@@ -11,6 +11,16 @@ export const KEYBOARD_OVERRIDES_STORAGE_KEY = "aos_ui:keyboard:overrides"
 export const KEYBOARD_OVERRIDES_EVENT = "aos_ui:keyboard-overrides-change"
 
 export type KeyboardOverrideMap = Readonly<KeyboardBindingOverrides>
+export type KeyboardPlatform = "mac" | "windows"
+
+export function detectKeyboardPlatform(): KeyboardPlatform {
+  if (typeof navigator === "undefined") return "windows"
+  return /Mac|iPhone|iPad|iPod/i.test(
+    `${navigator.platform} ${navigator.userAgent}`
+  )
+    ? "mac"
+    : "windows"
+}
 
 function isBindingInput(value: unknown): value is KeyboardBindingInput {
   if (typeof value === "string") return value.trim().length > 0
@@ -118,14 +128,16 @@ export function validateKeyboardBinding(
 
 export function formatKeyboardBinding(
   input: KeyboardBindingInput | NormalizedKeyboardBinding,
-  locale: KeyboardLocale
+  locale: KeyboardLocale,
+  platform: KeyboardPlatform = detectKeyboardPlatform()
 ) {
   void locale
   const binding = normalizeBinding(input)
   const modifiers: string[] = []
   if (binding.altGraph) modifiers.push("AltGraph")
   else {
-    if (binding.ctrl || binding.meta) modifiers.push("Mod")
+    if (binding.ctrl || binding.meta)
+      modifiers.push(platform === "mac" ? "⌘" : "❖")
     if (binding.alt) modifiers.push("Alt")
     if (binding.shift) modifiers.push("Shift")
   }
@@ -135,10 +147,13 @@ export function formatKeyboardBinding(
 
 export function formatKeyboardBindings(
   inputs: readonly (KeyboardBindingInput | NormalizedKeyboardBinding)[],
-  locale: KeyboardLocale
+  locale: KeyboardLocale,
+  platform: KeyboardPlatform = detectKeyboardPlatform()
 ) {
   return [
-    ...new Set(inputs.map((input) => formatKeyboardBinding(input, locale))),
+    ...new Set(
+      inputs.map((input) => formatKeyboardBinding(input, locale, platform))
+    ),
   ]
 }
 

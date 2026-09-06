@@ -316,6 +316,7 @@ type AgentsPanelProps = Pick<
   onAfterSelectAgent?: () => void
   activity?: ActivityView
   activityButton?: ReactNode
+  commandsHost?: boolean
 }
 
 function AgentsPanel({
@@ -332,6 +333,7 @@ function AgentsPanel({
   onAfterSelectAgent,
   activity,
   activityButton,
+  commandsHost = false,
 }: AgentsPanelProps) {
   return (
     <div className={styles.agentsPanel}>
@@ -442,7 +444,11 @@ function AgentsPanel({
         {dictionary.workspace.manageAgents}
       </Button>
 
-      <WorkspacePreferences locale={locale} dictionary={dictionary} />
+      <WorkspacePreferences
+        locale={locale}
+        dictionary={dictionary}
+        commandsHost={commandsHost}
+      />
     </div>
   )
 }
@@ -1262,7 +1268,11 @@ export function WorkspaceShell({
           aria-hidden={modalDrawerOpen || undefined}
           inert={modalDrawerOpen ? true : undefined}
         >
-          <AgentsPanel {...agentsPanelProps} activityButton={activityButton} />
+          <AgentsPanel
+            {...agentsPanelProps}
+            activityButton={activityButton}
+            commandsHost
+          />
         </aside>
 
         <div

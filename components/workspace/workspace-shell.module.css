@@ -309,7 +309,14 @@
   }
 }
 
+.preferenceActions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .manageButton {
+  min-width: 0;
   justify-content: flex-start;
   color: var(--muted-foreground);
 }
@@ -324,21 +331,15 @@
 }
 
 .commandsTrigger {
-  position: absolute;
-  inset-block-end: 0.75rem;
-  inset-inline-start: 0.75rem;
-  z-index: 10;
   display: inline-flex;
   min-block-size: 1.75rem;
   align-items: center;
-  gap: 0.375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: color-mix(in oklab, var(--background) 90%, transparent);
-  padding-inline: 0.5rem;
+  padding-inline: 0.375rem;
   color: var(--muted-foreground);
   font-size: 0.75rem;
-  box-shadow: var(--shadow-sm);
 }
 
 .commandsTrigger:hover {
@@ -349,24 +350,6 @@
 .commandsTrigger:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-@container workspace (min-width: 64rem) {
-  .commandsTrigger {
-    inset-inline-start: calc(15.5rem + 0.75rem);
-  }
-}
-
-@container workspace (min-width: 80rem) {
-  .commandsTrigger {
-    inset-inline-start: calc(17.5rem + 0.75rem);
-  }
-}
-
-@container workspace (min-width: 90rem) {
-  .commandsTrigger {
-    inset-inline-start: calc(19.5rem + 0.75rem);
-  }
 }
 
 .themeControl {

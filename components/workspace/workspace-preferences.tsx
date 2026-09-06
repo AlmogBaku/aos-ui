@@ -42,9 +42,11 @@ function subscribeToClientReady() {
 export function WorkspacePreferences({
   locale,
   dictionary,
+  commandsHost = false,
 }: {
   locale: Locale
   dictionary: Dictionary
+  commandsHost?: boolean
 }) {
   const router = useRouter()
   const { setTheme, theme } = useTheme()
@@ -88,7 +90,7 @@ export function WorkspacePreferences({
   ]
 
   return (
-    <div className={styles.workspacePreferences}>
+    <div className={styles.workspacePreferences} data-workspace-preferences>
       <TooltipProvider>
         <ToggleGroup
           className={styles.themeControl}
@@ -122,20 +124,23 @@ export function WorkspacePreferences({
         </ToggleGroup>
       </TooltipProvider>
 
-      <button
-        className={cn(
-          buttonVariants({ variant: "ghost", size: "sm" }),
-          styles.localeButton
-        )}
-        type="button"
-        aria-label={switchLocaleLabel}
-        title={switchLocaleLabel}
-        lang={targetLocale}
-        dir={getLocaleDirection(targetLocale)}
-        onClick={switchLocale}
-      >
-        <bdi>{targetLocaleLabel}</bdi>
-      </button>
+      <div className={styles.preferenceActions}>
+        {commandsHost ? <div data-keyboard-commands-host /> : null}
+        <button
+          className={cn(
+            buttonVariants({ variant: "ghost", size: "sm" }),
+            styles.localeButton
+          )}
+          type="button"
+          aria-label={switchLocaleLabel}
+          title={switchLocaleLabel}
+          lang={targetLocale}
+          dir={getLocaleDirection(targetLocale)}
+          onClick={switchLocale}
+        >
+          <bdi>{targetLocaleLabel}</bdi>
+        </button>
+      </div>
     </div>
   )
 }

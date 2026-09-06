@@ -50,14 +50,17 @@ describe("keyboard settings validation", () => {
     ).toEqual(expect.objectContaining({ valid: false, reason: "conflict" }))
   })
 
-  it("formats modifier keys with a platform-neutral Mod label", () => {
-    expect(formatKeyboardBinding("Ctrl+Shift+k", "en")).toBe("Mod+Shift+K")
-    expect(formatKeyboardBinding("Ctrl+Shift+k", "he")).toBe("Mod+Shift+K")
+  it("formats modifier keys with the macOS Command symbol", () => {
+    expect(formatKeyboardBinding("Meta+Shift+k", "en", "mac")).toBe("⌘+Shift+K")
+  })
+
+  it("formats modifier keys with the Windows Super symbol", () => {
+    expect(formatKeyboardBinding("Ctrl+Shift+k", "en", "windows")).toBe(
+      "❖+Shift+K"
+    )
   })
 
   it("deduplicates platform-equivalent alternatives", () => {
-    expect(formatKeyboardBindings(["Meta+K", "Ctrl+K"], "en")).toEqual([
-      "Mod+K",
-    ])
+    expect(formatKeyboardBindings(["Meta+K", "Ctrl+K"], "en")).toEqual(["❖+K"])
   })
 })

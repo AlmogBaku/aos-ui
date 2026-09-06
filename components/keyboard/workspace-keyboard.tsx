@@ -3,6 +3,7 @@
 import { createKeyboardDispatcher } from "@/lib/keyboard"
 import type { Locale } from "@/lib/i18n/config"
 import * as React from "react"
+import { createPortal } from "react-dom"
 import {
   Dialog,
   DialogContent,
@@ -19,7 +20,11 @@ import {
 } from "./focus-regions"
 import { KeyboardReference } from "./keyboard-reference"
 import { KeyboardShortcutsSettings } from "./keyboard-shortcuts-settings"
-import { formatKeyboardBinding } from "./keyboard-settings"
+import {
+  detectKeyboardPlatform,
+  formatKeyboardBinding,
+  type KeyboardPlatform,
+} from "./keyboard-settings"
 import { useKeyboardSettings } from "./use-keyboard-settings"
 import workspaceStyles from "@/components/workspace/workspace-shell.module.css"
 
@@ -48,6 +53,7 @@ export type WorkspaceKeyboardProps = {
 const localCopy = {
   en: {
     commands: "Commands",
+    openCommands: "Open Commands",
     commandDescription: "Search available workspace actions.",
     newAgent: "New Agent",
     newSession: "New Session",
@@ -65,6 +71,7 @@ const localCopy = {
   },
   he: {
     commands: "פקודות",
+    openCommands: "פתיחת פקודות",
     commandDescription: "חיפוש פעולות זמינות בסביבת העבודה.",
     newAgent: "סוכן חדש",
     newSession: "שיחה חדשה",
@@ -109,6 +116,9 @@ export function WorkspaceKeyboard({
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [referenceOpen, setReferenceOpen] = React.useState(false)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [triggerHost, setTriggerHost] = React.useState<HTMLElement | null>(null)
+  const [keyboardPlatform, setKeyboardPlatform] =
+    React.useState<KeyboardPlatform>("windows")
   const coordinatorRef = React.useRef(createFocusRegionCoordinator())
 
   React.useEffect(() => {
@@ -117,6 +127,15 @@ export function WorkspaceKeyboard({
     // Assistant UI owns these elements; the attributes let F6 discover their
     // layout order without taking ownership of Tab or composer behavior.
     return observeKeyboardRegions(root)
+  }, [rootRef])
+
+  React.useEffect(() => {
+    setTriggerHost(
+      rootRef.current?.querySelector<HTMLElement>(
+        "[data-keyboard-commands-host]"
+      ) ?? null
+    )
+    setKeyboardPlatform(detectKeyboardPlatform())
   }, [rootRef])
 
   const execute = React.useCallback(
@@ -219,7 +238,7 @@ export function WorkspaceKeyboard({
     const actionBinding = (id: string) => {
       const action = settings.effectiveBindings.find((item) => item.id === id)
       return action?.bindings[0]
-        ? formatKeyboardBinding(action.bindings[0], locale)
+        ? formatKeyboardBinding(action.bindings[0], locale, keyboardPlatform)
         : undefined
     }
     const unavailable = (
@@ -347,20 +366,29 @@ export function WorkspaceKeyboard({
   )?.bindings[0]
   return (
     <>
-      <button
-        type="button"
-        data-keyboard-commands-trigger="true"
-        className={workspaceStyles.commandsTrigger}
-        aria-label={`${localCopy[locale].commands}${commandBinding ? ` (${formatKeyboardBinding(commandBinding, locale)})` : ""}`}
-        onClick={() => setCommandOpen(true)}
-      >
-        {localCopy[locale].commands}
-        {commandBinding ? (
-          <kbd className="text-[0.65rem]">
-            {formatKeyboardBinding(commandBinding, locale)}
-          </kbd>
-        ) : null}
-      </button>
+      {triggerHost
+        ? createPortal(
+            <button
+              type="button"
+              data-keyboard-commands-trigger="true"
+              className={workspaceStyles.commandsTrigger}
+              aria-label={`${localCopy[locale].commands}${commandBinding ? ` (${formatKeyboardBinding(commandBinding, locale, keyboardPlatform)})` : ""}`}
+              title={localCopy[locale].openCommands}
+              onClick={() => setCommandOpen(true)}
+            >
+              {commandBinding ? (
+                <kbd className="text-[0.65rem]">
+                  {formatKeyboardBinding(
+                    commandBinding,
+                    locale,
+                    keyboardPlatform
+                  )}
+                </kbd>
+              ) : null}
+            </button>,
+            triggerHost
+          )
+        : null}
       <CommandPalette
         open={commandOpen}
         locale={locale}

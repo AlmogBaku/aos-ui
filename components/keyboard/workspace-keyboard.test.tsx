@@ -54,12 +54,23 @@ function renderShell() {
 }
 
 describe("workspace keyboard discovery", () => {
-  it("opens Commands with Mod+K and reference with physical Mod+/", async () => {
+  it("places the compact Commands trigger beside the language switcher", () => {
+    renderShell()
+    const trigger = screen.getByRole("button", { name: /^Commands \(/ })
+    const preferences = trigger.closest("[data-workspace-preferences]")
+    expect(preferences).not.toBeNull()
+    expect(trigger).toHaveTextContent("❖+K")
+    expect(trigger).not.toHaveTextContent("Commands")
+    expect(trigger).toHaveAttribute("title", "Open Commands")
+    expect(
+      preferences?.querySelector('[aria-label="Switch to Hebrew"]')
+    ).not.toBeNull()
+  })
+
+  it("opens Commands with the platform shortcut and reference with physical Mod+/", async () => {
     const user = userEvent.setup()
     renderShell()
-    expect(
-      screen.getByRole("button", { name: "Commands (Mod+K)" })
-    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Commands (❖+K)" })).toBeVisible()
     await user.keyboard("{Control>}k{/Control}")
     expect(screen.getByRole("dialog", { name: "Commands" })).toBeVisible()
     await user.keyboard("{Escape}")
@@ -119,7 +130,7 @@ describe("workspace keyboard discovery", () => {
       </WorkspaceShell>
     )
 
-    await user.click(screen.getByRole("button", { name: "Commands (Mod+K)" }))
+    await user.click(screen.getByRole("button", { name: "Commands (❖+K)" }))
     expect(
       screen.getAllByRole("button", { name: "Open Session: A" })
     ).toHaveLength(1)

@@ -47,7 +47,7 @@ test("Commands search and execute, and Mod+/ opens the shortcut reference", asyn
   await openWorkspace(page)
 
   await expect(
-    page.getByRole("button", { name: "Commands (Mod+K)" })
+    page.getByRole("button", { name: /^Commands \((?:⌘|❖)\+K\)$/ })
   ).toBeVisible()
   await runCommand(page, "Open Session: Launch review")
   await expect(
