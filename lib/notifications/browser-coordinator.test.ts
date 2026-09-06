@@ -351,7 +351,7 @@ describe("live browser Activity", () => {
       {
         title: "AOS",
         body: "A turn finished",
-        icon: "/aos-ui-placeholder.svg",
+        icon: "/logo-adaptive.svg",
         timestamp: now,
         tag: expect.stringMatching(/^aos-ui-/),
         renotify: false,

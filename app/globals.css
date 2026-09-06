@@ -3,6 +3,13 @@
 @import "shadcn/tailwind.css";
 @import "tw-shimmer";
 
+.aos-wordmark {
+  font-family: var(--font-aos-wordmark), sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  line-height: 1;
+}
+
 @custom-variant dark (&:is(.dark *));
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

@@ -1,4 +1,9 @@
-import { Geist, Geist_Mono, Noto_Sans_Hebrew } from "next/font/google"
+import {
+  Geist,
+  Geist_Mono,
+  Michroma,
+  Noto_Sans_Hebrew,
+} from "next/font/google"
 import { headers } from "next/headers"
 import type { ReactNode } from "react"
 
@@ -23,7 +28,7 @@ export async function generateMetadata() {
   return {
     title: dictionary.productName,
     description: dictionary.empty.conversationDescription,
-    icons: { icon: "/aos-ui-placeholder.svg" },
+    icons: { icon: "/logo-adaptive.svg" },
   }
 }
 
@@ -42,6 +47,12 @@ const notoSansHebrew = Noto_Sans_Hebrew({
   variable: "--font-hebrew",
 })
 
+const michroma = Michroma({
+  subsets: ["latin"],
+  weight: "400",
+  variable: "--font-aos-wordmark",
+})
+
 export default async function RootLayout({
   children,
 }: {
@@ -57,7 +68,8 @@ export default async function RootLayout({
         "antialiased",
         geist.variable,
         geistMono.variable,
-        notoSansHebrew.variable
+        notoSansHebrew.variable,
+        michroma.variable
       )}
       lang={locale}
       dir={getLocaleDirection(locale)}

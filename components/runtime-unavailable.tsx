@@ -116,7 +116,7 @@ export function RuntimeUnavailable({
         <div className="mb-7 flex items-center gap-3">
           <span className="flex size-11 items-center justify-center overflow-hidden rounded-2xl bg-secondary">
             <Image
-              src="/aos-ui-placeholder.svg"
+              src="/logo-adaptive.svg"
               alt=""
               width={40}
               height={40}
@@ -124,7 +124,7 @@ export function RuntimeUnavailable({
               className="size-10 object-contain"
             />
           </span>
-          <span className="text-sm font-semibold tracking-tight">
+          <span className="aos-wordmark text-base">
             {labels.eyebrow}
           </span>
         </div>

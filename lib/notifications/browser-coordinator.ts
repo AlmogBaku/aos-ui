@@ -318,7 +318,7 @@ export class BrowserActivityCoordinator {
         {
           title: "AOS",
           body: this.#options.copy()[category],
-          icon: "/aos-ui-placeholder.svg",
+          icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
           tag: `aos-ui-${(hash >>> 0).toString(16)}`,
           renotify: false,

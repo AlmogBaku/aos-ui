@@ -89,9 +89,7 @@
   align-items: center;
   gap: 0.625rem;
   color: var(--foreground);
-  font-size: 1.25rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-size: 1.0625rem;
 }
 
 .brandLogo {

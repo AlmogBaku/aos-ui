@@ -340,13 +340,13 @@ function AgentsPanel({
       <div className={cn(styles.brand, styles.desktopBrand)}>
         <Image
           className={styles.brandLogo}
-          src="/aos-ui-placeholder.svg"
+          src="/logo-adaptive.svg"
           alt=""
           width={32}
           height={32}
           priority
         />
-        <span>{dictionary.productName}</span>
+        <span className="aos-wordmark">{dictionary.productName}</span>
         {environmentLabel ? (
           <span className={styles.environmentLabel}>{environmentLabel}</span>
         ) : null}

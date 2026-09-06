@@ -73,7 +73,7 @@ describe("browser adapters", () => {
       {
         title: "AOS",
         body: "A turn finished",
-        icon: "/aos-ui-placeholder.svg",
+        icon: "/logo-adaptive.svg",
         timestamp: 100,
         tag: "aos-ui-id",
         renotify: false,
@@ -85,7 +85,7 @@ describe("browser adapters", () => {
     expect(instances).toHaveLength(1)
     expect(instances[0]?.options).toEqual({
       body: "A turn finished",
-      icon: "/aos-ui-placeholder.svg",
+      icon: "/logo-adaptive.svg",
       timestamp: 100,
       tag: "aos-ui-id",
       renotify: false,
