@@ -1,0 +1,292 @@
+"use client"
+
+import { lazy, Suspense, type ComponentType, type ReactNode } from "react"
+import type { z } from "zod"
+
+import {
+  ActivityTool,
+  activityPayloadSchema,
+  type ActivityPayload,
+} from "./activity"
+import { chartPayloadSchema, type ChartPayload } from "./payloads/chart"
+import { GenericJsonTool } from "./generic-json"
+import { LazyVisualBoundary } from "./lazy-boundary"
+import { mapPayloadSchema, type MapPayload } from "./payloads/map"
+import { montyPayloadSchema, type MontyPayload } from "./payloads/monty"
+import {
+  permissionPayloadSchema,
+  type PermissionPayload,
+} from "./payloads/permission"
+import { PlanTool, planPayloadSchema, type PlanPayload } from "./plan"
+import { statsPayloadSchema, type StatsPayload } from "./payloads/stats"
+import {
+  questionPayloadSchema,
+  type QuestionPayload,
+} from "./payloads/question-flow"
+import { useToolUiLocale, type ToolUiToolName } from "./locale"
+import type { RichToolPart, RichToolRendererComponent } from "./types"
+
+const QuestionFlowTool = lazy(() =>
+  import("./question-flow").then((module) => ({
+    default: module.QuestionFlowTool,
+  }))
+)
+const PermissionTool = lazy(() =>
+  import("./permission").then((module) => ({ default: module.PermissionTool }))
+)
+const MontyTool = lazy(() =>
+  import("./monty").then((module) => ({ default: module.MontyTool }))
+)
+const ChartTool = lazy(() =>
+  import("./chart").then((module) => ({ default: module.ChartTool }))
+)
+const MapTool = lazy(() =>
+  import("./map").then((module) => ({ default: module.MapTool }))
+)
+const StatsTool = lazy(() =>
+  import("./stats").then((module) => ({ default: module.StatsTool }))
+)
+
+function ToolDisplayFallback({
+  part,
+  failed = false,
+}: {
+  part: RichToolPart
+  failed?: boolean
+}) {
+  const { direction, labels, locale } = useToolUiLocale()
+  return (
+    <div className="flex min-w-0 flex-col gap-2" dir={direction} lang={locale}>
+      <p
+        className="text-sm text-muted-foreground"
+        role={failed ? "alert" : "status"}
+      >
+        {failed
+          ? labels.common.displayUnavailable
+          : labels.common.displayLoading}
+      </p>
+      <GenericJsonTool part={part} />
+    </div>
+  )
+}
+
+function OptionalToolDisplay({
+  part,
+  children,
+}: {
+  part: RichToolPart
+  children: ReactNode
+}) {
+  const { labels } = useToolUiLocale()
+  return (
+    <LazyVisualBoundary
+      key={part.toolCallId}
+      fallbackLabel={labels.common.displayUnavailable}
+      fallback={<ToolDisplayFallback part={part} failed />}
+    >
+      <Suspense fallback={<ToolDisplayFallback part={part} />}>
+        {children}
+      </Suspense>
+    </LazyVisualBoundary>
+  )
+}
+
+export type RichToolValidation =
+  { valid: true; payload: unknown } | { valid: false }
+
+export type RichToolRegistration = {
+  displayNameKey: ToolUiToolName
+  validate: (part: RichToolPart) => RichToolValidation
+  render: (part: RichToolPart, payload: unknown) => ReactNode
+}
+
+export type RichToolRegistry = Readonly<Record<string, RichToolRegistration>>
+
+type RegisteredRendererProps<T> = {
+  part: RichToolPart
+  payload: T
+}
+
+function defineToolRenderer<T>({
+  displayNameKey,
+  schema,
+  Renderer,
+  acceptsPart = () => true,
+  optional = false,
+}: {
+  displayNameKey: ToolUiToolName
+  schema: z.ZodType<T>
+  Renderer: ComponentType<RegisteredRendererProps<T>>
+  acceptsPart?: (part: RichToolPart) => boolean
+  optional?: boolean
+}): RichToolRegistration {
+  return {
+    displayNameKey,
+    validate(part) {
+      if (!acceptsPart(part)) return { valid: false }
+      const parsed = schema.safeParse({ args: part.args, result: part.result })
+      return parsed.success
+        ? { valid: true, payload: parsed.data }
+        : { valid: false }
+    },
+    render(part, payload) {
+      const display = <Renderer part={part} payload={payload as T} />
+      return optional ? (
+        <OptionalToolDisplay part={part}>{display}</OptionalToolDisplay>
+      ) : (
+        display
+      )
+    },
+  }
+}
+
+const question = defineToolRenderer<QuestionPayload>({
+  displayNameKey: "question",
+  schema: questionPayloadSchema,
+  Renderer: QuestionFlowTool,
+  optional: true,
+})
+
+const permission = defineToolRenderer<PermissionPayload>({
+  displayNameKey: "permission",
+  schema: permissionPayloadSchema,
+  Renderer: PermissionTool,
+  optional: true,
+  acceptsPart: (part) => part.approval !== undefined,
+})
+
+const plan = defineToolRenderer<PlanPayload>({
+  displayNameKey: "plan",
+  schema: planPayloadSchema,
+  Renderer: PlanTool,
+})
+
+const monty = defineToolRenderer<MontyPayload>({
+  displayNameKey: "monty",
+  schema: montyPayloadSchema,
+  Renderer: MontyTool,
+  optional: true,
+})
+
+const chart = defineToolRenderer<ChartPayload>({
+  displayNameKey: "chart",
+  schema: chartPayloadSchema,
+  Renderer: ChartTool,
+  optional: true,
+})
+
+const map = defineToolRenderer<MapPayload>({
+  displayNameKey: "map",
+  schema: mapPayloadSchema,
+  Renderer: MapTool,
+  optional: true,
+})
+
+const stats = defineToolRenderer<StatsPayload>({
+  displayNameKey: "stats",
+  schema: statsPayloadSchema,
+  Renderer: StatsTool,
+  optional: true,
+})
+
+function SubagentActivity(props: RegisteredRendererProps<ActivityPayload>) {
+  return <ActivityTool {...props} kind="subagent" />
+}
+
+function SkillActivity(props: RegisteredRendererProps<ActivityPayload>) {
+  return <ActivityTool {...props} kind="skill" />
+}
+
+function ToolActivity(props: RegisteredRendererProps<ActivityPayload>) {
+  return <ActivityTool {...props} kind="tool" />
+}
+
+const subagentActivity = defineToolRenderer<ActivityPayload>({
+  displayNameKey: "subagentActivity",
+  schema: activityPayloadSchema,
+  Renderer: SubagentActivity,
+})
+
+const skillActivity = defineToolRenderer<ActivityPayload>({
+  displayNameKey: "skillActivity",
+  schema: activityPayloadSchema,
+  Renderer: SkillActivity,
+})
+
+const toolActivity = defineToolRenderer<ActivityPayload>({
+  displayNameKey: "toolActivity",
+  schema: activityPayloadSchema,
+  Renderer: ToolActivity,
+})
+
+/**
+ * The only rich-tool dispatch table. Provider adapters can add aliases at
+ * their boundary, while the message surface has one deterministic registry.
+ */
+export const richToolRegistry: RichToolRegistry = Object.freeze({
+  ask_user_question: question,
+  question,
+  request_permission: permission,
+  request_approval: permission,
+  present_plan: plan,
+  plan,
+  delegate_subagent: subagentActivity,
+  run_subagent: subagentActivity,
+  task: subagentActivity,
+  use_skill: skillActivity,
+  load_skill: skillActivity,
+  tool_activity: toolActivity,
+  run_tool: toolActivity,
+  monty_execute: monty,
+  render_chart: chart,
+  render_map: map,
+  render_stats: stats,
+})
+
+/** Direct `MessagePrimitive.Parts` tool-call renderer. */
+export const RichToolRenderer: RichToolRendererComponent = (part) => {
+  const { labels } = useToolUiLocale()
+  const registration = richToolRegistry[part.toolName]
+
+  // OpenCode's reserved Question tool is rendered beside the composer by
+  // OpenCodeQuestionBridge. Rendering the same call in the transcript would
+  // duplicate the interaction, and its batched payload is intentionally not
+  // the single-question payload used by ask_user_question below.
+  if (part.toolName === "question") return null
+
+  // Provider-native approvals stay attached to the tool they guard (for
+  // example `bash` or `edit`) rather than arriving as a permission tool.
+  // Questions remain on their dedicated free-text/option flow.
+  if (part.approval && registration !== question) {
+    const parsed = permissionPayloadSchema.safeParse({
+      args: part.args,
+      result: part.result,
+    })
+    const payload: PermissionPayload = parsed.success
+      ? parsed.data
+      : {
+          args: {
+            action:
+              part.approval.prompt?.trim() ||
+              labels.permission.defaultAction(part.toolName),
+          },
+          result: part.result,
+        }
+
+    return permission.render(part, payload)
+  }
+
+  if (!registration) return <GenericJsonTool part={part} />
+
+  const validation = registration.validate(part)
+  if (!validation.valid) {
+    return (
+      <GenericJsonTool
+        part={part}
+        invalidDisplayName={labels.toolNames[registration.displayNameKey]}
+      />
+    )
+  }
+
+  return registration.render(part, validation.payload)
+}

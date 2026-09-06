@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+
+FROM oven/bun:1.3.10-alpine AS bun-runtime
+FROM ghcr.io/astral-sh/uv:0.12.5 AS uv-runtime
+
+FROM bun-runtime AS management-build
+WORKDIR /bundle
+COPY package.json bun.lock ./
+COPY patches/ ./patches/
+RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY scripts/opencode-config.ts scripts/opencode-serve.ts scripts/opencode-management.ts ./scripts/
+COPY .opencode/lib/agent-visibility.ts ./.opencode/lib/
+COPY lib/runtime-adapters/opencode/agent-catalog.ts ./lib/runtime-adapters/opencode/
+RUN bun build scripts/opencode-serve.ts --target=bun --outfile=opencode-serve.js
+
+FROM ghcr.io/anomalyco/opencode:1.18.29
+
+ARG AOS_UI_HOST_UID=1000
+ARG AOS_UI_HOST_GID=1000
+
+RUN case "${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID}" in *[!0-9:]*|:*|*:) exit 1 ;; esac \
+    && test "${AOS_UI_HOST_UID}" -gt 0 \
+    && test "${AOS_UI_HOST_GID}" -gt 0 \
+    && apk add --no-cache git libstdc++ python3 \
+    && if ! awk -F: -v id="${AOS_UI_HOST_GID}" '$3 == id { found = 1 } END { exit !found }' /etc/group; then \
+         printf 'aos_ui:x:%s:\n' "${AOS_UI_HOST_GID}" >> /etc/group; \
+       fi \
+    && if ! awk -F: -v id="${AOS_UI_HOST_UID}" '$3 == id { found = 1 } END { exit !found }' /etc/passwd; then \
+         printf 'aos_ui:x:%s:%s:AOS:/home/aos-ui:/sbin/nologin\n' "${AOS_UI_HOST_UID}" "${AOS_UI_HOST_GID}" >> /etc/passwd; \
+       fi \
+    && install -d -o "${AOS_UI_HOST_UID}" -g "${AOS_UI_HOST_GID}" \
+      /home/aos-ui/.cache \
+      /home/aos-ui/.config \
+      /home/aos-ui/.local/share/opencode \
+      /opt/aos-ui/monty \
+      /opt/aos-ui/scripts \
+      /workspace
+
+RUN install -d -o "${AOS_UI_HOST_UID}" -g "${AOS_UI_HOST_GID}" /home/aos-ui/.local/state
+
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=uv-runtime /uv /uvx /usr/local/bin/
+
+ENV HOME=/home/aos-ui \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/aos-ui/monty/.venv \
+    XDG_CACHE_HOME=/home/aos-ui/.cache \
+    XDG_CONFIG_HOME=/home/aos-ui/.config \
+    XDG_DATA_HOME=/home/aos-ui/.local/share
+
+COPY --chown=${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID} integrations/monty/ /opt/aos-ui/monty/
+COPY --from=management-build --chown=${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID} /bundle/opencode-serve.js /opt/aos-ui/scripts/opencode-serve.js
+
+USER ${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID}
+WORKDIR /opt/aos-ui/monty
+RUN uv sync --frozen
+
+WORKDIR /workspace
+EXPOSE 4096 4097
+ENTRYPOINT ["bun", "run", "/opt/aos-ui/scripts/opencode-serve.js"]

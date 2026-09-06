@@ -1,0 +1,605 @@
+"use client"
+
+import {
+  ExportedMessageRepository,
+  type ChatModelAdapter,
+  type ChatModelRunOptions,
+  type ChatModelRunResult,
+  type ExportedMessageRepositoryItem,
+  type RemoteThreadListAdapter,
+  type RuntimeAdapters,
+  type ThreadHistoryAdapter,
+  type ThreadMessageLike,
+  useAui,
+  useLocalRuntime,
+  useRemoteThreadListRuntime,
+} from "@assistant-ui/react"
+import { useMemo, useState } from "react"
+
+import { buildFixtureScenario } from "./fixture-scenarios"
+import {
+  FIXTURE_NOW,
+  createFixtureWorkspace,
+  type FixtureWorkspace,
+} from "./fixture-workspace"
+
+const cloneRepository = (
+  repository: ReturnType<typeof ExportedMessageRepository.fromArray>
+) => structuredClone(repository)
+
+const planResult = {
+  id: "plan-market",
+  title: "Plan",
+  steps: [
+    { id: "scope", label: "Define scope and coverage", status: "completed" },
+    { id: "trends", label: "Aggregate spend trends", status: "active" },
+    {
+      id: "segments",
+      label: "Segment by function and industry",
+      status: "pending",
+    },
+    { id: "drivers", label: "Identify drivers and shifts", status: "pending" },
+    { id: "summary", label: "Summarize key takeaways", status: "pending" },
+  ],
+} as const
+
+function messagesFor(
+  threadId: string,
+  workspace?: FixtureWorkspace
+): readonly ThreadMessageLike[] {
+  const builderKickoff = workspace?.getBuilderKickoff(threadId)
+  if (builderKickoff) {
+    return [
+      {
+        id: `${threadId}-kickoff`,
+        role: "user",
+        content: builderKickoff,
+        createdAt: FIXTURE_NOW,
+      },
+      {
+        id: `${threadId}-interview`,
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Great. I’ll keep this focused and turn the result into a native Agent.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: `${threadId}-question`,
+            toolName: "ask_user_question",
+            args: {
+              question: "What do you mostly want this Agent to help with?",
+              options: ["Work projects", "Personal tasks", "A bit of both"],
+              allowFreeform: true,
+            },
+            argsText: JSON.stringify({
+              question: "What do you mostly want this Agent to help with?",
+              options: ["Work projects", "Personal tasks", "A bit of both"],
+              allowFreeform: true,
+            }),
+          },
+        ],
+        createdAt: FIXTURE_NOW,
+      },
+    ]
+  }
+
+  if (threadId === "thread-aster-market") {
+    return [
+      {
+        id: "message-market-user",
+        role: "user",
+        content:
+          "Give me a market brief on enterprise AI spend, highlighting shifts in the past 2 quarters.",
+        createdAt: new Date("2026-09-03T09:10:00.000Z"),
+      },
+      {
+        id: "message-market-assistant",
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Enterprise AI spend continues to broaden and deepen.\n\nAcross our coverage universe, Q4’24 and Q1’25 show accelerating investment in platforms and applied AI, with a clear shift from pilots to scaled deployments. Budgets are concentrating around data foundations, model governance, and measurable productivity outcomes.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-plan",
+            toolName: "present_plan",
+            args: { title: "Market brief" },
+            argsText: '{"title":"Market brief"}',
+            result: planResult,
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-subagent",
+            toolName: "delegate_subagent",
+            args: { task: "Validate the market segments" },
+            argsText: '{"task":"Validate the market segments"}',
+            result: {
+              name: "Data analyst",
+              status: "completed",
+              summary: "Validated three market segments.",
+            },
+          },
+        ],
+        createdAt: new Date("2026-09-03T09:12:00.000Z"),
+      },
+    ]
+  }
+
+  if (threadId === "thread-aster-interviews") {
+    return Array.from({ length: 32 }, (_, index) => {
+      const turn = String(index + 1).padStart(2, "0")
+      const createdAt = new Date(
+        Date.parse("2026-09-02T08:00:00.000Z") + index * 60_000
+      )
+      return [
+        {
+          id: `message-interviews-user-${turn}`,
+          role: "user" as const,
+          content: `Interview theme ${index + 1}: what changed in the customer workflow?`,
+          createdAt,
+        },
+        {
+          id: `message-interviews-assistant-${turn}`,
+          role: "assistant" as const,
+          content:
+            "The signal is consistent: teams value a clear handoff, visible ownership, and fewer context switches. This evidence remains attached to the interview Session.",
+          createdAt,
+        },
+      ]
+    }).flat()
+  }
+
+  const titleByThread: Record<string, string> = {
+    "thread-aster-launch":
+      "Review the launch narrative and identify the most important decision.",
+    "thread-aster-scan":
+      "Summarize the competitive scan without overloading the brief.",
+    "thread-aster-pricing":
+      "Compare the pricing signals from the current dataset.",
+    "thread-mica-quarterly": "Prepare the quarterly synthesis.",
+    "thread-lumen-roadmap": "Review the roadmap and ask for missing input.",
+    "thread-vela-metrics": "Interpret the activation metrics.",
+    "thread-nori-copy": "Polish the launch copy.",
+  }
+  const prompt = titleByThread[threadId]
+  if (!prompt) return []
+
+  return [
+    {
+      id: `${threadId}-user`,
+      role: "user",
+      content: prompt,
+      createdAt: FIXTURE_NOW,
+    },
+    {
+      id: `${threadId}-assistant`,
+      role: "assistant",
+      content:
+        threadId === "thread-lumen-roadmap"
+          ? "I’ve reviewed the available roadmap. Which customer segment should define the first release?"
+          : "The Session is ready to continue. The existing context remains scoped to this Agent.",
+      createdAt: FIXTURE_NOW,
+    },
+  ]
+}
+
+class FixtureHistoryStore {
+  readonly #repositories = new Map<
+    string,
+    ReturnType<typeof ExportedMessageRepository.fromArray>
+  >()
+
+  constructor(private readonly workspace: FixtureWorkspace) {}
+
+  load(threadId: string) {
+    const existing = this.#repositories.get(threadId)
+    if (existing) return cloneRepository(existing)
+    const seeded = ExportedMessageRepository.fromArray(
+      messagesFor(threadId, this.workspace)
+    )
+    this.#repositories.set(threadId, seeded)
+    return cloneRepository(seeded)
+  }
+
+  upsert(threadId: string, item: ExportedMessageRepositoryItem) {
+    const repository = this.load(threadId)
+    const index = repository.messages.findIndex(
+      ({ message }) => message.id === item.message.id
+    )
+    if (index >= 0) repository.messages[index] = item
+    else repository.messages.push(item)
+    repository.headId = item.message.id
+    this.#repositories.set(threadId, cloneRepository(repository))
+  }
+
+  delete(threadId: string, items: ExportedMessageRepositoryItem[]) {
+    const ids = new Set(items.map(({ message }) => message.id))
+    const repository = this.load(threadId)
+    repository.messages = repository.messages.filter(
+      ({ message }) => !ids.has(message.id)
+    )
+    if (repository.headId && ids.has(repository.headId)) {
+      repository.headId = repository.messages.at(-1)?.message.id ?? null
+    }
+    this.#repositories.set(threadId, cloneRepository(repository))
+  }
+}
+
+class FixtureHistoryAdapter implements ThreadHistoryAdapter {
+  constructor(
+    private readonly store: FixtureHistoryStore,
+    private readonly resolveThreadId: () =>
+      string | undefined | Promise<string | undefined>
+  ) {}
+
+  async #threadId() {
+    const threadId = await this.resolveThreadId()
+    if (!threadId) throw new Error("Fixture Session is not initialized")
+    return threadId
+  }
+
+  async load() {
+    const threadId = await this.resolveThreadId()
+    return threadId ? this.store.load(threadId) : { messages: [] }
+  }
+
+  async append(item: ExportedMessageRepositoryItem) {
+    this.store.upsert(await this.#threadId(), item)
+  }
+
+  async update(item: ExportedMessageRepositoryItem) {
+    this.store.upsert(await this.#threadId(), item)
+  }
+
+  async delete(items: ExportedMessageRepositoryItem[]) {
+    this.store.delete(await this.#threadId(), items)
+  }
+}
+
+export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
+  unstable_useAdapters?: () => RuntimeAdapters
+  readonly #deleted = new Set<string>()
+  readonly #archived = new Set<string>()
+  readonly #history: FixtureHistoryStore
+
+  constructor(readonly workspace: FixtureWorkspace) {
+    this.#history = new FixtureHistoryStore(workspace)
+  }
+
+  historyFor(threadId: string): ThreadHistoryAdapter {
+    return new FixtureHistoryAdapter(this.#history, () => threadId)
+  }
+
+  dynamicHistory(
+    resolveThreadId: () => string | undefined | Promise<string | undefined>
+  ) {
+    return new FixtureHistoryAdapter(this.#history, resolveThreadId)
+  }
+
+  async list() {
+    return {
+      threads: this.workspace
+        .listAllSessionMetadata()
+        .filter(({ threadId }) => !this.#deleted.has(threadId))
+        .map(({ threadId, agentId, updatedAt, status }) => ({
+          remoteId: threadId,
+          externalId: threadId,
+          status: this.#archived.has(threadId)
+            ? ("archived" as const)
+            : ("regular" as const),
+          title: this.workspace.getSessionTitle(threadId),
+          lastMessageAt: new Date(updatedAt),
+          custom: { agentId, status },
+        })),
+    }
+  }
+
+  async rename(remoteId: string, newTitle: string) {
+    this.workspace.setSessionTitle(remoteId, newTitle)
+  }
+
+  async updateCustom() {}
+
+  async archive(remoteId: string) {
+    await this.assertSession(remoteId)
+    this.#archived.add(remoteId)
+  }
+
+  async unarchive(remoteId: string) {
+    await this.assertSession(remoteId)
+    this.#archived.delete(remoteId)
+  }
+
+  async delete(remoteId: string) {
+    await this.assertSession(remoteId)
+    this.#deleted.add(remoteId)
+  }
+
+  async initialize(threadId: string) {
+    await this.assertSession(threadId)
+    return { remoteId: threadId, externalId: threadId }
+  }
+
+  async generateTitle() {
+    return new ReadableStream({
+      start(controller) {
+        controller.close()
+      },
+    }) as Awaited<ReturnType<RemoteThreadListAdapter["generateTitle"]>>
+  }
+
+  async fetch(threadId: string) {
+    const session = await this.assertSession(threadId)
+    return {
+      remoteId: session.threadId,
+      externalId: session.threadId,
+      status: this.#archived.has(threadId)
+        ? ("archived" as const)
+        : ("regular" as const),
+      title: this.workspace.getSessionTitle(threadId),
+      lastMessageAt: new Date(session.updatedAt),
+      custom: { agentId: session.agentId, status: session.status },
+    }
+  }
+
+  private async assertSession(threadId: string) {
+    if (this.#deleted.has(threadId)) {
+      throw new Error(`Fixture Session not found: ${threadId}`)
+    }
+    const [session] = await this.workspace.getSessionMetadata([threadId])
+    if (!session) throw new Error(`Fixture Session not found: ${threadId}`)
+    return session
+  }
+}
+
+function useFixtureThreadAdapters(
+  adapter: FixtureThreadListAdapter
+): RuntimeAdapters {
+  const aui = useAui()
+  const history = useMemo(
+    () =>
+      adapter.dynamicHistory(() => {
+        const state = aui.threadListItem.getState()
+        return state.remoteId
+      }),
+    [adapter, aui]
+  )
+  return useMemo(() => ({ history }), [history])
+}
+
+export function createFixtureThreadListAdapter(workspace: FixtureWorkspace) {
+  const adapter = new FixtureThreadListAdapter(workspace)
+  adapter.unstable_useAdapters = function useFixtureAdapters() {
+    return useFixtureThreadAdapters(adapter)
+  }
+  return adapter
+}
+
+function latestUserText({ messages }: ChatModelRunOptions) {
+  const message = [...messages].reverse().find(({ role }) => role === "user")
+  if (!message) return ""
+  return message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+}
+
+function resolvedAttention(options: ChatModelRunOptions) {
+  const current = options.unstable_getMessage()
+  const latestUserIndex = options.messages.findLastIndex(
+    ({ role }) => role === "user"
+  )
+  const messages = [
+    ...options.messages.slice(latestUserIndex + 1),
+    ...(current ? [current] : []),
+  ]
+  for (const message of messages.toReversed()) {
+    if (message.role !== "assistant") continue
+    for (const part of message.content.toReversed()) {
+      if (part.type !== "tool-call") continue
+      if (part.toolName === "ask_user_question" && part.result !== undefined) {
+        return { kind: "question" as const, requestId: part.toolCallId }
+      }
+      if (
+        part.toolName === "request_permission" &&
+        part.approval !== undefined &&
+        (part.approval.approved !== undefined ||
+          part.approval.optionId !== undefined ||
+          part.approval.text !== undefined ||
+          part.approval.resolution !== undefined)
+      ) {
+        return {
+          kind: "permission" as const,
+          requestId: part.approval.id,
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function waitForChunk(delayMs: number, signal: AbortSignal) {
+  if (delayMs <= 0 || signal.aborted) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, delayMs)
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeout)
+        resolve()
+      },
+      { once: true }
+    )
+  })
+}
+
+export function createFixtureChatModel(
+  workspace: FixtureWorkspace,
+  { streamDelayMs = 22 }: { streamDelayMs?: number } = {}
+): ChatModelAdapter {
+  return {
+    async *run(options): AsyncGenerator<ChatModelRunResult, void> {
+      const scenario = buildFixtureScenario(latestUserText(options))
+      const threadId = options.unstable_threadId
+      const activity = threadId
+        ? workspace.beginRunActivity(
+            threadId,
+            options.unstable_assistantMessageId
+          )
+        : undefined
+
+      try {
+        const resolution = resolvedAttention(options)
+        if (resolution) {
+          if (threadId) {
+            workspace.publishAttention(
+              threadId,
+              "resolved",
+              resolution.requestId
+            )
+          }
+          yield {
+            content: [
+              {
+                type: "text",
+                text:
+                  resolution.kind === "question"
+                    ? "Your provider recorded the question response."
+                    : "Your provider recorded the permission decision.",
+              },
+            ],
+          }
+          if (options.abortSignal.aborted) return
+          workspace.finishRunActivity(activity, "finished")
+          return
+        }
+
+        if (threadId && scenario.todoEvent) {
+          workspace.emitTodos(threadId, scenario.todoEvent)
+        }
+        let scenarioParts = scenario.parts
+        if (
+          threadId &&
+          (scenario.name === "question" || scenario.name === "permission")
+        ) {
+          const kind = scenario.name
+          const requestId = workspace.createAttentionRequestId(
+            threadId,
+            kind,
+            options.unstable_assistantMessageId
+          )
+          workspace.publishAttention(threadId, kind, requestId)
+          scenarioParts = scenario.parts.map((part) =>
+            part.type !== "tool-call"
+              ? part
+              : kind === "question"
+                ? { ...part, toolCallId: requestId }
+                : {
+                    ...part,
+                    toolCallId: requestId,
+                    approval: part.approval
+                      ? { ...part.approval, id: requestId }
+                      : part.approval,
+                  }
+          )
+        }
+
+        const textPart =
+          scenarioParts.length === 1 && scenarioParts[0]?.type === "text"
+            ? scenarioParts[0]
+            : undefined
+
+        if (textPart) {
+          const chunks =
+            scenario.name === "mermaid-oversized"
+              ? [textPart.text]
+              : textPart.text.split(/(?<=\s)/u)
+          let text = ""
+          for (const chunk of chunks) {
+            if (options.abortSignal.aborted) return
+            text += chunk
+            yield { content: [{ type: "text", text }] }
+            await waitForChunk(streamDelayMs, options.abortSignal)
+          }
+        } else {
+          if (options.abortSignal.aborted) return
+          const requiresAction = scenarioParts.some(
+            (part) =>
+              part.type === "tool-call" &&
+              ((part.toolName === "ask_user_question" &&
+                part.result === undefined) ||
+                (part.approval !== undefined &&
+                  part.approval.resolution === undefined &&
+                  part.approval.approved === undefined &&
+                  part.approval.optionId === undefined &&
+                  part.approval.text === undefined))
+          )
+          yield {
+            content: scenarioParts,
+            ...(requiresAction
+              ? {
+                  status: {
+                    type: "requires-action" as const,
+                    reason: "tool-calls" as const,
+                  },
+                }
+              : {}),
+          }
+        }
+
+        if (options.abortSignal.aborted) return
+        if (scenario.outage) throw scenario.outage
+        workspace.finishRunActivity(activity, "finished")
+      } catch (reason) {
+        workspace.finishRunActivity(activity, "failed")
+        throw reason
+      }
+    },
+  }
+}
+
+export type FixtureRuntimeBundleOptions = {
+  threadId?: string
+  onThreadIdChange?: (threadId: string | undefined) => void
+  streamDelayMs?: number
+}
+
+export function useFixtureRuntimeBundle({
+  threadId,
+  onThreadIdChange,
+  streamDelayMs,
+}: FixtureRuntimeBundleOptions = {}) {
+  const [workspace] = useState(() =>
+    createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+  )
+  const threadListAdapter = useMemo(
+    () => createFixtureThreadListAdapter(workspace),
+    [workspace]
+  )
+  const chatModel = useMemo(
+    () => createFixtureChatModel(workspace, { streamDelayMs }),
+    [streamDelayMs, workspace]
+  )
+  const assistantRuntime = useRemoteThreadListRuntime({
+    adapter: threadListAdapter,
+    threadId,
+    onThreadIdChange,
+    allowNesting: true,
+    runtimeHook: function useFixtureThreadRuntime() {
+      return useLocalRuntime(chatModel, {
+        maxSteps: 5,
+        unstable_enableMessageQueue: true,
+        unstable_queueClearOnCancel: false,
+        unstable_humanToolNames: ["ask_user_question"],
+      })
+    },
+  })
+
+  return useMemo(
+    () => ({ assistantRuntime, workspace }),
+    [assistantRuntime, workspace]
+  )
+}

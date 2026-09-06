@@ -1,0 +1,20 @@
+services:
+  web:
+    build:
+      target: development
+    command:
+      - bun
+      - run
+      - dev
+      - --hostname
+      - 0.0.0.0
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+      - type: volume
+        source: web-node-modules
+        target: /app/node_modules
+
+volumes:
+  web-node-modules:

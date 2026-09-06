@@ -1,0 +1,1558 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+  waitFor,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import {
+  RichToolRenderer,
+  ToolChrome,
+  ToolUiLocaleProvider,
+  normalizeRichToolState,
+  type RichToolPart,
+} from "./index"
+import { LazyVisualBoundary } from "./lazy-boundary"
+import { Plan } from "./plan/index"
+import { SerializablePlanSchema } from "./plan/schema"
+import { QuestionFlow } from "./question-flow/index"
+import { SerializableQuestionFlowSchema } from "./question-flow/schema"
+
+afterEach(cleanup)
+
+async function renderTool(ui: Parameters<typeof render>[0]) {
+  const view = render(ui)
+  const waitForDisplay = () =>
+    waitFor(() => {
+      expect(
+        view.queryByText(/^(Loading tool display…|תצוגת הכלי נטענת…)$/)
+      ).not.toBeInTheDocument()
+    })
+  await waitForDisplay()
+  return {
+    ...view,
+    async rerender(next: Parameters<typeof render>[0]) {
+      view.rerender(next)
+      await waitForDisplay()
+    },
+  }
+}
+
+function toolPart(
+  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">
+): RichToolPart {
+  const args = overrides.args ?? {}
+
+  return {
+    type: "tool-call",
+    toolCallId: `test-${overrides.toolName}`,
+    args,
+    argsText: JSON.stringify(args),
+    status: { type: "complete" },
+    addResult: vi.fn(),
+    resume: vi.fn(),
+    respondToApproval: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  }
+}
+
+describe("normalizeRichToolState", () => {
+  it("keeps an unresolved interactive call pending even after its message completes", () => {
+    const state = normalizeRichToolState(
+      toolPart({ toolName: "ask_user_question" }),
+      { interactive: true }
+    )
+
+    expect(state.phase).toBe("pending")
+    expect(state.canRespond).toBe(true)
+  })
+
+  it("gives provider expiry precedence over completion", () => {
+    const state = normalizeRichToolState(
+      toolPart({
+        toolName: "request_permission",
+        approval: { id: "approval-1", resolution: "expired" },
+      }),
+      { interactive: true }
+    )
+
+    expect(state.phase).toBe("expired")
+    expect(state.canRespond).toBe(false)
+  })
+})
+
+describe("accessible rich-tool semantics", () => {
+  const completeState = {
+    phase: "complete",
+    label: "Complete",
+    canRespond: false,
+  } as const
+
+  it("renders standalone ToolChrome and Plan titles at heading level 2", () => {
+    render(
+      <>
+        <ToolChrome title="Standalone tool" state={completeState} />
+        <Plan
+          id="standalone-plan"
+          title="Standalone plan"
+          todos={[{ id: "first", label: "First step", status: "pending" }]}
+        />
+      </>
+    )
+
+    expect(
+      screen.getByRole("heading", { name: "Standalone tool", level: 2 })
+    ).toBeVisible()
+    expect(
+      screen.getByRole("heading", { name: "Standalone plan", level: 2 })
+    ).toBeVisible()
+  })
+
+  it("renders explicitly nested rich-tool titles at heading level 3", () => {
+    render(
+      <>
+        <ToolChrome
+          title="Nested tool"
+          state={completeState}
+          headingLevel={3}
+        />
+        <Plan
+          id="nested-plan"
+          title="Nested plan"
+          todos={[{ id: "first", label: "First step", status: "pending" }]}
+          headingLevel={3}
+        />
+        <QuestionFlow
+          id="nested-question"
+          step={1}
+          title="Nested question"
+          options={[{ id: "answer", label: "Answer" }]}
+          headingLevel={3}
+        />
+      </>
+    )
+
+    for (const name of ["Nested tool", "Nested plan", "Nested question"]) {
+      expect(screen.getByRole("heading", { name, level: 3 })).toBeVisible()
+    }
+  })
+
+  it("renders a QuestionFlow receipt title at its requested heading level", () => {
+    render(
+      <QuestionFlow
+        id="nested-receipt"
+        choice={{
+          title: "Recorded answer",
+          summary: [{ label: "Audience", value: "Team" }],
+        }}
+        headingLevel={3}
+      />
+    )
+
+    expect(
+      screen.getByRole("heading", { name: "Recorded answer", level: 3 })
+    ).toBeVisible()
+  })
+
+  it("renders a QuestionFlow nested under ToolChrome one level below its tool title", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "ask_user_question",
+          args: {
+            question: "Choose a market",
+            options: ["Israel", "United Kingdom"],
+          },
+          status: { type: "requires-action", reason: "tool-calls" },
+        })}
+      />
+    )
+
+    const chrome = document.querySelector<HTMLElement>(
+      '[data-slot="tool-chrome"]'
+    )
+    const questionFlow = document.querySelector<HTMLElement>(
+      '[data-slot="question-flow"]'
+    )
+
+    expect(chrome).not.toBeNull()
+    expect(questionFlow).not.toBeNull()
+    expect(
+      within(chrome!).getByRole("heading", {
+        name: "Choose a market",
+        level: 2,
+      })
+    ).toBeVisible()
+    expect(
+      within(questionFlow!).getByRole("heading", {
+        name: "Choose a market",
+        level: 3,
+      })
+    ).toBeVisible()
+  })
+
+  it.each([
+    ["en", "Plan progress"],
+    ["he", "התקדמות התוכנית"],
+  ] as const)(
+    "gives the Plan progressbar its localized %s accessible name",
+    (locale, accessibleName) => {
+      render(
+        <ToolUiLocaleProvider locale={locale}>
+          <Plan
+            id={`plan-${locale}`}
+            title="Plan"
+            todos={[
+              { id: "done", label: "Done", status: "completed" },
+              { id: "next", label: "Next", status: "pending" },
+            ]}
+          />
+        </ToolUiLocaleProvider>
+      )
+
+      expect(
+        screen.getByRole("progressbar", { name: accessibleName })
+      ).toHaveAttribute("aria-valuenow", "50")
+    }
+  )
+
+  it.each([
+    ["en", "Question progress"],
+    ["he", "התקדמות השאלה"],
+  ] as const)(
+    "gives the QuestionFlow progressbar its localized %s accessible name",
+    (locale, accessibleName) => {
+      render(
+        <ToolUiLocaleProvider locale={locale}>
+          <QuestionFlow
+            id={`question-${locale}`}
+            steps={[
+              {
+                id: "audience",
+                title: "Audience",
+                options: [{ id: "team", label: "Team" }],
+              },
+              {
+                id: "format",
+                title: "Format",
+                options: [{ id: "brief", label: "Brief" }],
+              },
+            ]}
+          />
+        </ToolUiLocaleProvider>
+      )
+
+      expect(
+        screen.getByRole("progressbar", { name: accessibleName })
+      ).toHaveAttribute("aria-valuenow", "1")
+    }
+  )
+
+  it("keeps headingLevel out of serializable Plan and QuestionFlow payloads", () => {
+    const plan = SerializablePlanSchema.parse({
+      id: "plan-schema",
+      title: "Plan schema",
+      todos: [{ id: "step", label: "Step", status: "pending" }],
+      headingLevel: 3,
+    })
+    const question = SerializableQuestionFlowSchema.parse({
+      id: "question-schema",
+      step: 1,
+      title: "Question schema",
+      options: [{ id: "option", label: "Option" }],
+      headingLevel: 3,
+    })
+
+    expect(plan).not.toHaveProperty("headingLevel")
+    expect(question).not.toHaveProperty("headingLevel")
+  })
+})
+
+describe("QuestionFlow renderer", () => {
+  it("leaves OpenCode's native batched question call to the composer bridge", async () => {
+    const { container } = await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "question",
+          args: {
+            questions: [
+              {
+                header: "Scope",
+                question: "Which boundary should the Agent use?",
+                options: [
+                  {
+                    label: "Focused",
+                    description: "Keep the Agent narrowly scoped",
+                  },
+                ],
+              },
+            ],
+          },
+          status: { type: "running" },
+        })}
+      />
+    )
+
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it.each([
+    ["missing options", { question: "Unanswerable question" }],
+    [
+      "an empty options list",
+      { question: "Unanswerable question", options: [] },
+    ],
+    [
+      "an explicitly disabled freeform answer",
+      {
+        question: "Unanswerable question",
+        options: [],
+        allowFreeform: false,
+      },
+    ],
+  ])("uses the malformed fallback for %s", async (_case, args) => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "ask_user_question",
+          args,
+          status: { type: "requires-action", reason: "tool-calls" },
+        })}
+      />
+    )
+
+    expect(
+      screen.getByText("Could not safely render Question")
+    ).toBeInTheDocument()
+    expect(document.querySelector('[data-slot="question-flow"]')).toBeNull()
+    expect(screen.queryByRole("textbox")).toBeNull()
+  })
+
+  it("uses the registry QuestionFlow slot and submits its selected provider option", async () => {
+    const user = userEvent.setup()
+    const addResult = vi.fn()
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "ask_user_question",
+          args: {
+            question: "Choose a market",
+            options: ["Israel", "United Kingdom"],
+          },
+          status: { type: "requires-action", reason: "tool-calls" },
+          addResult,
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="question-flow"]')).toBeTruthy()
+    await user.click(screen.getByRole("option", { name: "Israel" }))
+    await user.click(screen.getByRole("button", { name: "Submit answer" }))
+
+    expect(addResult).toHaveBeenCalledTimes(1)
+    expect(addResult).toHaveBeenCalledWith({ answer: "Israel" })
+  })
+
+  it("uses the registry OptionList slot for hybrid option and free-text questions", async () => {
+    const user = userEvent.setup()
+    const addResult = vi.fn()
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "ask_user_question",
+          args: {
+            question: "Choose or explain",
+            options: ["Use the option"],
+            allowFreeform: true,
+          },
+          status: { type: "requires-action", reason: "tool-calls" },
+          addResult,
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="option-list"]')).toBeTruthy()
+    await user.click(screen.getByRole("option", { name: "Use the option" }))
+
+    expect(addResult).toHaveBeenCalledTimes(1)
+    expect(addResult).toHaveBeenCalledWith({ answer: "Use the option" })
+  })
+
+  it("submits a free-text answer through the tool result seam", async () => {
+    const user = userEvent.setup()
+    const addResult = vi.fn()
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "ask_user_question",
+          args: {
+            question: "Which audience should the brief prioritize?",
+            allowFreeform: true,
+          },
+          status: { type: "requires-action", reason: "tool-calls" },
+          addResult,
+        })}
+      />
+    )
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Your answer" }),
+      "Design leads"
+    )
+    await user.click(screen.getByRole("button", { name: "Submit answer" }))
+
+    expect(addResult).toHaveBeenCalledWith({ answer: "Design leads" })
+    expect(screen.getByText("Answered")).toBeInTheDocument()
+    expect(screen.getByText("Design leads")).toBeInTheDocument()
+  })
+
+  it("shows submitting, answered, failed, and expired as distinct states", async () => {
+    let resolveApproval: (() => void) | undefined
+    const respondToApproval = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveApproval = resolve
+        })
+    )
+    const base = toolPart({
+      toolName: "ask_user_question",
+      args: { question: "Name the audience", allowFreeform: true },
+      approval: {
+        id: "question-1",
+        prompt: "Name the audience",
+        display: "text",
+        allowFreeform: true,
+      },
+      status: { type: "requires-action", reason: "tool-calls" },
+      respondToApproval,
+    })
+    const { rerender } = await renderTool(<RichToolRenderer {...base} />)
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer" }), {
+      target: { value: "Product team" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit answer" }))
+    expect(screen.getByText("Submitting")).toBeInTheDocument()
+
+    await act(async () => resolveApproval?.())
+    expect(screen.getByText("Answered")).toBeInTheDocument()
+
+    await rerender(
+      <RichToolRenderer
+        {...base}
+        approval={{ ...base.approval!, resolution: "expired" }}
+      />
+    )
+    expect(screen.getByText("Expired")).toBeInTheDocument()
+
+    await rerender(
+      <RichToolRenderer
+        {...base}
+        approval={undefined}
+        isError
+        status={{
+          type: "incomplete",
+          reason: "error",
+          error: "Provider failed",
+        }}
+      />
+    )
+    expect(screen.getByText("Failed")).toBeInTheDocument()
+  })
+
+  it("offers a localized retry after failure and guards it from double-submit", async () => {
+    const user = userEvent.setup()
+    let resolveRetry: (() => void) | undefined
+    const retryResult = new Promise<void>((resolve) => {
+      resolveRetry = resolve
+    })
+    const addResult = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first attempt failed"))
+      .mockImplementation(() => retryResult)
+
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "ask_user_question",
+            args: { question: "Retry this answer?", allowFreeform: true },
+            status: { type: "requires-action", reason: "tool-calls" },
+            addResult,
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    await user.type(
+      screen.getByRole("textbox", { name: "התשובה שלך" }),
+      "Provider answer"
+    )
+    await user.click(screen.getByRole("button", { name: "שליחת תשובה" }))
+    const retry = await screen.findByRole("button", { name: "ניסיון חוזר" })
+
+    fireEvent.click(retry)
+    fireEvent.click(retry)
+
+    expect(addResult).toHaveBeenCalledTimes(2)
+    expect(addResult).toHaveBeenLastCalledWith({ answer: "Provider answer" })
+    expect(screen.queryByRole("button", { name: "ניסיון חוזר" })).toBeNull()
+
+    await act(async () => resolveRetry?.())
+    expect(screen.getByText("נענה")).toBeInTheDocument()
+  })
+})
+
+describe("provider permission renderer", () => {
+  it("renders approvals attached to provider-native tool names", async () => {
+    const user = userEvent.setup()
+    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "bash",
+          args: { command: "pwd" },
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "opencode-bash-approval",
+            prompt: "Allow this command?",
+            options: [
+              { id: "once", kind: "allow-once", label: "Allow once" },
+              { id: "reject", kind: "reject-once", label: "Reject" },
+            ],
+          },
+          respondToApproval,
+        })}
+      />
+    )
+
+    expect(screen.getByText("Allow this command?")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Allow once" }))
+    expect(respondToApproval).toHaveBeenCalledWith({ optionId: "once" })
+  })
+
+  it("only offers persistent permission when its provider scope is visible", async () => {
+    const user = userEvent.setup()
+    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "request_permission",
+          args: { action: "Read the shared market dataset" },
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "permission-1",
+            prompt: "Allow Aster to read the shared market dataset?",
+            options: [
+              { id: "once", kind: "allow-once", label: "Allow once" },
+              {
+                id: "always-dataset",
+                kind: "allow-always",
+                label: "Always for this dataset",
+                grants: ["datasets/market/**"],
+              },
+              {
+                id: "always-hidden",
+                kind: "allow-always",
+                label: "Always everywhere",
+              },
+              { id: "reject", kind: "reject-once", label: "Reject" },
+            ],
+          },
+          respondToApproval,
+        })}
+      />
+    )
+
+    expect(screen.getByText("datasets/market/**")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Always everywhere" })
+    ).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("button", { name: "Always for this dataset" })
+    )
+    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Confirm always" }))
+
+    await waitFor(() =>
+      expect(respondToApproval).toHaveBeenCalledWith({
+        optionId: "always-dataset",
+      })
+    )
+  })
+
+  it("does not invent choices when the provider supplies no option ids", async () => {
+    const respondToApproval = vi.fn()
+    const part = toolPart({
+      toolName: "request_permission",
+      args: { action: "Read provider data" },
+      status: { type: "requires-action", reason: "tool-calls" },
+      approval: {
+        id: "permission-without-options",
+        prompt: "Provider supplied no answerable choices",
+        options: [
+          { kind: "allow-once", label: "Choice without an id" },
+        ] as unknown as NonNullable<RichToolPart["approval"]>["options"],
+      },
+      respondToApproval,
+    })
+    const { rerender } = await renderTool(<RichToolRenderer {...part} />)
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument()
+    expect(
+      screen.getByText("The provider did not supply an answerable choice.")
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("button")).toBeNull()
+    expect(respondToApproval).not.toHaveBeenCalled()
+
+    await rerender(
+      <RichToolRenderer
+        {...part}
+        approval={{ ...part.approval!, resolution: "expired" }}
+      />
+    )
+    expect(screen.getByText("Expired")).toBeInTheDocument()
+    expect(screen.queryByText("Unavailable")).toBeNull()
+  })
+
+  it("retries the same provider-native choice once without double-submit", async () => {
+    const user = userEvent.setup()
+    let resolveRetry: (() => void) | undefined
+    const retryResult = new Promise<void>((resolve) => {
+      resolveRetry = resolve
+    })
+    const respondToApproval = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("first attempt failed"))
+      .mockImplementation(() => retryResult)
+
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "request_permission",
+            args: { action: "Read provider data" },
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "permission-retry",
+              prompt: "Retry provider permission",
+              options: [
+                {
+                  id: "provider-once",
+                  kind: "allow-once",
+                  label: "Provider allow once",
+                },
+              ],
+            },
+            respondToApproval,
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Provider allow once" })
+    )
+    const retry = await screen.findByRole("button", { name: "ניסיון חוזר" })
+
+    fireEvent.click(retry)
+    fireEvent.click(retry)
+
+    expect(respondToApproval).toHaveBeenCalledTimes(2)
+    expect(respondToApproval).toHaveBeenLastCalledWith({
+      optionId: "provider-once",
+    })
+
+    await act(async () => resolveRetry?.())
+    expect(screen.getByText("נענה")).toBeInTheDocument()
+  })
+})
+
+describe("informational renderers", () => {
+  it("renders four plan rows with truthful progress and discloses overflow", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "present_plan",
+          args: { title: "Market brief" },
+          result: {
+            id: "plan-market",
+            title: "Plan",
+            steps: [
+              { id: "scope", label: "Define scope", status: "completed" },
+              { id: "trends", label: "Aggregate trends", status: "active" },
+              { id: "segments", label: "Segment market", status: "pending" },
+              { id: "drivers", label: "Identify drivers", status: "pending" },
+              { id: "summary", label: "Write summary", status: "pending" },
+            ],
+          },
+        })}
+      />
+    )
+
+    expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument()
+    expect(document.querySelector('[data-slot="plan"]')).toBeTruthy()
+    expect(screen.getByText("Define scope")).toBeInTheDocument()
+    expect(screen.getByText("In progress")).toBeInTheDocument()
+    expect(screen.getByText("1 of 5 plan steps complete")).toBeInTheDocument()
+    expect(screen.queryByText("Write summary")).not.toBeInTheDocument()
+
+    await user.click(screen.getByText("Show 1 more step"))
+    expect(screen.getByText("Write summary")).toBeVisible()
+  })
+
+  it("keeps subagent activity collapsed by default", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "delegate_subagent",
+          args: { task: "Validate the market segments" },
+          result: {
+            name: "Data analyst",
+            status: "completed",
+            summary: "Validated three segments.",
+          },
+        })}
+      />
+    )
+
+    const disclosure = screen.getByText("Data analyst").closest("details")
+    expect(disclosure).not.toHaveAttribute("open")
+    expect(screen.getByText("Validated three segments.")).toBeInTheDocument()
+  })
+
+  it.each([
+    ["running", "Running", "Transcript is loading…"],
+    ["waiting", "Waiting", "Transcript is loading…"],
+    ["completed", "Completed", "Transcript unavailable."],
+    ["failed", "Failed", "Transcript unavailable."],
+  ] as const)(
+    "shows validated child status %s and its transcript state",
+    async (status, statusLabel, transcriptLabel) => {
+      await renderTool(
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "delegate_subagent",
+            args: { task: "Inspect child state" },
+            result: { name: "Child agent", status },
+          })}
+        />
+      )
+
+      const disclosure = screen.getByText("Child agent").closest("details")
+      expect(disclosure).not.toHaveAttribute("open")
+      expect(screen.getByText(statusLabel)).toBeInTheDocument()
+      expect(screen.getByText(transcriptLabel)).toBeInTheDocument()
+      expect(screen.queryByRole("button")).toBeNull()
+    }
+  )
+
+  it("renders a supplied transcript verbatim and rejects unknown child status", async () => {
+    const { rerender } = await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "delegate_subagent",
+          args: { task: "Inspect transcript" },
+          result: {
+            name: "Child agent",
+            status: "completed",
+            transcript: "Provider transcript",
+          },
+        })}
+      />
+    )
+
+    expect(screen.getByText("Provider transcript")).toHaveAttribute(
+      "dir",
+      "auto"
+    )
+    expect(screen.queryByText("Transcript unavailable.")).toBeNull()
+
+    await rerender(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "delegate_subagent",
+          args: { task: "Inspect invalid status" },
+          result: { name: "Child agent", status: "mystery" },
+        })}
+      />
+    )
+    expect(
+      screen.getByText("Could not safely render Subagent activity")
+    ).toBeInTheDocument()
+  })
+})
+
+describe("safe result renderers", () => {
+  it("announces a visual chunk failure while preserving the surrounding data UI", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    function BrokenVisual(): never {
+      throw new Error("visual chunk failed")
+    }
+
+    render(
+      <>
+        <LazyVisualBoundary fallbackLabel="Visual unavailable. Data remains available.">
+          <BrokenVisual />
+        </LazyVisualBoundary>
+        <p>Textual data</p>
+      </>
+    )
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Visual unavailable. Data remains available."
+    )
+    expect(screen.getByText("Textual data")).toBeInTheDocument()
+  })
+
+  it("makes Monty inspectable and copyable without exposing browser execution", async () => {
+    const user = userEvent.setup()
+    const source =
+      '<script>alert("not executed")</script>\nmarket.total_by_quarter()'
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "monty_execute",
+          args: { code: source },
+          result: { stdout: "Q1’25: 365", receipt: "fixture-monty-001" },
+        })}
+      />
+    )
+
+    const sourceCode = screen.getByText(/not executed/)
+    expect(sourceCode).not.toBeVisible()
+    expect(document.querySelector("script")).not.toBeInTheDocument()
+    expect(screen.getByText("Q1’25: 365")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /run|execute/i })
+    ).not.toBeInTheDocument()
+
+    const inspectSource = screen.getByText("Inspect source code")
+    const summary = inspectSource.closest("summary")
+    expect(summary).toBeInTheDocument()
+    await user.click(summary!)
+    expect(sourceCode).toBeVisible()
+
+    await user.click(screen.getByText("Inspect full result"))
+    expect(screen.getByText(/fixture-monty-001/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Copy code" }))
+    expect(await navigator.clipboard.readText()).toBe(source)
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+  })
+
+  it("shows a provider Monty failure without offering browser execution", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "monty_execute",
+          args: { code: "broken_call()" },
+          isError: true,
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: "Monty worker timed out",
+          },
+        })}
+      />
+    )
+
+    expect(screen.getByText("Failed")).toBeInTheDocument()
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Monty worker timed out"
+    )
+    expect(
+      screen.queryByRole("button", { name: /run|execute/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it("uses the inspectable JSON fallback for unknown and malformed known tools", async () => {
+    const user = userEvent.setup()
+    const { rerender } = await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "unknown_fixture_tool",
+          args: { unexpected: [null, 42] },
+          result: "not-an-object",
+        })}
+      />
+    )
+
+    expect(screen.getByText("unknown_fixture_tool")).toBeInTheDocument()
+    await user.click(screen.getByText("unknown_fixture_tool"))
+    expect(screen.getByText(/"unexpected"/)).toBeInTheDocument()
+    expect(screen.getByText(/not-an-object/)).toBeInTheDocument()
+
+    await rerender(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_chart",
+          args: { title: "Broken chart" },
+          result: { type: "line", data: "invalid" },
+        })}
+      />
+    )
+    expect(
+      screen.getByText("Could not safely render Chart")
+    ).toBeInTheDocument()
+  })
+
+  it("keeps chart data available as a table while the visual loads", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_chart",
+          args: { title: "Enterprise AI spend" },
+          result: {
+            type: "line",
+            xKey: "quarter",
+            series: [
+              { key: "total", label: "Total AI spend" },
+              { key: "genai", label: "GenAI spend" },
+            ],
+            data: [
+              { quarter: "Q4’24", total: 300, genai: 220 },
+              { quarter: "Q1’25", total: 365, genai: 275 },
+            ],
+          },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "View chart data" }))
+    expect(
+      screen.getByRole("table", { name: "Enterprise AI spend data" })
+    ).toBeInTheDocument()
+    expect(screen.getByRole("cell", { name: "365" })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="chart"]')).toBeTruthy()
+    )
+  })
+
+  it("renders a pie chart retained in tool arguments", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_chart",
+          args: {
+            title: "Illustrative allocation",
+            type: "pie",
+            xKey: "category",
+            series: [{ key: "value", label: "Share" }],
+            data: [
+              { category: "Research", value: 45 },
+              { category: "Delivery", value: 35 },
+              { category: "Support", value: 20 },
+            ],
+          },
+          result: "Chart ready for display.",
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "View chart data" }))
+    expect(
+      screen.getByRole("table", { name: "Illustrative allocation data" })
+    ).toBeInTheDocument()
+    expect(await screen.findByTestId("chart-visual-pie")).toBeInTheDocument()
+  })
+
+  it("rejects malformed label/value pie shorthand without hiding provider data", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_chart",
+          args: {
+            title: "Sample Pie Chart",
+            type: "pie",
+            xKey: "Category",
+            series: [
+              { key: "Part A", label: "Part A" },
+              { key: "Part B", label: "Part B" },
+            ],
+            data: [
+              { key: "A", label: "Part A", value: 40 },
+              { key: "B", label: "Part B", value: 60 },
+            ],
+          },
+          result: "Chart ready for display: Sample Pie Chart",
+        })}
+      />
+    )
+
+    expect(
+      screen.getByText("Could not safely render Chart")
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("chart-visual-pie")).not.toBeInTheDocument()
+    await user.click(screen.getByText("Could not safely render Chart"))
+    expect(screen.getByText(/"xKey": "Category"/)).toBeVisible()
+    expect(
+      screen.getByText(/Chart ready for display: Sample Pie Chart/)
+    ).toBeVisible()
+  })
+
+  it("does not repair or conceal a mixed malformed pie payload", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_chart",
+          args: {
+            title: "Incomplete Pie Chart",
+            type: "pie",
+            xKey: "Category",
+            series: [{ key: "Part A", label: "Part A" }],
+            data: [{ label: "Part A", value: 40 }, null],
+          },
+          result: "Chart ready for display: Incomplete Pie Chart",
+        })}
+      />
+    )
+
+    expect(
+      screen.getByText("Could not safely render Chart")
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("chart-visual-pie")).not.toBeInTheDocument()
+    await user.click(screen.getByText("Could not safely render Chart"))
+    expect(screen.getByText(/"data": \[/)).toBeVisible()
+    expect(screen.getByText(/null/)).toBeVisible()
+    expect(
+      screen.getByText(/Chart ready for display: Incomplete Pie Chart/)
+    ).toBeVisible()
+  })
+
+  it("renders the installed stats display for argument-backed metrics", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_stats",
+          args: {
+            title: "Launch metrics",
+            description: "Illustrative execution metrics",
+            stats: [
+              {
+                key: "sessions",
+                label: "Sessions",
+                value: 1284,
+                format: { kind: "number", compact: true },
+                diff: { value: 12.5, label: "vs. last week" },
+                sparkline: { data: [880, 940, 1012, 1090, 1160, 1284] },
+              },
+            ],
+          },
+          result: "Metrics ready for display.",
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="stats-display"]')).toBeTruthy()
+    expect(screen.getByText("Sessions")).toBeInTheDocument()
+    expect(screen.getByText("vs. last week")).toBeInTheDocument()
+  })
+
+  it("suppresses stats and sparkline animations for reduced motion", async () => {
+    const { container } = await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_stats",
+          args: {
+            title: "Launch metrics",
+            stats: [
+              {
+                key: "sessions",
+                label: "Sessions",
+                value: 1284,
+                sparkline: { data: [880, 940, 1012, 1090] },
+              },
+            ],
+          },
+        })}
+      />
+    )
+
+    const stats = container.querySelector<HTMLElement>(
+      '[data-slot="stats-display"]'
+    )
+    expect(stats).toBeInTheDocument()
+    const animatedElements = stats!.querySelectorAll<HTMLElement>(
+      '[class*="animate-"]'
+    )
+    expect(animatedElements.length).toBeGreaterThan(0)
+    for (const element of animatedElements) {
+      const classes = element.getAttribute("class")?.split(/\s+/) ?? []
+      const unconditionalAnimations = classes.filter(
+        (className) =>
+          className.includes("animate-") &&
+          !className.includes("animate-none") &&
+          !className.includes("motion-safe:")
+      )
+      if (unconditionalAnimations.length > 0) {
+        expect(element).toHaveClass("motion-reduce:animate-none")
+      }
+    }
+  })
+
+  it("renders currency metrics when OpenCode supplies the required currency", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_stats",
+          args: {
+            title: "Revenue",
+            stats: [
+              {
+                key: "arr",
+                label: "ARR",
+                value: 1250000,
+                format: { kind: "currency", currency: "USD", decimals: 0 },
+              },
+            ],
+          },
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="stats-display"]')).toBeTruthy()
+    expect(screen.getByLabelText("1,250,000 US dollars")).toBeInTheDocument()
+  })
+
+  it("renders provider-native map data retained in OpenCode tool arguments", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_map",
+          args: {
+            title: "Illustrative offices",
+            locations: [
+              {
+                id: "tel-aviv",
+                label: "Tel Aviv",
+                latitude: 32.0853,
+                longitude: 34.7818,
+              },
+            ],
+          },
+          result: "Map ready for display.",
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "View map locations" }))
+    expect(screen.getByText("Tel Aviv")).toBeInTheDocument()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="geo-map"]')).toBeTruthy()
+    )
+  })
+
+  it("renders provider-native plans retained in OpenCode tool arguments", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "present_plan",
+          args: {
+            id: "plan-launch",
+            title: "Launch plan",
+            steps: [
+              { id: "brief", label: "Confirm the brief", status: "active" },
+            ],
+          },
+          result: "Plan ready for display.",
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="inline-plan"]')).toBeTruthy()
+    expect(screen.getByText("Confirm the brief")).toBeInTheDocument()
+  })
+
+  it("localizes response-scoped Plan copy in Hebrew", async () => {
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "present_plan",
+            args: {
+              id: "plan-launch",
+              title: "תוכנית השקה",
+              steps: [
+                { id: "brief", label: "אישור התקציר", status: "completed" },
+              ],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText("מצורפת לתשובה הזו.")).toBeInTheDocument()
+    expect(
+      screen.getByText("1 מתוך 1 שלבים בתוכנית הושלמו")
+    ).toBeInTheDocument()
+  })
+
+  it("renders native OpenCode task calls as collapsed subagent activity", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "task",
+          args: { description: "Review the launch plan" },
+          result: "The review is complete.",
+        })}
+      />
+    )
+
+    expect(document.querySelector('[data-slot="tool-activity"]')).toBeTruthy()
+    expect(screen.getByText("Review the launch plan")).toBeInTheDocument()
+  })
+
+  it("keeps map locations available as text while the visual loads", async () => {
+    const user = userEvent.setup()
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "render_map",
+          args: { title: "Interview coverage" },
+          result: {
+            locations: [
+              {
+                id: "london",
+                label: "London",
+                latitude: 51.5072,
+                longitude: -0.1276,
+              },
+              {
+                id: "tel-aviv",
+                label: "Tel Aviv",
+                latitude: 32.0853,
+                longitude: 34.7818,
+              },
+            ],
+          },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "View map locations" }))
+    const londonLabel = screen.getByText("London")
+    const telAvivLabel = screen.getByText("Tel Aviv")
+    expect(londonLabel.closest("li")).toHaveTextContent(
+      "London — 51.5072, -0.1276"
+    )
+    expect(telAvivLabel.closest("li")).toHaveTextContent(
+      "Tel Aviv — 32.0853, 34.7818"
+    )
+    expect(londonLabel).toHaveAttribute("dir", "auto")
+    expect(screen.getByText("51.5072, -0.1276")).toHaveAttribute("dir", "ltr")
+    expect(telAvivLabel).toHaveAttribute("dir", "auto")
+    expect(screen.getByText("32.0853, 34.7818")).toHaveAttribute("dir", "ltr")
+  })
+})
+
+describe("Hebrew tool UI", () => {
+  it("formats spoken percentages with the active Hebrew locale", async () => {
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_stats",
+            args: {
+              title: "Conversion",
+              stats: [
+                {
+                  key: "conversion",
+                  label: "Conversion rate",
+                  value: -0.1234,
+                  format: { kind: "percent", decimals: 2 },
+                },
+              ],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    const expected = new Intl.NumberFormat("he", {
+      style: "percent",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(-0.1234)
+    expect(screen.getByLabelText(expected)).toBeInTheDocument()
+  })
+
+  it("localizes chart and stats chrome while preserving provider labels", async () => {
+    const user = userEvent.setup()
+    const { rerender } = await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_chart",
+            args: {
+              title: "Provider chart",
+              type: "pie",
+              xKey: "category",
+              series: [{ key: "value", label: "Provider value" }],
+              data: [
+                { category: "First", value: 12 },
+                { category: "Second", value: 8 },
+              ],
+            },
+            result: "Chart ready for display.",
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    await user.click(screen.getByRole("button", { name: "הצגת נתוני התרשים" }))
+    expect(
+      screen.getByRole("columnheader", { name: "Provider value" })
+    ).toBeVisible()
+    expect(screen.queryByText(/Slice/)).not.toBeInTheDocument()
+
+    await rerender(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_stats",
+            args: {
+              stats: [{ key: "total", label: "Provider total", value: 20 }],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByRole("heading", { name: "מדדים" })).toBeVisible()
+  })
+
+  it("localizes QuestionFlow chrome while preserving payload text and direction", async () => {
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "ask_user_question",
+            args: {
+              question: "Keep this provider question verbatim?",
+              options: ["Payload option"],
+              allowFreeform: true,
+            },
+            status: { type: "requires-action", reason: "tool-calls" },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText("נדרשת תשובה")).toBeInTheDocument()
+    expect(
+      screen.getByRole("group", { name: "אפשרויות תשובה" })
+    ).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "התשובה שלך" })).toHaveAttribute(
+      "dir",
+      "auto"
+    )
+    expect(
+      screen.getByRole("button", { name: "שליחת תשובה" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", {
+        name: "Keep this provider question verbatim?",
+      })
+    ).toHaveAttribute("dir", "auto")
+    expect(
+      screen.getByRole("option", { name: "Payload option" })
+    ).toHaveAttribute("dir", "auto")
+  })
+
+  it("localizes permission defaults and keeps provider scope identifiers LTR", async () => {
+    await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "request_permission",
+            args: { action: "Read the provider dataset" },
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "permission-he",
+              prompt: "Allow this provider operation verbatim?",
+              options: [
+                {
+                  id: "always-dataset",
+                  kind: "allow-always",
+                  grants: ["datasets/market/**"],
+                },
+              ],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByRole("heading", { name: "בקשת הרשאה" })).toBeVisible()
+    expect(
+      screen.getByText("Allow this provider operation verbatim?")
+    ).toHaveAttribute("dir", "auto")
+    expect(
+      screen.getByRole("button", { name: "אישור קבוע" })
+    ).toBeInTheDocument()
+    expect(screen.getByText("datasets/market/**")).toHaveAttribute("dir", "ltr")
+  })
+
+  it("localizes malformed fallback, Monty controls, and copy feedback", async () => {
+    const user = userEvent.setup()
+    const { rerender } = await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_chart",
+            args: { title: "Provider chart" },
+            result: { data: "invalid" },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText("לא ניתן להציג בבטחה: תרשים")).toBeInTheDocument()
+    await user.click(screen.getByText("לא ניתן להציג בבטחה: תרשים"))
+    expect(screen.getByRole("button", { name: "העתקת JSON" })).toBeVisible()
+
+    await rerender(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "monty_execute",
+            args: { code: "market.total_by_quarter()" },
+            result: { stdout: "Provider output" },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByRole("heading", { name: "תוצאת Monty" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "העתקת קוד" })).toBeVisible()
+    const sourceCode = screen.getByText("market.total_by_quarter()")
+    expect(sourceCode).not.toBeVisible()
+    expect(sourceCode).toHaveAttribute("dir", "ltr")
+    await user.click(screen.getByText("בדיקת קוד המקור"))
+    expect(sourceCode).toBeVisible()
+    await user.click(screen.getByRole("button", { name: "העתקת קוד" }))
+    expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
+  })
+
+  it("localizes plan and collapsed activity chrome", async () => {
+    const { rerender } = await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "present_plan",
+            args: { title: "Provider plan" },
+            result: {
+              id: "plan-he",
+              title: "Provider plan title",
+              steps: [
+                { id: "step-he", label: "Provider step", status: "active" },
+              ],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText("בביצוע")).toBeInTheDocument()
+    expect(
+      screen.getByText("0 מתוך 1 שלבים בתוכנית הושלמו")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Provider plan title")).toHaveAttribute(
+      "dir",
+      "auto"
+    )
+
+    await rerender(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "delegate_subagent",
+            args: { task: "Provider task" },
+            result: {
+              name: "Provider agent",
+              status: "waiting",
+              summary: "Provider summary",
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText("סוכן משנה")).toBeInTheDocument()
+    expect(screen.getByText("בהמתנה")).toBeInTheDocument()
+    expect(screen.getByText("התמליל נטען…")).toBeInTheDocument()
+    expect(screen.getByText("Provider agent")).toHaveAttribute("dir", "auto")
+    expect(screen.getByText("Provider summary")).toHaveAttribute("dir", "auto")
+  })
+
+  it("localizes chart and map actions and accessible alternatives", async () => {
+    const user = userEvent.setup()
+    const { rerender } = await renderTool(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_chart",
+            args: { title: "Provider chart" },
+            result: {
+              type: "line",
+              xKey: "quarter",
+              series: [{ key: "total", label: "Provider series" }],
+              data: [{ quarter: "Q1", total: 365 }],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    await user.click(screen.getByRole("button", { name: "הצגת נתוני התרשים" }))
+    expect(
+      screen.getByRole("table", { name: "Provider chart — נתוני תרשים" })
+    ).toBeVisible()
+
+    await rerender(
+      <ToolUiLocaleProvider locale="he">
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "render_map",
+            args: { title: "Provider map" },
+            result: {
+              locations: [
+                {
+                  id: "location-he",
+                  label: "Provider location",
+                  latitude: 32.0853,
+                  longitude: 34.7818,
+                },
+              ],
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    await user.click(screen.getByRole("button", { name: "הצגת מיקומי המפה" }))
+    expect(
+      screen.getByRole("list", { name: "Provider map — מיקומים" })
+    ).toBeVisible()
+  })
+})

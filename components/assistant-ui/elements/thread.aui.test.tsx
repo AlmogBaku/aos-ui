@@ -1,0 +1,903 @@
+import {
+  AssistantRuntimeProvider,
+  type AttachmentAdapter,
+  type AssistantRuntime,
+  type ChatModelAdapter,
+  type ThreadMessage,
+  type ThreadMessageLike,
+  useAuiState,
+  useLocalRuntime,
+  useRemoteThreadListRuntime,
+} from "@assistant-ui/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import { Thread, type ThreadComponents, type ThreadLabels } from "./thread.aui"
+import { RichToolRenderer } from "@/components/tool-ui"
+
+afterEach(cleanup)
+
+const INITIAL_MESSAGES = [
+  {
+    id: "message-user",
+    role: "user" as const,
+    content: [
+      { type: "text" as const, text: "Review this image" },
+      {
+        type: "image" as const,
+        image:
+          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
+        filename: "reference.svg",
+      },
+    ],
+  },
+  {
+    id: "message-assistant",
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "The reference is ready." }],
+  },
+]
+
+function LocalThread({
+  labels,
+  model = { run: async () => ({ content: [] }) },
+  exposeRuntime,
+  initialMessages = INITIAL_MESSAGES,
+  toolFallback,
+  composer,
+  enableMessageQueue = false,
+  attachmentAdapter,
+}: {
+  labels?: Partial<ThreadLabels>
+  model?: ChatModelAdapter
+  exposeRuntime?: (runtime: AssistantRuntime) => void
+  initialMessages?: readonly ThreadMessageLike[]
+  toolFallback?: typeof RichToolRenderer
+  composer?: ThreadComponents["Composer"]
+  enableMessageQueue?: boolean
+  attachmentAdapter?: AttachmentAdapter
+}) {
+  const runtime = useLocalRuntime(model, {
+    initialMessages,
+    unstable_enableMessageQueue: enableMessageQueue,
+    unstable_queueClearOnCancel: false,
+    adapters: attachmentAdapter
+      ? { attachments: attachmentAdapter }
+      : undefined,
+  })
+  exposeRuntime?.(runtime)
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread
+        labels={labels}
+        autoFocus={false}
+        components={{ ToolFallback: toolFallback, Composer: composer }}
+      />
+    </AssistantRuntimeProvider>
+  )
+}
+
+const MULTI_SESSION_MESSAGES: Record<string, readonly ThreadMessageLike[]> = {
+  "session-one": [],
+  "session-two": [
+    {
+      id: "session-two-history",
+      role: "user",
+      content: [{ type: "text", text: "Session two history" }],
+    },
+  ],
+}
+
+const multiSessionAdapter = {
+  list: async () => ({
+    threads: ["session-one", "session-two"].map((remoteId) => ({
+      remoteId,
+      status: "regular" as const,
+    })),
+  }),
+  fetch: async (remoteId: string) => ({
+    remoteId,
+    status: "regular" as const,
+  }),
+  initialize: async (threadId: string) => ({
+    remoteId: threadId,
+  }),
+  rename: async () => undefined,
+  updateCustom: async () => undefined,
+  archive: async () => undefined,
+  unarchive: async () => undefined,
+  delete: async () => undefined,
+  generateTitle: async () =>
+    new ReadableStream({
+      start(controller) {
+        controller.close()
+      },
+    }),
+}
+
+function MultiSessionThread({
+  exposeRuntime,
+}: {
+  exposeRuntime?: (runtime: AssistantRuntime) => void
+}) {
+  const runtime = useRemoteThreadListRuntime({
+    adapter: multiSessionAdapter,
+    initialThreadId: "session-one",
+    runtimeHook: useMultiSessionRuntime,
+  })
+  exposeRuntime?.(runtime)
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread autoFocus={false} />
+    </AssistantRuntimeProvider>
+  )
+}
+
+/*
+ * Keep the runtime hook named so eslint can verify that the hooks it calls
+ * follow the Rules of Hooks. The remote runtime invokes it inside a thread
+ * scope, where threadListItem.remoteId is available.
+ */
+function useMultiSessionRuntime() {
+  const threadId = useAuiState((state) => state.threadListItem.remoteId)
+  return useLocalRuntime(
+    { run: async () => ({ content: [] }) },
+    { initialMessages: MULTI_SESSION_MESSAGES[threadId ?? "session-one"] }
+  )
+}
+
+describe("Thread accessibility", () => {
+  it("suppresses welcome animations when reduced motion is preferred", () => {
+    render(<LocalThread initialMessages={[]} />)
+
+    expect(
+      screen.getByRole("heading", { name: "How can I help you today?" })
+    ).toHaveClass("motion-reduce:animate-none")
+  })
+
+  it("suppresses populated-thread animations when reduced motion is preferred", async () => {
+    const { container } = render(<LocalThread />)
+
+    await screen.findByText("The reference is ready.")
+    const animatedElements = container.querySelectorAll<HTMLElement>(
+      '[class*="animate-"]'
+    )
+    expect(animatedElements.length).toBeGreaterThan(0)
+    for (const element of animatedElements) {
+      const classes = element.getAttribute("class")?.split(/\s+/) ?? []
+      const unconditionalAnimations = classes.filter(
+        (className) =>
+          className.includes("animate-") &&
+          !className.includes("animate-none") &&
+          !className.includes("motion-safe:")
+      )
+      if (unconditionalAnimations.length > 0) {
+        expect(element).toHaveClass("motion-reduce:animate-none")
+      }
+    }
+  })
+
+  it("allows a provider interaction to replace the normal composer", async () => {
+    render(
+      <LocalThread
+        composer={() => (
+          <section aria-label="Provider question">Question</section>
+        )}
+      />
+    )
+
+    expect(
+      await screen.findByRole("region", { name: "Provider question" })
+    ).toBeVisible()
+    expect(screen.queryByRole("textbox", { name: "Message input" })).toBeNull()
+  })
+
+  it("gives a populated conversation a localized level-one heading", async () => {
+    render(<LocalThread labels={{ conversationHeading: "שיחת הסוכן" }} />)
+
+    await screen.findByText("The reference is ready.")
+    expect(
+      screen.getByRole("heading", { level: 1, name: "שיחת הסוכן" })
+    ).toBeInTheDocument()
+  })
+
+  it("renders provider subagent messages as a nested read-only transcript", async () => {
+    const nestedMessages: readonly ThreadMessage[] = [
+      {
+        id: "message-user",
+        role: "user",
+        content: [{ type: "text", text: "Review the figures" }],
+        createdAt: new Date("2026-09-04T08:00:00.000Z"),
+        status: { type: "complete", reason: "stop" },
+        attachments: [],
+        metadata: { custom: {} },
+      },
+      {
+        id: "message-assistant",
+        role: "assistant",
+        content: [{ type: "text", text: "Validated the three segments." }],
+        createdAt: new Date("2026-09-04T08:00:00.000Z"),
+        status: { type: "complete", reason: "stop" },
+        metadata: {
+          unstable_state: null,
+          unstable_annotations: [],
+          unstable_data: [],
+          steps: [],
+          custom: {},
+        },
+      },
+    ]
+    const messages: readonly ThreadMessageLike[] = [
+      {
+        id: "parent-assistant",
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "subagent-1",
+            toolName: "delegate_subagent",
+            args: { task: "Validate market segments" },
+            result: {
+              name: "Data analyst",
+              status: "completed",
+              summary: "Analysis complete.",
+            },
+            messages: nestedMessages,
+          },
+        ],
+      },
+    ]
+
+    render(
+      <LocalThread initialMessages={messages} toolFallback={RichToolRenderer} />
+    )
+
+    await screen.findByText("Data analyst")
+    expect(screen.getByText("Validated the three segments.")).not.toBeVisible()
+
+    await userEvent.click(screen.getByText("Data analyst"))
+
+    const transcript = document.querySelector<HTMLElement>(
+      '[data-slot="nested-activity-transcript"]'
+    )
+    expect(transcript).toBeInTheDocument()
+    expect(
+      screen.getByText("Review the figures").closest('[data-role="user"]')
+    ).toBeInTheDocument()
+    expect(
+      screen
+        .getByText("Validated the three segments.")
+        .closest('[data-role="assistant"]')
+    ).toBeInTheDocument()
+    expect(within(transcript!).queryByRole("textbox")).toBeNull()
+    expect(within(transcript!).queryByRole("button")).toBeNull()
+  })
+
+  it("announces the localized working state while a response streams", async () => {
+    const user = userEvent.setup()
+    let finish: (() => void) | undefined
+    const model: ChatModelAdapter = {
+      async *run() {
+        yield { content: [{ type: "text", text: "Working" }] }
+        await new Promise<void>((resolve) => {
+          finish = resolve
+        })
+      },
+    }
+
+    render(
+      <LocalThread labels={{ assistantWorking: "הסוכן עובד" }} model={model} />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "Continue")
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+
+    const status = screen.getByRole("status")
+    await waitFor(() => expect(status).toHaveTextContent("הסוכן עובד"))
+    expect(status).toHaveAttribute("aria-live", "polite")
+
+    await act(async () => finish?.())
+    await waitFor(() => expect(status).toBeEmptyDOMElement())
+  })
+
+  it("regenerates an assistant response and keeps both branches navigable", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "The refreshed answer." }],
+    }))
+
+    render(<LocalThread model={{ run }} />)
+
+    await user.click(await screen.findByRole("button", { name: "Refresh" }))
+
+    expect(await screen.findByText("The refreshed answer.")).toBeInTheDocument()
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(screen.getByText("2 / 2")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Previous" }))
+    expect(screen.getByText("The reference is ready.")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Next" }))
+    expect(screen.getByText("The refreshed answer.")).toBeInTheDocument()
+  })
+
+  it("cancels a streaming response while preserving its partial content", async () => {
+    const user = userEvent.setup()
+    let providerSignal: AbortSignal | undefined
+    const model: ChatModelAdapter = {
+      async *run({ abortSignal }) {
+        providerSignal = abortSignal
+        yield { content: [{ type: "text", text: "Partial response" }] }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true })
+        })
+      },
+    }
+
+    render(<LocalThread model={model} />)
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message input" }),
+      "Continue"
+    )
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    expect(await screen.findByText("Partial response")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Stop generating" }))
+
+    await waitFor(() => expect(providerSignal?.aborted).toBe(true))
+    expect(screen.getByText("Partial response")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Send message" })
+    ).toBeInTheDocument()
+  })
+
+  it("localizes attachment controls and image descriptions through Thread labels", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const labels: Partial<ThreadLabels> = {
+      attachments: {
+        add: "הוספת קובץ",
+        remove: "הסרת קובץ",
+        preview: "תצוגה מקדימה של קובץ",
+        image: "קובץ תמונה",
+        document: "מסמך מצורף",
+        file: "קובץ מצורף",
+        uploading: "בהעלאה",
+        uploadFailed: "ההעלאה נכשלה",
+      },
+    }
+
+    render(
+      <LocalThread
+        labels={labels}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+
+    await screen.findByText("The reference is ready.")
+    expect(
+      screen.getByRole("button", { name: "הוספת קובץ" })
+    ).toBeInTheDocument()
+    await act(() =>
+      runtime!.thread.composer.addAttachment({
+        name: "wireframe.svg",
+        type: "image",
+        content: [
+          {
+            type: "image",
+            image:
+              "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
+          },
+        ],
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "קובץ תמונה" }))
+    expect(
+      await screen.findByRole("dialog", { name: "תצוגה מקדימה של קובץ" })
+    ).toBeInTheDocument()
+    expect(screen.getByAltText("תצוגה מקדימה של קובץ")).toBeInTheDocument()
+  })
+
+  it("opens current-session history search with Ctrl+R without sending the draft", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Done" }],
+    }))
+
+    render(
+      <LocalThread
+        model={{ run }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = (await screen.findByRole("textbox", {
+      name: "Message input",
+    })) as HTMLTextAreaElement
+    await user.type(input, "unsent draft")
+    await act(() =>
+      runtime!.thread.composer.addAttachment({
+        name: "search-context.txt",
+        type: "file",
+        content: [{ type: "text", text: "context" }],
+      })
+    )
+    const attachmentIds = runtime!.thread.composer
+      .getState()
+      .attachments.map((attachment) => attachment.id)
+    await user.keyboard("{Meta>}r{/Meta}")
+    expect(
+      screen.queryByRole("dialog", { name: "Search conversation history" })
+    ).toBeNull()
+    expect(input).toHaveValue("unsent draftr")
+    await user.keyboard("{Backspace}")
+    input.setSelectionRange(2, 6)
+    await user.keyboard("{Control>}r{/Control}")
+
+    expect(
+      await screen.findByRole("dialog", { name: "Search conversation history" })
+    ).toBeVisible()
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("unsent draft")
+    expect(input.selectionStart).toBe(2)
+    expect(input.selectionEnd).toBe(6)
+    expect(
+      runtime!.thread.composer
+        .getState()
+        .attachments.map((attachment) => attachment.id)
+    ).toEqual(attachmentIds)
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("uses ArrowDown then Enter or Tab to load history without submitting", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Done" }],
+    }))
+    const messages: readonly ThreadMessageLike[] = [
+      {
+        id: "history-older",
+        role: "user",
+        content: [{ type: "text", text: "Older request" }],
+      },
+      {
+        id: "history-older-answer",
+        role: "assistant",
+        content: [{ type: "text", text: "Older answer" }],
+      },
+      {
+        id: "history-newer",
+        role: "user",
+        content: [{ type: "text", text: "Newer request" }],
+      },
+      {
+        id: "history-newer-answer",
+        role: "assistant",
+        content: [{ type: "text", text: "Newer answer" }],
+      },
+    ]
+
+    render(<LocalThread model={{ run }} initialMessages={messages} />)
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.click(input)
+    await user.keyboard("{Control>}r{/Control}")
+
+    const search = await screen.findByRole("textbox", {
+      name: "Filter sent messages…",
+    })
+    expect(
+      screen.getByRole("option", { name: "Newer request" })
+    ).toHaveAttribute("aria-selected", "true")
+    await user.keyboard("{ArrowDown}")
+    expect(
+      screen.getByRole("option", { name: "Older request" })
+    ).toHaveAttribute("aria-selected", "true")
+    await user.keyboard("{Enter}")
+    expect(input).toHaveValue("Older request")
+    expect(run).not.toHaveBeenCalled()
+
+    await user.keyboard("{Control>}r{/Control}")
+    await screen.findByRole("textbox", { name: "Filter sent messages…" })
+    await user.keyboard("{ArrowDown}")
+    await user.keyboard("{Tab}")
+    expect(input).toHaveValue("Older request")
+    expect(search).not.toBeInTheDocument()
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("enters history from a nonempty draft and restores its exact text selection", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "history-entry",
+            role: "user",
+            content: [{ type: "text", text: "Previous request" }],
+          },
+        ]}
+      />
+    )
+    const input = (await screen.findByRole("textbox", {
+      name: "Message input",
+    })) as HTMLTextAreaElement
+    await user.type(input, "present draft")
+    input.setSelectionRange(3, 3)
+    fireEvent.keyDown(input, { key: "ArrowUp" })
+    await waitFor(() => expect(input).toHaveValue("Previous request"))
+
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    await waitFor(() => expect(input).toHaveValue("present draft"))
+    expect(input.selectionStart).toBe(3)
+    expect(input.selectionEnd).toBe(3)
+  })
+
+  it("loads a current-session history entry without sending it", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Done" }],
+    }))
+
+    render(<LocalThread model={{ run }} />)
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.click(input)
+    await user.keyboard("{Control>}r{/Control}")
+    await user.click(
+      await screen.findByRole("option", { name: "Review this image" })
+    )
+
+    expect(input).toHaveValue("Review this image")
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it("queues busy Enter exactly once in the queue lane", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    let release: (() => void) | undefined
+    const run = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return { content: [{ type: "text" as const, text: "Done" }] }
+    })
+
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await waitFor(() =>
+      expect(runtime?.thread.getState().capabilities.queue).toBe(true)
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "first")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+
+    await user.type(input, "second")
+    await user.keyboard("{Enter}")
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Queued messages" })
+      ).toBeVisible()
+    )
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(screen.getByText("second")).toBeInTheDocument()
+
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Queued messages" })
+      ).toBeVisible()
+    )
+    expect(run).toHaveBeenCalledTimes(1)
+
+    await act(async () => release?.())
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Resume queued message" })
+      ).toBeVisible()
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Resume queued message" })
+    )
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+    expect(screen.getByText("second")).toBeInTheDocument()
+    await act(async () => release?.())
+  })
+
+  it("cancels from the transcript while leaving a queued follow-up parked", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async function* ({
+      abortSignal,
+    }: {
+      abortSignal: AbortSignal
+    }) {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true })
+      })
+      yield { content: [{ type: "text" as const, text: "Done" }] }
+    })
+
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await waitFor(() =>
+      expect(runtime?.thread.getState().capabilities.queue).toBe(true)
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "first")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+    await user.type(input, "park me")
+    await user.keyboard("{Enter}")
+    await screen.findByText("park me")
+
+    const viewport = document.querySelector('[data-slot="aui_thread-viewport"]')
+    expect(viewport).toBeInTheDocument()
+    if (!viewport) throw new Error("Thread viewport not found")
+    fireEvent.keyDown(viewport, { key: "Escape", keyCode: 0, bubbles: true })
+    await waitFor(() =>
+      expect(runtime?.thread.getState().isRunning).toBe(false)
+    )
+    expect(runtime?.thread.composer.getState().queue).toHaveLength(1)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it("clears a draft only after two idle Escape presses and restores it with ArrowUp", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread />)
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "recover me")
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("recover me")
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveValue(""))
+
+    await user.keyboard("{ArrowUp}")
+    await waitFor(() => expect(input).toHaveValue("recover me"))
+  })
+
+  it("does not restore a cleared draft after switching sessions", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        initialMessages={[]}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "session one draft")
+    await user.keyboard("{Escape}")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveValue(""))
+
+    await act(async () => {
+      await runtime!.threads.switchToNewThread()
+    })
+    await waitFor(() => expect(input).toHaveValue(""))
+    await user.keyboard("{ArrowUp}")
+    expect(input).toHaveValue("")
+  })
+
+  it("isolates history search state when switching sessions", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    render(
+      <MultiSessionThread
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "session one draft")
+    await user.keyboard("{Control>}r{/Control}")
+    expect(
+      await screen.findByRole("dialog", { name: "Search conversation history" })
+    ).toBeVisible()
+
+    await act(async () => {
+      await runtime!.threads.switchToThread("session-two")
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Search conversation history" })
+      ).toBeNull()
+    )
+    expect(input).toHaveValue("")
+
+    await user.click(input)
+    fireEvent.keyDown(input, { key: "ArrowUp" })
+    await waitFor(() => expect(input).toHaveValue("Session two history"))
+  })
+
+  it("does not consume keyCode 229 in the composer or history search", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread />)
+    const input = (await screen.findByRole("textbox", {
+      name: "Message input",
+    })) as HTMLTextAreaElement
+
+    const composerEvent = new KeyboardEvent("keydown", {
+      key: "r",
+      ctrlKey: true,
+      keyCode: 229,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.dispatchEvent(composerEvent)
+    expect(composerEvent.defaultPrevented).toBe(false)
+
+    await user.click(input)
+    await user.keyboard("{Control>}r{/Control}")
+    const search = await screen.findByRole("textbox", {
+      name: "Filter sent messages…",
+    })
+    const searchEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 229,
+      bubbles: true,
+      cancelable: true,
+    })
+    search.dispatchEvent(searchEvent)
+    expect(searchEvent.defaultPrevented).toBe(false)
+    expect(
+      screen.getByRole("dialog", { name: "Search conversation history" })
+    ).toBeInTheDocument()
+  })
+
+  it("restores a pending file attachment after clear and undo", async () => {
+    const user = userEvent.setup()
+    const file = new File(["pending"], "pending.txt", { type: "text/plain" })
+    const pending = {
+      id: "pending-file",
+      type: "file" as const,
+      name: file.name,
+      contentType: file.type,
+      file,
+      status: {
+        type: "running" as const,
+        reason: "uploading" as const,
+        progress: 0,
+      },
+    }
+    const attachmentAdapter: AttachmentAdapter = {
+      accept: "text/*",
+      add: vi.fn(async () => pending),
+      remove: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({
+        ...pending,
+        status: { type: "complete" as const },
+        content: [{ type: "text" as const, text: "pending" }],
+      })),
+    }
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        initialMessages={[]}
+        attachmentAdapter={attachmentAdapter}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "recover attachment")
+    await act(() => runtime!.thread.composer.addAttachment(file))
+    expect(runtime!.thread.composer.getState().attachments).toHaveLength(1)
+
+    await user.keyboard("{Escape}")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveValue(""))
+    await user.keyboard("{ArrowUp}")
+    await waitFor(() => expect(input).toHaveValue("recover attachment"))
+    await waitFor(() =>
+      expect(runtime!.thread.composer.getState().attachments).toHaveLength(1)
+    )
+    expect(runtime!.thread.composer.getState().attachments[0]?.id).toBe(
+      "pending-file"
+    )
+  })
+
+  it("uses a localized accessible name for queued messages", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async function* ({
+      abortSignal,
+    }: {
+      abortSignal: AbortSignal
+    }) {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true })
+      })
+    })
+    const model: ChatModelAdapter = { run }
+    render(
+      <LocalThread
+        initialMessages={[]}
+        enableMessageQueue
+        model={model}
+        labels={{ queuedMessages: "הודעות בתור" }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "first")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+    await user.type(input, "queued")
+    await user.keyboard("{Enter}")
+    expect(
+      await screen.findByRole("region", { name: "הודעות בתור" })
+    ).toBeVisible()
+  })
+
+  it("opens history on a double Escape from an empty composer", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread />)
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.click(input)
+    await user.keyboard("{Escape}")
+    await user.keyboard("{Escape}")
+
+    expect(
+      await screen.findByRole("dialog", { name: "Search conversation history" })
+    ).toBeVisible()
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("")
+  })
+
+  it("disarms double Escape recovery when input changes or focus leaves", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread initialMessages={[]} />)
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "recover")
+    await user.keyboard("{Escape}")
+    await user.type(input, "ed")
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("recovered")
+
+    input.blur()
+    input.focus()
+    await user.keyboard("{Escape}")
+    const consumedEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    })
+    consumedEscape.preventDefault()
+    input.dispatchEvent(consumedEscape)
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("recovered")
+  })
+})

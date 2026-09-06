@@ -1,0 +1,89 @@
+name: aos-ui
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    environment:
+      AOS_UI_OPENCODE_BASE_URL: ${AOS_UI_OPENCODE_BASE_URL:-http://127.0.0.1:${AOS_UI_OPENCODE_PUBLISHED_PORT:-4096}}
+      AOS_UI_OPENCODE_MANAGEMENT_URL: ${AOS_UI_OPENCODE_MANAGEMENT_URL:-http://127.0.0.1:${AOS_UI_OPENCODE_MANAGEMENT_PUBLISHED_PORT:-4097}}
+      AOS_UI_OPENCODE_MODEL_ID: ${AOS_UI_OPENCODE_MODEL_ID:-}
+      AOS_UI_OPENCODE_PROVIDER_ID: ${AOS_UI_OPENCODE_PROVIDER_ID:-}
+      AOS_UI_RUNTIME_MODE: opencode
+    ports:
+      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:3000
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      opencode:
+        condition: service_healthy
+        restart: true
+    init: true
+
+  opencode:
+    build:
+      context: .
+      dockerfile: Dockerfile.opencode
+      args:
+        AOS_UI_HOST_GID: ${AOS_UI_HOST_GID:-1000}
+        AOS_UI_HOST_UID: ${AOS_UI_HOST_UID:-1000}
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      AWS_PROFILE: ${AWS_PROFILE:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      AOS_UI_OPENAI_COMPATIBLE_API_KEY: ${AOS_UI_OPENAI_COMPATIBLE_API_KEY:-}
+      AOS_UI_OPENAI_COMPATIBLE_BASE_URL: ${AOS_UI_OPENAI_COMPATIBLE_BASE_URL:-}
+      AOS_UI_OPENAI_COMPATIBLE_MODEL_ID: ${AOS_UI_OPENAI_COMPATIBLE_MODEL_ID:-}
+      AOS_UI_OPENCODE_CORS_ORIGINS: ${AOS_UI_OPENCODE_CORS_ORIGINS:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
+      AOS_UI_OPENCODE_HOST: 0.0.0.0
+      AOS_UI_OPENCODE_PORT: "4096"
+      AOS_UI_OPENCODE_MANAGEMENT_PORT: "4097"
+      UV_PROJECT_ENVIRONMENT: /opt/aos-ui/monty/.venv
+    ports:
+      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_OPENCODE_PUBLISHED_PORT:-4096}:4096
+      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_OPENCODE_MANAGEMENT_PUBLISHED_PORT:-4097}:4097
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --quiet
+        - --output-document=/dev/null
+        - http://127.0.0.1:4096/global/health
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    init: true
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: ${AOS_UI_AWS_CONFIG_DIR:-${HOME}/.aws}
+        target: /home/aos-ui/.aws
+        read_only: true
+      - type: volume
+        source: opencode-data
+        target: /home/aos-ui/.local/share/opencode
+      - type: volume
+        source: monty-environment
+        target: /opt/aos-ui/monty/.venv
+
+volumes:
+  monty-environment:
+  opencode-data:

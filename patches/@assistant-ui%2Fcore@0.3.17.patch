@@ -1,0 +1,743 @@
+diff --git a/dist/runtime/api/composer-runtime.d.ts b/dist/runtime/api/composer-runtime.d.ts
+index 05a86a80bf6c9bd2a0b208c81cf7125ca5fe3167..d09bc7e1b50f938b399d2285655f93d15818fd1c 100644
+--- a/dist/runtime/api/composer-runtime.d.ts
++++ b/dist/runtime/api/composer-runtime.d.ts
+@@ -106,6 +106,10 @@ type ComposerRuntime = {
+   steerQueueItem(queueItemId: string): void;
+   /** Move a queued message between lanes or within a lane. */
+   moveQueueItem(queueItemId: string, placement: QueuePlacement): void;
++  /** Resume one parked queued message. */
++  resumeQueueItem(queueItemId: string): void;
++  /** Replace a queued message while preserving its complete payload. */
++  editQueueItem(queueItemId: string, message: AppendMessage): void;
+   /** Remove a queued message. */
+   removeQueueItem(queueItemId: string): void;
+   /**
+@@ -153,6 +157,8 @@ declare abstract class ComposerRuntimeImpl implements ComposerRuntime {
+   cancel(): void;
+   steerQueueItem(queueItemId: string): void;
+   moveQueueItem(queueItemId: string, placement: QueuePlacement): void;
++  resumeQueueItem(queueItemId: string): void;
++  editQueueItem(queueItemId: string, message: AppendMessage): void;
+   removeQueueItem(queueItemId: string): void;
+   setRole(role: MessageRole): void;
+   startDictation(): void;
+diff --git a/dist/runtime/api/composer-runtime.js b/dist/runtime/api/composer-runtime.js
+index 2bdfb6d3cef91c47c35d5a91b4c9b1e273b59e3e..2dd7179886e3a80335ccf2ef66796040deae657e 100644
+--- a/dist/runtime/api/composer-runtime.js
++++ b/dist/runtime/api/composer-runtime.js
+@@ -61,6 +61,8 @@ var ComposerRuntimeImpl = class {
+ 		this.cancel = this.cancel.bind(this);
+ 		this.steerQueueItem = this.steerQueueItem.bind(this);
+ 		this.moveQueueItem = this.moveQueueItem.bind(this);
++		this.resumeQueueItem = this.resumeQueueItem.bind(this);
++		this.editQueueItem = this.editQueueItem.bind(this);
+ 		this.removeQueueItem = this.removeQueueItem.bind(this);
+ 		this.setRole = this.setRole.bind(this);
+ 		this.getAttachmentByIndex = this.getAttachmentByIndex.bind(this);
+@@ -115,6 +117,16 @@ var ComposerRuntimeImpl = class {
+ 		if (!core) throw new Error("Composer is not available");
+ 		core.moveQueueItem(queueItemId, placement);
+ 	}
++	resumeQueueItem(queueItemId) {
++		const core = this._core.getState();
++		if (!core) throw new Error("Composer is not available");
++		core.resumeQueueItem(queueItemId);
++	}
++	editQueueItem(queueItemId, message) {
++		const core = this._core.getState();
++		if (!core) throw new Error("Composer is not available");
++		core.editQueueItem(queueItemId, message);
++	}
+ 	removeQueueItem(queueItemId) {
+ 		const core = this._core.getState();
+ 		if (!core) throw new Error("Composer is not available");
+diff --git a/dist/runtime/base/base-composer-runtime-core.d.ts b/dist/runtime/base/base-composer-runtime-core.d.ts
+index d5558d592d451b055654a3d1241fffa9bbd5228d..c2e29a142bf2e07cdf4c05ff3ac70677605dc838 100644
+--- a/dist/runtime/base/base-composer-runtime-core.d.ts
++++ b/dist/runtime/base/base-composer-runtime-core.d.ts
+@@ -75,6 +75,8 @@ declare abstract class BaseComposerRuntimeCore extends BaseSubscribable implemen
+   cancel(): void;
+   get queue(): readonly QueueItemState[];
+   moveQueueItem(_queueItemId: string, _placement: QueuePlacement): void;
++  resumeQueueItem(_queueItemId: string): void;
++  editQueueItem(_queueItemId: string, _message: AppendMessage): void;
+   removeQueueItem(_queueItemId: string): void;
+   protected abstract handleSend(message: Omit<AppendMessage, "parentId" | "sourceId">, options?: SendOptions): void | Promise<void>;
+   protected abstract handleCancel(): void;
+diff --git a/dist/runtime/base/base-composer-runtime-core.js b/dist/runtime/base/base-composer-runtime-core.js
+index 90c5794ed05ba4c8d51aa993c0e89453545254f1..f773bf26d19b2bbb93015599499d31f70dd5e3b8 100644
+--- a/dist/runtime/base/base-composer-runtime-core.js
++++ b/dist/runtime/base/base-composer-runtime-core.js
+@@ -245,6 +245,8 @@ var BaseComposerRuntimeCore = class extends BaseSubscribable {
+ 		return EMPTY_QUEUE_ITEMS;
+ 	}
+ 	moveQueueItem(_queueItemId, _placement) {}
++	resumeQueueItem(_queueItemId) {}
++	editQueueItem(_queueItemId, _message) {}
+ 	removeQueueItem(_queueItemId) {}
+ 	async addAttachment(fileOrAttachment) {
+ 		if (isCreateAttachment(fileOrAttachment)) {
+diff --git a/dist/runtime/base/default-thread-composer-runtime-core.d.ts b/dist/runtime/base/default-thread-composer-runtime-core.d.ts
+index 32b93babee2084bbcd367b1664955b4c71c7d948..2e5a2485a21d9934fa03080dfb64b61b45845dd2 100644
+--- a/dist/runtime/base/default-thread-composer-runtime-core.d.ts
++++ b/dist/runtime/base/default-thread-composer-runtime-core.d.ts
+@@ -15,6 +15,8 @@ declare class DefaultThreadComposerRuntimeCore extends BaseComposerRuntimeCore i
+   private _queueCache;
+   get queue(): readonly QueueItemState[];
+   moveQueueItem(queueItemId: string, placement: QueuePlacement): void;
++  resumeQueueItem(queueItemId: string): void;
++  editQueueItem(queueItemId: string, message: AppendMessage): void;
+   removeQueueItem(queueItemId: string): void;
+   protected getAttachmentAdapter(): AttachmentAdapter | undefined;
+   protected getDictationAdapter(): DictationAdapter | undefined;
+diff --git a/dist/runtime/base/default-thread-composer-runtime-core.js b/dist/runtime/base/default-thread-composer-runtime-core.js
+index 23b2ffcf8e5bcf7911f526c5e45a4c9cdcc13e31..ca60bff79cb65600565aaf5d05a7230fed033290 100644
+--- a/dist/runtime/base/default-thread-composer-runtime-core.js
++++ b/dist/runtime/base/default-thread-composer-runtime-core.js
+@@ -30,6 +30,12 @@ var DefaultThreadComposerRuntimeCore = class extends BaseComposerRuntimeCore {
+ 	moveQueueItem(queueItemId, placement) {
+ 		this.runtime.moveQueueItem?.(queueItemId, placement);
+ 	}
++	resumeQueueItem(queueItemId) {
++		this.runtime.resumeQueueItem?.(queueItemId);
++	}
++	editQueueItem(queueItemId, message) {
++		this.runtime.editQueueItem?.(queueItemId, message);
++	}
+ 	removeQueueItem(queueItemId) {
+ 		this.runtime.removeQueueItem?.(queueItemId);
+ 	}
+diff --git a/dist/runtime/interfaces/composer-runtime-core.d.ts b/dist/runtime/interfaces/composer-runtime-core.d.ts
+index fde9838a7e88bacfe6f2e9ceaf2c36d714e40dcd..e971a978a3b0699e9dd259af775cf5dc1d87f44d 100644
+--- a/dist/runtime/interfaces/composer-runtime-core.d.ts
++++ b/dist/runtime/interfaces/composer-runtime-core.d.ts
+@@ -1,4 +1,4 @@
+-import { MessageRole, RunConfig } from "../../types/message.js";
++import { AppendMessage, MessageRole, RunConfig } from "../../types/message.js";
+ import { Attachment, CreateAttachment } from "../../types/attachment.js";
+ import { Unsubscribe } from "../../types/unsubscribe.js";
+ import { DictationAdapter } from "../../adapters/speech.js";
+@@ -61,6 +61,8 @@ type ComposerRuntimeCore = Readonly<{
+   cancel: () => void;
+   queue: readonly QueueItemState[];
+   moveQueueItem: (queueItemId: string, placement: QueuePlacement) => void;
++  resumeQueueItem: (queueItemId: string) => void;
++  editQueueItem: (queueItemId: string, message: AppendMessage) => void;
+   removeQueueItem: (queueItemId: string) => void;
+   dictation: DictationState | undefined;
+   startDictation: () => void;
+diff --git a/dist/runtime/interfaces/thread-runtime-core.d.ts b/dist/runtime/interfaces/thread-runtime-core.d.ts
+index bed55a7c779817c2a853c542ad6bd81d13efbe00..3b4d0f4ffbfa9a04443d06c15520671f099d6288 100644
+--- a/dist/runtime/interfaces/thread-runtime-core.d.ts
++++ b/dist/runtime/interfaces/thread-runtime-core.d.ts
+@@ -164,6 +164,8 @@ type ThreadRuntimeCore = Readonly<{
+   getQueueItems?: () => readonly QueueItemState[];
+   getSteerQueueItems?: () => readonly QueueItemState[];
+   moveQueueItem?: (queueItemId: string, placement: QueuePlacement) => void;
++  resumeQueueItem?: (queueItemId: string) => void;
++  editQueueItem?: (queueItemId: string, message: AppendMessage) => void;
+   removeQueueItem?: (queueItemId: string) => void;
+   speech: SpeechState | undefined;
+   voice: VoiceSessionState | undefined;
+diff --git a/dist/runtime/queue/external-thread-queue-adapter.d.ts b/dist/runtime/queue/external-thread-queue-adapter.d.ts
+index 597b2715617b1171845fc42f2b34ec0912f7d166..eb6f953824ae726871bd05f9dc224db2546b86e4 100644
+--- a/dist/runtime/queue/external-thread-queue-adapter.d.ts
++++ b/dist/runtime/queue/external-thread-queue-adapter.d.ts
+@@ -25,6 +25,8 @@ type ExternalThreadQueueAdapter = {
+    */
+   move: (queueItemId: string, placement: QueuePlacement) => void;
+   edit: (queueItemId: string, message: AppendMessage) => void;
++  /** Resume one parked item, when the adapter supports cancellation parking. */
++  resume?: ((queueItemId: string) => void) | undefined;
+   remove: (queueItemId: string) => void;
+   /**
+    * Installed by the owning runtime, applied to a message as it leaves a lane.
+@@ -37,8 +39,8 @@ type ExternalThreadQueueAdapter = {
+   /**
+    * Called by the owning runtime when the user cancels the run, before the run
+    * is aborted. Pauses the queue so the cancelled run's settle keeps the
+-   * pending items instead of dispatching the next one; the next send re-arms
+-   * draining. A hand-rolled adapter that omits it drains on cancel.
++   * pending items instead of dispatching the next one; an explicit resume
++   * re-arms draining. A hand-rolled adapter that omits it drains on cancel.
+    */
+   __internal_notifyCancelled?: (() => void) | undefined;
+ };
+diff --git a/dist/runtime/queue/message-queue.d.ts b/dist/runtime/queue/message-queue.d.ts
+index a9f8233d10e5d079657036919d57093d5a08bd58..058f497d77f2e5d3ba98a08f4e451b606566372c 100644
+--- a/dist/runtime/queue/message-queue.d.ts
++++ b/dist/runtime/queue/message-queue.d.ts
+@@ -17,10 +17,11 @@ type MessageQueueController = {
+   /**
+    * Pauses queue advance for a user-initiated cancel, so the cancelled run's
+    * settle keeps the pending items instead of dispatching the next one; the
+-   * next explicit send or run start re-arms draining. Call before aborting
+-   * the run.
++   * an explicit resume re-arms draining. Call before aborting the run.
+    */
+   notifyCancelled: () => void;
++  /** Resume one parked queue item and pause again when that run settles. */
++  resume: (queueItemId: string) => void;
+   /** Empties both lanes without dispatching. */
+   clear: () => void;
+   subscribe: (callback: () => void) => () => void;
+diff --git a/dist/runtime/queue/message-queue.js b/dist/runtime/queue/message-queue.js
+index 1323ce36a9ea1ee08132e2e8208be3ecc17479eb..b60005a09431ae5c92b5e879a7c05f8a171fd26e 100644
+--- a/dist/runtime/queue/message-queue.js
++++ b/dist/runtime/queue/message-queue.js
+@@ -28,6 +28,7 @@ const createMessageQueue = (driver) => {
+ 	let suppressIdle = 0;
+ 	let cancelSettles = 0;
+ 	let interrupting = false;
++	let pauseAfterResume = false;
+ 	const notify = () => {
+ 		notifyEventListeners(subscribers, void 0, "Message queue");
+ 	};
+@@ -75,7 +76,6 @@ const createMessageQueue = (driver) => {
+ 		driver.run(dispatchTransform(message), { steer: true });
+ 	};
+ 	const push = (lane, message) => {
+-		paused = false;
+ 		const id = generateId();
+ 		messages.set(id, message);
+ 		setLanes({
+@@ -140,7 +140,7 @@ const createMessageQueue = (driver) => {
+ 	};
+ 	const edit = (queueItemId, message) => {
+ 		const lane = laneOf(queueItemId);
+-		if (!lane) throw new Error(`Unknown queue item "${queueItemId}".`);
++		if (!lane) return;
+ 		messages.set(queueItemId, message);
+ 		setLanes({
+ 			...lanes,
+@@ -159,8 +159,25 @@ const createMessageQueue = (driver) => {
+ 		if (running && cancelSettles === 0) {
+ 			paused = true;
+ 			cancelSettles = 1;
++			pauseAfterResume = false;
+ 		}
+ 	};
++	const resume = (queueItemId) => {
++		if (running || !paused) return;
++		const lane = laneOf(queueItemId);
++		if (!lane) return;
++		const message = messages.get(queueItemId);
++		if (!message) return;
++		messages.delete(queueItemId);
++		setLanes({
++			queue: lanes.queue.filter((item) => item.id !== queueItemId),
++			steer: lanes.steer.filter((item) => item.id !== queueItemId)
++		});
++		paused = false;
++		pauseAfterResume = true;
++		running = true;
++		driver.run(dispatchTransform(message), { steer: false });
++	};
+ 	const adapter = {
+ 		items: lanes.queue,
+ 		steerItems: lanes.steer,
+@@ -169,6 +186,7 @@ const createMessageQueue = (driver) => {
+ 		move,
+ 		edit,
+ 		remove,
++		resume,
+ 		__internal_setDispatchTransform: (transform) => {
+ 			dispatchTransform = transform;
+ 		},
+@@ -177,7 +195,6 @@ const createMessageQueue = (driver) => {
+ 	return {
+ 		adapter,
+ 		notifyBusy: () => {
+-			paused = false;
+ 			suppressIdle += cancelSettles;
+ 			cancelSettles = 0;
+ 			running = true;
+@@ -189,11 +206,19 @@ const createMessageQueue = (driver) => {
+ 			}
+ 			if (cancelSettles > 0) cancelSettles--;
+ 			running = false;
++			if (pauseAfterResume) {
++				pauseAfterResume = false;
++				paused = true;
++				return;
++			}
+ 			advance();
+ 		},
+ 		notifyCancelled,
++		resume,
+ 		clear: () => {
+ 			messages.clear();
++			paused = false;
++			pauseAfterResume = false;
+ 			setLanes({
+ 				queue: EMPTY_QUEUE_ITEMS,
+ 				steer: EMPTY_QUEUE_ITEMS
+diff --git a/dist/runtimes/external-store/external-store-thread-runtime-core.js b/dist/runtimes/external-store/external-store-thread-runtime-core.js
+index d05ea6f81e85f17676236f0e517870338b7e8ec9..0810def1c9b194b9863e305788ed69267acdb34e 100644
+--- a/dist/runtimes/external-store/external-store-thread-runtime-core.js
++++ b/dist/runtimes/external-store/external-store-thread-runtime-core.js
+@@ -442,6 +442,12 @@ var ExternalStoreThreadRuntimeCore = class extends BaseThreadRuntimeCore {
+ 	moveQueueItem(queueItemId, placement) {
+ 		this._store?.queue?.move(queueItemId, placement);
+ 	}
++	resumeQueueItem(queueItemId) {
++		this._store?.queue?.resume?.(queueItemId);
++	}
++	editQueueItem(queueItemId, message) {
++		this._store?.queue?.edit(queueItemId, message);
++	}
+ 	removeQueueItem(queueItemId) {
+ 		this._store?.queue?.remove(queueItemId);
+ 	}
+diff --git a/dist/runtimes/local/local-runtime-options.d.ts b/dist/runtimes/local/local-runtime-options.d.ts
+index 436c1d7adec3cf77dbc9076923055f333a1e644e..bd3603635c8ba9652b83dc55c214bda16b1f85cf 100644
+--- a/dist/runtimes/local/local-runtime-options.d.ts
++++ b/dist/runtimes/local/local-runtime-options.d.ts
+@@ -36,7 +36,7 @@ type LocalRuntimeOptionsBase = {
+   /**
+    * Auto-clear the message queue when the user cancels the run. Defaults to
+    * `true`. When `false`, cancel pauses the queue and keeps the pending
+-   * items; the next send drains them.
++   * items; an explicit queue-item resume drains one item.
+    * @deprecated Removal after 2026-11-05 — cancel will always pause the queue and keep the items.
+    */
+   unstable_queueClearOnCancel?: boolean | undefined;
+diff --git a/dist/runtimes/local/local-thread-runtime-core.js b/dist/runtimes/local/local-thread-runtime-core.js
+index 728c99fd5bc02a9b7839888d6fc791de2bc5af13..a050f58b601cd7a6ac6964200f7e136733dfce48 100644
+--- a/dist/runtimes/local/local-thread-runtime-core.js
++++ b/dist/runtimes/local/local-thread-runtime-core.js
+@@ -209,6 +209,12 @@ var LocalThreadRuntimeCore = class extends BaseThreadRuntimeCore {
+ 	moveQueueItem(queueItemId, placement) {
+ 		this._queue?.adapter.move(queueItemId, placement);
+ 	}
++	resumeQueueItem(queueItemId) {
++		this._queue?.adapter.resume?.(queueItemId);
++	}
++	editQueueItem(queueItemId, message) {
++		this._queue?.adapter.edit(queueItemId, message);
++	}
+ 	removeQueueItem(queueItemId) {
+ 		this._queue?.adapter.remove(queueItemId);
+ 	}
+diff --git a/dist/store/runtime-clients/composer-runtime-client.js b/dist/store/runtime-clients/composer-runtime-client.js
+index 1f2c434bbe90d2b9f1f3547e72b9aadbed2c5193..705ee569557b85140006e3812044cb39121b28cb 100644
+--- a/dist/store/runtime-clients/composer-runtime-client.js
++++ b/dist/store/runtime-clients/composer-runtime-client.js
+@@ -25,7 +25,7 @@ const useComposerAttachmentClientByIndex = (t0) => {
+ 	return useResource(t2);
+ };
+ const ComposerAttachmentClientByIndex = resource(useComposerAttachmentClientByIndex);
+-const useQueueItemClient = ({ item, onMove, onRemove }) => {
++const useQueueItemClient = ({ item, onMove, onResume, onEdit, onRemove }) => {
+ 	return {
+ 		getState: () => item,
+ 		steer: () => onMove({
+@@ -33,6 +33,8 @@ const useQueueItemClient = ({ item, onMove, onRemove }) => {
+ 			insertAfter: null
+ 		}),
+ 		move: onMove,
++		resume: onResume,
++		edit: onEdit,
+ 		remove: onRemove
+ 	};
+ };
+@@ -111,6 +113,8 @@ const useComposerClient = (t0) => {
+ 			t5 = (item) => withKey(item.id, QueueItemClient({
+ 				item,
+ 				onMove: (placement) => runtime.moveQueueItem(item.id, placement),
++				onResume: () => runtime.resumeQueueItem(item.id),
++				onEdit: (message) => runtime.editQueueItem(item.id, message),
+ 				onRemove: () => runtime.removeQueueItem(item.id)
+ 			}));
+ 			$[14] = runtime;
+diff --git a/dist/store/scopes/queue-item.d.ts b/dist/store/scopes/queue-item.d.ts
+index dde9de85333dd165e317afd6f0f875fdc36ca346..a5c9a6b2bedefcab58267766725176a1cbc6920c 100644
+--- a/dist/store/scopes/queue-item.d.ts
++++ b/dist/store/scopes/queue-item.d.ts
+@@ -1,11 +1,14 @@
+ import { QueueItemState } from "../../runtime/queue/queue-item.js";
+ import { QueuePlacement } from "../../runtime/queue/external-thread-queue-adapter.js";
++import { AppendMessage } from "../../types/message.js";
+ //#region src/store/scopes/queue-item.d.ts
+ type QueueItemMethods = {
+   getState(): QueueItemState;
+   /** @deprecated Use `move({ lane: "steer", insertAfter: null })` instead. Removal after 2026-11-05. */
+   steer(): void;
+   move(placement: QueuePlacement): void;
++  resume(): void;
++  edit(message: AppendMessage): void;
+   remove(): void;
+ };
+ type QueueItemMeta = {
+diff --git a/src/runtime/api/composer-runtime.ts b/src/runtime/api/composer-runtime.ts
+index 2e09d122daf503107e0fe3fcdaab76a3a6f73612..dd9125102d6d54d67fdb37e4a480394c76e08ab1 100644
+--- a/src/runtime/api/composer-runtime.ts
++++ b/src/runtime/api/composer-runtime.ts
+@@ -1,5 +1,5 @@
+ import type { Attachment, CreateAttachment } from "../../types/attachment";
+-import type { MessageRole } from "../../types/message";
++import type { AppendMessage, MessageRole } from "../../types/message";
+ import type { QuoteInfo } from "../../types/quote";
+ import type { Unsubscribe } from "../../types/unsubscribe";
+ import type { RunConfig } from "../../types/message";
+@@ -212,6 +212,12 @@ export type ComposerRuntime = {
+   /** Move a queued message between lanes or within a lane. */
+   moveQueueItem(queueItemId: string, placement: QueuePlacement): void;
+ 
++  /** Resume one parked queued message. */
++  resumeQueueItem(queueItemId: string): void;
++
++  /** Replace a queued message while preserving its complete payload. */
++  editQueueItem(queueItemId: string, message: AppendMessage): void;
++
+   /** Remove a queued message. */
+   removeQueueItem(queueItemId: string): void;
+ 
+@@ -278,6 +284,8 @@ export abstract class ComposerRuntimeImpl implements ComposerRuntime {
+     this.cancel = this.cancel.bind(this);
+     this.steerQueueItem = this.steerQueueItem.bind(this);
+     this.moveQueueItem = this.moveQueueItem.bind(this);
++    this.resumeQueueItem = this.resumeQueueItem.bind(this);
++    this.editQueueItem = this.editQueueItem.bind(this);
+     this.removeQueueItem = this.removeQueueItem.bind(this);
+     this.setRole = this.setRole.bind(this);
+     this.getAttachmentByIndex = this.getAttachmentByIndex.bind(this);
+@@ -341,6 +349,18 @@ export abstract class ComposerRuntimeImpl implements ComposerRuntime {
+     core.moveQueueItem(queueItemId, placement);
+   }
+ 
++  public resumeQueueItem(queueItemId: string) {
++    const core = this._core.getState();
++    if (!core) throw new Error("Composer is not available");
++    core.resumeQueueItem(queueItemId);
++  }
++
++  public editQueueItem(queueItemId: string, message: AppendMessage) {
++    const core = this._core.getState();
++    if (!core) throw new Error("Composer is not available");
++    core.editQueueItem(queueItemId, message);
++  }
++
+   public removeQueueItem(queueItemId: string) {
+     const core = this._core.getState();
+     if (!core) throw new Error("Composer is not available");
+diff --git a/src/runtime/base/base-composer-runtime-core.ts b/src/runtime/base/base-composer-runtime-core.ts
+index 807a56065e92a1df9fba20292512a8adc6eb25c3..2784da6d89aff758d817a729435894f67f6eb36b 100644
+--- a/src/runtime/base/base-composer-runtime-core.ts
++++ b/src/runtime/base/base-composer-runtime-core.ts
+@@ -389,6 +389,11 @@ export abstract class BaseComposerRuntimeCore
+     _queueItemId: string,
+     _placement: QueuePlacement,
+   ): void {}
++  public resumeQueueItem(_queueItemId: string): void {}
++  public editQueueItem(
++    _queueItemId: string,
++    _message: AppendMessage,
++  ): void {}
+   public removeQueueItem(_queueItemId: string): void {}
+ 
+   protected abstract handleSend(
+diff --git a/src/runtime/base/default-thread-composer-runtime-core.ts b/src/runtime/base/default-thread-composer-runtime-core.ts
+index bc8a0fa35dbb0804bc1d8104fe21f677dfa01980..9b27660d1e3c214da1f37958d33faa49d008408c 100644
+--- a/src/runtime/base/default-thread-composer-runtime-core.ts
++++ b/src/runtime/base/default-thread-composer-runtime-core.ts
+@@ -60,6 +60,17 @@ export class DefaultThreadComposerRuntimeCore
+     this.runtime.moveQueueItem?.(queueItemId, placement);
+   }
+ 
++  public override resumeQueueItem(queueItemId: string): void {
++    this.runtime.resumeQueueItem?.(queueItemId);
++  }
++
++  public override editQueueItem(
++    queueItemId: string,
++    message: AppendMessage,
++  ): void {
++    this.runtime.editQueueItem?.(queueItemId, message);
++  }
++
+   public override removeQueueItem(queueItemId: string): void {
+     this.runtime.removeQueueItem?.(queueItemId);
+   }
+diff --git a/src/runtime/interfaces/composer-runtime-core.ts b/src/runtime/interfaces/composer-runtime-core.ts
+index 7db8e4842d5983d06191aa762070e402508558ce..64979900d61d03dde1e553cb7dcdada3ddb4cc32 100644
+--- a/src/runtime/interfaces/composer-runtime-core.ts
++++ b/src/runtime/interfaces/composer-runtime-core.ts
+@@ -1,6 +1,7 @@
+ import type { MessageRole } from "../../types/message";
+ import type { QuoteInfo } from "../../types/quote";
+ import type { Attachment, CreateAttachment } from "../../types/attachment";
++import type { AppendMessage } from "../../types/message";
+ import type { Unsubscribe } from "../../types/unsubscribe";
+ import type { RunConfig } from "../../types/message";
+ import type { DictationAdapter } from "../../adapters/speech";
+@@ -84,6 +85,8 @@ export type ComposerRuntimeCore = Readonly<{
+ 
+   queue: readonly QueueItemState[];
+   moveQueueItem: (queueItemId: string, placement: QueuePlacement) => void;
++  resumeQueueItem: (queueItemId: string) => void;
++  editQueueItem: (queueItemId: string, message: AppendMessage) => void;
+   removeQueueItem: (queueItemId: string) => void;
+ 
+   dictation: DictationState | undefined;
+diff --git a/src/runtime/interfaces/thread-runtime-core.ts b/src/runtime/interfaces/thread-runtime-core.ts
+index c13506a8c8157b9bdd6516304a74f86825ceb5bf..4368ada4c3888c6de00cde1eb43f2c1d9eb7c2d7 100644
+--- a/src/runtime/interfaces/thread-runtime-core.ts
++++ b/src/runtime/interfaces/thread-runtime-core.ts
+@@ -202,6 +202,8 @@ export type ThreadRuntimeCore = Readonly<{
+   getQueueItems?: () => readonly QueueItemState[];
+   getSteerQueueItems?: () => readonly QueueItemState[];
+   moveQueueItem?: (queueItemId: string, placement: QueuePlacement) => void;
++  resumeQueueItem?: (queueItemId: string) => void;
++  editQueueItem?: (queueItemId: string, message: AppendMessage) => void;
+   removeQueueItem?: (queueItemId: string) => void;
+ 
+   speech: SpeechState | undefined;
+diff --git a/src/runtime/queue/external-thread-queue-adapter.ts b/src/runtime/queue/external-thread-queue-adapter.ts
+index aa2f05ca11239b2ae3511c307b0dc5f91f3f5ce3..d4565b3c19f9bbe4c0d4c238502791ff6a0ebabe 100644
+--- a/src/runtime/queue/external-thread-queue-adapter.ts
++++ b/src/runtime/queue/external-thread-queue-adapter.ts
+@@ -26,6 +26,8 @@ export type ExternalThreadQueueAdapter = {
+    */
+   move: (queueItemId: string, placement: QueuePlacement) => void;
+   edit: (queueItemId: string, message: AppendMessage) => void;
++  /** Resume one parked item, when the adapter supports cancellation parking. */
++  resume?: ((queueItemId: string) => void) | undefined;
+   remove: (queueItemId: string) => void;
+   /**
+    * Installed by the owning runtime, applied to a message as it leaves a lane.
+@@ -40,8 +42,8 @@ export type ExternalThreadQueueAdapter = {
+   /**
+    * Called by the owning runtime when the user cancels the run, before the run
+    * is aborted. Pauses the queue so the cancelled run's settle keeps the
+-   * pending items instead of dispatching the next one; the next send re-arms
+-   * draining. A hand-rolled adapter that omits it drains on cancel.
++   * pending items instead of dispatching the next one; an explicit resume
++   * re-arms draining. A hand-rolled adapter that omits it drains on cancel.
+    */
+   __internal_notifyCancelled?: (() => void) | undefined;
+ };
+diff --git a/src/runtime/queue/message-queue.ts b/src/runtime/queue/message-queue.ts
+index 14511f614b6ddc8e70aa3d441177b705b5b7572b..616c7ff06bfe175aa846475fad98fecd378f1903 100644
+--- a/src/runtime/queue/message-queue.ts
++++ b/src/runtime/queue/message-queue.ts
+@@ -27,10 +27,11 @@ export type MessageQueueController = {
+   /**
+    * Pauses queue advance for a user-initiated cancel, so the cancelled run's
+    * settle keeps the pending items instead of dispatching the next one; the
+-   * next explicit send or run start re-arms draining. Call before aborting
+-   * the run.
++   * an explicit resume re-arms draining. Call before aborting the run.
+    */
+   notifyCancelled: () => void;
++  /** Resume one parked queue item and pause again when that run settles. */
++  resume: (queueItemId: string) => void;
+   /** Empties both lanes without dispatching. */
+   clear: () => void;
+   subscribe: (callback: () => void) => () => void;
+@@ -83,6 +84,7 @@ export const createMessageQueue = (
+   // settles from cancelled runs that must drop `running` without advancing
+   let cancelSettles = 0;
+   let interrupting = false;
++  let pauseAfterResume = false;
+ 
+   const notify = () => {
+     notifyEventListeners(subscribers, undefined, "Message queue");
+@@ -140,7 +142,6 @@ export const createMessageQueue = (
+   };
+ 
+   const push = (lane: Lane, message: AppendMessage) => {
+-    paused = false;
+     const id = generateId();
+     messages.set(id, message);
+     setLanes({ ...lanes, [lane]: [...lanes[lane], toItem(id, message)] });
+@@ -231,7 +232,7 @@ export const createMessageQueue = (
+ 
+   const edit = (queueItemId: string, message: AppendMessage) => {
+     const lane = laneOf(queueItemId);
+-    if (!lane) throw new Error(`Unknown queue item "${queueItemId}".`);
++    if (!lane) return;
+     messages.set(queueItemId, message);
+     setLanes({
+       ...lanes,
+@@ -254,9 +255,28 @@ export const createMessageQueue = (
+     if (running && cancelSettles === 0) {
+       paused = true;
+       cancelSettles = 1;
++      pauseAfterResume = false;
+     }
+   };
+ 
++  const resume = (queueItemId: string) => {
++    if (running || !paused) return;
++    const lane = laneOf(queueItemId);
++    if (!lane) return;
++    const message = messages.get(queueItemId);
++    if (!message) return;
++
++    messages.delete(queueItemId);
++    setLanes({
++      queue: lanes.queue.filter((item) => item.id !== queueItemId),
++      steer: lanes.steer.filter((item) => item.id !== queueItemId),
++    });
++    paused = false;
++    pauseAfterResume = true;
++    running = true;
++    driver.run(dispatchTransform(message), { steer: false });
++  };
++
+   const adapter: ExternalThreadQueueAdapter = {
+     items: lanes.queue,
+     steerItems: lanes.steer,
+@@ -265,6 +285,7 @@ export const createMessageQueue = (
+     move,
+     edit,
+     remove,
++    resume,
+     __internal_setDispatchTransform: (transform) => {
+       dispatchTransform = transform;
+     },
+@@ -274,7 +295,6 @@ export const createMessageQueue = (
+   return {
+     adapter,
+     notifyBusy: () => {
+-      paused = false;
+       // a cancelled run's settle that is still outstanding belongs to a run
+       // this new one replaces; swallow it entirely
+       suppressIdle += cancelSettles;
+@@ -288,11 +308,19 @@ export const createMessageQueue = (
+       }
+       if (cancelSettles > 0) cancelSettles--;
+       running = false;
++      if (pauseAfterResume) {
++        pauseAfterResume = false;
++        paused = true;
++        return;
++      }
+       advance();
+     },
+     notifyCancelled,
++    resume,
+     clear: () => {
+       messages.clear();
++      paused = false;
++      pauseAfterResume = false;
+       setLanes({ queue: EMPTY_QUEUE_ITEMS, steer: EMPTY_QUEUE_ITEMS });
+     },
+     subscribe: (callback) => {
+diff --git a/src/runtimes/external-store/external-store-thread-runtime-core.ts b/src/runtimes/external-store/external-store-thread-runtime-core.ts
+index c935765809941e2092278330e7acdfb1bc8c2802..4fa30720419e0a4ea2e45bbdf1c5e05f17dbc534 100644
+--- a/src/runtimes/external-store/external-store-thread-runtime-core.ts
++++ b/src/runtimes/external-store/external-store-thread-runtime-core.ts
+@@ -779,6 +779,14 @@ export class ExternalStoreThreadRuntimeCore
+     this._store?.queue?.move(queueItemId, placement);
+   }
+ 
++  public resumeQueueItem(queueItemId: string) {
++    this._store?.queue?.resume?.(queueItemId);
++  }
++
++  public editQueueItem(queueItemId: string, message: AppendMessage) {
++    this._store?.queue?.edit(queueItemId, message);
++  }
++
+   public removeQueueItem(queueItemId: string) {
+     this._store?.queue?.remove(queueItemId);
+   }
+diff --git a/src/runtimes/local/local-runtime-options.ts b/src/runtimes/local/local-runtime-options.ts
+index e026a099b94e4f334ad4215562bc8dafb83f4db0..eba52177bc8b0bce459cdb5e799a90fef030aba2 100644
+--- a/src/runtimes/local/local-runtime-options.ts
++++ b/src/runtimes/local/local-runtime-options.ts
+@@ -43,7 +43,7 @@ export type LocalRuntimeOptionsBase = {
+   /**
+    * Auto-clear the message queue when the user cancels the run. Defaults to
+    * `true`. When `false`, cancel pauses the queue and keeps the pending
+-   * items; the next send drains them.
++   * items; an explicit queue-item resume drains one item.
+    * @deprecated Removal after 2026-11-05 — cancel will always pause the queue and keep the items.
+    */
+   unstable_queueClearOnCancel?: boolean | undefined;
+diff --git a/src/runtimes/local/local-thread-runtime-core.ts b/src/runtimes/local/local-thread-runtime-core.ts
+index 59316f8736a430f7713d2440b2bc5ff84a9c871a..9b8e391a4d0c1156ade759579b69d7a21ccdb5c3 100644
+--- a/src/runtimes/local/local-thread-runtime-core.ts
++++ b/src/runtimes/local/local-thread-runtime-core.ts
+@@ -373,6 +373,14 @@ export class LocalThreadRuntimeCore
+     this._queue?.adapter.move(queueItemId, placement);
+   }
+ 
++  public resumeQueueItem(queueItemId: string): void {
++    this._queue?.adapter.resume?.(queueItemId);
++  }
++
++  public editQueueItem(queueItemId: string, message: AppendMessage): void {
++    this._queue?.adapter.edit(queueItemId, message);
++  }
++
+   public removeQueueItem(queueItemId: string): void {
+     this._queue?.adapter.remove(queueItemId);
+   }
+diff --git a/src/store/runtime-clients/composer-runtime-client.ts b/src/store/runtime-clients/composer-runtime-client.ts
+index 43ca59ad3e045056b20155145f0e0dd224f49b17..255efcd2df021d49eac24a2942caab8b4546cef6 100644
+--- a/src/store/runtime-clients/composer-runtime-client.ts
++++ b/src/store/runtime-clients/composer-runtime-client.ts
+@@ -7,6 +7,7 @@ import type {
+   ComposerRuntime,
+   EditComposerRuntime,
+ } from "../../runtime/api/composer-runtime";
++import type { AppendMessage } from "../../types/message";
+ import type { ComposerState } from "../scopes/composer";
+ import type { QueueItemState } from "../scopes/queue-item";
+ import type { QueuePlacement } from "../../runtime/queue/external-thread-queue-adapter";
+@@ -39,16 +40,22 @@ const ComposerAttachmentClientByIndex = resource(
+ const useQueueItemClient = ({
+   item,
+   onMove,
++  onResume,
++  onEdit,
+   onRemove,
+ }: {
+   item: QueueItemState;
+   onMove: (placement: QueuePlacement) => void;
++  onResume: () => void;
++  onEdit: (message: AppendMessage) => void;
+   onRemove: () => void;
+ }): ClientOutput<"queueItem"> => {
+   return {
+     getState: () => item,
+     steer: () => onMove({ lane: "steer", insertAfter: null }),
+     move: onMove,
++    resume: onResume,
++    edit: onEdit,
+     remove: onRemove,
+   };
+ };
+@@ -121,6 +128,8 @@ const useComposerClient = ({
+         QueueItemClient({
+           item,
+           onMove: (placement) => runtime.moveQueueItem(item.id, placement),
++          onResume: () => runtime.resumeQueueItem(item.id),
++          onEdit: (message) => runtime.editQueueItem(item.id, message),
+           onRemove: () => runtime.removeQueueItem(item.id),
+         }),
+       ),
+diff --git a/src/store/scopes/queue-item.ts b/src/store/scopes/queue-item.ts
+index 5c4b71fdca1ffd14a9d54e6e665b99531933049f..3e460efbca19d4acb177e7cb15348d9a7827880b 100644
+--- a/src/store/scopes/queue-item.ts
++++ b/src/store/scopes/queue-item.ts
+@@ -1,5 +1,6 @@
+ import type { QueuePlacement } from "../../runtime/queue/external-thread-queue-adapter";
+ import type { QueueItemState } from "../../runtime/queue/queue-item";
++import type { AppendMessage } from "../../types/message";
+ 
+ export type { QueueItemState };
+ 
+@@ -8,6 +9,8 @@ export type QueueItemMethods = {
+   /** @deprecated Use `move({ lane: "steer", insertAfter: null })` instead. Removal after 2026-11-05. */
+   steer(): void;
+   move(placement: QueuePlacement): void;
++  resume(): void;
++  edit(message: AppendMessage): void;
+   remove(): void;
+ };
+ 
