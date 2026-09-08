@@ -40,7 +40,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
-async function installOpenCodeProvider(page: Page) {
+async function installOpenCodeProvider(
+  page: Page,
+  options: { running?: boolean } = {}
+) {
+  let running = options.running ?? false
   const sessions = [session("existing-session", "build", "Provider session")]
   const createdAgents: string[] = []
   const promptedAgents: string[] = []
@@ -57,6 +61,7 @@ async function installOpenCodeProvider(page: Page) {
   }> = []
   const questionReplies: Array<{ requestId: string; answers: unknown }> = []
   const revertedMessageIds: string[] = []
+  const abortedSessionIds: string[] = []
   const existingMessages: Array<{
     info: Record<string, unknown>
     parts: Array<Record<string, unknown>>
@@ -153,7 +158,9 @@ async function installOpenCodeProvider(page: Page) {
     if (path === "/session/status") {
       await json(
         route,
-        Object.fromEntries(sessions.map(({ id }) => [id, { type: "idle" }]))
+        Object.fromEntries(
+          sessions.map(({ id }) => [id, { type: running ? "busy" : "idle" }])
+        )
       )
       return
     }
@@ -247,6 +254,12 @@ async function installOpenCodeProvider(page: Page) {
       await json(route, true)
       return
     }
+    if (resource === "abort") {
+      abortedSessionIds.push(sessionId!)
+      running = false
+      await json(route, true)
+      return
+    }
     if (!resource && request.method() === "GET") {
       await json(route, current)
       return
@@ -255,6 +268,7 @@ async function installOpenCodeProvider(page: Page) {
   })
 
   return {
+    abortedSessionIds,
     createdAgents,
     pendingQuestions,
     promptedAgents,
@@ -264,6 +278,81 @@ async function installOpenCodeProvider(page: Page) {
     existingMessages,
   }
 }
+
+async function preventEventStreamConnection(page: Page) {
+  await page.addInitScript(() => {
+    // Keep the adapter's reconnect probe unavailable so the contract exercises
+    // authoritative initial-load hydration only.
+    AbortController.prototype.abort = function () {}
+    const streamGate = new Promise<void>(() => {})
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const url = new URL(
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url,
+        window.location.href
+      )
+      if (url.pathname !== "/global/event" && url.pathname !== "/event") {
+        return nativeFetch(input, init)
+      }
+
+      await streamGate
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(": connected\n\n"))
+          },
+        }),
+        {
+          headers: {
+            "access-control-allow-origin": "*",
+            "content-type": "text/event-stream",
+          },
+        }
+      )
+    }
+  })
+}
+
+test("reattaches a running OpenCode Session on the initial stream connection", async ({
+  page,
+}) => {
+  await preventEventStreamConnection(page)
+  const provider = await installOpenCodeProvider(page, { running: true })
+
+  await page.goto("/en")
+  await expect(page.getByText("Initial provider response")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Stop generating" })
+  ).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByText("Initial provider response")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Stop generating" })
+  ).toBeVisible()
+  expect(provider.abortedSessionIds).toEqual([])
+
+  const input = page.getByRole("textbox", { name: "Message input" })
+  await input.fill("Wait until the running command finishes")
+  await input.press("Enter")
+  const queued = page.getByRole("region", { name: "Queued messages" })
+  await expect(queued).toContainText("Wait until the running command finishes")
+  expect(provider.promptedAgents).toEqual([])
+  expect(provider.abortedSessionIds).toEqual([])
+
+  await page.getByRole("button", { name: "Stop generating" }).click()
+  await expect
+    .poll(() => provider.abortedSessionIds)
+    .toEqual(["existing-session"])
+  await expect(queued).toContainText("Wait until the running command finishes")
+
+  await page.goto("/en/missing-session")
+  expect(provider.abortedSessionIds).toEqual(["existing-session"])
+})
 
 test("the default OpenCode workspace creates and prompts an Agent-owned Session", async ({
   page,

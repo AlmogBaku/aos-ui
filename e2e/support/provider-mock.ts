@@ -120,7 +120,7 @@ export function createProviderMock(options: ProviderMockOptions): ProviderMock {
     }
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
-        "access-control-allow-headers": "content-type",
+        "access-control-allow-headers": "content-type, x-opencode-directory",
         "access-control-allow-methods": "GET, POST, OPTIONS",
         "access-control-allow-origin": "*",
       })

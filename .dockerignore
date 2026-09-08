@@ -1,13 +1,16 @@
 .git
 .gitignore
-.next
-.next-*
 .turbo
 .vercel
 .env
 .env.*
 !.env.example
 .aws
+.agents
+.claude
+.codex
+.hermes
+.opencode
 node_modules
 **/node_modules
 **/.venv
@@ -15,6 +18,7 @@ node_modules
 **/__pycache__
 **/.pytest_cache
 coverage
+dist
 playwright-report
 test-results
 *.log

@@ -1,0 +1,11 @@
+name: aos-integration
+version: 1.0.0
+description: AOS Session handoff and rich-presentation tools
+python_dependencies:
+  - jsonschema>=4.26,<5
+provides_tools:
+  - render_chart
+  - render_map
+  - render_stats
+  - present_plan
+  - aos_start_session

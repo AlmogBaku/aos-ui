@@ -1,9 +1,12 @@
 import { defineConfig, devices } from "@playwright/test"
 
 const port = 3100
+const externalBaseURL = process.env.AOS_UI_E2E_BASE_URL?.replace(/\/$/, "")
+const baseURL = externalBaseURL ?? `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "test-results/fixture",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
@@ -13,7 +16,7 @@ export default defineConfig({
     timeout: 7_000,
   },
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL,
     locale: "en-US",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -45,18 +48,20 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    command: `bun run dev -- --hostname 127.0.0.1 --port ${port}`,
-    env: {
-      ...process.env,
-      AOS_UI_E2E_DIST_DIR: ".next-e2e-fixture",
-      AOS_UI_RUNTIME_MODE: "fixture",
-      NEXT_PUBLIC_AOS_UI_E2E: "1",
-    },
-    url: `http://127.0.0.1:${port}/en`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: externalBaseURL
+    ? undefined
+    : {
+        command: `bun run dev -- --host 127.0.0.1 --port ${port}`,
+        env: {
+          ...process.env,
+          AOS_UI_RUNTIME_MODE: "fixture",
+          AOS_UI_E2E_CACHE_KEY: "fixture-3100",
+          VITE_AOS_UI_E2E: "1",
+        },
+        url: `http://127.0.0.1:${port}/en`,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
 })

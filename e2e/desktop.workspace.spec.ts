@@ -8,7 +8,7 @@ for (const locale of ["en", "he"] as const) {
   test(`desktop Session tabs and identity in ${locale}`, async ({ page }) => {
     await exerciseSessionTabs(page, false, locale)
   })
-  test(`Manage Agents supports visibility and creation in ${locale}`, async ({
+  test(`Manage Agents supports visibility controls in ${locale}`, async ({
     page,
   }) => {
     await exerciseAgentManagement(page, false, locale)

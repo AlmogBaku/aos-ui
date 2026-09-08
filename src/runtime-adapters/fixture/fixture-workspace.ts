@@ -1,0 +1,466 @@
+import { createBrowserId } from "@/lib/browser-id"
+
+import type {
+  AgentSummary,
+  AgentCatalogEntry,
+  AgentVisibility,
+  SessionCreationOptions,
+  SessionMetadata,
+  TodoItem,
+  WorkspaceActivityEvent,
+  WorkspaceAdapter,
+} from "../contracts"
+import {
+  buildFixtureActivityScenario,
+  type FixtureActivityScenarioName,
+} from "./fixture-activity"
+
+export const FIXTURE_NOW = new Date("2026-09-03T12:00:00.000Z")
+
+export type FixtureClock = () => Date
+
+export const fixtureAgents: AgentSummary[] = [
+  {
+    kind: "ready",
+    id: "agent-aster",
+    name: "Aster",
+    description: "General analysis and synthesis",
+    status: "running",
+    icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
+  },
+  {
+    kind: "ready",
+    id: "agent-mica",
+    name: "Mica",
+    description: "Long-form synthesis",
+    status: "idle",
+    icon: { kind: "symbol", symbol: "layers", tone: "purple" },
+  },
+  {
+    kind: "ready",
+    id: "agent-lumen",
+    name: "Lumen",
+    description: "Planning and review",
+    status: "attention",
+    icon: { kind: "symbol", symbol: "compass", tone: "teal" },
+  },
+  {
+    kind: "ready",
+    id: "agent-vela",
+    name: "Vela",
+    description: "Data interpretation",
+    status: "idle",
+    icon: { kind: "symbol", symbol: "chart", tone: "ochre" },
+  },
+  {
+    kind: "ready",
+    id: "agent-nori",
+    name: "Nori",
+    description: "Writing and editing",
+    status: "idle",
+    icon: { kind: "symbol", symbol: "pen", tone: "slate" },
+  },
+]
+
+export const fixtureSessionTitles = new Map<string, string>([
+  ["thread-aster-market", "Market brief"],
+  ["thread-aster-launch", "Launch review"],
+  ["thread-aster-scan", "Competitive scan"],
+  ["thread-aster-pricing", "Pricing analysis"],
+  ["thread-aster-interviews", "Customer interviews"],
+  ["thread-mica-quarterly", "Quarterly synthesis"],
+  ["thread-lumen-roadmap", "Roadmap review"],
+  ["thread-vela-metrics", "Activation metrics"],
+  ["thread-nori-copy", "Launch copy"],
+])
+
+export const fixtureSessions: SessionMetadata[] = [
+  {
+    threadId: "thread-aster-market",
+    agentId: "agent-aster",
+    updatedAt: "2026-09-03T11:00:00.000Z",
+    status: "running",
+  },
+  {
+    threadId: "thread-aster-launch",
+    agentId: "agent-aster",
+    updatedAt: "2026-09-03T07:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-aster-scan",
+    agentId: "agent-aster",
+    updatedAt: "2026-09-03T01:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-aster-pricing",
+    agentId: "agent-aster",
+    updatedAt: "2026-09-03T00:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-aster-interviews",
+    agentId: "agent-aster",
+    updatedAt: "2026-09-02T10:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-mica-quarterly",
+    agentId: "agent-mica",
+    updatedAt: "2026-09-03T10:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-lumen-roadmap",
+    agentId: "agent-lumen",
+    updatedAt: "2026-08-30T12:00:00.000Z",
+    status: "waiting-for-input",
+  },
+  {
+    threadId: "thread-vela-metrics",
+    agentId: "agent-vela",
+    updatedAt: "2026-08-28T12:00:00.000Z",
+    status: "idle",
+  },
+  {
+    threadId: "thread-nori-copy",
+    agentId: "agent-nori",
+    updatedAt: "2026-08-27T12:00:00.000Z",
+    status: "failed",
+  },
+]
+
+const fixtureTodos = new Map<string, TodoItem[]>([
+  [
+    "thread-aster-market",
+    [
+      {
+        id: "todo-scope",
+        label: "Define scope and coverage",
+        status: "completed",
+      },
+      { id: "todo-trends", label: "Aggregate spend trends", status: "active" },
+      { id: "todo-segments", label: "Segment the market", status: "pending" },
+      { id: "todo-drivers", label: "Identify key drivers", status: "pending" },
+      { id: "todo-summary", label: "Summarize takeaways", status: "pending" },
+    ],
+  ],
+])
+
+type FixtureWorkspaceOptions = {
+  clock?: FixtureClock
+  activityIdFactory?: () => string
+  enableAgentCreator?: boolean
+}
+
+type ActivitySubscription = {
+  listener: (event: WorkspaceActivityEvent) => void
+  onError?: (error: Error) => void
+}
+
+type FixtureRunActivity = {
+  agentId: string
+  threadId: string
+  lifecycleId: string
+}
+
+export class FixtureWorkspace implements WorkspaceAdapter {
+  /** Test fixtures derive creator identity from the same catalog as the UI. */
+  get agentCreator() {
+    return this.#agents.find((agent) => agent.role === "creator")
+  }
+
+  readonly #clock: FixtureClock
+  readonly #activityIdFactory: () => string
+  readonly #agents: AgentSummary[] = [
+    ...structuredClone(fixtureAgents),
+    {
+      kind: "ready",
+      id: "agent-sable",
+      name: "Sable",
+      description: "Research and discovery",
+      status: "idle",
+      icon: { kind: "symbol", symbol: "compass", tone: "slate" },
+    },
+  ]
+  readonly #hiddenAgents = new Set(["agent-sable"])
+  readonly #sessions = structuredClone(fixtureSessions)
+  readonly #todos = new Map(
+    [...fixtureTodos].map(([threadId, todos]) => [
+      threadId,
+      structuredClone(todos),
+    ])
+  )
+  readonly #todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
+  readonly #agentCatalogListeners = new Set<() => void>()
+
+  readonly #activityListeners = new Set<ActivitySubscription>()
+  readonly #sessionTitles = new Map(fixtureSessionTitles)
+  #sessionSequence = 0
+
+  constructor({
+    clock = () => new Date(),
+    activityIdFactory = createBrowserId,
+    enableAgentCreator = true,
+  }: FixtureWorkspaceOptions = {}) {
+    this.#clock = clock
+    this.#activityIdFactory = activityIdFactory
+    if (enableAgentCreator)
+      this.#agents.push({
+        kind: "ready",
+        id: "agent-builder",
+        name: "Agent Creator",
+        visibility: "hidden",
+        role: "creator",
+        description: "Create a native Agent",
+        icon: { kind: "symbol", symbol: "spark", tone: "purple" },
+      })
+  }
+
+  async listAgents() {
+    return structuredClone(
+      this.#agents.map((agent) => ({
+        ...agent,
+        visibility: this.#hiddenAgents.has(agent.id)
+          ? ("hidden" as const)
+          : (agent.visibility ?? ("visible" as const)),
+      }))
+    )
+  }
+
+  async listAgentCatalog(): Promise<AgentCatalogEntry[]> {
+    return this.#agents.flatMap((summary) =>
+      summary.kind === "ready" && summary.role !== "creator"
+        ? [
+            {
+              summary: structuredClone(summary),
+              visibility: this.#hiddenAgents.has(summary.id)
+                ? "hidden"
+                : "visible",
+              selectable: !this.#hiddenAgents.has(summary.id),
+              editable: true,
+            },
+          ]
+        : []
+    )
+  }
+
+  async updateAgentVisibility(agentId: string, visibility: AgentVisibility) {
+    if (agentId === this.agentCreator?.id)
+      throw new Error("Creator visibility is managed by the provider")
+    if (
+      !this.#agents.some(
+        (agent) => agent.id === agentId && agent.kind === "ready"
+      )
+    )
+      throw new Error("Agent visibility cannot be changed")
+    if (visibility === "hidden") this.#hiddenAgents.add(agentId)
+    else if (visibility === "visible") this.#hiddenAgents.delete(agentId)
+    else throw new Error("Invalid Agent visibility")
+    this.#publishCatalog()
+  }
+
+  async refreshAgents() {
+    return this.listAgents()
+  }
+
+  async getSessionMetadata(threadIds: string[]) {
+    const requested = new Set(threadIds)
+    return structuredClone(
+      this.#sessions.filter(({ threadId }) => requested.has(threadId))
+    )
+  }
+
+  async createSession(agentId: string, options?: SessionCreationOptions) {
+    const agent =
+      agentId === this.agentCreator?.id
+        ? this.agentCreator
+        : this.#agents.find(({ id }) => id === agentId)
+    if (!agent) {
+      throw new Error(`Unknown Agent: ${agentId}`)
+    }
+    if (agent.kind !== "ready") {
+      throw new Error(`Agent is not ready: ${agentId}`)
+    }
+
+    this.#sessionSequence += 1
+    const threadId = `fixture-session-${String(this.#sessionSequence).padStart(3, "0")}`
+    this.#sessions.push({
+      threadId,
+      agentId,
+      status: "idle",
+      updatedAt: this.#clock().toISOString(),
+    })
+    this.#sessionTitles.set(threadId, options?.title ?? "New session")
+    return { threadId }
+  }
+
+  listAllSessionMetadata() {
+    return structuredClone(this.#sessions)
+  }
+
+  getSessionTitle(threadId: string) {
+    return this.#sessionTitles.get(threadId)
+  }
+
+  setSessionTitle(threadId: string, title: string) {
+    if (!this.#sessions.some((session) => session.threadId === threadId)) {
+      throw new Error(`Session not found: ${threadId}`)
+    }
+    this.#sessionTitles.set(threadId, title)
+  }
+
+  subscribeTodos(threadId: string, listener: (todos: TodoItem[]) => void) {
+    const listeners = this.#todoListeners.get(threadId) ?? new Set()
+    listeners.add(listener)
+    this.#todoListeners.set(threadId, listeners)
+    listener(structuredClone(this.#todos.get(threadId) ?? []))
+
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) this.#todoListeners.delete(threadId)
+    }
+  }
+
+  emitTodos(threadId: string, todos: TodoItem[]) {
+    this.#todos.set(threadId, structuredClone(todos))
+    for (const listener of this.#todoListeners.get(threadId) ?? []) {
+      listener(structuredClone(todos))
+    }
+  }
+
+  subscribeActivity(
+    listener: (event: WorkspaceActivityEvent) => void,
+    onError?: (error: Error) => void
+  ) {
+    const entry = { listener, ...(onError ? { onError } : {}) }
+    this.#activityListeners.add(entry)
+    return () => this.#activityListeners.delete(entry)
+  }
+
+  publishActivityScenario(name: FixtureActivityScenarioName) {
+    for (const event of buildFixtureActivityScenario(name)) {
+      this.#publishActivity(event)
+    }
+  }
+
+  beginRunActivity(
+    threadId: string,
+    providerRunId?: string
+  ): FixtureRunActivity | undefined {
+    const session = this.#sessions.find((item) => item.threadId === threadId)
+    if (!session) return undefined
+    const runId = providerRunId || this.#activityIdFactory()
+    const lifecycleId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(runId)}`
+    const activity = { agentId: session.agentId, threadId, lifecycleId }
+    this.#publishActivity({
+      id: `${lifecycleId}:started`,
+      ...activity,
+      occurredAt: this.#clock().toISOString(),
+      type: "run-started",
+    })
+    return activity
+  }
+
+  createAttentionRequestId(
+    threadId: string,
+    kind: "question" | "permission",
+    providerRunId?: string
+  ) {
+    const requestId = providerRunId || this.#activityIdFactory()
+    return `fixture:${kind}:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`
+  }
+
+  finishRunActivity(
+    activity: FixtureRunActivity | undefined,
+    result: "finished" | "failed"
+  ) {
+    if (!activity) return
+    this.#publishActivity({
+      id: `${activity.lifecycleId}:${result}`,
+      ...activity,
+      occurredAt: this.#clock().toISOString(),
+      type: result === "finished" ? "run-finished" : "run-failed",
+    })
+  }
+
+  publishAttention(
+    threadId: string,
+    kind: "question" | "permission" | "resolved",
+    requestId: string
+  ) {
+    const session = this.#sessions.find((item) => item.threadId === threadId)
+    if (!session) return
+    const eventBase = {
+      id: `fixture:runtime:${encodeURIComponent(threadId)}:attention:${encodeURIComponent(requestId)}:${kind === "resolved" ? "resolved" : "requested"}`,
+      agentId: session.agentId,
+      threadId,
+      occurredAt: this.#clock().toISOString(),
+    }
+    this.#publishActivity(
+      kind === "resolved"
+        ? {
+            ...eventBase,
+            type: "attention-resolved",
+            requestId,
+          }
+        : {
+            ...eventBase,
+            type: "attention-requested",
+            attentionKind: kind,
+            requestId,
+          }
+    )
+  }
+
+  subscribeAgentCatalog(listener: () => void) {
+    this.#agentCatalogListeners.add(listener)
+    return () => this.#agentCatalogListeners.delete(listener)
+  }
+
+  completeAgentCreation(creatorThreadId: string, agent: AgentSummary) {
+    const creatorSession = this.#sessions.find(
+      ({ threadId }) => threadId === creatorThreadId
+    )
+    if (!this.agentCreator || creatorSession?.agentId !== this.agentCreator.id)
+      throw new Error("Only creator Sessions can create Agents")
+    if (
+      this.#agents.some(({ id }) => id === agent.id) ||
+      agent.id === this.agentCreator.id
+    )
+      throw new Error("Agent already exists")
+    this.#agents.push(structuredClone(agent))
+    this.#publishCatalog()
+  }
+
+  #publishCatalog() {
+    for (const listener of this.#agentCatalogListeners) listener()
+  }
+
+  #publishActivity(event: WorkspaceActivityEvent) {
+    for (const entry of this.#activityListeners) {
+      try {
+        entry.listener(structuredClone(event))
+      } catch (reason) {
+        try {
+          entry.onError?.(
+            reason instanceof Error ? reason : new Error(String(reason))
+          )
+        } catch {
+          // Fixture observers are isolated like real provider observers.
+        }
+      }
+    }
+  }
+}
+
+declare global {
+  interface Window {
+    __AOS_UI_FIXTURE_WORKSPACE__?: FixtureWorkspace
+  }
+}
+
+export function createFixtureWorkspace(options?: FixtureWorkspaceOptions) {
+  return new FixtureWorkspace(options)
+}

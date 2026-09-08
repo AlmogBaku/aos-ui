@@ -6,8 +6,15 @@ services:
       - bun
       - run
       - dev
-      - --hostname
+      - --
+      - --host
       - 0.0.0.0
+    environment:
+      AOS_UI_RUNTIME_CONFIG_FILE: /run/aos-ui/runtime-config.json
+    configs:
+      - source: runtime-config
+        target: /run/aos-ui/runtime-config.json
+        mode: 0444
     volumes:
       - type: bind
         source: .

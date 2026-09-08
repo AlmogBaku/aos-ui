@@ -1,0 +1,8 @@
+# Hermes itself is operator-managed; this overlay only forwards native traffic.
+services:
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      AOS_UI_HERMES_HOST: ${AOS_UI_HERMES_HOST:-host.docker.internal}
+      AOS_UI_HERMES_PORT: ${AOS_UI_HERMES_PORT:-9119}

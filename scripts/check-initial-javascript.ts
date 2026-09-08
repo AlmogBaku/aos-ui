@@ -1,9 +1,7 @@
 import assert from "node:assert/strict"
 import { chromium } from "@playwright/test"
 
-// Run against a production fixture server, never `next dev`:
-// AOS_UI_RUNTIME_MODE=fixture bun run start -- --port 3194
-// bun run scripts/check-initial-javascript.ts http://localhost:3194/en
+// Run against the production Nginx image, never the Vite development server.
 const route = process.argv[2]
 assert(route, "Pass the production fixture route URL")
 
@@ -19,7 +17,7 @@ try {
       .filter(
         (entry): entry is PerformanceResourceTiming =>
           entry instanceof PerformanceResourceTiming &&
-          entry.name.includes("/_next/") &&
+          entry.name.includes("/assets/") &&
           new URL(entry.name).pathname.endsWith(".js")
       )
       .map((entry) => ({

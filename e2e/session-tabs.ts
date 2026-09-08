@@ -37,6 +37,17 @@ export async function exerciseSessionTabs(
     "aria-selected",
     "true"
   )
+  if (!mobile) {
+    const tabBarHeight = await page
+      .locator("[data-tab-viewport]")
+      .evaluate((element) => element.parentElement?.getBoundingClientRect().height)
+    const firstTabWidth = await page
+      .getByRole("tab", { name: "Market brief" })
+      .evaluate((element) => element.getBoundingClientRect().width)
+
+    expect(tabBarHeight).toBeLessThanOrEqual(56)
+    expect(firstTabWidth).toBeLessThanOrEqual(104)
+  }
   if (mobile) {
     const drawer = page.getByRole("button", { name: copy.drawer })
     const bounds = await drawer.boundingBox()
@@ -115,7 +126,6 @@ export async function exerciseSessionTabs(
     .getByRole("button", { name: `${copy.actions}: Market brief` })
     .click()
   await page.getByRole("menuitem", { name: copy.close }).click()
-  await page.waitForTimeout(7000)
   await expect(
     page.getByRole("button", { name: copy.undo, exact: true })
   ).toBeVisible()
@@ -124,7 +134,7 @@ export async function exerciseSessionTabs(
   })
   await expect(
     page.getByRole("button", { name: copy.undo, exact: true })
-  ).toHaveCount(0, { timeout: 2000 })
+  ).toHaveCount(0, { timeout: 10_000 })
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth

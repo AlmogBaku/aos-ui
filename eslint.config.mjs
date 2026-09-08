@@ -1,30 +1,123 @@
+import js from "@eslint/js"
 import { defineConfig, globalIgnores } from "eslint/config"
-import nextVitals from "eslint-config-next/core-web-vitals"
-import nextTs from "eslint-config-next/typescript"
+import reactHooks from "eslint-plugin-react-hooks"
+import globals from "globals"
+import tseslint from "typescript-eslint"
 
-const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  // Override default ignores of eslint-config-next.
+export default defineConfig([
   globalIgnores([
-    // Default ignores of eslint-config-next:
-    ".next/**",
-    ".next-e2e/**",
-    ".next-e2e-fixture/**",
-    ".next-e2e-opencode/**",
-    ".next-e2e-keyboard-opencode/**",
-    ".next-e2e-ag-ui/**",
-    "out/**",
-    "build/**",
-    "next-env.d.ts",
-    // Python dependencies can include third-party JavaScript assets.
+    "dist/**",
+    "coverage/**",
+    "integrations/**/dist/**",
     "**/.venv/**",
-    // Local agent/design tooling is vendored into the workspace, not shipped.
     ".agents/**",
     ".claude/**",
+    ".hermes/**",
     ".impeccable/**",
     ".worktrees/**",
   ]),
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  reactHooks.configs.flat.recommended,
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+    rules: {
+      "no-restricted-globals": ["error", "process"],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "node:*",
+                "integrations/*",
+                "integrations/**",
+                "../**/integrations/**",
+                "../../integrations/**",
+                "scripts/*",
+                "scripts/**",
+                "../**/scripts/**",
+                "@assistant-ui/*/dist/**",
+                "@assistant-ui/*/src/**",
+              ],
+              message:
+                "Browser code must not import native implementations or private Assistant UI internals.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["shared/**/*.ts"],
+    ignores: ["shared/**/*.test.ts"],
+    languageOptions: {
+      globals: { URL: "readonly" },
+    },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "@/*",
+                "react",
+                "react/*",
+                "@ag-ui/*",
+                "@assistant-ui/*",
+                "@opencode-ai/*",
+                "src/*",
+                "src/**",
+                "../src/**",
+                "integrations/*",
+                "integrations/**",
+                "../integrations/**",
+                "../**/integrations/**",
+                "node:*",
+              ],
+              message:
+                "Shared contracts must remain browser- and native-independent.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        "window",
+        "document",
+        "navigator",
+        "process",
+      ],
+    },
+  },
+  {
+    files: [
+      "scripts/**/*.{ts,mts}",
+      "test/**/*.ts",
+      "e2e/**/*.ts",
+      "**/*.config.{ts,mts,mjs}",
+      "**/*.test.{ts,tsx}",
+    ],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        Bun: "readonly",
+      },
+    },
+    rules: {
+      "no-restricted-globals": "off",
+    },
+  },
+  {
+    rules: {
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
 ])
-
-export default eslintConfig

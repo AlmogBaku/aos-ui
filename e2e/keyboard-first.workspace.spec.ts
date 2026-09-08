@@ -14,7 +14,9 @@ function commandsTrigger(page: Page) {
 }
 
 async function runCommand(page: Page, title: string, shortcut = "Control+k") {
-  await commandsTrigger(page).focus()
+  const trigger = commandsTrigger(page)
+  if (await trigger.isVisible()) await trigger.focus()
+  else await page.getByRole("tab", { selected: true }).focus()
   await page.keyboard.press(shortcut)
   const dialog = page.getByRole("dialog", { name: "Commands" })
   await expect(dialog).toBeVisible()
@@ -90,9 +92,12 @@ test("a captured shortcut drives its new behavior and Reset restores the default
 
   await page.keyboard.press("Escape")
   await expect(settings).toBeHidden()
+  await expect(settings).toHaveCount(0)
   await page.keyboard.press("Control+Shift+p")
-  await expect(page.getByRole("dialog", { name: "Commands" })).toBeVisible()
+  const commands = page.getByRole("dialog", { name: "Commands" })
+  await expect(commands).toBeVisible()
   await page.keyboard.press("Escape")
+  await expect(commands).toHaveCount(0)
 
   await runCommand(page, "Keyboard Shortcuts", "Control+Shift+p")
   await expect(settings).toBeVisible()
@@ -232,10 +237,12 @@ test("Escape closes only the active overlay and leaves the composer draft intact
   await expect(commandsTrigger(page)).toBeFocused()
 })
 
-test("Escape cancels a busy run without dropping queued work, which resumes explicitly", async ({
+test("Escape cancels a busy run without dropping queued work, which re-arms on an explicit send", async ({
   page,
 }) => {
+  await page.clock.install()
   await openWorkspace(page)
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
 
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
@@ -264,13 +271,16 @@ test("Escape cancels a busy run without dropping queued work, which resumes expl
   await expect(queued).toContainText("Queued follow-up")
   await expect(
     page.getByRole("button", { name: "Resume queued message" })
-  ).toBeVisible()
+  ).toHaveCount(0)
 
-  const resume = page.getByRole("button", { name: "Resume queued message" })
-  await resume.focus()
+  await input.focus()
+  await page.keyboard.type("Explicit follow-up")
   await page.keyboard.press("Enter")
-  await expect(queued).toBeHidden()
+  await expect(queued).not.toContainText("Queued follow-up")
+  await expect(queued).toContainText("Explicit follow-up")
   await expect(
-    page.getByText("Queued follow-up", { exact: true })
+    page
+      .locator('[data-slot="aui_thread-viewport"]')
+      .getByText("Queued follow-up", { exact: true })
   ).toBeVisible()
 })

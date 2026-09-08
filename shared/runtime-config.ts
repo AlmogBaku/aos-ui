@@ -1,0 +1,220 @@
+import { z } from "zod"
+
+export type RuntimeUnavailableReason =
+  | "invalid-public-config"
+  | "missing-hermes-base-url"
+  | "invalid-hermes-base-url"
+  | "invalid-runtime-mode"
+  | "invalid-opencode-base-url"
+  | "missing-opencode-directory"
+  | "invalid-opencode-directory"
+  | "incomplete-opencode-model-override"
+  | "missing-ag-ui-run-url"
+  | "invalid-ag-ui-run-url"
+  | "missing-ag-ui-workspace-url"
+  | "invalid-ag-ui-workspace-url"
+
+export type RuntimeConfiguration =
+  | { status: "ready"; mode: "fixture" }
+  | { status: "ready"; mode: "hermes"; baseUrl: string }
+  | {
+      status: "ready"
+      mode: "opencode"
+      baseUrl: string
+      directory: string
+      defaultModel?: { providerID: string; modelID: string }
+    }
+  | {
+      status: "ready"
+      mode: "ag-ui"
+      runUrl: string
+      workspaceUrl: string
+    }
+  | { status: "unavailable"; reason: RuntimeUnavailableReason }
+
+type RuntimeEnvironment = Partial<
+  Record<
+    | "AOS_UI_RUNTIME_MODE"
+    | "AOS_UI_HERMES_BASE_URL"
+    | "AOS_UI_OPENCODE_BASE_URL"
+    | "AOS_UI_OPENCODE_WORKTREE"
+    | "AOS_UI_OPENCODE_PROVIDER_ID"
+    | "AOS_UI_OPENCODE_MODEL_ID"
+    | "AOS_UI_AG_UI_URL"
+    | "AOS_UI_AG_UI_WORKSPACE_URL",
+    string | undefined
+  >
+>
+
+function resolveHttpUrl(value: string | undefined) {
+  if (!value) return undefined
+
+  try {
+    const parsed = new URL(value)
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username ||
+      parsed.password ||
+      /[?#]/.test(parsed.href)
+    ) {
+      return null
+    }
+
+    return parsed.toString().replace(/\/$/, "")
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Runtime choice is intentionally strict. A misspelled production mode must
+ * never expose deterministic fixture data as though it came from a provider.
+ */
+export function resolveRuntimeConfiguration(
+  environment: RuntimeEnvironment
+): RuntimeConfiguration {
+  const mode = environment.AOS_UI_RUNTIME_MODE ?? "opencode"
+
+  if (mode === "fixture") {
+    return { status: "ready", mode: "fixture" }
+  }
+  if (mode === "hermes") {
+    const baseUrl = environment.AOS_UI_HERMES_BASE_URL
+    if (!baseUrl)
+      return { status: "unavailable", reason: "missing-hermes-base-url" }
+    if (/^\/(?!\/)[A-Za-z0-9/_-]+$/.test(baseUrl))
+      return { status: "ready", mode, baseUrl: baseUrl.replace(/\/+$/, "") }
+    const resolved = resolveHttpUrl(baseUrl)
+    return resolved
+      ? { status: "ready", mode, baseUrl: resolved }
+      : { status: "unavailable", reason: "invalid-hermes-base-url" }
+  }
+  if (mode === "opencode") {
+    const configuredBaseUrl = resolveHttpUrl(
+      environment.AOS_UI_OPENCODE_BASE_URL
+    )
+    if (configuredBaseUrl === null) {
+      return { status: "unavailable", reason: "invalid-opencode-base-url" }
+    }
+    const baseUrl = configuredBaseUrl ?? "http://127.0.0.1:4096"
+    const providerID = environment.AOS_UI_OPENCODE_PROVIDER_ID?.trim()
+    const modelID = environment.AOS_UI_OPENCODE_MODEL_ID?.trim()
+
+    if (Boolean(providerID) !== Boolean(modelID)) {
+      return {
+        status: "unavailable",
+        reason: "incomplete-opencode-model-override",
+      }
+    }
+
+    const directory = environment.AOS_UI_OPENCODE_WORKTREE?.trim()
+    if (!directory)
+      return { status: "unavailable", reason: "missing-opencode-directory" }
+    if (
+      !/^(?:\/(?!\/)|[A-Za-z]:[\\/])/.test(directory) ||
+      [...directory].some((character) => character.charCodeAt(0) < 32)
+    )
+      return { status: "unavailable", reason: "invalid-opencode-directory" }
+    return {
+      status: "ready",
+      mode,
+      baseUrl,
+      directory,
+      ...(providerID && modelID
+        ? { defaultModel: { providerID, modelID } }
+        : {}),
+    }
+  }
+  if (mode !== "ag-ui") {
+    return { status: "unavailable", reason: "invalid-runtime-mode" }
+  }
+
+  const runUrl = resolveHttpUrl(environment.AOS_UI_AG_UI_URL)
+  if (runUrl === undefined) {
+    return { status: "unavailable", reason: "missing-ag-ui-run-url" }
+  }
+  if (runUrl === null) {
+    return { status: "unavailable", reason: "invalid-ag-ui-run-url" }
+  }
+
+  const workspaceUrl = resolveHttpUrl(environment.AOS_UI_AG_UI_WORKSPACE_URL)
+  if (workspaceUrl === undefined) {
+    return {
+      status: "unavailable",
+      reason: "missing-ag-ui-workspace-url",
+    }
+  }
+  if (workspaceUrl === null) {
+    return {
+      status: "unavailable",
+      reason: "invalid-ag-ui-workspace-url",
+    }
+  }
+
+  return { status: "ready", mode, runUrl, workspaceUrl }
+}
+
+const publicConfigurationSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("fixture"),
+      status: z.literal("ready").optional(),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("opencode"),
+      status: z.literal("ready").optional(),
+      baseUrl: z.string().min(1),
+      directory: z.string().min(1),
+      defaultModel: z
+        .object({ providerID: z.string().min(1), modelID: z.string().min(1) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("hermes"),
+      status: z.literal("ready").optional(),
+      baseUrl: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("ag-ui"),
+      status: z.literal("ready").optional(),
+      runUrl: z.string().min(1),
+      workspaceUrl: z.string().min(1),
+    })
+    .strict(),
+])
+
+/** Deliberately allowlists public fields; native credentials are never accepted. */
+export function parsePublicRuntimeConfiguration(
+  input: unknown
+): RuntimeConfiguration {
+  const parsed = publicConfigurationSchema.safeParse(input)
+  if (!parsed.success)
+    return { status: "unavailable", reason: "invalid-public-config" }
+  const config = parsed.data
+  if (config.mode === "fixture") return { status: "ready", mode: "fixture" }
+  if (config.mode === "hermes")
+    return resolveRuntimeConfiguration({
+      AOS_UI_RUNTIME_MODE: "hermes",
+      AOS_UI_HERMES_BASE_URL: config.baseUrl,
+    })
+  if (config.mode === "opencode")
+    return resolveRuntimeConfiguration({
+      AOS_UI_RUNTIME_MODE: "opencode",
+      AOS_UI_OPENCODE_BASE_URL: config.baseUrl,
+      AOS_UI_OPENCODE_WORKTREE: config.directory,
+      AOS_UI_OPENCODE_PROVIDER_ID: config.defaultModel?.providerID,
+      AOS_UI_OPENCODE_MODEL_ID: config.defaultModel?.modelID,
+    })
+  return resolveRuntimeConfiguration({
+    AOS_UI_RUNTIME_MODE: "ag-ui",
+    AOS_UI_AG_UI_URL: config.runUrl,
+    AOS_UI_AG_UI_WORKSPACE_URL: config.workspaceUrl,
+  })
+}

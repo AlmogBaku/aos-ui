@@ -5,9 +5,112 @@ import {
   createOpenCodeChildEnvironment,
   createOpenCodeServeArguments,
   parseCorsOrigins,
+  parseOpenCodeWorktree,
 } from "./opencode-config"
 
 describe("OpenCode startup configuration", () => {
+  it("requires an explicit absolute external worktree", () => {
+    expect(() => parseOpenCodeWorktree({})).toThrow(/AOS_UI_OPENCODE_WORKTREE/)
+    expect(() =>
+      parseOpenCodeWorktree({ AOS_UI_OPENCODE_WORKTREE: "relative" })
+    ).toThrow(/absolute/i)
+    expect(
+      parseOpenCodeWorktree({
+        AOS_UI_OPENCODE_WORKTREE: " /srv/agents ",
+      })
+    ).toBe("/srv/agents")
+  })
+
+  it("loads the standalone plugin and denies privileged creation by default", () => {
+    expect(
+      JSON.parse(
+        buildOpenCodeConfigContent({}, "file:///opt/aos/opencode/plugin.js") ??
+          ""
+      )
+    ).toMatchObject({
+      plugin: ["file:///opt/aos/opencode/plugin.js"],
+      permission: {
+        create_agent: "deny",
+        start_session: "allow",
+        render_chart: "allow",
+        render_map: "allow",
+        render_stats: "allow",
+        present_plan: "allow",
+      },
+    })
+  })
+
+  it("does not configure Monty unless the operator supplies native configuration", () => {
+    const config = JSON.parse(
+      buildOpenCodeConfigContent({}, "file:///opt/aos/opencode/plugin.js") ?? ""
+    )
+    expect(config.mcp).toBeUndefined()
+  })
+
+  it("registers Monty as a local MCP only from an explicit command", () => {
+    const environment = {
+      AOS_UI_OPENCODE_MONTY_COMMAND_JSON: JSON.stringify([
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "monty",
+      ]),
+    }
+    const config = JSON.parse(
+      buildOpenCodeConfigContent(
+        environment,
+        "file:///opt/aos/opencode/plugin.js"
+      ) ?? ""
+    )
+
+    expect(config.mcp).toEqual({
+      monty: {
+        type: "local",
+        command: ["uv", "run", "python", "-m", "monty"],
+        enabled: true,
+        timeout: 120_000,
+      },
+    })
+    expect(createOpenCodeChildEnvironment(environment)).toMatchObject({
+      AOS_UI_OPENCODE_MONTY_TOOLS: "monty_execute,monty_search",
+    })
+  })
+
+  it("registers Monty as a remote MCP only from an explicit URL", () => {
+    const environment = {
+      AOS_UI_OPENCODE_MONTY_URL: " https://monty.example.test/mcp ",
+    }
+    const config = JSON.parse(buildOpenCodeConfigContent(environment) ?? "")
+
+    expect(config.mcp).toEqual({
+      monty: {
+        type: "remote",
+        url: "https://monty.example.test/mcp",
+        enabled: true,
+        timeout: 120_000,
+      },
+    })
+  })
+
+  it.each([
+    {
+      AOS_UI_OPENCODE_MONTY_COMMAND_JSON: '["uv", 42]',
+    },
+    {
+      AOS_UI_OPENCODE_MONTY_COMMAND_JSON: "[]",
+    },
+    {
+      AOS_UI_OPENCODE_MONTY_URL: "file:///tmp/monty.sock",
+    },
+    {
+      AOS_UI_OPENCODE_MONTY_COMMAND_JSON: '["monty"]',
+      AOS_UI_OPENCODE_MONTY_URL: "https://monty.example.test/mcp",
+    },
+  ])("rejects invalid or ambiguous Monty configuration: %o", (environment) => {
+    expect(() => buildOpenCodeConfigContent(environment)).toThrow(/Monty/i)
+  })
+
   it("does not add a custom provider when none of its variables are configured", () => {
     expect(buildOpenCodeConfigContent({})).toBeUndefined()
   })

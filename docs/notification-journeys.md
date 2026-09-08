@@ -22,7 +22,7 @@ boundaries. They do not observe host OS toasts.
 | All tabs closed | No new delivery | Architectural limit; manual OS gate |
 
 Run browser coverage with `bunx playwright test e2e/notifications.desktop.workspace.spec.ts --workers=1`.
-Run delivery/ownership coverage with `bunx vitest run lib/notifications components/workspace/browser-activity.test.tsx components/workspace/activity.test.tsx --maxWorkers=2`.
+Run delivery/ownership coverage with `bunx vitest run src/lib/notifications src/components/workspace/browser-activity.test.tsx src/components/workspace/activity.test.tsx --maxWorkers=2`.
 
 ## Manual host OS gate
 

@@ -304,24 +304,12 @@ test("stats display is a rich, structured artifact rather than a Todo", async ({
   await expect(page.getByLabel("Session todos")).toHaveCount(0)
 })
 
-test("Agent Builder opens as a provider-owned Session instead of a local form", async ({
-  page,
-}) => {
+test("fixture demo omits Agent creation", async ({ page }) => {
   await openWorkspace(page)
 
   const newAgent = page.getByRole("button", { name: "New Agent", exact: true })
-  await expect(newAgent).toBeEnabled()
-  await newAgent.click()
-
-  await expect(page.getByRole("tab", { name: "New Agent" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  )
-  await expect(
-    page.getByText("Hey, let's build a new agent.", { exact: true })
-  ).toBeVisible()
-  await expect(page.getByText("agent-builder", { exact: true })).toHaveCount(0)
-  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await expect(newAgent).toHaveCount(0)
+  await expect(page.getByText("Agent Creator", { exact: true })).toHaveCount(0)
 })
 
 test("Hebrew localizes rich controls while preserving provider content verbatim", async ({

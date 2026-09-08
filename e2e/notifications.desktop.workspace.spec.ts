@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./test"
-import type { FixtureActivityScenarioName } from "../lib/runtime-adapters/fixture/fixture-activity"
+import type { FixtureActivityScenarioName } from "../src/runtime-adapters/fixture/fixture-activity"
 
 declare global {
   interface Window {

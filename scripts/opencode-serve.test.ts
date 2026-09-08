@@ -2,7 +2,9 @@
 
 import { spawn } from "node:child_process"
 import { EventEmitter } from "node:events"
+import { mkdtemp } from "node:fs/promises"
 import { createServer } from "node:net"
+import { tmpdir } from "node:os"
 import path from "node:path"
 
 import { describe, expect, it, vi } from "vitest"
@@ -11,7 +13,8 @@ import { waitForOpenCodeExit } from "./opencode-serve"
 
 const projectRoot = path.resolve(import.meta.dirname, "..")
 
-function runServePreflight(port: number) {
+async function runServePreflight(port: number) {
+  const worktree = await mkdtemp(path.join(tmpdir(), "aos-ui-opencode-serve-"))
   return new Promise<{ code: number | null; stderr: string }>(
     (resolve, reject) => {
       const child = spawn("bun", ["run", "scripts/opencode-serve.ts"], {
@@ -19,6 +22,7 @@ function runServePreflight(port: number) {
         env: {
           ...process.env,
           AOS_UI_OPENCODE_PORT: String(port),
+          AOS_UI_OPENCODE_WORKTREE: worktree,
         },
         stdio: ["ignore", "ignore", "pipe"],
       })
@@ -74,7 +78,9 @@ describe("OpenCode server startup", () => {
     ["SIGINT", 130],
   ] as const)("maps a child %s exit to status %i", async (signal, status) => {
     const signalSource = new EventEmitter()
-    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) })
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => true),
+    })
     const exit = waitForOpenCodeExit(child, signalSource)
 
     child.emit("exit", null, signal)

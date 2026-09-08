@@ -110,22 +110,4 @@ test("reduced motion disables audited transitions without hiding their state cha
 
   await moreSteps.click()
   await expect(plan.getByText("Summarize key takeaways")).toBeHidden()
-
-  const newAgent = page.getByRole("button", { name: "New Agent", exact: true })
-  await newAgent.click()
-  const inspector = page.getByRole("complementary", { name: "Agent details" })
-  const deleteDraft = inspector.getByRole("button", {
-    name: "Delete Agent draft",
-  })
-  await deleteDraft.click()
-
-  const dialog = page.locator('[data-slot="alert-dialog-content"]')
-  const overlay = page.locator('[data-slot="alert-dialog-overlay"]')
-  await expect(dialog).toBeVisible()
-  expect(await computedMotion(dialog, "animationName")).toBe("none")
-  expect(await computedMotion(overlay, "animationName")).toBe("none")
-
-  await page.getByRole("button", { name: "Keep draft" }).click()
-  await expect(dialog).toBeHidden()
-  await expect(deleteDraft).toBeFocused()
 })

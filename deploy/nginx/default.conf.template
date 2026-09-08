@@ -1,0 +1,93 @@
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  '' close;
+}
+
+server {
+  listen ${AOS_UI_WEB_PORT};
+  server_name _;
+  root /usr/share/nginx/html;
+
+  gzip on;
+  gzip_min_length 1024;
+  gzip_types application/javascript application/json image/svg+xml text/css;
+
+  location = /api/health {
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    return 200 '{"status":"ok"}';
+  }
+
+  location = /runtime-config.json {
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    try_files $uri =404;
+  }
+
+  location = /hermes { return 308 /hermes/; }
+
+  # Hermes' native login page currently submits to an absolute /auth path even
+  # when X-Forwarded-Prefix is set. Keep authentication native while routing
+  # that public callback through the same trusted upstream.
+  location ^~ /auth/ {
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
+    proxy_pass $hermes_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Prefix /hermes;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /hermes/ {
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
+    rewrite ^/hermes/?(.*)$ /$1 break;
+    proxy_pass $hermes_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Prefix /hermes;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /api/ {
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    return 404 '{"error":"not_found"}';
+  }
+
+  location ^~ /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    try_files $uri =404;
+  }
+
+  location = /index.html {
+    add_header Cache-Control "no-cache" always;
+    try_files $uri =404;
+  }
+
+  location ~* \.[^/]+$ {
+    try_files $uri =404;
+  }
+
+  location / {
+    try_files $uri $uri/ @spa;
+  }
+
+  location @spa {
+    add_header Cache-Control "no-cache" always;
+    rewrite ^ /index.html break;
+  }
+}

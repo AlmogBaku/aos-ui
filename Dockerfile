@@ -3,31 +3,26 @@
 FROM oven/bun:1.3.10-debian AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
-COPY patches/ ./patches/
-RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile
 
 FROM dependencies AS development
-ENV NEXT_TELEMETRY_DISABLED=1
 COPY . .
 EXPOSE 3000
-CMD ["bun", "run", "dev", "--hostname", "0.0.0.0"]
+CMD ["bun", "run", "dev", "--host", "0.0.0.0"]
 
 FROM dependencies AS builder
-ENV NEXT_TELEMETRY_DISABLED=1
 COPY . .
 RUN bun run build
 
-FROM node:22.22.0-bookworm-slim AS runner
-WORKDIR /app
-ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1 \
-    HOSTNAME=0.0.0.0 \
-    PORT=3000
+FROM nginxinc/nginx-unprivileged:1.29.3-alpine AS runner
+ENV AOS_UI_WEB_PORT=3000 \
+    AOS_UI_HERMES_HOST=127.0.0.1 \
+    AOS_UI_HERMES_PORT=9119
 
-COPY --from=builder --chown=node:node /app/public ./public
-COPY --from=builder --chown=node:node /app/.next/standalone ./
-COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html
+RUN rm -f /usr/share/nginx/html/runtime-config.json
 
-USER node
+USER nginx
 EXPOSE 3000
-CMD ["node", "server.js"]

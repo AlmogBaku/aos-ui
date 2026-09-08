@@ -1,17 +1,16 @@
 import { spawn } from "node:child_process"
+import { access, realpath } from "node:fs/promises"
 import { connect } from "node:net"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import {
-  createManagementProvider,
-  startManagementServer,
-} from "./opencode-management"
+import { installCreatorDefinition } from "../integrations/opencode/agent-definition"
 
 import {
   buildOpenCodeConfigContent,
   createOpenCodeChildEnvironment,
   createOpenCodeServeArguments,
   parseCorsOrigins,
+  parseOpenCodeWorktree,
 } from "./opencode-config"
 
 const forwardedSignals = ["SIGTERM", "SIGINT"] as const
@@ -95,14 +94,18 @@ function isPortOccupied(host: string, port: number) {
 }
 
 export async function main() {
+  let configuredWorktree: string
+  try {
+    configuredWorktree = parseOpenCodeWorktree(process.env)
+    configuredWorktree = await realpath(configuredWorktree)
+  } catch (reason) {
+    console.error(reason instanceof Error ? reason.message : String(reason))
+    return 1
+  }
   const host = process.env.AOS_UI_OPENCODE_HOST?.trim() || "127.0.0.1"
   const rawPort = process.env.AOS_UI_OPENCODE_PORT?.trim() || "4096"
   const port = Number(rawPort)
-  const managementPort = Number(
-    process.env.AOS_UI_OPENCODE_MANAGEMENT_PORT ?? "4097"
-  )
   const corsOrigins = parseCorsOrigins(process.env.AOS_UI_OPENCODE_CORS_ORIGINS)
-  const configContent = buildOpenCodeConfigContent(process.env)
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     console.error(
@@ -110,18 +113,6 @@ export async function main() {
     )
     return 1
   }
-  if (
-    !Number.isInteger(managementPort) ||
-    managementPort < 1 ||
-    managementPort > 65_535 ||
-    managementPort === port
-  ) {
-    console.error(
-      "AOS_UI_OPENCODE_MANAGEMENT_PORT must be a distinct port from 1 to 65535."
-    )
-    return 1
-  }
-
   if (await isPortOccupied(host, port)) {
     console.error(
       [
@@ -133,39 +124,41 @@ export async function main() {
     return 1
   }
 
-  const providerHost =
-    host === "0.0.0.0"
-      ? "127.0.0.1"
-      : host === "::"
-        ? "[::1]"
-        : host.includes(":")
-          ? `[${host}]`
-          : host
-  const management = await startManagementServer({
-    host,
-    port: managementPort,
-    worktree: process.cwd(),
-    origins: corsOrigins,
-    provider: createManagementProvider(
-      `http://${providerHost}:${port}`,
-      process.cwd()
-    ),
-  })
-  console.info(`AOS Agent management listening on ${host}:${managementPort}`)
+  const pluginPath = resolve(
+    process.env.AOS_UI_OPENCODE_PLUGIN_PATH?.trim() ||
+      resolve(
+        import.meta.dirname,
+        "../integrations/opencode/dist/aos-ui-plugin.js"
+      )
+  )
+  try {
+    await access(pluginPath)
+    await installCreatorDefinition(configuredWorktree)
+  } catch (reason) {
+    console.error(
+      `OpenCode integration setup failed: ${reason instanceof Error ? reason.message : String(reason)}`
+    )
+    return 1
+  }
+  const configContent = buildOpenCodeConfigContent(
+    process.env,
+    pathToFileURL(pluginPath).href
+  )
+
   const child = spawn(
     "opencode",
     createOpenCodeServeArguments(host, port, corsOrigins),
     {
-      env: createOpenCodeChildEnvironment(process.env, configContent),
+      env: createOpenCodeChildEnvironment(
+        { ...process.env, AOS_UI_OPENCODE_WORKTREE: configuredWorktree },
+        configContent
+      ),
+      cwd: configuredWorktree,
       stdio: "inherit",
     }
   )
 
-  try {
-    return await waitForOpenCodeExit(child)
-  } finally {
-    await management.close()
-  }
+  return await waitForOpenCodeExit(child)
 }
 
 const entrypoint = process.argv[1]

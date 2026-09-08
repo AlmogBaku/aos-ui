@@ -16,17 +16,9 @@
 **/.venv/
 **/__pycache__/
 
-# next.js
-/.next/
-/.next-*/
-/.next-e2e/
-/.next-e2e-fixture/
-/.next-e2e-opencode/
-/.next-e2e-ag-ui/
-/out/
-
 # production
 /build
+/dist
 
 # misc
 .DS_Store
@@ -34,6 +26,7 @@
 /.worktrees/
 /.claude/
 /.impeccable/
+/.hermes/plans/.chromium-pdf-profile/
 /skills-lock.json
 
 # debug
@@ -49,4 +42,3 @@ pnpm-debug.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts

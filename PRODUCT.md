@@ -16,7 +16,7 @@ AOS provides one calm workspace for selecting a primary Agent, resuming its Sess
 
 ## Positioning
 
-AOS keeps the chat runtime authoritative for conversation state and adds only the workspace concepts providers do not supply consistently. A narrow adapter seam supports OpenCode first, AG-UI where capabilities exist, and deterministic fixtures for complete offline development.
+AOS is a UI for native harnesses, with Agent creation and rich messages around their conversations. OpenCode and Hermes use separate integrations behind a small workspace boundary; generic AG-UI and explicit fixtures remain available. Monty is an independent optional integration.
 
 ## Operating Context
 
@@ -25,10 +25,11 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 ## Capabilities and Constraints
 
 - An Agent is a provider-owned primary agent; a Session belongs to exactly one Agent; a Subagent is a nested delegated run; a Plan belongs to the message that produced it; Todos belong to the Session.
-- Assistant UI remains canonical for threads, messages, runs, branches, composer state, and thread lifecycle.
+- Native runtimes own durable conversations and execution. Assistant UI owns their frontend projection, composer, queue, and thread lifecycle.
 - Provider data is authoritative. Client-owned state is limited to view preferences, manually opened recent tabs, per-visit selection restoration, and content-free Activity read/delivery state persisted locally in the browser.
-- The Agent catalog includes visible and hidden ordinary primary Agents; only visible, selectable Agents appear in the workspace roster. Agent Builder, native/system definitions, and Subagents are excluded from management. Visibility remains provider-owned. AOS may edit only its managed Agent definitions through the optional provider-side management service; other definitions are read-only.
-- OpenCode is the primary production integration. AG-UI degrades honestly where workspace capabilities are unavailable. Deterministic fixtures must exercise the entire interface without a live backend.
+- The Agent catalog includes visible and hidden ordinary primary Agents; only visible, selectable Agents appear in the workspace roster. Creators, native/system definitions, and Subagents are excluded from management. Visibility and creator role come from native metadata. Unsupported native mutations are read-only; AOS has no management server or Agent registry.
+- One engine is selected per deployment, with multiple Agents and Sessions. Native harnesses own execution, persistence, credentials, and Agent configuration outside this checkout. Unsupported capabilities remain explicit.
+- On configured real runtimes, Agent creation uses an ordinary creator-owned Session opened through the dedicated New Agent entry point. The hidden creator identity never appears in the ordinary roster or management catalog. Creation uses portable guidance with a native safe writer; it never transfers interview ownership or automatically starts the created Agent's first Session. Public fixture/demo mode intentionally omits Agent creation. Native harnesses can initiate inbound Sessions without a browser.
 - Provider events retain their originating Agent and Session. Delayed events may update their own cache but never the visible Session.
 - Rich tools always have safe, inspectable fallbacks. Browser-side code execution, terminal/filesystem/VCS surfaces, and provider hosting are out of scope.
 
@@ -46,7 +47,7 @@ The product name is AOS. Product language is concise, calm, and operational. The
 
 ## Evidence on Hand
 
-The repository contains an early Next.js, Tailwind, and shadcn scaffold. The approved agent-workspace plan defines the required architecture, interaction states, acceptance journeys, and failure audit. No testimonials, customer logos, benchmarks, pricing, or deployment claims are available and future work must not fabricate them.
+The frontend uses Vite, React, Tailwind, and shadcn with static production hosting. Integration readiness requires automated and live acceptance evidence; implementation alone is not proof. No testimonials, customer logos, benchmarks, pricing, or deployment claims are available and future work must not fabricate them.
 
 ## Product Principles
 
@@ -54,7 +55,8 @@ The repository contains an early Next.js, Tailwind, and shadcn scaffold. The app
 2. Make system state legible: running, waiting, failed, stale, expired, malformed, and unsupported states are visible and actionable.
 3. Prefer provider truth over duplicated client state.
 4. Keep the workspace calm under complexity through progressive disclosure and restrained visual hierarchy.
-5. Keep the full experience developable and testable through deterministic fixtures.
+5. Keep the workspace developable and testable through deterministic fixtures,
+   while reserving real-runtime-only capabilities for provider harnesses.
 
 ## Accessibility & Inclusion
 

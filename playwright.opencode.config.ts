@@ -1,6 +1,8 @@
 import { defineConfig, devices } from "@playwright/test"
 
 const port = 3101
+const externalBaseURL = process.env.AOS_UI_E2E_BASE_URL?.replace(/\/$/, "")
+const baseURL = externalBaseURL ?? `http://127.0.0.1:${port}`
 
 /**
  * Isolated browser contract for the production-default OpenCode composition.
@@ -9,6 +11,7 @@ const port = 3101
  */
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "test-results/opencode",
   testMatch: /opencode\.runtime\.spec\.ts/,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
@@ -17,7 +20,7 @@ export default defineConfig({
   reporter: process.env.CI ? "github" : "list",
   expect: { timeout: 10_000 },
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL,
     locale: "en-US",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -25,19 +28,22 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
     viewport: { width: 1440, height: 1000 },
   },
-  webServer: {
-    command: `bun run dev -- --hostname 127.0.0.1 --port ${port}`,
-    env: {
-      ...process.env,
-      // Deliberately omit AOS_UI_RUNTIME_MODE: OpenCode is the application
-      // default and this test protects that composition path.
-      AOS_UI_E2E_DIST_DIR: ".next-e2e-opencode",
-      AOS_UI_OPENCODE_BASE_URL: "http://127.0.0.1:4097",
-    },
-    url: `http://127.0.0.1:${port}/en`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: externalBaseURL
+    ? undefined
+    : {
+        command: `bun run dev -- --host 127.0.0.1 --port ${port}`,
+        env: {
+          ...process.env,
+          // Deliberately omit AOS_UI_RUNTIME_MODE: OpenCode is the application
+          // default and this test protects that composition path.
+          AOS_UI_OPENCODE_BASE_URL: "http://127.0.0.1:4097",
+          AOS_UI_OPENCODE_WORKTREE: "/workspace",
+          AOS_UI_E2E_CACHE_KEY: "opencode-3101",
+        },
+        url: `http://127.0.0.1:${port}/en`,
+        reuseExistingServer: false,
+        timeout: 120_000,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
 })

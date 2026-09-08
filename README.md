@@ -1,205 +1,104 @@
 # AOS-ui
 
-AOS is a multilingual workspace for provider-owned AI Agents and their
-Sessions. It combines [Assistant UI](https://www.assistant-ui.com/) conversation
-state with a narrow workspace adapter for Agent ownership, Session metadata,
-Todos, and provider capabilities.
+AOS is a multilingual React workspace for native AI harnesses. OpenCode and Hermes own execution, persistence, credentials, and Agent configuration. Assistant UI owns frontend conversations; a small workspace adapter adds Agent catalogs, verified Session ownership, Todos, and optional capabilities.
 
-The interface stores the preferred language locally and uses compact workspace
-URLs: `/{agentId}/{sessionId}`. OpenCode is the default runtime, AG-UI is
-supported through an explicit workspace API, and a deterministic fixture mode
-keeps the complete interface developable offline.
+One engine is selected per deployment. English and Hebrew, RTL, keyboard navigation, rich-message fallbacks, generic AG-UI, and explicit fixtures are supported. URLs are `/{agentId}/{sessionId}`; language preference is stored locally. Legacy `/en` and `/he` links remain recognized.
 
-## Requirements
+## Development
 
-Choose the toolchain for the way you want to run AOS:
-
-- **Fixture development:** [Bun](https://bun.sh/).
-- **Local OpenCode:** Bun, [OpenCode](https://opencode.ai/),
-  [uv](https://docs.astral.sh/uv/), and credentials for an OpenCode provider.
-- **Containers:** Docker Engine or Docker Desktop with Docker Compose.
-
-The container images pin their own Bun, Node.js, OpenCode, and uv versions. A
-local installation only needs to provide the `bun`, `opencode`, and `uv`
-executables used by the project scripts.
-
-## Quickstart
-
-### Develop against fixtures
-
-This is the fastest way to work on the interface. It needs no model provider or
-backend:
+Use Bun. Fixture mode needs no backend or model credentials and intentionally
+does not offer Agent creation:
 
 ```bash
 bun install
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-Open <http://localhost:3000>. The app negotiates and remembers a locale while
-keeping Agent and Session selection in the URL.
+Open http://localhost:3000. Vite serves development only; production is static Nginx hosting.
 
-Fixture data is always labeled as a demo workspace so it cannot be mistaken for
-provider data.
+### OpenCode
 
-### Develop against local OpenCode
-
-Install the JavaScript and locked Monty dependencies once:
+Install OpenCode separately and configure its model credentials outside this checkout. Build the integration, then run in separate terminals:
 
 ```bash
-bun install
+bun run integrations:build
+AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree bun run opencode:serve
+```
+
+```bash
+AOS_UI_RUNTIME_MODE=opencode \
+AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
+bun run dev
+```
+
+The same external directory scopes the native process, SDK requests, Agent writes, and native tools. Existing definitions are never overwritten. The launcher installs its dedicated creator Agent and portable skill; ordinary Agent content stays external. Secure Agent writes currently require Linux directory descriptors; use the supplied OpenCode container on other hosts. Old user-owned content remaining in this checkout is preserved but is not migrated or loaded automatically.
+
+OpenCode 1.18.29 caches Agent definitions. Newly saved Agents can report `setup-needed` until an operator restarts the harness after its runs finish. AOS does not automatically use the instance-disposal endpoint: it can abort unrelated runs. Saving a definition is not reported as readiness.
+
+OpenCode defaults to port 4096. Agent visibility is read from native metadata; management is read-only when native mutation support is absent. Leave model selection native, or set `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID` together. Optional `AOS_UI_OPENAI_COMPATIBLE_BASE_URL`, `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, and `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` are all-or-none and belong only in the native process environment.
+
+### Hermes
+
+Hermes itself is operator-managed. AOS connects directly to the native `hermes serve` HTTP/WebSocket API and discovers profiles through `profiles.list`. There is no AOS bridge, profile registry, or database. Follow the [Hermes installation guide](integrations/hermes/README.md) for native presentation, inbound-session, and creator tools.
+
+```bash
+bun run integrations:build
+uv sync --project integrations/hermes --frozen
+AOS_UI_RUNTIME_MODE=hermes AOS_UI_HERMES_BASE_URL=/hermes bun run dev
+```
+
+Vite forwards `/hermes` to `AOS_UI_HERMES_TARGET` (default `http://127.0.0.1:9119`). Configure native authentication. Hermes owns recovery policy, including auto-continue; AOS does not require changing it or submit prompts on reattachment. The browser uses native login/cookies and single-use WebSocket tickets; never put credentials in public configuration. Production requires a native public URL including the `/hermes` prefix.
+
+The live native API baseline is checkout `b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b`; the required direct RPC surface was also verified in unmodified Hermes `v2026.9.7`. Incompatible interfaces remain unavailable. Native CLI/cron Sessions can be discoverable without gateway live control; Stop uses native Session interruption, not an AOS cancellation layer.
+
+Automated Hermes Agent creation is currently blocked: upstream profile creation is not atomic against concurrent creators. The interview remains available, but the writer fails without native writes. See the integration guide for the exact upstream prerequisite.
+
+### Generic AG-UI
+
+Set `AOS_UI_RUNTIME_MODE=ag-ui`, `AOS_UI_AG_UI_URL`, and `AOS_UI_AG_UI_WORKSPACE_URL`. The workspace host implements `GET /agents`, `GET /sessions`, `POST /sessions`, and `GET /sessions/:threadId`. Capabilities absent from the integration remain visibly unavailable.
+
+Generic AG-UI composition uses public `HttpAgent` instances, one per Session. Navigation detaches the outgoing HTTP stream and parks its queue; it does not invoke a native Stop callback. Custom agents with native cancellation side effects are not supported by this composition.
+
+### Optional Monty
+
+Core startup does not require Monty. Configure it explicitly on the harness side; credentials and downstream tools remain native:
+
+```bash
 bun run monty:sync
 ```
 
-Then run the services in separate terminals:
+See [Monty](integrations/monty/README.md). Its implementation, MIT license, and upstream attribution remain independent.
 
-```bash
-# Terminal 1
-bun run opencode:serve
+## Public configuration and static deployment
 
-# Terminal 2
-AOS_UI_OPENCODE_MANAGEMENT_URL=http://127.0.0.1:4097 bun run dev
-```
+The browser fetches `/runtime-config.json` without caching. This deployment file is separate from the frontend build; do not put secrets in it or in `VITE_*`. Missing/invalid configuration renders unavailable state, never fixture fallback. Development accepts the same file via `AOS_UI_RUNTIME_CONFIG_FILE`, or the allowlisted environment values in [.env.example](.env.example).
 
-AOS connects to `http://127.0.0.1:4096` by default. OpenCode discovers the
-providers available from its configuration and environment; AOS does not
-force a model unless both an explicit provider and model are configured.
-
-No `.env.local` file is required for the defaults. Copy `.env.example` to
-`.env.local` when you need to change the runtime address, server bind, or AWS
-profile. Environment changes require restarting the affected process.
-Changes under `.opencode/plugins` also require restarting OpenCode; the project
-plugin loader does not hot-reload an already running provider process.
-
-The launcher also serves Agent visibility management on port `4097`. The web
-app uses `AOS_UI_OPENCODE_MANAGEMENT_URL` to enable this capability; omit it
-when connecting to an external OpenCode server without the AOS management
-service. Set `AOS_UI_OPENCODE_MANAGEMENT_PORT` to change the launcher's port.
-See [Agent visibility management](./docs/agent-visibility-management.md) for
-the persistence contract, active-Session behavior, and deployment limits.
-
-## Docker Compose
-
-Compose runs AOS and OpenCode as separate non-root containers. Copy the
-operator configuration before changing any defaults:
+Public examples are in `deploy/runtime-config.fixture.json`,
+`deploy/runtime-config.opencode.json`, and
+`deploy/runtime-config.hermes-native.json`. OpenCode's `directory` is the path
+inside the native server/container, not necessarily the browser host's path.
 
 ```bash
 cp .env.compose.example .env
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json docker compose up --build
 ```
 
-Start the production build:
+The base composition is web-only. The OpenCode overlay runs native OpenCode; the Hermes overlay only forwards to operator-managed Hermes:
 
 ```bash
-docker compose up --build
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
+AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
+docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
-
-For hot-reloading web development with containerized OpenCode:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml up --build
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
+docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
 
-AOS is published at <http://127.0.0.1:3000> and OpenCode at
-<http://127.0.0.1:4096>. The OpenCode container receives a writable bind mount
-of this repository at `/workspace`, while named volumes retain OpenCode state
-and the locked Monty environment.
+Add `-f compose.dev.yaml` for hot-reloading frontend development. Source mounts and native content/state mounts are separate. Configuration is mounted read-only; changes require no frontend rebuild. Hashed assets are immutable, HTML revalidates, and proxy errors never fall through to the SPA. Event-stream forwarding disables buffering.
 
-On Linux, set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` in `.env` to the numeric
-output of `id -u` and `id -g`. This lets the non-root OpenCode container write
-the workspace and read mode-`600` AWS files. Docker Desktop users can normally
-keep the default `1000:1000` identity.
-
-Compose mounts `${HOME}/.aws` read-only by default. The directory must exist;
-set `AOS_UI_AWS_CONFIG_DIR` if the AWS configuration is elsewhere or if you
-want to mount a different existing directory.
-
-Stop the stack without deleting its named volumes:
-
-```bash
-docker compose down
-```
-
-`docker compose down -v` also removes the persisted OpenCode and Monty volumes.
-It does not remove Agent definitions written into the repository bind mount.
-
-### Ports, health, and network safety
-
-Set these values in `.env` to change the published endpoints:
-
-| Variable                          | Default                | Purpose                                             |
-| --------------------------------- | ---------------------- | --------------------------------------------------- |
-| `AOS_UI_BIND_ADDRESS`            | `127.0.0.1`            | Host address for both published services            |
-| `AOS_UI_WEB_PUBLISHED_PORT`      | `3000`                 | AOS port exposed to the browser                 |
-| `AOS_UI_OPENCODE_PUBLISHED_PORT` | `4096`                 | OpenCode port exposed to the browser                |
-| `AOS_UI_OPENCODE_BASE_URL`       | Published OpenCode URL | Browser-reachable OpenCode address                  |
-| `AOS_UI_OPENCODE_CORS_ORIGINS`   | Local AOS origins  | Comma-separated browser origins allowed by OpenCode |
-
-Health endpoints are available at `/api/health` on AOS and
-`/global/health` on OpenCode. Agent management exposes `/health` on port `4097`.
-Compose publishes it on loopback; `AOS_UI_OPENCODE_MANAGEMENT_PUBLISHED_PORT`
-changes that port. For a LAN deployment, also set a browser-reachable
-`AOS_UI_OPENCODE_MANAGEMENT_URL` and the allowed
-`AOS_UI_OPENCODE_CORS_ORIGINS`.
-
-The default loopback binding is intentional. Compose includes no TLS,
-authentication, or reverse proxy. If you publish to a LAN, set a
-browser-reachable `AOS_UI_OPENCODE_BASE_URL` and matching CORS origins, and run
-the stack only on a trusted private network.
-
-## Runtime configuration
-
-`AOS_UI_RUNTIME_MODE` accepts `fixture`, `opencode`, or `ag-ui` and defaults to
-`opencode`. Invalid or incomplete configuration renders an explicit unavailable
-state instead of silently falling back to fixtures.
-
-### OpenCode providers and models
-
-Without model overrides, OpenCode selects from its configured, available
-catalog. To force a model, set both values together:
-
-```bash
-AOS_UI_OPENCODE_PROVIDER_ID=amazon-bedrock \
-AOS_UI_OPENCODE_MODEL_ID=eu.anthropic.claude-haiku-4-5-20251001-v1:0 \
-bun run dev
-```
-
-Setting only one of these variables is an error. AWS credential-chain values,
-including `AWS_PROFILE`, `AWS_REGION`, and exported temporary credentials, pass
-through to OpenCode.
-
-For Google models, set `GOOGLE_GENERATIVE_AI_API_KEY`. The OpenCode launcher
-also accepts `GEMINI_API_KEY` as an alias when the canonical variable is unset;
-Compose passes either variable only to the OpenCode service.
-
-The OpenCode launcher can register one optional OpenAI-compatible provider. Set
-all three variables in the environment (or in Compose's `.env`):
-
-- `AOS_UI_OPENAI_COMPATIBLE_BASE_URL`
-- `AOS_UI_OPENAI_COMPATIBLE_API_KEY`
-- `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`
-
-OpenCode exposes it as provider `openai-compatible` and local model `default`.
-To select it explicitly, also set:
-
-```dotenv
-AOS_UI_OPENCODE_PROVIDER_ID=openai-compatible
-AOS_UI_OPENCODE_MODEL_ID=default
-```
-
-### AG-UI
-
-AG-UI needs both its run endpoint and a host API for workspace ownership:
-
-```bash
-AOS_UI_RUNTIME_MODE=ag-ui \
-AOS_UI_AG_UI_URL=https://example.test/agent \
-AOS_UI_AG_UI_WORKSPACE_URL=https://example.test/workspace \
-bun run dev
-```
-
-The workspace host implements `GET /agents`, `GET /sessions`, `POST /sessions`,
-and `GET /sessions/:threadId`. This generic composition advertises common
-Markdown and Mermaid only; provider-specific rich controls remain visibly
-unavailable rather than being simulated.
+Loopback is the default. Wider exposure requires appropriate protection; this is not a public multi-user authentication system. Web health is `/api/health`; OpenCode is `/global/health`. Hermes must be reachable from the web container; a host-loopback-only listener is not reachable through Docker's host gateway. Use the same Compose files with `down` to stop; do not use `down -v` unless you intend to delete the named native-state volumes.
 
 ## Activity and live notifications
 
@@ -232,65 +131,43 @@ coverage and the manual host OS check.
 
 ## Architecture
 
-| Area                | Responsibility                                                      | Main location                                              |
-| ------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Next.js application | Locale routing and runtime composition                              | `app/[locale]`, `lib/runtime-config.ts`                    |
-| Assistant UI        | Threads, messages, runs, branches, and composer state               | `components/assistant-ui`, `components/aos-ui-*-app.tsx`  |
-| Workspace layer     | Agent ownership, Session metadata, Todos, and capabilities          | `components/aos-ui-workspace.tsx`, `lib/runtime-adapters` |
-| Provider adapters   | OpenCode, AG-UI, and deterministic fixtures                         | `lib/runtime-adapters/{opencode,ag-ui,fixture}`            |
-| Rich tools          | Safe chart, map, stats, Plan, question, permission, and Monty views | `components/tool-ui`                                       |
-| OpenCode project    | Agents, tools, permissions, and presentation harness                | `opencode.json`, `.opencode`                               |
+- `src/app/`: bootstrap, React Router, selected runtime loading.
+- `src/components/`: workspace, Assistant UI, safe tool renderers, keyboard and UI primitives.
+- `src/runtime-adapters/`: contracts and OpenCode/Hermes/AG-UI/fixture implementations.
+- `src/lib/`: browser locale, preferences, and helpers.
+- `shared/`: public runtime configuration, presentation schemas/examples, portable creator skill.
+- `integrations/`: native OpenCode and Hermes packages; independent optional Monty.
+- `deploy/`: static hosting and public configuration examples.
 
-Provider data remains authoritative: a Session belongs to exactly one Agent,
-delayed events retain their originating Agent and Session, Plans belong to the
-message that produced them, and Todos belong to the Session. The browser owns
-view preferences, selection restoration, and content-free Activity read/delivery
-state in local browser storage.
+Browser code never imports native implementations. Shared definitions contain no React, browser state, filesystem access, SDKs, or secrets. Split TypeScript targets and import restrictions enforce these boundaries.
 
-Seeded and user-created product Agents share the native
-`.opencode/agents/<id>.md` format. The hidden `agent-builder` conducts the
-creation interview; its allowlisted `create_agent` tool writes a new definition,
-and AOS promotes a provisional row only after OpenCode confirms discovery.
-The root `AGENTS.md` guides coding agents and is unrelated to these product
-Agent definitions.
+Assistant UI packages are version-pinned and installed without dependency patches.
+Adapters compose public upstream APIs; upgrades must retain focused lifecycle and
+ownership regressions. Stop parks the upstream queue; a subsequent explicit send
+may restart it. There is no custom single-item Resume operation.
 
-Monty runs Python with builtins and tools from a configured downstream MCP server.
-See [the Monty integration reference](./integrations/monty/README.md)
-for its executable surface and resource limits.
+Agent creation is an ordinary creator-owned Session opened through `New Agent`;
+the creator is discovered from native metadata (`aos_ui_role: creator` in OpenCode,
+`ui_meta.aos.role: creator` in Hermes) and never appears in the ordinary Agent roster
+or management catalog. Native safe writers return inspectable outcomes;
+creation never changes the interview's owner or starts the new Agent's first
+Session automatically. Native `start_session` support works without a browser.
+Discovery must not steal selection.
 
-For product boundaries and terminology, read [PRODUCT.md](./PRODUCT.md). The
-approved visual direction is recorded in the
-[workspace design lock](./docs/design/agent-workspace-design-lock.md).
+Read [PRODUCT.md](PRODUCT.md) for ownership and [the design lock](docs/design/agent-workspace-design-lock.md) for the visual direction.
 
 ## Verification
 
-| Command              | Coverage                                                           |
-| -------------------- | ------------------------------------------------------------------ |
-| `bun run test`       | Vitest unit, component, adapter, and container-configuration tests |
-| `bun run test:watch` | Focused Vitest development loop                                    |
-| `bun run typecheck`  | TypeScript checking without emit                                   |
-| `bun run lint`       | ESLint, including Next.js rules                                    |
-| `bun run build`      | Production standalone Next.js build                                |
-| `bun run monty:test` | Locked Python/Monty integration tests                              |
-| `bun run test:e2e`   | Fixture, mocked OpenCode, and AG-UI Playwright journeys            |
-
-Install the Chromium browser binary with `bunx playwright install chromium`
-before running Playwright for the first time.
-
-The automated browser suites do not require live model credentials. A live
-OpenCode contract smoke is opt-in and requires an existing ordinary primary
-Agent plus an inexpensive Bedrock Haiku or Nova model:
-
 ```bash
-AOS_UI_LIVE_OPENCODE=1 \
-AOS_UI_OPENCODE_PROVIDER_ID=amazon-bedrock \
-AOS_UI_OPENCODE_MODEL_ID=<cheap-haiku-or-nova-model-id> \
-AOS_UI_OPENCODE_AGENT_ID=<existing-primary-agent-id> \
-bunx vitest run lib/runtime-adapters/opencode/opencode-workspace.live.test.ts
+bun run test
+bun run typecheck
+bun run lint
+bun run build
+bun run integrations:build
+bun run hermes:test
+bun run test:e2e
 ```
 
-The smoke may create and remove temporary Sessions. It verifies that Mermaid
-stays fenced Markdown while structured charts use `render_chart`. It
-deliberately does not complete an Agent Builder flow because that writes a real
-Agent definition into the repository. Exercise live Builder creation only as an
-explicit manual test with a unique Agent ID and exact scoped cleanup.
+Install Chromium with `bunx playwright install chromium`. Run `bun run monty:test` when changing Monty. Container changes also require Compose validation, image builds, and health/streaming smoke checks.
+
+Automated browser tests use deterministic harnesses. Required live acceptance uses real models and disposable external targets: chat/persistence, inbound Sessions, usable Agent creation, rich output, reconnect/Stop, and exact-request approval on each engine. Missing credentials, API support, or disposable-target approval blocks live acceptance; skipped checks are not passes.

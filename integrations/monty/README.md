@@ -87,10 +87,17 @@ The additional discoverable functions are:
 
 ## OpenCode
 
-`opencode.json` runs the local `python -m monty` module. OpenCode exposes the tools as
-`monty_execute` and `monty_search`. To configure a downstream server, append
-`--config` and the JSON file path after `monty` in its command array. For a large
-catalog, insert `--extra`, `semantic` before `python` as in the command above.
+Monty is opt-in. Set `AOS_UI_OPENCODE_MONTY_COMMAND_JSON` on the native OpenCode
+launcher to a JSON command array, for example:
+
+```json
+["uv", "run", "--project", "/absolute/path/to/monty", "--frozen", "python", "-m", "monty"]
+```
+
+Alternatively set `AOS_UI_OPENCODE_MONTY_URL` for a remote MCP server, but not both.
+OpenCode exposes `monty_execute` and `monty_search`. Append `--config` and the
+downstream JSON path to the command when needed; add `--extra`, `semantic` before
+`python` for a large catalog. Hermes uses its native profile MCP configuration.
 
 ## Tests
 

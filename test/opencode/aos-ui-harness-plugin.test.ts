@@ -1,41 +1,30 @@
 import { describe, expect, it, vi } from "vitest"
 
-import AosUiHarnessPlugin, * as AosUiHarnessPluginModule from "../../.opencode/plugins/aos-ui-harness"
+import { createAosUiPlugin } from "../../integrations/opencode/plugin"
 
 async function createHarnessHook(
-  getSession: () => Promise<{ data?: { agent?: unknown } }>
+  getSession: () => Promise<{ data?: { agent?: unknown } }>,
+  agents: unknown[] = []
 ) {
   const get = vi.fn(getSession)
   const log = vi.fn(async () => ({ data: true }))
-  const hooks = await AosUiHarnessPlugin({
-    client: { session: { get }, app: { log } },
-  } as never)
+  const hooks = await createAosUiPlugin(
+    {
+      directory: "/external/worktree",
+      worktree: "/external/worktree",
+      client: {
+        session: { get },
+        app: { log, agents: vi.fn(async () => ({ data: agents })) },
+      },
+    } as never,
+    "/external/worktree"
+  )
   const hook = hooks["experimental.chat.system.transform"]
   if (!hook) throw new Error("Expected the AOS system-transform hook")
   return { get, hook, log }
 }
 
 describe("OpenCode harness plugin", () => {
-  it("exposes only one callable plugin entrypoint to the OpenCode auto-loader", async () => {
-    const client = {
-      session: { get: vi.fn(async () => ({ data: { agent: "build" } })) },
-      app: { log: vi.fn(async () => ({ data: true })) },
-    }
-    const functionExports = Object.entries(AosUiHarnessPluginModule).filter(
-      ([, plugin]) => typeof plugin === "function"
-    )
-
-    const loadedPlugins = await Promise.all(
-      functionExports.map(([, plugin]) => plugin({ client } as never))
-    )
-
-    expect(functionExports.map(([name]) => name)).toEqual(["default"])
-    expect(loadedPlugins).toHaveLength(1)
-    expect(loadedPlugins[0]).toHaveProperty(
-      "experimental.chat.system.transform"
-    )
-  })
-
   it("injects the OpenCode manifest and records healthy provider guidance", async () => {
     const { get, hook, log } = await createHarnessHook(async () => ({
       data: { agent: "build" },
@@ -47,9 +36,10 @@ describe("OpenCode harness plugin", () => {
     expect(system).toHaveLength(2)
     expect(system[0]).toBe("Provider-owned Agent instructions")
     expect(system[1]).toContain("AOS presentation harness:")
-    expect(system[1]).toContain("`monty_execute`")
+    expect(system[1]).not.toMatch(/monty_/)
     expect(get).toHaveBeenCalledWith({
       path: { id: "session-build" },
+      query: { directory: "/external/worktree" },
       throwOnError: true,
     })
     expect(log).toHaveBeenCalledWith({
@@ -67,9 +57,18 @@ describe("OpenCode harness plugin", () => {
   })
 
   it("injects the restricted Agent Builder manifest", async () => {
-    const { hook, log } = await createHarnessHook(async () => ({
-      data: { agent: "agent-builder" },
-    }))
+    const { hook, log } = await createHarnessHook(
+      async () => ({ data: { agent: "workspace-creator" } }),
+      [
+        {
+          name: "workspace-creator",
+          mode: "primary",
+          hidden: true,
+          native: false,
+          options: { aos_ui_role: "creator" },
+        },
+      ]
+    )
     const system: string[] = []
 
     await hook({ sessionID: "session-builder", model: {} as never }, { system })
@@ -91,7 +90,7 @@ describe("OpenCode harness plugin", () => {
     )
   })
 
-  it("logs degraded guidance when Session ownership resolution fails", async () => {
+  it("logs and injects conservative guidance when Session ownership resolution fails", async () => {
     const { hook, log } = await createHarnessHook(async () => {
       throw new Error("provider unavailable")
     })
