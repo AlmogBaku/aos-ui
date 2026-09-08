@@ -123,7 +123,7 @@ for (const locale of [
 
     await page.getByRole("button", { name: locale.openAgents }).click()
     await expect(
-      page.getByRole("button", { name: locale.closePanel })
+      page.getByRole("dialog").getByRole("heading", { name: "Aster" })
     ).toBeFocused()
     await page.keyboard.press("Escape")
     await expect(
@@ -337,6 +337,8 @@ test("Session tabs use roving focus and direction-aware arrow keys", async ({
   const market = page.getByRole("tab", { name: "Market brief" })
   const launch = page.getByRole("tab", { name: "Launch review" })
   await market.focus()
+  await market.press("ArrowDown")
+  await expect(market).toBeFocused()
   await market.press("ArrowRight")
   await expect(launch).toBeFocused()
   await expect(launch).toHaveAttribute("aria-selected", "true")

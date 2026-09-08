@@ -10,6 +10,7 @@ export async function exerciseAgentManagement(
       ? {
           manage: "Manage Agents",
           open: "Open Agents",
+          back: "Back to Agents",
           show: "Show in workspace: Aster",
           heading: "Add an Agent to your workspace.",
           close: "Close panel",
@@ -17,13 +18,18 @@ export async function exerciseAgentManagement(
       : {
           manage: "ניהול סוכנים",
           open: "פתיחת רשימת הסוכנים",
+          back: "חזרה לסוכנים",
           show: "הצגה בסביבת העבודה: Aster",
           heading: "הוסיפו סוכן לסביבת העבודה.",
           close: "סגירת החלונית",
         }
   await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto(`/${locale}`)
-  if (mobile) await page.getByRole("button", { name: copy.open }).click()
+  if (mobile) {
+    await page.getByRole("button", { name: copy.open }).click()
+    const back = page.getByRole("button", { name: copy.back })
+    if (await back.isVisible()) await back.click()
+  }
   await page.getByRole("button", { name: copy.manage }).click()
   const dialog = page.getByRole("dialog", { name: copy.manage })
   await expect(dialog).toBeVisible()

@@ -100,9 +100,16 @@ export function useActivityCoordinator(
       )
         store.markRead(record.id)
     }
-    setRecords(store.records())
+    const nextRecords = store.records()
+    setRecords(nextRecords)
     browserRef.current?.publish()
-    if (!state.pageVisible || !state.pageFocused) setNotice(null)
+    if (
+      !state.pageVisible ||
+      !state.pageFocused ||
+      !nextRecords.some((record) => !record.read && !record.resolved)
+    ) {
+      setNotice(null)
+    }
   })
 
   useEffect(() => {
@@ -253,7 +260,13 @@ export function useActivityCoordinator(
 
   useEffect(() => {
     refresh()
-  }, [selection?.agentId, selection?.threadId, options.sessions])
+  }, [
+    selection?.agentId,
+    selection?.threadId,
+    options.sessions,
+    options.conversationExposed,
+    records.length,
+  ])
   useEffect(() => {
     if (!notice) return
     const timeout = window.setTimeout(() => setNotice(null), 8000)

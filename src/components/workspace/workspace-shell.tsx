@@ -1,6 +1,10 @@
 "use client"
 
 import {
+  ThreadListPrimitive,
+  type ThreadListRuntime,
+} from "@assistant-ui/react"
+import {
   BarChart3,
   CircleDashed,
   Compass,
@@ -58,11 +62,18 @@ import {
 } from "./mobile-navigator"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
 import {
+  SessionThreadListItem,
+  SessionThreadListTitle,
+  SessionThreadListTrigger,
+} from "./session-thread-list-item"
+import {
   getAgentNavigationActivity,
+  getOtherVisibleAgentsNavigationActivity,
   getSessionNavigationActivity,
 } from "./navigation-activity"
 
-export type WorkspaceAgentStatus = "idle" | "running" | "attention" | "unknown"
+export type WorkspaceAgentStatus =
+  "idle" | "active" | "running" | "attention" | "unknown"
 export type WorkspaceSessionStatus =
   "idle" | "running" | "waiting-for-input" | "failed" | "unknown"
 
@@ -106,13 +117,14 @@ export type WorkspaceShellProps = {
   openSessions: readonly WorkspaceSession[]
   olderSessions: readonly WorkspaceSession[]
   navigationCatalog?: ReadonlyMap<string, AgentSessionNavigation>
+  threadListRuntime?: ThreadListRuntime
   selectedAgentId: string | null
   activeThreadId: string | null
   environmentLabel?: string
   agentBuilderAvailable?: boolean
   onSelectAgent: (agentId: string) => WorkspaceActionResult
   onOpenSession: (threadId: string) => WorkspaceActionResult
-  onCloseSession: (threadId: string) => WorkspaceActionResult
+  onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
   onCreateSession: (agentId: string) => WorkspaceActionResult
   onOpenAgentBuilder: () => WorkspaceActionResult
   onManageAgents?: () => void
@@ -227,6 +239,7 @@ function agentStatusLabel(
   status: WorkspaceAgentStatus | undefined,
   dictionary: Dictionary
 ) {
+  if (status === "active") return dictionary.status.active
   if (status === "running") return dictionary.status.running
   if (status === "attention") return dictionary.status.attention
   if (status === "unknown") return dictionary.status.unknown
@@ -258,6 +271,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     selected: dictionary.mobileNavigation.selected,
     lastSelected: dictionary.mobileNavigation.lastSelected,
     status: {
+      active: dictionary.status.active,
       idle: dictionary.status.idle,
       running: dictionary.status.running,
       attention: dictionary.status.attention,
@@ -476,6 +490,7 @@ type SessionTabsProps = Pick<
   | "onCloseSession"
   | "onCreateSession"
   | "onActionError"
+  | "threadListRuntime"
 > & {
   activity?: ActivityView
   inspectorOpen: boolean
@@ -492,6 +507,7 @@ function SessionTabs({
   onCloseSession,
   onCreateSession,
   onActionError,
+  threadListRuntime,
   inspectorOpen,
   onToggleInspector,
   activity,
@@ -539,7 +555,10 @@ function SessionTabs({
         activeThreadId
       ),
     }
-    runAction(() => onCloseSession(threadId), onActionError)
+    runAction(
+      () => onCloseSession(threadId, selectedAgentId ?? undefined),
+      onActionError
+    )
   }
 
   function moveToTab(index: number, event: KeyboardEvent<HTMLButtonElement>) {
@@ -592,7 +611,7 @@ function SessionTabs({
             } as CSSProperties
           }
         >
-          <div
+          <ThreadListPrimitive.Root
             className={styles.tabList}
             role="tablist"
             aria-label={dictionary.workspace.sessions}
@@ -605,47 +624,58 @@ function SessionTabs({
               })
 
               return (
-                <button
-                  className={styles.tab}
-                  data-active={isActive ? "true" : undefined}
-                  data-closable={session.canClose ? "true" : undefined}
-                  ref={(element) => {
-                    if (element) tabRefs.current.set(session.threadId, element)
-                    else tabRefs.current.delete(session.threadId)
-                  }}
-                  id={getTabId(session.threadId)}
+                <SessionThreadListItem
+                  runtime={threadListRuntime}
+                  threadId={session.threadId}
+                  onSwitch={() => onOpenSession(session.threadId)}
+                  onActionError={onActionError}
                   key={session.threadId}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  aria-label={
-                    indicator.label
-                      ? `${session.title}, ${indicator.label}`
-                      : undefined
-                  }
-                  aria-controls="workspace-conversation-panel"
-                  tabIndex={
-                    isActive || (activeIndex === -1 && index === 0) ? 0 : -1
-                  }
-                  onClick={() =>
-                    runAction(
-                      () => onOpenSession(session.threadId),
-                      onActionError
-                    )
-                  }
-                  onKeyDown={(event) => handleTabKeyDown(event, index)}
-                  onMouseEnter={() => setHoveredThreadId(session.threadId)}
-                  onFocus={() => setFocusedThreadId(session.threadId)}
-                  onBlur={() => setFocusedThreadId(null)}
+                  className={styles.threadItemContents}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                      event.preventDefault()
+                    }
+                  }}
                 >
-                  <span className={styles.tabLabel}>
-                    <bdi>{session.title}</bdi>
-                    {indicator.marker}
-                  </span>
-                </button>
+                  <SessionThreadListTrigger
+                    className={styles.tab}
+                    data-active={isActive ? "true" : undefined}
+                    data-closable={session.canClose ? "true" : undefined}
+                    ref={(element) => {
+                      if (element)
+                        tabRefs.current.set(session.threadId, element)
+                      else tabRefs.current.delete(session.threadId)
+                    }}
+                    id={getTabId(session.threadId)}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    title={session.title}
+                    aria-label={
+                      indicator.label
+                        ? `${session.title}, ${indicator.label}`
+                        : undefined
+                    }
+                    aria-controls="workspace-conversation-panel"
+                    tabIndex={
+                      isActive || (activeIndex === -1 && index === 0) ? 0 : -1
+                    }
+                    onKeyDown={(event) => handleTabKeyDown(event, index)}
+                    onMouseEnter={() => setHoveredThreadId(session.threadId)}
+                    onFocus={() => setFocusedThreadId(session.threadId)}
+                    onBlur={() => setFocusedThreadId(null)}
+                  >
+                    <span className={styles.tabLabel}>
+                      <bdi>
+                        <SessionThreadListTitle fallback={session.title} />
+                      </bdi>
+                      {indicator.marker}
+                    </span>
+                  </SessionThreadListTrigger>
+                </SessionThreadListItem>
               )
             })}
-          </div>
+          </ThreadListPrimitive.Root>
 
           <div className={styles.tabCloseList}>
             {openSessions.map((session) => (
@@ -742,6 +772,7 @@ type InspectorPanelProps = Pick<
   | "activeThreadId"
   | "onOpenSession"
   | "onActionError"
+  | "threadListRuntime"
 > & {
   agent: WorkspaceAgent | null
   activity?: ActivityView
@@ -754,6 +785,7 @@ function InspectorPanel({
   activeThreadId,
   onOpenSession,
   onActionError,
+  threadListRuntime,
   agent,
   activity,
 }: InspectorPanelProps) {
@@ -806,7 +838,7 @@ function InspectorPanel({
           {dictionary.workspace.recentSessions}
         </h2>
         {olderSessions.length > 0 ? (
-          <div className={styles.sessionList}>
+          <ThreadListPrimitive.Root className={styles.sessionList}>
             {olderSessions.map((session) => {
               const indicator = navigationActivity(activity, dictionary, {
                 threadId: session.threadId,
@@ -825,45 +857,48 @@ function InspectorPanel({
                 .join(", ")
 
               return (
-                <button
-                  className={styles.sessionButton}
-                  type="button"
+                <SessionThreadListItem
+                  runtime={threadListRuntime}
+                  threadId={session.threadId}
+                  onSwitch={() => onOpenSession(session.threadId)}
+                  onActionError={onActionError}
                   key={session.threadId}
-                  aria-current={
-                    session.threadId === activeThreadId ? "true" : undefined
-                  }
-                  aria-label={accessibleName}
-                  onClick={() =>
-                    runAction(
-                      () => onOpenSession(session.threadId),
-                      onActionError
-                    )
-                  }
                 >
-                  <span className={styles.sessionTitle}>
-                    {session.status !== "idle" ? (
-                      <span
-                        className={styles.statusDot}
-                        data-status={session.status}
-                        title={statusLabel}
-                        aria-hidden="true"
-                      />
+                  <SessionThreadListTrigger
+                    className={styles.sessionButton}
+                    type="button"
+                    aria-current={
+                      session.threadId === activeThreadId ? "true" : undefined
+                    }
+                    aria-label={accessibleName}
+                  >
+                    <span className={styles.sessionTitle}>
+                      {session.status !== "idle" ? (
+                        <span
+                          className={styles.statusDot}
+                          data-status={session.status}
+                          title={statusLabel}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                      <bdi>
+                        <SessionThreadListTitle fallback={session.title} />
+                      </bdi>
+                      {indicator.marker}
+                    </span>
+                    {isValidDate ? (
+                      <time
+                        className={styles.sessionTime}
+                        dateTime={session.updatedAt}
+                      >
+                        {dateFormatter.format(parsedDate)}
+                      </time>
                     ) : null}
-                    <bdi>{session.title}</bdi>
-                    {indicator.marker}
-                  </span>
-                  {isValidDate ? (
-                    <time
-                      className={styles.sessionTime}
-                      dateTime={session.updatedAt}
-                    >
-                      {dateFormatter.format(parsedDate)}
-                    </time>
-                  ) : null}
-                </button>
+                  </SessionThreadListTrigger>
+                </SessionThreadListItem>
               )
             })}
-          </div>
+          </ThreadListPrimitive.Root>
         ) : (
           <p className={styles.emptyText}>{dictionary.empty.noSessions}</p>
         )}
@@ -963,7 +998,7 @@ function FocusDrawer({
       document.body.style.overflow = previousOverflow
       returnFocus?.focus()
     }
-  }, [open, returnFocusRef])
+  }, [initialFocusSelector, open, returnFocusRef])
 
   if (!open) return null
 
@@ -1019,6 +1054,7 @@ export function WorkspaceShell({
   openSessions,
   olderSessions,
   navigationCatalog = new Map(),
+  threadListRuntime,
   selectedAgentId,
   activeThreadId,
   environmentLabel,
@@ -1152,6 +1188,7 @@ export function WorkspaceShell({
     locale,
     dictionary,
     olderSessions,
+    threadListRuntime,
     activeThreadId,
     onOpenSession,
     onActionError,
@@ -1195,21 +1232,38 @@ export function WorkspaceShell({
             <Menu />
           </Button>
           {selectedAgent ? (
-              <div className={styles.mobileIdentity}>
-                <AgentGlyph agent={selectedAgent} />
-                <span className={styles.mobileIdentityText}>
-                  <bdi className={styles.mobileAgentName}>{selectedAgent.name}</bdi>
-                  {activeSession ? (
-                    <bdi className={styles.mobileSessionName}>{activeSession.title}</bdi>
-                  ) : null}
-                </span>
-                <span
-                  className={styles.statusDot}
-                  data-status={selectedAgent.status ?? "idle"}
-                  title={agentStatusLabel(selectedAgent.status, dictionary)}
-                  aria-hidden="true"
-                />
-              </div>
+            <div
+              className={styles.mobileIdentity}
+              role="group"
+              aria-label={[
+                selectedAgent.name,
+                activeSession?.title,
+                `${dictionary.status.label}: ${agentStatusLabel(
+                  selectedAgent.status,
+                  dictionary
+                )}`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              <AgentGlyph agent={selectedAgent} />
+              <span className={styles.mobileIdentityText}>
+                <bdi className={styles.mobileAgentName}>
+                  {selectedAgent.name}
+                </bdi>
+                {activeSession ? (
+                  <bdi className={styles.mobileSessionName}>
+                    {activeSession.title}
+                  </bdi>
+                ) : null}
+              </span>
+              <span
+                className={styles.statusDot}
+                data-status={selectedAgent.status ?? "idle"}
+                title={agentStatusLabel(selectedAgent.status, dictionary)}
+                aria-hidden="true"
+              />
+            </div>
           ) : (
             <span className={styles.mobileAgentName}>
               {dictionary.productName}
@@ -1252,6 +1306,7 @@ export function WorkspaceShell({
               onCloseSession={onCloseSession}
               onCreateSession={onCreateSession}
               onActionError={onActionError}
+              threadListRuntime={threadListRuntime}
               inspectorOpen={desktopInspectorOpen}
               onToggleInspector={toggleDesktopInspector}
             />
@@ -1338,17 +1393,27 @@ export function WorkspaceShell({
         >
           <MobileNavigator
             state={mobileNavigator}
+            threadListRuntime={threadListRuntime}
             agents={rosterAgents}
             selectedAgentId={selectedAgentId}
             activeThreadId={activeThreadId}
-            sessionsByAgentId={[
-              ...navigationCatalog.values(),
-            ] satisfies MobileAgentSessionCatalog[]}
+            sessionsByAgentId={
+              [
+                ...navigationCatalog.values(),
+              ] satisfies MobileAgentSessionCatalog[]
+            }
             agentActivity={Object.fromEntries(
               rosterAgents.map((agent) => [
                 agent.id,
                 getAgentNavigationActivity(activity?.items ?? [], agent.id),
               ])
+            )}
+            otherAgentsActivity={getOtherVisibleAgentsNavigationActivity(
+              activity?.items ?? [],
+              mobileNavigator.view === "sessions"
+                ? mobileNavigator.agentId
+                : selectedAgentId,
+              rosterAgents.map((agent) => agent.id)
             )}
             sessionActivity={Object.fromEntries(
               [...navigationCatalog.values()].flatMap((catalog) =>
@@ -1366,6 +1431,7 @@ export function WorkspaceShell({
             )}
             locale={locale}
             copy={mobileNavigatorCopy(dictionary)}
+            onActionError={onActionError}
             onStateChange={dispatchMobileNavigator}
             onOpenSession={(_agentId, threadId) =>
               runAction(() => onOpenSession(threadId), onActionError)
@@ -1373,8 +1439,8 @@ export function WorkspaceShell({
             onCreateSession={(agentId) =>
               runAction(() => onCreateSession(agentId), onActionError)
             }
-            onRemoveOpenSession={(_agentId, threadId) =>
-              runAction(() => onCloseSession(threadId), onActionError)
+            onRemoveOpenSession={(agentId, threadId) =>
+              runAction(() => onCloseSession(threadId, agentId), onActionError)
             }
             onNewAgent={
               agentBuilderAvailable
@@ -1426,7 +1492,6 @@ export function WorkspaceShell({
             onOpened={() => setActivityOpen(false)}
           />
         </FocusDrawer>
-
       </section>
     </div>
   )

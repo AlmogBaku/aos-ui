@@ -91,6 +91,30 @@ const WS_OPEN = 1
 const SESSION_PAGE_SIZE = 100
 const SESSION_FANOUT = 4
 
+/** Desktop's activity windows: chat recency and native worker heartbeats. */
+function profileActivity(raw: JsonRecord, now = Date.now()): "active" | "idle" {
+  const recent = (value: unknown, windowSeconds: number) => {
+    const timestamp = isRecord(value)
+      ? numberValue(value.last_active)
+      : undefined
+    if (!timestamp || timestamp <= 0) return false
+    const age = now / 1000 - timestamp
+    return age >= 0 && age < windowSeconds
+  }
+  return recent(raw.last_session, 90) ||
+    recent(raw.canonical_session, 90) ||
+    recent(raw.worker_session, 150)
+    ? "active"
+    : "idle"
+}
+
+function liveSessionStatus(value: unknown): SessionMetadata["status"] {
+  if (value === "waiting") return "waiting-for-input"
+  if (value === "working" || value === "starting") return "running"
+  if (value === "idle") return "idle"
+  return "unknown"
+}
+
 export class HermesNativeClient {
   readonly #baseUrl: string
   readonly #fetch: typeof fetch
@@ -279,6 +303,7 @@ export class HermesNativeClient {
       if (generation !== this.#socketGeneration || this.#stopped) return
       this.#socket = undefined
       this.#rejectPending(new Error("Hermes WebSocket disconnected"))
+      this.#invalidateActivity()
       this.#scheduleReconnect()
     })
   }
@@ -333,14 +358,33 @@ export class HermesNativeClient {
     this.#catalogPromise = request
     try {
       await request
+    } catch (reason) {
+      this.#invalidateActivity()
+      throw reason
     } finally {
       if (this.#catalogPromise === request) this.#catalogPromise = undefined
     }
   }
 
+  #invalidateActivity() {
+    if (this.#snapshot.agents.every((agent) => agent.activity === "unknown"))
+      return
+    this.#catalogSignature = ""
+    this.#setSnapshot({
+      agents: this.#snapshot.agents.map((agent) => ({
+        ...agent,
+        activity: "unknown",
+      })),
+    })
+    for (const listener of this.#catalogListeners) listener()
+  }
+
   async #refreshCatalog() {
+    const before = new Map(
+      this.#snapshot.sessions.map((session) => [session.threadId, session])
+    )
     const profileResult = await this.request<unknown>("profiles.list", {
-      include_sessions: false,
+      include_sessions: true,
     })
     if (!isRecord(profileResult) || !Array.isArray(profileResult.profiles))
       throw new Error("Hermes returned an invalid profile catalog")
@@ -362,17 +406,43 @@ export class HermesNativeClient {
         kind: "ready",
         id,
         name: stringValue(raw.display_name) ?? id,
+        activity: profileActivity(raw),
         ...(stringValue(raw.description)
           ? { description: stringValue(raw.description) }
           : {}),
         visibility: bots.hidden === true ? "hidden" : "visible",
         ...(aos.role === "creator" ? { role: "creator" as const } : {}),
-        status: "unknown",
       }
     })
     if (new Set(agents.map(({ id }) => id)).size !== agents.length)
       throw new Error("Hermes returned duplicate canonical profile names")
     const sessions = await this.#listAllSessions(agents.map(({ id }) => id))
+    let live: Map<string, unknown> | undefined
+    if ([...before.values()].some((session) => session.liveSessionId)) {
+      try {
+        const result = await this.request<unknown>("session.active_list")
+        if (!isRecord(result) || !Array.isArray(result.sessions))
+          throw new Error("Hermes returned invalid live Session statuses")
+        live = new Map()
+        for (const row of result.sessions) {
+          if (!isRecord(row) || !stringValue(row.id))
+            throw new Error("Hermes returned invalid live Session status")
+          live.set(String(row.id), row.status)
+        }
+      } catch (reason) {
+        live = undefined
+        this.#report(reason)
+      }
+      if (!live) {
+        const affected = new Set(
+          [...before.values()]
+            .filter((session) => session.liveSessionId)
+            .map((session) => session.agentId)
+        )
+        for (const agent of agents)
+          if (affected.has(agent.id)) agent.activity = "unknown"
+      }
+    }
     const catalogSignature = JSON.stringify({
       agents,
       profiles: [...profileUiMetadata],
@@ -384,6 +454,7 @@ export class HermesNativeClient {
           storedSessionId,
           title,
           updatedAt,
+          status,
         }) => ({
           threadId,
           agentId,
@@ -391,6 +462,7 @@ export class HermesNativeClient {
           storedSessionId,
           title,
           updatedAt,
+          status,
         })
       ),
     })
@@ -399,17 +471,25 @@ export class HermesNativeClient {
     )
     const merged = sessions.map((session) => {
       const old = previous.get(session.threadId)
-      return old
-        ? {
-            ...session,
-            messages: old.messages,
-            running: old.running,
-            loading: old.loading,
-            status: old.status,
-            ...(old.approval ? { approval: old.approval } : {}),
-            ...(old.liveSessionId ? { liveSessionId: old.liveSessionId } : {}),
-          }
-        : session
+      if (!old) return session
+      // Live events received during discovery take precedence over the poll.
+      const unchanged = old === before.get(session.threadId)
+      const status = !unchanged
+        ? old.status
+        : old.approval
+          ? "waiting-for-input"
+          : old.liveSessionId
+            ? liveSessionStatus(live?.get(old.liveSessionId))
+            : session.status
+      return {
+        ...session,
+        messages: old.messages,
+        running: status === "running" || status === "waiting-for-input",
+        loading: old.loading,
+        status,
+        ...(old.approval ? { approval: old.approval } : {}),
+        ...(old.liveSessionId ? { liveSessionId: old.liveSessionId } : {}),
+      }
     })
     for (const session of this.#snapshot.sessions) {
       if (
@@ -421,7 +501,13 @@ export class HermesNativeClient {
     this.#profileUiMetadata.clear()
     for (const [profile, metadata] of profileUiMetadata)
       this.#profileUiMetadata.set(profile, metadata)
-    if (catalogSignature === this.#catalogSignature) return
+    const statusChanged = merged.some(
+      (session) => session.status !== previous.get(session.threadId)?.status
+    )
+    if (catalogSignature === this.#catalogSignature) {
+      if (statusChanged) this.#setSnapshot({ sessions: merged })
+      return
+    }
     this.#catalogSignature = catalogSignature
     this.#setSnapshot({ agents, sessions: merged })
     for (const listener of this.#catalogListeners) listener()
@@ -521,7 +607,12 @@ export class HermesNativeClient {
           storedSessionId,
           title: stringValue(raw.title) ?? storedSessionId,
           updatedAt: isoTimestamp(raw.last_active ?? raw.started_at),
-          status: "unknown",
+          status:
+            typeof raw.ended_at === "number" &&
+            Number.isFinite(raw.ended_at) &&
+            raw.ended_at > 0
+              ? "idle"
+              : "unknown",
           messages: [],
           running: false,
           loading: false,

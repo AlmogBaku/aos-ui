@@ -85,6 +85,7 @@ export const he = {
     dark: "כהה",
   },
   status: {
+    active: "פעיל לאחרונה",
     unknown: "המצב אינו זמין",
     label: "מצב",
     idle: "לא פעיל",

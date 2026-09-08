@@ -82,6 +82,7 @@ export type Dictionary = {
     dark: string
   }
   status: {
+    active: string
     unknown: string
     label: string
     idle: string

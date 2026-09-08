@@ -6,6 +6,7 @@ import {
   type HermesWebSocket,
 } from "./hermes-native-client"
 import { createHermesWorkspace } from "./hermes-workspace"
+import { agentStatusFromSessions } from "@/lib/workspace-view-model"
 
 type Listener = (event: Event | MessageEvent) => void
 
@@ -105,7 +106,17 @@ function harness({
   reconnectTicketFailures = 0,
   visibilityConflict = false,
   approvalDeferred,
+  endedAt,
+  liveStatus = "idle",
+  activeReply,
+  sameSessionIdAcrossProfiles = false,
+  profileActivity = {},
 }: {
+  activeReply?: DeferredRpc | RpcFailure
+  profileActivity?: Record<string, unknown>
+  sameSessionIdAcrossProfiles?: boolean
+  endedAt?: number
+  liveStatus?: string
   autoContinue?: boolean | null | "inaccessible"
   duplicateSession?: boolean
   promptError?: boolean
@@ -120,6 +131,7 @@ function harness({
   let historyFetches = 0
   let researchHidden = false
   let researchRevision = 3
+  let activeStatus = liveStatus
   const fetcher = vi.fn<typeof fetch>(async (input) => {
     const url = new URL(String(input), "http://aos.test")
     if (
@@ -142,16 +154,21 @@ function harness({
     if (url.pathname === "/hermes/api/sessions")
       return Response.json({
         sessions:
-          url.searchParams.get("profile") === "research"
+          url.searchParams.get("profile") === "research" ||
+          sameSessionIdAcrossProfiles
             ? Array.from({ length: duplicateSession ? 2 : 1 }, () => ({
                 id: "stored-1",
-                profile: wrongOwner ? "creator" : "research",
+                profile: wrongOwner
+                  ? "creator"
+                  : url.searchParams.get("profile"),
                 title: "Native history",
                 last_active: 1_788_000_000,
+                ended_at: endedAt,
               }))
             : [],
         total:
-          url.searchParams.get("profile") === "research"
+          url.searchParams.get("profile") === "research" ||
+          sameSessionIdAcrossProfiles
             ? duplicateSession
               ? 2
               : 1
@@ -193,6 +210,14 @@ function harness({
   })
   const reply = (request: Record<string, unknown>) => {
     switch (request.method) {
+      case "session.active_list":
+        return (
+          activeReply ?? {
+            sessions: [
+              { id: "live-1", session_key: "stored-1", status: activeStatus },
+            ],
+          }
+        )
       case "profiles.list":
         return {
           profiles: [
@@ -200,6 +225,7 @@ function harness({
               name: "research",
               display_name: "Research",
               description: "Native profile",
+              ...profileActivity,
               ui_meta: {
                 "hermes-bots": { hidden: researchHidden, accent: "violet" },
                 foreign: { preserved: true },
@@ -279,6 +305,9 @@ function harness({
     client,
     fetcher,
     sockets,
+    setLiveStatus: (status: string) => {
+      activeStatus = status
+    },
     get historyFetches() {
       return historyFetches
     },
@@ -286,6 +315,233 @@ function harness({
 }
 
 describe("Hermes native browser client", () => {
+  it("invalidates activity on catalog failure and restores it on recovery", async () => {
+    const { client, fetcher } = harness()
+    try {
+      await client.start()
+      const changed = vi.fn()
+      const unsubscribe = client.subscribeCatalog(changed)
+      fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }))
+      await expect(client.refreshCatalog()).rejects.toThrow("503")
+      expect(client.getSnapshot().agents[0].activity).toBe("unknown")
+      expect(changed).toHaveBeenCalledTimes(1)
+      await client.refreshCatalog()
+      expect(client.getSnapshot().agents[0].activity).toBe("idle")
+      expect(changed).toHaveBeenCalledTimes(2)
+      unsubscribe()
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("invalidates Agent activity when the native connection closes", async () => {
+    const { client, sockets } = harness()
+    try {
+      await client.start()
+      sockets[0].disconnect()
+      expect(client.getSnapshot().agents[0].activity).toBe("unknown")
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("marks an attached Session unknown when native status reading fails", async () => {
+    const { client } = harness({
+      activeReply: new RpcFailure("status unavailable"),
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshCatalog()
+      expect(client.session(threadId)?.status).toBe("unknown")
+      expect(
+        agentStatusFromSessions(
+          client.getSnapshot().agents[0],
+          client.getSnapshot().sessions
+        )
+      ).toBe("unknown")
+      expect(client.getSnapshot().agents).toHaveLength(2)
+    } finally {
+      client.stop()
+    }
+  })
+  it("keeps live statuses scoped by verified attachment, not bare stored IDs", async () => {
+    const { client } = harness({
+      sameSessionIdAcrossProfiles: true,
+      liveStatus: "working",
+    })
+    try {
+      await client.start()
+      await client.attach(encodeHermesThreadId("research", "stored-1"))
+      await client.refreshCatalog()
+      expect(
+        client.session(encodeHermesThreadId("research", "stored-1"))?.status
+      ).toBe("running")
+      expect(
+        client.session(encodeHermesThreadId("creator", "stored-1"))?.status
+      ).toBe("unknown")
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("does not overwrite a live event with an older status poll", async () => {
+    const activeReply = new DeferredRpc()
+    const { client, sockets } = harness({ activeReply })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      const refreshing = client.refreshCatalog()
+      await vi.waitFor(() =>
+        expect(
+          sockets[0].requests.some(
+            ({ method }) => method === "session.active_list"
+          )
+        ).toBe(true)
+      )
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "message.start",
+          session_id: "live-1",
+          payload: {},
+        },
+      })
+      activeReply.resolve({ sessions: [{ id: "live-1", status: "idle" }] })
+      await refreshing
+      expect(client.session(threadId)?.status).toBe("running")
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("shows native Agent activity despite unknown historical Session execution", async () => {
+    const { client, sockets } = harness()
+    try {
+      await client.start()
+      const { agents, sessions } = client.getSnapshot()
+      expect(sessions[0].status).toBe("unknown")
+      expect(
+        agentStatusFromSessions(agents[0], [
+          ...sessions,
+          { ...sessions[0], threadId: "attached", status: "idle" },
+        ])
+      ).toBe("idle")
+      expect(
+        sockets[0].requests.find(({ method }) => method === "profiles.list")
+          ?.params
+      ).toEqual({ include_sessions: true })
+      expect(
+        sockets[0].requests.some(({ method }) => method === "session.resume")
+      ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it.each([
+    ["last_session", 89, "active"],
+    ["canonical_session", 89, "active"],
+    ["worker_session", 149, "active"],
+    ["last_session", 90, "idle"],
+    ["worker_session", 150, "idle"],
+    ["last_session", -1000, "idle"],
+  ])(
+    "projects %s activity at age %s without declaring a Session running",
+    async (field, age, expected) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date("2026-09-08T12:00:00Z"))
+      const { client } = harness({
+        profileActivity: {
+          [field]: { last_active: Date.now() / 1000 - Number(age) },
+        },
+      })
+      try {
+        await client.start()
+        expect(
+          agentStatusFromSessions(
+            client.getSnapshot().agents[0],
+            client.getSnapshot().sessions
+          )
+        ).toBe(expected)
+        expect(client.getSnapshot().sessions[0].status).toBe("unknown")
+        expect(client.getSnapshot().sessions[0].running).toBe(false)
+        await vi.advanceTimersByTimeAsync(151_000)
+        await client.refreshCatalog()
+        expect(
+          agentStatusFromSessions(
+            client.getSnapshot().agents[0],
+            client.getSnapshot().sessions
+          )
+        ).toBe("idle")
+      } finally {
+        client.stop()
+        vi.useRealTimers()
+      }
+    }
+  )
+
+  it("derives Agent idle after native attachment instead of pinning it to unknown", async () => {
+    const { client } = harness()
+    try {
+      await client.start()
+      await client.attach(encodeHermesThreadId("research", "stored-1"))
+      expect(
+        agentStatusFromSessions(
+          client.getSnapshot().agents[0],
+          client.getSnapshot().sessions
+        )
+      ).toBe("idle")
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("recognizes native-ended Sessions without attachment", async () => {
+    const { client, sockets } = harness({ endedAt: 1_788_000_100 })
+    try {
+      await client.start()
+      expect(client.getSnapshot().sessions[0].status).toBe("idle")
+      expect(
+        sockets[0].requests.some(({ method }) => method === "session.resume")
+      ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("refreshes live status without reattaching or changing catalog metadata", async () => {
+    const { client, sockets, setLiveStatus } = harness()
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      // An unscoped native live row is not evidence of profile ownership.
+      expect(client.session(threadId)?.status).toBe("unknown")
+      await client.attach(threadId)
+      for (const [native, expected] of [
+        ["working", "running"],
+        ["waiting", "waiting-for-input"],
+        ["idle", "idle"],
+        ["future-status", "unknown"],
+      ]) {
+        setLiveStatus(native)
+        await client.refreshCatalog()
+        expect(client.session(threadId)?.status).toBe(expected)
+      }
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "session.resume")
+      ).toHaveLength(1)
+      expect(
+        sockets[0].requests.some(({ method }) => method === "prompt.submit")
+      ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
   it("reports recovery after startup and reconnect, and releases the listener", async () => {
     const { client, sockets } = harness()
     const recovered = vi.fn()

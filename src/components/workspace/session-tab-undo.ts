@@ -7,6 +7,9 @@ export type ClosedSessionTab = {
   threadId: string
   title: string
   selectedThreadId: string | null
+  selectionChanged?: boolean
+  previousLastSelectedThreadId?: string | null
+  clearedLastSelected?: boolean
 }
 
 export function neighborAfterClose(
@@ -17,6 +20,20 @@ export function neighborAfterClose(
   if (closed !== selected) return selected
   const index = ids.indexOf(closed)
   return ids[index + 1] ?? ids[index - 1] ?? null
+}
+
+export function restoreBackgroundLastSelected(
+  lastSelected: Map<string, string | null>,
+  closed: ClosedSessionTab
+) {
+  if (
+    !closed.clearedLastSelected ||
+    lastSelected.has(closed.agentId) ||
+    closed.previousLastSelectedThreadId === undefined
+  ) {
+    return
+  }
+  lastSelected.set(closed.agentId, closed.previousLastSelectedThreadId)
 }
 
 export function useSessionTabUndo() {

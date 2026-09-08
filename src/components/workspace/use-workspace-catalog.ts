@@ -31,6 +31,13 @@ export function useWorkspaceCatalog(
       } catch (reason) {
         if (active && requestGeneration === generation) {
           setAgentError(toError(reason))
+          setAgents((previous) =>
+            previous.map((agent) =>
+              agent.activity === undefined
+                ? agent
+                : { ...agent, activity: "unknown" }
+            )
+          )
           setAgentsLoading(false)
         }
       }

@@ -185,11 +185,15 @@ test("wrapped history navigation restores a nonempty draft at both visual bounda
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await openWorkspace(page)
-  await runCommand(page, "Open Session: Customer interviews")
+  await page.goto("/en")
+  await page.getByRole("button", { name: "Open Agents" }).click()
+  const navigator = page.getByRole("dialog", { name: "Sessions" })
+  await navigator
+    .getByRole("button", { name: /Open Session: Customer interviews/i })
+    .click()
   await expect(
-    page.getByRole("tab", { name: "Customer interviews" })
-  ).toHaveAttribute("aria-selected", "true")
+    page.getByRole("group", { name: /Aster, Customer interviews/ })
+  ).toBeVisible()
 
   const input = page.getByRole("textbox", { name: "Message input" })
   const draft =

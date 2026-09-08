@@ -69,6 +69,7 @@ const copy: MobileNavigatorCopy = {
   selected: "Selected",
   lastSelected: "Last selected",
   status: {
+    active: "Active",
     idle: "Idle",
     running: "Running",
     attention: "Needs attention",
@@ -105,6 +106,7 @@ const defaultProps = (): MobileNavigatorProps => ({
   agentActivity: {
     "agent-b": { unreadCount: 3, needsAttention: true },
   },
+  otherAgentsActivity: { unreadCount: 3, needsAttention: true },
   sessionActivity: {
     "b-1": { unreadCount: 2, needsAttention: true },
   },
@@ -245,6 +247,7 @@ describe("MobileNavigator", () => {
       screen.getByRole("menuitem", { name: "Remove from open sessions" })
     )
     expect(props.onRemoveOpenSession).toHaveBeenCalledWith("agent-a", "a-2")
+    expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })
   })
 
   it("preserves visible Session ordering while open, removes missing rows, and appends discoveries", () => {
@@ -303,7 +306,11 @@ describe("MobileNavigator", () => {
     const { container } = render(<MobileNavigator {...props} />)
 
     expect(container.firstElementChild).toHaveAttribute("dir", "rtl")
-    fireEvent.click(screen.getByRole("button", { name: "Back to Agents" }))
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Back to Agents, 3 unread, Needs attention",
+      })
+    )
     expect(props.onStateChange).toHaveBeenCalledWith({ type: "BACK_TO_AGENTS" })
     fireEvent.click(screen.getByRole("button", { name: "Close navigation" }))
     expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })

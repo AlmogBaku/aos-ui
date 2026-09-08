@@ -1,6 +1,7 @@
 import type { AssistantRuntime } from "@assistant-ui/react"
 
-export type AgentStatus = "idle" | "running" | "attention" | "unknown"
+export type AgentStatus =
+  "idle" | "active" | "running" | "attention" | "unknown"
 
 export type AgentIconName =
   "spark" | "layers" | "compass" | "chart" | "pen" | "unassigned"
@@ -18,6 +19,8 @@ type AgentSummaryBase = {
   name: string
   description?: string
   status?: AgentStatus
+  /** Native roster activity, distinct from exact Session execution. */
+  activity?: "active" | "idle" | "unknown"
   icon?: AgentIcon
   visibility?: AgentVisibility
   role?: "creator"

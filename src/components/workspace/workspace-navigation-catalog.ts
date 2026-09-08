@@ -52,9 +52,9 @@ export function buildWorkspaceNavigationCatalog({
         now,
         untitledLabel,
       })
-      const openSessions = view.openSessions.filter(
-        (session) => !dismissed.has(session.threadId)
-      )
+      const openSessions = view.openSessions
+        .filter((session) => !dismissed.has(session.threadId))
+        .map((session) => ({ ...session, canClose: true }))
       const openIds = new Set(openSessions.map((session) => session.threadId))
       return [
         agentId,

@@ -15,6 +15,16 @@ const message = (text: string): AppendMessage => ({
 })
 
 describe("Hermes message queue", () => {
+  it("parks dispatch when an idle Session becomes unobservable", () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const queue = createHermesMessageQueue({ submit }, "thread-1")
+    queue.sync({ running: false, status: "idle" } as never)
+    queue.sync({ running: false, status: "unknown" } as never)
+    queue.controller.adapter.enqueue(message("wait for native status"))
+    expect(submit).not.toHaveBeenCalled()
+    queue.sync({ running: false, status: "idle" } as never)
+    expect(submit).toHaveBeenCalledOnce()
+  })
   it("parks later prompts after an uncertain native submit failure", async () => {
     const submit = vi.fn().mockRejectedValue(new Error("outcome uncertain"))
     const onError = vi.fn()

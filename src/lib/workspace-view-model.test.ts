@@ -21,6 +21,27 @@ it("does not call an Agent idle when owned execution status is unknown", () => {
 
 const now = new Date("2026-09-03T12:00:00.000Z")
 
+it("keeps native activity separate from execution and preserves attention priority", () => {
+  const agent = { kind: "ready", id: "a", name: "A", activity: "idle" } as const
+  const session = { agentId: "a", threadId: "t", updatedAt: now.toISOString() }
+  expect(
+    agentStatusFromSessions(agent, [{ ...session, status: "running" }])
+  ).toBe("active")
+  expect(
+    agentStatusFromSessions(agent, [
+      { ...session, status: "waiting-for-input" },
+    ])
+  ).toBe("attention")
+  expect(
+    agentStatusFromSessions(agent, [
+      { ...session, agentId: "other", status: "running" },
+    ])
+  ).toBe("idle")
+  expect(agentStatusFromSessions({ ...agent, activity: "unknown" }, [])).toBe(
+    "unknown"
+  )
+})
+
 const sessions: SessionMetadata[] = [
   {
     threadId: "recent",

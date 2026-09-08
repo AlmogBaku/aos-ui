@@ -90,6 +90,7 @@ export const en = {
     dark: "Dark",
   },
   status: {
+    active: "Active",
     unknown: "Status unavailable",
     label: "Status",
     idle: "Idle",

@@ -30,7 +30,11 @@ import {
   workspaceHref,
   type WorkspaceSelection,
 } from "@/lib/workspace-routing"
-import { neighborAfterClose, useSessionTabUndo } from "./session-tab-undo"
+import {
+  neighborAfterClose,
+  restoreBackgroundLastSelected,
+  useSessionTabUndo,
+} from "./session-tab-undo"
 import { buildWorkspaceNavigationCatalog } from "./workspace-navigation-catalog"
 import {
   getAgentCreator,
@@ -627,46 +631,55 @@ export function useWorkspaceNavigation({
     await selectRuntimeThread(threadId)
   }
 
-  async function closeSession(threadId: string) {
-    const closed = shellOpenSessions.find(
-      (session) => session.threadId === threadId
-    )
-    if (!selectedAgentId || !closed?.canClose) return
+  async function closeSession(threadId: string, verifiedAgentId?: string) {
+    const metadata = sessions.find((session) => session.threadId === threadId)
+    const agentId = metadata?.agentId ?? verifiedAgentId
+    const closed = agentId
+      ? navigationCatalog
+          .get(agentId)
+          ?.openSessions.find((session) => session.threadId === threadId)
+      : undefined
+    if (!agentId || !closed?.canClose) return
+    const selectionChanged =
+      agentId === selectedAgentId && threadId === activeThreadId
+    const previousLastSelectedThreadId = lastSelected.current.get(agentId)
+    const clearedLastSelected = previousLastSelectedThreadId === threadId
     tabUndo.remember({
-      agentId: selectedAgentId,
+      agentId,
       threadId,
       title: closed.title,
-      selectedThreadId: activeThreadId,
+      selectedThreadId: selectionChanged ? activeThreadId : null,
+      selectionChanged,
+      previousLastSelectedThreadId,
+      clearedLastSelected,
     })
     setDismissedTabs((current) => ({
       ...current,
-      [selectedAgentId]: [
-        ...new Set([...(current[selectedAgentId] ?? []), threadId]),
-      ],
+      [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],
     }))
     setManuallyOpened((current) => ({
       ...current,
-      [selectedAgentId]: (current[selectedAgentId] ?? []).filter(
+      [agentId]: (current[agentId] ?? []).filter(
         (candidate) => candidate !== threadId
       ),
     }))
-    if (lastSelected.current.get(selectedAgentId) === threadId) {
-      lastSelected.current.delete(selectedAgentId)
+    if (clearedLastSelected) {
+      lastSelected.current.delete(agentId)
     }
-    if (threadId !== activeThreadId) return
+    if (!selectionChanged) return
     const next = neighborAfterClose(
       sessionView.openSessions.map((session) => session.threadId),
       threadId,
       activeThreadId
     )
     if (next) {
-      lastSelected.current.set(selectedAgentId, next)
-      updateRoute({ agentId: selectedAgentId, sessionId: next }, "replace")
+      lastSelected.current.set(agentId, next)
+      updateRoute({ agentId, sessionId: next }, "replace")
       await selectRuntimeThread(next)
     } else {
-      lastSelected.current.set(selectedAgentId, null)
+      lastSelected.current.set(agentId, null)
       desiredThread.current = null
-      updateRoute({ agentId: selectedAgentId, sessionId: null }, "replace")
+      updateRoute({ agentId, sessionId: null }, "replace")
       await runtime.threads.switchToNewThread()
     }
   }
@@ -686,6 +699,10 @@ export function useWorkspaceNavigation({
         ...new Set([...(current[closed.agentId] ?? []), closed.threadId]),
       ],
     }))
+    if (closed.selectionChanged === false) {
+      restoreBackgroundLastSelected(lastSelected.current, closed)
+      return
+    }
     setPreferredAgentId(closed.agentId)
     if (closed.selectedThreadId) {
       lastSelected.current.set(closed.agentId, closed.selectedThreadId)

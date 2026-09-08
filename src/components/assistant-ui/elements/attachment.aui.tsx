@@ -243,7 +243,7 @@ export const UserMessageAttachments: FC = () => {
 
 export const ComposerAttachments: FC = () => {
   return (
-    <div className="aui-composer-attachments flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
+    <div className="aui-composer-attachments col-span-full row-start-1 flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
       <ComposerPrimitive.Attachments>
         {() => <AttachmentUI />}
       </ComposerPrimitive.Attachments>
@@ -261,12 +261,14 @@ export const ComposerAddAttachment: FC = () => {
           side="bottom"
           variant="ghost"
           size="icon"
-          className="aui-composer-add-attachment size-7 rounded-full text-muted-foreground hover:bg-muted-foreground/15 hover:text-foreground active:scale-[0.96] motion-reduce:transition-none dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30"
+          className="aui-composer-add-attachment relative size-11 shrink-0 rounded-full bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:scale-[0.96] motion-reduce:transition-none @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:hover:bg-muted-foreground/15 dark:hover:bg-transparent @min-[64rem]/workspace:dark:hover:bg-muted-foreground/30"
           aria-label={labels.add}
         />
       }
     >
-      <PlusIcon className="aui-attachment-add-icon size-4" />
+      <span className="absolute bottom-0 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full bg-foreground/[0.04] @min-[64rem]/workspace:static @min-[64rem]/workspace:size-auto @min-[64rem]/workspace:translate-x-0 @min-[64rem]/workspace:bg-transparent dark:bg-foreground/[0.06] @min-[64rem]/workspace:dark:bg-transparent">
+        <PlusIcon className="aui-attachment-add-icon size-4" />
+      </span>
     </ComposerPrimitive.AddAttachment>
   )
 }

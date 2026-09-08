@@ -11,6 +11,7 @@ export function agentStatusFromSessions(
   agent: AgentSummary,
   sessions: readonly SessionMetadata[]
 ): AgentStatus {
+  if (agent.activity === "unknown") return "unknown"
   const owned = sessions.filter(({ agentId }) => agentId === agent.id)
   if (
     agent.status === "attention" ||
@@ -21,7 +22,10 @@ export function agentStatusFromSessions(
     agent.status === "running" ||
     owned.some(({ status }) => status === "running")
   )
-    return "running"
+    return agent.activity === undefined ? "running" : "active"
+  // Native roster activity is not an aggregate of every historical execution.
+  if (agent.activity !== undefined) return agent.activity
+  if (agent.status === "active") return "active"
   if (
     agent.status === "unknown" ||
     owned.some(({ status }) => status === "unknown")

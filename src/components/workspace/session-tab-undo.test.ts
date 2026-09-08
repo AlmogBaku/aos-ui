@@ -1,6 +1,10 @@
 import { act, renderHook, cleanup } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { neighborAfterClose, useSessionTabUndo } from "./session-tab-undo"
+import {
+  neighborAfterClose,
+  restoreBackgroundLastSelected,
+  useSessionTabUndo,
+} from "./session-tab-undo"
 
 afterEach(() => {
   cleanup()
@@ -20,6 +24,22 @@ describe("Session tab undo", () => {
     expect(neighborAfterClose(["a", "b", "c"], "c", "c")).toBe("b")
     expect(neighborAfterClose(["a", "b", "c"], "b", "a")).toBe("a")
     expect(neighborAfterClose(["a"], "a", "a")).toBeNull()
+  })
+
+  it("restores a cleared background bookmark without overwriting a newer selection", () => {
+    const restored = new Map<string, string | null>()
+    const backgroundClose = {
+      ...closed,
+      selectionChanged: false,
+      previousLastSelectedThreadId: "b",
+      clearedLastSelected: true,
+    }
+    restoreBackgroundLastSelected(restored, backgroundClose)
+    expect(restored.get("aster")).toBe("b")
+
+    const newerSelection = new Map<string, string | null>([["aster", "c"]])
+    restoreBackgroundLastSelected(newerSelection, backgroundClose)
+    expect(newerSelection.get("aster")).toBe("c")
   })
 
   it("retains the exact close until 8 seconds and expires it at the boundary", () => {

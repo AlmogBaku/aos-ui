@@ -362,11 +362,15 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
             {BeforeComposer ? <BeforeComposer /> : null}
-            {ComposerOverride ? (
-              <ComposerOverride fallback={<Composer autoFocus={autoFocus} />} />
-            ) : (
-              <Composer autoFocus={autoFocus} />
-            )}
+            <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+              {ComposerOverride ? (
+                <ComposerOverride
+                  fallback={<Composer autoFocus={autoFocus} />}
+                />
+              ) : (
+                <Composer autoFocus={autoFocus} />
+              )}
+            </ComposerPrimitive.Unstable_TriggerPopoverRoot>
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
             </AuiIf>
@@ -899,32 +903,37 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
         render={
           <div
             data-slot="aui_composer-shell"
-            className="grid w-full cursor-text grid-cols-[auto_minmax(0,1fr)_auto] items-end gap-1.5 rounded-(--composer-radius) border border-border/60 bg-(--composer-bg) p-(--composer-padding) transition-[border-color] focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] [&>.aui-composer-attachments]:col-span-3 dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 @md:flex @md:flex-col @md:gap-2"
+            className="grid w-full cursor-text grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-end gap-2 transition-colors data-[dragging=true]:rounded-xl data-[dragging=true]:border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:flex @min-[64rem]/workspace:max-w-[45rem] @min-[64rem]/workspace:flex-col @min-[64rem]/workspace:gap-2 @min-[64rem]/workspace:rounded-[24px] @min-[64rem]/workspace:border @min-[64rem]/workspace:border-border/60 @min-[64rem]/workspace:bg-background @min-[64rem]/workspace:p-2.5 @min-[64rem]/workspace:focus-within:border-border @min-[64rem]/workspace:dark:bg-popover"
           />
         }
       >
         <ComposerAttachments />
-        <ComposerPrimitive.Input
-          placeholder={labels.composerPlaceholder}
-          className="aui-composer-input col-start-2 row-start-2 max-h-36 min-h-11 w-full resize-none bg-transparent px-1.5 py-2.5 text-base leading-6 caret-primary outline-none placeholder:text-muted-foreground @md:max-h-48 @md:min-h-12 @md:px-2.5 @md:py-1"
-          rows={1}
-          autoFocus={autoFocus}
-          enterKeyHint="send"
-          submitMode="none"
-          ref={inputRef}
-          cancelOnEscape={false}
-          onChange={() => {
-            escapeRef.current = null
-          }}
-          onFocus={() => {
-            escapeRef.current = null
-          }}
-          onBlur={() => {
-            escapeRef.current = null
-          }}
-          onKeyDown={handleKeyDown}
-          aria-label={labels.messageInput}
-        />
+        <div
+          data-slot="aui_composer-field"
+          className="col-start-2 row-start-2 flex min-w-0 items-center rounded-[18px] bg-foreground/[0.04] px-3 py-2 @min-[64rem]/workspace:contents dark:bg-foreground/[0.06]"
+        >
+          <ComposerPrimitive.Input
+            placeholder={labels.composerPlaceholder}
+            className="aui-composer-input max-h-36 min-w-0 flex-1 resize-none bg-transparent text-base leading-5 text-foreground/85 caret-primary outline-none placeholder:text-muted-foreground @min-[64rem]/workspace:max-h-48 @min-[64rem]/workspace:min-h-11 @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-3 @min-[64rem]/workspace:text-[15px] @min-[64rem]/workspace:leading-6"
+            rows={1}
+            autoFocus={autoFocus}
+            enterKeyHint="send"
+            submitMode="none"
+            ref={inputRef}
+            cancelOnEscape={false}
+            onChange={() => {
+              escapeRef.current = null
+            }}
+            onFocus={() => {
+              escapeRef.current = null
+            }}
+            onBlur={() => {
+              escapeRef.current = null
+            }}
+            onKeyDown={handleKeyDown}
+            aria-label={labels.messageInput}
+          />
+        </div>
         <ComposerAction />
       </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
@@ -935,87 +944,87 @@ const ComposerAction: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const onStopRun = useContext(ThreadStopContext)
   return (
-    <div className="aui-composer-action-wrapper contents [&>:first-child]:col-start-1 [&>:first-child]:row-start-2 [&>:last-child]:col-start-3 [&>:last-child]:row-start-2 @md:relative @md:flex @md:items-center @md:justify-between">
+    <div className="aui-composer-action-wrapper contents @min-[64rem]/workspace:relative @min-[64rem]/workspace:flex @min-[64rem]/workspace:w-full @min-[64rem]/workspace:items-center @min-[64rem]/workspace:justify-between [&>:first-child]:col-start-1 [&>:first-child]:row-start-2 [&>:last-child]:col-start-3 [&>:last-child]:row-start-2">
       <ComposerAddAttachment />
       <div className="flex items-center gap-1.5">
-        <AuiIf condition={(s) => s.thread.capabilities.dictation}>
-          <AuiIf condition={(s) => s.composer.dictation == null}>
-            <ComposerPrimitive.Dictate
-              render={
-                <TooltipIconButton
-                  tooltip={labels.voiceInput}
-                  side="bottom"
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="aui-composer-dictate size-7 rounded-full text-muted-foreground hover:text-foreground"
-                  aria-label={labels.startVoiceInput}
-                />
-              }
-            >
-              <MicIcon className="aui-composer-dictate-icon size-4" />
-            </ComposerPrimitive.Dictate>
+        <div className="hidden @min-[64rem]/workspace:contents">
+          <AuiIf condition={(s) => s.thread.capabilities.dictation}>
+            <AuiIf condition={(s) => s.composer.dictation == null}>
+              <ComposerPrimitive.Dictate
+                render={
+                  <TooltipIconButton
+                    tooltip={labels.voiceInput}
+                    side="bottom"
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="aui-composer-dictate size-8 rounded-full text-muted-foreground hover:text-foreground"
+                    aria-label={labels.startVoiceInput}
+                  />
+                }
+              >
+                <MicIcon className="aui-composer-dictate-icon size-4" />
+              </ComposerPrimitive.Dictate>
+            </AuiIf>
+            <AuiIf condition={(s) => s.composer.dictation != null}>
+              <ComposerPrimitive.StopDictation
+                render={
+                  <TooltipIconButton
+                    tooltip={labels.stopDictation}
+                    side="bottom"
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="aui-composer-stop-dictation size-8 rounded-full text-destructive"
+                    aria-label={labels.stopVoiceInput}
+                  />
+                }
+              >
+                <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current motion-reduce:animate-none" />
+              </ComposerPrimitive.StopDictation>
+            </AuiIf>
           </AuiIf>
-          <AuiIf condition={(s) => s.composer.dictation != null}>
-            <ComposerPrimitive.StopDictation
-              render={
-                <TooltipIconButton
-                  tooltip={labels.stopDictation}
-                  side="bottom"
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="aui-composer-stop-dictation size-7 rounded-full text-destructive"
-                  aria-label={labels.stopVoiceInput}
-                />
-              }
-            >
-              <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current motion-reduce:animate-none" />
-            </ComposerPrimitive.StopDictation>
-          </AuiIf>
-        </AuiIf>
+        </div>
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <ComposerPrimitive.Send
             render={
-              <TooltipIconButton
-                tooltip={labels.sendMessage}
-                side="bottom"
+              <button
                 type="button"
-                variant="default"
-                size="icon"
-                className="aui-composer-send size-7 rounded-full"
+                className="aui-composer-send flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
                 aria-label={labels.sendMessage}
               />
             }
           >
-            <ArrowUpIcon className="aui-composer-send-icon size-4" />
+            <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents">
+              <ArrowUpIcon className="aui-composer-send-icon size-4" />
+            </span>
           </ComposerPrimitive.Send>
         </AuiIf>
         <AuiIf condition={(s) => s.thread.isRunning}>
           {onStopRun ? (
             <Button
               type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
+              className="aui-composer-cancel flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary"
               aria-label={labels.stopGenerating}
               onClick={onStopRun}
             >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+              <span className="grid size-9 place-items-center rounded-full bg-primary @min-[64rem]/workspace:contents">
+                <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+              </span>
             </Button>
           ) : (
             <ComposerPrimitive.Cancel
               render={
                 <Button
                   type="button"
-                  variant="default"
-                  size="icon"
-                  className="aui-composer-cancel size-7 rounded-full"
+                  className="aui-composer-cancel flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary"
                   aria-label={labels.stopGenerating}
                 />
               }
             >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+              <span className="grid size-9 place-items-center rounded-full bg-primary @min-[64rem]/workspace:contents">
+                <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+              </span>
             </ComposerPrimitive.Cancel>
           )}
         </AuiIf>
@@ -1050,7 +1059,7 @@ const AssistantMessage: FC = () => {
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
-      className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
+      className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
     >
       {AssistantIdentity ? <AssistantIdentity /> : null}
       <div
@@ -1216,7 +1225,7 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
+      className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />

@@ -9,11 +9,14 @@ export async function exerciseSessionTabs(
     locale === "en"
       ? {
           drawer: "Open Agents",
-          identity: "Open Agent details",
-          details: "Agent details",
+          sessions: "Sessions",
+          agents: "Agents",
+          backToAgents: "Back to Agents",
+          openSession: "Open session",
           status: "Status: Running",
           newSession: "New session",
           actions: "Session actions",
+          removeOpenSession: "Remove from open sessions",
           close: "Close tab",
           closeSession: "Close session",
           undo: "Undo",
@@ -21,11 +24,14 @@ export async function exerciseSessionTabs(
         }
       : {
           drawer: "פתיחת רשימת הסוכנים",
-          identity: "פתיחת פרטי הסוכן",
-          details: "פרטי הסוכן",
+          sessions: "שיחות",
+          agents: "סוכנים",
+          backToAgents: "חזרה לסוכנים",
+          openSession: "פתיחת שיחה",
           status: "מצב: פעיל",
           newSession: "שיחה חדשה",
           actions: "פעולות שיחה",
+          removeOpenSession: "הסרה מהשיחות הפתוחות",
           close: "סגירת לשונית",
           closeSession: "סגירת שיחה",
           undo: "ביטול",
@@ -33,40 +39,119 @@ export async function exerciseSessionTabs(
         }
   await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto(`/${locale}`)
+  if (mobile) {
+    await expect(
+      page.getByRole("tablist", { name: copy.sessions })
+    ).toBeHidden()
+    const drawerTrigger = page.getByRole("button", { name: copy.drawer })
+    const bounds = await drawerTrigger.boundingBox()
+    expect(bounds!.width).toBeGreaterThanOrEqual(44)
+    expect(bounds!.height).toBeGreaterThanOrEqual(44)
+
+    const identity = page.getByRole("group", {
+      name: new RegExp(`Aster, Market brief, ${copy.status}`),
+    })
+    await expect(identity).toBeVisible()
+    await expect(identity.locator('[data-agent-symbol="spark"]')).toBeVisible()
+
+    await drawerTrigger.click()
+    let drawer = page.getByRole("dialog", { name: copy.sessions })
+    await expect(drawer).toBeVisible()
+    await expect(drawer.getByRole("heading", { name: "Aster" })).toBeFocused()
+    await expect(
+      drawer.getByRole("button", {
+        name: new RegExp(`${copy.openSession}: Launch review`, "i"),
+      })
+    ).toBeVisible()
+    await expect(
+      drawer.locator('[data-thread-list-primitive="true"]').first()
+    ).toBeVisible()
+
+    await drawer.getByRole("button", { name: copy.backToAgents }).click()
+    drawer = page.getByRole("dialog", { name: copy.agents })
+    await expect(
+      drawer.locator("[data-mobile-navigator-heading]")
+    ).toBeFocused()
+    await expect(drawer.getByRole("button", { name: /Mica/ })).toBeVisible()
+    await drawer.getByRole("button", { name: /Aster/ }).click()
+    drawer = page.getByRole("dialog", { name: copy.sessions })
+    await expect(
+      drawer.locator("[data-mobile-navigator-heading]")
+    ).toBeFocused()
+    await drawer
+      .getByRole("button", {
+        name: new RegExp(`${copy.openSession}: Launch review`, "i"),
+      })
+      .click()
+    await expect(drawer).toHaveCount(0)
+    await expect(
+      page.getByRole("group", { name: new RegExp("Aster, Launch review") })
+    ).toBeVisible()
+
+    await drawerTrigger.click()
+    drawer = page.getByRole("dialog", { name: copy.sessions })
+    await drawer
+      .getByRole("button", { name: `${copy.actions}: Market brief` })
+      .click()
+    await drawer.getByRole("menuitem", { name: copy.removeOpenSession }).click()
+    await expect(drawer).toHaveCount(0)
+    await expect(
+      page.getByRole("status").filter({ hasText: copy.closed })
+    ).toContainText("Market brief")
+    await page.getByRole("button", { name: copy.undo, exact: true }).click()
+    await expect(
+      page.getByRole("group", { name: new RegExp("Aster, Launch review") })
+    ).toBeVisible()
+
+    await drawerTrigger.click()
+    drawer = page.getByRole("dialog", { name: copy.sessions })
+    await expect(
+      drawer.getByRole("button", {
+        name: new RegExp(`${copy.openSession}: Market brief`, "i"),
+      })
+    ).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(drawerTrigger).toBeFocused()
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth
+      )
+    ).toBe(true)
+    return
+  }
+
   await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
     "aria-selected",
     "true"
   )
+  await expect(
+    page.getByRole("tab", { name: "Market brief" }).locator("..")
+  ).toHaveAttribute("data-thread-list-primitive", "true")
   if (!mobile) {
     const tabBarHeight = await page
       .locator("[data-tab-viewport]")
-      .evaluate((element) => element.parentElement?.getBoundingClientRect().height)
+      .evaluate(
+        (element) => element.parentElement?.getBoundingClientRect().height
+      )
     const firstTabWidth = await page
       .getByRole("tab", { name: "Market brief" })
       .evaluate((element) => element.getBoundingClientRect().width)
+    const longTabWidth = await page
+      .getByRole("tab", { name: "Competitive scan" })
+      .evaluate((element) => element.getBoundingClientRect().width)
+    const tabFontSize = await page
+      .getByRole("tab", { name: "Market brief" })
+      .locator("span")
+      .first()
+      .evaluate((element) => getComputedStyle(element).fontSize)
 
-    expect(tabBarHeight).toBeLessThanOrEqual(56)
-    expect(firstTabWidth).toBeLessThanOrEqual(104)
+    expect(tabBarHeight).toBeLessThanOrEqual(40)
+    expect(tabFontSize).toBe("13px")
+    expect(firstTabWidth).toBeGreaterThanOrEqual(104)
+    expect(longTabWidth).toBeGreaterThan(firstTabWidth)
+    expect(longTabWidth).toBeLessThanOrEqual(192)
   }
-  if (mobile) {
-    const drawer = page.getByRole("button", { name: copy.drawer })
-    const bounds = await drawer.boundingBox()
-    expect(bounds!.width).toBeGreaterThanOrEqual(44)
-    expect(bounds!.height).toBeGreaterThanOrEqual(44)
-    const identity = page.getByRole("button", {
-      name: `${copy.identity}: Aster`,
-    })
-    await expect(identity).toContainText("Aster")
-    await expect(identity).toHaveAccessibleDescription(copy.status)
-    await expect(identity.locator('[data-agent-symbol="spark"]')).toBeVisible()
-    await identity.click()
-    await expect(page.getByRole("dialog", { name: copy.details })).toBeVisible()
-    await page.keyboard.press("Escape")
-    await expect(identity).toBeFocused()
-    await expect(
-      page.locator(`button[aria-label^="${copy.closeSession}:"]`).first()
-    ).toBeHidden()
-  } else {
+  {
     const close = page.getByRole("button", {
       name:
         locale === "en"
@@ -86,13 +171,24 @@ export async function exerciseSessionTabs(
   }
   // The workspace uses a named inline-size container. Account for the page's
   // outer padding so the container itself reaches the 64rem desktop layout.
-  if (!mobile) await page.setViewportSize({ width: 1056, height: 1000 })
+  await page.setViewportSize({ width: 1056, height: 1000 })
+  const actions = page.locator("[data-session-actions]")
+  const newSession = actions.getByRole("button", { name: copy.newSession })
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const overflowing = await page
+      .locator("[data-tab-viewport]")
+      .evaluate((el) => el.scrollWidth > el.clientWidth)
+    if (overflowing) break
+    const tabCount = await page.getByRole("tab").count()
+    await newSession.click()
+    await expect(page.getByRole("tab")).toHaveCount(tabCount + 1)
+  }
   expect(
     await page
       .locator("[data-tab-viewport]")
       .evaluate((el) => el.scrollWidth > el.clientWidth)
   ).toBe(true)
-  const actions = page.locator("[data-session-actions]")
+  await page.getByRole("tab", { name: "Market brief" }).click()
   const before = await actions.boundingBox()
   await page.locator("[data-tab-viewport]").evaluate((el) => {
     el.scrollLeft = el.scrollWidth * (document.dir === "rtl" ? -1 : 1)
@@ -140,13 +236,4 @@ export async function exerciseSessionTabs(
       () => document.documentElement.scrollWidth <= innerWidth
     )
   ).toBe(true)
-  if (mobile) {
-    await page.setViewportSize({ width: 1440, height: 1000 })
-    await expect(
-      page.locator(`button[aria-label^="${copy.closeSession}:"]`).first()
-    ).toBeHidden()
-    await expect(
-      page.getByRole("button", { name: `${copy.actions}: Launch review` })
-    ).toBeVisible()
-  }
 }

@@ -46,7 +46,7 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     loadingConversation: "Loading conversation",
     scrollToBottom: "Scroll to bottom",
     welcome: "What would you like to work on?",
-    composerPlaceholder: "Message your Agent…",
+    composerPlaceholder: "Message",
     messageInput: "Message input",
     voiceInput: "Voice input",
     startVoiceInput: "Start voice input",
@@ -84,7 +84,7 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     loadingConversation: "השיחה נטענת",
     scrollToBottom: "גלילה לתחתית",
     welcome: "על מה תרצו לעבוד?",
-    composerPlaceholder: "שליחת הודעה לסוכן…",
+    composerPlaceholder: "הודעה",
     messageInput: "שדה הודעה",
     voiceInput: "קלט קולי",
     startVoiceInput: "התחלת קלט קולי",
@@ -514,51 +514,52 @@ export function AosUiWorkspace({
   })
 
   return (
-    <WorkspaceShell
-      activity={activity}
-      browserSettings={
-        browserSettings ?? {
-          ...activity.browserSettings,
-          coverage: capabilities.activityEvents
-            ? activityCoverage
-            : "unavailable",
+    <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
+      <WorkspaceShell
+        activity={activity}
+        browserSettings={
+          browserSettings ?? {
+            ...activity.browserSettings,
+            coverage: capabilities.activityEvents
+              ? activityCoverage
+              : "unavailable",
+          }
         }
-      }
-      locale={locale}
-      dictionary={dictionary}
-      agents={displayAgents}
-      agentCreatorId={agentCreator?.id}
-      openSessions={shellOpenSessions}
-      olderSessions={sessionView.allSessions}
-      navigationCatalog={navigationCatalog}
-      selectedAgentId={selectedAgentId}
-      activeThreadId={visibleThreadId}
-      environmentLabel={environmentLabel}
-      agentBuilderAvailable={Boolean(agentCreator)}
-      onSelectAgent={selectAgent}
-      onOpenSession={openSession}
-      onCloseSession={closeSession}
-      tabUndo={
-        tabUndo.pending
-          ? { title: tabUndo.pending.title, onUndo: undoCloseSession }
-          : null
-      }
-      onCreateSession={createSession}
-      onOpenAgentBuilder={openAgentBuilder}
-      onManageAgents={() => setManagementOpen(true)}
-      onConversationObscuredChange={setConversationObscured}
-      onActionError={(reason) => setActionError(toError(reason))}
-    >
-      <div className="relative h-full min-h-0">
-        {workspaceError && !onWorkspaceError ? (
-          <WorkspaceError
-            key={workspaceError.message}
-            locale={locale}
-            error={workspaceError}
-            onRetry={retryWorkspace}
-          />
-        ) : null}
-        <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
+        locale={locale}
+        dictionary={dictionary}
+        agents={displayAgents}
+        agentCreatorId={agentCreator?.id}
+        openSessions={shellOpenSessions}
+        olderSessions={sessionView.allSessions}
+        navigationCatalog={navigationCatalog}
+        threadListRuntime={runtime.threads}
+        selectedAgentId={selectedAgentId}
+        activeThreadId={visibleThreadId}
+        environmentLabel={environmentLabel}
+        agentBuilderAvailable={Boolean(agentCreator)}
+        onSelectAgent={selectAgent}
+        onOpenSession={openSession}
+        onCloseSession={closeSession}
+        tabUndo={
+          tabUndo.pending
+            ? { title: tabUndo.pending.title, onUndo: undoCloseSession }
+            : null
+        }
+        onCreateSession={createSession}
+        onOpenAgentBuilder={openAgentBuilder}
+        onManageAgents={() => setManagementOpen(true)}
+        onConversationObscuredChange={setConversationObscured}
+        onActionError={(reason) => setActionError(toError(reason))}
+      >
+        <div className="relative h-full min-h-0">
+          {workspaceError && !onWorkspaceError ? (
+            <WorkspaceError
+              key={workspaceError.message}
+              locale={locale}
+              error={workspaceError}
+              onRetry={retryWorkspace}
+            />
+          ) : null}
           {assistantInstructions ? (
             <AssistantInstructions instructions={assistantInstructions} />
           ) : null}
@@ -600,19 +601,19 @@ export function AosUiWorkspace({
               />
             )}
           </ToolUiLocaleProvider>
-        </AssistantRuntimeProvider>
-      </div>
-      <ManageAgents
-        creatorAvailable={Boolean(agentCreator)}
-        open={managementOpen}
-        onOpenChange={setManagementOpen}
-        workspace={workspace}
-        locale={locale}
-        dictionary={dictionary}
-        onVisibilityChanged={refreshAfterVisibilityChange}
-        onNewAgent={openAgentBuilder}
-        onActionError={(reason) => setActionError(toError(reason))}
-      />
-    </WorkspaceShell>
+        </div>
+        <ManageAgents
+          creatorAvailable={Boolean(agentCreator)}
+          open={managementOpen}
+          onOpenChange={setManagementOpen}
+          workspace={workspace}
+          locale={locale}
+          dictionary={dictionary}
+          onVisibilityChanged={refreshAfterVisibilityChange}
+          onNewAgent={openAgentBuilder}
+          onActionError={(reason) => setActionError(toError(reason))}
+        />
+      </WorkspaceShell>
+    </AssistantRuntimeProvider>
   )
 }

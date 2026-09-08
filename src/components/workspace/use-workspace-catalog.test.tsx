@@ -61,26 +61,36 @@ it("unsubscribes and ignores delayed reads after unmount", async () => {
   expect(result.current.agents).toEqual([])
 })
 
-it("keeps the last catalog when a refresh fails", async () => {
-  let notify!: () => void
-  const agent: AgentSummary = { kind: "ready", id: "native", name: "Native" }
-  const workspace: WorkspaceAdapter = {
-    listAgents: async () => [agent],
-    refreshAgents: async () => {
-      throw new Error("Native unavailable")
-    },
-    getSessionMetadata: async () => [],
-    createSession: async () => ({ threadId: "unused" }),
-    subscribeAgentCatalog: (listener) => {
-      notify = listener
-      return () => {}
-    },
+it.each([undefined, "idle", "active"] as const)(
+  "keeps the catalog but invalidates native activity %s when refresh fails",
+  async (activity) => {
+    let notify!: () => void
+    const agent: AgentSummary = {
+      kind: "ready",
+      id: "native",
+      name: "Native",
+      ...(activity ? { activity } : {}),
+    }
+    const workspace: WorkspaceAdapter = {
+      listAgents: async () => [agent],
+      refreshAgents: async () => {
+        throw new Error("Native unavailable")
+      },
+      getSessionMetadata: async () => [],
+      createSession: async () => ({ threadId: "unused" }),
+      subscribeAgentCatalog: (listener) => {
+        notify = listener
+        return () => {}
+      },
+    }
+    const { result } = renderHook(() => useWorkspaceCatalog(workspace, 0))
+    await waitFor(() => expect(result.current.agents).toEqual([agent]))
+    await act(async () => notify())
+    await waitFor(() =>
+      expect(result.current.agentError?.message).toBe("Native unavailable")
+    )
+    expect(result.current.agents).toEqual([
+      activity ? { ...agent, activity: "unknown" } : agent,
+    ])
   }
-  const { result } = renderHook(() => useWorkspaceCatalog(workspace, 0))
-  await waitFor(() => expect(result.current.agents).toEqual([agent]))
-  await act(async () => notify())
-  await waitFor(() =>
-    expect(result.current.agentError?.message).toBe("Native unavailable")
-  )
-  expect(result.current.agents).toEqual([agent])
-})
+)

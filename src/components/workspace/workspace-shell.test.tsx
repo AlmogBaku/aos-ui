@@ -84,6 +84,34 @@ function renderShell(
     agents,
     openSessions,
     olderSessions,
+    navigationCatalog: new Map([
+      [
+        "agent-aster",
+        {
+          agentId: "agent-aster",
+          openSessions,
+          historySessions: olderSessions,
+          lastSelectedThreadId: "thread-market",
+        },
+      ],
+      [
+        "agent-mica",
+        {
+          agentId: "agent-mica",
+          openSessions: [
+            {
+              threadId: "thread-mica-draft",
+              title: "Mica draft",
+              status: "idle" as const,
+              updatedAt: "2026-09-02T11:00:00.000Z",
+              canClose: true,
+            },
+          ],
+          historySessions: [],
+          lastSelectedThreadId: "thread-mica-draft",
+        },
+      ],
+    ]),
     selectedAgentId: "agent-aster",
     activeThreadId: "thread-market",
     onSelectAgent: vi.fn(),
@@ -99,6 +127,21 @@ function renderShell(
 }
 
 describe("WorkspaceShell", () => {
+  it.each([
+    ["en", en, "Active"],
+    ["he", he, "פעיל לאחרונה"],
+  ] as const)(
+    "labels Agent activity separately from execution in %s",
+    (locale, dictionary, label) => {
+      renderShell({
+        locale,
+        dictionary,
+        agents: [{ ...agents[0], status: "active" }],
+        selectedAgentId: agents[0].id,
+      })
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0)
+    }
+  )
   it.each([true, false])(
     "returns focused Undo to a safe target at exactly 8 seconds (active tab: %s)",
     (hasActiveTab) => {
@@ -261,7 +304,7 @@ describe("WorkspaceShell", () => {
     expect(screen.getAllByText("Demo workspace")).toHaveLength(2)
   })
 
-  it("renders tabs as the tablist's direct required children", () => {
+  it("renders tabs inside the Assistant UI thread item roots", () => {
     renderShell()
 
     const tablist = screen.getByRole("tablist", { name: "Sessions" })
@@ -271,13 +314,7 @@ describe("WorkspaceShell", () => {
 
     expect(activeTab).toHaveAttribute("aria-selected", "true")
     expect(activeTab).toHaveAttribute("tabindex", "0")
-    expect([...tablist.children]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ role: "tab" }),
-        expect.objectContaining({ role: "tab" }),
-        expect.objectContaining({ role: "tab" }),
-      ])
-    )
+    expect(within(tablist).getAllByRole("tab")).toHaveLength(3)
     expect([...tablist.children]).toHaveLength(3)
   })
 
@@ -295,25 +332,18 @@ describe("WorkspaceShell", () => {
   it.each(["en", "he"] as const)(
     "shows the selected Agent identity and status in the %s mobile header",
     async (locale) => {
-      const user = userEvent.setup()
       const dictionary = locale === "he" ? he : en
       renderShell({ locale, dictionary })
-      const identity = screen.getByRole("button", {
-        name: `${dictionary.actions.openAgentDetails}: Aster`,
+      const identity = screen.getByRole("group", {
+        name: new RegExp(
+          `Aster, Market brief, ${dictionary.status.label}: ${dictionary.status.running}`
+        ),
       })
       expect(identity).toHaveTextContent("Aster")
-      expect(identity).toHaveAccessibleDescription(
-        `${dictionary.status.label}: ${dictionary.status.running}`
-      )
+      expect(identity).toHaveTextContent("Market brief")
       expect(
         identity.querySelector('[data-agent-symbol="spark"]')
       ).not.toBeNull()
-      await user.click(identity)
-      expect(
-        screen.getByRole("dialog", { name: dictionary.workspace.agentDetails })
-      ).toBeVisible()
-      await user.keyboard("{Escape}")
-      await waitFor(() => expect(identity).toHaveFocus())
     }
   )
 
@@ -346,7 +376,10 @@ describe("WorkspaceShell", () => {
       screen.getByRole("button", { name: "Session actions: Market brief" })
     )
     await user.click(await screen.findByRole("menuitem", { name: "Close tab" }))
-    expect(onCloseSession).toHaveBeenCalledExactlyOnceWith("thread-market")
+    expect(onCloseSession).toHaveBeenCalledExactlyOnceWith(
+      "thread-market",
+      "agent-aster"
+    )
   })
 
   it("only exposes close controls for manually closable sessions", () => {
@@ -450,7 +483,7 @@ describe("WorkspaceShell", () => {
       })
     )
 
-    expect(onCloseSession).toHaveBeenCalledWith("thread-launch")
+    expect(onCloseSession).toHaveBeenCalledWith("thread-launch", "agent-aster")
     expect(onOpenSession).not.toHaveBeenCalled()
   })
 
@@ -551,16 +584,15 @@ describe("WorkspaceShell", () => {
     ).not.toHaveAttribute("hidden")
   })
 
-  it("keeps the mobile Agent details drawer independent from the desktop preference", async () => {
-    const user = userEvent.setup()
+  it("keeps mobile Agent identity compact when the desktop inspector is collapsed", () => {
     window.localStorage.setItem("aos_ui:workspace:inspector-open", "false")
     renderShell()
 
-    await user.click(
-      screen.getByRole("button", { name: "Open Agent details: Aster" })
-    )
-
-    expect(screen.getByRole("dialog", { name: "Agent details" })).toBeVisible()
+    expect(
+      screen.getByRole("group", {
+        name: /Aster, Market brief, Status: Running/,
+      })
+    ).toBeVisible()
   })
 
   it("includes meaningful status in Agent and history button names", () => {
@@ -664,12 +696,11 @@ describe("WorkspaceShell", () => {
     const trigger = screen.getByRole("button", { name: "Open Agents" })
     await user.click(trigger)
 
-    const drawer = screen.getByRole("dialog", { name: "Agents" })
-    const close = within(drawer).getByRole("button", { name: "Close panel" })
-    expect(close).toHaveFocus()
+    const drawer = screen.getByRole("dialog", { name: "Sessions" })
+    expect(within(drawer).getByRole("heading", { name: "Aster" })).toHaveFocus()
 
     await user.keyboard("{Escape}")
-    expect(screen.queryByRole("dialog", { name: "Agents" })).toBeNull()
+    expect(screen.queryByRole("dialog", { name: "Sessions" })).toBeNull()
     await waitFor(() => expect(trigger).toHaveFocus())
   })
 
@@ -685,18 +716,33 @@ describe("WorkspaceShell", () => {
     expect(inertRegion).toHaveAttribute("aria-hidden", "true")
   })
 
-  it("closes the Agents drawer after selection and restores focus to its trigger", async () => {
+  it("browses an Agent without switching, then closes after choosing its Session", async () => {
     const user = userEvent.setup()
     const onSelectAgent = vi.fn()
-    renderShell({ onSelectAgent })
+    const onOpenSession = vi.fn()
+    renderShell({ onSelectAgent, onOpenSession })
 
     const trigger = screen.getByRole("button", { name: "Open Agents" })
     await user.click(trigger)
-    const drawer = screen.getByRole("dialog", { name: "Agents" })
+    let drawer = screen.getByRole("dialog", { name: "Sessions" })
+    await user.click(
+      within(drawer).getByRole("button", { name: "Back to Agents" })
+    )
+    drawer = screen.getByRole("dialog", { name: "Agents" })
     await user.click(within(drawer).getByRole("button", { name: "Mica" }))
 
-    expect(onSelectAgent).toHaveBeenCalledWith("agent-mica")
-    expect(screen.queryByRole("dialog", { name: "Agents" })).toBeNull()
+    expect(onSelectAgent).not.toHaveBeenCalled()
+    drawer = screen.getByRole("dialog", { name: "Sessions" })
+    expect(within(drawer).getByRole("heading", { name: "Mica" })).toBeVisible()
+    await user.click(
+      within(drawer).getByRole("button", {
+        name: /Open Session: Mica draft/i,
+      })
+    )
+
+    expect(onSelectAgent).not.toHaveBeenCalled()
+    expect(onOpenSession).toHaveBeenCalledWith("thread-mica-draft")
+    expect(screen.queryByRole("dialog", { name: "Sessions" })).toBeNull()
     await waitFor(() => expect(trigger).toHaveFocus())
   })
 

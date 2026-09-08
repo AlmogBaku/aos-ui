@@ -1,6 +1,18 @@
 "use client"
 
-import { useEffect, useMemo, useReducer, useState, type ReactNode } from "react"
+import {
+  ThreadListPrimitive,
+  type ThreadListRuntime,
+} from "@assistant-ui/react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import {
   ArrowLeft,
   Bot,
@@ -17,6 +29,11 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { WorkspaceAgent, WorkspaceSession } from "./workspace-shell"
 import styles from "./mobile-navigator.module.css"
+import {
+  SessionThreadListItem,
+  SessionThreadListTitle,
+  SessionThreadListTrigger,
+} from "./session-thread-list-item"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -89,6 +106,7 @@ export type MobileNavigatorCopy = {
   selected: string
   lastSelected: string
   status: {
+    active: string
     idle: string
     running: string
     attention: string
@@ -106,7 +124,9 @@ export type MobileNavigatorProps = {
   selectedAgentId: string | null
   activeThreadId: string | null
   sessionsByAgentId: readonly MobileAgentSessionCatalog[]
+  threadListRuntime?: ThreadListRuntime
   agentActivity?: Readonly<Record<string, MobileNavigationActivity | undefined>>
+  otherAgentsActivity?: MobileNavigationActivity
   sessionActivity?: Readonly<
     Record<string, MobileNavigationActivity | undefined>
   >
@@ -123,6 +143,7 @@ export type MobileNavigatorProps = {
   onAgentDetails?: (agentId: string) => void
   renderAgentIcon?: (agent: WorkspaceAgent) => ReactNode
   className?: string
+  onActionError?: (error: unknown) => void
 }
 
 type SessionSnapshot = {
@@ -268,6 +289,7 @@ function statusLabel(
   status: WorkspaceAgent["status"] | WorkspaceSession["status"],
   copy: MobileNavigatorCopy
 ) {
+  if (status === "active") return copy.status.active
   if (status === "waiting-for-input") return copy.status.waitingForInput
   if (status === "failed") return copy.status.failed
   if (status === "running") return copy.status.running
@@ -300,7 +322,9 @@ export function MobileNavigator({
   selectedAgentId,
   activeThreadId,
   sessionsByAgentId,
+  threadListRuntime,
   agentActivity = {},
+  otherAgentsActivity,
   sessionActivity = {},
   locale,
   copy,
@@ -315,7 +339,9 @@ export function MobileNavigator({
   onAgentDetails,
   renderAgentIcon,
   className,
+  onActionError,
 }: MobileNavigatorProps) {
+  const navigatorRef = useRef<HTMLDivElement>(null)
   const [agentQuery, setAgentQuery] = useState("")
   const [sessionQueries, setSessionQueries] = useState<Record<string, string>>(
     {}
@@ -340,6 +366,13 @@ export function MobileNavigator({
     }
   }, [browsedAgentUnavailable, onStateChange])
 
+  useLayoutEffect(() => {
+    if (state.view === "closed") return
+    navigatorRef.current
+      ?.querySelector<HTMLElement>("[data-mobile-navigator-heading]")
+      ?.focus()
+  }, [state])
+
   const normalizedAgentQuery = normalizeSearch(agentQuery, locale)
   const visibleAgents = useMemo(
     () =>
@@ -361,6 +394,7 @@ export function MobileNavigator({
 
   return (
     <div
+      ref={navigatorRef}
       className={cn(styles.navigator, className)}
       dir={direction}
       data-mobile-navigator
@@ -474,11 +508,13 @@ export function MobileNavigator({
       ) : (
         <SessionsView
           agent={browsedAgent!}
+          threadListRuntime={threadListRuntime}
           activeThreadId={activeThreadId}
           lastSelectedThreadId={catalog!.lastSelectedThreadId}
           openSessions={stableSections.openSessions}
           historySessions={stableSections.historySessions}
           sessionActivity={sessionActivity}
+          otherAgentsActivity={otherAgentsActivity}
           query={sessionQueries[state.agentId] ?? ""}
           locale={locale}
           copy={copy}
@@ -505,12 +541,16 @@ export function MobileNavigator({
           }}
           onRemoveOpenSession={
             onRemoveOpenSession
-              ? (threadId) => onRemoveOpenSession(state.agentId, threadId)
+              ? (threadId) => {
+                  onStateChange({ type: "DISMISS" })
+                  onRemoveOpenSession(state.agentId, threadId)
+                }
               : undefined
           }
           onAgentDetails={
             onAgentDetails ? () => onAgentDetails(state.agentId) : undefined
           }
+          onActionError={onActionError}
         />
       )}
     </div>
@@ -519,6 +559,7 @@ export function MobileNavigator({
 
 type SessionsViewProps = {
   agent: WorkspaceAgent
+  threadListRuntime?: ThreadListRuntime
   activeThreadId: string | null
   lastSelectedThreadId: string | null
   openSessions: readonly WorkspaceSession[]
@@ -526,6 +567,7 @@ type SessionsViewProps = {
   sessionActivity: Readonly<
     Record<string, MobileNavigationActivity | undefined>
   >
+  otherAgentsActivity?: MobileNavigationActivity
   query: string
   locale: "en" | "he"
   copy: MobileNavigatorCopy
@@ -539,15 +581,18 @@ type SessionsViewProps = {
   onCreateSession: () => void
   onRemoveOpenSession?: (threadId: string) => void
   onAgentDetails?: () => void
+  onActionError?: (error: unknown) => void
 }
 
 function SessionsView({
   agent,
+  threadListRuntime,
   activeThreadId,
   lastSelectedThreadId,
   openSessions,
   historySessions,
   sessionActivity,
+  otherAgentsActivity,
   query,
   locale,
   copy,
@@ -561,6 +606,7 @@ function SessionsView({
   onCreateSession,
   onRemoveOpenSession,
   onAgentDetails,
+  onActionError,
 }: SessionsViewProps) {
   const normalizedQuery = normalizeSearch(query, locale)
   const filter = (session: WorkspaceSession) =>
@@ -578,11 +624,15 @@ function SessionsView({
           variant="ghost"
           className={styles.backButton}
           type="button"
-          aria-label={copy.backToAgents}
+          aria-label={[
+            copy.backToAgents,
+            ...activityLabel(otherAgentsActivity, copy),
+          ].join(", ")}
           onClick={onBack}
         >
           <ArrowLeft aria-hidden="true" />
           <span>{copy.agents}</span>
+          <ActivityMarker activity={otherAgentsActivity} copy={copy} />
         </Button>
         <Button
           variant="ghost"
@@ -634,7 +684,7 @@ function SessionsView({
         />
       </label>
 
-      <div className={styles.sessionScroller}>
+      <ThreadListPrimitive.Root className={styles.sessionScroller}>
         {visibleOpen.length ? (
           <SessionSection
             heading={copy.openSessions}
@@ -648,6 +698,8 @@ function SessionsView({
             onActionThreadChange={onActionThreadChange}
             onOpenSession={onOpenSession}
             onRemoveOpenSession={onRemoveOpenSession}
+            threadListRuntime={threadListRuntime}
+            onActionError={onActionError}
           />
         ) : null}
         {visibleHistory.length ? (
@@ -662,6 +714,8 @@ function SessionsView({
             actionThreadId={actionThreadId}
             onActionThreadChange={onActionThreadChange}
             onOpenSession={onOpenSession}
+            threadListRuntime={threadListRuntime}
+            onActionError={onActionError}
           />
         ) : null}
         {!hasResults ? (
@@ -674,7 +728,7 @@ function SessionsView({
             ) : null}
           </div>
         ) : null}
-      </div>
+      </ThreadListPrimitive.Root>
     </>
   )
 }
@@ -693,6 +747,8 @@ type SessionSectionProps = {
   onActionThreadChange: (threadId: string | null) => void
   onOpenSession: (threadId: string) => void
   onRemoveOpenSession?: (threadId: string) => void
+  threadListRuntime?: ThreadListRuntime
+  onActionError?: (error: unknown) => void
 }
 
 function SessionSection({
@@ -707,6 +763,8 @@ function SessionSection({
   onActionThreadChange,
   onOpenSession,
   onRemoveOpenSession,
+  threadListRuntime,
+  onActionError,
 }: SessionSectionProps) {
   const dateFormatter = new Intl.DateTimeFormat(locale, {
     month: "short",
@@ -737,12 +795,16 @@ function SessionSection({
             .join(", ")
 
           return (
-            <div
+            <SessionThreadListItem
+              runtime={threadListRuntime}
+              threadId={session.threadId}
+              onSwitch={() => onOpenSession(session.threadId)}
+              onActionError={onActionError}
               className={styles.sessionRow}
               data-testid={`mobile-session-${session.threadId}`}
               key={session.threadId}
             >
-              <button
+              <SessionThreadListTrigger
                 type="button"
                 className={styles.sessionNavigation}
                 aria-label={label}
@@ -750,12 +812,13 @@ function SessionSection({
                 data-needs-attention={
                   activity?.needsAttention ? "true" : undefined
                 }
-                onClick={() => onOpenSession(session.threadId)}
               >
                 <span className={styles.rowText}>
                   <span className={styles.sessionTitleLine}>
                     <StatusDot status={session.status} copy={copy} />
-                    <bdi className={styles.rowTitle}>{session.title}</bdi>
+                    <bdi className={styles.rowTitle}>
+                      <SessionThreadListTitle fallback={session.title} />
+                    </bdi>
                     <ActivityMarker activity={activity} copy={copy} />
                   </span>
                   {Number.isFinite(parsedDate.getTime()) ? (
@@ -764,7 +827,7 @@ function SessionSection({
                     </time>
                   ) : null}
                 </span>
-              </button>
+              </SessionThreadListTrigger>
               {onRemoveOpenSession ? (
                 <div className={styles.actionSlot}>
                   <Button
@@ -800,7 +863,7 @@ function SessionSection({
                   ) : null}
                 </div>
               ) : null}
-            </div>
+            </SessionThreadListItem>
           )
         })}
       </div>

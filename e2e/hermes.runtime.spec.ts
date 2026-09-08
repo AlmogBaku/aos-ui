@@ -44,6 +44,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
   page,
 }) => {
   let submissions = 0
+  let activityAt = 0
   const rpcMethods: string[] = []
   const plan = presentationExamples.present_plan
 
@@ -66,9 +67,15 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
                   title: "Native history",
                   last_active: 1_788_000_000,
                 },
+                {
+                  id: "older-history",
+                  profile: "research",
+                  title: "Unobserved older history",
+                  last_active: 1_700_000_000,
+                },
               ]
             : [],
-        total: profile === "research" ? 1 : 0,
+        total: profile === "research" ? 2 : 0,
         limit: 100,
         offset: 0,
       },
@@ -130,6 +137,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
               name: "research",
               display_name: "Research",
               description: "Native profile",
+              canonical_session: { id: "history", last_active: activityAt },
               ui_meta: { "hermes-bots": { hidden: false } },
             },
           ],
@@ -141,6 +149,12 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
           running: false,
           status: "idle",
           messages: [],
+        }
+      if (request.method === "session.active_list")
+        return {
+          sessions: [
+            { id: "live-history", session_key: "history", status: "idle" },
+          ],
         }
       if (request.method === "prompt.submit") {
         submissions++
@@ -260,6 +274,22 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
   await expect(
     page.getByText("Persisted Hermes history.", { exact: true })
   ).toBeVisible()
+  await expect(page.getByText("Idle", { exact: true }).first()).toBeVisible()
+  await expect(
+    page.getByText("Status unavailable", { exact: true })
+  ).toHaveCount(0)
+  expect(submissions).toBe(0)
+  const resumeCount = rpcMethods.filter(
+    (method) => method === "session.resume"
+  ).length
+  activityAt = Date.now() / 1000
+  await expect(page.getByText("Active", { exact: true }).first()).toBeVisible()
+  activityAt = 0
+  await expect(page.getByText("Active", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Idle", { exact: true }).first()).toBeVisible()
+  expect(
+    rpcMethods.filter((method) => method === "session.resume")
+  ).toHaveLength(resumeCount)
   expect(submissions).toBe(0)
   await page
     .getByRole("textbox", { name: "Message input" })

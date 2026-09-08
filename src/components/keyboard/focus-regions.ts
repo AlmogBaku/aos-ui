@@ -1,6 +1,22 @@
 const regionSelector =
   "[data-keyboard-region], [data-keyboard-transcript], [data-keyboard-composer]"
 
+function hasHiddenLayoutAncestor(element: HTMLElement) {
+  let candidate: HTMLElement | null = element.parentElement
+  while (candidate) {
+    const style = window.getComputedStyle(candidate)
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse"
+    ) {
+      return true
+    }
+    candidate = candidate.parentElement
+  }
+  return false
+}
+
 function isExcluded(element: HTMLElement) {
   const style =
     typeof window === "undefined" ? null : window.getComputedStyle(element)
@@ -19,6 +35,7 @@ function isExcluded(element: HTMLElement) {
     style?.display === "none" ||
     style?.visibility === "hidden" ||
     style?.visibility === "collapse" ||
+    (typeof window !== "undefined" && hasHiddenLayoutAncestor(element)) ||
     (rects.length > 0 && (rect.width <= 0 || rect.height <= 0))
   )
 }
@@ -43,6 +60,9 @@ export function annotateKeyboardRegions(root: ParentNode) {
   )
   transcript?.setAttribute("data-keyboard-region", "transcript")
   transcript?.setAttribute("data-keyboard-transcript", "true")
+  if (transcript && !transcript.hasAttribute("tabindex")) {
+    transcript.tabIndex = -1
+  }
   const composer = root.querySelector<HTMLElement>(
     '[data-slot="aui_composer-shell"]'
   )
