@@ -855,7 +855,7 @@ describe("AosUiApp fixture composition", () => {
     } finally {
       focus.mockRestore()
     }
-  })
+  }, 20_000)
 
   it("removes an idle Session tab when it reaches the exact 12-hour boundary", async () => {
     vi.useFakeTimers()

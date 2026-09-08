@@ -28,7 +28,7 @@ export default defineConfig({
           AOS_UI_E2E_CACHE_KEY: "hermes-3104",
           AOS_UI_HERMES_BASE_URL: "/hermes",
         },
-        url: `http://127.0.0.1:${port}`,
+        url: `http://127.0.0.1:${port}/__aos_e2e_ready`,
         reuseExistingServer: false,
         timeout: 120_000,
       },

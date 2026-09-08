@@ -140,4 +140,36 @@ describe("container orchestration", () => {
     expect(nginx).toContain("proxy_buffering off")
     expect(nginx).toContain("max-age=31536000, immutable")
   })
+
+  it("raises the upload limit only for exact native Hermes transcription", () => {
+    const nginx = readFileSync(
+      resolve(root, "deploy/nginx/default.conf.template"),
+      "utf8"
+    )
+    const transcription = nginx.match(
+      /location = \/hermes\/api\/audio\/transcribe \{([\s\S]*?)^ {2}\}/m
+    )?.[1]
+
+    expect(transcription).toBeDefined()
+    expect(transcription).toContain("client_max_body_size 8m;")
+    expect(nginx.match(/client_max_body_size/g)).toHaveLength(1)
+    expect(transcription).toContain("rewrite ^/hermes/?(.*)$ /$1 break;")
+    expect(transcription).toContain("proxy_pass $hermes_upstream;")
+    expect(transcription).toContain("proxy_http_version 1.1;")
+    expect(transcription).toContain("proxy_buffering off;")
+    expect(transcription).toContain("proxy_request_buffering off;")
+    expect(transcription).toContain("proxy_cache off;")
+    expect(transcription).toContain("proxy_read_timeout 1h;")
+    expect(transcription).toContain("proxy_send_timeout 1h;")
+    for (const header of [
+      "Upgrade $http_upgrade",
+      "Connection $connection_upgrade",
+      "Host $http_host",
+      "X-Forwarded-Prefix /hermes",
+      "X-Forwarded-For $proxy_add_x_forwarded_for",
+      "X-Forwarded-Proto $scheme",
+    ]) {
+      expect(transcription).toContain(`proxy_set_header ${header};`)
+    }
+  })
 })

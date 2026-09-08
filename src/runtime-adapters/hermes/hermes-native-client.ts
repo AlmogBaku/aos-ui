@@ -125,12 +125,15 @@ export class HermesNativeClient {
   readonly #catalogListeners = new Set<() => void>()
   readonly #errors = new Set<(error: Error) => void>()
   readonly #recoveryListeners = new Set<() => void>()
+  readonly #connectionListeners = new Set<() => void>()
   readonly #pending = new Map<string, RpcPending>()
   readonly #liveToThread = new Map<string, string>()
   readonly #watermarks = new Map<string, number>()
   readonly #profileUiMetadata = new Map<string, ProfileUiMetadata>()
   #socket?: HermesWebSocket
   #socketGeneration = 0
+  #authRejected = false
+  #authRevision = 0
   #nextRequestId = 0
   #started = false
   #startPromise?: Promise<void>
@@ -159,6 +162,29 @@ export class HermesNativeClient {
   }
 
   getSnapshot = () => this.#snapshot
+
+  get isConnected() {
+    return (
+      !this.#stopped &&
+      !this.#authRejected &&
+      this.#socket?.readyState === WS_OPEN
+    )
+  }
+
+  subscribeConnection = (listener: () => void) => {
+    this.#connectionListeners.add(listener)
+    return () => this.#connectionListeners.delete(listener)
+  }
+
+  #connectionChanged() {
+    for (const listener of this.#connectionListeners) listener()
+  }
+
+  #authenticationRejected() {
+    this.#authRejected = true
+    this.#authRevision += 1
+    this.#connectionChanged()
+  }
 
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener)
@@ -247,6 +273,7 @@ export class HermesNativeClient {
       document.removeEventListener("visibilitychange", this.#onVisibility)
     this.#socket?.close()
     this.#socket = undefined
+    this.#connectionChanged()
     this.#rejectPending(new Error("Hermes connection closed"))
   }
 
@@ -295,13 +322,20 @@ export class HermesNativeClient {
       socket.addEventListener("open", onOpen)
       socket.addEventListener("error", onError)
     })
+    this.#authRejected = false
+    this.#connectionChanged()
     socket.addEventListener("message", (event) => {
       if (generation !== this.#socketGeneration) return
       this.#onMessage((event as MessageEvent).data)
     })
+    socket.addEventListener("error", () => {
+      if (generation === this.#socketGeneration && !this.#stopped)
+        this.#connectionChanged()
+    })
     socket.addEventListener("close", () => {
       if (generation !== this.#socketGeneration || this.#stopped) return
       this.#socket = undefined
+      this.#connectionChanged()
       this.#rejectPending(new Error("Hermes WebSocket disconnected"))
       this.#invalidateActivity()
       this.#scheduleReconnect()
@@ -354,10 +388,15 @@ export class HermesNativeClient {
 
   async refreshCatalog() {
     if (this.#catalogPromise) return this.#catalogPromise
+    const authRevision = this.#authRevision
     const request = this.#refreshCatalog()
     this.#catalogPromise = request
     try {
       await request
+      if (this.#authRejected && authRevision === this.#authRevision) {
+        this.#authRejected = false
+        this.#connectionChanged()
+      }
     } catch (reason) {
       this.#invalidateActivity()
       throw reason
@@ -583,8 +622,11 @@ export class HermesNativeClient {
         absoluteUrl(this.#baseUrl, `/api/sessions?${query}`),
         { credentials: "include", headers: { accept: "application/json" } }
       )
-      if (!response.ok)
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403)
+          this.#authenticationRejected()
         throw new Error(`Hermes Session catalog failed (${response.status})`)
+      }
       const payload: unknown = await response.json()
       if (!isRecord(payload) || !Array.isArray(payload.sessions))
         throw new Error("Hermes returned invalid Session metadata")
@@ -680,8 +722,11 @@ export class HermesNativeClient {
           ),
           { credentials: "include", headers: { accept: "application/json" } }
         )
-        if (!response.ok)
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403)
+            this.#authenticationRejected()
           throw new Error(`Hermes history failed (${response.status})`)
+        }
         const payload: unknown = await response.json()
         if (!isRecord(payload) || !Array.isArray(payload.messages))
           throw new Error("Hermes returned invalid Session history")
@@ -692,8 +737,9 @@ export class HermesNativeClient {
           : payload.messages.length
         if (returned < limit) break
       }
+      const projected = projectHermesHistory(messages)
       this.#patchSession(threadId, {
-        messages: projectHermesHistory(messages),
+        messages: projected,
         loading: false,
       })
     } catch (reason) {
@@ -756,7 +802,10 @@ export class HermesNativeClient {
       approval: undefined,
     })
     try {
-      await this.request("prompt.submit", { session_id: liveSessionId, text })
+      await this.request("prompt.submit", {
+        session_id: liveSessionId,
+        text,
+      })
     } catch (reason) {
       this.#patchSession(threadId, { running: false, status: "unknown" })
       throw reason
@@ -827,9 +876,14 @@ export class HermesNativeClient {
   }
 
   #handleEvent(event: GatewayEvent) {
-    if (event.type === "gateway.ready" && isRecord(event.payload)) {
-      const epoch = stringValue(event.payload.replay_epoch)
-      if (epoch && this.#epoch && epoch !== this.#epoch) {
+    if (event.type === "gateway.ready") {
+      const epoch = isRecord(event.payload)
+        ? stringValue(event.payload.replay_epoch)
+        : undefined
+      const previousEpoch = this.#epoch
+      this.#epoch = epoch
+      if (epoch !== previousEpoch) this.#connectionChanged()
+      if (previousEpoch && epoch !== previousEpoch) {
         this.#watermarks.clear()
         const active = this.#snapshot.sessions.filter(
           ({ liveSessionId }) => liveSessionId
@@ -839,7 +893,6 @@ export class HermesNativeClient {
             this.#report(reason)
           )
       }
-      if (epoch) this.#epoch = epoch
     }
     const liveSessionId = event.session_id
     if (!liveSessionId) return

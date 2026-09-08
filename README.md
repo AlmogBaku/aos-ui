@@ -53,6 +53,21 @@ The live native API baseline is checkout `b29b352c9eeec261fc17b09bd5402b5a8a0c4a
 
 Automated Hermes Agent creation is currently blocked: upstream profile creation is not atomic against concurrent creators. The interview remains available, but the writer fails without native writes. See the integration guide for the exact upstream prerequisite.
 
+Hermes voice v1 adds native transcription and in-message read-aloud. Tap the
+microphone to record; hold for 450 ms (or use Arrow Down / Shift+F10) to choose
+Transcription or explicit Voice turn. Native STT and TTS are checked independently
+using non-secret profile configuration metadata. No browser speech fallback or
+additional AOS server is used. The recording bars reflect the active microphone;
+capture continues across tab/window switches until an explicit action or safety
+limit. PTT auto-read coordination uses Assistant UI thread/run/queue state and
+does not depend on Hermes completion events; Hermes provides the native speech
+transport only. OpenCode, generic AG-UI and fixtures omit voice in v1.
+
+Microphone capture requires HTTPS or localhost, browser permission, and a
+supported `MediaRecorder`. See [Chat voice setup and use](docs/chat-voice.md)
+for configuration, limits, privacy, troubleshooting and the pending live
+acceptance gate. Automated fixtures do not certify live speech support.
+
 ### Generic AG-UI
 
 Set `AOS_UI_RUNTIME_MODE=ag-ui`, `AOS_UI_AG_UI_URL`, and `AOS_UI_AG_UI_WORKSPACE_URL`. The workspace host implements `GET /agents`, `GET /sessions`, `POST /sessions`, and `GET /sessions/:threadId`. Capabilities absent from the integration remain visibly unavailable.

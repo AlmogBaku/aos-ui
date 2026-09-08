@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&display=swap" rel="stylesheet" />
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #242429; color: #f1f0f3; display: grid; place-items: center; padding: 40px 24px; }
+      main { width: min(860px, 100%); }
+      h1 { margin: 0 0 8px; font-size: 25px; font-weight: 600; }
+      .subtitle { margin: 0 0 28px; color: #aaa8b0; }
+      .options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+      .option { appearance: none; width: 100%; border: 1px solid #47464e; border-radius: 16px; background: #2c2b31; color: inherit; padding: 0; text-align: start; cursor: pointer; overflow: hidden; transition: border-color .15s, background .15s; }
+      .option:hover { border-color: #77727f; background: #302f36; }
+      .option.selected { border-color: #9d7cf5; box-shadow: 0 0 0 2px rgb(157 124 245 / .18); }
+      .preview { min-height: 220px; display: grid; place-items: center; padding: 28px; background: #202025; }
+      .shell { width: 100%; height: 136px; border: 1px solid #3e3d45; border-radius: 14px; background: #28272d; padding: 22px; }
+      .brand { display: flex; align-items: center; gap: 11px; }
+      .mark { width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #241f31; background: linear-gradient(135deg, #a78bfa, #5eead4); }
+      .wordmark { font-size: 20px; font-weight: 400; letter-spacing: .12em; line-height: 1; }
+      .current { font-family: "Arial Narrow", Arial, sans-serif; }
+      .michroma { font-family: Michroma, sans-serif; font-size: 17px; }
+      .body { margin-top: 24px; height: 9px; width: 70%; border-radius: 99px; background: #393840; box-shadow: 0 18px #34333a, 0 36px #34333a; }
+      .copy { padding: 18px 20px 20px; }
+      .copy strong { display: block; font-size: 15px; margin-bottom: 5px; }
+      .copy span { color: #aaa8b0; font-size: 13px; line-height: 1.45; }
+      .note { margin: 20px 0 0; color: #aaa8b0; font-size: 13px; }
+      @media (max-width: 650px) { .options { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Which wordmark typeface should we use?</h1>
+      <p class="subtitle">Both previews use the current 0.12em letter spacing.</p>
+      <div class="options">
+        <button class="option" data-choice="keep-current" onclick="select(this)">
+          <div class="preview">
+            <div class="shell"><div class="brand"><div class="mark">A</div><span class="wordmark current">AOS</span></div><div class="body"></div></div>
+          </div>
+          <div class="copy"><strong>A · Current font</strong><span>Arial Narrow, falling back to Arial. Compact and understated.</span></div>
+        </button>
+        <button class="option" data-choice="switch-michroma" onclick="select(this)">
+          <div class="preview">
+            <div class="shell"><div class="brand"><div class="mark">A</div><span class="wordmark michroma">AOS</span></div><div class="body"></div></div>
+          </div>
+          <div class="copy"><strong>B · Michroma</strong><span>More geometric and distinctive, with a wider footprint.</span></div>
+        </button>
+      </div>
+      <p class="note">Click one option, then reply in Codex with your preference.</p>
+    </main>
+    <script>
+      function select(element) {
+        document.querySelectorAll('.option').forEach((item) => item.classList.remove('selected'));
+        element.classList.add('selected');
+        fetch('/__event', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ type: 'click', choice: element.dataset.choice, text: element.innerText.trim() }) });
+      }
+    </script>
+  </body>
+</html>
