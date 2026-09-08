@@ -68,6 +68,7 @@ const copy: MobileNavigatorCopy = {
   removeOpenSession: "Remove from open sessions",
   selected: "Selected",
   lastSelected: "Last selected",
+  statusLabel: "Status",
   status: {
     active: "Active",
     idle: "Idle",
@@ -233,11 +234,12 @@ describe("MobileNavigator", () => {
     props.state = { view: "sessions", agentId: "agent-a" }
     render(<MobileNavigator {...props} />)
 
-    const row = screen.getByTestId("mobile-session-a-2")
-    const openButton = within(row).getByRole("button", {
+    const row = document.querySelector<HTMLElement>('[data-session-id="a-2"]')
+    expect(row).not.toBeNull()
+    const openButton = within(row!).getByRole("button", {
       name: /Open Session: Secondary investigation/i,
     })
-    const actionsButton = within(row).getByRole("button", {
+    const actionsButton = within(row!).getByRole("button", {
       name: /Session actions: Secondary investigation/i,
     })
     expect(openButton.contains(actionsButton)).toBe(false)

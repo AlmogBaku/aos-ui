@@ -61,6 +61,8 @@ import {
   type MobileNavigatorCopy,
 } from "./mobile-navigator"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
+import { AgentSessionHistory } from "./agent-session-history"
+import type { NavigationActivitySummary } from "./navigation-activity"
 import {
   SessionThreadListItem,
   SessionThreadListTitle,
@@ -270,6 +272,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     removeOpenSession: dictionary.mobileNavigation.removeOpenSession,
     selected: dictionary.mobileNavigation.selected,
     lastSelected: dictionary.mobileNavigation.lastSelected,
+    statusLabel: dictionary.status.label,
     status: {
       active: dictionary.status.active,
       idle: dictionary.status.idle,
@@ -282,19 +285,6 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     unread: (count) => `${count} ${dictionary.activity.unread}`,
     needsAttention: dictionary.activity.needsAttention,
   }
-}
-
-function sessionStatusLabel(
-  status: WorkspaceSessionStatus,
-  dictionary: Dictionary
-) {
-  if (status === "running") return dictionary.status.running
-  if (status === "waiting-for-input") {
-    return dictionary.status.waitingForInput
-  }
-  if (status === "failed") return dictionary.status.failed
-  if (status === "unknown") return dictionary.status.unknown
-  return dictionary.status.idle
 }
 
 export function AgentGlyph({
@@ -768,28 +758,30 @@ type InspectorPanelProps = Pick<
   WorkspaceShellProps,
   | "locale"
   | "dictionary"
-  | "olderSessions"
   | "activeThreadId"
   | "onOpenSession"
   | "onActionError"
   | "threadListRuntime"
 > & {
   agent: WorkspaceAgent | null
-  activity?: ActivityView
+  navigation: AgentSessionNavigation | null
+  sessionActivity: Readonly<
+    Record<string, NavigationActivitySummary | undefined>
+  >
 }
 
 function InspectorPanel({
   locale,
   dictionary,
-  olderSessions,
   activeThreadId,
   onOpenSession,
   onActionError,
   threadListRuntime,
   agent,
-  activity,
+  navigation,
+  sessionActivity,
 }: InspectorPanelProps) {
-  const recentSessionsHeadingId = useId()
+  const [query, setQuery] = useState("")
 
   if (!agent) {
     return (
@@ -799,12 +791,6 @@ function InspectorPanel({
     )
   }
 
-  const dateFormatter = new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
   const statusLabel = agentStatusLabel(agent.status, dictionary)
 
   return (
@@ -830,79 +816,22 @@ function InspectorPanel({
         <bdi className={styles.inspectorDescription}>{agent.description}</bdi>
       ) : null}
 
-      <section
-        className={styles.recentSessions}
-        aria-labelledby={recentSessionsHeadingId}
-      >
-        <h2 className={styles.recentHeading} id={recentSessionsHeadingId}>
-          {dictionary.workspace.recentSessions}
-        </h2>
-        {olderSessions.length > 0 ? (
-          <ThreadListPrimitive.Root className={styles.sessionList}>
-            {olderSessions.map((session) => {
-              const indicator = navigationActivity(activity, dictionary, {
-                threadId: session.threadId,
-              })
-              const parsedDate = new Date(session.updatedAt)
-              const isValidDate = Number.isFinite(parsedDate.getTime())
-              const statusLabel = sessionStatusLabel(session.status, dictionary)
-              const accessibleName = [
-                `${dictionary.actions.openSession}: ${session.title}`,
-                session.status !== "idle"
-                  ? `${dictionary.status.label}: ${statusLabel}`
-                  : null,
-                indicator.label,
-              ]
-                .filter(Boolean)
-                .join(", ")
-
-              return (
-                <SessionThreadListItem
-                  runtime={threadListRuntime}
-                  threadId={session.threadId}
-                  onSwitch={() => onOpenSession(session.threadId)}
-                  onActionError={onActionError}
-                  key={session.threadId}
-                >
-                  <SessionThreadListTrigger
-                    className={styles.sessionButton}
-                    type="button"
-                    aria-current={
-                      session.threadId === activeThreadId ? "true" : undefined
-                    }
-                    aria-label={accessibleName}
-                  >
-                    <span className={styles.sessionTitle}>
-                      {session.status !== "idle" ? (
-                        <span
-                          className={styles.statusDot}
-                          data-status={session.status}
-                          title={statusLabel}
-                          aria-hidden="true"
-                        />
-                      ) : null}
-                      <bdi>
-                        <SessionThreadListTitle fallback={session.title} />
-                      </bdi>
-                      {indicator.marker}
-                    </span>
-                    {isValidDate ? (
-                      <time
-                        className={styles.sessionTime}
-                        dateTime={session.updatedAt}
-                      >
-                        {dateFormatter.format(parsedDate)}
-                      </time>
-                    ) : null}
-                  </SessionThreadListTrigger>
-                </SessionThreadListItem>
-              )
-            })}
-          </ThreadListPrimitive.Root>
-        ) : (
-          <p className={styles.emptyText}>{dictionary.empty.noSessions}</p>
-        )}
-      </section>
+      {navigation ? (
+        <div className={styles.recentSessions}>
+          <AgentSessionHistory
+            navigation={navigation}
+            activeThreadId={activeThreadId}
+            sessionActivity={sessionActivity}
+            locale={locale}
+            copy={mobileNavigatorCopy(dictionary)}
+            query={query}
+            onQueryChange={setQuery}
+            onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+            threadListRuntime={threadListRuntime}
+            onActionError={onActionError}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1108,6 +1037,26 @@ export function WorkspaceShell({
   )
   const selectedAgent =
     agents.find((agent) => agent.id === selectedAgentId) ?? null
+  const selectedNavigation = useMemo<AgentSessionNavigation | null>(() => {
+    if (!selectedAgentId) return null
+    const catalog = navigationCatalog.get(selectedAgentId)
+    if (catalog) return catalog
+    const openIds = new Set(openSessions.map((session) => session.threadId))
+    return {
+      agentId: selectedAgentId,
+      openSessions,
+      historySessions: olderSessions.filter(
+        (session) => !openIds.has(session.threadId)
+      ),
+      lastSelectedThreadId: activeThreadId,
+    }
+  }, [
+    activeThreadId,
+    navigationCatalog,
+    olderSessions,
+    openSessions,
+    selectedAgentId,
+  ])
   const rosterAgents = useMemo(
     () =>
       agents.filter(
@@ -1184,10 +1133,22 @@ export function WorkspaceShell({
     onActionError,
   }
   const inspectorPanelProps: InspectorPanelProps = {
-    activity,
     locale,
     dictionary,
-    olderSessions,
+    navigation: selectedNavigation,
+    sessionActivity: Object.fromEntries(
+      [
+        ...(selectedNavigation?.openSessions ?? []),
+        ...(selectedNavigation?.historySessions ?? []),
+      ].map((session) => [
+        session.threadId,
+        getSessionNavigationActivity(
+          activity?.items ?? [],
+          selectedNavigation?.agentId ?? "",
+          session.threadId
+        ),
+      ])
+    ),
     threadListRuntime,
     activeThreadId,
     onOpenSession,
@@ -1337,7 +1298,10 @@ export function WorkspaceShell({
           inert={modalDrawerOpen ? true : undefined}
           hidden={!desktopInspectorOpen}
         >
-          <InspectorPanel {...inspectorPanelProps} />
+          <InspectorPanel
+            key={selectedAgentId ?? "no-agent"}
+            {...inspectorPanelProps}
+          />
         </aside>
 
         <WorkspaceKeyboard

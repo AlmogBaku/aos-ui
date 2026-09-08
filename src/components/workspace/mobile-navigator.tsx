@@ -1,9 +1,6 @@
 "use client"
 
-import {
-  ThreadListPrimitive,
-  type ThreadListRuntime,
-} from "@assistant-ui/react"
+import type { ThreadListRuntime } from "@assistant-ui/react"
 import {
   useEffect,
   useLayoutEffect,
@@ -17,7 +14,6 @@ import {
   ArrowLeft,
   Bot,
   ChevronRight,
-  Ellipsis,
   Plus,
   Search,
   Settings2,
@@ -30,10 +26,9 @@ import { cn } from "@/lib/utils"
 import type { WorkspaceAgent, WorkspaceSession } from "./workspace-shell"
 import styles from "./mobile-navigator.module.css"
 import {
-  SessionThreadListItem,
-  SessionThreadListTitle,
-  SessionThreadListTrigger,
-} from "./session-thread-list-item"
+  AgentSessionHistory,
+  type AgentSessionHistoryCopy,
+} from "./agent-session-history"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -82,29 +77,18 @@ export type MobileAgentSessionCatalog = {
   lastSelectedThreadId: string | null
 }
 
-export type MobileNavigatorCopy = {
+export type MobileNavigatorCopy = AgentSessionHistoryCopy & {
   agents: string
   sessions: string
   backToAgents: string
   close: string
   searchAgents: string
-  searchSessions: string
-  openSessions: string
-  history: string
   newAgent: string
   newSession: string
   manageAgents: string
   preferences: string
   agentDetails: string
-  clearSearch: string
   noAgents: string
-  noSessions: string
-  noSearchResults: string
-  openSession: string
-  sessionActions: string
-  removeOpenSession: string
-  selected: string
-  lastSelected: string
   status: {
     active: string
     idle: string
@@ -114,8 +98,6 @@ export type MobileNavigatorCopy = {
     waitingForInput: string
     failed: string
   }
-  unread: (count: number) => string
-  needsAttention: string
 }
 
 export type MobileNavigatorProps = {
@@ -346,7 +328,6 @@ export function MobileNavigator({
   const [sessionQueries, setSessionQueries] = useState<Record<string, string>>(
     {}
   )
-  const [actionThreadId, setActionThreadId] = useState<string | null>(null)
 
   const catalog =
     state.view === "sessions"
@@ -518,7 +499,6 @@ export function MobileNavigator({
           query={sessionQueries[state.agentId] ?? ""}
           locale={locale}
           copy={copy}
-          actionThreadId={actionThreadId}
           renderAgentIcon={renderAgentIcon}
           onQueryChange={(query) =>
             setSessionQueries((current) => ({
@@ -526,7 +506,6 @@ export function MobileNavigator({
               [state.agentId]: query,
             }))
           }
-          onActionThreadChange={setActionThreadId}
           onBack={() => onStateChange({ type: "BACK_TO_AGENTS" })}
           onDismiss={() => onStateChange({ type: "DISMISS" })}
           onOpenSession={(threadId) => {
@@ -571,10 +550,8 @@ type SessionsViewProps = {
   query: string
   locale: "en" | "he"
   copy: MobileNavigatorCopy
-  actionThreadId: string | null
   renderAgentIcon?: (agent: WorkspaceAgent) => ReactNode
   onQueryChange: (query: string) => void
-  onActionThreadChange: (threadId: string | null) => void
   onBack: () => void
   onDismiss: () => void
   onOpenSession: (threadId: string) => void
@@ -596,10 +573,8 @@ function SessionsView({
   query,
   locale,
   copy,
-  actionThreadId,
   renderAgentIcon,
   onQueryChange,
-  onActionThreadChange,
   onBack,
   onDismiss,
   onOpenSession,
@@ -608,15 +583,6 @@ function SessionsView({
   onAgentDetails,
   onActionError,
 }: SessionsViewProps) {
-  const normalizedQuery = normalizeSearch(query, locale)
-  const filter = (session: WorkspaceSession) =>
-    !normalizedQuery ||
-    normalizeSearch(session.title, locale).includes(normalizedQuery)
-  const visibleOpen = openSessions.filter(filter)
-  const visibleHistory = historySessions.filter(filter)
-  const hasSessions = openSessions.length + historySessions.length > 0
-  const hasResults = visibleOpen.length + visibleHistory.length > 0
-
   return (
     <>
       <header className={styles.header}>
@@ -672,201 +638,28 @@ function SessionsView({
         {copy.newSession}
       </Button>
 
-      <label className={styles.searchField}>
-        <Search aria-hidden="true" />
-        <span className={styles.srOnly}>{copy.searchSessions}</span>
-        <input
-          type="search"
-          aria-label={copy.searchSessions}
-          placeholder={copy.searchSessions}
-          value={query}
-          onChange={(event) => onQueryChange(event.currentTarget.value)}
-        />
-      </label>
-
-      <ThreadListPrimitive.Root className={styles.sessionScroller}>
-        {visibleOpen.length ? (
-          <SessionSection
-            heading={copy.openSessions}
-            sessions={visibleOpen}
-            activeThreadId={activeThreadId}
-            lastSelectedThreadId={lastSelectedThreadId}
-            sessionActivity={sessionActivity}
-            copy={copy}
-            locale={locale}
-            actionThreadId={actionThreadId}
-            onActionThreadChange={onActionThreadChange}
-            onOpenSession={onOpenSession}
-            onRemoveOpenSession={onRemoveOpenSession}
-            threadListRuntime={threadListRuntime}
-            onActionError={onActionError}
-          />
-        ) : null}
-        {visibleHistory.length ? (
-          <SessionSection
-            heading={copy.history}
-            sessions={visibleHistory}
-            activeThreadId={activeThreadId}
-            lastSelectedThreadId={lastSelectedThreadId}
-            sessionActivity={sessionActivity}
-            copy={copy}
-            locale={locale}
-            actionThreadId={actionThreadId}
-            onActionThreadChange={onActionThreadChange}
-            onOpenSession={onOpenSession}
-            threadListRuntime={threadListRuntime}
-            onActionError={onActionError}
-          />
-        ) : null}
-        {!hasResults ? (
-          <div className={styles.empty}>
-            <p>{hasSessions ? copy.noSearchResults : copy.noSessions}</p>
-            {normalizedQuery ? (
-              <Button variant="ghost" onClick={() => onQueryChange("")}>
-                {copy.clearSearch}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-      </ThreadListPrimitive.Root>
+      <AgentSessionHistory
+        navigation={{
+          agentId: agent.id,
+          openSessions,
+          historySessions,
+          lastSelectedThreadId,
+        }}
+        activeThreadId={activeThreadId}
+        sessionActivity={sessionActivity}
+        locale={locale}
+        copy={copy}
+        query={query}
+        onQueryChange={onQueryChange}
+        onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+        onRemoveOpenSession={
+          onRemoveOpenSession
+            ? (_agentId, threadId) => onRemoveOpenSession(threadId)
+            : undefined
+        }
+        threadListRuntime={threadListRuntime}
+        onActionError={onActionError}
+      />
     </>
-  )
-}
-
-type SessionSectionProps = {
-  heading: string
-  sessions: readonly WorkspaceSession[]
-  activeThreadId: string | null
-  lastSelectedThreadId: string | null
-  sessionActivity: Readonly<
-    Record<string, MobileNavigationActivity | undefined>
-  >
-  copy: MobileNavigatorCopy
-  locale: "en" | "he"
-  actionThreadId: string | null
-  onActionThreadChange: (threadId: string | null) => void
-  onOpenSession: (threadId: string) => void
-  onRemoveOpenSession?: (threadId: string) => void
-  threadListRuntime?: ThreadListRuntime
-  onActionError?: (error: unknown) => void
-}
-
-function SessionSection({
-  heading,
-  sessions,
-  activeThreadId,
-  lastSelectedThreadId,
-  sessionActivity,
-  copy,
-  locale,
-  actionThreadId,
-  onActionThreadChange,
-  onOpenSession,
-  onRemoveOpenSession,
-  threadListRuntime,
-  onActionError,
-}: SessionSectionProps) {
-  const dateFormatter = new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
-
-  return (
-    <section className={styles.section} aria-label={heading}>
-      <h3>{heading}</h3>
-      <div className={styles.list}>
-        {sessions.map((session) => {
-          const activity = sessionActivity[session.threadId]
-          const parsedDate = new Date(session.updatedAt)
-          const isActive = session.threadId === activeThreadId
-          const isLastSelected = session.threadId === lastSelectedThreadId
-          const label = [
-            `${copy.openSession}: ${session.title}`,
-            session.status !== "idle"
-              ? statusLabel(session.status, copy)
-              : null,
-            isActive ? copy.selected : null,
-            !isActive && isLastSelected ? copy.lastSelected : null,
-            ...activityLabel(activity, copy),
-          ]
-            .filter(Boolean)
-            .join(", ")
-
-          return (
-            <SessionThreadListItem
-              runtime={threadListRuntime}
-              threadId={session.threadId}
-              onSwitch={() => onOpenSession(session.threadId)}
-              onActionError={onActionError}
-              className={styles.sessionRow}
-              data-testid={`mobile-session-${session.threadId}`}
-              key={session.threadId}
-            >
-              <SessionThreadListTrigger
-                type="button"
-                className={styles.sessionNavigation}
-                aria-label={label}
-                aria-current={isActive ? "true" : undefined}
-                data-needs-attention={
-                  activity?.needsAttention ? "true" : undefined
-                }
-              >
-                <span className={styles.rowText}>
-                  <span className={styles.sessionTitleLine}>
-                    <StatusDot status={session.status} copy={copy} />
-                    <bdi className={styles.rowTitle}>
-                      <SessionThreadListTitle fallback={session.title} />
-                    </bdi>
-                    <ActivityMarker activity={activity} copy={copy} />
-                  </span>
-                  {Number.isFinite(parsedDate.getTime()) ? (
-                    <time dateTime={session.updatedAt}>
-                      {dateFormatter.format(parsedDate)}
-                    </time>
-                  ) : null}
-                </span>
-              </SessionThreadListTrigger>
-              {onRemoveOpenSession ? (
-                <div className={styles.actionSlot}>
-                  <Button
-                    variant="ghost"
-                    className={styles.iconButton}
-                    aria-label={`${copy.sessionActions}: ${session.title}`}
-                    aria-haspopup="menu"
-                    aria-expanded={actionThreadId === session.threadId}
-                    onClick={() =>
-                      onActionThreadChange(
-                        actionThreadId === session.threadId
-                          ? null
-                          : session.threadId
-                      )
-                    }
-                  >
-                    <Ellipsis />
-                  </Button>
-                  {actionThreadId === session.threadId ? (
-                    <div className={styles.actionMenu} role="menu">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          onActionThreadChange(null)
-                          onRemoveOpenSession(session.threadId)
-                        }}
-                      >
-                        <X aria-hidden="true" />
-                        {copy.removeOpenSession}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </SessionThreadListItem>
-          )
-        })}
-      </div>
-    </section>
   )
 }

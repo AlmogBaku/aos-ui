@@ -176,8 +176,7 @@
   gap: 0.125rem;
 }
 
-.panelHeading h2,
-.recentHeading {
+.panelHeading h2 {
   color: var(--foreground);
   font-size: 1rem;
   font-weight: 600;
@@ -709,57 +708,6 @@
   margin-block-start: 1.75rem;
   border-block-start: 1px solid var(--border);
   padding-block-start: 1.5rem;
-}
-
-.sessionList {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  gap: 0.25rem;
-  overflow-y: auto;
-  scrollbar-color: var(--muted) transparent;
-  scrollbar-width: thin;
-}
-
-.sessionButton {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.75rem;
-  border: 0;
-  border-radius: 0.75rem;
-  background: transparent;
-  color: var(--foreground);
-  padding: 0.625rem;
-  text-align: start;
-}
-
-.sessionButton:hover,
-.sessionButton[aria-current="true"] {
-  background: var(--muted);
-}
-
-.sessionTitle {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.sessionTitle bdi {
-  overflow: hidden;
-  font-size: 0.875rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sessionTime {
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .emptyText {

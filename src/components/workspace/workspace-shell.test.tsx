@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   renderHook,
   screen,
@@ -127,6 +128,27 @@ function renderShell(
 }
 
 describe("WorkspaceShell", () => {
+  it("searches the selected Agent's open Sessions and history in the desktop inspector", () => {
+    renderShell()
+
+    const inspector = screen.getByRole("complementary", {
+      name: "Agent details",
+    })
+    expect(
+      within(inspector).getByRole("region", { name: "Open sessions" })
+    ).toBeVisible()
+    expect(
+      within(inspector).getByRole("region", { name: "History" })
+    ).toBeVisible()
+
+    fireEvent.change(
+      within(inspector).getByRole("searchbox", { name: "Search Sessions" }),
+      { target: { value: "pricing" } }
+    )
+    expect(within(inspector).getByText("Pricing analysis")).toBeVisible()
+    expect(within(inspector).queryByText("Market brief")).toBeNull()
+  })
+
   it.each([
     ["en", en, "Active"],
     ["he", he, "פעיל לאחרונה"],
@@ -596,28 +618,40 @@ describe("WorkspaceShell", () => {
   })
 
   it("includes meaningful status in Agent and history button names", () => {
+    const statusHistory: WorkspaceSession[] = [
+      olderSessions[0],
+      {
+        threadId: "thread-running-history",
+        title: "Running history",
+        status: "running",
+        updatedAt: "2026-08-31T11:00:00.000Z",
+      },
+      {
+        threadId: "thread-waiting-history",
+        title: "Waiting history",
+        status: "waiting-for-input",
+        updatedAt: "2026-08-30T11:00:00.000Z",
+      },
+      {
+        threadId: "thread-failed-history",
+        title: "Failed history",
+        status: "failed",
+        updatedAt: "2026-08-29T11:00:00.000Z",
+      },
+    ]
     renderShell({
-      olderSessions: [
-        olderSessions[0],
-        {
-          threadId: "thread-running-history",
-          title: "Running history",
-          status: "running",
-          updatedAt: "2026-08-31T11:00:00.000Z",
-        },
-        {
-          threadId: "thread-waiting-history",
-          title: "Waiting history",
-          status: "waiting-for-input",
-          updatedAt: "2026-08-30T11:00:00.000Z",
-        },
-        {
-          threadId: "thread-failed-history",
-          title: "Failed history",
-          status: "failed",
-          updatedAt: "2026-08-29T11:00:00.000Z",
-        },
-      ],
+      olderSessions: statusHistory,
+      navigationCatalog: new Map([
+        [
+          "agent-aster",
+          {
+            agentId: "agent-aster",
+            openSessions,
+            historySessions: statusHistory,
+            lastSelectedThreadId: "thread-market",
+          },
+        ],
+      ]),
     })
 
     const agentsNavigation = screen.getByRole("navigation", { name: "Agents" })
