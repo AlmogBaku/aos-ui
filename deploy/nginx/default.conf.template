@@ -43,6 +43,26 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  location = /hermes/api/audio/transcribe {
+    client_max_body_size 8m;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
+    rewrite ^/hermes/?(.*)$ /$1 break;
+    proxy_pass $hermes_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Prefix /hermes;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
   location ^~ /hermes/ {
     resolver 127.0.0.11 valid=10s ipv6=off;
     set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};

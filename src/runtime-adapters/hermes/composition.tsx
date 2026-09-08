@@ -9,6 +9,7 @@ import {
 } from "react"
 
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
+import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import type { Locale } from "@/lib/i18n/config"
@@ -137,6 +138,7 @@ export function HermesAosUiApp({
   }, [])
   const bundle = useHermesRuntimeBundle({
     baseUrl,
+    locale,
     onError,
     onRecovered,
   })
@@ -196,16 +198,18 @@ export function HermesAosUiApp({
           }
         />
       ) : null}
-      <AosUiWorkspace
-        locale={locale}
-        dictionary={dictionary}
-        bundle={bundle}
-        now={now}
-        composer={composer}
-        onWorkspaceError={onError}
-        onStopRun={() => stopCurrentHermesRun(bundle.assistantRuntime)}
-        activityCoverage="active-session"
-      />
+      <VoiceMediaProvider media={bundle.media} locale={locale}>
+        <AosUiWorkspace
+          locale={locale}
+          dictionary={dictionary}
+          bundle={bundle}
+          now={now}
+          composer={composer}
+          onWorkspaceError={onError}
+          onStopRun={() => stopCurrentHermesRun(bundle.assistantRuntime)}
+          activityCoverage="active-session"
+        />
+      </VoiceMediaProvider>
     </div>
   )
 }

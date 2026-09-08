@@ -9,7 +9,16 @@ import {
   type MessageStatus,
   type ThreadMessageLike,
 } from "@assistant-ui/react"
-import { useEffect, useMemo, useSyncExternalStore } from "react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react"
+import type { Locale } from "@/lib/i18n/config"
+import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
+import { HermesAudioClient } from "./hermes-audio-client"
+import { HermesMediaBinding } from "./hermes-media-binding"
 
 import type { RuntimeBundle } from "../contracts"
 import {
@@ -25,6 +34,7 @@ const COMPLETE_STATUS: MessageStatus = { type: "complete", reason: "unknown" }
 
 function useHermesThreadRuntime(
   client: HermesNativeClient,
+  voice: HermesMediaBinding,
   onError?: (error: Error) => void
 ) {
   const threadId = useAuiState((state) => state.threadListItem.remoteId)
@@ -34,6 +44,11 @@ function useHermesThreadRuntime(
     client.getSnapshot
   )
   const session = threadId ? client.session(threadId) : undefined
+  const profile = session?.profile
+  const adapters = useMemo(
+    () => (threadId && profile ? voice.adapters(threadId, profile) : undefined),
+    [profile, threadId, voice]
+  )
   const queue = useMemo(
     () =>
       threadId
@@ -61,6 +76,7 @@ function useHermesThreadRuntime(
   }, [queue, session, snapshot.revision])
 
   return useExternalStoreRuntime<ThreadMessageLike>({
+    adapters,
     messages: session?.messages ?? EMPTY_MESSAGES,
     convertMessage: (message, index) =>
       fromThreadMessageLike(
@@ -86,14 +102,14 @@ function useHermesThreadRuntime(
 }
 
 export type UseHermesRuntimeBundleOptions = HermesNativeClientOptions & {
+  locale?: Locale
   onError?: (error: Error) => void
   onRecovered?: () => void
 }
 
 export function useHermesRuntimeBundle(
   options: UseHermesRuntimeBundleOptions
-): RuntimeBundle & { client: HermesNativeClient } {
-  const onError = options.onError
+): RuntimeBundle & { client: HermesNativeClient; media: VoiceMediaController } {
   const onRecovered = options.onRecovered
   const client = useMemo(
     () =>
@@ -114,6 +130,25 @@ export function useHermesRuntimeBundle(
   )
   const adapter = useMemo(() => new HermesThreadListAdapter(client), [client])
   const workspace = useMemo(() => createHermesWorkspace(client), [client])
+  const audio = useMemo(
+    () =>
+      new HermesAudioClient({
+        baseUrl: options.baseUrl,
+        fetcher: options.fetcher,
+      }),
+    [options.baseUrl, options.fetcher]
+  )
+  const voice = useMemo(
+    () =>
+      new HermesMediaBinding(
+        client,
+        audio,
+        options.locale ?? "en",
+        options.onError
+      ),
+    [audio, client, options.locale, options.onError]
+  )
+  const onError = voice.handleNativeError
   useEffect(
     () => (onRecovered ? client.subscribeRecovery(onRecovered) : undefined),
     [client, onRecovered]
@@ -122,9 +157,20 @@ export function useHermesRuntimeBundle(
     adapter,
     allowNesting: true,
     runtimeHook: function useRuntime() {
-      return useHermesThreadRuntime(client, onError)
+      return useHermesThreadRuntime(client, voice, onError)
     },
   })
+
+  const selectedThread = useSyncExternalStore(
+    assistantRuntime.threads.subscribe,
+    () => {
+      const state = assistantRuntime.threads.getState()
+      const item = state.threadItems[state.mainThreadId]
+      return item?.remoteId ?? item?.externalId
+    }
+  )
+  useLayoutEffect(() => voice.connect(), [voice])
+  useLayoutEffect(() => voice.select(selectedThread), [selectedThread, voice])
 
   useEffect(() => {
     const release = client.retain()
@@ -146,7 +192,7 @@ export function useHermesRuntimeBundle(
   )
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, client }),
-    [assistantRuntime, client, workspace]
+    () => ({ assistantRuntime, workspace, client, media: voice.media }),
+    [assistantRuntime, client, workspace, voice]
   )
 }

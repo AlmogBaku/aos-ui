@@ -2,11 +2,10 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "tw-shimmer";
-
 .aos-wordmark {
   font-family: var(--font-aos-wordmark), sans-serif;
   font-weight: 400;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.38em;
   line-height: 1;
 }
 
@@ -65,7 +64,7 @@
   --font-geist: Inter, ui-sans-serif, system-ui, sans-serif;
   --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --font-hebrew: Arial, ui-sans-serif, system-ui, sans-serif;
-  --font-aos-wordmark: "Arial Narrow", Arial, sans-serif;
+  --font-aos-wordmark: "Michroma";
   --app-font-sans: var(--font-geist);
   --canvas: oklch(0.955 0.006 265);
   --background: oklch(0.99 0.002 265);

@@ -3,13 +3,19 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { HermesAosUiApp } from "./composition"
+import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 
 const mocks = vi.hoisted(() => ({
   options: {} as {
     onError?: (error: Error) => void
     onRecovered?: () => void
   },
-  bundle: { client: {}, assistantRuntime: {}, workspace: {} },
+  bundle: {
+    client: {},
+    assistantRuntime: {},
+    workspace: {},
+    media: undefined as VoiceMediaController | undefined,
+  },
 }))
 vi.mock("@/runtime-adapters/hermes", () => ({
   useHermesRuntimeBundle: (options: typeof mocks.options) => {
@@ -28,6 +34,7 @@ afterEach(() => {
 })
 
 function showApp(locale: "en" | "he" = "en") {
+  mocks.bundle.media = new VoiceMediaController()
   return render(
     <HermesAosUiApp
       locale={locale}

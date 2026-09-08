@@ -32,7 +32,7 @@ export default defineConfig({
           AOS_UI_AG_UI_URL: `http://127.0.0.1:${providerPort}/runs`,
           AOS_UI_AG_UI_WORKSPACE_URL: `http://127.0.0.1:${providerPort}`,
         },
-        url: `http://127.0.0.1:${port}/en`,
+        url: `http://127.0.0.1:${port}/__aos_e2e_ready`,
         reuseExistingServer: false,
         timeout: 120_000,
         stdout: "pipe",

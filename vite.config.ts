@@ -1,7 +1,13 @@
 import react from "@vitejs/plugin-react"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
-import { defineConfig, loadEnv, type Plugin } from "vite"
+import {
+  defineConfig,
+  loadEnv,
+  type Plugin,
+  type PreviewServer,
+  type ViteDevServer,
+} from "vite"
 
 import { resolveRuntimeConfiguration } from "./shared/runtime-config.ts"
 
@@ -19,31 +25,85 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
 }
 
 function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
+  const configureRuntimeConfiguration = (
+    server: PreviewServer | ViteDevServer
+  ) => {
+    server.middlewares.use(
+      "/runtime-config.json",
+      async (_request, response) => {
+        response.setHeader("cache-control", "no-store")
+        response.setHeader("content-type", "application/json; charset=utf-8")
+        try {
+          const configFile = environment.AOS_UI_RUNTIME_CONFIG_FILE
+          const body = configFile
+            ? await readFile(path.resolve(configFile), "utf8")
+            : JSON.stringify(runtimeConfigurationFromEnvironment(environment))
+          response.end(body)
+        } catch {
+          response.statusCode = 500
+          response.end(
+            JSON.stringify({
+              status: "unavailable",
+              reason: "invalid-public-config",
+            })
+          )
+        }
+      }
+    )
+  }
+
   return {
     name: "aos-runtime-configuration",
+    configureServer: configureRuntimeConfiguration,
+    configurePreviewServer: configureRuntimeConfiguration,
+  }
+}
+
+function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
+  const runtimeMode = environment.AOS_UI_RUNTIME_MODE ?? "opencode"
+  const runtimeEntry =
+    runtimeMode === "fixture"
+      ? "/src/runtime-adapters/fixture/composition.tsx"
+      : runtimeMode === "hermes"
+        ? "/src/runtime-adapters/hermes/composition.tsx"
+        : runtimeMode === "ag-ui"
+          ? "/src/runtime-adapters/ag-ui/composition.tsx"
+          : "/src/runtime-adapters/opencode/composition.tsx"
+  return {
+    name: "aos-e2e-readiness",
     configureServer(server) {
-      server.middlewares.use(
-        "/runtime-config.json",
-        async (_request, response) => {
-          response.setHeader("cache-control", "no-store")
-          response.setHeader("content-type", "application/json; charset=utf-8")
-          try {
-            const configFile = environment.AOS_UI_RUNTIME_CONFIG_FILE
-            const body = configFile
-              ? await readFile(path.resolve(configFile), "utf8")
-              : JSON.stringify(runtimeConfigurationFromEnvironment(environment))
-            response.end(body)
-          } catch {
-            response.statusCode = 500
-            response.end(
-              JSON.stringify({
-                status: "unavailable",
-                reason: "invalid-public-config",
-              })
+      if (!environment.AOS_UI_E2E_CACHE_KEY) return
+      let ready: Promise<void> | undefined
+      server.middlewares.use("/__aos_e2e_ready", async (_request, response) => {
+        try {
+          ready ??= (async () => {
+            const optimizer = server.environments.client.depsOptimizer
+            await optimizer?.scanProcessing
+            await Promise.all(
+              Object.values(optimizer?.metadata.discovered ?? {}).flatMap(
+                ({ processing }) => (processing ? [processing] : [])
+              )
             )
-          }
+            await Promise.all([
+              server.warmupRequest("/src/main.tsx"),
+              server.warmupRequest(runtimeEntry),
+            ])
+            await server.waitForRequestsIdle()
+            await Promise.all(
+              Object.values(optimizer?.metadata.discovered ?? {}).flatMap(
+                ({ processing }) => (processing ? [processing] : [])
+              )
+            )
+          })()
+          await ready
+          response.statusCode = 204
+          response.end()
+        } catch {
+          ready = undefined
+          response.statusCode = 503
+          response.end()
         }
-      )
+      })
     },
   }
 }
@@ -64,7 +124,11 @@ export default defineConfig(({ mode }) => {
       import.meta.dirname,
       `node_modules/.vite-${cacheKey}`
     ),
-    plugins: [react(), runtimeConfigurationPlugin(environment)],
+    plugins: [
+      react(),
+      runtimeConfigurationPlugin(environment),
+      e2eReadinessPlugin(environment),
+    ],
     resolve: {
       alias: {
         "@": path.resolve(import.meta.dirname, "src"),
@@ -72,7 +136,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     optimizeDeps: {
-      entries: ["index.html", "src/components/aos-ui-*-app.tsx"],
+      entries: ["index.html", "src/runtime-adapters/*/composition.tsx"],
     },
     server: {
       host: "127.0.0.1",
