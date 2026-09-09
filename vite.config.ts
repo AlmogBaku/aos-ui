@@ -129,6 +129,20 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     "opencode"
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
+  const hermesProxy = {
+    "/auth": {
+      target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
+      changeOrigin: false,
+      headers: { "X-Forwarded-Prefix": "/hermes" },
+    },
+    "/hermes": {
+      target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
+      changeOrigin: false,
+      ws: true,
+      headers: { "X-Forwarded-Prefix": "/hermes" },
+      rewrite: (pathname: string) => pathname.replace(/^\/hermes/, ""),
+    },
+  }
 
   return {
     cacheDir: path.resolve(
@@ -156,20 +170,10 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "127.0.0.1",
       port: 3000,
-      proxy: {
-        "/auth": {
-          target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-          changeOrigin: false,
-          headers: { "X-Forwarded-Prefix": "/hermes" },
-        },
-        "/hermes": {
-          target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-          changeOrigin: false,
-          ws: true,
-          headers: { "X-Forwarded-Prefix": "/hermes" },
-          rewrite: (pathname) => pathname.replace(/^\/hermes/, ""),
-        },
-      },
+      proxy: hermesProxy,
+    },
+    preview: {
+      proxy: hermesProxy,
     },
     build: {
       chunkSizeWarningLimit: 650,
