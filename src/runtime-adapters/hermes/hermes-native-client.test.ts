@@ -446,7 +446,7 @@ describe("Hermes native browser client", () => {
     const state = harness({
       history: [{ id: 1, role: "user", content: "First" }],
       rpcReply: ({ method }) =>
-        method === "session.usage"
+        method === "session.context_breakdown"
           ? unavailable
             ? new RpcFailure("usage unavailable")
             : {
@@ -822,7 +822,7 @@ describe("Hermes native browser client", () => {
               return new RpcFailure("detach unavailable")
             return { detached: true, count: 0 }
           }
-          if (method === "session.usage") {
+          if (method === "session.context_breakdown") {
             if (++usageAttempts === 2 && failure === "context")
               return new RpcFailure("usage unavailable")
             return {
@@ -1336,7 +1336,7 @@ describe("Hermes native browser client", () => {
             model: "small",
             providers: [{ slug: "native", models: ["small", "large"] }],
           }
-        if (method === "session.usage")
+        if (method === "session.context_breakdown")
           return {
             context_used: fields.session_id === "live-research" ? 10 : 50,
             context_max: 100,
@@ -1456,7 +1456,7 @@ describe("Hermes native browser client", () => {
             model: "large",
             providers: [{ slug: "native", models: ["large"] }],
           }
-        if (method === "session.usage")
+        if (method === "session.context_breakdown")
           return {
             context_used: 4_321,
             context_max: 100_000,
@@ -1489,7 +1489,7 @@ describe("Hermes native browser client", () => {
     let failed = false
     const { client } = harness({
       rpcReply: ({ method }) =>
-        method === "session.usage"
+        method === "session.context_breakdown"
           ? failed
             ? new RpcFailure("usage unavailable")
             : {
@@ -1567,7 +1567,7 @@ describe("Hermes native browser client", () => {
       rpcReply: ({ method }) => {
         if (method === "model.options")
           return new RpcFailure("catalog unavailable")
-        if (method === "session.usage")
+        if (method === "session.context_breakdown")
           return {
             context_used: 10,
             context_max: 100,
@@ -1598,7 +1598,8 @@ describe("Hermes native browser client", () => {
   it("composer keeps a newer native context event when an older usage read arrives", async () => {
     const old = new DeferredRpc()
     const { client, sockets } = harness({
-      rpcReply: ({ method }) => (method === "session.usage" ? old : undefined),
+      rpcReply: ({ method }) =>
+        method === "session.context_breakdown" ? old : undefined,
     })
     try {
       await client.start()
@@ -1644,7 +1645,7 @@ describe("Hermes native browser client", () => {
     let max = 100
     const state = harness({
       rpcReply: ({ method }) => {
-        if (method === "session.usage")
+        if (method === "session.context_breakdown")
           return {
             context_used: used,
             context_max: max,
@@ -1853,7 +1854,7 @@ describe("Hermes native browser client", () => {
     async (usage) => {
       const { client, sockets } = harness({
         rpcReply: ({ method }) =>
-          method === "session.usage"
+          method === "session.context_breakdown"
             ? {
                 context_used: 4321,
                 context_max: 100000,
@@ -1888,7 +1889,7 @@ describe("Hermes native browser client", () => {
   it("composer reads authoritative context independently of the model catalog", async () => {
     const { client, sockets } = harness({
       rpcReply: ({ method }) =>
-        method === "session.usage"
+        method === "session.context_breakdown"
           ? {
               context_used: 4321,
               context_max: 100000,
@@ -1912,6 +1913,95 @@ describe("Hermes native browser client", () => {
       expect(
         sockets[0].requests.some(({ method }) => method === "model.options")
       ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer mirrors Hermes Desktop context estimates for a resumed Session", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) =>
+        method === "session.context_breakdown"
+          ? {
+              context_used: 36_410,
+              context_max: 272_000,
+              context_source: "local_estimate",
+              context_estimated: true,
+            }
+          : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      })
+
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 36_410,
+        maxTokens: 272_000,
+        estimated: true,
+      })
+      expect(sockets[0].requests).toContainEqual(
+        expect.objectContaining({
+          method: "session.context_breakdown",
+          params: { session_id: "live-1" },
+        })
+      )
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("refreshes context when Hermes finishes building a resumed Session", async () => {
+    let reads = 0
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) =>
+        method === "session.context_breakdown"
+          ? ++reads === 1
+            ? {
+                context_used: 0,
+                context_max: 0,
+                context_source: "provider_usage",
+                context_estimated: false,
+              }
+            : {
+                context_used: 36_410,
+                context_max: 272_000,
+                context_source: "local_estimate",
+                context_estimated: true,
+              }
+          : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      })
+      expect(client.session(threadId)?.composer?.context).toBeUndefined()
+
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "session.info",
+          session_id: "live-1",
+          payload: { running: false, model: "gpt-5.6-terra" },
+        },
+      })
+
+      await vi.waitFor(() =>
+        expect(client.session(threadId)?.composer?.context).toEqual({
+          usedTokens: 36_410,
+          maxTokens: 272_000,
+          estimated: true,
+        })
+      )
+      expect(reads).toBe(2)
     } finally {
       client.stop()
     }

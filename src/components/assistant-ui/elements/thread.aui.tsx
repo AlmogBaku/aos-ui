@@ -1007,7 +1007,9 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   const labels = useContext(ThreadLabelsContext)
   if (!features.model && !features.context) return null
 
-  const usedTokens = features.context?.usedTokens.toLocaleString("en-US")
+  const usedTokens = features.context
+    ? `${features.context.estimated ? "~" : ""}${features.context.usedTokens.toLocaleString("en-US")}`
+    : undefined
   const maxTokens = features.context?.maxTokens.toLocaleString("en-US")
 
   return (
@@ -1042,6 +1044,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           className="ms-auto"
           usedTokens={features.context.usedTokens}
           maxTokens={features.context.maxTokens}
+          estimated={features.context.estimated}
           label={labels.contextUsage(usedTokens, maxTokens)}
         />
       ) : null}

@@ -7,16 +7,21 @@ export type HermesModelOption = ComposerModelOption & {
 }
 export type HermesComposerState = {
   model?: { options: readonly HermesModelOption[]; selectedId: string }
-  context?: { usedTokens: number; maxTokens: number }
+  context?: { usedTokens: number; maxTokens: number; estimated?: boolean }
 }
 
 export function readHermesContext(
   value: unknown
 ): HermesComposerState["context"] {
+  if (!isRecord(value)) return undefined
+  const source = value.context_source
+  const estimated = value.context_estimated
   if (
-    !isRecord(value) ||
-    value.context_source !== "provider_usage" ||
-    value.context_estimated !== false
+    !["provider_usage", "provider_usage_plus_estimate", "local_estimate"].includes(
+      String(source)
+    ) ||
+    typeof estimated !== "boolean" ||
+    (source === "provider_usage" ? estimated : !estimated)
   )
     return undefined
   const used = value.context_used
@@ -27,7 +32,11 @@ export function readHermesContext(
     typeof max === "number" &&
     Number.isSafeInteger(max) &&
     max > 0
-    ? { usedTokens: used, maxTokens: max }
+    ? {
+        usedTokens: used,
+        maxTokens: max,
+        ...(estimated ? { estimated: true } : {}),
+      }
     : undefined
 }
 

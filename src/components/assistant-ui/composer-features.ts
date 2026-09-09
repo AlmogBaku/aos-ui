@@ -16,6 +16,7 @@ export type ComposerFeatureViewModel = {
     | {
         readonly usedTokens: number
         readonly maxTokens: number
+        readonly estimated?: boolean | undefined
       }
     | undefined
 }

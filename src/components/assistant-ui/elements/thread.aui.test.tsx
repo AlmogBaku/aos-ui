@@ -85,7 +85,7 @@ function LocalThread({
       selectedId: string
       select(id: string): Promise<void>
     }
-    context?: { usedTokens: number; maxTokens: number }
+    context?: { usedTokens: number; maxTokens: number; estimated?: boolean }
   }
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
@@ -537,6 +537,28 @@ describe("Thread accessibility", () => {
 
     expect(screen.queryByRole("combobox", { name: "Choose model" })).toBeNull()
     expect(screen.getByText("0 / 4,096", { exact: true })).toBeInTheDocument()
+  })
+
+  it("marks Hermes-style estimated context usage with a tilde", () => {
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          context: {
+            usedTokens: 36_410,
+            maxTokens: 272_000,
+            estimated: true,
+          },
+        }}
+      />
+    )
+
+    expect(
+      screen.getByText("~36,410 / 272,000", { exact: true })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("Context usage: ~36,410 of 272,000 tokens")
+    ).toBeInTheDocument()
   })
 
   it("uses localized accessible labels for composer model and context controls", () => {

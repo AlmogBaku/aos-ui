@@ -1021,7 +1021,7 @@ export class HermesNativeClient {
     this.#patchSession(threadId, {
       composer: { ...this.session(threadId)?.composer, context: undefined },
     })
-    const result = await this.request("session.usage", {
+    const result = await this.request("session.context_breakdown", {
       session_id: liveSessionId,
     })
     if (
@@ -1719,6 +1719,16 @@ export class HermesNativeClient {
           context: readHermesContext(payload.usage),
         },
       })
+      if (
+        event.type === "session.info" &&
+        payload.running === false &&
+        stringValue(payload.model) &&
+        !readHermesContext(payload.usage) &&
+        this.#composerConfigs.get(threadId)?.contextEnabled
+      )
+        void this.#refreshContext(threadId).catch((reason) =>
+          this.#report(reason)
+        )
       if (confirmIdle && turn)
         void this.#confirmIdleTurn(threadId, turn).catch((reason) =>
           this.#report(reason)

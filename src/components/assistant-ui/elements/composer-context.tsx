@@ -11,11 +11,13 @@ import { cn } from "@/lib/utils"
 export function ComposerContext({
   usedTokens,
   maxTokens,
+  estimated = false,
   label,
   className,
 }: {
   usedTokens: number
   maxTokens: number
+  estimated?: boolean | undefined
   label: string
   className?: string | undefined
 }) {
@@ -79,6 +81,7 @@ export function ComposerContext({
         className="hidden tabular-nums @min-[64rem]/workspace:inline"
         dir="ltr"
       >
+        {estimated ? "~" : ""}
         {usedTokens.toLocaleString("en-US")} /{" "}
         {maxTokens.toLocaleString("en-US")}
       </span>
