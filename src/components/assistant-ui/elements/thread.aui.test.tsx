@@ -21,10 +21,44 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { Thread, type ThreadComponents, type ThreadLabels } from "./thread.aui"
+import {
+  createComposerHistorySelector,
+  Thread,
+  type ThreadComponents,
+  type ThreadLabels,
+} from "./thread.aui"
 import { RichToolRenderer } from "@/components/tool-ui"
 
 afterEach(cleanup)
+
+describe("composer history performance", () => {
+  it("keeps history stable across assistant-only streaming updates", () => {
+    const selectHistory = createComposerHistorySelector()
+    const user = {
+      id: "user-1",
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "First prompt" }],
+    }
+    const first = selectHistory([
+      user,
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: [{ type: "text", text: "First token" }],
+      },
+    ])
+    const next = selectHistory([
+      user,
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: [{ type: "text", text: "First token and more" }],
+      },
+    ])
+
+    expect(next).toBe(first)
+  })
+})
 
 const INITIAL_MESSAGES = [
   {

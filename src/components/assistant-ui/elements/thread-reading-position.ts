@@ -24,10 +24,25 @@ function messageElements(viewport: HTMLElement) {
   return Array.from(viewport.querySelectorAll<HTMLElement>(MESSAGE_SELECTOR))
 }
 
+function escapeAttributeValue(value: string) {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replace(/[\n\r\f]/g, (character) =>
+      `\\${character.codePointAt(0)!.toString(16)} `
+    )
+    .replaceAll("\0", "�")
+}
+
 function findMessage(viewport: HTMLElement, messageId: string) {
-  return messageElements(viewport).find(
-    (message) => message.dataset.messageId === messageId
+  return viewport.querySelector<HTMLElement>(
+    `[data-message-id="${escapeAttributeValue(messageId)}"]`
   )
+}
+
+function updateScrollTop(viewport: HTMLElement, scrollTop: number) {
+  if (Math.abs(viewport.scrollTop - scrollTop) < 0.5) return
+  viewport.scrollTop = scrollTop
 }
 
 export function captureThreadReadingBookmark(
@@ -64,7 +79,7 @@ export function restoreThreadReadingBookmark(
   viewport.style.scrollBehavior = "auto"
 
   if (bookmark.mode === "follow") {
-    viewport.scrollTop = maximumScrollTop(viewport)
+    updateScrollTop(viewport, maximumScrollTop(viewport))
   } else {
     const anchor = bookmark.messageId
       ? findMessage(viewport, bookmark.messageId)
@@ -77,7 +92,7 @@ export function restoreThreadReadingBookmark(
           bookmark.offsetPx)
       : bookmark.scrollTop
 
-    viewport.scrollTop = clampScrollTop(viewport, targetScrollTop)
+    updateScrollTop(viewport, clampScrollTop(viewport, targetScrollTop))
   }
 
   viewport.style.scrollBehavior = previousScrollBehavior
@@ -174,7 +189,22 @@ export function useThreadReadingPosition({
     const viewport = viewportRef.current
     if (!threadId || !contentReady || !viewport) return
 
-    const capture = () => controller.capture(threadId, viewport)
+    let frame: number | null = null
+    let capturePending = false
+    const schedule = (capture: boolean) => {
+      capturePending ||= capture
+      if (frame !== null) return
+      frame = window.requestAnimationFrame(() => {
+        frame = null
+        if (capturePending) {
+          capturePending = false
+          controller.capture(threadId, viewport)
+          return
+        }
+        controller.syncAfterContentChange(threadId, viewport)
+      })
+    }
+    const capture = () => schedule(true)
     viewport.addEventListener("scroll", capture, { passive: true })
 
     const content = viewport.querySelector<HTMLElement>(
@@ -182,15 +212,14 @@ export function useThreadReadingPosition({
     )
     const resizeObserver =
       content && typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() =>
-            controller.syncAfterContentChange(threadId, viewport)
-          )
+        ? new ResizeObserver(() => schedule(false))
         : null
     if (content) resizeObserver?.observe(content)
 
     return () => {
       viewport.removeEventListener("scroll", capture)
       resizeObserver?.disconnect()
+      if (frame !== null) window.cancelAnimationFrame(frame)
     }
   }, [contentReady, controller, threadId, viewportRef])
 

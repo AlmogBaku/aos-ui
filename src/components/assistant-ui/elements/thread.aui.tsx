@@ -512,7 +512,9 @@ type HistoryBrowse = {
   readonly lastRecalledText: string
 }
 
-const getMessageText = (message: ThreadMessage) =>
+type ComposerHistoryMessage = Pick<ThreadMessage, "id" | "role" | "content">
+
+const getMessageText = (message: ComposerHistoryMessage) =>
   message.content
     .filter(
       (
@@ -522,6 +524,29 @@ const getMessageText = (message: ThreadMessage) =>
     )
     .map((part) => part.text)
     .join("")
+
+type ComposerHistoryEntry = { id: string; text: string }
+
+export function createComposerHistorySelector() {
+  let previous: readonly ComposerHistoryEntry[] = []
+  return (messages: readonly ComposerHistoryMessage[]) => {
+    const next = messages
+      .filter((message) => message.role === "user")
+      .map((message) => ({ id: message.id, text: getMessageText(message) }))
+      .filter((entry) => entry.text.trim().length > 0)
+      .reverse()
+    if (
+      previous.length === next.length &&
+      previous.every(
+        (entry, index) =>
+          entry.id === next[index]?.id && entry.text === next[index]?.text
+      )
+    )
+      return previous
+    previous = next
+    return next
+  }
+}
 
 const Composer: FC<{
   autoFocus: boolean
@@ -546,7 +571,13 @@ const Composer: FC<{
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
-  const messages = useAuiState((s) => s.thread.messages)
+  const selectHistoryEntries = useMemo(
+    () => createComposerHistorySelector(),
+    []
+  )
+  const historyEntries = useAuiState((s) =>
+    selectHistoryEntries(s.thread.messages)
+  )
   const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
 
   useAuiEvent("threads.selectionChanged", () => {
@@ -557,16 +588,6 @@ const Composer: FC<{
     setHistorySearchQuery("")
     setHistorySearchIndex(0)
   })
-
-  const historyEntries = useMemo(
-    () =>
-      messages
-        .filter((message) => message.role === "user")
-        .map((message) => ({ id: message.id, text: getMessageText(message) }))
-        .filter((entry) => entry.text.trim().length > 0)
-        .reverse(),
-    [messages]
-  )
 
   const filteredHistory = useMemo(() => {
     const query = historySearchQuery.trim().toLocaleLowerCase()

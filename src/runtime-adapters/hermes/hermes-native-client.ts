@@ -297,7 +297,22 @@ export class HermesNativeClient {
     this.#stopped = false
     this.#startPromise = (async () => {
       try {
-        await this.#connect()
+        try {
+          await this.#connect()
+        } catch (reason) {
+          if (
+            reason instanceof Error &&
+            reason.message.includes("authentication failed (401)")
+          )
+            throw reason
+          this.#socketGeneration += 1
+          this.#socket?.close()
+          this.#socket = undefined
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.#reconnectDelayMs)
+          )
+          await this.#connect()
+        }
         await this.refreshCatalog()
         for (const listener of this.#recoveryListeners) listener()
         this.#catalogTimer = setInterval(() => {
@@ -1761,10 +1776,18 @@ export class HermesNativeClient {
       const index = content.findIndex(
         (part) => part.type === "tool-call" && part.toolCallId === toolCallId
       )
-      const nativeToolName = stringValue(payload.name) ?? "tool"
+      const existing = index >= 0 ? content[index] : undefined
+      const nativeToolName =
+        stringValue(payload.name) ??
+        (existing?.type === "tool-call" ? existing.toolName : undefined) ??
+        "tool"
       const unwrapped = unwrapHermesToolCall(
         nativeToolName,
-        isRecord(payload.args) ? payload.args : {}
+        isRecord(payload.args)
+          ? payload.args
+          : existing?.type === "tool-call" && isRecord(existing.args)
+            ? existing.args
+            : {}
       )
       const args = canonicalHermesToolArgs(unwrapped.name, unwrapped.args)
       const part = {

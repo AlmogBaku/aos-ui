@@ -160,6 +160,7 @@ export function InlineReadAloud() {
 }
 
 export function VoiceMessageActions() {
+  const aui = useAui()
   const media = useVoiceContext()?.media
   const labels = useVoiceLabels()
   const availability = useVoiceState((s) => s?.availability.speech)
@@ -168,7 +169,6 @@ export function VoiceMessageActions() {
   const runtimeReading = useAuiState((s) => Boolean(s.message.speech))
   const reading = useVoiceMessageReading()
   const messageId = useAuiState((s) => s.message.id)
-  const messages = useAuiState((s) => s.thread.messages)
   const action = useRef<HTMLButtonElement>(null)
   const restoreFocus = useRef(false)
   useEffect(() => {
@@ -234,6 +234,7 @@ export function VoiceMessageActions() {
           return
         }
         media.disarm()
+        const messages = aui.thread.getState().messages
         media.preparePlaybackOwner(
           messageId,
           messages.findIndex((message) => message.id === messageId)
