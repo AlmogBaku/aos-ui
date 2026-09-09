@@ -1445,6 +1445,46 @@ describe("Hermes native browser client", () => {
     }
   })
 
+  it("preserves Session composer metadata when catalog activity changes", async () => {
+    const lastSession = { last_active: 0 }
+    const { client } = harness({
+      profileActivity: { last_session: lastSession },
+      rpcReply: ({ method }) => {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "large",
+            providers: [{ slug: "native", models: ["large"] }],
+          }
+        if (method === "session.usage")
+          return {
+            context_used: 4_321,
+            context_max: 100_000,
+            context_source: "provider_usage",
+            context_estimated: false,
+          }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      })
+      const composer = client.session(threadId)?.composer
+      expect(composer).toBeDefined()
+
+      lastSession.last_active = Date.now() / 1_000
+      await client.refreshCatalog()
+
+      expect(client.session(threadId)?.composer).toEqual(composer)
+    } finally {
+      client.stop()
+    }
+  })
+
   it("composer omits stale context when refreshing native usage fails", async () => {
     let failed = false
     const { client } = harness({

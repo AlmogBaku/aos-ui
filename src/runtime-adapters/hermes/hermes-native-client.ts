@@ -597,6 +597,7 @@ export class HermesNativeClient {
         status,
         ...(old.approval ? { approval: old.approval } : {}),
         ...(old.clarification ? { clarification: old.clarification } : {}),
+        ...(old.composer ? { composer: old.composer } : {}),
         ...(old.liveSessionId ? { liveSessionId: old.liveSessionId } : {}),
       }
     })
