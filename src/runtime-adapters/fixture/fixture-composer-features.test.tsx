@@ -43,8 +43,7 @@ describe("fixture composer features", () => {
       { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
     ])
     expect(features.context).toEqual({
-      usedTokens: 12_288,
-      maxTokens: 65_536,
+      usage: { system: 2, tools: 1, messages: 9, total: 66 },
     })
 
     act(() => {
@@ -56,8 +55,7 @@ describe("fixture composer features", () => {
     })
     await waitFor(() =>
       expect(features.context).toEqual({
-        usedTokens: 12_544,
-        maxTokens: 65_536,
+        usage: { system: 2, tools: 1, messages: 10, total: 66 },
       })
     )
 
@@ -66,8 +64,7 @@ describe("fixture composer features", () => {
     )
     expect(features.model?.selectedId).toBe("fixture-fast")
     expect(features.context).toEqual({
-      usedTokens: 12_544,
-      maxTokens: 32_768,
+      usage: { system: 2, tools: 1, messages: 10, total: 33 },
     })
 
     view.rerender(<Harness threadId="thread-mica-quarterly" />)
@@ -78,8 +75,7 @@ describe("fixture composer features", () => {
     )
     expect(features.model?.selectedId).toBe("fixture-balanced")
     expect(features.context).toEqual({
-      usedTokens: 4_096,
-      maxTokens: 65_536,
+      usage: { system: 2, tools: 1, messages: 1, total: 66 },
     })
 
     view.rerender(<Harness threadId="thread-aster-market" />)
@@ -90,8 +86,7 @@ describe("fixture composer features", () => {
     )
     expect(features.model?.selectedId).toBe("fixture-fast")
     expect(features.context).toEqual({
-      usedTokens: 12_544,
-      maxTokens: 32_768,
+      usage: { system: 2, tools: 1, messages: 10, total: 33 },
     })
   })
 

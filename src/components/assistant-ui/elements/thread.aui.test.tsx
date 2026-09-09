@@ -85,7 +85,10 @@ function LocalThread({
       selectedId: string
       select(id: string): Promise<void>
     }
-    context?: { usedTokens: number; maxTokens: number; estimated?: boolean }
+    context?: {
+      usage: { system: number; tools: number; messages: number; total: number }
+      segments?: readonly ("system" | "tools" | "messages")[]
+    }
   }
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
@@ -491,7 +494,9 @@ describe("Thread accessibility", () => {
             selectedId: "opaque-balanced",
             select,
           },
-          context: { usedTokens: 1_024, maxTokens: 8_192 },
+          context: {
+            usage: { system: 1, tools: 1, messages: 2, total: 8 },
+          },
         }}
       />
     )
@@ -499,25 +504,22 @@ describe("Thread accessibility", () => {
     const model = screen.getByRole("combobox", { name: "Choose model" })
     expect(model).toHaveAttribute("data-slot", "model-selector-trigger")
     expect(model).toHaveTextContent("Balanced")
-    expect(
-      screen.getByText("1,024 / 8,192", { exact: true })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByLabelText("Context usage: 1,024 of 8,192 tokens")
-    ).toBeInTheDocument()
+    const context = screen.getByRole("button", { name: "Context usage" })
+    expect(context).toBeInTheDocument()
+    expect(screen.getByText("Context")).toBeInTheDocument()
+    expect(screen.getByText("System")).toBeInTheDocument()
+    expect(screen.getByText("Tools")).toBeInTheDocument()
+    expect(screen.getByText("Messages")).toBeInTheDocument()
+    expect(screen.getByText("4k / 8k")).toBeInTheDocument()
     const toolbar = document.querySelector(
       '[data-slot="aui_composer-toolbar"]'
     )
     expect(toolbar).not.toBeNull()
     expect(toolbar).toContainElement(model)
     expect(toolbar).toContainElement(
-      screen.getByRole("button", {
-        name: "Context usage: 1,024 of 8,192 tokens",
-      })
+      context
     )
-    expect(
-      document.querySelector('[data-slot="composer-context-ring"]')
-    ).toBeInTheDocument()
+    expect(context).toHaveAttribute("data-slot", "composer-context-trigger")
 
     model.focus()
     await user.keyboard("{ArrowDown}")
@@ -531,34 +533,35 @@ describe("Thread accessibility", () => {
     render(
       <LocalThread
         initialMessages={[]}
-        composerFeatures={{ context: { usedTokens: 0, maxTokens: 4_096 } }}
+        composerFeatures={{
+          context: { usage: { system: 0, tools: 0, messages: 0, total: 4 } },
+        }}
       />
     )
 
     expect(screen.queryByRole("combobox", { name: "Choose model" })).toBeNull()
-    expect(screen.getByText("0 / 4,096", { exact: true })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Context usage" })
+    ).toBeInTheDocument()
   })
 
-  it("marks Hermes-style estimated context usage with a tilde", () => {
+  it("omits categories the runtime did not provide", () => {
     render(
       <LocalThread
         initialMessages={[]}
         composerFeatures={{
           context: {
-            usedTokens: 36_410,
-            maxTokens: 272_000,
-            estimated: true,
+            usage: { system: 0, tools: 0, messages: 36, total: 272 },
+            segments: [],
           },
         }}
       />
     )
 
-    expect(
-      screen.getByText("~36,410 / 272,000", { exact: true })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByLabelText("Context usage: ~36,410 of 272,000 tokens")
-    ).toBeInTheDocument()
+    expect(screen.getByText("36k / 272k")).toBeInTheDocument()
+    expect(screen.queryByText("System")).toBeNull()
+    expect(screen.queryByText("Tools")).toBeNull()
+    expect(screen.queryByText("Messages")).toBeNull()
   })
 
   it("uses localized accessible labels for composer model and context controls", () => {
@@ -567,8 +570,7 @@ describe("Thread accessibility", () => {
         initialMessages={[]}
         labels={{
           modelSelector: "בחירת מודל",
-          contextUsage: (used, max) =>
-            `שימוש בהקשר: ${used} מתוך ${max} טוקנים`,
+          contextUsage: "שימוש בהקשר",
         }}
         composerFeatures={{
           model: {
@@ -576,7 +578,9 @@ describe("Thread accessibility", () => {
             selectedId: "opaque-balanced",
             select: async () => undefined,
           },
-          context: { usedTokens: 512, maxTokens: 4_096 },
+          context: {
+            usage: { system: 0, tools: 0, messages: 1, total: 4 },
+          },
         }}
       />
     )
@@ -585,7 +589,7 @@ describe("Thread accessibility", () => {
       screen.getByRole("combobox", { name: "בחירת מודל" })
     ).toBeInTheDocument()
     expect(
-      screen.getByLabelText("שימוש בהקשר: 512 מתוך 4,096 טוקנים")
+      screen.getByRole("button", { name: "שימוש בהקשר" })
     ).toBeInTheDocument()
   })
 

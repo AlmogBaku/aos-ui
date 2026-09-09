@@ -23,7 +23,9 @@ type MockHermesSession = Pick<HermesSession, "threadId"> & {
 const mocks = vi.hoisted(() => ({
   featureConfig: undefined as ComposerFeatureConfig | undefined,
   workspaceFeatures: undefined as ComposerFeatureViewModel | undefined,
-  features: { context: { usedTokens: 17, maxTokens: 100 } },
+  features: {
+    context: { usage: { system: 0, tools: 0, messages: 17, total: 100 } },
+  },
   options: {} as {
     onError?: (error: Error) => void
     onRecovered?: () => void

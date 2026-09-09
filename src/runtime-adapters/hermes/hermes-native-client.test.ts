@@ -1338,8 +1338,9 @@ describe("Hermes native browser client", () => {
           }
         if (method === "session.context_breakdown")
           return {
-            context_used: fields.session_id === "live-research" ? 10 : 50,
-            context_max: 100,
+            context_used:
+              fields.session_id === "live-research" ? 10_000 : 50_000,
+            context_max: 100_000,
             context_source: "provider_usage",
             context_estimated: false,
           }
@@ -1384,12 +1385,15 @@ describe("Hermes native browser client", () => {
           encodeHermesThreadId("creator", "stored-1")
         )
       )
-      await waitFor(() => expect(features?.context?.usedTokens).toBe(50))
+      await waitFor(() => expect(features?.context?.usage.messages).toBe(50))
       delayed.resolve(new RpcFailure("Original Session failed"))
       await act(() => change)
       expect(onError).not.toHaveBeenCalled()
       expect(features?.model?.selectedId).toBe('["native","small"]')
-      expect(features?.context).toEqual({ usedTokens: 50, maxTokens: 100 })
+      expect(features?.context).toEqual({
+        usage: { system: 0, tools: 0, messages: 50, total: 100 },
+        segments: [],
+      })
       expect(
         state.sockets[0].requests.filter(
           ({ method }) => method === "config.set"

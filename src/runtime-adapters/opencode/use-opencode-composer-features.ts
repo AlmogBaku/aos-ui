@@ -8,6 +8,7 @@ import {
   type ComposerFeatureConfig,
 } from "@shared/runtime-config"
 import { aosOpenCodeExtras } from "./opencode-runtime-extras"
+import { readOpenCodeComposerContext } from "./opencode-context-usage"
 
 const REQUEST_OPTIONS = { throwOnError: true } as const
 type ModelOption = {
@@ -114,23 +115,12 @@ export function useOpenCodeComposerFeatures(
       native.providerID === state.session.model.providerID
   )
   const sessionId = state.session?.id
-  const latestAssistant = state.messageOrder
-    .map((id) => state.messagesById[id]?.info)
-    .findLast((info) => info?.role === "assistant")
-  const usedTokens =
-    latestAssistant?.role === "assistant" &&
-    latestAssistant.sessionID === sessionId
-      ? latestAssistant.tokens?.total
-      : undefined
+  const context = selected?.maxTokens
+    ? readOpenCodeComposerContext(state, selected.maxTokens)
+    : undefined
   return {
     context:
-      config.contextEnabled &&
-      selected?.maxTokens !== undefined &&
-      typeof usedTokens === "number" &&
-      Number.isFinite(usedTokens) &&
-      usedTokens >= 0
-        ? { usedTokens, maxTokens: selected.maxTokens }
-        : undefined,
+      config.contextEnabled && sessionId ? context : undefined,
     model:
       config.modelSelectorEnabled && selected && sessionId
         ? {

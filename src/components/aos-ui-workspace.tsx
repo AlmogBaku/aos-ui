@@ -71,8 +71,12 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     next: "Next branch",
     conversationHeading: "Conversation",
     modelSelector: "Choose model",
-    contextUsage: (usedTokens, maxTokens) =>
-      `Context usage: ${usedTokens} of ${maxTokens} tokens`,
+    contextUsage: "Context usage",
+    contextTitle: "Context",
+    contextSystem: "System",
+    contextTools: "Tools",
+    contextMessages: "Messages",
+    contextTotal: "Total",
     attachments: {
       add: "Add attachment",
       remove: "Remove attachment",
@@ -112,8 +116,12 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     next: "הסתעפות הבאה",
     conversationHeading: "שיחה",
     modelSelector: "בחירת מודל",
-    contextUsage: (usedTokens, maxTokens) =>
-      `שימוש בהקשר: ${usedTokens} מתוך ${maxTokens} טוקנים`,
+    contextUsage: "שימוש בהקשר",
+    contextTitle: "הקשר",
+    contextSystem: "מערכת",
+    contextTools: "כלים",
+    contextMessages: "הודעות",
+    contextTotal: "סה״כ",
     attachments: {
       add: "הוספת קובץ מצורף",
       remove: "הסרת קובץ מצורף",

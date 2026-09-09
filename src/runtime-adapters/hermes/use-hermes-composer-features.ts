@@ -6,6 +6,7 @@ import {
   type ComposerFeatureConfig,
 } from "@shared/runtime-config"
 import type { HermesNativeClient } from "./hermes-native-client"
+import { toHermesComposerUsage } from "./hermes-composer-state"
 
 function selectedThread(runtime: AssistantRuntime) {
   const state = runtime.threads.getState()
@@ -54,7 +55,15 @@ export function useHermesComposerFeatures(
 
   const model = session?.composer?.model
   return {
-    context: contextEnabled ? session?.composer?.context : undefined,
+    context:
+      contextEnabled && session?.composer?.context
+        ? {
+            usage: toHermesComposerUsage(session.composer.context),
+            segments: session.composer.context.breakdown
+              ? (["system", "tools", "messages"] as const)
+              : [],
+          }
+        : undefined,
     model:
       modelSelectorEnabled &&
       model &&

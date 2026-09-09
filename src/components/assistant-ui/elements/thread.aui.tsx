@@ -173,7 +173,12 @@ export type ThreadLabels = {
   next: string
   conversationHeading?: string | undefined
   modelSelector: string
-  contextUsage: (usedTokens: string, maxTokens: string) => string
+  contextUsage: string
+  contextTitle: string
+  contextSystem: string
+  contextTools: string
+  contextMessages: string
+  contextTotal: string
   attachments?: Partial<AttachmentLabels> | undefined
 }
 
@@ -205,8 +210,12 @@ const DEFAULT_LABELS: ThreadLabels = {
   next: "Next",
   conversationHeading: "Conversation",
   modelSelector: "Choose model",
-  contextUsage: (usedTokens, maxTokens) =>
-    `Context usage: ${usedTokens} of ${maxTokens} tokens`,
+  contextUsage: "Context usage",
+  contextTitle: "Context",
+  contextSystem: "System",
+  contextTools: "Tools",
+  contextMessages: "Messages",
+  contextTotal: "Total",
   attachments: DEFAULT_ATTACHMENT_LABELS,
 }
 
@@ -1007,11 +1016,6 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   const labels = useContext(ThreadLabelsContext)
   if (!features.model && !features.context) return null
 
-  const usedTokens = features.context
-    ? `${features.context.estimated ? "~" : ""}${features.context.usedTokens.toLocaleString("en-US")}`
-    : undefined
-  const maxTokens = features.context?.maxTokens.toLocaleString("en-US")
-
   return (
     <div
       data-slot="aui_composer-features"
@@ -1039,13 +1043,19 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
       ) : (
         <span />
       )}
-      {features.context && usedTokens && maxTokens ? (
+      {features.context ? (
         <ComposerContext
           className="ms-auto"
-          usedTokens={features.context.usedTokens}
-          maxTokens={features.context.maxTokens}
-          estimated={features.context.estimated}
-          label={labels.contextUsage(usedTokens, maxTokens)}
+          usage={features.context.usage}
+          visibleSegments={features.context.segments}
+          labels={{
+            trigger: labels.contextUsage,
+            title: labels.contextTitle,
+            system: labels.contextSystem,
+            tools: labels.contextTools,
+            messages: labels.contextMessages,
+            total: labels.contextTotal,
+          }}
         />
       ) : null}
     </div>

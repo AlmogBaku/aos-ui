@@ -606,7 +606,7 @@ describe("AOS OpenCode runtime", () => {
     )
   })
 
-  it("shows exact native context usage, omits missing usage, and gates model and context independently", async () => {
+  it("builds ComposerContext usage from native tokens and gates features independently", async () => {
     const { client, native } = nativeClient()
     const hub = new AosOpenCodeEventHub(client)
     let features!: ComposerFeatureViewModel
@@ -631,7 +631,20 @@ describe("AOS OpenCode runtime", () => {
       },
     }
     native.session.messages.mockResolvedValue({
-      data: [{ info: assistant, parts: [] }],
+      data: [
+        {
+          info: assistant,
+          parts: [
+            {
+              id: "text-1",
+              sessionID: "session-build",
+              messageID: "assistant-1",
+              type: "text",
+              text: "a".repeat(4_000),
+            },
+          ],
+        },
+      ],
     })
     function Features({ config }: { config: ComposerFeatureConfig }) {
       features = useOpenCodeComposerFeatures(client, config)
@@ -653,7 +666,10 @@ describe("AOS OpenCode runtime", () => {
       <Harness config={{ modelSelectorEnabled: false, contextEnabled: true }} />
     )
     await waitFor(() =>
-      expect(features.context).toEqual({ usedTokens: 12345, maxTokens: 32768 })
+      expect(features.context).toEqual({
+        usage: { system: 0, tools: 0, messages: 12, total: 33 },
+        segments: [],
+      })
     )
     expect(features.model).toBeUndefined()
     view.rerender(
@@ -674,7 +690,12 @@ describe("AOS OpenCode runtime", () => {
         raw: {},
       })
     )
-    await waitFor(() => expect(features.context).toBeUndefined())
+    await waitFor(() =>
+      expect(features.context).toEqual({
+        usage: { system: 0, tools: 0, messages: 12, total: 33 },
+        segments: [],
+      })
+    )
   })
 
   it("keeps a pending model change scoped to its Session across navigation and native updates", async () => {

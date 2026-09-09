@@ -34,11 +34,18 @@ function contextFor(
     0
   )
   const initialUsedTokens = configured ?? 2_048 + hash
+  const messages =
+    initialUsedTokens +
+    Math.max(0, messageCount - initialMessageCount(threadId)) * 256
   return {
-    usedTokens:
-      initialUsedTokens +
-      Math.max(0, messageCount - initialMessageCount(threadId)) * 256,
-    maxTokens: FIXTURE_MAX_TOKENS.get(modelId) ?? 65_536,
+    usage: {
+      system: 2,
+      tools: 1,
+      messages: Math.round(Math.max(0, messages - 3_000) / 1_000),
+      total: Math.round(
+        (FIXTURE_MAX_TOKENS.get(modelId) ?? 65_536) / 1_000
+      ),
+    },
   }
 }
 
