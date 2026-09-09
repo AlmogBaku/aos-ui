@@ -7,7 +7,7 @@ import {
   type ReasoningMessagePartComponent,
   type ReasoningGroupComponent,
 } from "@assistant-ui/react"
-import { MessageText } from "@/components/assistant-ui/elements/message-text"
+import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import {
   ANIMATION_DURATION,
   ReasoningRoot as ReasoningRootBase,
@@ -56,7 +56,7 @@ function ReasoningRoot({
   )
 }
 
-const ReasoningImpl: ReasoningMessagePartComponent = () => <MessageText />
+const ReasoningImpl: ReasoningMessagePartComponent = () => <MarkdownText />
 
 const ReasoningGroupImpl: ReasoningGroupComponent = ({
   children,

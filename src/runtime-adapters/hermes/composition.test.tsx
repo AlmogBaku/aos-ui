@@ -136,7 +136,7 @@ describe("Hermes error toasts", () => {
     )
   })
 
-  it("renders every native approval scope through the shared approval composer", () => {
+  it("leaves Hermes approvals to the native Assistant UI message lifecycle", () => {
     const session = {
       threadId: "thread-one",
       approval: {
@@ -147,10 +147,10 @@ describe("Hermes error toasts", () => {
     }
     mocks.bundle.client.session = () => session
     showApp()
+    expect(screen.getByText("Fallback composer")).toBeVisible()
     expect(
-      screen.getByRole("button", { name: "Allow for this session" })
-    ).toBeVisible()
-    expect(screen.getByRole("button", { name: "Always allow" })).toBeVisible()
+      screen.queryByRole("button", { name: "Allow for this session" })
+    ).toBeNull()
   })
 
   it("does not auto-dismiss an unresolved error", () => {

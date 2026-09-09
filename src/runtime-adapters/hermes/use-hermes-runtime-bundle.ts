@@ -28,6 +28,10 @@ import {
 import { HermesThreadListAdapter } from "./hermes-thread-list"
 import { createHermesMessageQueue } from "./hermes-message-queue"
 import { messageText } from "./hermes-native-codec"
+import {
+  projectHermesApprovalMessages,
+  respondToHermesApproval,
+} from "./hermes-approval"
 import { createHermesWorkspace } from "./hermes-workspace"
 
 const EMPTY_MESSAGES: readonly ThreadMessageLike[] = []
@@ -36,35 +40,16 @@ const COMPLETE_STATUS: MessageStatus = { type: "complete", reason: "unknown" }
 export function createHermesInteractions(
   client: Pick<
     HermesNativeClient,
-    "answerClarification" | "rejectClarification" | "answerApproval"
+    "answerClarification" | "rejectClarification"
   >
 ): RuntimeInteractionAdapter {
   return {
     async respond(request, response) {
-      if (request.kind === "question" && response.kind === "question") {
-        await client.answerClarification(
-          request.sessionId,
-          request.requestId,
-          response.answers
-        )
-        return
-      }
-      if (request.kind === "approval" && response.kind === "approval") {
-        if (
-          response.option !== "once" &&
-          response.option !== "session" &&
-          response.option !== "always" &&
-          response.option !== "deny"
-        )
-          throw new Error("Hermes approval option is not supported")
-        await client.answerApproval(
-          request.sessionId,
-          request.requestId,
-          response.option
-        )
-        return
-      }
-      throw new Error("Hermes interaction response does not match its request")
+      await client.answerClarification(
+        request.sessionId,
+        request.requestId,
+        response.answers
+      )
     },
     async reject(request) {
       await client.rejectClarification(request.sessionId, request.requestId)
@@ -75,6 +60,7 @@ export function createHermesInteractions(
 function useHermesThreadRuntime(
   client: HermesNativeClient,
   voice: HermesMediaBinding,
+  locale: Locale,
   onError?: (error: Error) => void
 ) {
   const threadId = useAuiState((state) => state.threadListItem.remoteId)
@@ -117,7 +103,11 @@ function useHermesThreadRuntime(
 
   return useExternalStoreRuntime<ThreadMessageLike>({
     adapters,
-    messages: session?.messages ?? EMPTY_MESSAGES,
+    messages: projectHermesApprovalMessages(
+      session?.messages ?? EMPTY_MESSAGES,
+      session?.approval,
+      locale
+    ),
     convertMessage: (message, index) =>
       fromThreadMessageLike(
         message,
@@ -148,6 +138,10 @@ function useHermesThreadRuntime(
     },
     async onRefetchThread() {
       if (threadId) await client.loadHistory(threadId)
+    },
+    async onRespondToToolApproval(response) {
+      if (!threadId) throw new Error("No Hermes Session is selected")
+      await respondToHermesApproval(client, threadId, response)
     },
     queue: queue?.controller.adapter,
   })
@@ -210,7 +204,12 @@ export function useHermesRuntimeBundle(
     adapter,
     allowNesting: true,
     runtimeHook: function useRuntime() {
-      return useHermesThreadRuntime(client, voice, onError)
+      return useHermesThreadRuntime(
+        client,
+        voice,
+        options.locale ?? "en",
+        onError
+      )
     },
   })
 

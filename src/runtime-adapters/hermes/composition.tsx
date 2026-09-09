@@ -10,16 +10,12 @@ import {
 
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
-import { RuntimeApprovalComposer } from "@/components/runtime-interactions/approval-composer"
 import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
-import type {
-  RuntimeApprovalRequest,
-  RuntimeQuestionRequest,
-} from "@/runtime-adapters/contracts"
+import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
 import {
   stopCurrentHermesRun,
   useHermesRuntimeBundle,
@@ -83,31 +79,7 @@ function HermesInteractionComposer({
       />
     )
   }
-  if (!session.approval) return fallback
-  const approvalLabels = {
-    once: locale === "he" ? "אישור פעם אחת" : "Allow once",
-    session: locale === "he" ? "אישור לשיחה זו" : "Allow for this session",
-    always: locale === "he" ? "אישור תמיד" : "Always allow",
-    deny: locale === "he" ? "דחייה" : "Deny",
-  }
-  const request: RuntimeApprovalRequest = {
-    kind: "approval",
-    requestId: session.approval.requestId,
-    sessionId: session.threadId,
-    message: session.approval.message,
-    options: (session.approval.choices ?? ["once", "deny"]).map((choice) => ({
-      label: approvalLabels[choice],
-      value: choice,
-    })),
-  }
-  return (
-    <RuntimeApprovalComposer
-      locale={locale}
-      request={request}
-      interactions={interactions}
-      onResolved={() => undefined}
-    />
-  )
+  return fallback
 }
 
 export function HermesAosUiApp({

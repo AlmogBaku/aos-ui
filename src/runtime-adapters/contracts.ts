@@ -167,36 +167,16 @@ export type RuntimeQuestionRequest = {
   questions: readonly RuntimeQuestion[]
 }
 
-/** Approval options stay provider-defined; the UI only renders their labels. */
-export type RuntimeApprovalRequest = {
-  kind: "approval"
-  requestId: string
-  sessionId: string
-  message: string
-  options: readonly RuntimeQuestionOption[]
-}
-
-export type RuntimeInteractionRequest =
-  RuntimeQuestionRequest | RuntimeApprovalRequest
-
 export type RuntimeQuestionResponse = {
   kind: "question"
   answers: string[][]
 }
 
-export type RuntimeApprovalResponse = {
-  kind: "approval"
-  option: string
-}
-
-export type RuntimeInteractionResponse =
-  RuntimeQuestionResponse | RuntimeApprovalResponse
-
 /** Provider-owned interaction actions exposed to shared runtime UI. */
 export type RuntimeInteractionAdapter = {
   respond(
-    request: RuntimeInteractionRequest,
-    response: RuntimeInteractionResponse
+    request: RuntimeQuestionRequest,
+    response: RuntimeQuestionResponse
   ): Promise<void>
   reject(request: RuntimeQuestionRequest): Promise<void>
 }
