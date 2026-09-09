@@ -13,6 +13,7 @@ describe("provider harness manifests", () => {
     expect(openCodeProviderInstructions).toContain("`render_map`")
     expect(openCodeProviderInstructions).toContain("`render_stats`")
     expect(openCodeProviderInstructions).toContain("`present_plan`")
+    expect(openCodeProviderInstructions).toContain("`present_artifact`")
     expect(openCodeProviderInstructions).toContain("`question`")
     expect(openCodeProviderInstructions).not.toMatch(/monty_/)
   })
@@ -26,6 +27,7 @@ describe("provider harness manifests", () => {
       /Interactive questions are unavailable/i
     )
     expect(agUiProviderInstructions).not.toContain("`render_chart`")
+    expect(agUiProviderInstructions).toContain("`present_artifact`")
   })
 
   it("advertises only the Builder controls its permission set exposes", () => {

@@ -14,6 +14,7 @@ import type { TextMessagePartProps } from "@assistant-ui/react"
 import { CheckIcon, CopyIcon } from "lucide-react"
 
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import { SyntaxHighlighter } from "@/components/code/syntax-highlighter"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { cn } from "@/lib/utils"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
@@ -104,6 +105,7 @@ const componentsByLanguage = {
 }
 
 const defaultComponents = memoizeMarkdownComponents({
+  SyntaxHighlighter,
   h1: ({ className, ...props }) => (
     <h1
       className={cn(

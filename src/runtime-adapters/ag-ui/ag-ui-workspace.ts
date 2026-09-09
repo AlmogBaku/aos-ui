@@ -88,12 +88,12 @@ export class AgUiWorkspace implements WorkspaceAdapter {
   async listAgents() {
     return structuredClone(
       (await this.#transport.listAgents()).map((agent) => {
-          const summary = { ...agent }
-          if (summary.selectable === false) summary.visibility = "hidden"
-          delete summary.selectable
-          delete summary.editable
-          return summary
-        })
+        const summary = { ...agent }
+        if (summary.selectable === false) summary.visibility = "hidden"
+        delete summary.selectable
+        delete summary.editable
+        return summary
+      })
     )
   }
 

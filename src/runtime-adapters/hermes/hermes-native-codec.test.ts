@@ -47,4 +47,43 @@ describe("Hermes native history projection", () => {
   ])("canonicalizes %s", (native, expected) => {
     expect(canonicalHermesToolName(native)).toBe(expected)
   })
+
+  it("unwraps tools selected through Hermes tool search", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "chart-1",
+            function: {
+              name: "tool_call",
+              arguments: JSON.stringify({
+                name: "render_chart",
+                arguments: { type: "bar", data: [{ label: "A", value: 2 }] },
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "chart-1",
+        tool_name: "render_chart",
+        content: '{"ok":true}',
+      },
+    ])
+
+    expect(messages[0]).toMatchObject({
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "chart-1",
+          toolName: "render_chart",
+          args: { type: "bar", data: [{ label: "A", value: 2 }] },
+          result: { ok: true },
+        },
+      ],
+    })
+  })
 })

@@ -12,3 +12,7 @@ export {
 } from "./use-ag-ui-runtime-bundle"
 export { createAgUiHttpWorkspaceTransport } from "./ag-ui-http-transport"
 export { AgUiAosUiApp } from "./composition"
+export {
+  createAgUiArtifactToolkit,
+  publishAgUiArtifact,
+} from "./ag-ui-artifacts"

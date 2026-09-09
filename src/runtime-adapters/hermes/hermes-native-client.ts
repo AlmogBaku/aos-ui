@@ -5,6 +5,7 @@ import type {
 } from "@assistant-ui/react"
 
 import { createBrowserId } from "@/lib/browser-id"
+import { projectHermesArtifactReceipt } from "./hermes-artifacts"
 import {
   HermesAttachmentStagingError,
   hermesImagePaths,
@@ -36,6 +37,7 @@ import {
   numberValue,
   projectHermesHistory,
   stringValue,
+  unwrapHermesToolCall,
   websocketUrl,
   type JsonRecord,
 } from "./hermes-native-codec"
@@ -295,7 +297,22 @@ export class HermesNativeClient {
     this.#stopped = false
     this.#startPromise = (async () => {
       try {
-        await this.#connect()
+        try {
+          await this.#connect()
+        } catch (reason) {
+          if (
+            reason instanceof Error &&
+            reason.message.includes("authentication failed (401)")
+          )
+            throw reason
+          this.#socketGeneration += 1
+          this.#socket?.close()
+          this.#socket = undefined
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.#reconnectDelayMs)
+          )
+          await this.#connect()
+        }
         await this.refreshCatalog()
         for (const listener of this.#recoveryListeners) listener()
         this.#catalogTimer = setInterval(() => {
@@ -1759,14 +1776,24 @@ export class HermesNativeClient {
       const index = content.findIndex(
         (part) => part.type === "tool-call" && part.toolCallId === toolCallId
       )
-      const nativeToolName = stringValue(payload.name) ?? "tool"
-      const args = isRecord(payload.args)
-        ? canonicalHermesToolArgs(nativeToolName, payload.args)
-        : {}
+      const existing = index >= 0 ? content[index] : undefined
+      const nativeToolName =
+        stringValue(payload.name) ??
+        (existing?.type === "tool-call" ? existing.toolName : undefined) ??
+        "tool"
+      const unwrapped = unwrapHermesToolCall(
+        nativeToolName,
+        isRecord(payload.args)
+          ? payload.args
+          : existing?.type === "tool-call" && isRecord(existing.args)
+            ? existing.args
+            : {}
+      )
+      const args = canonicalHermesToolArgs(unwrapped.name, unwrapped.args)
       const part = {
         type: "tool-call",
         toolCallId,
-        toolName: canonicalHermesToolName(nativeToolName),
+        toolName: canonicalHermesToolName(unwrapped.name),
         args,
         argsText: JSON.stringify(args),
         ...(complete
@@ -1778,6 +1805,21 @@ export class HermesNativeClient {
       }
       if (index >= 0) content[index] = { ...content[index], ...part }
       else content.push(part)
+      const artifact =
+        complete && part.toolName === "present_artifact" && !payload.error
+          ? projectHermesArtifactReceipt(payload.result)
+          : undefined
+      if (
+        artifact &&
+        !content.some(
+          (item) =>
+            item.type === "data" &&
+            item.name === "aos.artifact" &&
+            isRecord(item.data) &&
+            item.data.id === artifact.data.id
+        )
+      )
+        content.push(artifact)
       return { ...message, content }
     })
   }

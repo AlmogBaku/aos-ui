@@ -2,6 +2,28 @@ import type { Dictionary } from "../dictionary"
 
 export const en = {
   productName: "AOS",
+  artifacts: {
+    outputs: "Outputs",
+    empty: "No outputs yet",
+    open: "Open",
+    download: "Download",
+    close: "Close preview",
+    loading: "Loading output…",
+    loadFailed: "This output could not be loaded.",
+    unavailable: "This runtime cannot open this output.",
+    downloadFailed: "This output could not be downloaded.",
+    retry: "Try again",
+    unsupported: "Preview is unavailable for this file type.",
+    fileTooLarge: "This file is too large to preview.",
+    textTooLarge: "This text file is too large to preview.",
+    preview: "Preview",
+    source: "Source",
+    htmlView: "HTML view",
+    htmlPreviewTitle: "HTML preview",
+    pdfPreviewTitle: "PDF preview",
+    csvTruncated: "Showing the first 500 rows.",
+    viewerLabel: "Output preview",
+  },
   activity: {
     title: "Activity",
     unread: "unread",

@@ -132,6 +132,28 @@ test("message plans and session todos remain independent artifacts", async ({
   await expect(plans).toHaveCount(1)
 })
 
+test("published artifacts open from Outputs and restore focus on close", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  const outputs = page.getByRole("region", { name: "Outputs" })
+  const markdownOutput = outputs
+    .locator("article")
+    .filter({ hasText: "enterprise-ai-brief.md" })
+  await expect(markdownOutput).toBeVisible()
+  const open = markdownOutput.getByRole("button", { name: "Open" })
+  await open.click()
+
+  const viewer = page.getByRole("region", { name: "Output preview" })
+  await expect(viewer.getByText("Enterprise AI brief")).toBeVisible()
+  await viewer.getByRole("button", { name: "Close preview" }).click()
+  await expect(open).toBeFocused()
+
+  await expect(outputs.getByText("research-notes.txt")).toBeVisible()
+  await expect(outputs.getByText("market-summary.mp4")).toBeVisible()
+})
+
 test("Monty stays inspect-only and malformed tools retain a safe JSON fallback", async ({
   page,
 }) => {

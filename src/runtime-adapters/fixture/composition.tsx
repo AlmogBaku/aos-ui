@@ -18,10 +18,12 @@ export function FixtureAosUiApp({
   locale,
   dictionary,
   composerFeatures = DEFAULT_COMPOSER_FEATURE_CONFIG,
+  artifactHtmlAssetOrigins,
 }: {
   locale: Locale
   dictionary: Dictionary
   composerFeatures?: ComposerFeatureConfig
+  artifactHtmlAssetOrigins?: readonly string[]
 }) {
   const [threadId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
@@ -57,6 +59,7 @@ export function FixtureAosUiApp({
       environmentLabel={dictionary.workspace.fixtureLabel}
       assistantInstructions={fixtureProviderInstructions}
       composerFeatures={composerFeatureViewModel}
+      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     />
   )
 }

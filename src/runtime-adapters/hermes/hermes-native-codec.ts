@@ -1,4 +1,5 @@
 import type { AppendMessage, ThreadMessageLike } from "@assistant-ui/react"
+import { projectHermesArtifactReceipt } from "./hermes-artifacts"
 
 export type JsonRecord = Record<string, unknown>
 
@@ -93,6 +94,15 @@ export function canonicalHermesToolArgs(name: string, args: JsonRecord) {
     : args
 }
 
+/** Unwrap Hermes' tool-search bridge into the provider-neutral tool call. */
+export function unwrapHermesToolCall(name: string, args: JsonRecord) {
+  if (name !== "tool_call") return { name, args }
+  const selectedName = stringValue(args.name)
+  const selectedArgs = parseJson(args.arguments)
+  if (!selectedName || !isRecord(selectedArgs)) return { name, args }
+  return { name: selectedName, args: selectedArgs }
+}
+
 function messageDate(value: JsonRecord, index: number) {
   const numeric = numberValue(value.timestamp ?? value.created_at)
   if (!numeric) return new Date(index)
@@ -120,11 +130,33 @@ export function projectHermesHistory(rows: readonly unknown[]) {
       const content = [...message.content]
       const part = content[target.partIndex]
       if (!part || part.type !== "tool-call") return
+      const resultToolName = stringValue(value.tool_name ?? value.toolName)
       content[target.partIndex] = {
         ...part,
+        ...(resultToolName
+          ? { toolName: canonicalHermesToolName(resultToolName) }
+          : {}),
         result: parseJson(value.content ?? value.result),
         ...(value.is_error === true ? { isError: true } : {}),
       }
+      const toolName = resultToolName
+        ? canonicalHermesToolName(resultToolName)
+        : part.toolName
+      const artifact =
+        toolName === "present_artifact" && value.is_error !== true
+          ? projectHermesArtifactReceipt(value.content ?? value.result)
+          : undefined
+      if (
+        artifact &&
+        !content.some(
+          (item) =>
+            item.type === "data" &&
+            item.name === "aos.artifact" &&
+            isRecord(item.data) &&
+            item.data.id === artifact.data.id
+        )
+      )
+        content.push(artifact)
       messages[target.messageIndex] = { ...message, content }
       return
     }
@@ -176,15 +208,16 @@ export function projectHermesHistory(rows: readonly unknown[]) {
         if (!toolCallId || !nativeToolName) continue
         const argsText = String(fn?.arguments ?? "{}")
         const args = parseJson(argsText)
+        const unwrapped = isRecord(args)
+          ? unwrapHermesToolCall(nativeToolName, args)
+          : { name: nativeToolName, args: {} }
         const partIndex = content.length
         content.push({
           type: "tool-call",
           toolCallId,
-          toolName: canonicalHermesToolName(nativeToolName),
-          args: isRecord(args)
-            ? canonicalHermesToolArgs(nativeToolName, args)
-            : {},
-          argsText,
+          toolName: canonicalHermesToolName(unwrapped.name),
+          args: canonicalHermesToolArgs(unwrapped.name, unwrapped.args),
+          argsText: JSON.stringify(unwrapped.args),
         })
         calls.set(toolCallId, { messageIndex: messages.length, partIndex })
       }

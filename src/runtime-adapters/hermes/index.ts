@@ -9,6 +9,10 @@ export {
   type HermesSession,
 } from "./hermes-native-client"
 export { HermesThreadListAdapter } from "./hermes-thread-list"
+export {
+  HermesArtifactAdapter,
+  projectHermesArtifactReceipt,
+} from "./hermes-artifacts"
 export { createHermesWorkspace } from "./hermes-workspace"
 export { stopCurrentHermesRun } from "./stop-hermes-run"
 export {

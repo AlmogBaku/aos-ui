@@ -90,12 +90,14 @@ export function HermesAosUiApp({
   baseUrl,
   nowIso,
   composerFeatures: composerConfig,
+  artifactHtmlAssetOrigins,
 }: {
   locale: Locale
   dictionary: Dictionary
   baseUrl: string
   nowIso: string
   composerFeatures?: ComposerFeatureConfig
+  artifactHtmlAssetOrigins?: readonly string[]
 }) {
   const [runtimeError, setRuntimeError] = useState<{
     message: string
@@ -195,6 +197,7 @@ export function HermesAosUiApp({
           onWorkspaceError={onError}
           onStopRun={() => stopCurrentHermesRun(bundle.assistantRuntime)}
           activityCoverage="active-session"
+          artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
         />
       </VoiceMediaProvider>
     </div>

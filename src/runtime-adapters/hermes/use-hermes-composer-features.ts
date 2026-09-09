@@ -1,5 +1,5 @@
 import type { AssistantRuntime } from "@assistant-ui/react"
-import { useEffect, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
   DEFAULT_COMPOSER_FEATURE_CONFIG,
@@ -25,9 +25,24 @@ export function useHermesComposerFeatures(
     () => selectedThread(runtime),
     () => selectedThread(runtime)
   )
-  useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot)
-  const session = threadId ? client.session(threadId) : undefined
-  const liveSessionId = session?.liveSessionId
+  const readComposer = useCallback(
+    () => (threadId ? client.session(threadId)?.composer : undefined),
+    [client, threadId]
+  )
+  const readLiveSessionId = useCallback(
+    () => (threadId ? client.session(threadId)?.liveSessionId : undefined),
+    [client, threadId]
+  )
+  const composer = useSyncExternalStore(
+    client.subscribe,
+    readComposer,
+    readComposer
+  )
+  const liveSessionId = useSyncExternalStore(
+    client.subscribe,
+    readLiveSessionId,
+    readLiveSessionId
+  )
   const { modelSelectorEnabled, contextEnabled } = config
   useEffect(() => {
     if (!threadId || !liveSessionId) return
@@ -53,40 +68,52 @@ export function useHermesComposerFeatures(
     onError,
   ])
 
-  const model = session?.composer?.model
-  return {
-    context:
-      contextEnabled && session?.composer?.context
-        ? {
-            usage: toHermesComposerUsage(session.composer.context),
-            segments: session.composer.context.breakdown
-              ? (["system", "tools", "messages"] as const)
-              : [],
-          }
-        : undefined,
-    model:
-      modelSelectorEnabled &&
-      model &&
-      threadId &&
-      model.options.some((option) => option.id === model.selectedId)
-        ? {
-            selectedId: model.selectedId,
-            options: model.options.map(({ id, label, group }) => ({
-              id,
-              label,
-              group,
-            })),
-            async select(id) {
-              try {
-                await client.selectModel(threadId, id)
-              } catch (reason) {
-                if (selectedThread(runtime) === threadId)
-                  onError?.(
-                    reason instanceof Error ? reason : new Error(String(reason))
-                  )
-              }
-            },
-          }
-        : undefined,
-  }
+  return useMemo(() => {
+    const model = composer?.model
+    return {
+      context:
+        contextEnabled && composer?.context
+          ? {
+              usage: toHermesComposerUsage(composer.context),
+              segments: composer.context.breakdown
+                ? (["system", "tools", "messages"] as const)
+                : [],
+            }
+          : undefined,
+      model:
+        modelSelectorEnabled &&
+        model &&
+        threadId &&
+        model.options.some((option) => option.id === model.selectedId)
+          ? {
+              selectedId: model.selectedId,
+              options: model.options.map(({ id, label, group }) => ({
+                id,
+                label,
+                group,
+              })),
+              async select(id: string) {
+                try {
+                  await client.selectModel(threadId, id)
+                } catch (reason) {
+                  if (selectedThread(runtime) === threadId)
+                    onError?.(
+                      reason instanceof Error
+                        ? reason
+                        : new Error(String(reason))
+                    )
+                }
+              },
+            }
+          : undefined,
+    }
+  }, [
+    client,
+    composer,
+    contextEnabled,
+    modelSelectorEnabled,
+    onError,
+    runtime,
+    threadId,
+  ])
 }

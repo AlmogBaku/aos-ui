@@ -16,6 +16,7 @@ export const openCodeHarnessCapabilities = {
   nativePermissions: true,
   providerTodos: true,
   providerSubagents: true,
+  artifactPublicationTool: "present_artifact",
 } as const satisfies HarnessCapabilities
 
 export const hermesHarnessCapabilities = {
@@ -30,6 +31,7 @@ export const hermesHarnessCapabilities = {
   nativePermissions: true,
   providerTodos: true,
   providerSubagents: true,
+  artifactPublicationTool: "present_artifact",
 } as const satisfies HarnessCapabilities
 
 export const fixtureHarnessCapabilities = {
@@ -49,6 +51,7 @@ export const fixtureHarnessCapabilities = {
 // An unconfigured generic AG-UI endpoint promises only streamed Markdown.
 export const agUiHarnessCapabilities = {
   mermaid: true,
+  artifactPublicationTool: "present_artifact",
   nativePermissions: false,
   providerTodos: false,
   providerSubagents: false,

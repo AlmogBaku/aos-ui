@@ -19,6 +19,7 @@ import {
   AGENT_PERMISSION_KEYS,
 } from "./agent-definition"
 import { createAgent } from "./create-agent"
+import { presentArtifact } from "./present-artifact"
 import { startSession } from "./start-session"
 
 type Environment = Readonly<Record<string, string | undefined>>
@@ -122,6 +123,19 @@ export async function createAosUiPlugin(
   }
   const tools: NonNullable<Hooks["tool"]> = {
     ...presentationTools(),
+    present_artifact: tool({
+      description:
+        "Explicitly publish one existing worktree file as an AOS artifact. Use only when the file should appear in the artifact panel.",
+      args: {
+        path: tool.schema.string().min(1).max(4_096),
+        title: tool.schema.string().min(1).max(160).optional(),
+        mimeType: tool.schema.string().min(1).max(255).optional(),
+      },
+      async execute(args, context) {
+        assertContextDirectory(configuredWorktree, context.directory)
+        return presentArtifact(configuredWorktree, args)
+      },
+    }),
     start_session: tool({
       description:
         "Start an independent root Session owned by another available Agent. An optional kickoff is submitted once; an uncertain acceptance is reported and never retried automatically.",

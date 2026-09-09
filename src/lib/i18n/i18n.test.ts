@@ -65,4 +65,22 @@ describe("typed dictionaries", () => {
     expect(english.workspace.fixtureLabel).toBe("Demo workspace")
     expect(hebrew.workspace.fixtureLabel).toBe("סביבת הדגמה")
   })
+
+  it("provides complete artifact actions and states in both locales", async () => {
+    const english = await getDictionary("en")
+    const hebrew = await getDictionary("he")
+
+    expect(english.artifacts).toMatchObject({
+      outputs: "Outputs",
+      open: "Open",
+      download: "Download",
+      preview: "Preview",
+      source: "Source",
+    })
+    expect(hebrew.artifacts.outputs).toBe("תוצרים")
+    expect(hebrew.artifacts.open).not.toBe(english.artifacts.open)
+    expect(hebrew.artifacts.fileTooLarge).not.toBe(
+      english.artifacts.fileTooLarge
+    )
+  })
 })

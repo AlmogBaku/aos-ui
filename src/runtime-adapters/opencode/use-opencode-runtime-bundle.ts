@@ -7,10 +7,8 @@ import {
   type OpenCodeRuntimeOptions,
 } from "@assistant-ui/react-opencode"
 
-import type {
-  RuntimeBundle,
-  RuntimeInteractionAdapter,
-} from "../contracts"
+import { createBrowserArtifactAdapter } from "@/artifacts/browser-artifact-adapter"
+import type { RuntimeBundle, RuntimeInteractionAdapter } from "../contracts"
 import { createOpenCodeWorkspace } from "./opencode-workspace"
 import {
   createAgentScopedOpenCodeClient,
@@ -137,9 +135,16 @@ export function useOpenCodeRuntimeBundle(
     () => createOpenCodeRuntimeInteractions(scopedClient),
     [scopedClient]
   )
+  const artifacts = useMemo(() => createBrowserArtifactAdapter(), [])
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, client: scopedClient, interactions }),
-    [assistantRuntime, interactions, scopedClient, workspace]
+    () => ({
+      assistantRuntime,
+      workspace,
+      client: scopedClient,
+      interactions,
+      artifacts,
+    }),
+    [artifacts, assistantRuntime, interactions, scopedClient, workspace]
   )
 }

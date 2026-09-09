@@ -151,17 +151,34 @@ test("the mobile composer keeps model and context in one Assistant UI rail", asy
   await expect(composer).toHaveCSS("display", "flex")
   await expect(context).toBeHidden()
   await expect(contextValue).toBeVisible()
-  const [desktopComposerBox, desktopAddBox, desktopSendBox] =
-    await Promise.all([
-      composer.boundingBox(),
-      addAttachment.boundingBox(),
-      send.boundingBox(),
-    ])
+  const [desktopComposerBox, desktopAddBox, desktopSendBox] = await Promise.all(
+    [composer.boundingBox(), addAttachment.boundingBox(), send.boundingBox()]
+  )
   expect(desktopComposerBox).not.toBeNull()
   expect(desktopAddBox).not.toBeNull()
   expect(desktopSendBox).not.toBeNull()
   expect(desktopComposerBox!.width).toBeGreaterThan(680)
   expect(desktopAddBox!.x).toBeLessThan(desktopSendBox!.x)
+})
+
+test("a Hebrew artifact opens in the focus-managed full-screen viewer", async ({
+  page,
+}) => {
+  await page.goto("/he")
+  await expect(page.getByText("enterprise-ai-brief.md").first()).toBeVisible()
+
+  const open = page.getByRole("button", { name: "פתיחה" }).first()
+  await open.click()
+
+  const viewer = page.getByRole("dialog", {
+    name: "תצוגה מקדימה של התוצר",
+  })
+  await expect(
+    viewer.locator('section[aria-label="תצוגה מקדימה של התוצר"]')
+  ).toHaveAttribute("dir", "rtl")
+  await expect(viewer.getByText("Enterprise AI brief")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(open).toBeFocused()
 })
 
 test("mobile attachment previews span the composer above its controls", async ({

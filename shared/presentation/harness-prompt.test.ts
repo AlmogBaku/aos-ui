@@ -19,6 +19,7 @@ const fullCapabilities: HarnessCapabilities = {
   nativePermissions: true,
   providerTodos: true,
   providerSubagents: true,
+  artifactPublicationTool: "present_artifact",
 }
 
 describe("buildAosUiHarnessPrompt", () => {
@@ -52,6 +53,14 @@ describe("buildAosUiHarnessPrompt", () => {
     expect(prompt).toMatch(/Plans?.*message-scoped/i)
     expect(prompt).toMatch(/never.*Todo/i)
     expect(prompt).toMatch(/Todos?.*session-scoped.*provider-owned/i)
+  })
+
+  it("defines artifact publication as explicit and separate from editing", () => {
+    const prompt = buildAosUiHarnessPrompt(fullCapabilities)
+
+    expect(prompt).toContain("`present_artifact`")
+    expect(prompt).toMatch(/completed user-facing deliverable/i)
+    expect(prompt).toMatch(/ordinary file creation or editing never publishes/i)
   })
 
   it("maps native interactions without inventing unavailable controls", () => {

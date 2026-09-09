@@ -88,6 +88,9 @@ describe("MarkdownText fenced diagrams", () => {
     render(<TestMarkdown text={"```ts\nconst answer = 42\n```"} />)
 
     expect(await screen.findByText("const answer = 42")).toBeVisible()
+    expect(
+      document.querySelector('[data-syntax-language="typescript"]')
+    ).toBeInTheDocument()
     expect(screen.getByText("ts")).toBeVisible()
     expect(screen.getByRole("button", { name: "Copy code" })).toBeVisible()
     expect(mermaid.initialize).not.toHaveBeenCalled()

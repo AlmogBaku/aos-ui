@@ -114,6 +114,7 @@ function harness({
   truncateReplay = false,
   wrongOwner = false,
   reconnectTicketFailures = 0,
+  initialTicketFailures = 0,
   visibilityConflict = false,
   approvalDeferred,
   pendingClarify,
@@ -140,6 +141,7 @@ function harness({
   truncateReplay?: boolean
   wrongOwner?: boolean
   reconnectTicketFailures?: number
+  initialTicketFailures?: number
   visibilityConflict?: boolean
   approvalDeferred?: DeferredRpc
   pendingClarify?: Record<string, unknown>
@@ -152,6 +154,12 @@ function harness({
   let activeStatus = liveStatus
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://aos.test")
+    if (
+      url.pathname === "/hermes/api/auth/ws-ticket" &&
+      tickets === 0 &&
+      initialTicketFailures-- > 0
+    )
+      return new Response(null, { status: 503 })
     if (
       url.pathname === "/hermes/api/auth/ws-ticket" &&
       tickets > 0 &&
@@ -1711,6 +1719,104 @@ describe("Hermes native browser client", () => {
       })
     } finally {
       client.stop()
+    }
+  })
+
+  it("keeps the composer feature view stable across message-only updates", async () => {
+    const state = harness({
+      rpcReply: ({ method }) => {
+        if (method === "session.resume")
+          return { session_id: "live-research", running: false, status: "idle" }
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small"] }],
+          }
+        if (method === "session.context_breakdown")
+          return {
+            context_used: 10_000,
+            context_max: 100_000,
+            context_source: "provider_usage",
+            context_estimated: false,
+          }
+      },
+    })
+    let bundle: ReturnType<typeof useHermesRuntimeBundle> | undefined
+    let features: ReturnType<typeof useHermesComposerFeatures> | undefined
+    let renders = 0
+    const Harness = () => {
+      renders += 1
+      bundle = useHermesRuntimeBundle(state.options)
+      features = useHermesComposerFeatures(
+        bundle.client,
+        bundle.assistantRuntime,
+        { modelSelectorEnabled: true, contextEnabled: true }
+      )
+      return createElement(
+        AssistantRuntimeProvider,
+        { runtime: bundle.assistantRuntime },
+        null
+      )
+    }
+    const view = render(createElement(Harness))
+    try {
+      await act(() =>
+        bundle!.assistantRuntime.threads.switchToThread(
+          encodeHermesThreadId("research", "stored-1")
+        )
+      )
+      await waitFor(() => expect(features?.context?.usage.messages).toBe(10))
+      const settledRenders = renders
+      const settledFeatures = features
+
+      act(() => {
+        state.sockets[0].message({
+          method: "event",
+          params: {
+            type: "message.start",
+            session_id: "live-research",
+            payload: { message_id: "assistant-1" },
+          },
+        })
+        state.sockets[0].message({
+          method: "event",
+          params: {
+            type: "message.delta",
+            session_id: "live-research",
+            payload: { text: "Hello" },
+          },
+        })
+      })
+
+      expect(renders).toBe(settledRenders)
+      expect(features).toBe(settledFeatures)
+
+      act(() => {
+        state.sockets[0].message({
+          method: "event",
+          params: {
+            type: "session.usage",
+            session_id: "live-research",
+            payload: {
+              usage: {
+                context_used: 20_000,
+                context_max: 100_000,
+                context_source: "provider_usage",
+                context_estimated: false,
+              },
+            },
+          },
+        })
+      })
+
+      expect(renders).toBeGreaterThan(settledRenders)
+      expect(features).not.toBe(settledFeatures)
+      expect(features?.context?.usage.messages).toBe(20)
+    } finally {
+      view.unmount()
+      bundle?.client.stop()
+      state.client.stop()
     }
   })
 
@@ -3352,6 +3458,106 @@ describe("Hermes native browser client", () => {
     client.stop()
   })
 
+  it("projects an explicit artifact receipt during live tool completion", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    const event = (
+      type: string,
+      seq: number,
+      payload: Record<string, unknown>
+    ) =>
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: { type, session_id: "live-1", seq, payload },
+      })
+    event("message.start", 1, {})
+    event("tool.start", 2, {
+      tool_id: "artifact-tool",
+      name: "present_artifact",
+      args: { path: "report.txt" },
+    })
+    event("tool.complete", 3, {
+      tool_id: "artifact-tool",
+      result: JSON.stringify({
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: "hermes-artifact-live",
+          path: "report.txt",
+          filename: "Report.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+        },
+      }),
+    })
+
+    expect(client.session(threadId)?.messages.at(-1)?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "artifact-tool",
+      }),
+      {
+        type: "data",
+        name: "aos.artifact",
+        data: {
+          id: "hermes-artifact-live",
+          filename: "Report.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+          source: { type: "provider", reference: "report.txt" },
+        },
+      },
+    ])
+    client.stop()
+  })
+
+  it("does not project a receipt-shaped result from another live tool", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "message.start",
+        session_id: "live-1",
+        seq: 1,
+        payload: {},
+      },
+    })
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "tool.complete",
+        session_id: "live-1",
+        seq: 2,
+        payload: {
+          tool_id: "write-tool",
+          name: "write_file",
+          result: JSON.stringify({
+            ok: true,
+            type: "aos.artifact",
+            artifact: {
+              id: "forged",
+              path: "report.txt",
+              filename: "report.txt",
+            },
+          }),
+        },
+      },
+    })
+
+    expect(client.session(threadId)?.messages.at(-1)?.content).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "data" })])
+    )
+    client.stop()
+  })
+
   it("does not resubmit an accepted prompt during reconnect or cleanup", async () => {
     const { client, sockets } = harness()
     await client.start()
@@ -3401,6 +3607,18 @@ describe("Hermes native browser client", () => {
         String(input).includes("/api/auth/ws-ticket")
       )
     ).toHaveLength(3)
+    state.client.stop()
+  })
+
+  it("recovers after a transient initial WebSocket ticket failure", async () => {
+    const state = harness({ initialTicketFailures: 1 })
+    const recovered = vi.fn()
+    state.client.subscribeRecovery(recovered)
+
+    await expect(state.client.start()).resolves.toBeUndefined()
+    expect(state.sockets).toHaveLength(1)
+    expect(recovered).toHaveBeenCalledOnce()
+    expect(state.client.getSnapshot().agents).toHaveLength(2)
     state.client.stop()
   })
 

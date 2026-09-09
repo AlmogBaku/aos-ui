@@ -134,6 +134,11 @@ export type WorkspaceShellProps = {
   agentFocusRequest?: { agentId: string; nonce: number } | null
   onActionError?: (error: unknown) => void
   tabUndo?: { title: string; onUndo: () => WorkspaceActionResult } | null
+  artifactOutputs?: ReactNode
+  artifactViewer?: ReactNode
+  artifactViewerOpen?: boolean
+  artifactViewerLabel?: string
+  onCloseArtifactViewer?: () => void
   children: ReactNode
 }
 
@@ -768,6 +773,7 @@ type InspectorPanelProps = Pick<
   sessionActivity: Readonly<
     Record<string, NavigationActivitySummary | undefined>
   >
+  artifactOutputs?: ReactNode
 }
 
 function InspectorPanel({
@@ -780,6 +786,7 @@ function InspectorPanel({
   agent,
   navigation,
   sessionActivity,
+  artifactOutputs,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
 
@@ -831,6 +838,9 @@ function InspectorPanel({
             onActionError={onActionError}
           />
         </div>
+      ) : null}
+      {artifactOutputs ? (
+        <div className={styles.inspectorOutputs}>{artifactOutputs}</div>
       ) : null}
     </div>
   )
@@ -998,6 +1008,11 @@ export function WorkspaceShell({
   agentFocusRequest,
   onActionError,
   tabUndo,
+  artifactOutputs,
+  artifactViewer,
+  artifactViewerOpen = false,
+  artifactViewerLabel,
+  onCloseArtifactViewer,
   children,
 }: WorkspaceShellProps) {
   const shellRef = useRef<HTMLElement>(null)
@@ -1006,6 +1021,7 @@ export function WorkspaceShell({
     { view: "closed" }
   )
   const [activityOpen, setActivityOpen] = useState(false)
+  const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
     subscribeToInspectorPreference,
     getInspectorPreference,
@@ -1015,9 +1031,12 @@ export function WorkspaceShell({
     boolean | null
   >(null)
   const desktopInspectorOpen = volatileInspectorOpen ?? storedInspectorOpen
+  const effectiveInspectorOpen = desktopInspectorOpen || artifactViewerOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
-  const modalDrawerOpen = mobileNavigatorOpen || activityOpen
+  const artifactDrawerOpen = artifactViewerOpen && !desktopLayout
+  const modalDrawerOpen =
+    mobileNavigatorOpen || activityOpen || artifactDrawerOpen
   useEffect(() => {
     onConversationObscuredChange?.(modalDrawerOpen)
     return () => onConversationObscuredChange?.(false)
@@ -1097,9 +1116,10 @@ export function WorkspaceShell({
     const shell = shellRef.current
     if (!shell || typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver(([entry]) => {
-      if (entry && entry.contentRect.width >= 1024) {
-        dispatchMobileNavigator({ type: "ENTER_DESKTOP" })
-      }
+      if (!entry) return
+      const desktop = entry.contentRect.width >= 1024
+      setDesktopLayout(desktop)
+      if (desktop) dispatchMobileNavigator({ type: "ENTER_DESKTOP" })
     })
     observer.observe(shell)
     return () => observer.disconnect()
@@ -1154,6 +1174,7 @@ export function WorkspaceShell({
     onOpenSession,
     onActionError,
     agent: selectedAgent,
+    artifactOutputs,
   }
 
   return (
@@ -1161,7 +1182,8 @@ export function WorkspaceShell({
       <section
         ref={shellRef}
         className={styles.shell}
-        data-inspector-open={desktopInspectorOpen ? "true" : "false"}
+        data-inspector-open={effectiveInspectorOpen ? "true" : "false"}
+        data-artifact-viewer-open={artifactViewerOpen ? "true" : "false"}
         dir={getLocaleDirection(locale)}
       >
         <a
@@ -1268,8 +1290,12 @@ export function WorkspaceShell({
               onCreateSession={onCreateSession}
               onActionError={onActionError}
               threadListRuntime={threadListRuntime}
-              inspectorOpen={desktopInspectorOpen}
-              onToggleInspector={toggleDesktopInspector}
+              inspectorOpen={effectiveInspectorOpen}
+              onToggleInspector={
+                artifactViewerOpen && onCloseArtifactViewer
+                  ? onCloseArtifactViewer
+                  : toggleDesktopInspector
+              }
             />
           </div>
           <main
@@ -1293,15 +1319,23 @@ export function WorkspaceShell({
           id="workspace-agent-inspector"
           className={styles.desktopInspector}
           data-keyboard-region="inspector"
-          aria-label={dictionary.workspace.agentDetails}
+          aria-label={
+            artifactViewerOpen
+              ? (artifactViewerLabel ?? dictionary.workspace.agentDetails)
+              : dictionary.workspace.agentDetails
+          }
           aria-hidden={modalDrawerOpen || undefined}
           inert={modalDrawerOpen ? true : undefined}
-          hidden={!desktopInspectorOpen}
+          hidden={!effectiveInspectorOpen}
         >
-          <InspectorPanel
-            key={selectedAgentId ?? "no-agent"}
-            {...inspectorPanelProps}
-          />
+          {artifactViewerOpen && artifactViewer ? (
+            artifactViewer
+          ) : (
+            <InspectorPanel
+              key={selectedAgentId ?? "no-agent"}
+              {...inspectorPanelProps}
+            />
+          )}
         </aside>
 
         <WorkspaceKeyboard
@@ -1431,6 +1465,17 @@ export function WorkspaceShell({
             }
             renderAgentIcon={(agent) => <AgentGlyph agent={agent} />}
           />
+        </FocusDrawer>
+
+        <FocusDrawer
+          open={artifactDrawerOpen}
+          side="end"
+          title={artifactViewerLabel ?? dictionary.workspace.agentDetails}
+          closeLabel={dictionary.actions.closePanel}
+          onClose={() => onCloseArtifactViewer?.()}
+          chrome={false}
+        >
+          {artifactViewer}
         </FocusDrawer>
 
         {!modalDrawerOpen ? (

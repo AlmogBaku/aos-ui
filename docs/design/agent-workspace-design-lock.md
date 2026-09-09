@@ -15,7 +15,10 @@ Implementation invariants:
   Session drawer.
 - Use the temporary AOS placeholder mark at small scale and the violet/teal palette sparingly.
 - Give every primary Agent a persistent, distinctive icon and a separate status indicator.
-- Keep the inspector limited to Agent identity, status, description, and Sessions.
+- Keep the inspector limited to Agent identity, status, description, Sessions, and the active
+  Session's explicitly published Outputs. Opening an Output may temporarily
+  replace the inspector with its read-only viewer; closing it restores the
+  Agent inspector. Narrow layouts use the established focus-managed drawer.
 - Do not add department navigation, window traffic lights, dashboard cards, or ornamental effects.
 - Prefer native-feeling shadcn controls, comfortable spacing, clear contrast, and progressive disclosure.
 

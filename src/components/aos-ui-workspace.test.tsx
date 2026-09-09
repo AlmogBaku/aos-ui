@@ -899,6 +899,10 @@ describe("AosUiApp fixture composition", () => {
       )
     ).toBeInTheDocument()
     expect(screen.getAllByText("Demo workspace")).toHaveLength(2)
+    expect(screen.getByRole("heading", { name: "Outputs" })).toBeVisible()
+    expect(screen.getAllByText("enterprise-ai-brief.md")).toHaveLength(2)
+    expect(screen.getAllByText("quarterly-spend.csv")).toHaveLength(2)
+    expect(screen.getAllByText("market-summary.html")).toHaveLength(2)
 
     const message = screen
       .getByText("Plan")

@@ -1,5 +1,27 @@
 export type Dictionary = {
   productName: string
+  artifacts: {
+    outputs: string
+    empty: string
+    open: string
+    download: string
+    close: string
+    loading: string
+    loadFailed: string
+    unavailable: string
+    downloadFailed: string
+    retry: string
+    unsupported: string
+    fileTooLarge: string
+    textTooLarge: string
+    preview: string
+    source: string
+    htmlView: string
+    htmlPreviewTitle: string
+    pdfPreviewTitle: string
+    csvTruncated: string
+    viewerLabel: string
+  }
   activity: {
     title: string
     unread: string

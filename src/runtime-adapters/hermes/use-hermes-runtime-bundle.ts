@@ -18,6 +18,7 @@ import {
 import type { Locale } from "@/lib/i18n/config"
 import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { HermesAudioClient } from "./hermes-audio-client"
+import { HermesArtifactAdapter } from "./hermes-artifacts"
 import { HermesMediaBinding } from "./hermes-media-binding"
 import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
@@ -190,6 +191,15 @@ export function useHermesRuntimeBundle(
   const adapter = useMemo(() => new HermesThreadListAdapter(client), [client])
   const workspace = useMemo(() => createHermesWorkspace(client), [client])
   const interactions = useMemo(() => createHermesInteractions(client), [client])
+  const artifacts = useMemo(
+    () =>
+      new HermesArtifactAdapter({
+        baseUrl: options.baseUrl,
+        client,
+        fetcher: options.fetcher,
+      }),
+    [client, options.baseUrl, options.fetcher]
+  )
   const audio = useMemo(
     () =>
       new HermesAudioClient({
@@ -261,9 +271,10 @@ export function useHermesRuntimeBundle(
       assistantRuntime,
       workspace,
       interactions,
+      artifacts,
       client,
       media: voice.media,
     }),
-    [assistantRuntime, client, interactions, workspace, voice]
+    [artifacts, assistantRuntime, client, interactions, workspace, voice]
   )
 }
