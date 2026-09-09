@@ -37,6 +37,7 @@ import {
   numberValue,
   projectHermesHistory,
   stringValue,
+  unwrapHermesToolCall,
   websocketUrl,
   type JsonRecord,
 } from "./hermes-native-codec"
@@ -1761,13 +1762,15 @@ export class HermesNativeClient {
         (part) => part.type === "tool-call" && part.toolCallId === toolCallId
       )
       const nativeToolName = stringValue(payload.name) ?? "tool"
-      const args = isRecord(payload.args)
-        ? canonicalHermesToolArgs(nativeToolName, payload.args)
-        : {}
+      const unwrapped = unwrapHermesToolCall(
+        nativeToolName,
+        isRecord(payload.args) ? payload.args : {}
+      )
+      const args = canonicalHermesToolArgs(unwrapped.name, unwrapped.args)
       const part = {
         type: "tool-call",
         toolCallId,
-        toolName: canonicalHermesToolName(nativeToolName),
+        toolName: canonicalHermesToolName(unwrapped.name),
         args,
         argsText: JSON.stringify(args),
         ...(complete

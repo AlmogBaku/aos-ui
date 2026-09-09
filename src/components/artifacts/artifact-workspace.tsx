@@ -138,18 +138,33 @@ function sameArtifactOccurrence(
   )
 }
 
-function useArtifactOccurrences(messages: readonly ArtifactMessage[]) {
-  const next = useMemo(() => extractArtifactOccurrences(messages), [messages])
-  const stable = useRef(next)
-  if (
-    stable.current.length !== next.length ||
-    stable.current.some(
-      (occurrence, index) => !sameArtifactOccurrence(occurrence, next[index]!)
+export function createArtifactMessageStabilizer(
+  project?: (
+    messages: readonly ArtifactMessage[]
+  ) => readonly ArtifactMessage[]
+) {
+  let previousMessages: readonly ArtifactMessage[] = []
+  let previousPathKey = ""
+  let previousOccurrences: ArtifactOccurrence[] = []
+
+  return (messages: readonly ArtifactMessage[]) => {
+    const projected = project?.(messages) ?? messages
+    const pathKey = projected.map(({ id }) => id).join("\u0000")
+    const occurrences = extractArtifactOccurrences(projected)
+    if (
+      pathKey === previousPathKey &&
+      previousOccurrences.length === occurrences.length &&
+      previousOccurrences.every((occurrence, index) =>
+        sameArtifactOccurrence(occurrence, occurrences[index]!)
+      )
     )
-  ) {
-    stable.current = next
+      return previousMessages
+
+    previousMessages = projected
+    previousPathKey = pathKey
+    previousOccurrences = occurrences
+    return projected
   }
-  return stable.current
 }
 
 export function ArtifactWorkspaceProvider({
@@ -171,7 +186,10 @@ export function ArtifactWorkspaceProvider({
   const downloadControllersRef = useRef(new Set<AbortController>())
   const downloadUrlsRef = useRef(new Set<string>())
   const labels = (locale === "he" ? he : en).artifacts
-  const occurrences = useArtifactOccurrences(messages)
+  const occurrences = useMemo(
+    () => extractArtifactOccurrences(messages),
+    [messages]
+  )
   const messagePathKey = messages.map(({ id }) => id).join("\u0000")
   const selectedArtifact =
     selection?.agentId === agentId &&

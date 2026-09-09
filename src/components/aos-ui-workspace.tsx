@@ -5,6 +5,7 @@ import {
   AuiConfig,
   Tools,
   useAuiState,
+  type AssistantState,
   type Toolkit,
 } from "@assistant-ui/react"
 import {
@@ -22,7 +23,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from "react"
 
 import {
@@ -42,6 +42,7 @@ import {
   ArtifactOutputs,
   ArtifactViewerContent,
   ArtifactWorkspaceProvider,
+  createArtifactMessageStabilizer,
   useArtifactWorkspace,
 } from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
@@ -207,13 +208,17 @@ function ArtifactWorkspaceBridge({
     messages: readonly ArtifactMessage[]
   ) => readonly ArtifactMessage[]
 } & WorkspaceShellProps) {
-  const messages = useAuiState((state) => state.thread.messages)
-  const artifactMessages = useMemo(
-    () =>
-      artifactMessageProjector?.(messages as readonly ArtifactMessage[]) ??
-      (messages as readonly ArtifactMessage[]),
-    [artifactMessageProjector, messages]
+  const selectArtifactMessages = useMemo(
+    () => {
+      const stabilize = createArtifactMessageStabilizer(
+        artifactMessageProjector
+      )
+      return (state: AssistantState) =>
+        stabilize(state.thread.messages as readonly ArtifactMessage[])
+    },
+    [artifactMessageProjector]
   )
+  const artifactMessages = useAuiState(selectArtifactMessages)
 
   return (
     <ArtifactWorkspaceProvider

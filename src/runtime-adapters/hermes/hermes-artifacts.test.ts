@@ -82,6 +82,42 @@ describe("Hermes artifact receipts", () => {
     ])
   })
 
+  it("projects artifacts selected through Hermes tool search", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "tool-1",
+            function: {
+              name: "tool_call",
+              arguments: JSON.stringify({
+                name: "present_artifact",
+                arguments: { path: "reports/summary.csv" },
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "tool-1",
+        tool_name: "present_artifact",
+        content: JSON.stringify(receipt),
+      },
+    ])
+
+    expect(messages[0]?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "present_artifact",
+        args: { path: "reports/summary.csv" },
+      }),
+      { type: "data", name: "aos.artifact", data: descriptor },
+    ])
+  })
+
   it("does not project receipt-shaped output from another or failed tool", () => {
     for (const row of [
       {
