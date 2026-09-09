@@ -1,5 +1,7 @@
 {
   "mode": "opencode",
   "baseUrl": "http://127.0.0.1:4096",
-  "directory": "/workspace"
+  "directory": "/workspace",
+  "composerModelSelectorEnabled": true,
+  "composerContextEnabled": true
 }

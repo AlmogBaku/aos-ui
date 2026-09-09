@@ -83,6 +83,7 @@ export class VoiceMediaController {
   #capture?: VoiceCapture
   #playback?: VoicePlayback
   #pendingPlaybackOwner?: VoicePlaybackOwner
+  #previousPlaybackOwnerId?: string
   #audio?: HTMLAudioElement
   #meter?: MicLevelMeterLike
   #meterUnsubscribe?: () => void
@@ -166,8 +167,24 @@ export class VoiceMediaController {
       owner?.scopeId === scopeId &&
       owner.messageId === previousId &&
       previousId !== nextId
-    )
+    ) {
+      // Native history and Assistant UI publish separately. Keep the known
+      // predecessor valid only until Assistant UI exposes its replacement.
+      this.#previousPlaybackOwnerId ??= previousId
       this.#update({ playbackOwner: { ...owner, messageId: nextId } })
+    }
+  }
+  isPlaybackOwnerPresent(messageIds: readonly string[]) {
+    const owner = this.#state.playbackOwner
+    if (!owner) return false
+    if (messageIds.includes(owner.messageId)) {
+      this.#previousPlaybackOwnerId = undefined
+      return true
+    }
+    return Boolean(
+      this.#previousPlaybackOwnerId &&
+      messageIds.includes(this.#previousPlaybackOwnerId)
+    )
   }
   get captureSignal() {
     return this.#captureAbort.signal
@@ -341,6 +358,7 @@ export class VoiceMediaController {
     this.#playback = undefined
     playback?.cancel()
     this.#pendingPlaybackOwner = undefined
+    this.#previousPlaybackOwnerId = undefined
     this.#update({
       playback: undefined,
       playbackError: undefined,

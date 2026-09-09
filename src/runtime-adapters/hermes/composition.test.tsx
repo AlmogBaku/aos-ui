@@ -4,8 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { HermesAosUiApp } from "./composition"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
+import type { ComposerFeatureConfig } from "@shared/runtime-config"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 
 const mocks = vi.hoisted(() => ({
+  featureConfig: undefined as ComposerFeatureConfig | undefined,
+  workspaceFeatures: undefined as ComposerFeatureViewModel | undefined,
+  features: { context: { usedTokens: 17, maxTokens: 100 } },
   options: {} as {
     onError?: (error: Error) => void
     onRecovered?: () => void
@@ -17,6 +22,16 @@ const mocks = vi.hoisted(() => ({
     media: undefined as VoiceMediaController | undefined,
   },
 }))
+vi.mock("./use-hermes-composer-features", () => ({
+  useHermesComposerFeatures: (
+    _client: unknown,
+    _runtime: unknown,
+    config: ComposerFeatureConfig | undefined
+  ) => {
+    mocks.featureConfig = config
+    return mocks.features
+  },
+}))
 vi.mock("@/runtime-adapters/hermes", () => ({
   useHermesRuntimeBundle: (options: typeof mocks.options) => {
     mocks.options = options
@@ -25,7 +40,14 @@ vi.mock("@/runtime-adapters/hermes", () => ({
   stopCurrentHermesRun: vi.fn(),
 }))
 vi.mock("@/components/aos-ui-workspace", () => ({
-  AosUiWorkspace: () => <main>Workspace remains available</main>,
+  AosUiWorkspace: ({
+    composerFeatures,
+  }: {
+    composerFeatures?: ComposerFeatureViewModel
+  }) => {
+    mocks.workspaceFeatures = composerFeatures
+    return <main>Workspace remains available</main>
+  },
 }))
 
 afterEach(() => {
@@ -46,6 +68,22 @@ function showApp(locale: "en" | "he" = "en") {
 }
 
 describe("Hermes error toasts", () => {
+  it("passes independent composer flags and the provider view model to the workspace", () => {
+    mocks.bundle.media = new VoiceMediaController()
+    const config = { modelSelectorEnabled: false, contextEnabled: true }
+    render(
+      <HermesAosUiApp
+        locale="en"
+        dictionary={en}
+        baseUrl="/hermes"
+        nowIso="2026-09-08T12:00:00Z"
+        composerFeatures={config}
+      />
+    )
+    expect(mocks.featureConfig).toEqual(config)
+    expect(mocks.workspaceFeatures).toBe(mocks.features)
+  })
+
   it("does not auto-dismiss an unresolved error", () => {
     vi.useFakeTimers()
     showApp()

@@ -14,21 +14,63 @@ export type RuntimeUnavailableReason =
   | "missing-ag-ui-workspace-url"
   | "invalid-ag-ui-workspace-url"
 
+export type ComposerFeatureConfig = {
+  readonly modelSelectorEnabled: boolean
+  readonly contextEnabled: boolean
+}
+
+export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
+  modelSelectorEnabled: true,
+  contextEnabled: true,
+}
+
+type ReadyRuntimeConfiguration = {
+  status: "ready"
+  composerFeatures: ComposerFeatureConfig
+}
+
 export type RuntimeConfiguration =
-  | { status: "ready"; mode: "fixture" }
-  | { status: "ready"; mode: "hermes"; baseUrl: string }
-  | {
-      status: "ready"
+  | (ReadyRuntimeConfiguration & { mode: "fixture" })
+  | (ReadyRuntimeConfiguration & { mode: "hermes"; baseUrl: string })
+  | (ReadyRuntimeConfiguration & {
       mode: "opencode"
       baseUrl: string
       directory: string
       defaultModel?: { providerID: string; modelID: string }
-    }
-  | {
-      status: "ready"
+    })
+  | (ReadyRuntimeConfiguration & {
       mode: "ag-ui"
       runUrl: string
       workspaceUrl: string
+    })
+  | { status: "unavailable"; reason: RuntimeUnavailableReason }
+
+export type PublicRuntimeConfiguration =
+  | {
+      mode: "fixture"
+      composerModelSelectorEnabled: boolean
+      composerContextEnabled: boolean
+    }
+  | {
+      mode: "hermes"
+      baseUrl: string
+      composerModelSelectorEnabled: boolean
+      composerContextEnabled: boolean
+    }
+  | {
+      mode: "opencode"
+      baseUrl: string
+      directory: string
+      defaultModel?: { providerID: string; modelID: string }
+      composerModelSelectorEnabled: boolean
+      composerContextEnabled: boolean
+    }
+  | {
+      mode: "ag-ui"
+      runUrl: string
+      workspaceUrl: string
+      composerModelSelectorEnabled: boolean
+      composerContextEnabled: boolean
     }
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
@@ -41,7 +83,9 @@ type RuntimeEnvironment = Partial<
     | "AOS_UI_OPENCODE_PROVIDER_ID"
     | "AOS_UI_OPENCODE_MODEL_ID"
     | "AOS_UI_AG_UI_URL"
-    | "AOS_UI_AG_UI_WORKSPACE_URL",
+    | "AOS_UI_AG_UI_WORKSPACE_URL"
+    | "AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED"
+    | "AOS_UI_COMPOSER_CONTEXT_ENABLED",
     string | undefined
   >
 >
@@ -66,6 +110,21 @@ function resolveHttpUrl(value: string | undefined) {
   }
 }
 
+function featureEnabled(value: string | undefined) {
+  return value?.trim().toLowerCase() !== "false"
+}
+
+function resolveComposerFeatures(
+  environment: RuntimeEnvironment
+): ComposerFeatureConfig {
+  return {
+    modelSelectorEnabled: featureEnabled(
+      environment.AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED
+    ),
+    contextEnabled: featureEnabled(environment.AOS_UI_COMPOSER_CONTEXT_ENABLED),
+  }
+}
+
 /**
  * Runtime choice is intentionally strict. A misspelled production mode must
  * never expose deterministic fixture data as though it came from a provider.
@@ -74,19 +133,25 @@ export function resolveRuntimeConfiguration(
   environment: RuntimeEnvironment
 ): RuntimeConfiguration {
   const mode = environment.AOS_UI_RUNTIME_MODE ?? "opencode"
+  const composerFeatures = resolveComposerFeatures(environment)
 
   if (mode === "fixture") {
-    return { status: "ready", mode: "fixture" }
+    return { status: "ready", mode: "fixture", composerFeatures }
   }
   if (mode === "hermes") {
     const baseUrl = environment.AOS_UI_HERMES_BASE_URL
     if (!baseUrl)
       return { status: "unavailable", reason: "missing-hermes-base-url" }
     if (/^\/(?!\/)[A-Za-z0-9/_-]+$/.test(baseUrl))
-      return { status: "ready", mode, baseUrl: baseUrl.replace(/\/+$/, "") }
+      return {
+        status: "ready",
+        mode,
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        composerFeatures,
+      }
     const resolved = resolveHttpUrl(baseUrl)
     return resolved
-      ? { status: "ready", mode, baseUrl: resolved }
+      ? { status: "ready", mode, baseUrl: resolved, composerFeatures }
       : { status: "unavailable", reason: "invalid-hermes-base-url" }
   }
   if (mode === "opencode") {
@@ -120,6 +185,7 @@ export function resolveRuntimeConfiguration(
       mode,
       baseUrl,
       directory,
+      composerFeatures,
       ...(providerID && modelID
         ? { defaultModel: { providerID, modelID } }
         : {}),
@@ -151,7 +217,42 @@ export function resolveRuntimeConfiguration(
     }
   }
 
-  return { status: "ready", mode, runUrl, workspaceUrl }
+  return { status: "ready", mode, runUrl, workspaceUrl, composerFeatures }
+}
+
+/** Maps internal resolved configuration to the strict browser-visible shape. */
+export function serializePublicRuntimeConfiguration(
+  config: RuntimeConfiguration
+): PublicRuntimeConfiguration {
+  if (config.status === "unavailable") return config
+
+  const featureFields = {
+    composerModelSelectorEnabled: config.composerFeatures.modelSelectorEnabled,
+    composerContextEnabled: config.composerFeatures.contextEnabled,
+  }
+  if (config.mode === "fixture") return { mode: config.mode, ...featureFields }
+  if (config.mode === "hermes")
+    return { mode: config.mode, baseUrl: config.baseUrl, ...featureFields }
+  if (config.mode === "opencode") {
+    return {
+      mode: config.mode,
+      baseUrl: config.baseUrl,
+      directory: config.directory,
+      ...(config.defaultModel ? { defaultModel: config.defaultModel } : {}),
+      ...featureFields,
+    }
+  }
+  return {
+    mode: config.mode,
+    runUrl: config.runUrl,
+    workspaceUrl: config.workspaceUrl,
+    ...featureFields,
+  }
+}
+
+const publicComposerFeatureFields = {
+  composerModelSelectorEnabled: z.boolean().optional(),
+  composerContextEnabled: z.boolean().optional(),
 }
 
 const publicConfigurationSchema = z.discriminatedUnion("mode", [
@@ -159,6 +260,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
     .object({
       mode: z.literal("fixture"),
       status: z.literal("ready").optional(),
+      ...publicComposerFeatureFields,
     })
     .strict(),
   z
@@ -171,6 +273,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
         .object({ providerID: z.string().min(1), modelID: z.string().min(1) })
         .strict()
         .optional(),
+      ...publicComposerFeatureFields,
     })
     .strict(),
   z
@@ -178,6 +281,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
       mode: z.literal("hermes"),
       status: z.literal("ready").optional(),
       baseUrl: z.string().min(1),
+      ...publicComposerFeatureFields,
     })
     .strict(),
   z
@@ -186,6 +290,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
       status: z.literal("ready").optional(),
       runUrl: z.string().min(1),
       workspaceUrl: z.string().min(1),
+      ...publicComposerFeatureFields,
     })
     .strict(),
 ])
@@ -198,11 +303,22 @@ export function parsePublicRuntimeConfiguration(
   if (!parsed.success)
     return { status: "unavailable", reason: "invalid-public-config" }
   const config = parsed.data
-  if (config.mode === "fixture") return { status: "ready", mode: "fixture" }
+  const composerEnvironment = {
+    AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
+      config.composerModelSelectorEnabled === false ? "false" : undefined,
+    AOS_UI_COMPOSER_CONTEXT_ENABLED:
+      config.composerContextEnabled === false ? "false" : undefined,
+  }
+  if (config.mode === "fixture")
+    return resolveRuntimeConfiguration({
+      AOS_UI_RUNTIME_MODE: "fixture",
+      ...composerEnvironment,
+    })
   if (config.mode === "hermes")
     return resolveRuntimeConfiguration({
       AOS_UI_RUNTIME_MODE: "hermes",
       AOS_UI_HERMES_BASE_URL: config.baseUrl,
+      ...composerEnvironment,
     })
   if (config.mode === "opencode")
     return resolveRuntimeConfiguration({
@@ -211,10 +327,12 @@ export function parsePublicRuntimeConfiguration(
       AOS_UI_OPENCODE_WORKTREE: config.directory,
       AOS_UI_OPENCODE_PROVIDER_ID: config.defaultModel?.providerID,
       AOS_UI_OPENCODE_MODEL_ID: config.defaultModel?.modelID,
+      ...composerEnvironment,
     })
   return resolveRuntimeConfiguration({
     AOS_UI_RUNTIME_MODE: "ag-ui",
     AOS_UI_AG_UI_URL: config.runUrl,
     AOS_UI_AG_UI_WORKSPACE_URL: config.workspaceUrl,
+    ...composerEnvironment,
   })
 }

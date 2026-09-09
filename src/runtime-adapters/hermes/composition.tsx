@@ -14,6 +14,8 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import type { ComposerFeatureConfig } from "@shared/runtime-config"
+import { useHermesComposerFeatures } from "./use-hermes-composer-features"
 import {
   stopCurrentHermesRun,
   useHermesRuntimeBundle,
@@ -112,11 +114,13 @@ export function HermesAosUiApp({
   dictionary,
   baseUrl,
   nowIso,
+  composerFeatures: composerConfig,
 }: {
   locale: Locale
   dictionary: Dictionary
   baseUrl: string
   nowIso: string
+  composerFeatures?: ComposerFeatureConfig
 }) {
   const [runtimeError, setRuntimeError] = useState<{
     message: string
@@ -142,6 +146,12 @@ export function HermesAosUiApp({
     onError,
     onRecovered,
   })
+  const composerFeatures = useHermesComposerFeatures(
+    bundle.client,
+    bundle.assistantRuntime,
+    composerConfig,
+    onError
+  )
   const [now] = useState(() => new Date(nowIso))
   const authenticationRequired = runtimeError?.message.includes(
     "authentication failed (401)"
@@ -205,6 +215,7 @@ export function HermesAosUiApp({
           bundle={bundle}
           now={now}
           composer={composer}
+          composerFeatures={composerFeatures}
           onWorkspaceError={onError}
           onStopRun={() => stopCurrentHermesRun(bundle.assistantRuntime)}
           activityCoverage="active-session"

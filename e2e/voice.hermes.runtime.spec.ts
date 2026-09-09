@@ -202,6 +202,26 @@ async function installHermesVoiceMock(
       }
     if (request.method === "session.events.since")
       return { events: [], truncated: false, epoch: "voice-e2e" }
+    if (request.method === "model.options")
+      return {
+        provider: "mock",
+        model: "voice",
+        providers: [
+          {
+            slug: "mock",
+            name: "Mock",
+            authenticated: true,
+            models: ["voice"],
+          },
+        ],
+      }
+    if (request.method === "session.usage")
+      return {
+        context_used: 1_024,
+        context_max: 32_768,
+        context_source: "provider_usage",
+        context_estimated: false,
+      }
     if (request.method === "prompt.submit") {
       running = true
       return { status: "streaming" }

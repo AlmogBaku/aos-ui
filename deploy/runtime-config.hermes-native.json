@@ -1,4 +1,6 @@
 {
   "mode": "hermes",
-  "baseUrl": "/hermes"
+  "baseUrl": "/hermes",
+  "composerModelSelectorEnabled": true,
+  "composerContextEnabled": true
 }

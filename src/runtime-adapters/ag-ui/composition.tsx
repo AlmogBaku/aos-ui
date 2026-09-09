@@ -6,6 +6,7 @@ import { useMemo, useState } from "react"
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { agUiProviderInstructions } from "@shared/presentation/manifests"
 import { createAgUiHttpWorkspaceTransport } from "./ag-ui-http-transport"
 import { useAgUiRuntimeBundle } from "./use-ag-ui-runtime-bundle"
@@ -22,6 +23,7 @@ export function AgUiAosUiApp({
   runUrl: string
   workspaceUrl: string
   nowIso: string
+  composerFeatures?: ComposerFeatureConfig
 }) {
   const agent = useMemo(() => new HttpAgent({ url: runUrl }), [runUrl])
   const workspaceTransport = useMemo(

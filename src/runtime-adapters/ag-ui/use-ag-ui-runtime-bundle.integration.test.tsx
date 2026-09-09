@@ -155,6 +155,53 @@ function renderAgUiBundle(options: UseAgUiRuntimeBundleOptions) {
 }
 
 describe("AG-UI runtime bundle integration", () => {
+  it("preserves the native same-thread edit path", async () => {
+    const harness = createHarness()
+    const controlled = controlledAgent()
+    const hook = renderAgUiBundle({
+      agent: controlled.agent,
+      workspaceTransport: harness.transport,
+    })
+
+    await waitFor(() =>
+      expect(activeThreadId(hook.result.current.assistantRuntime)).toBe(
+        "thread-research"
+      )
+    )
+    act(() => {
+      hook.result.current.assistantRuntime.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Original request" }],
+      })
+    })
+    await waitFor(() => expect(controlled.runAgent).toHaveBeenCalledOnce())
+    await act(async () => controlled.release())
+
+    const userMessage = hook.result.current.assistantRuntime.thread
+      .getState()
+      .messages.find((message) => message.role === "user")
+    expect(userMessage).toBeDefined()
+
+    const editComposer = hook.result.current.assistantRuntime.thread.getMessageById(
+      userMessage!.id
+    ).composer
+    act(() => {
+      editComposer.beginEdit()
+      editComposer.setText("Replacement request")
+      editComposer.send()
+    })
+
+    await waitFor(() => expect(controlled.runAgent).toHaveBeenCalledTimes(2))
+    const replacementRun = JSON.stringify(
+      controlled.runAgent.mock.calls[1]?.[0]
+    )
+    expect(replacementRun).toContain("thread-research")
+    expect(replacementRun).toContain("Replacement request")
+    expect(replacementRun).not.toContain("Original request")
+    await act(async () => controlled.release())
+    hook.unmount()
+  })
+
   it("detaches an active Session on navigation without explicit cancellation or queue leakage", async () => {
     const harness = createHarness()
     const controlled = controlledAgent()

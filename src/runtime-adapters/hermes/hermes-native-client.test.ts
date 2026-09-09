@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from "vitest"
+import { createElement } from "react"
+import { act, render, waitFor } from "@testing-library/react"
+import {
+  AssistantRuntimeProvider,
+  type AppendMessage,
+  type ThreadUserMessagePart,
+} from "@assistant-ui/react"
+import { useHermesRuntimeBundle } from "./use-hermes-runtime-bundle"
+import { useHermesComposerFeatures } from "./use-hermes-composer-features"
 
 import {
   HermesNativeClient,
   encodeHermesThreadId,
   type HermesWebSocket,
+  type HermesNativeClientOptions,
 } from "./hermes-native-client"
 import { createHermesWorkspace } from "./hermes-workspace"
 import { agentStatusFromSessions } from "@/lib/workspace-view-model"
@@ -111,9 +121,13 @@ function harness({
   activeReply,
   sameSessionIdAcrossProfiles = false,
   profileActivity = {},
+  history,
+  rpcReply,
 }: {
   activeReply?: DeferredRpc | RpcFailure
   profileActivity?: Record<string, unknown>
+  history?: unknown[]
+  rpcReply?: (request: Record<string, unknown>) => unknown
   sameSessionIdAcrossProfiles?: boolean
   endedAt?: number
   liveStatus?: string
@@ -180,7 +194,7 @@ function harness({
       historyFetches++
       return Response.json({
         session_id: "stored-1",
-        messages: [
+        messages: history ?? [
           { id: "u1", role: "user", content: "Hello" },
           {
             id: "a1",
@@ -209,6 +223,8 @@ function harness({
     return new Response(null, { status: 404 })
   })
   const reply = (request: Record<string, unknown>) => {
+    const override = rpcReply?.(request)
+    if (override !== undefined) return override
     switch (request.method) {
       case "session.active_list":
         return (
@@ -291,7 +307,7 @@ function harness({
         throw new Error(`Unexpected RPC: ${String(request.method)}`)
     }
   }
-  const client = new HermesNativeClient({
+  const options: HermesNativeClientOptions = {
     baseUrl: "/hermes",
     fetcher,
     reconnectDelayMs: 0,
@@ -300,9 +316,11 @@ function harness({
       sockets.push(socket)
       return socket
     },
-  })
+  }
+  const client = new HermesNativeClient(options)
   return {
     client,
+    options,
     fetcher,
     sockets,
     setLiveStatus: (status: string) => {
@@ -315,6 +333,1947 @@ function harness({
 }
 
 describe("Hermes native browser client", () => {
+  it.each(["send", "reconnect"])(
+    "composer retains partial staging cleanup after detach fails and retries on %s before the next image send",
+    async (retry) => {
+      const staged = new Set<string>()
+      const consumed: string[][] = []
+      let images = 0
+      let detaches = 0
+      const state = harness({
+        rpcReply: ({ method, params }) => {
+          if (method === "image.attach_bytes") {
+            const path = `/images/${++images}.png`
+            staged.add(path)
+            return { attached: true, path, count: staged.size }
+          }
+          if (method === "file.attach")
+            return new RpcFailure("native file rejected")
+          if (method === "image.detach") {
+            if (++detaches === 1) return new RpcFailure("detach unavailable")
+            const { path } = params as { path: string }
+            staged.delete(path)
+            return { detached: true, count: staged.size }
+          }
+          if (method === "prompt.submit") {
+            consumed.push([...staged])
+            staged.clear()
+            return { status: "streaming" }
+          }
+        },
+      })
+      const { client, sockets } = state
+      const recovered = vi.fn()
+      const message: AppendMessage = {
+        role: "user",
+        content: [
+          { type: "image", image: "data:image/png;base64,YQ==" },
+          { type: "file", data: "aGk=", mimeType: "text/plain" },
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      }
+      try {
+        await client.start()
+        client.subscribeRecovery(recovered)
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        const failure = await client
+          .submit(threadId, message)
+          .catch((reason: unknown) => reason)
+        expect(failure).toBeInstanceOf(Error)
+        expect(consumed).toEqual([])
+        expect(staged).toEqual(new Set(["/images/1.png"]))
+        if (retry === "reconnect") {
+          sockets[0].disconnect()
+          await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1))
+        }
+        await client.submit(threadId, {
+          ...message,
+          content: [{ type: "image", image: "data:image/png;base64,Yg==" }],
+        })
+        expect(consumed).toEqual([["/images/2.png"]])
+        expect(
+          sockets
+            .flatMap(({ requests }) => requests)
+            .filter(
+              ({ method }) =>
+                typeof method === "string" &&
+                (method.startsWith("image.") ||
+                  method === "file.attach" ||
+                  method === "prompt.submit")
+            )
+            .map(({ method }) => method)
+        ).toEqual([
+          "image.attach_bytes",
+          "file.attach",
+          "image.detach",
+          "image.detach",
+          "image.attach_bytes",
+          "prompt.submit",
+        ])
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("native file rejected"),
+        })
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("detach unavailable"),
+        })
+        expect(state.historyFetches).toBe(0)
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it("composer reconciles durable history and sends again while optional native usage keeps failing", async () => {
+    let unavailable = false
+    const state = harness({
+      history: [{ id: 1, role: "user", content: "First" }],
+      rpcReply: ({ method }) =>
+        method === "session.usage"
+          ? unavailable
+            ? new RpcFailure("usage unavailable")
+            : {
+                context_used: 10,
+                context_max: 100,
+                context_source: "provider_usage",
+                context_estimated: false,
+              }
+          : undefined,
+    })
+    const { client, sockets } = state
+    const onError = vi.fn()
+    client.subscribeCatalog(() => undefined, onError)
+    const message: AppendMessage = {
+      role: "user",
+      content: [{ type: "text", text: "First" }],
+      sourceId: null,
+      parentId: null,
+      attachments: [],
+      metadata: { custom: {} },
+      runConfig: {},
+      createdAt: new Date(),
+    }
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      })
+      await client.submit(threadId, message)
+      unavailable = true
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "message.complete",
+          session_id: "live-1",
+          seq: 1,
+          payload: { status: "complete" },
+        },
+      })
+      await vi.waitFor(() =>
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "usage unavailable" })
+        )
+      )
+      expect(client.session(threadId)?.composer?.context).toBeUndefined()
+      expect(client.session(threadId)?.messages[0].id).toBe("hermes-row-1")
+      await expect(
+        client.submit(threadId, {
+          ...message,
+          content: [{ type: "text", text: "Next" }],
+        })
+      ).resolves.toBeUndefined()
+      expect(state.historyFetches).toBe(1)
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(2)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer deduplicates idle confirmations and ignores a late result for a retired turn", async () => {
+    const confirmed = new DeferredRpc()
+    const state = harness({
+      history: [],
+      rpcReply: ({ method }) => {
+        if (method === "session.active_list") return confirmed
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/pending.png", count: 1 }
+        if (method === "image.detach") return { detached: true, count: 0 }
+      },
+    })
+    const { client, sockets } = state
+    const message: AppendMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "Caption" },
+        { type: "image", image: "data:image/png;base64,YQ==" },
+      ],
+      sourceId: null,
+      parentId: null,
+      attachments: [],
+      metadata: { custom: {} },
+      runConfig: {},
+      createdAt: new Date(),
+    }
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.submit(threadId, message)
+      for (const seq of [1, 2])
+        sockets[0].message({
+          method: "event",
+          params: {
+            type: "session.info",
+            session_id: "live-1",
+            seq,
+            payload: { running: false },
+          },
+        })
+      expect(
+        sockets[0].requests.filter(
+          ({ method }) => method === "session.active_list"
+        )
+      ).toHaveLength(1)
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "message.complete",
+          session_id: "live-1",
+          seq: 3,
+          payload: { status: "complete" },
+        },
+      })
+      const next = client.submit(threadId, message)
+      void next.catch(() => undefined)
+      await vi.waitFor(() =>
+        expect(
+          sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+        ).toHaveLength(2)
+      )
+      await next
+      const historyReads = state.historyFetches
+      await act(async () =>
+        confirmed.resolve({
+          sessions: [{ id: "live-1", session_key: "stored-1", status: "idle" }],
+        })
+      )
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "image.detach")
+      ).toHaveLength(0)
+      expect(state.historyFetches).toBe(historyReads)
+      expect(client.session(threadId)?.running).toBe(true)
+      expect(client.session(threadId)?.messages).toHaveLength(1)
+    } finally {
+      confirmed.resolve({ sessions: [] })
+      client.stop()
+    }
+  })
+
+  it("composer confirms trailing old idle events cannot detach a newer active image turn", async () => {
+    const state = harness({
+      history: [],
+      rpcReply: ({ method }) => {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/pending.png", count: 1 }
+        if (method === "image.detach") return { detached: true, count: 0 }
+      },
+    })
+    const { client, sockets } = state
+    const message: AppendMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "Caption" },
+        { type: "image", image: "data:image/png;base64,YQ==" },
+      ],
+      sourceId: null,
+      parentId: null,
+      attachments: [],
+      metadata: { custom: {} },
+      runConfig: {},
+      createdAt: new Date(),
+    }
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.submit(threadId, message)
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "message.complete",
+          session_id: "live-1",
+          seq: 1,
+          payload: { status: "complete" },
+        },
+      })
+      await client.submit(threadId, message)
+      state.setLiveStatus("working")
+      const historyReads = state.historyFetches
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "session.info",
+          session_id: "live-1",
+          seq: 2,
+          payload: { running: false },
+        },
+      })
+      await vi.waitFor(() =>
+        expect(
+          sockets[0].requests.filter(
+            ({ method }) => method === "session.active_list"
+          )
+        ).toHaveLength(1)
+      )
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "image.detach")
+      ).toHaveLength(0)
+      expect(state.historyFetches).toBe(historyReads)
+      expect(client.session(threadId)?.running).toBe(true)
+      expect(client.session(threadId)?.messages).toHaveLength(1)
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(2)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer does not let a late idle resume reconcile a newer staged turn", async () => {
+    const resumed = new DeferredRpc()
+    let resumes = 0
+    const { client, sockets } = harness({
+      history: [],
+      rpcReply: ({ method }) => {
+        if (method === "session.resume" && ++resumes === 2) return resumed
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/pending.png", count: 1 }
+        if (method === "image.detach") return { detached: true, count: 0 }
+      },
+    })
+    const message: AppendMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "Caption" },
+        { type: "image", image: "data:image/png;base64,YQ==" },
+      ],
+      sourceId: null,
+      parentId: null,
+      attachments: [],
+      metadata: { custom: {} },
+      runConfig: {},
+      createdAt: new Date(),
+    }
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.submit(threadId, message)
+      const pendingResume = client.attach(threadId)
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "message.complete",
+          session_id: "live-1",
+          seq: 1,
+          payload: { status: "complete" },
+        },
+      })
+      await client.submit(threadId, message)
+      resumed.resolve({
+        session_id: "live-1",
+        resumed: "stored-1",
+        running: false,
+        status: "idle",
+      })
+      await pendingResume
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "image.detach")
+      ).toHaveLength(0)
+      expect(client.session(threadId)?.running).toBe(true)
+      expect(client.session(threadId)?.messages).toHaveLength(1)
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(2)
+    } finally {
+      resumed.resolve({ session_id: "live-1", running: false, status: "idle" })
+      client.stop()
+    }
+  })
+
+  it.each(["event", "replay"])(
+    "composer waits for dropped-terminal idle session.info recovery from %s",
+    async (source) => {
+      const detached = new DeferredRpc()
+      const idle = {
+        type: "session.info",
+        session_id: "live-1",
+        seq: 2,
+        payload: { running: false },
+      }
+      const { client, sockets } = harness({
+        history: [],
+        rpcReply: ({ method }) => {
+          if (method === "image.attach_bytes")
+            return { attached: true, path: "/images/pending.png", count: 1 }
+          if (method === "image.detach") return detached
+          if (method === "session.events.since")
+            return { events: [idle], epoch: "epoch-1" }
+        },
+      })
+      const message: AppendMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: "Lost terminal" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      }
+      try {
+        await client.start()
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        await client.submit(threadId, message)
+        sockets[0].message({
+          method: "event",
+          params: {
+            type: "message.start",
+            session_id: "live-1",
+            seq: 1,
+            payload: {},
+          },
+        })
+        if (source === "event")
+          sockets[0].message({ method: "event", params: idle })
+        else sockets[0].disconnect()
+        await vi.waitFor(() =>
+          expect(
+            sockets
+              .flatMap(({ requests }) => requests)
+              .some(({ method }) => method === "image.detach")
+          ).toBe(true)
+        )
+        const next = client.submit(threadId, message)
+        void next.catch(() => undefined)
+        expect(
+          sockets
+            .flatMap(({ requests }) => requests)
+            .filter(({ method }) => method === "image.attach_bytes")
+        ).toHaveLength(1)
+        detached.resolve({ detached: true, count: 0 })
+        await next
+        expect(
+          sockets
+            .flatMap(({ requests }) => requests)
+            .filter(({ method }) => method === "prompt.submit")
+        ).toHaveLength(2)
+        expect(client.session(threadId)?.messages).toHaveLength(1)
+      } finally {
+        detached.resolve({ detached: true, count: 0 })
+        client.stop()
+      }
+    }
+  )
+
+  it.each([
+    { failure: "detach", terminal: "error", retry: "send" },
+    { failure: "history", terminal: "error", retry: "send" },
+    { failure: "context", terminal: "error", retry: "send" },
+    { failure: "history", terminal: "complete", retry: "send" },
+    { failure: "detach", terminal: "error", retry: "reconnect" },
+    { failure: "history", terminal: "error", retry: "reconnect" },
+    { failure: "context", terminal: "error", retry: "reconnect" },
+    { failure: "history", terminal: "complete", retry: "reconnect" },
+  ])(
+    "composer handles $failure failure after terminal $terminal on $retry without resubmission",
+    async ({ failure, terminal, retry }) => {
+      let detachAttempts = 0
+      let usageAttempts = 0
+      const { client, sockets, fetcher } = harness({
+        history: [],
+        rpcReply: ({ method }) => {
+          if (method === "image.attach_bytes")
+            return { attached: true, path: "/images/pending.png", count: 1 }
+          if (method === "image.detach") {
+            if (++detachAttempts === 1 && failure === "detach")
+              return new RpcFailure("detach unavailable")
+            return { detached: true, count: 0 }
+          }
+          if (method === "session.usage") {
+            if (++usageAttempts === 2 && failure === "context")
+              return new RpcFailure("usage unavailable")
+            return {
+              context_used: 10,
+              context_max: 100,
+              context_source: "provider_usage",
+              context_estimated: false,
+            }
+          }
+        },
+      })
+      const onError = vi.fn()
+      const recovered = vi.fn()
+      client.subscribeCatalog(() => undefined, onError)
+      const message: AppendMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: "Accepted" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      }
+      try {
+        await client.start()
+        client.subscribeRecovery(recovered)
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        await client.attach(threadId)
+        if (failure === "context")
+          await client.refreshComposer(threadId, {
+            modelSelectorEnabled: false,
+            contextEnabled: true,
+          })
+        await client.submit(threadId, message)
+        if (failure === "history")
+          fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }))
+        sockets[0].message({
+          method: "event",
+          params: {
+            type: "message.complete",
+            session_id: "live-1",
+            seq: 10,
+            payload: { status: terminal },
+          },
+        })
+        await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+        if (retry === "reconnect") {
+          sockets[0].disconnect()
+          await vi.waitFor(() => expect(recovered).toHaveBeenCalledTimes(1))
+        }
+        await client.submit(threadId, {
+          ...message,
+          content: [{ type: "text", text: "Next" }],
+        })
+        expect(detachAttempts).toBe(
+          terminal === "complete" ? 0 : failure === "detach" ? 2 : 1
+        )
+        expect(client.session(threadId)?.messages).toHaveLength(1)
+        expect(client.session(threadId)?.messages[0].content).toBe("Next")
+        expect(
+          sockets
+            .flatMap(({ requests }) => requests)
+            .filter(({ method }) => method === "prompt.submit")
+        ).toHaveLength(2)
+        expect(onError).toHaveBeenCalledTimes(1)
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it.each([false, true])(
+    "composer recovers a dropped terminal on idle resume before the next send (image=%s)",
+    async (image) => {
+      const state = harness({
+        history: [],
+        rpcReply: ({ method }) => {
+          if (method === "image.attach_bytes")
+            return { attached: true, path: "/images/pending.png", count: 1 }
+          if (method === "image.detach") return { detached: true, count: 0 }
+        },
+      })
+      const { client, sockets } = state
+      const message: AppendMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: "Lost terminal" },
+          ...(image
+            ? [{ type: "image" as const, image: "data:image/png;base64,YQ==" }]
+            : []),
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      }
+      try {
+        await client.start()
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        await client.submit(threadId, message)
+        sockets[0].disconnect()
+        await vi.waitFor(() => expect(sockets).toHaveLength(2))
+        await vi.waitFor(() => expect(state.historyFetches).toBeGreaterThan(0))
+        await vi.waitFor(() =>
+          expect(client.session(threadId)?.messages).toEqual([])
+        )
+        await client.submit(threadId, {
+          ...message,
+          content: [{ type: "text", text: "Next" }],
+        })
+        const requests = sockets.flatMap(({ requests }) => requests)
+        expect(
+          requests.filter(({ method }) => method === "image.detach")
+        ).toEqual(
+          image
+            ? [
+                expect.objectContaining({
+                  params: { session_id: "live-1", path: "/images/pending.png" },
+                }),
+              ]
+            : []
+        )
+        expect(
+          requests.filter(({ method }) => method === "prompt.submit")
+        ).toHaveLength(2)
+        expect(client.session(threadId)?.messages).toHaveLength(1)
+        expect(client.session(threadId)?.storedSessionId).toBe("stored-1")
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it("composer waits for old terminal cleanup before staging a new turn and ignores its replay", async () => {
+    const detached = new DeferredRpc()
+    const { client, sockets } = harness({
+      history: [
+        {
+          id: 52,
+          role: "user",
+          content: "Original\n@image:/images/original.png",
+        },
+      ],
+      rpcReply: ({ method }) => {
+        if (method === "image.attach" || method === "image.attach_bytes")
+          return { attached: true, path: "/images/original.png", count: 1 }
+        if (method === "image.detach") return detached
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await client.edit(threadId, {
+        role: "user",
+        content: [{ type: "text", text: "Revised" }],
+        sourceId: "hermes-row-52",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      const terminal = {
+        method: "event",
+        params: {
+          type: "error",
+          session_id: "live-1",
+          seq: 10,
+          payload: { message: "agent initialization failed" },
+        },
+      }
+      sockets[0].message(terminal)
+      const second = client.submit(threadId, {
+        role: "user",
+        content: [
+          { type: "text", text: "Next" },
+          { type: "image", image: "data:image/png;base64,Yg==" },
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      void second.catch(() => undefined)
+      await vi.waitFor(() =>
+        expect(
+          sockets[0].requests.some(({ method }) => method === "image.detach")
+        ).toBe(true)
+      )
+      expect(
+        sockets[0].requests.filter(
+          ({ method }) => method === "image.attach_bytes"
+        )
+      ).toHaveLength(0)
+      detached.resolve({ detached: true, count: 0 })
+      await second
+      sockets[0].message(terminal)
+      expect(client.session(threadId)?.messages.at(-1)).toMatchObject({
+        content: [
+          { type: "text", text: "Next" },
+          { type: "image", image: "data:image/png;base64,Yg==" },
+        ],
+      })
+      expect(client.session(threadId)?.running).toBe(true)
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "message.complete",
+          session_id: "live-1",
+          seq: 11,
+          payload: { status: "complete", text: "Done" },
+        },
+      })
+      await vi.waitFor(() =>
+        expect(client.session(threadId)?.loading).toBe(false)
+      )
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "image.detach")
+      ).toHaveLength(1)
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(2)
+    } finally {
+      detached.resolve({ detached: true, count: 0 })
+      client.stop()
+    }
+  })
+
+  it.each([
+    {
+      type: "message.complete",
+      payload: {
+        status: "error",
+        error: "agent initialization failed",
+        text: "Error: agent initialization failed",
+      },
+    },
+    {
+      type: "error",
+      payload: {
+        message: "Session no longer running before the agent was ready",
+      },
+    },
+  ])(
+    "composer accepted edit reconciles history and detaches images on native terminal $type",
+    async ({ type, payload }) => {
+      const history: unknown[] = [
+        {
+          id: 52,
+          role: "user",
+          content: [
+            { type: "text", text: "Original\n@image:/images/original.png" },
+            {
+              type: "image_url",
+              image_url: { url: "data:image/png;base64,YQ==" },
+            },
+          ],
+        },
+      ]
+      const { client, sockets } = harness({
+        history,
+        rpcReply: ({ method }) => {
+          if (method === "image.attach")
+            return { attached: true, path: "/images/original.png", count: 1 }
+          if (method === "image.detach") return { detached: true, count: 0 }
+          if (method === "prompt.submit") {
+            // Native truncation is durable before the deferred agent build.
+            history.length = 0
+            return { status: "streaming" }
+          }
+        },
+      })
+      try {
+        await client.start()
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        await client.loadHistory(threadId)
+        await client.edit(threadId, {
+          role: "user",
+          content: [{ type: "text", text: "Revised" }],
+          sourceId: "hermes-row-52",
+          parentId: null,
+          attachments: [],
+          metadata: { custom: {} },
+          runConfig: {},
+          createdAt: new Date(),
+        })
+        sockets[0].message({
+          method: "event",
+          params: { type, session_id: "live-1", seq: 10, payload },
+        })
+        await vi.waitFor(() =>
+          expect(sockets[0].requests).toContainEqual(
+            expect.objectContaining({
+              method: "image.detach",
+              params: { session_id: "live-1", path: "/images/original.png" },
+            })
+          )
+        )
+        await vi.waitFor(() =>
+          expect(client.session(threadId)?.messages).toEqual([])
+        )
+        expect(client.session(threadId)?.status).toBe("failed")
+        expect(
+          sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+        ).toHaveLength(1)
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it("composer native-vision edit restages the original path once when history also has image bytes", async () => {
+    const history: unknown[] = [
+      {
+        id: 52,
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Original\n@image:`/images/original photo.png`",
+          },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,YQ==" },
+          },
+        ],
+      },
+    ]
+    const { client, sockets } = harness({
+      history,
+      rpcReply: ({ method, params }) => {
+        if (method === "image.attach")
+          return {
+            attached: true,
+            path: "/images/original photo.png",
+            count: 1,
+          }
+        if (method === "prompt.submit") {
+          // Pinned Hermes appends one @image directive for each staged path.
+          const caption = (params as { text: string }).text
+          history.splice(0, history.length, {
+            id: 53,
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `${caption}\n@image:\`/images/original photo.png\``,
+              },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,YQ==" },
+              },
+            ],
+          })
+          return { status: "streaming" }
+        }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await client.edit(threadId, {
+        role: "user",
+        content: [{ type: "text", text: "Revised" }],
+        sourceId: "hermes-row-52",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      expect(
+        sockets[0].requests
+          .filter(({ method }) =>
+            ["image.attach", "image.attach_bytes", "prompt.submit"].includes(
+              String(method)
+            )
+          )
+          .map(({ method, params }) => ({ method, params }))
+      ).toEqual([
+        {
+          method: "image.attach",
+          params: { session_id: "live-1", path: "/images/original photo.png" },
+        },
+        {
+          method: "prompt.submit",
+          params: {
+            session_id: "live-1",
+            text: "Revised",
+            truncate_before_row_id: 52,
+            confirm_truncate: true,
+            confirm_empty_truncate: true,
+          },
+        },
+      ])
+      expect(client.session(threadId)?.messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Revised\n@image:`/images/original photo.png`",
+            },
+            { type: "image", image: "data:image/png;base64,YQ==" },
+          ],
+        }),
+      ])
+      await client.loadHistory(threadId)
+      expect(client.session(threadId)?.messages).toEqual([
+        expect.objectContaining({
+          id: "hermes-row-53",
+          content: [
+            {
+              type: "text",
+              text: "Revised\n@image:`/images/original photo.png`",
+            },
+            { type: "image", image: "data:image/png;base64,YQ==" },
+          ],
+        }),
+      ])
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer edit rejection reconciles native history and detaches staged images without retrying", async () => {
+    const state = harness({
+      promptError: true,
+      history: [
+        {
+          id: 52,
+          role: "user",
+          content: [
+            { type: "text", text: "Original" },
+            {
+              type: "image_url",
+              image_url: { url: "data:image/png;base64,YQ==" },
+            },
+          ],
+        },
+      ],
+      rpcReply: ({ method }) => {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/preserved.png" }
+        if (method === "image.detach") return { detached: true }
+      },
+    })
+    const { client, sockets } = state
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await expect(
+        client.edit(threadId, {
+          role: "user",
+          content: [{ type: "text", text: "Revised" }],
+          sourceId: "hermes-row-52",
+          parentId: null,
+          attachments: [],
+          metadata: { custom: {} },
+          runConfig: {},
+          createdAt: new Date(),
+        })
+      ).rejects.toThrow("provider outcome uncertain")
+      expect(client.session(threadId)?.messages[0]).toMatchObject({
+        id: "hermes-row-52",
+        content: [
+          { type: "text", text: "Original" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+      })
+      expect(sockets[0].requests).toContainEqual(
+        expect.objectContaining({
+          method: "image.detach",
+          params: { session_id: "live-1", path: "/images/preserved.png" },
+        })
+      )
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(1)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer isolates delayed model failures and native context across Session selection", async () => {
+    const delayed = new DeferredRpc()
+    const state = harness({
+      sameSessionIdAcrossProfiles: true,
+      rpcReply: ({ method, params }) => {
+        const fields = params as Record<string, unknown>
+        if (method === "session.resume")
+          return {
+            session_id: `live-${String(fields.profile)}`,
+            running: false,
+            status: "idle",
+          }
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+        if (method === "session.usage")
+          return {
+            context_used: fields.session_id === "live-research" ? 10 : 50,
+            context_max: 100,
+            context_source: "provider_usage",
+            context_estimated: false,
+          }
+        if (method === "config.set") return delayed
+      },
+    })
+    const onError = vi.fn()
+    let bundle: ReturnType<typeof useHermesRuntimeBundle> | undefined
+    let features: ReturnType<typeof useHermesComposerFeatures> | undefined
+    const Harness = () => {
+      bundle = useHermesRuntimeBundle(state.options)
+      features = useHermesComposerFeatures(
+        bundle.client,
+        bundle.assistantRuntime,
+        { modelSelectorEnabled: true, contextEnabled: true },
+        onError
+      )
+      return createElement(
+        AssistantRuntimeProvider,
+        { runtime: bundle.assistantRuntime },
+        null
+      )
+    }
+    const view = render(createElement(Harness))
+    try {
+      await act(() =>
+        bundle!.assistantRuntime.threads.switchToThread(
+          encodeHermesThreadId("research", "stored-1")
+        )
+      )
+      await waitFor(() => expect(features?.model?.options).toHaveLength(2))
+      const change = features!.model!.select('["native","large"]')
+      await vi.waitFor(() =>
+        expect(
+          state.sockets[0].requests.some(
+            ({ method }) => method === "config.set"
+          )
+        ).toBe(true)
+      )
+      await act(() =>
+        bundle!.assistantRuntime.threads.switchToThread(
+          encodeHermesThreadId("creator", "stored-1")
+        )
+      )
+      await waitFor(() => expect(features?.context?.usedTokens).toBe(50))
+      delayed.resolve(new RpcFailure("Original Session failed"))
+      await act(() => change)
+      expect(onError).not.toHaveBeenCalled()
+      expect(features?.model?.selectedId).toBe('["native","small"]')
+      expect(features?.context).toEqual({ usedTokens: 50, maxTokens: 100 })
+      expect(
+        state.sockets[0].requests.filter(
+          ({ method }) => method === "config.set"
+        )
+      ).toEqual([
+        expect.objectContaining({
+          params: {
+            session_id: "live-research",
+            key: "model",
+            value: "large --provider native --session",
+          },
+        }),
+      ])
+    } finally {
+      delayed.resolve(new RpcFailure("finished"))
+      view.unmount()
+      bundle?.client.stop()
+      state.client.stop()
+    }
+  })
+
+  it("composer respects the selected Session model reported by resume over the active-agent catalog", async () => {
+    const { client } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "session.resume")
+          return {
+            session_id: "live-1",
+            status: "idle",
+            running: false,
+            info: { provider: "native", model: "large" },
+          }
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: true,
+        contextEnabled: false,
+      })
+      expect(client.session(threadId)?.composer?.model?.selectedId).toBe(
+        '["native","large"]'
+      )
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer omits stale context when refreshing native usage fails", async () => {
+    let failed = false
+    const { client } = harness({
+      rpcReply: ({ method }) =>
+        method === "session.usage"
+          ? failed
+            ? new RpcFailure("usage unavailable")
+            : {
+                context_used: 10,
+                context_max: 100,
+                context_source: "provider_usage",
+                context_estimated: false,
+              }
+          : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      const config = { modelSelectorEnabled: false, contextEnabled: true }
+      await client.refreshComposer(threadId, config)
+      failed = true
+      await expect(client.refreshComposer(threadId, config)).rejects.toThrow(
+        "usage unavailable"
+      )
+      expect(client.session(threadId)?.composer?.context).toBeUndefined()
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer rejects overlapping edits before attachments or the replacement can be duplicated", async () => {
+    const firstSend = new DeferredRpc()
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) =>
+        method === "prompt.submit" ? firstSend : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await client.attach(threadId)
+      const message = {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "Revised" }],
+        sourceId: "u1",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      }
+      const first = client.edit(threadId, message)
+      void first.catch(() => undefined)
+      const second = client.edit(threadId, message)
+      void second.catch(() => undefined)
+      await vi.waitFor(() =>
+        expect(
+          sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+            .length
+        ).toBeGreaterThan(0)
+      )
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(1)
+      firstSend.resolve({ status: "streaming" })
+      await first
+      await expect(second).rejects.toThrow(/editing|pending/iu)
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toHaveLength(1)
+    } finally {
+      firstSend.resolve({ status: "streaming" })
+      client.stop()
+    }
+  })
+
+  it("composer keeps context available when the independent native model catalog fails", async () => {
+    const { client } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "model.options")
+          return new RpcFailure("catalog unavailable")
+        if (method === "session.usage")
+          return {
+            context_used: 10,
+            context_max: 100,
+            context_source: "provider_usage",
+            context_estimated: false,
+          }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await expect(
+        client.refreshComposer(threadId, {
+          modelSelectorEnabled: true,
+          contextEnabled: true,
+        })
+      ).rejects.toThrow("catalog unavailable")
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 10,
+        maxTokens: 100,
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer keeps a newer native context event when an older usage read arrives", async () => {
+    const old = new DeferredRpc()
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) => (method === "session.usage" ? old : undefined),
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      const read = client.refreshComposer(threadId, {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      })
+      sockets[0].message({
+        method: "event",
+        params: {
+          type: "session.usage",
+          session_id: "live-1",
+          payload: {
+            usage: {
+              context_used: 30,
+              context_max: 100,
+              context_source: "provider_usage",
+              context_estimated: false,
+            },
+          },
+        },
+      })
+      old.resolve({
+        context_used: 10,
+        context_max: 100,
+        context_source: "provider_usage",
+        context_estimated: false,
+      })
+      await read
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 30,
+        maxTokens: 100,
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer refreshes native context after history and model changes", async () => {
+    let used = 10
+    let max = 100
+    const state = harness({
+      rpcReply: ({ method }) => {
+        if (method === "session.usage")
+          return {
+            context_used: used,
+            context_max: max,
+            context_source: "provider_usage",
+            context_estimated: false,
+          }
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+        if (method === "config.set") {
+          max = 200
+          return { key: "model", value: "large", scope: "session" }
+        }
+      },
+    })
+    const { client } = state
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      })
+      used = 20
+      await client.loadHistory(threadId)
+      await vi.waitFor(() =>
+        expect(client.session(threadId)?.composer?.context).toEqual({
+          usedTokens: 20,
+          maxTokens: 100,
+        })
+      )
+      await client.selectModel(threadId, '["native","large"]')
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 20,
+        maxTokens: 200,
+      })
+      state.sockets[0].message({
+        method: "event",
+        params: {
+          type: "session.usage",
+          session_id: "live-1",
+          payload: {
+            usage: {
+              context_used: 30,
+              context_max: 200,
+              context_source: "provider_usage",
+              context_estimated: false,
+            },
+          },
+        },
+      })
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 30,
+        maxTokens: 200,
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer view model handles model failures through onError without rejecting", async () => {
+    const state = harness({
+      rpcReply: ({ method }) => {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+        if (method === "config.set")
+          return new RpcFailure("Native model failed")
+      },
+    })
+    const onError = vi.fn()
+    let bundle: ReturnType<typeof useHermesRuntimeBundle> | undefined
+    let features: ReturnType<typeof useHermesComposerFeatures> | undefined
+    const Harness = () => {
+      bundle = useHermesRuntimeBundle(state.options)
+      features = useHermesComposerFeatures(
+        bundle.client,
+        bundle.assistantRuntime,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        onError
+      )
+      return createElement(
+        AssistantRuntimeProvider,
+        { runtime: bundle.assistantRuntime },
+        null
+      )
+    }
+    const view = render(createElement(Harness))
+    try {
+      await act(() =>
+        bundle!.assistantRuntime.threads.switchToThread(
+          encodeHermesThreadId("research", "stored-1")
+        )
+      )
+      await waitFor(() => expect(features?.model?.options).toHaveLength(2))
+      expect(features?.context).toBeUndefined()
+      await act(() =>
+        expect(
+          features!.model!.select('["native","large"]')
+        ).resolves.toBeUndefined()
+      )
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Native model failed" })
+      )
+      expect(features?.model?.selectedId).toBe('["native","small"]')
+    } finally {
+      view.unmount()
+      bundle?.client.stop()
+      state.client.stop()
+    }
+  })
+
+  it("composer runtime exposes native attachments and same-Session text edits", async () => {
+    const state = harness({
+      rpcReply: ({ method }) =>
+        method === "file.attach"
+          ? { attached: true, ref_text: "@file:notes.txt" }
+          : undefined,
+    })
+    let bundle: ReturnType<typeof useHermesRuntimeBundle> | undefined
+    const Harness = () => {
+      bundle = useHermesRuntimeBundle(state.options)
+      return createElement(
+        AssistantRuntimeProvider,
+        { runtime: bundle.assistantRuntime },
+        null
+      )
+    }
+    const view = render(createElement(Harness))
+    try {
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await act(() => bundle!.assistantRuntime.threads.switchToThread(threadId))
+      await waitFor(() =>
+        expect(bundle!.client.session(threadId)?.liveSessionId).toBe("live-1")
+      )
+      const runtime = bundle!.assistantRuntime.thread
+      expect(runtime.getState().capabilities).toMatchObject({
+        attachments: true,
+        edit: true,
+      })
+      await act(() =>
+        runtime.composer.addAttachment(
+          new File(["hi"], "notes.txt", { type: "text/plain" })
+        )
+      )
+      expect(runtime.composer.getState().attachments).toHaveLength(1)
+      await act(() => runtime.composer.send())
+      await waitFor(() =>
+        expect(state.sockets[0].requests).toContainEqual(
+          expect.objectContaining({
+            method: "prompt.submit",
+            params: { session_id: "live-1", text: "@file:notes.txt" },
+          })
+        )
+      )
+    } finally {
+      view.unmount()
+      bundle?.client.stop()
+      state.client.stop()
+    }
+  })
+
+  it.each([
+    {},
+    { context_used: 10 },
+    { context_max: 100 },
+    {
+      context_used: "10",
+      context_max: 100,
+      context_source: "provider_usage",
+      context_estimated: false,
+    },
+    {
+      context_used: -1,
+      context_max: 100,
+      context_source: "provider_usage",
+      context_estimated: false,
+    },
+    {
+      context_used: 10,
+      context_max: 0,
+      context_source: "provider_usage",
+      context_estimated: false,
+    },
+    {
+      context_used: 10,
+      context_max: 100,
+      context_source: "local_estimate",
+      context_estimated: false,
+    },
+    {
+      context_used: 10,
+      context_max: 100,
+      context_source: "provider_usage",
+      context_estimated: true,
+    },
+  ])(
+    "composer drops context when a native update lacks an authoritative valid reading: %j",
+    async (usage) => {
+      const { client, sockets } = harness({
+        rpcReply: ({ method }) =>
+          method === "session.usage"
+            ? {
+                context_used: 4321,
+                context_max: 100000,
+                context_source: "provider_usage",
+                context_estimated: false,
+              }
+            : undefined,
+      })
+      try {
+        await client.start()
+        const threadId = encodeHermesThreadId("research", "stored-1")
+        await client.attach(threadId)
+        await client.refreshComposer(threadId, {
+          modelSelectorEnabled: false,
+          contextEnabled: true,
+        })
+        sockets[0].message({
+          method: "event",
+          params: {
+            type: "session.info",
+            session_id: "live-1",
+            payload: { running: false, usage },
+          },
+        })
+        expect(client.session(threadId)?.composer?.context).toBeUndefined()
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it("composer reads authoritative context independently of the model catalog", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) =>
+        method === "session.usage"
+          ? {
+              context_used: 4321,
+              context_max: 100000,
+              context_source: "provider_usage",
+              context_estimated: false,
+            }
+          : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      })
+      expect(client.session(threadId)?.composer?.context).toEqual({
+        usedTokens: 4321,
+        maxTokens: 100000,
+      })
+      expect(
+        sockets[0].requests.some(({ method }) => method === "model.options")
+      ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer serializes rapid model picks and ignores a stale catalog response", async () => {
+    const change = new DeferredRpc()
+    const stale = new DeferredRpc()
+    let catalogReads = 0
+    let changes = 0
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "model.options")
+          return ++catalogReads === 1
+            ? {
+                provider: "native",
+                model: "small",
+                providers: [{ slug: "native", models: ["small", "large"] }],
+              }
+            : stale
+        if (method === "config.set")
+          return ++changes === 1
+            ? change
+            : { key: "model", value: "small", scope: "session" }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      const config = { modelSelectorEnabled: true, contextEnabled: false }
+      await client.refreshComposer(threadId, config)
+      const oldRefresh = client.refreshComposer(threadId, config)
+      const first = client.selectModel(threadId, '["native","large"]')
+      const second = client.selectModel(threadId, '["native","small"]')
+      await vi.waitFor(() => expect(changes).toBe(1))
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "config.set")
+      ).toHaveLength(1)
+      change.resolve({ key: "model", value: "large", scope: "session" })
+      await Promise.all([first, second])
+      stale.resolve({
+        provider: "native",
+        model: "large",
+        providers: [{ slug: "native", models: ["small", "large"] }],
+      })
+      await oldRefresh
+      expect(client.session(threadId)?.composer?.model?.selectedId).toBe(
+        '["native","small"]'
+      )
+      expect(changes).toBe(2)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer reads the native Session model catalog and changes only that Session", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [
+              { slug: "native", name: "Native", models: ["small", "large"] },
+            ],
+          }
+        if (method === "config.set")
+          return {
+            key: "model",
+            value: "large",
+            scope: "session",
+            confirm_required: false,
+          }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.attach(threadId)
+      await client.refreshComposer(threadId, {
+        modelSelectorEnabled: true,
+        contextEnabled: false,
+      })
+      expect(client.session(threadId)?.composer?.model).toMatchObject({
+        selectedId: '["native","small"]',
+        options: [
+          { id: '["native","small"]', label: "small", group: "Native" },
+          { id: '["native","large"]', label: "large", group: "Native" },
+        ],
+      })
+      await client.selectModel(threadId, '["native","large"]')
+      expect(sockets[0].requests).toContainEqual(
+        expect.objectContaining({
+          method: "config.set",
+          params: {
+            session_id: "live-1",
+            key: "model",
+            value: "large --provider native --session",
+          },
+        })
+      )
+      expect(client.session(threadId)?.composer?.model?.selectedId).toBe(
+        '["native","large"]'
+      )
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer projects native image history and preserves those images when editing text", async () => {
+    const { client, sockets } = harness({
+      history: [
+        {
+          id: 52,
+          role: "user",
+          content: [
+            { type: "text", text: "Original" },
+            {
+              type: "image_url",
+              image_url: { url: "data:image/png;base64,YQ==" },
+            },
+          ],
+        },
+      ],
+      rpcReply: ({ method }) =>
+        method === "image.attach_bytes"
+          ? { attached: true, path: "/images/preserved.png" }
+          : undefined,
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      expect(client.session(threadId)?.messages[0]).toMatchObject({
+        content: [
+          { type: "text", text: "Original" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+      })
+      await client.edit(threadId, {
+        role: "user",
+        content: [{ type: "text", text: "Revised" }],
+        sourceId: "hermes-row-52",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      expect(sockets[0].requests).toContainEqual(
+        expect.objectContaining({
+          method: "image.attach_bytes",
+          params: {
+            session_id: "live-1",
+            content_base64: "data:image/png;base64,YQ==",
+            filename: "image.png",
+          },
+        })
+      )
+      expect(client.session(threadId)?.messages[0]).toMatchObject({
+        content: [
+          { type: "text", text: "Revised" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
+  it.each([
+    { type: "image", image: "https://external.test/a.png" },
+    { type: "file", data: "%%%", mimeType: "text/plain" },
+  ] satisfies ThreadUserMessagePart[])(
+    "composer refuses unsupported attachment bytes before native staging: $type",
+    async (part) => {
+      const { client, sockets } = harness()
+      try {
+        await client.start()
+        await expect(
+          client.submit(encodeHermesThreadId("research", "stored-1"), {
+            role: "user",
+            content: [{ type: "text", text: "Inspect" }, part],
+            sourceId: null,
+            parentId: null,
+            attachments: [],
+            metadata: { custom: {} },
+            runConfig: {},
+            createdAt: new Date(),
+          })
+        ).rejects.toThrow(/attachment/iu)
+        expect(
+          sockets[0].requests.some(({ method }) =>
+            ["image.attach_bytes", "file.attach", "prompt.submit"].includes(
+              String(method)
+            )
+          )
+        ).toBe(false)
+      } finally {
+        client.stop()
+      }
+    }
+  )
+
+  it("composer removes its staged image when a later native attachment fails", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/a.png" }
+        if (method === "file.attach")
+          return new RpcFailure("native file rejected")
+        if (method === "image.detach") return { detached: true }
+      },
+    })
+    try {
+      await client.start()
+      await expect(
+        client.submit(encodeHermesThreadId("research", "stored-1"), {
+          role: "user",
+          content: [
+            { type: "image", image: "data:image/png;base64,YQ==" },
+            { type: "file", data: "aGk=", mimeType: "text/plain" },
+          ],
+          sourceId: null,
+          parentId: null,
+          attachments: [],
+          metadata: { custom: {} },
+          runConfig: {},
+          createdAt: new Date(),
+        })
+      ).rejects.toThrow("native file rejected")
+      expect(sockets[0].requests).toContainEqual(
+        expect.objectContaining({
+          method: "image.detach",
+          params: { session_id: "live-1", path: "/images/a.png" },
+        })
+      )
+      expect(
+        sockets[0].requests.some(({ method }) => method === "prompt.submit")
+      ).toBe(false)
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer attachments stage image bytes and native file references before one submit", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) => {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/images/a.png" }
+        if (method === "file.attach")
+          return {
+            attached: true,
+            ref_text: "@file:notes.txt",
+            path: "/attachments/notes.txt",
+            name: "notes.txt",
+          }
+      },
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.submit(threadId, {
+        role: "user",
+        content: [
+          { type: "text", text: "Inspect" },
+          {
+            type: "image",
+            image: "data:image/png;base64,YQ==",
+            filename: "a.png",
+          },
+          {
+            type: "file",
+            data: "aGk=",
+            mimeType: "text/plain",
+            filename: "notes.txt",
+          },
+        ],
+        sourceId: null,
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      expect(
+        sockets[0].requests
+          .filter(({ method }) =>
+            ["image.attach_bytes", "file.attach", "prompt.submit"].includes(
+              String(method)
+            )
+          )
+          .map(({ method, params }) => ({ method, params }))
+      ).toEqual([
+        {
+          method: "image.attach_bytes",
+          params: {
+            session_id: "live-1",
+            content_base64: "data:image/png;base64,YQ==",
+            filename: "a.png",
+          },
+        },
+        {
+          method: "file.attach",
+          params: {
+            session_id: "live-1",
+            data_url: "data:text/plain;base64,aGk=",
+            name: "notes.txt",
+          },
+        },
+        {
+          method: "prompt.submit",
+          params: { session_id: "live-1", text: "Inspect\n@file:notes.txt" },
+        },
+      ])
+      expect(client.session(threadId)?.messages.at(-1)).toMatchObject({
+        content: [
+          { type: "text", text: "Inspect\n@file:notes.txt" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer edit keeps native attachment references and durable row identity", async () => {
+    const { client, sockets } = harness({
+      rpcReply: ({ method }) =>
+        method === "image.attach"
+          ? { attached: true, path: "/images/photo.png", count: 1 }
+          : undefined,
+      history: [
+        {
+          id: 42,
+          role: "user",
+          content: "Original\n@file:`report a.pdf`\n@image:/images/photo.png",
+        },
+        { id: 43, role: "assistant", content: "Answer" },
+      ],
+    })
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await client.edit(threadId, {
+        role: "user",
+        content: [{ type: "text", text: "Revised\n@file:changed.pdf" }],
+        sourceId: "hermes-row-42",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toEqual([
+        expect.objectContaining({
+          params: {
+            session_id: "live-1",
+            text: "Revised\n@file:`report a.pdf`",
+            truncate_before_row_id: 42,
+            confirm_truncate: true,
+            confirm_empty_truncate: true,
+          },
+        }),
+      ])
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("composer edit replaces a sent turn once in the same native Session", async () => {
+    const { client, sockets } = harness()
+    try {
+      await client.start()
+      const threadId = encodeHermesThreadId("research", "stored-1")
+      await client.loadHistory(threadId)
+      await client.attach(threadId)
+      await client.edit(threadId, {
+        role: "user",
+        content: [{ type: "text", text: "Corrected" }],
+        sourceId: "u1",
+        parentId: null,
+        attachments: [],
+        metadata: { custom: {} },
+        runConfig: {},
+        createdAt: new Date(),
+      })
+      expect(
+        sockets[0].requests.filter(({ method }) => method === "prompt.submit")
+      ).toEqual([
+        expect.objectContaining({
+          params: {
+            session_id: "live-1",
+            text: "Corrected",
+            truncate_before_message_id: "u1",
+            confirm_truncate: true,
+            confirm_empty_truncate: true,
+          },
+        }),
+      ])
+      expect(client.session(threadId)).toMatchObject({
+        threadId,
+        storedSessionId: "stored-1",
+        liveSessionId: "live-1",
+        messages: [{ role: "user", content: "Corrected" }],
+      })
+    } finally {
+      client.stop()
+    }
+  })
+
   it("invalidates activity on catalog failure and restores it on recovery", async () => {
     const { client, fetcher } = harness()
     try {

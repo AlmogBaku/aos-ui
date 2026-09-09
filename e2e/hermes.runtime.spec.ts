@@ -162,6 +162,26 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
       }
       if (request.method === "session.events.since")
         return { events: [], truncated: false, epoch: "e2e" }
+      if (request.method === "model.options")
+        return {
+          provider: "mock",
+          model: "chat",
+          providers: [
+            {
+              slug: "mock",
+              name: "Mock",
+              authenticated: true,
+              models: ["chat"],
+            },
+          ],
+        }
+      if (request.method === "session.usage")
+        return {
+          context_used: 2_048,
+          context_max: 65_536,
+          context_source: "provider_usage",
+          context_estimated: false,
+        }
       throw new Error(`Unexpected Hermes RPC ${request.method}`)
     }
   )

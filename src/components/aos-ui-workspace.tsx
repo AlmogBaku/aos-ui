@@ -21,6 +21,7 @@ import {
   type ThreadComponents,
   type ThreadLabels,
 } from "@/components/assistant-ui/elements/thread.aui"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { ToolUiLocaleProvider, RichToolRenderer } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
@@ -31,7 +32,7 @@ import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-nav
 import { useActivityCoordinator } from "@/components/workspace/use-activity-coordinator"
 import type { BrowserSettingsView } from "@/components/workspace/activity"
 import type { BrowserNotificationPort } from "@/lib/notifications/browser-port"
-import type { Locale } from "@/lib/i18n/config"
+import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentSummary,
@@ -69,6 +70,9 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     previous: "Previous branch",
     next: "Next branch",
     conversationHeading: "Conversation",
+    modelSelector: "Choose model",
+    contextUsage: (usedTokens, maxTokens) =>
+      `Context usage: ${usedTokens} of ${maxTokens} tokens`,
     attachments: {
       add: "Add attachment",
       remove: "Remove attachment",
@@ -107,6 +111,9 @@ const threadLabels: Record<Locale, ThreadLabels> = {
     previous: "הסתעפות קודמת",
     next: "הסתעפות הבאה",
     conversationHeading: "שיחה",
+    modelSelector: "בחירת מודל",
+    contextUsage: (usedTokens, maxTokens) =>
+      `שימוש בהקשר: ${usedTokens} מתוך ${maxTokens} טוקנים`,
     attachments: {
       add: "הוספת קובץ מצורף",
       remove: "הסרת קובץ מצורף",
@@ -402,6 +409,7 @@ export function AosUiWorkspace({
   assistantInstructions,
   assistantToolkit,
   composer,
+  composerFeatures,
   onStopRun,
   onWorkspaceError,
   activityCoverage = "workspace",
@@ -417,6 +425,7 @@ export function AosUiWorkspace({
   assistantInstructions?: string
   assistantToolkit?: Toolkit
   composer?: ThreadComponents["Composer"]
+  composerFeatures?: ComposerFeatureViewModel
   onStopRun?: () => void | Promise<void>
   onWorkspaceError?: (error: Error) => void
   activityCoverage?: "workspace" | "active-session"
@@ -586,7 +595,9 @@ export function AosUiWorkspace({
                       : undefined
                   }
                   autoFocus={false}
+                  direction={getLocaleDirection(locale)}
                   labels={threadLabels[locale]}
+                  composerFeatures={composerFeatures}
                   components={activeThreadComponents}
                 />
               </WorkspaceThreadChromeContext.Provider>

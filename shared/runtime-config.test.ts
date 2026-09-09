@@ -13,6 +13,10 @@ describe("Hermes runtime configuration", () => {
       status: "ready",
       mode: "hermes",
       baseUrl: "http://127.0.0.1:8643",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
     })
   })
   it("does not fall back when Hermes endpoint is missing", () => {
@@ -23,6 +27,108 @@ describe("Hermes runtime configuration", () => {
 })
 
 describe("public configuration", () => {
+  it.each([
+    {
+      AOS_UI_RUNTIME_MODE: "fixture",
+      AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED: "false",
+    },
+    {
+      AOS_UI_RUNTIME_MODE: "hermes",
+      AOS_UI_HERMES_BASE_URL: "/hermes",
+      AOS_UI_COMPOSER_CONTEXT_ENABLED: "false",
+    },
+    {
+      AOS_UI_RUNTIME_MODE: "opencode",
+      AOS_UI_OPENCODE_WORKTREE: "/workspace",
+    },
+    {
+      AOS_UI_RUNTIME_MODE: "ag-ui",
+      AOS_UI_AG_UI_URL: "https://agents.example/run",
+      AOS_UI_AG_UI_WORKSPACE_URL: "https://agents.example/workspace",
+    },
+  ] as const)(
+    "round-trips environment-derived %s config through the public boundary",
+    (environment) => {
+      const resolved = resolveRuntimeConfiguration(environment)
+      const serialize = (
+        config as unknown as {
+          serializePublicRuntimeConfiguration: (
+            value: ReturnType<typeof resolveRuntimeConfiguration>
+          ) => unknown
+        }
+      ).serializePublicRuntimeConfiguration
+
+      const body = JSON.stringify(serialize(resolved))
+
+      expect(config.parsePublicRuntimeConfiguration(JSON.parse(body))).toEqual(
+        resolved
+      )
+    }
+  )
+
+  it("defaults both composer features on and accepts independent public opt-outs", () => {
+    expect(
+      config.parsePublicRuntimeConfiguration({ mode: "fixture" })
+    ).toMatchObject({
+      status: "ready",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
+    })
+
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "fixture",
+        composerModelSelectorEnabled: false,
+      })
+    ).toMatchObject({
+      status: "ready",
+      composerFeatures: {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      },
+    })
+
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "fixture",
+        composerContextEnabled: false,
+      })
+    ).toMatchObject({
+      status: "ready",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: false,
+      },
+    })
+  })
+
+  it("resolves independent composer feature environment flags", () => {
+    expect(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "fixture",
+        AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED: "false",
+      })
+    ).toMatchObject({
+      composerFeatures: {
+        modelSelectorEnabled: false,
+        contextEnabled: true,
+      },
+    })
+    expect(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "fixture",
+        AOS_UI_COMPOSER_CONTEXT_ENABLED: "false",
+      })
+    ).toMatchObject({
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: false,
+      },
+    })
+  })
+
   it("requires the external OpenCode directory and preserves it for SDK scoping", () => {
     expect(
       config.parsePublicRuntimeConfiguration({
@@ -74,7 +180,15 @@ describe("public configuration", () => {
         mode: "hermes",
         baseUrl: "/api/hermes",
       })
-    ).toEqual({ status: "ready", mode: "hermes", baseUrl: "/api/hermes" })
+    ).toEqual({
+      status: "ready",
+      mode: "hermes",
+      baseUrl: "/api/hermes",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
+    })
   })
   it("rejects credentials or query strings in Hermes URLs", () => {
     for (const baseUrl of [

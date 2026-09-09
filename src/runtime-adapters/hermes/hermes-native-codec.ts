@@ -99,16 +99,44 @@ export function projectHermesHistory(rows: readonly unknown[]) {
     }
     if (role !== "user" && role !== "assistant" && role !== "system") return
     const id =
-      stringValue(value.id) ??
+      (typeof value.id === "number" &&
+      Number.isSafeInteger(value.id) &&
+      value.id > 0
+        ? `hermes-row-${value.id}`
+        : stringValue(value.id)) ??
       (value._row_id !== undefined
         ? `hermes-row-${String(value._row_id)}`
         : `hermes-history-${index}`)
+    const rawContent = parseJson(value.content)
     const text = String(
-      value.display_content ?? value.text ?? value.content ?? ""
+      value.display_content ??
+        value.text ??
+        (Array.isArray(rawContent)
+          ? rawContent
+              .filter((part) => isRecord(part) && part.type === "text")
+              .map((part) => part.text)
+              .join("\n")
+          : rawContent) ??
+        ""
     )
     const content: Array<JsonRecord & { type: string }> = text
       ? [{ type: "text", text }]
       : []
+    if (role === "user" && Array.isArray(rawContent)) {
+      for (const part of rawContent) {
+        if (!isRecord(part) || part.type !== "image_url") continue
+        const image = isRecord(part.image_url)
+          ? part.image_url.url
+          : part.image_url
+        if (
+          typeof image === "string" &&
+          /^(?:data:image\/(?:png|jpeg|gif|webp|bmp);base64,|https?:\/\/)/u.test(
+            image
+          )
+        )
+          content.push({ type: "image", image })
+      }
+    }
     if (role === "assistant" && Array.isArray(value.tool_calls)) {
       for (const rawCall of value.tool_calls) {
         if (!isRecord(rawCall)) continue

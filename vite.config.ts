@@ -9,7 +9,10 @@ import {
   type ViteDevServer,
 } from "vite"
 
-import { resolveRuntimeConfiguration } from "./shared/runtime-config.ts"
+import {
+  resolveRuntimeConfiguration,
+  serializePublicRuntimeConfiguration,
+} from "./shared/runtime-config.ts"
 
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
@@ -21,6 +24,10 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
     AOS_UI_OPENCODE_WORKTREE: environment.AOS_UI_OPENCODE_WORKTREE,
     AOS_UI_AG_UI_URL: environment.AOS_UI_AG_UI_URL,
     AOS_UI_AG_UI_WORKSPACE_URL: environment.AOS_UI_AG_UI_WORKSPACE_URL,
+    AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
+      environment.AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED,
+    AOS_UI_COMPOSER_CONTEXT_ENABLED:
+      environment.AOS_UI_COMPOSER_CONTEXT_ENABLED,
   })
 }
 
@@ -37,7 +44,11 @@ function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
           const configFile = environment.AOS_UI_RUNTIME_CONFIG_FILE
           const body = configFile
             ? await readFile(path.resolve(configFile), "utf8")
-            : JSON.stringify(runtimeConfigurationFromEnvironment(environment))
+            : JSON.stringify(
+                serializePublicRuntimeConfiguration(
+                  runtimeConfigurationFromEnvironment(environment)
+                )
+              )
           response.end(body)
         } catch {
           response.statusCode = 500
@@ -137,6 +148,10 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       entries: ["index.html", "src/runtime-adapters/*/composition.tsx"],
+      include: [
+        "@base-ui/react/direction-provider",
+        "@base-ui/react/select",
+      ],
     },
     server: {
       host: "127.0.0.1",

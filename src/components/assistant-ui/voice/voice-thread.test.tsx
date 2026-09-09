@@ -713,76 +713,103 @@ describe("real Assistant UI voice composer", () => {
     expect(synthesize).toHaveBeenCalledOnce()
   })
 
-  it("stops playback instead of moving it to a replaced branch message", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
+  it.each([false, true])(
+    "keeps playback only for an explicitly reconciled message replacement (reconciled=%s)",
+    async (reconciled) => {
+      const OriginalURL = URL
+      vi.stubGlobal(
+        "URL",
+        class extends OriginalURL {
+          static createObjectURL() {
+            return "blob:audio"
+          }
+          static revokeObjectURL = vi.fn()
         }
-        static revokeObjectURL = vi.fn()
-      }
-    )
-    const audio = new Player()
-    const media = new VoiceMediaController({
-      createAudio: () => audio as unknown as HTMLAudioElement,
-    })
-    media.setScope("session")
-    media.setAvailability("session", {
-      transcription: "ready",
-      speech: "ready",
-    })
-    const adapters = media.createAdapters("session", {
-      transcribe: async () => "voice turn",
-      synthesize: async () => new Blob(["audio"]),
-      projectText: (text) => text,
-    })
-    let messages: readonly ThreadMessageLike[] = [
-      {
-        id: "live-answer",
-        role: "assistant",
-        content: [{ type: "text", text: "Same answer" }],
-      },
-    ]
-    let refresh!: () => void
-    function ControlledHarness() {
-      const [, rerender] = useReducer((revision) => revision + 1, 0)
-      refresh = rerender
-      const runtime = useExternalStoreRuntime<ThreadMessageLike>({
-        adapters,
-        messages,
-        convertMessage: (message) => message,
-        onNew: vi.fn(),
-      })
-      return (
-        <VoiceMediaProvider media={media} locale="en">
-          <AssistantRuntimeProvider runtime={runtime}>
-            <Thread autoFocus={false} />
-          </AssistantRuntimeProvider>
-        </VoiceMediaProvider>
       )
-    }
-    render(<ControlledHarness />)
-    const live = screen
-      .getByText("Same answer")
-      .closest<HTMLElement>('[data-role="assistant"]')!
-    fireEvent.mouseEnter(live)
-    fireEvent.click(within(live).getByRole("button", { name: "Read aloud" }))
-    await waitFor(() => expect(audio.play).toHaveBeenCalledOnce())
+      const audio = new Player()
+      const media = new VoiceMediaController({
+        createAudio: () => audio as unknown as HTMLAudioElement,
+      })
+      media.setScope("session")
+      media.setAvailability("session", {
+        transcription: "ready",
+        speech: "ready",
+      })
+      const adapters = media.createAdapters("session", {
+        transcribe: async () => "voice turn",
+        synthesize: async () => new Blob(["audio"]),
+        projectText: (text) => text,
+      })
+      let messages: readonly ThreadMessageLike[] = [
+        {
+          id: "live-answer",
+          role: "assistant",
+          content: [{ type: "text", text: "Same answer" }],
+        },
+      ]
+      let refresh!: () => void
+      function ControlledHarness() {
+        const [, rerender] = useReducer((revision) => revision + 1, 0)
+        refresh = rerender
+        const runtime = useExternalStoreRuntime<ThreadMessageLike>({
+          adapters,
+          messages,
+          convertMessage: (message) => message,
+          onNew: vi.fn(),
+        })
+        return (
+          <VoiceMediaProvider media={media} locale="en">
+            <AssistantRuntimeProvider runtime={runtime}>
+              <Thread autoFocus={false} />
+            </AssistantRuntimeProvider>
+          </VoiceMediaProvider>
+        )
+      }
+      render(<ControlledHarness />)
+      const live = screen
+        .getByText("Same answer")
+        .closest<HTMLElement>('[data-role="assistant"]')!
+      fireEvent.mouseEnter(live)
+      fireEvent.click(within(live).getByRole("button", { name: "Read aloud" }))
+      await waitFor(() => expect(audio.play).toHaveBeenCalledOnce())
 
-    messages = [
-      {
-        id: "other-branch",
-        role: "assistant",
-        content: [{ type: "text", text: "Different answer" }],
-      },
-    ]
-    act(() => refresh())
-    await waitFor(() => expect(media.getSnapshot().playback).toBeUndefined())
-    expect(screen.queryByRole("group", { name: "Read aloud" })).toBeNull()
-    media.dispose()
-  })
+      messages = [
+        {
+          id: "other-branch",
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: reconciled ? "Same answer" : "Different answer",
+            },
+          ],
+        },
+      ]
+      act(() => {
+        if (reconciled)
+          media.reconcilePlaybackOwner("session", "live-answer", "other-branch")
+        refresh()
+      })
+      if (reconciled) {
+        expect(media.getSnapshot().playback).toBeDefined()
+        expect(screen.getByRole("group", { name: "Read aloud" })).toBeVisible()
+        expect(audio.play).toHaveBeenCalledOnce()
+        // Once the durable owner appeared, the old optimistic id is no longer
+        // an alias: switching back to a different message must stop playback.
+        messages = [
+          {
+            id: "live-answer",
+            role: "assistant",
+            content: "A different branch",
+          },
+        ]
+        act(() => refresh())
+      }
+      await waitFor(() => expect(media.getSnapshot().playback).toBeUndefined())
+      expect(screen.queryByRole("group", { name: "Read aloud" })).toBeNull()
+      media.dispose()
+    }
+  )
 
   it("keeps Stop reading available while another turn is running", async () => {
     const OriginalURL = URL

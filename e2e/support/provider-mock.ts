@@ -173,6 +173,24 @@ export function createProviderMock(options: ProviderMockOptions): ProviderMock {
             options: {},
           },
         ])
+      if (request.method === "GET" && url.pathname === "/provider")
+        return json(response, {
+          connected: ["test"],
+          all: [
+            {
+              id: "test",
+              name: "Test",
+              models: {
+                test: {
+                  id: "test",
+                  name: "Test",
+                  providerID: "test",
+                  limit: { context: 65_536 },
+                },
+              },
+            },
+          ],
+        })
       if (
         request.method === "GET" &&
         (url.pathname === "/session" ||

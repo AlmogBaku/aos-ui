@@ -4,8 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { App, RuntimeErrorBoundary } from "./app"
 
 vi.mock("@/runtime-adapters/fixture/composition", () => ({
-  FixtureAosUiApp: ({ locale }: { locale: string }) => (
-    <div data-testid="fixture-app">{locale}</div>
+  FixtureAosUiApp: ({
+    locale,
+    composerFeatures,
+  }: {
+    locale: string
+    composerFeatures: {
+      modelSelectorEnabled: boolean
+      contextEnabled: boolean
+    }
+  }) => (
+    <div
+      data-testid="fixture-app"
+      data-model-selector-enabled={composerFeatures.modelSelectorEnabled}
+      data-context-enabled={composerFeatures.contextEnabled}
+    >
+      {locale}
+    </div>
   ),
 }))
 vi.mock("@/components/theme-provider", () => ({
@@ -59,6 +74,28 @@ describe("App", () => {
       cache: "no-store",
     })
     expect(window.location.pathname).toBe("/agent-aster/thread-market")
+  })
+
+  it("passes independently resolved composer feature flags to the runtime composition", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          mode: "fixture",
+          composerModelSelectorEnabled: false,
+          composerContextEnabled: true,
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      )
+    )
+
+    render(<App />)
+
+    const fixture = await screen.findByTestId("fixture-app")
+    expect(fixture).toHaveAttribute("data-model-selector-enabled", "false")
+    expect(fixture).toHaveAttribute("data-context-enabled", "true")
   })
 
   it("migrates a locale-prefixed deep link to the compact URL and preference", async () => {

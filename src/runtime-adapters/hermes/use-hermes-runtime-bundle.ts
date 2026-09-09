@@ -19,6 +19,7 @@ import type { Locale } from "@/lib/i18n/config"
 import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { HermesAudioClient } from "./hermes-audio-client"
 import { HermesMediaBinding } from "./hermes-media-binding"
+import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
 import type { RuntimeBundle } from "../contracts"
 import {
@@ -46,7 +47,13 @@ function useHermesThreadRuntime(
   const session = threadId ? client.session(threadId) : undefined
   const profile = session?.profile
   const adapters = useMemo(
-    () => (threadId && profile ? voice.adapters(threadId, profile) : undefined),
+    () =>
+      threadId && profile
+        ? {
+            ...voice.adapters(threadId, profile),
+            attachments: new HermesAttachmentAdapter(),
+          }
+        : undefined,
     [profile, threadId, voice]
   )
   const queue = useMemo(
@@ -89,7 +96,21 @@ function useHermesThreadRuntime(
     isDisabled: !threadId || !session,
     async onNew(message: AppendMessage) {
       if (!threadId) throw new Error("No Hermes Session is selected")
-      await client.submit(threadId, message)
+      try {
+        await client.submit(threadId, message)
+      } catch (reason) {
+        onError?.(reason instanceof Error ? reason : new Error(String(reason)))
+        throw reason
+      }
+    },
+    async onEdit(message: AppendMessage) {
+      if (!threadId) throw new Error("No Hermes Session is selected")
+      try {
+        await client.edit(threadId, message)
+      } catch (reason) {
+        onError?.(reason instanceof Error ? reason : new Error(String(reason)))
+        throw reason
+      }
     },
     async onCancel() {
       if (threadId) await client.stopRun(threadId)

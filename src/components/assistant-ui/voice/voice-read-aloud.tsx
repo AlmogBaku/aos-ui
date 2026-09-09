@@ -33,7 +33,7 @@ export function VoiceReplyReader() {
       media &&
       playbackOwner?.scopeId === media.getSnapshot().scopeId &&
       playbackOwnerId &&
-      !messages.some((message) => message.id === playbackOwnerId)
+      !media.isPlaybackOwnerPresent(messages.map((message) => message.id))
     )
       media.stopSpeech()
   }, [media, messages, playbackOwner, playbackOwnerId])

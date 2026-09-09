@@ -1,1 +1,5 @@
-{"mode":"fixture"}
+{
+  "mode": "fixture",
+  "composerModelSelectorEnabled": true,
+  "composerContextEnabled": true
+}

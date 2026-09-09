@@ -103,7 +103,13 @@ function RuntimeApp({
     return <RuntimeUnavailable locale={locale} reason={config.reason} />
   }
   if (config.mode === "fixture") {
-    return <FixtureAosUiApp locale={locale} dictionary={dictionary} />
+    return (
+      <FixtureAosUiApp
+        locale={locale}
+        dictionary={dictionary}
+        composerFeatures={config.composerFeatures}
+      />
+    )
   }
   if (config.mode === "opencode") {
     return (
@@ -114,6 +120,7 @@ function RuntimeApp({
         directory={config.directory}
         defaultModel={config.defaultModel}
         nowIso={nowIso}
+        composerFeatures={config.composerFeatures}
       />
     )
   }
@@ -125,6 +132,7 @@ function RuntimeApp({
         runUrl={config.runUrl}
         workspaceUrl={config.workspaceUrl}
         nowIso={nowIso}
+        composerFeatures={config.composerFeatures}
       />
     )
   }
@@ -135,6 +143,7 @@ function RuntimeApp({
       dictionary={dictionary}
       baseUrl={config.baseUrl}
       nowIso={nowIso}
+      composerFeatures={config.composerFeatures}
     />
   )
 }

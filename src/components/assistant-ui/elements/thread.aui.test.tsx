@@ -47,24 +47,46 @@ const INITIAL_MESSAGES = [
   },
 ]
 
+function messageText(message: ThreadMessage | ThreadMessageLike) {
+  const content =
+    typeof message.content === "string"
+      ? [{ type: "text" as const, text: message.content }]
+      : message.content
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("")
+}
+
 function LocalThread({
   labels,
+  direction,
   model = { run: async () => ({ content: [] }) },
   exposeRuntime,
   initialMessages = INITIAL_MESSAGES,
   toolFallback,
   composer,
+  composerFeatures,
   enableMessageQueue = false,
   attachmentAdapter,
   onStopRun,
 }: {
   labels?: Partial<ThreadLabels>
+  direction?: "ltr" | "rtl"
   onStopRun?: () => void
   model?: ChatModelAdapter
   exposeRuntime?: (runtime: AssistantRuntime) => void
   initialMessages?: readonly ThreadMessageLike[]
   toolFallback?: typeof RichToolRenderer
   composer?: ThreadComponents["Composer"]
+  composerFeatures?: {
+    model?: {
+      options: readonly { id: string; label: string; group?: string }[]
+      selectedId: string
+      select(id: string): Promise<void>
+    }
+    context?: { usedTokens: number; maxTokens: number }
+  }
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
 }) {
@@ -82,8 +104,10 @@ function LocalThread({
     <AssistantRuntimeProvider runtime={runtime}>
       <Thread
         labels={labels}
+        direction={direction}
         onStopRun={onStopRun}
         autoFocus={false}
+        composerFeatures={composerFeatures}
         components={{ ToolFallback: toolFallback, Composer: composer }}
       />
     </AssistantRuntimeProvider>
@@ -450,6 +474,189 @@ describe("Thread accessibility", () => {
       await screen.findByRole("dialog", { name: "תצוגה מקדימה של קובץ" })
     ).toBeInTheDocument()
     expect(screen.getByAltText("תצוגה מקדימה של קובץ")).toBeInTheDocument()
+  })
+
+  it("renders an optional model selector and exact authoritative context usage", async () => {
+    const user = userEvent.setup()
+    const select = vi.fn(async () => undefined)
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          model: {
+            options: [
+              { id: "opaque-balanced", label: "Balanced", group: "Fixture" },
+              { id: "opaque-fast", label: "Fast", group: "Fixture" },
+            ],
+            selectedId: "opaque-balanced",
+            select,
+          },
+          context: { usedTokens: 1_024, maxTokens: 8_192 },
+        }}
+      />
+    )
+
+    const model = screen.getByRole("combobox", { name: "Choose model" })
+    expect(model).toHaveAttribute("data-slot", "model-selector-trigger")
+    expect(model).toHaveTextContent("Balanced")
+    expect(
+      screen.getByText("1,024 / 8,192", { exact: true })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("Context usage: 1,024 of 8,192 tokens")
+    ).toBeInTheDocument()
+
+    model.focus()
+    await user.keyboard("{ArrowDown}")
+    expect(await screen.findByRole("listbox")).toBeVisible()
+    expect(screen.getByRole("group", { name: "Fixture" })).toBeInTheDocument()
+    await user.keyboard("{ArrowDown}{Enter}")
+    expect(select).toHaveBeenCalledWith("opaque-fast")
+  })
+
+  it("allows model and context composer features to be omitted independently", () => {
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{ context: { usedTokens: 0, maxTokens: 4_096 } }}
+      />
+    )
+
+    expect(screen.queryByRole("combobox", { name: "Choose model" })).toBeNull()
+    expect(screen.getByText("0 / 4,096", { exact: true })).toBeInTheDocument()
+  })
+
+  it("uses localized accessible labels for composer model and context controls", () => {
+    render(
+      <LocalThread
+        initialMessages={[]}
+        labels={{
+          modelSelector: "בחירת מודל",
+          contextUsage: (used, max) =>
+            `שימוש בהקשר: ${used} מתוך ${max} טוקנים`,
+        }}
+        composerFeatures={{
+          model: {
+            options: [{ id: "opaque-balanced", label: "מאוזן" }],
+            selectedId: "opaque-balanced",
+            select: async () => undefined,
+          },
+          context: { usedTokens: 512, maxTokens: 4_096 },
+        }}
+      />
+    )
+
+    expect(
+      screen.getByRole("combobox", { name: "בחירת מודל" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("שימוש בהקשר: 512 מתוך 4,096 טוקנים")
+    ).toBeInTheDocument()
+  })
+
+  it("opens the Hebrew model selector with RTL popup semantics", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[]}
+        direction="rtl"
+        labels={{ modelSelector: "בחירת מודל" }}
+        composerFeatures={{
+          model: {
+            options: [
+              { id: "opaque-balanced", label: "מאוזן" },
+              { id: "opaque-fast", label: "מהיר" },
+            ],
+            selectedId: "opaque-balanced",
+            select: async () => undefined,
+          },
+        }}
+      />
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "בחירת מודל" }))
+
+    expect(await screen.findByRole("listbox")).toBeVisible()
+    expect(
+      document.querySelector('[data-slot="model-selector-content"]')
+    ).toHaveAttribute("dir", "rtl")
+  })
+
+  it("preserves a complete attachment when editing only the message text", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
+      content: [{ type: "text", text: "Updated" }],
+    })
+    const view = render(
+      <LocalThread
+        model={{ run }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await screen.findByText("The reference is ready.")
+
+    act(() => {
+      runtime!.thread.getMessageById("message-user").composer.beginEdit()
+    })
+    const editor = view.container.querySelector<HTMLTextAreaElement>(
+      ".aui-edit-composer-input"
+    )
+    expect(editor).not.toBeNull()
+    await user.clear(editor!)
+    await user.type(editor!, "Review this image carefully")
+    await user.click(screen.getByRole("button", { name: "Update" }))
+
+    await waitFor(() => {
+      const editedBranch = runtime!.thread
+        .getState()
+        .messages.findLast(
+          (message) =>
+            message.role === "user" &&
+            messageText(message) === "Review this image carefully"
+        )
+      if (!editedBranch?.attachments) {
+        throw new Error("Expected the edited branch with its attachments")
+      }
+      expect(editedBranch.attachments).toHaveLength(1)
+      expect(editedBranch.attachments[0]).toMatchObject({
+        type: "image",
+        name: "reference.svg",
+        status: { type: "complete" },
+        content: [
+          {
+            type: "image",
+            image:
+              "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
+          },
+        ],
+      })
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    const submittedUserMessage = run.mock.calls[0]?.[0].messages.findLast(
+      (message) => message.role === "user"
+    )
+    expect(messageText(submittedUserMessage!)).toBe(
+      "Review this image carefully"
+    )
+    expect(submittedUserMessage?.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "image",
+          name: "reference.svg",
+          status: { type: "complete" },
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+              image:
+                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E",
+            }),
+          ]),
+        }),
+      ])
+    )
   })
 
   it("opens current-session history search with Ctrl+R without sending the draft", async () => {

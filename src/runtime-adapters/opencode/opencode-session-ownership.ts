@@ -91,6 +91,7 @@ type PromptAsyncParameters = Parameters<
 >[0]
 type AbortParameters = Parameters<OpencodeClient["session"]["abort"]>[0]
 type RevertParameters = Parameters<OpencodeClient["session"]["revert"]>[0]
+type CreateParameters = Parameters<OpencodeClient["session"]["create"]>[0]
 
 type OpenCodeMessageWithParts = {
   info?: { id?: string; role?: string }
@@ -157,12 +158,27 @@ function replayablePromptParts(
 export function createAgentScopedOpenCodeClient({
   client,
   ownership,
+  defaultModel,
 }: {
   client: OpencodeClient
   ownership: OpenCodeSessionOwnership
+  defaultModel?: { providerID: string; modelID: string } | undefined
 }): OpencodeClient {
   const session = new Proxy(client.session, {
     get(target, property) {
+      if (property === "create" && defaultModel) {
+        return (parameters?: CreateParameters, options?: PromptOptions) =>
+          target.create(
+            {
+              ...parameters,
+              model: parameters?.model ?? {
+                id: defaultModel.modelID,
+                providerID: defaultModel.providerID,
+              },
+            },
+            options
+          )
+      }
       if (property === "revert") {
         const abort = bindSessionMethod(target, "abort") as (
           parameters: AbortParameters,

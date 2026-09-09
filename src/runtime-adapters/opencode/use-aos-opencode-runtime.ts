@@ -15,6 +15,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react"
 import {
+  OpenCodeAttachmentAdapter,
   OpenCodeEventSource,
   OpenCodeThreadController,
   createOpenCodeThreadState,
@@ -47,6 +48,11 @@ const REQUEST_OPTIONS = { throwOnError: true } as const
 const EMPTY_ITEMS = [] as const
 const EMPTY_THREAD_STATE = createOpenCodeThreadState("")
 const subscribeNoop = () => () => undefined
+
+export type AosOpenCodeRuntimeOptions = OpenCodeRuntimeOptions & {
+  /** Native undo only: reload's scoped-client undo also replays the old input. */
+  revertForEdit?: (sessionId: string, messageId: string) => Promise<void>
+}
 
 type EventListener = (event: OpenCodeServerEvent) => void
 
@@ -224,9 +230,20 @@ function isBlocked(state: OpenCodeThreadState) {
 }
 
 function sendOptions(
-  options: OpenCodeRuntimeOptions
+  options: OpenCodeRuntimeOptions,
+  controller: OpenCodeThreadControllerLike
 ): OpenCodeUserMessageOptions {
-  return { model: options.defaultModel, agent: options.defaultAgent }
+  const selected = controller.getState().session?.model
+  return {
+    model:
+      typeof selected?.id === "string" &&
+      selected.id &&
+      typeof selected.providerID === "string" &&
+      selected.providerID
+        ? { modelID: selected.id, providerID: selected.providerID }
+        : options.defaultModel,
+    agent: options.defaultAgent,
+  }
 }
 
 function reportError(options: OpenCodeRuntimeOptions, error: unknown) {
@@ -241,8 +258,8 @@ function sendMessage(
   options: OpenCodeRuntimeOptions
 ) {
   return (message.startRun ?? message.role === "user")
-    ? controller.sendMessage(message, sendOptions(options))
-    : controller.stageMessage(message, sendOptions(options))
+    ? controller.sendMessage(message, sendOptions(options, controller))
+    : controller.stageMessage(message, sendOptions(options, controller))
 }
 
 function toPermissionResponse({
@@ -277,7 +294,7 @@ function getQueue(
   entry.options = options
   entry.queue = createOpenCodeSessionQueue(
     controller,
-    () => sendOptions(entry.options),
+    () => sendOptions(entry.options, controller),
     (error) => reportError(entry.options, error)
   )
   registry.queues.set(controller, entry)
@@ -288,7 +305,7 @@ function useThreadStore(
   registry: Registry,
   client: OpencodeClient,
   controller: OpenCodeThreadControllerLike,
-  options: OpenCodeRuntimeOptions,
+  options: AosOpenCodeRuntimeOptions,
   queue: OpenCodeSessionQueue | undefined,
   sessionId: string | undefined
 ): ExternalStoreAdapter<ThreadMessage> {
@@ -377,6 +394,38 @@ function useThreadStore(
           throw error
         }
       },
+      ...(options.revertForEdit && {
+        onEdit: async (message: AppendMessage) => {
+          if (!sessionId || !message.sourceId)
+            throw new Error(
+              "OpenCode edit requires an existing Session message"
+            )
+          const releaseQueue = queue?.hold()
+          try {
+            try {
+              await options.revertForEdit!(sessionId, message.sourceId)
+              queue?.clear()
+            } finally {
+              releaseQueue?.()
+            }
+            try {
+              await controller.sendMessage(
+                message,
+                sendOptions(options, controller)
+              )
+            } catch (error) {
+              // Undo already succeeded. Reconcile native history even if the
+              // replacement failed, without masking that original send error.
+              await controller.refresh().catch(() => undefined)
+              throw error
+            }
+            await controller.refresh()
+          } catch (error) {
+            reportError(options, error)
+            throw error
+          }
+        },
+      }),
       onCancel: async () => {
         try {
           await (queue ? queue.cancel() : controller.cancel())
@@ -393,7 +442,12 @@ function useThreadStore(
       onReload: async (parentId: string | null) => {
         if (!parentId) return
         queue?.clear()
-        if (await controller.sendStagedMessage(parentId, sendOptions(options)))
+        if (
+          await controller.sendStagedMessage(
+            parentId,
+            sendOptions(options, controller)
+          )
+        )
           return
         await controller.revert(parentId)
       },
@@ -407,6 +461,7 @@ function useThreadStore(
       queue,
       queueAdapter,
       state.loadState.type,
+      sessionId,
     ]
   )
 }
@@ -483,7 +538,7 @@ function useNewThreadStore(
 function useRuntimeHook(
   registry: Registry,
   client: OpencodeClient,
-  options: OpenCodeRuntimeOptions
+  options: AosOpenCodeRuntimeOptions
 ) {
   const item = useAuiState((state) => state.threadListItem)
   const sessionId = item.externalId ?? item.remoteId
@@ -505,9 +560,19 @@ function useRuntimeHook(
 
 export function useAosOpenCodeRuntime(
   client: OpencodeClient,
-  options: OpenCodeRuntimeOptions,
+  options: AosOpenCodeRuntimeOptions,
   eventHub: AosOpenCodeEventHub
 ): AssistantRuntime {
+  const runtimeOptions = useMemo(
+    () => ({
+      ...options,
+      adapters: {
+        attachments: new OpenCodeAttachmentAdapter(),
+        ...options.adapters,
+      },
+    }),
+    [options]
+  )
   const registry = useMemo(() => createRegistry(eventHub), [eventHub])
   useEffect(() => () => registry.dispose(), [registry])
   const adapter = useMemo(
@@ -520,6 +585,6 @@ export function useAosOpenCodeRuntime(
     initialThreadId: options.initialSessionId,
     onThreadIdChange: options.onThreadIdChange,
     // eslint-disable-next-line react-hooks/rules-of-hooks -- assistant-ui invokes this callback at a stable hook position.
-    runtimeHook: () => useRuntimeHook(registry, client, options),
+    runtimeHook: () => useRuntimeHook(registry, client, runtimeOptions),
   })
 }

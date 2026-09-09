@@ -48,13 +48,22 @@ export function useOpenCodeRuntimeBundle(
       createOpencodeClient({ baseUrl, directory: options.directory }),
     [baseUrl, options.client, options.directory]
   )
+  const defaultProviderId = options.defaultModel?.providerID
+  const defaultModelId = options.defaultModel?.modelID
   const { scopedClient, ownership } = useMemo(() => {
     const ownership = new OpenCodeSessionOwnership()
     return {
-      scopedClient: createAgentScopedOpenCodeClient({ client, ownership }),
+      scopedClient: createAgentScopedOpenCodeClient({
+        client,
+        ownership,
+        defaultModel:
+          defaultProviderId && defaultModelId
+            ? { providerID: defaultProviderId, modelID: defaultModelId }
+            : undefined,
+      }),
       ownership,
     }
-  }, [client])
+  }, [client, defaultModelId, defaultProviderId])
   const threadReload = useMemo(() => new ThreadReloadBinding(), [])
   const eventHub = useMemo(
     () => new AosOpenCodeEventHub(scopedClient),
@@ -63,16 +72,33 @@ export function useOpenCodeRuntimeBundle(
   const workspace = useMemo(
     () =>
       createOpenCodeWorkspace({
-        client,
+        client: scopedClient,
         events: eventHub,
         ownership,
         reloadThreads: threadReload.reload,
       }),
-    [client, eventHub, ownership, threadReload]
+    [scopedClient, eventHub, ownership, threadReload]
+  )
+  const runtimeOptions = useMemo(
+    () => ({
+      ...options,
+      revertForEdit: async (sessionID: string, messageID: string) => {
+        ownership.assertSendAvailable()
+        await ownership.resolve(client, sessionID)
+        ownership.assertSendAvailable()
+        // This must bypass the reload proxy: it replays the original prompt.
+        await client.session.abort({ sessionID }, { throwOnError: true })
+        await client.session.revert(
+          { sessionID, messageID },
+          { throwOnError: true }
+        )
+      },
+    }),
+    [client, options, ownership]
   )
   const assistantRuntime = useAosOpenCodeRuntime(
     scopedClient,
-    options,
+    runtimeOptions,
     eventHub
   )
   useEffect(

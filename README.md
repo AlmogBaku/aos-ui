@@ -88,6 +88,12 @@ See [Monty](integrations/monty/README.md). Its implementation, MIT license, and 
 
 The browser fetches `/runtime-config.json` without caching. This deployment file is separate from the frontend build; do not put secrets in it or in `VITE_*`. Missing/invalid configuration renders unavailable state, never fixture fallback. Development accepts the same file via `AOS_UI_RUNTIME_CONFIG_FILE`, or the allowlisted environment values in [.env.example](.env.example).
 
+The shared composer model selector and authoritative context indicator are
+enabled by default. Public JSON may set `composerModelSelectorEnabled` or
+`composerContextEnabled` to `false` independently; environment-derived config
+uses `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
+`AOS_UI_COMPOSER_CONTEXT_ENABLED`.
+
 Public examples are in `deploy/runtime-config.fixture.json`,
 `deploy/runtime-config.opencode.json`, and
 `deploy/runtime-config.hermes-native.json`. OpenCode's `directory` is the path

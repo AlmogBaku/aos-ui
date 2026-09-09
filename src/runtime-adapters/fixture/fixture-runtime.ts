@@ -2,6 +2,9 @@
 
 import {
   ExportedMessageRepository,
+  CompositeAttachmentAdapter,
+  SimpleImageAttachmentAdapter,
+  SimpleTextAttachmentAdapter,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ChatModelRunResult,
@@ -22,6 +25,11 @@ import {
   createFixtureWorkspace,
   type FixtureWorkspace,
 } from "./fixture-workspace"
+
+const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
+  new SimpleImageAttachmentAdapter(),
+  new SimpleTextAttachmentAdapter(),
+])
 
 const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
@@ -556,6 +564,7 @@ export function useFixtureRuntimeBundle({
         unstable_enableMessageQueue: true,
         unstable_queueClearOnCancel: false,
         unstable_humanToolNames: ["ask_user_question"],
+        adapters: { attachments: fixtureAttachmentAdapter },
       })
     },
   })

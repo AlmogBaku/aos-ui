@@ -28,6 +28,11 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/elements/tool-group.aui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import {
+  ModelSelectorContent,
+  ModelSelectorRoot,
+  ModelSelectorTrigger,
+} from "@/components/assistant-ui/elements/model-selector"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -38,6 +43,8 @@ import {
   type ComposerEnterEvent,
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
+import type { LocaleDirection } from "@/lib/i18n/config"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { useThreadReadingPosition } from "./thread-reading-position"
 import {
   VoiceComposerControl,
@@ -133,6 +140,8 @@ export type ThreadProps = {
   components?: ThreadComponents | undefined
   autoFocus?: boolean | undefined
   labels?: Partial<ThreadLabels> | undefined
+  direction?: LocaleDirection | undefined
+  composerFeatures?: ComposerFeatureViewModel | undefined
 }
 
 export type ThreadLabels = {
@@ -162,6 +171,8 @@ export type ThreadLabels = {
   previous: string
   next: string
   conversationHeading?: string | undefined
+  modelSelector: string
+  contextUsage: (usedTokens: string, maxTokens: string) => string
   attachments?: Partial<AttachmentLabels> | undefined
 }
 
@@ -192,6 +203,9 @@ const DEFAULT_LABELS: ThreadLabels = {
   previous: "Previous",
   next: "Next",
   conversationHeading: "Conversation",
+  modelSelector: "Choose model",
+  contextUsage: (usedTokens, maxTokens) =>
+    `Context usage: ${usedTokens} of ${maxTokens} tokens`,
   attachments: DEFAULT_ATTACHMENT_LABELS,
 }
 
@@ -201,6 +215,9 @@ const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS)
 const ThreadStopContext = createContext<(() => void) | undefined>(undefined)
 const ThreadLabelsContext = createContext<ThreadLabels>(DEFAULT_LABELS)
+const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
+  {}
+)
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -252,7 +269,9 @@ export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
   labels,
+  direction = "ltr",
   onStopRun,
+  composerFeatures = {},
 }) => {
   const isEmpty = useAuiState(isNewChatView)
   const localizedLabels = useMemo(
@@ -267,20 +286,27 @@ export const Thread: FC<ThreadProps> = ({
   return (
     <ThreadLabelsContext.Provider value={localizedLabels}>
       <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
-        <ThreadComponentsContext.Provider value={components}>
-          <ThreadStopContext.Provider value={onStopRun}>
-            <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
-          </ThreadStopContext.Provider>
-        </ThreadComponentsContext.Provider>
+        <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
+          <ThreadComponentsContext.Provider value={components}>
+            <ThreadStopContext.Provider value={onStopRun}>
+              <ThreadRoot
+                isEmpty={isEmpty}
+                autoFocus={autoFocus}
+                direction={direction}
+              />
+            </ThreadStopContext.Provider>
+          </ThreadComponentsContext.Provider>
+        </ThreadComposerFeaturesContext.Provider>
       </AttachmentLabelsContext.Provider>
     </ThreadLabelsContext.Provider>
   )
 }
 
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
-  isEmpty,
-  autoFocus,
-}) => {
+const ThreadRoot: FC<{
+  isEmpty: boolean
+  autoFocus: boolean
+  direction: LocaleDirection
+}> = ({ isEmpty, autoFocus, direction }) => {
   const {
     BeforeComposer,
     Composer: ComposerOverride,
@@ -377,10 +403,12 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
             <ComposerPrimitive.Unstable_TriggerPopoverRoot>
               {ComposerOverride ? (
                 <ComposerOverride
-                  fallback={<Composer autoFocus={autoFocus} />}
+                  fallback={
+                    <Composer autoFocus={autoFocus} direction={direction} />
+                  }
                 />
               ) : (
-                <Composer autoFocus={autoFocus} />
+                <Composer autoFocus={autoFocus} direction={direction} />
               )}
             </ComposerPrimitive.Unstable_TriggerPopoverRoot>
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
@@ -485,7 +513,10 @@ const getMessageText = (message: ThreadMessage) =>
     .map((part) => part.text)
     .join("")
 
-const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
+const Composer: FC<{
+  autoFocus: boolean
+  direction: LocaleDirection
+}> = ({ autoFocus, direction }) => {
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
   const labels = useContext(ThreadLabelsContext)
@@ -963,9 +994,57 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
           </VoiceComposerField>
         </div>
         <ComposerAction />
+        <ComposerFeatureBar direction={direction} />
       </ComposerPrimitive.AttachmentDropzone>
       <VoiceComposerNotice />
     </ComposerPrimitive.Root>
+  )
+}
+
+const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
+  direction,
+}) => {
+  const features = useContext(ThreadComposerFeaturesContext)
+  const labels = useContext(ThreadLabelsContext)
+  if (!features.model && !features.context) return null
+
+  const usedTokens = features.context?.usedTokens.toLocaleString("en-US")
+  const maxTokens = features.context?.maxTokens.toLocaleString("en-US")
+
+  return (
+    <div
+      data-slot="aui_composer-features"
+      className="col-span-full row-start-3 flex min-w-0 items-center justify-between gap-3 px-3 pb-1 text-xs text-muted-foreground @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-1 @min-[64rem]/workspace:pb-0"
+    >
+      {features.model ? (
+        <ModelSelectorRoot
+          direction={direction}
+          models={features.model.options.map((option) => ({
+            id: option.id,
+            name: option.label,
+            group: option.group,
+          }))}
+          value={features.model.selectedId}
+          onValueChange={(value) => {
+            void features.model?.select(value)
+          }}
+        >
+          <ModelSelectorTrigger aria-label={labels.modelSelector} />
+          <ModelSelectorContent />
+        </ModelSelectorRoot>
+      ) : (
+        <span />
+      )}
+      {features.context && usedTokens && maxTokens ? (
+        <span
+          className="shrink-0 tabular-nums"
+          dir="ltr"
+          aria-label={labels.contextUsage(usedTokens, maxTokens)}
+        >
+          {usedTokens} / {maxTokens}
+        </span>
+      ) : null}
+    </div>
   )
 }
 

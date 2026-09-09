@@ -5,6 +5,17 @@ import type {
 } from "@assistant-ui/react"
 
 import { createBrowserId } from "@/lib/browser-id"
+import {
+  HermesAttachmentStagingError,
+  hermesImagePaths,
+  stageHermesAttachments,
+} from "./hermes-native-attachments"
+import {
+  readHermesContext,
+  readHermesModels,
+  type HermesComposerState,
+} from "./hermes-composer-state"
+import type { ComposerFeatureConfig } from "@shared/runtime-config"
 
 import {
   AgentVisibilityUpdateError,
@@ -48,6 +59,7 @@ export type HermesSession = SessionMetadata & {
   loading: boolean
   liveSessionId?: string
   approval?: HermesApproval
+  composer?: HermesComposerState
 }
 
 export type HermesNativeSnapshot = {
@@ -72,6 +84,15 @@ type GatewayEvent = {
 type ProfileUiMetadata = {
   uiMeta: JsonRecord
   revisions: JsonRecord
+}
+
+type StagedTurn = {
+  liveSessionId: string
+  cleanup: (liveSessionId?: string) => Promise<void>
+  settled: boolean
+  cleanupRequired: boolean
+  historyRequired: boolean
+  idleConfirmation?: Promise<void>
 }
 
 export type HermesWebSocket = Pick<
@@ -130,6 +151,13 @@ export class HermesNativeClient {
   readonly #liveToThread = new Map<string, string>()
   readonly #watermarks = new Map<string, number>()
   readonly #profileUiMetadata = new Map<string, ProfileUiMetadata>()
+  readonly #modelChanges = new Map<string, Promise<void>>()
+  readonly #modelRevisions = new Map<string, number>()
+  readonly #composerConfigs = new Map<string, ComposerFeatureConfig>()
+  readonly #contextRevisions = new Map<string, number>()
+  readonly #pendingSends = new Set<string>()
+  readonly #stagedTurns = new Map<string, StagedTurn>()
+  readonly #turnRecoveries = new Map<string, Promise<void>>()
   #socket?: HermesWebSocket
   #socketGeneration = 0
   #authRejected = false
@@ -742,6 +770,10 @@ export class HermesNativeClient {
         messages: projected,
         loading: false,
       })
+      if (this.#composerConfigs.get(threadId)?.contextEnabled)
+        void this.#refreshContext(threadId).catch((reason) =>
+          this.#report(reason)
+        )
     } catch (reason) {
       this.#patchSession(threadId, { loading: false })
       throw reason
@@ -751,6 +783,7 @@ export class HermesNativeClient {
   async attach(threadId: string) {
     const session = this.session(threadId)
     if (!session) throw new Error(`Hermes Session not found: ${threadId}`)
+    const resumedTurn = this.#stagedTurns.get(threadId)
     const result = await this.request<unknown>("session.resume", {
       session_id: session.storedSessionId,
       profile: session.profile,
@@ -761,6 +794,10 @@ export class HermesNativeClient {
     const liveSessionId = stringValue(result.session_id)
     if (!liveSessionId)
       throw new Error("Hermes resume omitted its attachment id")
+    const currentTurn = this.#stagedTurns.get(threadId)
+    // An idle response requested for an older turn cannot retire a newer send.
+    if (currentTurn && currentTurn !== resumedTurn)
+      return currentTurn.liveSessionId
     if (session.liveSessionId) this.#liveToThread.delete(session.liveSessionId)
     this.#liveToThread.set(liveSessionId, threadId)
     const running = result.running === true
@@ -768,6 +805,11 @@ export class HermesNativeClient {
     const pendingApproval = isRecord(result.pending_approval)
       ? this.#approvalFrom(result.pending_approval, threadId, liveSessionId)
       : undefined
+    const info = isRecord(result.info) ? result.info : undefined
+    const selectedId =
+      info && stringValue(info.provider) && stringValue(info.model)
+        ? JSON.stringify([info.provider, info.model])
+        : undefined
     this.#patchSession(threadId, {
       liveSessionId,
       running,
@@ -779,37 +821,409 @@ export class HermesNativeClient {
             ? "idle"
             : "unknown",
       approval: pendingApproval,
+      composer: {
+        ...this.session(threadId)?.composer,
+        ...(selectedId
+          ? {
+              model: {
+                options: this.session(threadId)?.composer?.model?.options ?? [],
+                selectedId,
+              },
+            }
+          : {}),
+        context: readHermesContext(info?.usage),
+      },
     })
+    const turn = this.#stagedTurns.get(threadId)
+    if (turn && result.running === false && !pendingApproval) {
+      // Resume verifies ownership even if the gateway remints the live id.
+      turn.liveSessionId = liveSessionId
+      await this.#reconcileStagedTurn(threadId, turn, true)
+    }
     return liveSessionId
   }
 
   async submit(threadId: string, message: AppendMessage) {
-    const text = messageText(message)
-    if (!text) throw new Error("Hermes supports text messages only")
+    return this.#submit(threadId, message)
+  }
+
+  async refreshComposer(threadId: string, config: ComposerFeatureConfig) {
+    this.#composerConfigs.set(threadId, config)
+    const session = this.session(threadId)
+    if (!session?.liveSessionId) return
+    const reads: Promise<void>[] = []
+    if (config.modelSelectorEnabled) {
+      reads.push(
+        (async () => {
+          const revision = this.#modelRevisions.get(threadId)
+          const result = await this.request("model.options", {
+            session_id: session.liveSessionId,
+            profile: session.profile,
+          })
+          const model = readHermesModels(result)
+          if (
+            this.#modelRevisions.get(threadId) !== revision ||
+            this.session(threadId)?.liveSessionId !== session.liveSessionId
+          )
+            return
+          const current = this.session(threadId)?.composer
+          this.#patchSession(threadId, {
+            composer: {
+              ...current,
+              model: model
+                ? {
+                    ...model,
+                    selectedId: current?.model?.selectedId ?? model.selectedId,
+                  }
+                : undefined,
+            },
+          })
+        })()
+      )
+    }
+    if (config.contextEnabled) reads.push(this.#refreshContext(threadId))
+    const results = await Promise.allSettled(reads)
+    const failure = results.find((result) => result.status === "rejected")
+    if (failure?.status === "rejected") throw failure.reason
+  }
+
+  async #refreshContext(threadId: string) {
+    const liveSessionId = this.session(threadId)?.liveSessionId
+    if (!liveSessionId) return
+    const revision = (this.#contextRevisions.get(threadId) ?? 0) + 1
+    this.#contextRevisions.set(threadId, revision)
+    this.#patchSession(threadId, {
+      composer: { ...this.session(threadId)?.composer, context: undefined },
+    })
+    const result = await this.request("session.usage", {
+      session_id: liveSessionId,
+    })
+    if (
+      this.session(threadId)?.liveSessionId !== liveSessionId ||
+      this.#contextRevisions.get(threadId) !== revision
+    )
+      return
+    this.#patchSession(threadId, {
+      composer: {
+        ...this.session(threadId)?.composer,
+        context: readHermesContext(result),
+      },
+    })
+  }
+
+  selectModel(threadId: string, id: string) {
+    this.#modelRevisions.set(
+      threadId,
+      (this.#modelRevisions.get(threadId) ?? 0) + 1
+    )
+    const liveSessionId = this.session(threadId)?.liveSessionId
+    const previous = this.#modelChanges.get(threadId) ?? Promise.resolve()
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          !liveSessionId ||
+          this.session(threadId)?.liveSessionId !== liveSessionId
+        )
+          throw new Error(
+            "Hermes Session changed before the model could be selected"
+          )
+        await this.#selectModel(threadId, id)
+      })
+    this.#modelChanges.set(threadId, operation)
+    const release = () => {
+      if (this.#modelChanges.get(threadId) === operation)
+        this.#modelChanges.delete(threadId)
+    }
+    void operation.then(release, release)
+    return operation
+  }
+
+  async #selectModel(threadId: string, id: string) {
+    const session = this.session(threadId)
+    const option = session?.composer?.model?.options.find(
+      (item) => item.id === id
+    )
+    if (!session?.liveSessionId || !option)
+      throw new Error("Hermes model is unavailable")
+    const result = await this.request("config.set", {
+      session_id: session.liveSessionId,
+      key: "model",
+      value: `${option.model} --provider ${option.provider} --session`,
+    })
+    if (
+      !isRecord(result) ||
+      result.key !== "model" ||
+      result.scope !== "session" ||
+      !stringValue(result.value)
+    )
+      throw new Error("Hermes did not confirm the Session model change")
+    if (result.confirm_required === true)
+      throw new Error(
+        stringValue(result.confirm_message ?? result.warning) ??
+          "Hermes requires confirmation for this model"
+      )
+    if (this.session(threadId)?.liveSessionId !== session.liveSessionId) return
+    const current = this.session(threadId)?.composer
+    if (current?.model)
+      this.#patchSession(threadId, {
+        composer: {
+          ...current,
+          model: {
+            ...current.model,
+            selectedId: JSON.stringify([option.provider, result.value]),
+          },
+        },
+      })
+    if (this.#composerConfigs.get(threadId)?.contextEnabled)
+      await this.#refreshContext(threadId)
+  }
+
+  async edit(threadId: string, message: AppendMessage) {
+    const session = this.session(threadId)
+    if (!session || session.running)
+      throw new Error("Hermes Session is unavailable for editing")
+    const index = session.messages.findIndex(
+      (item) => item.id === message.sourceId
+    )
+    const original = session.messages[index]
+    if (index < 0 || original?.role !== "user" || !original.id)
+      throw new Error("The Hermes message is no longer available for editing")
+    const row = /^hermes-row-(\d+)$/u.exec(original.id)
+    if (!row && /^hermes-(?:history|user)-/u.test(original.id))
+      throw new Error("Refresh Hermes history before editing this message")
+    // References are the native durable attachment representation. A text edit
+    // retains those references, even if a caller changes them in the draft.
+    const references = /@(?:image|file):(?:`[^`]+`|"[^"]+"|'[^']+'|[^\s]+)/gu
+    const originalText =
+      typeof original.content === "string"
+        ? original.content
+        : original.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+    const text = [
+      messageText(message).replace(references, "").trim(),
+      ...(originalText.match(references) ?? []),
+    ]
+      .filter(Boolean)
+      .join("\n")
+    const images = Array.isArray(original.content)
+      ? original.content.filter((part) => part.type === "image")
+      : []
+    await this.#submit(
+      threadId,
+      {
+        ...message,
+        content: [{ type: "text", text }, ...images],
+        attachments: [],
+      },
+      {
+        ...(row
+          ? { truncate_before_row_id: Number(row[1]) }
+          : { truncate_before_message_id: original.id }),
+        confirm_truncate: true,
+        ...(index === 0 ? { confirm_empty_truncate: true } : {}),
+      },
+      session.messages.slice(0, index),
+      hermesImagePaths(originalText)
+    )
+  }
+
+  async #submit(
+    threadId: string,
+    message: AppendMessage,
+    truncate: JsonRecord = {},
+    prefix?: readonly ThreadMessageLike[],
+    preservedImagePaths: readonly string[] = []
+  ) {
+    if (this.#pendingSends.has(threadId))
+      throw new Error("A Hermes send is already pending")
+    this.#pendingSends.add(threadId)
+    try {
+      const turn = this.#stagedTurns.get(threadId)
+      if (turn) {
+        if (!turn.settled) await turn.idleConfirmation
+        if (this.#stagedTurns.get(threadId) === turn) {
+          if (!turn.settled)
+            throw new Error("The previous Hermes turn is still pending")
+          await this.#reconcileStagedTurn(threadId, turn)
+        }
+      }
+      await this.#submitTurn(
+        threadId,
+        message,
+        truncate,
+        prefix,
+        preservedImagePaths
+      )
+    } finally {
+      this.#pendingSends.delete(threadId)
+    }
+  }
+
+  async #submitTurn(
+    threadId: string,
+    message: AppendMessage,
+    truncate: JsonRecord,
+    prefix?: readonly ThreadMessageLike[],
+    preservedImagePaths: readonly string[] = []
+  ) {
+    let text = messageText(message)
     const session = this.session(threadId)
     if (!session) throw new Error(`Hermes Session not found: ${threadId}`)
     const liveSessionId = session.liveSessionId ?? (await this.attach(threadId))
+    const { images, references, cleanup } = await stageHermesAttachments(
+      message,
+      liveSessionId,
+      (method, params) => this.request(method, params),
+      preservedImagePaths
+    ).catch(async (reason: unknown) => {
+      if (!(reason instanceof HermesAttachmentStagingError)) throw reason
+      const turn: StagedTurn = {
+        liveSessionId,
+        cleanup: reason.cleanup,
+        settled: true,
+        cleanupRequired: true,
+        historyRequired: false,
+      }
+      this.#stagedTurns.set(threadId, turn)
+      try {
+        await this.#reconcileStagedTurn(threadId, turn)
+      } catch (cleanupFailure) {
+        throw new Error(
+          `${reason.message}; staged images could not be detached: ${String(cleanupFailure)}`,
+          { cause: reason.cause }
+        )
+      }
+      throw reason.cause
+    })
+    text = [text, ...references].filter(Boolean).join("\n")
+    if (!text && !images.length)
+      throw new Error("Hermes requires text or an attachment")
     const optimisticUser: ThreadMessageLike = {
       id: `hermes-user-${createBrowserId()}`,
       role: "user",
-      content: text,
+      content: images.length ? [{ type: "text", text }, ...images] : text,
       createdAt: new Date(),
     }
+    const turn: StagedTurn = {
+      liveSessionId,
+      cleanup,
+      settled: false,
+      cleanupRequired: false,
+      historyRequired: false,
+    }
+    this.#stagedTurns.set(threadId, turn)
     this.#patchSession(threadId, {
-      messages: [...this.session(threadId)!.messages, optimisticUser],
+      messages: [
+        ...(prefix ?? this.session(threadId)!.messages),
+        optimisticUser,
+      ],
       running: true,
       status: "running",
       approval: undefined,
     })
+    // Hermes appends directives for staged paths to durable history itself.
+    // Keep the original display projection, but avoid duplicating its refs.
+    const caption = preservedImagePaths.length
+      ? text
+          .replace(
+            /@image:(?:`[^`]+`|"[^"]+"|'[^']+'|[^\s]+)/gu,
+            (reference) =>
+              hermesImagePaths(reference).some((path) =>
+                preservedImagePaths.includes(path)
+              )
+                ? ""
+                : reference
+          )
+          .trim()
+      : text
     try {
       await this.request("prompt.submit", {
         session_id: liveSessionId,
-        text,
+        text: caption,
+        ...truncate,
       })
     } catch (reason) {
+      if (turn.settled) throw reason
       this.#patchSession(threadId, { running: false, status: "unknown" })
+      try {
+        await this.#reconcileStagedTurn(threadId, turn, true)
+      } catch {
+        throw new Error(
+          `${reason instanceof Error ? reason.message : String(reason)}; Hermes attachment or history recovery failed`
+        )
+      }
       throw reason
     }
+  }
+
+  #confirmIdleTurn(threadId: string, turn: StagedTurn) {
+    if (turn.settled) return this.#reconcileStagedTurn(threadId, turn)
+    if (turn.idleConfirmation) return turn.idleConfirmation
+    const liveSessionId = turn.liveSessionId
+    const generation = this.#socketGeneration
+    const operation = this.request<unknown>("session.active_list").then(
+      async (result) => {
+        if (
+          this.#stagedTurns.get(threadId) !== turn ||
+          turn.liveSessionId !== liveSessionId ||
+          this.session(threadId)?.liveSessionId !== liveSessionId ||
+          this.#socketGeneration !== generation
+        )
+          return
+        if (!isRecord(result) || !Array.isArray(result.sessions))
+          throw new Error("Hermes returned invalid live Session statuses")
+        for (const row of result.sessions)
+          if (!isRecord(row) || !stringValue(row.id))
+            throw new Error("Hermes returned invalid live Session status")
+        const live = result.sessions.find(
+          (row) => isRecord(row) && row.id === liveSessionId
+        )
+        if (!isRecord(live) || liveSessionStatus(live.status) !== "idle") return
+        const recovery = this.#reconcileStagedTurn(threadId, turn, true)
+        this.#patchSession(threadId, { running: false, status: "idle" })
+        await recovery
+      }
+    )
+    turn.idleConfirmation = operation
+    const clear = () => {
+      if (turn.idleConfirmation === operation) turn.idleConfirmation = undefined
+    }
+    void operation.then(clear, clear)
+    return operation
+  }
+
+  #reconcileStagedTurn(threadId: string, turn: StagedTurn, failed?: boolean) {
+    if (this.#stagedTurns.get(threadId) !== turn) return Promise.resolve()
+    if (!turn.settled && failed !== undefined) {
+      turn.settled = true
+      turn.cleanupRequired = failed
+      turn.historyRequired = true
+    }
+    const pending = this.#turnRecoveries.get(threadId)
+    if (pending) return pending
+    const operation = (async () => {
+      if (turn.cleanupRequired) {
+        await turn.cleanup(turn.liveSessionId)
+        turn.cleanupRequired = false
+      }
+      if (turn.historyRequired) {
+        await this.loadHistory(threadId)
+        turn.historyRequired = false
+      }
+      if (this.#stagedTurns.get(threadId) === turn)
+        this.#stagedTurns.delete(threadId)
+    })()
+    this.#turnRecoveries.set(threadId, operation)
+    const clear = () => {
+      if (this.#turnRecoveries.get(threadId) === operation)
+        this.#turnRecoveries.delete(threadId)
+    }
+    // Keep recovery intent on the turn, never a permanently rejected promise.
+    void operation.then(clear, clear)
+    return operation
   }
 
   async stopRun(threadId: string) {
@@ -950,22 +1364,53 @@ export class HermesNativeClient {
         })
       return
     }
-    if (event.type === "message.complete") {
-      this.#finishLiveMessage(threadId, payload)
-      setTimeout(() => {
-        void this.loadHistory(threadId).catch((reason) => this.#report(reason))
-      }, 0)
+    if (event.type === "message.complete" || event.type === "error") {
+      const failed = event.type === "error" || payload.status === "error"
+      const turn = this.#stagedTurns.get(threadId)
+      const ownedTurn = turn?.liveSessionId === liveSessionId ? turn : undefined
+      const operation = ownedTurn
+        ? this.#reconcileStagedTurn(threadId, ownedTurn, failed)
+        : event.type === "message.complete"
+          ? this.loadHistory(threadId)
+          : Promise.resolve()
+      this.#finishLiveMessage(threadId, payload, failed)
+      void operation.catch((reason) => this.#report(reason))
       return
     }
-    if (event.type === "error") {
-      this.#finishLiveMessage(threadId, payload, true)
-      return
-    }
-    if (event.type === "session.info" && typeof payload.running === "boolean") {
+    if (event.type === "session.info" || event.type === "session.usage") {
+      const turn = this.#stagedTurns.get(threadId)
+      const confirmIdle =
+        event.type === "session.info" &&
+        payload.running === false &&
+        turn?.liveSessionId === liveSessionId
+      this.#contextRevisions.set(
+        threadId,
+        (this.#contextRevisions.get(threadId) ?? 0) + 1
+      )
+      const current = this.session(threadId)?.composer
+      const selectedId =
+        stringValue(payload.provider) && stringValue(payload.model)
+          ? JSON.stringify([payload.provider, payload.model])
+          : current?.model?.selectedId
       this.#patchSession(threadId, {
-        running: payload.running,
-        status: payload.running ? "running" : "idle",
+        ...(typeof payload.running === "boolean" && !confirmIdle
+          ? {
+              running: payload.running,
+              status: payload.running ? "running" : "idle",
+            }
+          : {}),
+        composer: {
+          ...current,
+          ...(selectedId
+            ? { model: { options: current?.model?.options ?? [], selectedId } }
+            : {}),
+          context: readHermesContext(payload.usage),
+        },
       })
+      if (confirmIdle && turn)
+        void this.#confirmIdleTurn(threadId, turn).catch((reason) =>
+          this.#report(reason)
+        )
     }
   }
 

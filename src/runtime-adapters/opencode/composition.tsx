@@ -14,10 +14,12 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ComponentProps,
   type ReactNode,
 } from "react"
 
 import type { ThreadComposerOverrideProps } from "@/components/assistant-ui/elements/thread.aui"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import {
   OptionList,
@@ -26,8 +28,10 @@ import {
   type RichToolState,
 } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
+import { ErrorToast } from "@/components/ui/error-toast"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import {
   useAosOpenCodeQuestions as useOpenCodeQuestions,
   useAosOpenCodeRuntimeExtras as useOpenCodeRuntimeExtras,
@@ -35,6 +39,7 @@ import {
 } from "./opencode-runtime-extras"
 import { findOrphanedOpenCodeQuestion } from "./orphaned-question"
 import { useOpenCodeRuntimeBundle } from "./use-opencode-runtime-bundle"
+import { useOpenCodeComposerFeatures } from "./use-opencode-composer-features"
 
 const REQUEST_OPTIONS = { throwOnError: true } as const
 const emptyQuestionIds = new Set<string>()
@@ -941,6 +946,66 @@ export function OpenCodeQuestionBridge({
   return fallback
 }
 
+export function OpenCodeComposerFeatures({
+  client,
+  config,
+  locale,
+  children,
+}: {
+  client: OpencodeClient
+  config?: ComposerFeatureConfig | undefined
+  locale: Locale
+  children: (features: ComposerFeatureViewModel) => ReactNode
+}) {
+  const session = useOpenCodeSession()
+  const [errors, setErrors] = useState<Record<string, Error | undefined>>({})
+  const features = useOpenCodeComposerFeatures(
+    client,
+    config,
+    (error, sessionId) => {
+      setErrors((previous) => ({ ...previous, [sessionId]: error }))
+    }
+  )
+  const sessionId = session?.id
+  const error = sessionId ? errors[sessionId] : undefined
+  return (
+    <>
+      {children(features)}
+      {error && sessionId ? (
+        <ErrorToast
+          locale={locale}
+          title={locale === "he" ? "שינוי המודל נכשל" : "Model change failed"}
+          message={error.message}
+          onDismiss={() =>
+            setErrors((previous) => ({ ...previous, [sessionId]: undefined }))
+          }
+        />
+      ) : null}
+    </>
+  )
+}
+
+function OpenCodeWorkspace({
+  client,
+  composerFeatureConfig,
+  ...props
+}: Omit<ComponentProps<typeof AosUiWorkspace>, "composerFeatures"> & {
+  client: OpencodeClient
+  composerFeatureConfig?: ComposerFeatureConfig | undefined
+}) {
+  return (
+    <OpenCodeComposerFeatures
+      client={client}
+      config={composerFeatureConfig}
+      locale={props.locale}
+    >
+      {(composerFeatures) => (
+        <AosUiWorkspace {...props} composerFeatures={composerFeatures} />
+      )}
+    </OpenCodeComposerFeatures>
+  )
+}
+
 export function OpenCodeAosUiApp({
   locale,
   dictionary,
@@ -948,6 +1013,7 @@ export function OpenCodeAosUiApp({
   directory,
   defaultModel,
   nowIso,
+  composerFeatures,
 }: {
   locale: Locale
   dictionary: Dictionary
@@ -955,6 +1021,7 @@ export function OpenCodeAosUiApp({
   directory: string
   defaultModel?: { providerID: string; modelID: string }
   nowIso: string
+  composerFeatures?: ComposerFeatureConfig
 }) {
   const bundle = useOpenCodeRuntimeBundle({
     baseUrl,
@@ -978,12 +1045,14 @@ export function OpenCodeAosUiApp({
 
   return (
     <AssistantRuntimeProvider runtime={bundle.assistantRuntime}>
-      <AosUiWorkspace
+      <OpenCodeWorkspace
         locale={locale}
         dictionary={dictionary}
         bundle={bundle}
         now={now}
         composer={composer}
+        client={bundle.client}
+        composerFeatureConfig={composerFeatures}
       />
     </AssistantRuntimeProvider>
   )

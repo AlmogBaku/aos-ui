@@ -11,6 +11,10 @@ describe("resolveRuntimeConfiguration", () => {
       mode: "opencode",
       directory: "/external",
       baseUrl: "http://127.0.0.1:4096",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
     })
   })
 
@@ -43,6 +47,10 @@ describe("resolveRuntimeConfiguration", () => {
       defaultModel: {
         providerID: "amazon-bedrock",
         modelID: "anthropic.claude-haiku-4-5-20251001-v1:0",
+      },
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
       },
     })
   })
@@ -88,6 +96,10 @@ describe("resolveRuntimeConfiguration", () => {
       mode: "ag-ui",
       runUrl: "https://agents.example/run",
       workspaceUrl: "https://agents.example/workspace",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
     })
   })
 
