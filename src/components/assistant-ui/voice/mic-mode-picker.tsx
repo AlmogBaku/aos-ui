@@ -60,7 +60,7 @@ export function MicModePicker({
         type="button"
         tooltip={reason ?? `${modeLabel}. ${labels.modeHint}`}
         className={cn(
-          "aui-composer-dictate absolute end-[calc(100%+0.25rem)] top-[calc(50%+0.25rem)] z-10 size-11 shrink-0 -translate-y-1/2 rounded-full @min-[64rem]/workspace:static @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:translate-y-0",
+          "aui-composer-dictate size-11 shrink-0 rounded-full @min-[64rem]/workspace:size-8",
           reason && "opacity-50"
         )}
         aria-label={`${labels.record}: ${modeLabel}`}

@@ -34,6 +34,11 @@ function setup(
 }
 
 describe("single microphone mode picker", () => {
+  it("stays in the composer rail so it cannot cover adjacent controls", () => {
+    const { mic } = setup()
+
+    expect(mic).not.toHaveClass("absolute")
+  })
   it("records on tap without opening a selector", () => {
     const h = setup()
     fireEvent.click(h.mic)
