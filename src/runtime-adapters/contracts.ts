@@ -143,9 +143,68 @@ export type WorkspaceAdapter = {
   ) => () => void
 }
 
+export type RuntimeQuestionOption = {
+  label: string
+  /** Opaque provider value; absent options submit their rendered label. */
+  value?: string
+  description?: string
+}
+
+export type RuntimeQuestion = {
+  /** Provider-stable item identity for batched interaction responses. */
+  id?: string
+  header: string
+  prompt: string
+  options: readonly RuntimeQuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export type RuntimeQuestionRequest = {
+  kind: "question"
+  requestId: string
+  sessionId: string
+  questions: readonly RuntimeQuestion[]
+}
+
+/** Approval options stay provider-defined; the UI only renders their labels. */
+export type RuntimeApprovalRequest = {
+  kind: "approval"
+  requestId: string
+  sessionId: string
+  message: string
+  options: readonly RuntimeQuestionOption[]
+}
+
+export type RuntimeInteractionRequest =
+  RuntimeQuestionRequest | RuntimeApprovalRequest
+
+export type RuntimeQuestionResponse = {
+  kind: "question"
+  answers: string[][]
+}
+
+export type RuntimeApprovalResponse = {
+  kind: "approval"
+  option: string
+}
+
+export type RuntimeInteractionResponse =
+  RuntimeQuestionResponse | RuntimeApprovalResponse
+
+/** Provider-owned interaction actions exposed to shared runtime UI. */
+export type RuntimeInteractionAdapter = {
+  respond(
+    request: RuntimeInteractionRequest,
+    response: RuntimeInteractionResponse
+  ): Promise<void>
+  reject(request: RuntimeQuestionRequest): Promise<void>
+}
+
 export type RuntimeBundle = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
+  interactions?: RuntimeInteractionAdapter
 }
 
 export type RuntimeMode = "fixture" | "opencode" | "hermes" | "ag-ui"

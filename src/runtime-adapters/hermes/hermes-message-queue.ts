@@ -35,7 +35,10 @@ export function createHermesMessageQueue(
     controller,
     sync(session) {
       const safelyIdle =
-        session?.status === "idle" && !session.running && !session.approval
+        session?.status === "idle" &&
+        !session.running &&
+        !session.approval &&
+        !session.clarification
       if (!safelyIdle) {
         if (!nativeRunInFlight) controller.notifyBusy()
         nativeRunInFlight = true

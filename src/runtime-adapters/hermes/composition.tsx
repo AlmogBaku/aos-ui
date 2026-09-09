@@ -10,10 +10,16 @@ import {
 
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
+import { RuntimeApprovalComposer } from "@/components/runtime-interactions/approval-composer"
+import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import type {
+  RuntimeApprovalRequest,
+  RuntimeQuestionRequest,
+} from "@/runtime-adapters/contracts"
 import {
   stopCurrentHermesRun,
   useHermesRuntimeBundle,
@@ -28,82 +34,79 @@ function selectedRemoteThreadId(
   return item?.remoteId ?? item?.externalId
 }
 
-function HermesApprovalComposer({
+function HermesInteractionComposer({
   fallback,
   locale,
   client,
   runtime,
+  interactions,
 }: {
   fallback: ReactNode
   locale: Locale
   client: HermesNativeClient
   runtime: ReturnType<typeof useHermesRuntimeBundle>["assistantRuntime"]
+  interactions: ReturnType<typeof useHermesRuntimeBundle>["interactions"]
 }) {
   const threadId = useSyncExternalStore(
     runtime.threads.subscribe,
     () => selectedRemoteThreadId(runtime),
     () => selectedRemoteThreadId(runtime)
   )
-  const approval = useSyncExternalStore(
+  const session = useSyncExternalStore(
     client.subscribe,
-    () => (threadId ? client.session(threadId)?.approval : undefined),
-    () => (threadId ? client.session(threadId)?.approval : undefined)
+    () => (threadId ? client.session(threadId) : undefined),
+    () => (threadId ? client.session(threadId) : undefined)
   )
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string>()
-
-  if (!approval) return fallback
-
-  const respond = async (decision: "once" | "deny") => {
-    setPending(true)
-    setError(undefined)
-    try {
-      await client.answerApproval(
-        approval.threadId,
-        approval.requestId,
-        decision
-      )
-    } catch {
-      setError(
-        locale === "he"
-          ? "לא ניתן לשלוח את ההחלטה. ייתכן שהבקשה כבר אינה בתוקף."
-          : "The decision could not be sent; the request may no longer be current."
-      )
-    } finally {
-      setPending(false)
+  if (!session || !interactions) return fallback
+  if (session.clarification) {
+    const request: RuntimeQuestionRequest = {
+      kind: "question",
+      requestId: session.clarification.requestId,
+      sessionId: session.threadId,
+      questions: session.clarification.questions.map((question, index) => ({
+        ...(question.id ? { id: question.id } : {}),
+        header: locale === "he" ? `שאלה ${index + 1}` : `Question ${index + 1}`,
+        prompt: question.question,
+        options: (question.choices ?? []).map((choice) => ({ label: choice })),
+        multiple: question.multiple,
+        custom: true,
+      })),
     }
+    return (
+      <RuntimeQuestionComposer
+        locale={locale}
+        request={request}
+        interactions={interactions}
+        onDismissExpired={() => undefined}
+        onResponsePending={() => undefined}
+        onResolved={() => undefined}
+      />
+    )
   }
-
+  if (!session.approval) return fallback
+  const approvalLabels = {
+    once: locale === "he" ? "אישור פעם אחת" : "Allow once",
+    session: locale === "he" ? "אישור לשיחה זו" : "Allow for this session",
+    always: locale === "he" ? "אישור תמיד" : "Always allow",
+    deny: locale === "he" ? "דחייה" : "Deny",
+  }
+  const request: RuntimeApprovalRequest = {
+    kind: "approval",
+    requestId: session.approval.requestId,
+    sessionId: session.threadId,
+    message: session.approval.message,
+    options: (session.approval.choices ?? ["once", "deny"]).map((choice) => ({
+      label: approvalLabels[choice],
+      value: choice,
+    })),
+  }
   return (
-    <div
-      className="flex flex-col gap-2"
-      role="group"
-      aria-label={locale === "he" ? "בקשת הרשאה" : "Permission request"}
-    >
-      <p className="text-sm text-muted-foreground">{approval.message}</p>
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          disabled={pending}
-          onClick={() => void respond("once")}
-        >
-          {locale === "he" ? "אישור פעם אחת" : "Allow once"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={pending}
-          onClick={() => void respond("deny")}
-        >
-          {locale === "he" ? "דחייה" : "Deny"}
-        </Button>
-      </div>
-    </div>
+    <RuntimeApprovalComposer
+      locale={locale}
+      request={request}
+      interactions={interactions}
+      onResolved={() => undefined}
+    />
   )
 }
 
@@ -151,15 +154,16 @@ export function HermesAosUiApp({
     () =>
       function Composer({ fallback }: { fallback: ReactNode }) {
         return (
-          <HermesApprovalComposer
+          <HermesInteractionComposer
             fallback={fallback}
             locale={locale}
             client={bundle.client}
             runtime={bundle.assistantRuntime}
+            interactions={bundle.interactions}
           />
         )
       },
-    [bundle.assistantRuntime, bundle.client, locale]
+    [bundle.assistantRuntime, bundle.client, bundle.interactions, locale]
   )
 
   return (

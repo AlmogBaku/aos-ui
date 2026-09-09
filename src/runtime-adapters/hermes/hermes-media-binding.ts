@@ -149,9 +149,13 @@ export class HermesMediaBinding {
       session.status === "idle" &&
       !session.running &&
       !session.loading &&
-      !session.approval
+      !session.approval &&
+      !session.clarification
     )
-    if (session?.approval && this.media.getSnapshot().autoReadRequest)
+    if (
+      (session?.approval || session?.clarification) &&
+      this.media.getSnapshot().autoReadRequest
+    )
       this.media.disarm()
     if (
       this.media.getSnapshot().safelyIdle &&

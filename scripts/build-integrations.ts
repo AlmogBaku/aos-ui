@@ -5,7 +5,7 @@ import { format } from "prettier"
 import { presentationCatalog } from "../shared/presentation/tools"
 import {
   buildProviderInstructions,
-  openCodeHarnessCapabilities,
+  hermesHarnessCapabilities,
 } from "../shared/presentation/manifests"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -16,10 +16,7 @@ await writeFile(
   JSON.stringify(
     {
       tools: presentationCatalog(),
-      instructions: buildProviderInstructions({
-        ...openCodeHarnessCapabilities,
-        askUserQuestionTool: undefined,
-      }),
+      instructions: buildProviderInstructions(hermesHarnessCapabilities),
     },
     null,
     2

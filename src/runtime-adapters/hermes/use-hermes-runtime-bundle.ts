@@ -20,17 +20,57 @@ import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice
 import { HermesAudioClient } from "./hermes-audio-client"
 import { HermesMediaBinding } from "./hermes-media-binding"
 
-import type { RuntimeBundle } from "../contracts"
+import type { RuntimeBundle, RuntimeInteractionAdapter } from "../contracts"
 import {
   HermesNativeClient,
   type HermesNativeClientOptions,
 } from "./hermes-native-client"
 import { HermesThreadListAdapter } from "./hermes-thread-list"
 import { createHermesMessageQueue } from "./hermes-message-queue"
+import { messageText } from "./hermes-native-codec"
 import { createHermesWorkspace } from "./hermes-workspace"
 
 const EMPTY_MESSAGES: readonly ThreadMessageLike[] = []
 const COMPLETE_STATUS: MessageStatus = { type: "complete", reason: "unknown" }
+
+export function createHermesInteractions(
+  client: Pick<
+    HermesNativeClient,
+    "answerClarification" | "rejectClarification" | "answerApproval"
+  >
+): RuntimeInteractionAdapter {
+  return {
+    async respond(request, response) {
+      if (request.kind === "question" && response.kind === "question") {
+        await client.answerClarification(
+          request.sessionId,
+          request.requestId,
+          response.answers
+        )
+        return
+      }
+      if (request.kind === "approval" && response.kind === "approval") {
+        if (
+          response.option !== "once" &&
+          response.option !== "session" &&
+          response.option !== "always" &&
+          response.option !== "deny"
+        )
+          throw new Error("Hermes approval option is not supported")
+        await client.answerApproval(
+          request.sessionId,
+          request.requestId,
+          response.option
+        )
+        return
+      }
+      throw new Error("Hermes interaction response does not match its request")
+    },
+    async reject(request) {
+      await client.rejectClarification(request.sessionId, request.requestId)
+    },
+  }
+}
 
 function useHermesThreadRuntime(
   client: HermesNativeClient,
@@ -91,6 +131,18 @@ function useHermesThreadRuntime(
       if (!threadId) throw new Error("No Hermes Session is selected")
       await client.submit(threadId, message)
     },
+    async onEdit(message: AppendMessage) {
+      if (!threadId) throw new Error("No Hermes Session is selected")
+      if (!message.sourceId)
+        throw new Error("Hermes edit is missing its source message")
+      const text = messageText(message)
+      await client.editMessage(threadId, message.sourceId, text)
+    },
+    async onReload(parentId: string | null) {
+      if (!threadId || !parentId)
+        throw new Error("Hermes regenerate is missing its user prompt")
+      await client.regenerate(threadId, parentId)
+    },
     async onCancel() {
       if (threadId) await client.stopRun(threadId)
     },
@@ -130,6 +182,7 @@ export function useHermesRuntimeBundle(
   )
   const adapter = useMemo(() => new HermesThreadListAdapter(client), [client])
   const workspace = useMemo(() => createHermesWorkspace(client), [client])
+  const interactions = useMemo(() => createHermesInteractions(client), [client])
   const audio = useMemo(
     () =>
       new HermesAudioClient({
@@ -192,7 +245,13 @@ export function useHermesRuntimeBundle(
   )
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, client, media: voice.media }),
-    [assistantRuntime, client, workspace, voice]
+    () => ({
+      assistantRuntime,
+      workspace,
+      interactions,
+      client,
+      media: voice.media,
+    }),
+    [assistantRuntime, client, interactions, workspace, voice]
   )
 }

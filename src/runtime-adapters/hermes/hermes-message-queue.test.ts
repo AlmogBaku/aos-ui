@@ -47,7 +47,7 @@ describe("Hermes message queue", () => {
     queue.sync({ running: false, status: "unknown" } as never)
     queue.sync({
       running: false,
-      status: "waiting-for-input",
+      status: "idle",
       approval: { requestId: "approval-1" },
     } as never)
     expect(submit).not.toHaveBeenCalled()
@@ -56,5 +56,20 @@ describe("Hermes message queue", () => {
     queue.sync({ running: false, status: "idle" } as never)
     expect(submit).toHaveBeenCalledOnce()
     expect(queue.controller.adapter.items).toHaveLength(0)
+  })
+
+  it("does not dispatch while a clarification is pending", () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const queue = createHermesMessageQueue({ submit }, "thread-1")
+    queue.controller.adapter.enqueue(message("parked"))
+    queue.sync({
+      running: false,
+      status: "idle",
+      clarification: { requestId: "clarify-1" },
+    } as never)
+    expect(submit).not.toHaveBeenCalled()
+
+    queue.sync({ running: false, status: "idle" } as never)
+    expect(submit).toHaveBeenCalledOnce()
   })
 })

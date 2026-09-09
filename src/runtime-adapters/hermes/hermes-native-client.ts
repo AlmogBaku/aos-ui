@@ -11,9 +11,12 @@ import {
   type AgentVisibility,
   type ReadyAgentSummary,
   type SessionMetadata,
+  type WorkspaceActivityEvent,
 } from "../contracts"
 import {
   absoluteUrl,
+  canonicalHermesToolArgs,
+  canonicalHermesToolName,
   decodeHermesThreadId,
   encodeHermesThreadId,
   isoTimestamp,
@@ -37,17 +40,37 @@ export type HermesApproval = {
   liveSessionId: string
   requestId: string
   message: string
+  choices?: readonly HermesApprovalChoice[]
+  allowPermanent?: boolean
+}
+
+export type HermesApprovalChoice = "once" | "session" | "always" | "deny"
+
+export type HermesClarificationQuestion = {
+  id?: string
+  question: string
+  choices: readonly string[] | null
+  multiple: boolean
+}
+
+export type HermesClarification = {
+  threadId: string
+  liveSessionId: string
+  requestId: string
+  questions: readonly HermesClarificationQuestion[]
 }
 
 export type HermesSession = SessionMetadata & {
   profile: string
   storedSessionId: string
   title: string
+  archived: boolean
   messages: readonly ThreadMessageLike[]
   running: boolean
   loading: boolean
   liveSessionId?: string
   approval?: HermesApproval
+  clarification?: HermesClarification
 }
 
 export type HermesNativeSnapshot = {
@@ -126,10 +149,14 @@ export class HermesNativeClient {
   readonly #errors = new Set<(error: Error) => void>()
   readonly #recoveryListeners = new Set<() => void>()
   readonly #connectionListeners = new Set<() => void>()
+  readonly #activityListeners = new Set<
+    (event: WorkspaceActivityEvent) => void
+  >()
   readonly #pending = new Map<string, RpcPending>()
   readonly #liveToThread = new Map<string, string>()
   readonly #watermarks = new Map<string, number>()
   readonly #profileUiMetadata = new Map<string, ProfileUiMetadata>()
+  readonly #activeLifecycles = new Map<string, string>()
   #socket?: HermesWebSocket
   #socketGeneration = 0
   #authRejected = false
@@ -204,6 +231,18 @@ export class HermesNativeClient {
     this.#recoveryListeners.add(listener)
     return () => {
       this.#recoveryListeners.delete(listener)
+    }
+  }
+
+  subscribeActivity(
+    listener: (event: WorkspaceActivityEvent) => void,
+    onError?: (error: Error) => void
+  ) {
+    this.#activityListeners.add(listener)
+    if (onError) this.#errors.add(onError)
+    return () => {
+      this.#activityListeners.delete(listener)
+      if (onError) this.#errors.delete(onError)
     }
   }
 
@@ -494,6 +533,7 @@ export class HermesNativeClient {
           title,
           updatedAt,
           status,
+          archived,
         }) => ({
           threadId,
           agentId,
@@ -502,6 +542,7 @@ export class HermesNativeClient {
           title,
           updatedAt,
           status,
+          archived,
         })
       ),
     })
@@ -515,7 +556,7 @@ export class HermesNativeClient {
       const unchanged = old === before.get(session.threadId)
       const status = !unchanged
         ? old.status
-        : old.approval
+        : old.approval || old.clarification
           ? "waiting-for-input"
           : old.liveSessionId
             ? liveSessionStatus(live?.get(old.liveSessionId))
@@ -527,6 +568,7 @@ export class HermesNativeClient {
         loading: old.loading,
         status,
         ...(old.approval ? { approval: old.approval } : {}),
+        ...(old.clarification ? { clarification: old.clarification } : {}),
         ...(old.liveSessionId ? { liveSessionId: old.liveSessionId } : {}),
       }
     })
@@ -615,7 +657,7 @@ export class HermesNativeClient {
         limit: String(SESSION_PAGE_SIZE),
         offset: String(offset),
         order: "recent",
-        archived: "exclude",
+        archived: "include",
         exclude_sources: "cron,tool,kanban",
       })
       const response = await this.#fetch(
@@ -648,6 +690,7 @@ export class HermesNativeClient {
           profile,
           storedSessionId,
           title: stringValue(raw.title) ?? storedSessionId,
+          archived: raw.archived === true,
           updatedAt: isoTimestamp(raw.last_active ?? raw.started_at),
           status:
             typeof raw.ended_at === "number" &&
@@ -688,6 +731,7 @@ export class HermesNativeClient {
       storedSessionId,
       liveSessionId,
       title,
+      archived: false,
       updatedAt: new Date().toISOString(),
       status: "idle",
       messages: projectHermesHistory(
@@ -698,6 +742,77 @@ export class HermesNativeClient {
     }
     this.#setSnapshot({ sessions: [...this.#snapshot.sessions, session] })
     return session
+  }
+
+  async renameSession(threadId: string, title: string) {
+    if (!title.trim()) throw new Error("Hermes Session title cannot be empty")
+    await this.#mutateStoredSession(threadId, "PATCH", { title: title.trim() })
+    this.#patchSession(threadId, { title: title.trim() })
+  }
+
+  async archiveSession(threadId: string) {
+    await this.#mutateStoredSession(threadId, "PATCH", { archived: true })
+    this.#patchSession(threadId, { archived: true })
+  }
+
+  async unarchiveSession(threadId: string) {
+    await this.#mutateStoredSession(threadId, "PATCH", { archived: false })
+    this.#patchSession(threadId, { archived: false })
+  }
+
+  async deleteSession(threadId: string) {
+    const session = this.#sessionForMutation(threadId)
+    await this.#mutateStoredSession(threadId, "DELETE")
+    if (session.liveSessionId) this.#liveToThread.delete(session.liveSessionId)
+    this.#setSnapshot({
+      sessions: this.#snapshot.sessions.filter(
+        (item) => item.threadId !== threadId
+      ),
+    })
+  }
+
+  #sessionForMutation(threadId: string) {
+    const identity = decodeHermesThreadId(threadId)
+    const session = this.session(threadId)
+    if (
+      !identity ||
+      !session ||
+      identity.profile !== session.profile ||
+      identity.storedSessionId !== session.storedSessionId
+    )
+      throw new Error(`Hermes Session not found: ${threadId}`)
+    return session
+  }
+
+  async #mutateStoredSession(
+    threadId: string,
+    method: "PATCH" | "DELETE",
+    body?: JsonRecord
+  ) {
+    const session = this.#sessionForMutation(threadId)
+    const query = new URLSearchParams({ profile: session.profile })
+    const response = await this.#fetch(
+      absoluteUrl(
+        this.#baseUrl,
+        `/api/sessions/${encodeURIComponent(session.storedSessionId)}?${query}`
+      ),
+      {
+        method,
+        credentials: "include",
+        headers: {
+          accept: "application/json",
+          ...(body ? { "content-type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }
+    )
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403)
+        this.#authenticationRejected()
+      throw new Error(
+        `Hermes Session ${method.toLowerCase()} failed (${response.status})`
+      )
+    }
   }
 
   async loadHistory(threadId: string) {
@@ -768,17 +883,22 @@ export class HermesNativeClient {
     const pendingApproval = isRecord(result.pending_approval)
       ? this.#approvalFrom(result.pending_approval, threadId, liveSessionId)
       : undefined
+    const pendingClarification = isRecord(result.pending_clarify)
+      ? this.#clarificationFrom(result.pending_clarify, threadId, liveSessionId)
+      : undefined
     this.#patchSession(threadId, {
       liveSessionId,
       running,
-      status: pendingApproval
-        ? "waiting-for-input"
-        : running
-          ? "running"
-          : statusText === "idle"
-            ? "idle"
-            : "unknown",
+      status:
+        pendingApproval || pendingClarification
+          ? "waiting-for-input"
+          : running
+            ? "running"
+            : statusText === "idle"
+              ? "idle"
+              : "unknown",
       approval: pendingApproval,
+      clarification: pendingClarification,
     })
     return liveSessionId
   }
@@ -800,6 +920,7 @@ export class HermesNativeClient {
       running: true,
       status: "running",
       approval: undefined,
+      clarification: undefined,
     })
     try {
       await this.request("prompt.submit", {
@@ -810,6 +931,68 @@ export class HermesNativeClient {
       this.#patchSession(threadId, { running: false, status: "unknown" })
       throw reason
     }
+  }
+
+  async editMessage(threadId: string, sourceId: string, text: string) {
+    const target = this.#editableUserMessage(threadId, sourceId)
+    const nextText = text.trim()
+    if (!nextText) throw new Error("Hermes edited messages require text")
+    await this.#submitTruncated(threadId, target, nextText)
+  }
+
+  async regenerate(threadId: string, parentId: string) {
+    const target = this.#editableUserMessage(threadId, parentId)
+    const text =
+      typeof target.message.content === "string"
+        ? target.message.content.trim()
+        : Array.isArray(target.message.content)
+          ? target.message.content
+              .filter((part) => part.type === "text")
+              .map((part) => String(part.text ?? ""))
+              .join("\n")
+              .trim()
+          : ""
+    if (!text) throw new Error("Hermes cannot regenerate an empty user message")
+    await this.#submitTruncated(threadId, target, text)
+  }
+
+  #editableUserMessage(threadId: string, messageId: string) {
+    if (messageId.startsWith("hermes-history-"))
+      throw new Error("Hermes edits require a stable native message target")
+    const session = this.session(threadId)
+    const index =
+      session?.messages.findIndex(({ id }) => id === messageId) ?? -1
+    const message = index >= 0 ? session?.messages[index] : undefined
+    if (!session || !message)
+      throw new Error("Hermes message target is missing")
+    if (message.role !== "user")
+      throw new Error("Hermes edits require a user message target")
+    return { session, message, id: messageId, index }
+  }
+
+  async #submitTruncated(
+    threadId: string,
+    target: {
+      session: HermesSession
+      message: ThreadMessageLike
+      id: string
+      index: number
+    },
+    text: string
+  ) {
+    const liveSessionId =
+      target.session.liveSessionId ?? (await this.attach(threadId))
+    const id = target.id
+    const truncate = id.startsWith("hermes-row-")
+      ? { truncate_before_row_id: id.slice("hermes-row-".length) }
+      : { truncate_before_message_id: id }
+    await this.request("prompt.submit", {
+      session_id: liveSessionId,
+      text,
+      confirm_truncate: true,
+      ...(target.index === 0 ? { confirm_empty_truncate: true } : {}),
+      ...truncate,
+    })
   }
 
   async stopRun(threadId: string) {
@@ -824,7 +1007,7 @@ export class HermesNativeClient {
   async answerApproval(
     threadId: string,
     requestId: string,
-    choice: "once" | "deny"
+    choice: HermesApprovalChoice
   ) {
     const session = this.session(threadId)
     const approval = session?.approval
@@ -836,13 +1019,77 @@ export class HermesNativeClient {
       approval.liveSessionId !== session.liveSessionId
     )
       throw new Error("This Hermes approval request is no longer current")
+    if (!(approval.choices ?? ["once", "deny"]).includes(choice))
+      throw new Error("This Hermes approval choice is not available")
     await this.request("approval.respond", {
       session_id: approval.liveSessionId,
       request_id: requestId,
       choice,
     })
     if (this.session(threadId)?.approval === approval)
-      this.#patchSession(threadId, { approval: undefined, status: "running" })
+      this.#patchSession(threadId, {
+        approval: undefined,
+        status: session.clarification ? "waiting-for-input" : "running",
+      })
+    this.#publishAttentionResolved(session, requestId)
+  }
+
+  async answerClarification(
+    threadId: string,
+    requestId: string,
+    answers: readonly (readonly string[])[]
+  ) {
+    const session = this.session(threadId)
+    const clarification = session?.clarification
+    if (
+      !session ||
+      !clarification ||
+      clarification.threadId !== threadId ||
+      clarification.requestId !== requestId ||
+      clarification.liveSessionId !== session.liveSessionId ||
+      answers.length !== clarification.questions.length
+    )
+      throw new Error("This Hermes clarification request is no longer current")
+
+    for (const [index, question] of clarification.questions.entries()) {
+      const answer = answers[index] ?? []
+      await this.request("clarify.respond", {
+        session_id: clarification.liveSessionId,
+        request_id: requestId,
+        ...(question.id ? { question_id: question.id } : {}),
+        answer: question.multiple ? JSON.stringify(answer) : (answer[0] ?? ""),
+      })
+    }
+    if (this.session(threadId)?.clarification === clarification)
+      this.#patchSession(threadId, {
+        clarification: undefined,
+        status: session.approval ? "waiting-for-input" : "running",
+      })
+    this.#publishAttentionResolved(session, requestId)
+  }
+
+  async rejectClarification(threadId: string, requestId: string) {
+    const session = this.session(threadId)
+    const clarification = session?.clarification
+    if (
+      !session ||
+      !clarification ||
+      clarification.threadId !== threadId ||
+      clarification.requestId !== requestId ||
+      clarification.liveSessionId !== session.liveSessionId
+    )
+      throw new Error("This Hermes clarification request is no longer current")
+    await this.request("clarify.respond", {
+      session_id: clarification.liveSessionId,
+      request_id: requestId,
+      answer: "",
+    })
+    if (this.session(threadId)?.clarification === clarification)
+      this.#patchSession(threadId, {
+        clarification: undefined,
+        status: session.approval ? "waiting-for-input" : "running",
+      })
+    this.#publishAttentionResolved(session, requestId)
   }
 
   session(threadId: string) {
@@ -904,6 +1151,14 @@ export class HermesNativeClient {
     const threadId = this.#liveToThread.get(liveSessionId)
     if (!threadId) return
     const payload = isRecord(event.payload) ? event.payload : {}
+    if (event.type === "session.title") {
+      const session = this.session(threadId)
+      const storedSessionId = stringValue(payload.stored_session_id)
+      const title = stringValue(payload.title)
+      if (session && storedSessionId === session.storedSessionId && title)
+        this.#patchSession(threadId, { title })
+      return
+    }
     if (event.type === "message.start") {
       const session = this.session(threadId)
       if (!session) return
@@ -918,6 +1173,12 @@ export class HermesNativeClient {
         running: true,
         status: "running",
       })
+      this.#publishRunStarted(
+        session,
+        liveSessionId,
+        stringValue(payload.message_id ?? payload.id) ??
+          String(event.seq ?? "native")
+      )
       return
     }
     if (
@@ -941,6 +1202,7 @@ export class HermesNativeClient {
       return
     }
     if (event.type === "approval.request") {
+      const session = this.session(threadId)
       const approval = this.#approvalFrom(payload, threadId, liveSessionId)
       if (approval)
         this.#patchSession(threadId, {
@@ -948,10 +1210,50 @@ export class HermesNativeClient {
           running: true,
           status: "waiting-for-input",
         })
+      if (approval && session)
+        this.#publishAttentionRequested(
+          session,
+          approval.requestId,
+          "permission"
+        )
+      return
+    }
+    if (event.type === "clarify.request") {
+      const session = this.session(threadId)
+      const clarification = this.#clarificationFrom(
+        payload,
+        threadId,
+        liveSessionId
+      )
+      if (clarification && session)
+        this.#patchSession(threadId, {
+          clarification,
+          running: true,
+          status: "waiting-for-input",
+        })
+      if (clarification && session)
+        this.#publishAttentionRequested(
+          session,
+          clarification.requestId,
+          "question"
+        )
+      return
+    }
+    if (event.type === "clarify.expire") {
+      const requestId = stringValue(payload.request_id)
+      const session = this.session(threadId)
+      if (requestId && session?.clarification?.requestId === requestId)
+        this.#patchSession(threadId, {
+          clarification: undefined,
+          status: session.approval ? "waiting-for-input" : "running",
+        })
+      if (requestId && session)
+        this.#publishAttentionResolved(session, requestId)
       return
     }
     if (event.type === "message.complete") {
       this.#finishLiveMessage(threadId, payload)
+      this.#publishRunTerminal(threadId, liveSessionId, "run-finished")
       setTimeout(() => {
         void this.loadHistory(threadId).catch((reason) => this.#report(reason))
       }, 0)
@@ -959,12 +1261,19 @@ export class HermesNativeClient {
     }
     if (event.type === "error") {
       this.#finishLiveMessage(threadId, payload, true)
+      this.#publishRunTerminal(threadId, liveSessionId, "run-failed")
       return
     }
     if (event.type === "session.info" && typeof payload.running === "boolean") {
+      const session = this.session(threadId)
       this.#patchSession(threadId, {
         running: payload.running,
-        status: payload.running ? "running" : "idle",
+        status:
+          session?.approval || session?.clarification
+            ? "waiting-for-input"
+            : payload.running
+              ? "running"
+              : "idle",
       })
     }
   }
@@ -992,11 +1301,14 @@ export class HermesNativeClient {
       const index = content.findIndex(
         (part) => part.type === "tool-call" && part.toolCallId === toolCallId
       )
-      const args = isRecord(payload.args) ? payload.args : {}
+      const nativeToolName = stringValue(payload.name) ?? "tool"
+      const args = isRecord(payload.args)
+        ? canonicalHermesToolArgs(nativeToolName, payload.args)
+        : {}
       const part = {
         type: "tool-call",
         toolCallId,
-        toolName: stringValue(payload.name) ?? "tool",
+        toolName: canonicalHermesToolName(nativeToolName),
         args,
         argsText: JSON.stringify(args),
         ...(complete
@@ -1035,8 +1347,82 @@ export class HermesNativeClient {
       running: false,
       status: failed ? "failed" : "idle",
       approval: undefined,
+      clarification: undefined,
       updatedAt: new Date().toISOString(),
     })
+  }
+
+  #publishRunStarted(
+    session: HermesSession,
+    liveSessionId: string,
+    nativeId: string
+  ) {
+    const lifecycleId = `hermes:run:${encodeURIComponent(session.threadId)}:${encodeURIComponent(nativeId)}`
+    this.#activeLifecycles.set(liveSessionId, lifecycleId)
+    this.#publishActivity({
+      id: `${lifecycleId}:started`,
+      agentId: session.agentId,
+      threadId: session.threadId,
+      occurredAt: new Date().toISOString(),
+      type: "run-started",
+      lifecycleId,
+    })
+  }
+
+  #publishRunTerminal(
+    threadId: string,
+    liveSessionId: string,
+    type: "run-finished" | "run-failed"
+  ) {
+    const session = this.session(threadId)
+    const lifecycleId = this.#activeLifecycles.get(liveSessionId)
+    if (!session || !lifecycleId) return
+    this.#activeLifecycles.delete(liveSessionId)
+    this.#publishActivity({
+      id: `${lifecycleId}:${type === "run-finished" ? "finished" : "failed"}`,
+      agentId: session.agentId,
+      threadId,
+      occurredAt: new Date().toISOString(),
+      type,
+      lifecycleId,
+    })
+  }
+
+  #publishAttentionRequested(
+    session: HermesSession,
+    requestId: string,
+    attentionKind: "question" | "permission"
+  ) {
+    this.#publishActivity({
+      id: `hermes:attention:${encodeURIComponent(session.threadId)}:${encodeURIComponent(requestId)}:requested`,
+      agentId: session.agentId,
+      threadId: session.threadId,
+      occurredAt: new Date().toISOString(),
+      type: "attention-requested",
+      attentionKind,
+      requestId,
+    })
+  }
+
+  #publishAttentionResolved(session: HermesSession, requestId: string) {
+    this.#publishActivity({
+      id: `hermes:attention:${encodeURIComponent(session.threadId)}:${encodeURIComponent(requestId)}:resolved`,
+      agentId: session.agentId,
+      threadId: session.threadId,
+      occurredAt: new Date().toISOString(),
+      type: "attention-resolved",
+      requestId,
+    })
+  }
+
+  #publishActivity(event: WorkspaceActivityEvent) {
+    for (const listener of this.#activityListeners) {
+      try {
+        listener(structuredClone(event))
+      } catch (reason) {
+        this.#report(reason)
+      }
+    }
   }
 
   #updateLastAssistant(
@@ -1057,6 +1443,18 @@ export class HermesNativeClient {
   #approvalFrom(value: JsonRecord, threadId: string, liveSessionId: string) {
     const requestId = stringValue(value.request_id ?? value.id)
     if (!requestId) return undefined
+    const allowPermanent = value.allow_permanent !== false
+    const available: HermesApprovalChoice[] = Array.isArray(value.choices)
+      ? value.choices.filter(
+          (choice): choice is HermesApprovalChoice =>
+            choice === "once" ||
+            choice === "session" ||
+            choice === "always" ||
+            choice === "deny"
+        )
+      : value.smart_denied === true
+        ? ["once", "deny"]
+        : ["once", "session", "always", "deny"]
     return {
       threadId,
       liveSessionId,
@@ -1064,7 +1462,72 @@ export class HermesNativeClient {
       message:
         stringValue(value.message ?? value.command ?? value.description) ??
         "Hermes is requesting permission to continue.",
+      choices: available.filter(
+        (choice) => choice !== "always" || allowPermanent
+      ),
+      allowPermanent,
     }
+  }
+
+  #clarificationFrom(
+    value: JsonRecord,
+    threadId: string,
+    liveSessionId: string
+  ): HermesClarification | undefined {
+    const requestId = stringValue(value.request_id)
+    if (!requestId) return undefined
+    const choices = (raw: unknown): readonly string[] | null | undefined => {
+      if (raw === undefined || raw === null) return raw ?? null
+      return Array.isArray(raw) &&
+        raw.every((choice) => typeof choice === "string")
+        ? raw
+        : undefined
+    }
+    if (typeof value.question === "string") {
+      const options = choices(value.choices)
+      if (
+        !value.question ||
+        options === undefined ||
+        (value.multi_select !== undefined &&
+          typeof value.multi_select !== "boolean")
+      )
+        return undefined
+      return {
+        threadId,
+        liveSessionId,
+        requestId,
+        questions: [
+          {
+            question: value.question,
+            choices: options,
+            multiple: value.multi_select === true,
+          },
+        ],
+      }
+    }
+    if (!Array.isArray(value.questions) || value.questions.length === 0)
+      return undefined
+    const questions: HermesClarificationQuestion[] = []
+    for (const raw of value.questions) {
+      if (!isRecord(raw)) return undefined
+      const id = stringValue(raw.qid)
+      const question = stringValue(raw.question)
+      const options = choices(raw.choices)
+      if (
+        !id ||
+        !question ||
+        options === undefined ||
+        typeof raw.multi_select !== "boolean"
+      )
+        return undefined
+      questions.push({
+        id,
+        question,
+        choices: options,
+        multiple: raw.multi_select === true,
+      })
+    }
+    return { threadId, liveSessionId, requestId, questions }
   }
 
   async #replayEvents() {

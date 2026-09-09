@@ -1,9 +1,22 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import type { ComponentType, ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { HermesAosUiApp } from "./composition"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
+import type { HermesSession } from "./hermes-native-client"
+
+type MockHermesSession = Pick<HermesSession, "threadId"> & {
+  clarification?: Pick<
+    NonNullable<HermesSession["clarification"]>,
+    "requestId" | "questions"
+  >
+  approval?: Pick<
+    NonNullable<HermesSession["approval"]>,
+    "requestId" | "message" | "choices"
+  >
+}
 
 const mocks = vi.hoisted(() => ({
   options: {} as {
@@ -11,9 +24,24 @@ const mocks = vi.hoisted(() => ({
     onRecovered?: () => void
   },
   bundle: {
-    client: {},
-    assistantRuntime: {},
+    client: {
+      subscribe: () => () => undefined,
+      session: (): MockHermesSession | undefined => undefined,
+    },
+    assistantRuntime: {
+      threads: {
+        subscribe: () => () => undefined,
+        getState: () => ({
+          mainThreadId: "main",
+          threadItems: { main: { remoteId: "thread-one" } },
+        }),
+      },
+    },
     workspace: {},
+    interactions: {
+      respond: vi.fn(),
+      reject: vi.fn(),
+    },
     media: undefined as VoiceMediaController | undefined,
   },
 }))
@@ -25,12 +53,23 @@ vi.mock("@/runtime-adapters/hermes", () => ({
   stopCurrentHermesRun: vi.fn(),
 }))
 vi.mock("@/components/aos-ui-workspace", () => ({
-  AosUiWorkspace: () => <main>Workspace remains available</main>,
+  AosUiWorkspace: ({
+    composer: Composer,
+  }: {
+    composer?: ComponentType<{ fallback: ReactNode }>
+  }) => (
+    <main>
+      Workspace remains available
+      {Composer ? <Composer fallback={<span>Fallback composer</span>} /> : null}
+    </main>
+  ),
 }))
 
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  mocks.bundle.client.session = () => undefined
+  vi.mocked(mocks.bundle.interactions.respond).mockClear()
 })
 
 function showApp(locale: "en" | "he" = "en") {
@@ -46,6 +85,74 @@ function showApp(locale: "en" | "he" = "en") {
 }
 
 describe("Hermes error toasts", () => {
+  it("renders a selected Session clarification only in the composer", () => {
+    const session = {
+      threadId: "thread-one",
+      clarification: {
+        requestId: "clarify-one",
+        questions: [
+          {
+            question: "Which deployment region?",
+            choices: ["IL", "US"],
+            multiple: false,
+          },
+        ],
+      },
+    }
+    mocks.bundle.client.session = () => session
+    showApp()
+    expect(screen.getByLabelText("Questions")).toBeVisible()
+    expect(screen.getByText("Which deployment region?")).toBeVisible()
+    expect(screen.queryByText("Fallback composer")).not.toBeInTheDocument()
+  })
+
+  it("submits the selected Session clarification through the bundle adapter", async () => {
+    const session = {
+      threadId: "thread-one",
+      clarification: {
+        requestId: "clarify-one",
+        questions: [
+          {
+            question: "Which deployment region?",
+            choices: ["IL", "US"],
+            multiple: false,
+          },
+        ],
+      },
+    }
+    mocks.bundle.client.session = () => session
+    showApp()
+    fireEvent.click(screen.getByText("IL"))
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }))
+    await vi.waitFor(() =>
+      expect(mocks.bundle.interactions.respond).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "question",
+          requestId: "clarify-one",
+          sessionId: "thread-one",
+        }),
+        { kind: "question", answers: [["IL"]] }
+      )
+    )
+  })
+
+  it("renders every native approval scope through the shared approval composer", () => {
+    const session = {
+      threadId: "thread-one",
+      approval: {
+        requestId: "approval-one",
+        message: "Use the network?",
+        choices: ["once", "session", "always", "deny"] as const,
+      },
+    }
+    mocks.bundle.client.session = () => session
+    showApp()
+    expect(
+      screen.getByRole("button", { name: "Allow for this session" })
+    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Always allow" })).toBeVisible()
+  })
+
   it("does not auto-dismiss an unresolved error", () => {
     vi.useFakeTimers()
     showApp()

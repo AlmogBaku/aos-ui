@@ -318,3 +318,191 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
     rpcMethods.filter((method) => method === "prompt.submit")
   ).toHaveLength(1)
 })
+
+test("Hermes renders and answers a native clarification request", async ({
+  page,
+}) => {
+  const clarificationResponses: Array<Record<string, unknown>> = []
+  let resumed = false
+  await page.route("**/hermes/api/auth/ws-ticket", (route) =>
+    route.fulfill({ json: { ticket: "clarify-ticket", ttl_seconds: 30 } })
+  )
+  await page.route("**/hermes/api/sessions?**", (route) => {
+    const profile = new URL(route.request().url()).searchParams.get("profile")
+    return route.fulfill({
+      json: {
+        sessions:
+          profile === "research"
+            ? [
+                {
+                  id: "clarify-history",
+                  profile: "research",
+                  title: "Clarification Session",
+                  last_active: 1_788_000_000,
+                },
+              ]
+            : [],
+        total: profile === "research" ? 1 : 0,
+      },
+    })
+  })
+  await page.route(
+    "**/hermes/api/sessions/clarify-history/messages?**",
+    (route) =>
+      route.fulfill({
+        json: {
+          messages: [
+            { id: "native-prompt", role: "user", content: "Plan release" },
+          ],
+          pagination: { returned: 1 },
+        },
+      })
+  )
+  await page.exposeFunction(
+    "__hermesClarifyRpc",
+    (request: { method: string; params?: Record<string, unknown> }) => {
+      if (request.method === "profiles.list")
+        return {
+          profiles: [
+            {
+              name: "research",
+              display_name: "Research",
+              ui_meta: { "hermes-bots": { hidden: false } },
+            },
+          ],
+        }
+      if (request.method === "session.resume") {
+        resumed = true
+        return { session_id: "live-clarify", running: false, status: "idle" }
+      }
+      if (request.method === "session.active_list") return { sessions: [] }
+      if (request.method === "clarify.respond") {
+        clarificationResponses.push(request.params ?? {})
+        return { resolved: true }
+      }
+      throw new Error(`Unexpected Hermes RPC ${request.method}`)
+    }
+  )
+  await page.addInitScript(() => {
+    const BrowserWebSocket = window.WebSocket
+    class NativeSocket extends EventTarget {
+      static readonly OPEN = 1
+      readyState = 0
+      constructor() {
+        super()
+        ;(
+          window as unknown as { __hermesClarifySocket?: NativeSocket }
+        ).__hermesClarifySocket = this
+        setTimeout(() => {
+          this.readyState = 1
+          this.dispatchEvent(new Event("open"))
+        })
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw) as {
+          id: string
+          method: string
+          params?: Record<string, unknown>
+        }
+        void (
+          window as unknown as {
+            __hermesClarifyRpc(value: typeof request): Promise<unknown>
+          }
+        )
+          .__hermesClarifyRpc(request)
+          .then((result) =>
+            this.dispatchEvent(
+              new MessageEvent("message", {
+                data: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result,
+                }),
+              })
+            )
+          )
+      }
+      emitClarification() {
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              jsonrpc: "2.0",
+              method: "event",
+              params: {
+                type: "clarify.request",
+                session_id: "live-clarify",
+                seq: 1,
+                payload: {
+                  request_id: "clarify-release",
+                  questions: [
+                    {
+                      qid: "region",
+                      question: "Release region?",
+                      choices: ["IL", "US"],
+                      multi_select: false,
+                    },
+                    {
+                      qid: "goal",
+                      question: "Release goal?",
+                      choices: null,
+                      multi_select: false,
+                    },
+                  ],
+                },
+              },
+            }),
+          })
+        )
+      }
+      close() {
+        this.readyState = 3
+      }
+    }
+    const RoutedSocket = new Proxy(BrowserWebSocket, {
+      construct(Target, args) {
+        const protocols = args[1]
+        const protocolList = Array.isArray(protocols)
+          ? protocols
+          : typeof protocols === "string"
+            ? [protocols]
+            : []
+        if (protocolList.includes("hermes-gateway-v1"))
+          return new NativeSocket()
+        return Reflect.construct(Target, args)
+      },
+    })
+    Object.defineProperty(window, "WebSocket", { value: RoutedSocket })
+  })
+
+  await page.goto("/research/hermes%3Aresearch%3Aclarify-history")
+  await expect.poll(() => resumed).toBe(true)
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        __hermesClarifySocket?: { emitClarification(): void }
+      }
+    ).__hermesClarifySocket?.emitClarification()
+  )
+  await expect(page.getByRole("region", { name: "Questions" })).toBeVisible()
+  await page.getByText("IL", { exact: true }).click()
+  await page.getByRole("button", { name: "Next" }).click()
+  await page.getByRole("button", { name: "Type an answer" }).click()
+  await page.getByLabel("Your answer for Question 2").fill("Ship safely")
+  await page.getByRole("button", { name: "Send answer" }).click()
+  await expect
+    .poll(() => clarificationResponses)
+    .toEqual([
+      {
+        session_id: "live-clarify",
+        request_id: "clarify-release",
+        question_id: "region",
+        answer: "IL",
+      },
+      {
+        session_id: "live-clarify",
+        request_id: "clarify-release",
+        question_id: "goal",
+        answer: "Ship safely",
+      },
+    ])
+})
