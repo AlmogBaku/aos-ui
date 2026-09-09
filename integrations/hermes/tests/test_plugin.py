@@ -87,6 +87,30 @@ def test_artifact_tool_uses_the_calling_session_workdir(tmp_path, monkeypatch):
     assert result["artifact"]["path"] == "answer.txt"
 
 
+def test_artifact_tool_uses_native_runtime_cwd_before_any_terminal_call(tmp_path, monkeypatch):
+    _artifact(tmp_path, monkeypatch)
+    _native_home(tmp_path, monkeypatch, "name: researcher\n")
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "answer.txt").write_text("forty-two")
+    terminal = types.ModuleType("tools.terminal_tool")
+    terminal.get_session_cwd = lambda _task_id: None
+    monkeypatch.setitem(sys.modules, "tools.terminal_tool", terminal)
+    runtime_cwd = types.ModuleType("agent.runtime_cwd")
+    runtime_cwd.resolve_agent_cwd = lambda: workdir
+    monkeypatch.setitem(sys.modules, "agent.runtime_cwd", runtime_cwd)
+    context = FakeContext()
+    register(context)
+    tool = next(tool for tool in context.tools if tool["name"] == "present_artifact")
+
+    result = json.loads(tool["handler"](
+        {"path": "answer.txt"}, task_id="task-1", session_id="session-1"
+    ))
+
+    assert result["ok"] is True
+    assert result["artifact"]["path"] == "answer.txt"
+
+
 def test_artifact_tool_returns_a_rejection_without_native_call_context(tmp_path, monkeypatch):
     _artifact(tmp_path, monkeypatch)
     _native_home(tmp_path, monkeypatch, "name: researcher\n")

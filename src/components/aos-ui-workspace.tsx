@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import {
   createContext,
+  memo,
   useContext,
   useEffect,
   useMemo,
@@ -223,20 +224,17 @@ function ArtifactWorkspaceBridge({
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
-      <ArtifactWorkspaceContent shell={{ ...shell, locale }}>
+      <ArtifactWorkspaceContent {...shell} locale={locale}>
         {children}
       </ArtifactWorkspaceContent>
     </ArtifactWorkspaceProvider>
   )
 }
 
-function ArtifactWorkspaceContent({
-  shell,
+const ArtifactWorkspaceContent = memo(function ArtifactWorkspaceContent({
   children,
-}: {
-  shell: Omit<WorkspaceShellProps, "children">
-  children: ReactNode
-}) {
+  ...shell
+}: WorkspaceShellProps) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
 
   return (
@@ -252,7 +250,7 @@ function ArtifactWorkspaceContent({
       {children}
     </WorkspaceShell>
   )
-}
+})
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
 }

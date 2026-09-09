@@ -109,6 +109,49 @@ export type ArtifactWorkspaceProviderProps = {
 
 const NO_ASSET_ORIGINS: readonly string[] = []
 
+function sameArtifactOccurrence(
+  previous: ArtifactOccurrence,
+  next: ArtifactOccurrence
+) {
+  const previousArtifact = previous.artifact
+  const nextArtifact = next.artifact
+  const previousSource = previousArtifact.source
+  const nextSource = nextArtifact.source
+  const sameSource =
+    previousSource.type === nextSource.type &&
+    (previousSource.type === "inline" && nextSource.type === "inline"
+      ? previousSource.encoding === nextSource.encoding &&
+        previousSource.data === nextSource.data
+      : previousSource.type === "url" && nextSource.type === "url"
+        ? previousSource.url === nextSource.url
+        : previousSource.type === "provider" && nextSource.type === "provider"
+          ? previousSource.reference === nextSource.reference
+          : false)
+
+  return (
+    previous.key === next.key &&
+    previousArtifact.id === nextArtifact.id &&
+    previousArtifact.filename === nextArtifact.filename &&
+    previousArtifact.mimeType === nextArtifact.mimeType &&
+    previousArtifact.sizeBytes === nextArtifact.sizeBytes &&
+    sameSource
+  )
+}
+
+function useArtifactOccurrences(messages: readonly ArtifactMessage[]) {
+  const next = useMemo(() => extractArtifactOccurrences(messages), [messages])
+  const stable = useRef(next)
+  if (
+    stable.current.length !== next.length ||
+    stable.current.some(
+      (occurrence, index) => !sameArtifactOccurrence(occurrence, next[index]!)
+    )
+  ) {
+    stable.current = next
+  }
+  return stable.current
+}
+
 export function ArtifactWorkspaceProvider({
   locale,
   adapter,
@@ -128,10 +171,7 @@ export function ArtifactWorkspaceProvider({
   const downloadControllersRef = useRef(new Set<AbortController>())
   const downloadUrlsRef = useRef(new Set<string>())
   const labels = (locale === "he" ? he : en).artifacts
-  const occurrences = useMemo(
-    () => extractArtifactOccurrences(messages),
-    [messages]
-  )
+  const occurrences = useArtifactOccurrences(messages)
   const messagePathKey = messages.map(({ id }) => id).join("\u0000")
   const selectedArtifact =
     selection?.agentId === agentId &&

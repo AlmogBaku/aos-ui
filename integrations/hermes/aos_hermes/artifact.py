@@ -22,8 +22,15 @@ def _session_workdir(task_id: str) -> str | None:
     try:
         from tools.terminal_tool import get_session_cwd
 
-        return get_session_cwd(task_id)
+        if recorded := get_session_cwd(task_id):
+            return recorded
     except (ImportError, RuntimeError, TypeError, ValueError):
+        pass
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+
+        return str(resolve_agent_cwd())
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return None
 
 

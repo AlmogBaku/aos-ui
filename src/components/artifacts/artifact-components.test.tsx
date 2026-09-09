@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { memo } from "react"
 
 import type { ArtifactAdapter } from "@/runtime-adapters/contracts"
 
@@ -16,6 +17,7 @@ import {
   ArtifactViewerContent,
   ArtifactWorkspaceProvider,
   MAX_TEXT_PREVIEW_BYTES,
+  useArtifactWorkspace,
 } from "./artifact-workspace"
 
 const messages = [
@@ -67,6 +69,37 @@ afterEach(() => {
 describe("artifact workspace", () => {
   it("registers the canonical assistant data-part name", () => {
     expect(ArtifactDataUI.unstable_data.name).toBe("aos.artifact")
+  })
+
+  it("keeps artifact consumers stable while ordinary message text streams", () => {
+    let renders = 0
+    const Probe = memo(function Probe() {
+      useArtifactWorkspace()
+      renders += 1
+      return null
+    })
+    const provider = (text: string) => (
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={undefined}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={[
+          {
+            id: "streaming-message",
+            role: "assistant",
+            content: [{ type: "text", text }],
+          },
+        ]}
+      >
+        <Probe />
+      </ArtifactWorkspaceProvider>
+    )
+    const view = render(provider("First token"))
+
+    view.rerender(provider("First token, then another"))
+
+    expect(renders).toBe(1)
   })
 
   it("renders a validated present_artifact result as a message card", () => {
