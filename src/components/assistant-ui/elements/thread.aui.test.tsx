@@ -505,6 +505,19 @@ describe("Thread accessibility", () => {
     expect(
       screen.getByLabelText("Context usage: 1,024 of 8,192 tokens")
     ).toBeInTheDocument()
+    const toolbar = document.querySelector(
+      '[data-slot="aui_composer-toolbar"]'
+    )
+    expect(toolbar).not.toBeNull()
+    expect(toolbar).toContainElement(model)
+    expect(toolbar).toContainElement(
+      screen.getByRole("button", {
+        name: "Context usage: 1,024 of 8,192 tokens",
+      })
+    )
+    expect(
+      document.querySelector('[data-slot="composer-context-ring"]')
+    ).toBeInTheDocument()
 
     model.focus()
     await user.keyboard("{ArrowDown}")

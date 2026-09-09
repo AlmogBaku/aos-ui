@@ -33,6 +33,7 @@ import {
   ModelSelectorRoot,
   ModelSelectorTrigger,
 } from "@/components/assistant-ui/elements/model-selector"
+import { ComposerContext } from "@/components/assistant-ui/elements/composer-context"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -954,10 +955,7 @@ const Composer: FC<{
           <div
             data-slot="aui_composer-shell"
             className={cn(
-              "relative grid w-full cursor-text items-end gap-1 transition-colors data-[dragging=true]:rounded-xl data-[dragging=true]:border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:flex @min-[64rem]/workspace:max-w-[45rem] @min-[64rem]/workspace:flex-col @min-[64rem]/workspace:gap-2 @min-[64rem]/workspace:rounded-[24px] @min-[64rem]/workspace:border @min-[64rem]/workspace:border-border/60 @min-[64rem]/workspace:bg-background @min-[64rem]/workspace:p-2.5 @min-[64rem]/workspace:focus-within:border-border @min-[64rem]/workspace:dark:bg-popover",
-              voiceActive
-                ? "grid-cols-[2.75rem_minmax(0,1fr)_auto]"
-                : "grid-cols-[2.75rem_minmax(0,1fr)_2.75rem]"
+              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:bg-popover @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-[45rem]"
             )}
           />
         }
@@ -967,7 +965,7 @@ const Composer: FC<{
         </div>
         <div
           data-slot="aui_composer-field"
-          className="col-start-2 row-start-2 flex min-w-0 items-center rounded-[18px] bg-foreground/[0.04] py-2 ps-3 pe-11 @min-[64rem]/workspace:contents @min-[64rem]/workspace:px-3 dark:bg-foreground/[0.06]"
+          className="flex min-w-0 items-center px-3"
         >
           <VoiceComposerField>
             <ComposerPrimitive.Input
@@ -993,8 +991,9 @@ const Composer: FC<{
             />
           </VoiceComposerField>
         </div>
-        <ComposerAction />
-        <ComposerFeatureBar direction={direction} />
+        <ComposerToolbar>
+          <ComposerFeatureBar direction={direction} />
+        </ComposerToolbar>
       </ComposerPrimitive.AttachmentDropzone>
       <VoiceComposerNotice />
     </ComposerPrimitive.Root>
@@ -1014,7 +1013,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   return (
     <div
       data-slot="aui_composer-features"
-      className="col-span-full row-start-3 flex min-w-0 items-center justify-between gap-3 px-3 pb-1 text-xs text-muted-foreground @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-1 @min-[64rem]/workspace:pb-0"
+      className="flex min-w-0 flex-1 items-center gap-1 text-xs text-muted-foreground"
     >
       {features.model ? (
         <ModelSelectorRoot
@@ -1029,34 +1028,40 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             void features.model?.select(value)
           }}
         >
-          <ModelSelectorTrigger aria-label={labels.modelSelector} />
+          <ModelSelectorTrigger
+            aria-label={labels.modelSelector}
+            className="max-w-36 @min-[64rem]/workspace:max-w-56"
+          />
           <ModelSelectorContent />
         </ModelSelectorRoot>
       ) : (
         <span />
       )}
       {features.context && usedTokens && maxTokens ? (
-        <span
-          className="shrink-0 tabular-nums"
-          dir="ltr"
-          aria-label={labels.contextUsage(usedTokens, maxTokens)}
-        >
-          {usedTokens} / {maxTokens}
-        </span>
+        <ComposerContext
+          className="ms-auto"
+          usedTokens={features.context.usedTokens}
+          maxTokens={features.context.maxTokens}
+          label={labels.contextUsage(usedTokens, maxTokens)}
+        />
       ) : null}
     </div>
   )
 }
 
-const ComposerAction: FC = () => {
+const ComposerToolbar: FC<PropsWithChildren> = ({ children }) => {
   const labels = useContext(ThreadLabelsContext)
   const onStopRun = useContext(ThreadStopContext)
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
   return (
-    <div className="aui-composer-action-wrapper contents @min-[64rem]/workspace:relative @min-[64rem]/workspace:flex @min-[64rem]/workspace:w-full @min-[64rem]/workspace:items-center @min-[64rem]/workspace:justify-between [&>:first-child]:col-start-1 [&>:first-child]:row-start-2 [&>:last-child]:col-start-3 [&>:last-child]:row-start-2">
+    <div
+      data-slot="aui_composer-toolbar"
+      className="aui-composer-action-wrapper flex w-full min-w-0 items-center gap-1"
+    >
       <ComposerAddAttachment />
-      <div className="relative flex items-center gap-1.5">
+      {children}
+      <div className="relative ms-auto flex shrink-0 items-center gap-1.5">
         <VoiceComposerControl />
         {!voiceActive ? (
           <>
@@ -1065,7 +1070,7 @@ const ComposerAction: FC = () => {
                 render={
                   <button
                     type="button"
-                    className="aui-composer-send flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+                    className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
                     aria-label={labels.sendMessage}
                   />
                 }
@@ -1079,7 +1084,7 @@ const ComposerAction: FC = () => {
               {onStopRun ? (
                 <Button
                   type="button"
-                  className="aui-composer-cancel flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary"
+                  className="aui-composer-cancel grid size-11 shrink-0 place-items-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary"
                   aria-label={labels.stopGenerating}
                   onClick={() => {
                     voice?.media.disarm()
@@ -1095,7 +1100,7 @@ const ComposerAction: FC = () => {
                   render={
                     <Button
                       type="button"
-                      className="aui-composer-cancel flex size-11 shrink-0 items-end justify-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:grid @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:place-items-center @min-[64rem]/workspace:bg-primary"
+                      className="aui-composer-cancel grid size-11 shrink-0 place-items-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary"
                       aria-label={labels.stopGenerating}
                       onClick={() => voice?.media.disarm()}
                     />

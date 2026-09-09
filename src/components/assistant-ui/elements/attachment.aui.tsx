@@ -268,7 +268,7 @@ export const ComposerAddAttachment: FC = () => {
         />
       }
     >
-      <span className="absolute bottom-0 left-1/2 grid size-9 -translate-x-1/2 place-items-center rounded-full bg-foreground/[0.04] @min-[64rem]/workspace:static @min-[64rem]/workspace:size-auto @min-[64rem]/workspace:translate-x-0 @min-[64rem]/workspace:bg-transparent dark:bg-foreground/[0.06] @min-[64rem]/workspace:dark:bg-transparent">
+      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground/[0.04] @min-[64rem]/workspace:size-auto @min-[64rem]/workspace:bg-transparent dark:bg-foreground/[0.06] @min-[64rem]/workspace:dark:bg-transparent">
         <PlusIcon className="aui-attachment-add-icon size-4" />
       </span>
     </ComposerPrimitive.AddAttachment>

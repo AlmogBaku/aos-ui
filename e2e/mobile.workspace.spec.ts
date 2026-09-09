@@ -57,64 +57,87 @@ test("coarse-pointer workspace controls have 44px touch targets", async ({
   await page.keyboard.press("Escape")
 })
 
-test("the mobile composer uses the Assistant UI mobile bar", async ({
+test("the mobile composer keeps model and context in one Assistant UI rail", async ({
   page,
 }) => {
   await page.goto("/en")
 
   const composer = page.locator('[data-slot="aui_composer-shell"]')
   const field = composer.locator('[data-slot="aui_composer-field"]')
+  const toolbar = composer.locator('[data-slot="aui_composer-toolbar"]')
   const input = page.getByRole("textbox", { name: "Message input" })
   const addAttachment = page.getByRole("button", { name: "Add attachment" })
   const send = page.getByRole("button", { name: "Send message" })
+  const model = page.getByRole("combobox", { name: "Choose model" })
+  const context = page.getByRole("button", {
+    name: "Context usage: 12,288 of 65,536 tokens",
+  })
+  const contextValue = composer.getByText("12,288 / 65,536", { exact: true })
   const addAttachmentVisual = addAttachment.locator("span").first()
   const sendVisual = send.locator("span").first()
   await expect(input).toHaveCount(1)
   await expect(addAttachment).toHaveCount(1)
   await expect(send).toHaveCount(1)
+  await expect(model).toHaveCount(1)
+  await expect(context).toHaveCount(1)
   const [
     inputBox,
     fieldBox,
+    toolbarBox,
     addAttachmentBox,
     sendBox,
+    modelBox,
+    contextBox,
     addAttachmentVisualBox,
     sendVisualBox,
   ] = await Promise.all([
     input.boundingBox(),
     field.boundingBox(),
+    toolbar.boundingBox(),
     addAttachment.boundingBox(),
     send.boundingBox(),
+    model.boundingBox(),
+    context.boundingBox(),
     addAttachmentVisual.boundingBox(),
     sendVisual.boundingBox(),
   ])
 
   expect(inputBox).not.toBeNull()
   expect(fieldBox).not.toBeNull()
+  expect(toolbarBox).not.toBeNull()
   expect(addAttachmentBox).not.toBeNull()
   expect(sendBox).not.toBeNull()
+  expect(modelBox).not.toBeNull()
+  expect(contextBox).not.toBeNull()
   expect(addAttachmentVisualBox).not.toBeNull()
   expect(sendVisualBox).not.toBeNull()
   await expect(composer).toBeVisible()
-  await expect(composer).toHaveCSS("display", "grid")
+  await expect(composer).toHaveCSS("display", "flex")
+  await expect(context).toBeVisible()
+  await expect(contextValue).toBeHidden()
   expect(addAttachmentBox!.width).toBe(44)
   expect(addAttachmentBox!.height).toBe(44)
   expect(sendBox!.width).toBe(44)
   expect(sendBox!.height).toBe(44)
+  expect(modelBox!.height).toBe(44)
+  expect(contextBox!.width).toBe(44)
+  expect(contextBox!.height).toBe(44)
   await expect(addAttachmentVisual).toHaveCSS("width", "36px")
   await expect(sendVisual).toHaveCSS("width", "36px")
   await expect(input).toHaveAttribute("placeholder", "Message")
+  expect(fieldBox!.y + fieldBox!.height).toBeLessThanOrEqual(toolbarBox!.y)
   expect(
     Math.abs(
       sendVisualBox!.y +
         sendVisualBox!.height / 2 -
-        (fieldBox!.y + fieldBox!.height / 2)
+        (toolbarBox!.y + toolbarBox!.height / 2)
     )
   ).toBeLessThanOrEqual(1)
   expect(
     Math.abs(
       addAttachmentVisualBox!.y +
         addAttachmentVisualBox!.height / 2 -
-        (fieldBox!.y + fieldBox!.height / 2)
+        (toolbarBox!.y + toolbarBox!.height / 2)
     )
   ).toBeLessThanOrEqual(1)
 
@@ -126,6 +149,8 @@ test("the mobile composer uses the Assistant UI mobile bar", async ({
 
   await page.setViewportSize({ width: 1440, height: 844 })
   await expect(composer).toHaveCSS("display", "flex")
+  await expect(context).toBeHidden()
+  await expect(contextValue).toBeVisible()
   const [desktopComposerBox, desktopAddBox, desktopSendBox] =
     await Promise.all([
       composer.boundingBox(),
