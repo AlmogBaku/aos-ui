@@ -49,8 +49,6 @@ export type ToolUiLocaleLabels = {
     regeneratingImage: string
     downloadImage: string
     copyImage: string
-    markdownLoading: string
-    markdownUnavailable: string
   }
   question: {
     description: string
@@ -174,9 +172,6 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     regeneratingImage: "Regenerating image…",
     downloadImage: "Download image",
     copyImage: "Copy image",
-    markdownLoading: "Loading formatted text…",
-    markdownUnavailable:
-      "Formatted text unavailable. The source remains available.",
   },
   question: {
     description: "Choose an option or write your own response.",
@@ -331,8 +326,6 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     regeneratingImage: "התמונה נוצרת מחדש…",
     downloadImage: "הורדת התמונה",
     copyImage: "העתקת התמונה",
-    markdownLoading: "הטקסט המעוצב נטען…",
-    markdownUnavailable: "הטקסט המעוצב אינו זמין. המקור עדיין זמין.",
   },
   question: {
     description: "בחרו אפשרות או כתבו תשובה חופשית.",

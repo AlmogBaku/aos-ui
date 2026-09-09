@@ -6,7 +6,7 @@ function metadata(session: HermesSession) {
   return {
     remoteId: session.threadId,
     externalId: session.threadId,
-    status: "regular" as const,
+    status: session.archived ? ("archived" as const) : ("regular" as const),
     title: session.title,
     lastMessageAt: new Date(session.updatedAt),
     custom: { agentId: session.agentId, status: session.status },
@@ -33,20 +33,20 @@ export class HermesThreadListAdapter implements RemoteThreadListAdapter {
     return { remoteId: threadId, externalId: threadId }
   }
 
-  async rename() {
-    throw new Error("Hermes Session renaming is unavailable in AOS")
+  async rename(threadId: string, title: string) {
+    await this.client.renameSession(threadId, title)
   }
 
-  async archive() {
-    throw new Error("Hermes Session archiving is unavailable in AOS")
+  async archive(threadId: string) {
+    await this.client.archiveSession(threadId)
   }
 
-  async unarchive() {
-    throw new Error("Hermes Session unarchiving is unavailable in AOS")
+  async unarchive(threadId: string) {
+    await this.client.unarchiveSession(threadId)
   }
 
-  async delete() {
-    throw new Error("Hermes Session deletion is unavailable in AOS")
+  async delete(threadId: string) {
+    await this.client.deleteSession(threadId)
   }
 
   async generateTitle() {

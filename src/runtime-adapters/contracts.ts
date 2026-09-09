@@ -143,9 +143,48 @@ export type WorkspaceAdapter = {
   ) => () => void
 }
 
+export type RuntimeQuestionOption = {
+  label: string
+  /** Opaque provider value; absent options submit their rendered label. */
+  value?: string
+  description?: string
+}
+
+export type RuntimeQuestion = {
+  /** Provider-stable item identity for batched interaction responses. */
+  id?: string
+  header: string
+  prompt: string
+  options: readonly RuntimeQuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export type RuntimeQuestionRequest = {
+  kind: "question"
+  requestId: string
+  sessionId: string
+  questions: readonly RuntimeQuestion[]
+}
+
+export type RuntimeQuestionResponse = {
+  kind: "question"
+  answers: string[][]
+}
+
+/** Provider-owned interaction actions exposed to shared runtime UI. */
+export type RuntimeInteractionAdapter = {
+  respond(
+    request: RuntimeQuestionRequest,
+    response: RuntimeQuestionResponse
+  ): Promise<void>
+  reject(request: RuntimeQuestionRequest): Promise<void>
+}
+
 export type RuntimeBundle = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
+  interactions?: RuntimeInteractionAdapter
 }
 
 export type RuntimeMode = "fixture" | "opencode" | "hermes" | "ag-ui"

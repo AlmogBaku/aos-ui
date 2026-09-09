@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest"
 const {
   officialRuntime,
   client,
+  replyToQuestion,
+  rejectQuestion,
   workspace,
   eventHub,
   useAosOpenCodeRuntime,
@@ -13,10 +15,17 @@ const {
   createOpencodeClient,
 } = vi.hoisted(() => {
   const officialRuntime = {} as AssistantRuntime
-  const client = { session: {} } as OpencodeClient
+  const replyToQuestion = vi.fn().mockResolvedValue(undefined)
+  const rejectQuestion = vi.fn().mockResolvedValue(undefined)
+  const client = {
+    session: {},
+    question: { reply: replyToQuestion, reject: rejectQuestion },
+  } as unknown as OpencodeClient
   return {
     officialRuntime,
     client,
+    replyToQuestion,
+    rejectQuestion,
     workspace: {},
     eventHub: { subscribe: vi.fn() },
     useAosOpenCodeRuntime: vi.fn<(...args: unknown[]) => AssistantRuntime>(
@@ -100,5 +109,44 @@ describe("useOpenCodeRuntimeBundle", () => {
 
     expect(result.current.assistantRuntime).toBe(secondRuntime)
     expect(result.current.workspace).toBe(workspace)
+  })
+
+  it("exposes native question actions through the optional interaction capability", async () => {
+    createOpenCodeWorkspace.mockReturnValue(workspace)
+    const { result } = renderHook(() =>
+      useOpenCodeRuntimeBundle({
+        baseUrl: "http://opencode.test",
+        directory: "/external/worktree",
+      })
+    )
+    const interactions = result.current.interactions
+
+    expect(interactions).toBeDefined()
+    if (!interactions) throw new Error("Missing OpenCode interaction adapter")
+
+    await interactions.respond(
+      {
+        kind: "question",
+        requestId: "question-1",
+        sessionId: "session-build",
+        questions: [],
+      },
+      { kind: "question", answers: [["Fast"]] }
+    )
+    await interactions.reject({
+      kind: "question",
+      requestId: "question-1",
+      sessionId: "session-build",
+      questions: [],
+    })
+
+    expect(replyToQuestion).toHaveBeenCalledWith(
+      { requestID: "question-1", answers: [["Fast"]] },
+      { throwOnError: true }
+    )
+    expect(rejectQuestion).toHaveBeenCalledWith(
+      { requestID: "question-1" },
+      { throwOnError: true }
+    )
   })
 })

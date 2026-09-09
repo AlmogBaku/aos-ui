@@ -116,6 +116,7 @@ function harness({
   reconnectTicketFailures = 0,
   visibilityConflict = false,
   approvalDeferred,
+  pendingClarify,
   endedAt,
   liveStatus = "idle",
   activeReply,
@@ -123,11 +124,13 @@ function harness({
   profileActivity = {},
   history,
   rpcReply,
+  archived = false,
 }: {
   activeReply?: DeferredRpc | RpcFailure
   profileActivity?: Record<string, unknown>
   history?: unknown[]
   rpcReply?: (request: Record<string, unknown>) => unknown
+  archived?: boolean
   sameSessionIdAcrossProfiles?: boolean
   endedAt?: number
   liveStatus?: string
@@ -139,6 +142,7 @@ function harness({
   reconnectTicketFailures?: number
   visibilityConflict?: boolean
   approvalDeferred?: DeferredRpc
+  pendingClarify?: Record<string, unknown>
 } = {}) {
   const sockets: FakeSocket[] = []
   let tickets = 0
@@ -146,7 +150,7 @@ function harness({
   let researchHidden = false
   let researchRevision = 3
   let activeStatus = liveStatus
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://aos.test")
     if (
       url.pathname === "/hermes/api/auth/ws-ticket" &&
@@ -178,6 +182,7 @@ function harness({
                 title: "Native history",
                 last_active: 1_788_000_000,
                 ended_at: endedAt,
+                archived,
               }))
             : [],
         total:
@@ -220,6 +225,11 @@ function harness({
         pagination: { returned: 3 },
       })
     }
+    if (
+      url.pathname === "/hermes/api/sessions/stored-1" &&
+      ["PATCH", "DELETE"].includes(String(init?.method))
+    )
+      return new Response(null, { status: 204 })
     return new Response(null, { status: 404 })
   })
   const reply = (request: Record<string, unknown>) => {
@@ -265,6 +275,7 @@ function harness({
           running: false,
           status: "idle",
           messages: [],
+          ...(pendingClarify ? { pending_clarify: pendingClarify } : {}),
         }
       case "profiles.describe":
         return { name: "research", description: "Native profile" }
@@ -301,6 +312,8 @@ function harness({
         return { events: [], truncated: truncateReplay, epoch: "epoch-1" }
       case "approval.respond":
         return approvalDeferred ?? { resolved: true }
+      case "clarify.respond":
+        return { resolved: true }
       case "session.interrupt":
         return { status: "interrupted" }
       default:
@@ -2273,6 +2286,516 @@ describe("Hermes native browser client", () => {
       client.stop()
     }
   })
+
+  it("discovers archived sessions and preserves their native archive status", async () => {
+    const { client, fetcher } = harness({ archived: true })
+    try {
+      await client.start()
+      expect(client.getSnapshot().sessions[0]).toMatchObject({ archived: true })
+      expect(
+        String(
+          fetcher.mock.calls.find(([input]) =>
+            String(input).includes("/api/sessions")
+          )?.[0]
+        )
+      ).toContain("archived=include")
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("mutates only the owning stored session after its REST response succeeds", async () => {
+    const { client, fetcher } = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    try {
+      await client.start()
+      await client.renameSession(threadId, "Renamed")
+      await client.archiveSession(threadId)
+      await client.unarchiveSession(threadId)
+      await client.deleteSession(threadId)
+      const mutations = fetcher.mock.calls.filter(
+        ([input, init]) =>
+          String(input).includes("/api/sessions/stored-1?") &&
+          ["PATCH", "DELETE"].includes(String((init as RequestInit).method))
+      )
+      expect(mutations.map(([, init]) => (init as RequestInit).method)).toEqual(
+        ["PATCH", "PATCH", "PATCH", "DELETE"]
+      )
+      expect(String(mutations[0]?.[0])).toContain("profile=research")
+      expect(
+        mutations.slice(0, 3).map(([, init]) => (init as RequestInit).body)
+      ).toEqual([
+        '{"title":"Renamed"}',
+        '{"archived":true}',
+        '{"archived":false}',
+      ])
+      expect(client.session(threadId)).toBeUndefined()
+    } finally {
+      client.stop()
+    }
+  })
+
+  it("publishes native run, attention, and title events for the mapped session", async () => {
+    const { client, sockets } = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    const activity = vi.fn()
+    const unsubscribe = client.subscribeActivity(activity)
+    try {
+      await client.start()
+      await client.attach(threadId)
+      const event = (
+        type: string,
+        seq: number,
+        payload: Record<string, unknown> = {}
+      ) =>
+        sockets[0].message({
+          jsonrpc: "2.0",
+          method: "event",
+          params: { type, session_id: "live-1", seq, payload },
+        })
+      event("message.start", 1, { message_id: "answer-1" })
+      event("approval.request", 2, { request_id: "permission-1" })
+      event("session.title", 3, {
+        stored_session_id: "stored-1",
+        title: "Native title",
+      })
+      event("message.complete", 4, { message_id: "answer-1" })
+      expect(client.session(threadId)?.title).toBe("Native title")
+      expect(activity.mock.calls.map(([item]) => item.type)).toEqual([
+        "run-started",
+        "attention-requested",
+        "run-finished",
+      ])
+      expect(activity.mock.calls[0]?.[0]).toMatchObject({
+        threadId,
+        lifecycleId: expect.stringContaining("answer-1"),
+      })
+    } finally {
+      unsubscribe()
+      client.stop()
+    }
+  })
+
+  it("edits and regenerates only stable native user messages with truncate confirmation", async () => {
+    const { client, sockets } = harness()
+    const reload = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    try {
+      await client.start()
+      await client.loadHistory(threadId)
+      await expect(client.editMessage(threadId, "a1", "No")).rejects.toThrow(
+        "user message"
+      )
+      await expect(
+        client.regenerate(threadId, "hermes-history-0")
+      ).rejects.toThrow("stable")
+      await client.editMessage(threadId, "u1", "Edited prompt")
+      await reload.client.start()
+      await reload.client.loadHistory(threadId)
+      await reload.client.regenerate(threadId, "u1")
+      const prompts = [...sockets, ...reload.sockets].flatMap((socket) =>
+        socket.requests.filter(({ method }) => method === "prompt.submit")
+      )
+      expect(prompts.map(({ params }) => params).slice(-2)).toEqual([
+        expect.objectContaining({
+          text: "Edited prompt",
+          confirm_truncate: true,
+          truncate_before_message_id: "u1",
+        }),
+        expect.objectContaining({
+          text: "Hello",
+          confirm_truncate: true,
+          truncate_before_message_id: "u1",
+        }),
+      ])
+    } finally {
+      client.stop()
+      reload.client.stop()
+    }
+  })
+
+  it("canonicalizes live native todo tools for the workspace Todo projection", async () => {
+    const { client, sockets } = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    const workspace = createHermesWorkspace(client)
+    const todos = vi.fn()
+    const unsubscribe = workspace.subscribeTodos?.(threadId, todos)
+    try {
+      await client.start()
+      await client.attach(threadId)
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "message.start",
+          session_id: "live-1",
+          seq: 1,
+          payload: {},
+        },
+      })
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "tool.complete",
+          session_id: "live-1",
+          seq: 2,
+          payload: {
+            tool_id: "todos-1",
+            name: "todo_list",
+            result: {
+              todos: [{ id: "one", content: "Ship", status: "active" }],
+            },
+          },
+        },
+      })
+      expect(todos).toHaveBeenLastCalledWith([
+        { id: "one", label: "Ship", status: "active" },
+      ])
+    } finally {
+      unsubscribe?.()
+      client.stop()
+    }
+  })
+
+  it("derives a delegate description from live native task goals", async () => {
+    const { client, sockets } = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    try {
+      await client.start()
+      await client.attach(threadId)
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "message.start",
+          session_id: "live-1",
+          seq: 1,
+          payload: {},
+        },
+      })
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "tool.start",
+          session_id: "live-1",
+          seq: 2,
+          payload: {
+            tool_id: "delegate-1",
+            name: "delegate_task",
+            args: { goal: "Audit the release" },
+          },
+        },
+      })
+      const content = client.session(threadId)?.messages.at(-1)?.content
+      expect(Array.isArray(content)).toBe(true)
+      if (!Array.isArray(content)) throw new Error("Expected message parts")
+      expect(content[0]).toMatchObject({
+        toolName: "delegate_subagent",
+        args: {
+          goal: "Audit the release",
+          description: "Audit the release",
+        },
+      })
+    } finally {
+      client.stop()
+    }
+  })
+  it("responds to a scoped clarification request", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "clarify-one",
+          question: "Continue with the deployment?",
+          choices: ["Yes", "No"],
+        },
+      },
+    })
+
+    expect(client.session(threadId)?.clarification).toMatchObject({
+      requestId: "clarify-one",
+      questions: [
+        {
+          question: "Continue with the deployment?",
+          choices: ["Yes", "No"],
+        },
+      ],
+    })
+
+    await client.answerClarification(threadId, "clarify-one", [["Yes"]])
+
+    expect(
+      sockets[0].requests.find(({ method }) => method === "clarify.respond")
+    ).toMatchObject({
+      params: {
+        session_id: "live-1",
+        request_id: "clarify-one",
+        answer: "Yes",
+      },
+    })
+    client.stop()
+  })
+
+  it("keeps a resumed clarification scoped through reconnect and expires only its matching request", async () => {
+    const { client, sockets } = harness({
+      pendingClarify: { request_id: "active", question: "Proceed?" },
+    })
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.request",
+        session_id: "live-1",
+        seq: 1,
+        payload: { request_id: "active", question: "Proceed?" },
+      },
+    })
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.expire",
+        session_id: "live-1",
+        seq: 2,
+        payload: { request_id: "stale" },
+      },
+    })
+    expect(client.session(threadId)?.clarification?.requestId).toBe("active")
+
+    sockets[0].disconnect()
+    await vi.waitFor(() => expect(sockets).toHaveLength(2))
+    expect(client.session(threadId)?.clarification?.requestId).toBe("active")
+
+    sockets[1].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.expire",
+        session_id: "live-1",
+        seq: 3,
+        payload: { request_id: "active" },
+      },
+    })
+    expect(client.session(threadId)?.clarification).toBeUndefined()
+    client.stop()
+  })
+
+  it("answers every batch clarification item and encodes multi-select values", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "batch-one",
+          questions: [
+            {
+              qid: "region",
+              question: "Regions",
+              choices: ["IL", "US"],
+              multi_select: true,
+            },
+            {
+              qid: "mode",
+              question: "Mode",
+              choices: null,
+              multi_select: false,
+            },
+          ],
+        },
+      },
+    })
+
+    await client.answerClarification(threadId, "batch-one", [
+      ["IL", "US"],
+      ["Fast"],
+    ])
+
+    const answers = sockets[0].requests.filter(
+      ({ method }) => method === "clarify.respond"
+    )
+    expect(answers).toHaveLength(2)
+    expect(answers.map(({ params }) => params)).toEqual([
+      {
+        session_id: "live-1",
+        request_id: "batch-one",
+        question_id: "region",
+        answer: '["IL","US"]',
+      },
+      {
+        session_id: "live-1",
+        request_id: "batch-one",
+        question_id: "mode",
+        answer: "Fast",
+      },
+    ])
+    client.stop()
+  })
+
+  it("rejects a batch clarification without selecting an item", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "clarify.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "batch-reject",
+          questions: [
+            { qid: "one", question: "One", choices: null, multi_select: false },
+          ],
+        },
+      },
+    })
+
+    await client.rejectClarification(threadId, "batch-reject")
+    expect(
+      sockets[0].requests.find(({ method }) => method === "clarify.respond")
+        ?.params
+    ).toEqual({
+      session_id: "live-1",
+      request_id: "batch-reject",
+      answer: "",
+    })
+    client.stop()
+  })
+
+  it("rejects a stale clarification without answering its replacement", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    const clarify = (requestId: string) =>
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "clarify.request",
+          session_id: "live-1",
+          payload: { request_id: requestId, question: "Proceed?" },
+        },
+      })
+    clarify("old-request")
+    clarify("new-request")
+
+    await expect(
+      client.answerClarification(threadId, "old-request", [["Yes"]])
+    ).rejects.toThrow("no longer current")
+    expect(
+      sockets[0].requests.some(({ method }) => method === "clarify.respond")
+    ).toBe(false)
+    client.stop()
+  })
+
+  it("uses the native approval scopes and rejects unavailable choices", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "approval.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "approval-scopes",
+          message: "Use the network?",
+          choices: ["once", "session", "always", "deny"],
+          allow_permanent: true,
+        },
+      },
+    })
+
+    await client.answerApproval(threadId, "approval-scopes", "session")
+    expect(
+      sockets[0].requests.find(({ method }) => method === "approval.respond")
+        ?.params
+    ).toMatchObject({ choice: "session" })
+    await expect(
+      client.answerApproval(threadId, "approval-scopes", "always")
+    ).rejects.toThrow("no longer current")
+    client.stop()
+  })
+
+  it("defaults native approval scopes when choices are absent", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "approval.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "approval-defaults",
+          message: "Use the network?",
+        },
+      },
+    })
+
+    expect(client.session(threadId)?.approval).toMatchObject({
+      allowPermanent: true,
+      choices: ["once", "session", "always", "deny"],
+    })
+    await client.answerApproval(threadId, "approval-defaults", "always")
+    expect(
+      sockets[0].requests.find(({ method }) => method === "approval.respond")
+        ?.params
+    ).toMatchObject({ choice: "always" })
+    client.stop()
+  })
+
+  it("limits default approval scopes after a native smart denial", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "approval.request",
+        session_id: "live-1",
+        payload: {
+          request_id: "approval-smart-denied",
+          message: "Use the network?",
+          smart_denied: true,
+        },
+      },
+    })
+
+    expect(client.session(threadId)?.approval?.choices).toEqual([
+      "once",
+      "deny",
+    ])
+    client.stop()
+  })
+
 
   it("invalidates activity on catalog failure and restores it on recovery", async () => {
     const { client, fetcher } = harness()

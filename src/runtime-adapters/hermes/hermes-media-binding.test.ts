@@ -152,6 +152,28 @@ describe("Hermes media binding", () => {
     expect(h.media.getSnapshot().autoReadRequest).toBeUndefined()
     h.dispose()
   })
+  it("disarms a pending PTT read when the owning Session requests clarification", async () => {
+    const h = setup()
+    h.binding.select("one")
+    await Promise.resolve()
+    expect(h.media.submitVoiceTurn([], vi.fn())).toBe(true)
+    const session = h.sessions.get("one")!
+    h.sessions.set("one", {
+      ...session,
+      running: true,
+      status: "waiting-for-input",
+      clarification: {
+        threadId: "one",
+        liveSessionId: "live-one",
+        requestId: "clarify-one",
+        questions: [],
+      },
+    })
+    h.listeners.forEach((fn) => fn())
+    expect(h.media.getSnapshot().autoReadRequest).toBeUndefined()
+    expect(h.media.getSnapshot().safelyIdle).toBe(false)
+    h.dispose()
+  })
   it("maps a live Hermes message id to its durable history replacement", () => {
     const h = setup()
     h.sessions.set("one", {

@@ -7,7 +7,10 @@ import {
   type OpenCodeRuntimeOptions,
 } from "@assistant-ui/react-opencode"
 
-import type { RuntimeBundle } from "../contracts"
+import type {
+  RuntimeBundle,
+  RuntimeInteractionAdapter,
+} from "../contracts"
 import { createOpenCodeWorkspace } from "./opencode-workspace"
 import {
   createAgentScopedOpenCodeClient,
@@ -23,6 +26,31 @@ export type UseOpenCodeRuntimeBundleOptions = OpenCodeRuntimeOptions & {
 }
 export type OpenCodeRuntimeBundle = RuntimeBundle & {
   client: ReturnType<typeof createOpencodeClient>
+  interactions: RuntimeInteractionAdapter
+}
+
+const REQUEST_OPTIONS = { throwOnError: true } as const
+
+export function createOpenCodeRuntimeInteractions(
+  client: ReturnType<typeof createOpencodeClient>
+): RuntimeInteractionAdapter {
+  return {
+    async respond(request, response) {
+      if (request.kind !== "question" || response.kind !== "question") {
+        throw new Error("OpenCode only supports question responses here")
+      }
+      await client.question.reply(
+        { requestID: request.requestId, answers: response.answers },
+        REQUEST_OPTIONS
+      )
+    },
+    async reject(request) {
+      await client.question.reject(
+        { requestID: request.requestId },
+        REQUEST_OPTIONS
+      )
+    },
+  }
 }
 
 class ThreadReloadBinding {
@@ -105,9 +133,13 @@ export function useOpenCodeRuntimeBundle(
     () => threadReload.bind(assistantRuntime),
     [assistantRuntime, threadReload]
   )
+  const interactions = useMemo(
+    () => createOpenCodeRuntimeInteractions(scopedClient),
+    [scopedClient]
+  )
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, client: scopedClient }),
-    [assistantRuntime, scopedClient, workspace]
+    () => ({ assistantRuntime, workspace, client: scopedClient, interactions }),
+    [assistantRuntime, interactions, scopedClient, workspace]
   )
 }

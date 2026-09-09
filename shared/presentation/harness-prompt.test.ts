@@ -5,6 +5,7 @@ import {
   buildMontyInstructions,
   type HarnessCapabilities,
 } from "./harness-prompt"
+import { hermesHarnessCapabilities } from "./manifests"
 
 const fullCapabilities: HarnessCapabilities = {
   mermaid: true,
@@ -21,6 +22,13 @@ const fullCapabilities: HarnessCapabilities = {
 }
 
 describe("buildAosUiHarnessPrompt", () => {
+  it("advertises Hermes native clarification and provider controls", () => {
+    const prompt = buildAosUiHarnessPrompt(hermesHarnessCapabilities)
+
+    expect(hermesHarnessCapabilities.askUserQuestionTool).toBe("clarify")
+    expect(prompt).toContain("`clarify`")
+    expect(prompt).not.toMatch(/Interactive questions are unavailable/i)
+  })
   it("describes only the exact rich presentation tools advertised by the host", () => {
     const prompt = buildAosUiHarnessPrompt({
       mermaid: true,

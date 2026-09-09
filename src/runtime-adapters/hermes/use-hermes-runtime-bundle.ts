@@ -21,21 +21,46 @@ import { HermesAudioClient } from "./hermes-audio-client"
 import { HermesMediaBinding } from "./hermes-media-binding"
 import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
-import type { RuntimeBundle } from "../contracts"
+import type { RuntimeBundle, RuntimeInteractionAdapter } from "../contracts"
 import {
   HermesNativeClient,
   type HermesNativeClientOptions,
 } from "./hermes-native-client"
 import { HermesThreadListAdapter } from "./hermes-thread-list"
 import { createHermesMessageQueue } from "./hermes-message-queue"
+import {
+  projectHermesApprovalMessages,
+  respondToHermesApproval,
+} from "./hermes-approval"
 import { createHermesWorkspace } from "./hermes-workspace"
 
 const EMPTY_MESSAGES: readonly ThreadMessageLike[] = []
 const COMPLETE_STATUS: MessageStatus = { type: "complete", reason: "unknown" }
 
+export function createHermesInteractions(
+  client: Pick<
+    HermesNativeClient,
+    "answerClarification" | "rejectClarification"
+  >
+): RuntimeInteractionAdapter {
+  return {
+    async respond(request, response) {
+      await client.answerClarification(
+        request.sessionId,
+        request.requestId,
+        response.answers
+      )
+    },
+    async reject(request) {
+      await client.rejectClarification(request.sessionId, request.requestId)
+    },
+  }
+}
+
 function useHermesThreadRuntime(
   client: HermesNativeClient,
   voice: HermesMediaBinding,
+  locale: Locale,
   onError?: (error: Error) => void
 ) {
   const threadId = useAuiState((state) => state.threadListItem.remoteId)
@@ -84,7 +109,11 @@ function useHermesThreadRuntime(
 
   return useExternalStoreRuntime<ThreadMessageLike>({
     adapters,
-    messages: session?.messages ?? EMPTY_MESSAGES,
+    messages: projectHermesApprovalMessages(
+      session?.messages ?? EMPTY_MESSAGES,
+      session?.approval,
+      locale
+    ),
     convertMessage: (message, index) =>
       fromThreadMessageLike(
         message,
@@ -112,11 +141,20 @@ function useHermesThreadRuntime(
         throw reason
       }
     },
+    async onReload(parentId: string | null) {
+      if (!threadId || !parentId)
+        throw new Error("Hermes regenerate is missing its user prompt")
+      await client.regenerate(threadId, parentId)
+    },
     async onCancel() {
       if (threadId) await client.stopRun(threadId)
     },
     async onRefetchThread() {
       if (threadId) await client.loadHistory(threadId)
+    },
+    async onRespondToToolApproval(response) {
+      if (!threadId) throw new Error("No Hermes Session is selected")
+      await respondToHermesApproval(client, threadId, response)
     },
     queue: queue?.controller.adapter,
   })
@@ -151,6 +189,7 @@ export function useHermesRuntimeBundle(
   )
   const adapter = useMemo(() => new HermesThreadListAdapter(client), [client])
   const workspace = useMemo(() => createHermesWorkspace(client), [client])
+  const interactions = useMemo(() => createHermesInteractions(client), [client])
   const audio = useMemo(
     () =>
       new HermesAudioClient({
@@ -178,7 +217,12 @@ export function useHermesRuntimeBundle(
     adapter,
     allowNesting: true,
     runtimeHook: function useRuntime() {
-      return useHermesThreadRuntime(client, voice, onError)
+      return useHermesThreadRuntime(
+        client,
+        voice,
+        options.locale ?? "en",
+        onError
+      )
     },
   })
 
@@ -213,7 +257,13 @@ export function useHermesRuntimeBundle(
   )
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, client, media: voice.media }),
-    [assistantRuntime, client, workspace, voice]
+    () => ({
+      assistantRuntime,
+      workspace,
+      interactions,
+      client,
+      media: voice.media,
+    }),
+    [assistantRuntime, client, interactions, workspace, voice]
   )
 }

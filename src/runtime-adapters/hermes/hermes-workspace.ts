@@ -140,5 +140,8 @@ export function createHermesWorkspace(
       publish()
       return client.subscribe(publish)
     },
+    subscribeActivity(listener, onError) {
+      return client.subscribeActivity(listener, onError)
+    },
   }
 }

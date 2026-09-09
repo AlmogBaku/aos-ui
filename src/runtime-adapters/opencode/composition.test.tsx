@@ -89,6 +89,10 @@ function createClient(listed: OpenCodeQuestionRequest[] = []) {
   return {
     question: {
       list: vi.fn(async () => ({ data: listed })),
+      reply: vi.fn(({ requestID, answers }) =>
+        replyToQuestion(requestID, answers)
+      ),
+      reject: vi.fn(({ requestID }) => rejectQuestion(requestID)),
     },
   } as unknown as OpencodeClient
 }

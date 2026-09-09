@@ -62,6 +62,37 @@ export function isoTimestamp(value: unknown) {
   ).toISOString()
 }
 
+/** Translate Hermes-native tool names at the single provider boundary. */
+export function canonicalHermesToolName(name: string) {
+  return (
+    {
+      delegate_task: "delegate_subagent",
+      skill_view: "use_skill",
+      todo_list: "todo",
+      clarify: "question",
+    }[name] ?? name
+  )
+}
+
+export function canonicalHermesToolArgs(name: string, args: JsonRecord) {
+  if (canonicalHermesToolName(name) !== "delegate_subagent") return args
+  if (typeof args.description === "string" && args.description.trim())
+    return args
+  const candidate = [
+    args.goal,
+    args.goals,
+    args.prompt,
+    args.task,
+    args.name,
+    args.skill,
+  ]
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .find((value) => typeof value === "string" && value.trim())
+  return typeof candidate === "string"
+    ? { ...args, description: candidate.trim() }
+    : args
+}
+
 function messageDate(value: JsonRecord, index: number) {
   const numeric = numberValue(value.timestamp ?? value.created_at)
   if (!numeric) return new Date(index)
@@ -99,14 +130,13 @@ export function projectHermesHistory(rows: readonly unknown[]) {
     }
     if (role !== "user" && role !== "assistant" && role !== "system") return
     const id =
-      (typeof value.id === "number" &&
-      Number.isSafeInteger(value.id) &&
-      value.id > 0
-        ? `hermes-row-${value.id}`
-        : stringValue(value.id)) ??
-      (value._row_id !== undefined
+      value._row_id !== undefined
         ? `hermes-row-${String(value._row_id)}`
-        : `hermes-history-${index}`)
+        : typeof value.id === "number" &&
+            Number.isSafeInteger(value.id) &&
+            value.id > 0
+          ? `hermes-row-${value.id}`
+          : (stringValue(value.id) ?? `hermes-history-${index}`)
     const rawContent = parseJson(value.content)
     const text = String(
       value.display_content ??
@@ -142,16 +172,18 @@ export function projectHermesHistory(rows: readonly unknown[]) {
         if (!isRecord(rawCall)) continue
         const fn = isRecord(rawCall.function) ? rawCall.function : undefined
         const toolCallId = stringValue(rawCall.id)
-        const toolName = fn && stringValue(fn.name)
-        if (!toolCallId || !toolName) continue
+        const nativeToolName = fn && stringValue(fn.name)
+        if (!toolCallId || !nativeToolName) continue
         const argsText = String(fn?.arguments ?? "{}")
         const args = parseJson(argsText)
         const partIndex = content.length
         content.push({
           type: "tool-call",
           toolCallId,
-          toolName,
-          args: isRecord(args) ? args : {},
+          toolName: canonicalHermesToolName(nativeToolName),
+          args: isRecord(args)
+            ? canonicalHermesToolArgs(nativeToolName, args)
+            : {},
           argsText,
         })
         calls.set(toolCallId, { messageIndex: messages.length, partIndex })

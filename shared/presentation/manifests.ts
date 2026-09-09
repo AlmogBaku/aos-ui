@@ -18,6 +18,20 @@ export const openCodeHarnessCapabilities = {
   providerSubagents: true,
 } as const satisfies HarnessCapabilities
 
+export const hermesHarnessCapabilities = {
+  mermaid: true,
+  richUiTools: [
+    { kind: "chart", name: "render_chart" },
+    { kind: "map", name: "render_map" },
+    { kind: "stats", name: "render_stats" },
+    { kind: "plan", name: "present_plan" },
+  ],
+  askUserQuestionTool: "clarify",
+  nativePermissions: true,
+  providerTodos: true,
+  providerSubagents: true,
+} as const satisfies HarnessCapabilities
+
 export const fixtureHarnessCapabilities = {
   mermaid: true,
   richUiTools: [

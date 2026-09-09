@@ -13,7 +13,7 @@ import {
 import { File } from "@/components/assistant-ui/elements/file"
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui"
 import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
-import { MessageText } from "@/components/assistant-ui/elements/message-text"
+import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import {
   Reasoning,
   ReasoningContent,
@@ -1190,7 +1190,7 @@ const AssistantMessage: FC = () => {
                 )
               }
               case "text":
-                return reading ? <></> : <MessageText />
+                return reading ? <></> : <MarkdownText />
               case "reasoning":
                 return <Reasoning {...part} />
               case "tool-call":
