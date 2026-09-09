@@ -94,6 +94,12 @@ enabled by default. Public JSON may set `composerModelSelectorEnabled` or
 uses `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
 `AOS_UI_COMPOSER_CONTEXT_ENABLED`.
 
+Every ready runtime configuration may include
+`"artifactHtmlAssetOrigins": ["https://cdn.example.com"]`. Entries must be
+credential-free HTTPS origins without paths, queries, or fragments. They are
+used only by sandboxed previews of trusted generated HTML; omit the field to
+block external HTML assets.
+
 Public examples are in `deploy/runtime-config.fixture.json`,
 `deploy/runtime-config.opencode.json`, and
 `deploy/runtime-config.hermes-native.json`. OpenCode's `directory` is the path

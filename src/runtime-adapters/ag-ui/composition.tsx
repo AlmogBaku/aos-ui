@@ -10,6 +10,10 @@ import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { agUiProviderInstructions } from "@shared/presentation/manifests"
 import { createAgUiHttpWorkspaceTransport } from "./ag-ui-http-transport"
 import { useAgUiRuntimeBundle } from "./use-ag-ui-runtime-bundle"
+import {
+  createAgUiArtifactToolkit,
+  projectAgUiArtifactMessages,
+} from "./ag-ui-artifacts"
 
 export function AgUiAosUiApp({
   locale,
@@ -17,6 +21,7 @@ export function AgUiAosUiApp({
   runUrl,
   workspaceUrl,
   nowIso,
+  artifactHtmlAssetOrigins,
 }: {
   locale: Locale
   dictionary: Dictionary
@@ -24,6 +29,7 @@ export function AgUiAosUiApp({
   workspaceUrl: string
   nowIso: string
   composerFeatures?: ComposerFeatureConfig
+  artifactHtmlAssetOrigins?: readonly string[]
 }) {
   const agent = useMemo(() => new HttpAgent({ url: runUrl }), [runUrl])
   const workspaceTransport = useMemo(
@@ -31,6 +37,7 @@ export function AgUiAosUiApp({
     [workspaceUrl]
   )
   const bundle = useAgUiRuntimeBundle({ agent, workspaceTransport })
+  const artifactToolkit = useMemo(() => createAgUiArtifactToolkit(), [])
   const [now] = useState(() => new Date(nowIso))
 
   return (
@@ -40,7 +47,10 @@ export function AgUiAosUiApp({
       bundle={bundle}
       now={now}
       assistantInstructions={agUiProviderInstructions}
+      assistantToolkit={artifactToolkit}
       activityCoverage="active-session"
+      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
+      artifactMessageProjector={projectAgUiArtifactMessages}
     />
   )
 }

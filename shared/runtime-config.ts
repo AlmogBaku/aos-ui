@@ -24,7 +24,11 @@ export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
   contextEnabled: true,
 }
 
-type ReadyRuntimeConfiguration = {
+type ArtifactHtmlConfiguration = {
+  artifactHtmlAssetOrigins?: string[]
+}
+
+type ReadyRuntimeConfiguration = ArtifactHtmlConfiguration & {
   status: "ready"
   composerFeatures: ComposerFeatureConfig
 }
@@ -46,32 +50,32 @@ export type RuntimeConfiguration =
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 export type PublicRuntimeConfiguration =
-  | {
+  | ({
       mode: "fixture"
       composerModelSelectorEnabled: boolean
       composerContextEnabled: boolean
-    }
-  | {
+    } & ArtifactHtmlConfiguration)
+  | ({
       mode: "hermes"
       baseUrl: string
       composerModelSelectorEnabled: boolean
       composerContextEnabled: boolean
-    }
-  | {
+    } & ArtifactHtmlConfiguration)
+  | ({
       mode: "opencode"
       baseUrl: string
       directory: string
       defaultModel?: { providerID: string; modelID: string }
       composerModelSelectorEnabled: boolean
       composerContextEnabled: boolean
-    }
-  | {
+    } & ArtifactHtmlConfiguration)
+  | ({
       mode: "ag-ui"
       runUrl: string
       workspaceUrl: string
       composerModelSelectorEnabled: boolean
       composerContextEnabled: boolean
-    }
+    } & ArtifactHtmlConfiguration)
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 type RuntimeEnvironment = Partial<
@@ -229,6 +233,9 @@ export function serializePublicRuntimeConfiguration(
   const featureFields = {
     composerModelSelectorEnabled: config.composerFeatures.modelSelectorEnabled,
     composerContextEnabled: config.composerFeatures.contextEnabled,
+    ...(config.artifactHtmlAssetOrigins
+      ? { artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins }
+      : {}),
   }
   if (config.mode === "fixture") return { mode: config.mode, ...featureFields }
   if (config.mode === "hermes")
@@ -255,12 +262,32 @@ const publicComposerFeatureFields = {
   composerContextEnabled: z.boolean().optional(),
 }
 
+const artifactHtmlAssetOriginsSchema = z
+  .array(
+    z.string().refine((value) => {
+      try {
+        const parsed = new URL(value)
+        return (
+          parsed.protocol === "https:" &&
+          !parsed.username &&
+          !parsed.password &&
+          parsed.href === `${value}/`
+        )
+      } catch {
+        return false
+      }
+    })
+  )
+  .max(16)
+  .optional()
+
 const publicConfigurationSchema = z.discriminatedUnion("mode", [
   z
     .object({
       mode: z.literal("fixture"),
       status: z.literal("ready").optional(),
       ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
     })
     .strict(),
   z
@@ -274,6 +301,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
         .strict()
         .optional(),
       ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
     })
     .strict(),
   z
@@ -282,6 +310,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
       status: z.literal("ready").optional(),
       baseUrl: z.string().min(1),
       ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
     })
     .strict(),
   z
@@ -291,6 +320,7 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
       runUrl: z.string().min(1),
       workspaceUrl: z.string().min(1),
       ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
     })
     .strict(),
 ])
@@ -309,30 +339,45 @@ export function parsePublicRuntimeConfiguration(
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
       config.composerContextEnabled === false ? "false" : undefined,
   }
+  const withArtifactOrigins = (resolved: RuntimeConfiguration) =>
+    resolved.status === "ready" && config.artifactHtmlAssetOrigins
+      ? {
+          ...resolved,
+          artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins,
+        }
+      : resolved
   if (config.mode === "fixture")
-    return resolveRuntimeConfiguration({
-      AOS_UI_RUNTIME_MODE: "fixture",
-      ...composerEnvironment,
-    })
+    return withArtifactOrigins(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "fixture",
+        ...composerEnvironment,
+      })
+    )
   if (config.mode === "hermes")
-    return resolveRuntimeConfiguration({
-      AOS_UI_RUNTIME_MODE: "hermes",
-      AOS_UI_HERMES_BASE_URL: config.baseUrl,
-      ...composerEnvironment,
-    })
+    return withArtifactOrigins(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "hermes",
+        AOS_UI_HERMES_BASE_URL: config.baseUrl,
+        ...composerEnvironment,
+      })
+    )
   if (config.mode === "opencode")
-    return resolveRuntimeConfiguration({
-      AOS_UI_RUNTIME_MODE: "opencode",
-      AOS_UI_OPENCODE_BASE_URL: config.baseUrl,
-      AOS_UI_OPENCODE_WORKTREE: config.directory,
-      AOS_UI_OPENCODE_PROVIDER_ID: config.defaultModel?.providerID,
-      AOS_UI_OPENCODE_MODEL_ID: config.defaultModel?.modelID,
+    return withArtifactOrigins(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "opencode",
+        AOS_UI_OPENCODE_BASE_URL: config.baseUrl,
+        AOS_UI_OPENCODE_WORKTREE: config.directory,
+        AOS_UI_OPENCODE_PROVIDER_ID: config.defaultModel?.providerID,
+        AOS_UI_OPENCODE_MODEL_ID: config.defaultModel?.modelID,
+        ...composerEnvironment,
+      })
+    )
+  return withArtifactOrigins(
+    resolveRuntimeConfiguration({
+      AOS_UI_RUNTIME_MODE: "ag-ui",
+      AOS_UI_AG_UI_URL: config.runUrl,
+      AOS_UI_AG_UI_WORKSPACE_URL: config.workspaceUrl,
       ...composerEnvironment,
     })
-  return resolveRuntimeConfiguration({
-    AOS_UI_RUNTIME_MODE: "ag-ui",
-    AOS_UI_AG_UI_URL: config.runUrl,
-    AOS_UI_AG_UI_WORKSPACE_URL: config.workspaceUrl,
-    ...composerEnvironment,
-  })
+  )
 }

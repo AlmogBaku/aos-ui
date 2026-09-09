@@ -4,6 +4,7 @@ import {
   AssistantRuntimeProvider,
   AuiConfig,
   Tools,
+  useAuiState,
   type Toolkit,
 } from "@assistant-ui/react"
 import {
@@ -14,7 +15,14 @@ import {
   LoaderCircle,
   RotateCw,
 } from "lucide-react"
-import { createContext, useContext, useEffect, useMemo, useState } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
 
 import {
   Thread,
@@ -27,6 +35,14 @@ import { ToolUiLocaleProvider, RichToolRenderer } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import { AgentGlyph, WorkspaceShell } from "@/components/workspace"
+import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell"
+import {
+  ArtifactDataUI,
+  ArtifactOutputs,
+  ArtifactViewerContent,
+  ArtifactWorkspaceProvider,
+  useArtifactWorkspace,
+} from "@/components/artifacts"
 import { ManageAgents } from "@/components/workspace/manage-agents"
 import { useWorkspaceNavigation } from "@/components/workspace/use-workspace-navigation"
 import { useActivityCoordinator } from "@/components/workspace/use-activity-coordinator"
@@ -39,6 +55,7 @@ import type {
   RuntimeBundle,
   TodoItem,
 } from "@/runtime-adapters/contracts"
+import type { ArtifactMessage } from "@/artifacts/artifacts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 
@@ -168,6 +185,73 @@ const workspaceCopy = {
 
 function readSystemClock() {
   return new Date()
+}
+
+function ArtifactWorkspaceBridge({
+  bundle,
+  locale,
+  agentId,
+  threadId,
+  artifactHtmlAssetOrigins,
+  artifactMessageProjector,
+  children,
+  ...shell
+}: {
+  bundle: RuntimeBundle
+  locale: Locale
+  agentId: string
+  threadId: string
+  artifactHtmlAssetOrigins: readonly string[]
+  artifactMessageProjector?: (
+    messages: readonly ArtifactMessage[]
+  ) => readonly ArtifactMessage[]
+} & WorkspaceShellProps) {
+  const messages = useAuiState((state) => state.thread.messages)
+  const artifactMessages = useMemo(
+    () =>
+      artifactMessageProjector?.(messages as readonly ArtifactMessage[]) ??
+      (messages as readonly ArtifactMessage[]),
+    [artifactMessageProjector, messages]
+  )
+
+  return (
+    <ArtifactWorkspaceProvider
+      locale={locale}
+      adapter={bundle.artifacts}
+      agentId={agentId}
+      threadId={threadId}
+      messages={artifactMessages}
+      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
+    >
+      <ArtifactWorkspaceContent shell={{ ...shell, locale }}>
+        {children}
+      </ArtifactWorkspaceContent>
+    </ArtifactWorkspaceProvider>
+  )
+}
+
+function ArtifactWorkspaceContent({
+  shell,
+  children,
+}: {
+  shell: Omit<WorkspaceShellProps, "children">
+  children: ReactNode
+}) {
+  const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
+
+  return (
+    <WorkspaceShell
+      {...shell}
+      artifactOutputs={<ArtifactOutputs />}
+      artifactViewer={<ArtifactViewerContent />}
+      artifactViewerOpen={selectedArtifact !== null}
+      artifactViewerLabel={labels.viewerLabel}
+      onCloseArtifactViewer={closeArtifact}
+    >
+      <ArtifactDataUI />
+      {children}
+    </WorkspaceShell>
+  )
 }
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
@@ -423,6 +507,8 @@ export function AosUiWorkspace({
   activityCoverage = "workspace",
   browserSettings,
   browserNotificationPort,
+  artifactHtmlAssetOrigins = [],
+  artifactMessageProjector,
 }: {
   bundle: RuntimeBundle
   locale: Locale
@@ -439,6 +525,10 @@ export function AosUiWorkspace({
   activityCoverage?: "workspace" | "active-session"
   browserSettings?: BrowserSettingsView
   browserNotificationPort?: BrowserNotificationPort
+  artifactHtmlAssetOrigins?: readonly string[]
+  artifactMessageProjector?: (
+    messages: readonly ArtifactMessage[]
+  ) => readonly ArtifactMessage[]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
   const assistantConfig = useMemo(
@@ -532,7 +622,13 @@ export function AosUiWorkspace({
 
   return (
     <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
-      <WorkspaceShell
+      <ArtifactWorkspaceBridge
+        bundle={bundle}
+        locale={locale}
+        agentId={selectedAgentId ?? ""}
+        threadId={visibleThreadId ?? ""}
+        artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
+        artifactMessageProjector={artifactMessageProjector}
         activity={activity}
         browserSettings={
           browserSettings ?? {
@@ -542,7 +638,6 @@ export function AosUiWorkspace({
               : "unavailable",
           }
         }
-        locale={locale}
         dictionary={dictionary}
         agents={displayAgents}
         agentCreatorId={agentCreator?.id}
@@ -632,7 +727,7 @@ export function AosUiWorkspace({
           onNewAgent={openAgentBuilder}
           onActionError={(reason) => setActionError(toError(reason))}
         />
-      </WorkspaceShell>
+      </ArtifactWorkspaceBridge>
     </AssistantRuntimeProvider>
   )
 }

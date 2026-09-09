@@ -710,6 +710,14 @@
   padding-block-start: 1.5rem;
 }
 
+.inspectorOutputs {
+  min-block-size: 0;
+  margin-block-start: 1.5rem;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 1.25rem;
+  overflow-y: auto;
+}
+
 .emptyText {
   color: var(--muted-foreground);
   font-size: 0.8125rem;
@@ -793,6 +801,10 @@
 
   .shell[data-inspector-open="false"] {
     grid-template-columns: 15.5rem minmax(20rem, 1fr);
+  }
+
+  .shell[data-artifact-viewer-open="true"] {
+    grid-template-columns: 15.5rem minmax(20rem, 1fr) 26rem;
   }
 
   .mobileHeader,
@@ -880,6 +892,10 @@
   .shell[data-inspector-open="false"] {
     grid-template-columns: 17.5rem minmax(28rem, 1fr);
   }
+
+  .shell[data-artifact-viewer-open="true"] {
+    grid-template-columns: 17.5rem minmax(28rem, 1fr) 30rem;
+  }
 }
 
 @container workspace (min-width: 90rem) {
@@ -889,6 +905,10 @@
 
   .shell[data-inspector-open="false"] {
     grid-template-columns: 19.5rem minmax(36rem, 1fr);
+  }
+
+  .shell[data-artifact-viewer-open="true"] {
+    grid-template-columns: 19.5rem minmax(36rem, 1fr) 34rem;
   }
 }
 

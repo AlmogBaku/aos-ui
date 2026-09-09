@@ -27,6 +27,42 @@ describe("Hermes runtime configuration", () => {
 })
 
 describe("public configuration", () => {
+  it("accepts only credential-free HTTPS origins for artifact HTML assets", () => {
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "fixture",
+        artifactHtmlAssetOrigins: [
+          "https://cdn.example.test",
+          "https://fonts.example.test",
+        ],
+      })
+    ).toMatchObject({
+      status: "ready",
+      mode: "fixture",
+      artifactHtmlAssetOrigins: [
+        "https://cdn.example.test",
+        "https://fonts.example.test",
+      ],
+    })
+
+    for (const origin of [
+      "http://cdn.example.test",
+      "https://user:secret@cdn.example.test",
+      "https://cdn.example.test/assets",
+      "https://cdn.example.test?token=secret",
+    ]) {
+      expect(
+        config.parsePublicRuntimeConfiguration({
+          mode: "fixture",
+          artifactHtmlAssetOrigins: [origin],
+        })
+      ).toEqual({
+        status: "unavailable",
+        reason: "invalid-public-config",
+      })
+    }
+  })
+
   it.each([
     {
       AOS_UI_RUNTIME_MODE: "fixture",

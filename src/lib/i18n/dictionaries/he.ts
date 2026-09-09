@@ -2,6 +2,28 @@ import type { Dictionary } from "../dictionary"
 
 export const he = {
   productName: "AOS",
+  artifacts: {
+    outputs: "תוצרים",
+    empty: "עדיין אין תוצרים",
+    open: "פתיחה",
+    download: "הורדה",
+    close: "סגירת התצוגה המקדימה",
+    loading: "התוצר נטען…",
+    loadFailed: "לא ניתן לטעון את התוצר.",
+    unavailable: "סביבת הריצה הזו לא יכולה לפתוח את התוצר.",
+    downloadFailed: "לא ניתן להוריד את התוצר.",
+    retry: "ניסיון חוזר",
+    unsupported: "אין תצוגה מקדימה לסוג הקובץ הזה.",
+    fileTooLarge: "הקובץ גדול מדי לתצוגה מקדימה.",
+    textTooLarge: "קובץ הטקסט גדול מדי לתצוגה מקדימה.",
+    preview: "תצוגה מקדימה",
+    source: "קוד מקור",
+    htmlView: "תצוגת HTML",
+    htmlPreviewTitle: "תצוגה מקדימה של HTML",
+    pdfPreviewTitle: "תצוגה מקדימה של PDF",
+    csvTruncated: "מוצגות 500 השורות הראשונות.",
+    viewerLabel: "תצוגה מקדימה של התוצר",
+  },
   activity: {
     title: "פעילות",
     unread: "לא נקראו",

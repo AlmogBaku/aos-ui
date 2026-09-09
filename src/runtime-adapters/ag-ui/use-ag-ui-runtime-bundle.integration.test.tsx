@@ -261,9 +261,9 @@ describe("AG-UI runtime bundle integration", () => {
     const harness = createHarness()
     const controlled = controlledAgent()
     const hook = renderAgUiBundle({
-        agent: controlled.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: controlled.agent,
+      workspaceTransport: harness.transport,
+    })
 
     await waitFor(() =>
       expect(activeThreadId(hook.result.current.assistantRuntime)).toBe(
@@ -348,9 +348,9 @@ describe("AG-UI runtime bundle integration", () => {
     })
     const firstAgent = controlledAgent()
     const first = renderAgUiBundle({
-        agent: firstAgent.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: firstAgent.agent,
+      workspaceTransport: harness.transport,
+    })
     await waitFor(() =>
       expect(activeThreadId(first.result.current.assistantRuntime)).toBe(
         "thread-research"
@@ -377,9 +377,9 @@ describe("AG-UI runtime bundle integration", () => {
     recreatedStore.hydrate(firstStore.records())
     const secondAgent = controlledAgent()
     const second = renderAgUiBundle({
-        agent: secondAgent.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: secondAgent.agent,
+      workspaceTransport: harness.transport,
+    })
     await waitFor(() =>
       expect(activeThreadId(second.result.current.assistantRuntime)).toBe(
         "thread-research"
@@ -420,11 +420,11 @@ describe("AG-UI runtime bundle integration", () => {
     const activityClock = () => timestamps.shift()!
     const activityIdFactory = () => "1"
     const { result } = renderAgUiBundle({
-        agent: controlled.agent,
-        workspaceTransport: harness.transport,
-        activityClock,
-        activityIdFactory,
-      })
+      agent: controlled.agent,
+      workspaceTransport: harness.transport,
+      activityClock,
+      activityIdFactory,
+    })
 
     await waitFor(() =>
       expect(activeThreadId(result.current.assistantRuntime)).toBe(
@@ -523,11 +523,11 @@ describe("AG-UI runtime bundle integration", () => {
     let activitySequence = 0
     const activityIdFactory = () => String(++activitySequence)
     const { result } = renderAgUiBundle({
-        agent: controlled.agent,
-        workspaceTransport: harness.transport,
-        activityClock,
-        activityIdFactory,
-      })
+      agent: controlled.agent,
+      workspaceTransport: harness.transport,
+      activityClock,
+      activityIdFactory,
+    })
 
     await waitFor(() =>
       expect(activeThreadId(result.current.assistantRuntime)).toBe(
@@ -605,9 +605,9 @@ describe("AG-UI runtime bundle integration", () => {
   it("populates host Sessions and hydrates the newest Session history", async () => {
     const harness = createHarness()
     const { result } = renderAgUiBundle({
-        agent: harness.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: harness.agent,
+      workspaceTransport: harness.transport,
+    })
 
     await waitFor(() =>
       expect(
@@ -633,9 +633,9 @@ describe("AG-UI runtime bundle integration", () => {
   it("hydrates history and retargets the official Agent when switching Agents", async () => {
     const harness = createHarness()
     const { result } = renderAgUiBundle({
-        agent: harness.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: harness.agent,
+      workspaceTransport: harness.transport,
+    })
 
     await waitFor(() =>
       expect(
@@ -674,9 +674,9 @@ describe("AG-UI runtime bundle integration", () => {
   it("adds a provider-created Session before selecting and hydrating it", async () => {
     const harness = createHarness()
     const { result } = renderAgUiBundle({
-        agent: harness.agent,
-        workspaceTransport: harness.transport,
-      })
+      agent: harness.agent,
+      workspaceTransport: harness.transport,
+    })
 
     await waitFor(() =>
       expect(

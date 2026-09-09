@@ -12,6 +12,7 @@ export type HarnessCapabilities = Readonly<{
   nativePermissions?: boolean
   providerTodos?: boolean
   providerSubagents?: boolean
+  artifactPublicationTool?: string
 }>
 
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/
@@ -51,6 +52,13 @@ export function buildAosUiHarnessPrompt(
     seenToolNames.add(name)
     sections.push(
       `- \`${name}\` is the advertised ${tool.kind} presentation tool. ${richToolGuidance[tool.kind]} Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.`
+    )
+  }
+
+  if (capabilities.artifactPublicationTool) {
+    const artifactTool = assertToolName(capabilities.artifactPublicationTool)
+    sections.push(
+      `- Use \`${artifactTool}\` only to publish a completed user-facing deliverable. Ordinary file creation or editing never publishes an Artifact; call the tool again only when the edited file should be republished.`
     )
   }
 

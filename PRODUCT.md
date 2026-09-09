@@ -31,7 +31,9 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 - One engine is selected per deployment, with multiple Agents and Sessions. Native harnesses own execution, persistence, credentials, and Agent configuration outside this checkout. Unsupported capabilities remain explicit.
 - On configured real runtimes, Agent creation uses an ordinary creator-owned Session opened through the dedicated New Agent entry point. The hidden creator identity never appears in the ordinary roster or management catalog. Creation uses portable guidance with a native safe writer; it never transfers interview ownership or automatically starts the created Agent's first Session. Public fixture/demo mode intentionally omits Agent creation. Native harnesses can initiate inbound Sessions without a browser.
 - Provider events retain their originating Agent and Session. Delayed events may update their own cache but never the visible Session.
-- Rich tools always have safe, inspectable fallbacks. Browser-side code execution, terminal/filesystem/VCS surfaces, and provider hosting are out of scope.
+- Rich tools always have safe, inspectable fallbacks. Browser-side code execution is limited to published Artifact HTML in the isolated preview described below; terminal/filesystem/VCS surfaces and provider hosting are out of scope.
+- An Artifact is a provider-owned deliverable that an Agent explicitly publishes with `present_artifact`; ordinary file edits are not Artifacts. AOS derives published outputs from the active conversation branch and provides read-only preview and download without owning file editing, storage, or version history.
+- Published HTML opens on Preview by default and remains inspectable through a Source tab. Preview runs in an opaque-origin sandboxed frame with a fixed CSP. Deployment configuration may allowlist public asset origins; this trusted generated-content preview is isolation, not a hard network-egress boundary.
 
 ## Activity and Live Notifications
 

@@ -5,6 +5,8 @@ import {
 } from "@assistant-ui/react"
 import { describe, expect, it, vi } from "vitest"
 
+import { parseArtifactDescriptor } from "@/artifacts/artifacts"
+
 import type { WorkspaceActivityEvent } from "../contracts"
 import { ActivityStore } from "../../lib/notifications/store"
 import {
@@ -171,6 +173,50 @@ describe("fixture Assistant UI thread adapter", () => {
       )
     ).toBe(true)
     expect(launch.messages).not.toEqual(market.messages)
+  })
+
+  it("includes deterministic artifact data parts in the market Session", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const adapter = createFixtureThreadListAdapter(workspace)
+    const market = await adapter.historyFor("thread-aster-market").load()
+
+    const artifacts = market.messages.flatMap(({ message }) =>
+      message.content.flatMap((part) =>
+        part.type === "data" && part.name === "aos.artifact" ? [part.data] : []
+      )
+    )
+
+    expect(artifacts).toEqual([
+      expect.objectContaining({ id: "fixture-market-brief" }),
+      expect.objectContaining({ id: "fixture-text" }),
+      expect.objectContaining({ id: "fixture-code" }),
+      expect.objectContaining({ id: "fixture-json" }),
+      expect.objectContaining({ id: "fixture-market-data" }),
+      expect.objectContaining({ id: "fixture-image" }),
+      expect.objectContaining({ id: "fixture-pdf" }),
+      expect.objectContaining({ id: "fixture-audio" }),
+      expect.objectContaining({ id: "fixture-video" }),
+      expect.objectContaining({ id: "fixture-market-html" }),
+      expect.objectContaining({ id: "fixture-unsupported" }),
+    ])
+    expect(
+      artifacts.flatMap((value) => {
+        const artifact = parseArtifactDescriptor(value)
+        return artifact ? [artifact.id] : []
+      })
+    ).toEqual([
+      "fixture-market-brief",
+      "fixture-text",
+      "fixture-code",
+      "fixture-json",
+      "fixture-market-data",
+      "fixture-image",
+      "fixture-pdf",
+      "fixture-audio",
+      "fixture-video",
+      "fixture-market-html",
+      "fixture-unsupported",
+    ])
   })
 
   it("includes a deterministic long-thread fixture for manual viewport traces", async () => {

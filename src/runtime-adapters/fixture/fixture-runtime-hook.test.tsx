@@ -178,6 +178,25 @@ describe("useFixtureRuntimeBundle", () => {
     expect(result.current.workspace).toBe(workspace)
   })
 
+  it("exposes the deterministic artifact resolver", async () => {
+    const { result } = renderHook(() =>
+      useFixtureRuntimeBundle({ threadId: "thread-aster-market" })
+    )
+
+    const blob = await result.current.artifacts.resolve({
+      artifact: {
+        id: "fixture-output",
+        filename: "fixture.txt",
+        source: { type: "inline", encoding: "utf8", data: "fixture" },
+      },
+      agentId: "agent-aster",
+      threadId: "thread-aster-market",
+      signal: new AbortController().signal,
+    })
+
+    expect(await blob.text()).toBe("fixture")
+  })
+
   it("resolves a question through the public runtime tool-result path", async () => {
     let bundle: ReturnType<typeof useFixtureRuntimeBundle> | undefined
     const Harness = () => {

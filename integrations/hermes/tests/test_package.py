@@ -3,6 +3,15 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import yaml
+
+
+def test_plugin_manifest_declares_artifact_tool():
+    root = Path(__file__).parents[1]
+    manifest = yaml.safe_load((root / "plugin.yaml").read_text(encoding="utf-8"))
+
+    assert "present_artifact" in manifest["provides_tools"]
+
 
 def test_wheel_contains_generated_native_assets(tmp_path):
     root = Path(__file__).parents[1]

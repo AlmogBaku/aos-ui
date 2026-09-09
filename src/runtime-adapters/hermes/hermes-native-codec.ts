@@ -1,4 +1,5 @@
 import type { AppendMessage, ThreadMessageLike } from "@assistant-ui/react"
+import { projectHermesArtifactReceipt } from "./hermes-artifacts"
 
 export type JsonRecord = Record<string, unknown>
 
@@ -125,6 +126,21 @@ export function projectHermesHistory(rows: readonly unknown[]) {
         result: parseJson(value.content ?? value.result),
         ...(value.is_error === true ? { isError: true } : {}),
       }
+      const artifact =
+        part.toolName === "present_artifact" && value.is_error !== true
+          ? projectHermesArtifactReceipt(value.content ?? value.result)
+          : undefined
+      if (
+        artifact &&
+        !content.some(
+          (item) =>
+            item.type === "data" &&
+            item.name === "aos.artifact" &&
+            isRecord(item.data) &&
+            item.data.id === artifact.data.id
+        )
+      )
+        content.push(artifact)
       messages[target.messageIndex] = { ...message, content }
       return
     }

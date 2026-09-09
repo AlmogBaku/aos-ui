@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from .creator import Creator, CreatorConfig
+from .artifact import ArtifactPublisher
 from .environment import profile_env
 from .presentation import PresentationError, PresentationTools
 from .start_session import SessionStarter, StartSessionConfig
@@ -73,6 +74,24 @@ CREATOR_SCHEMA = {
     },
 }
 
+ARTIFACT_SCHEMA = {
+    "name": "present_artifact",
+    "description": (
+        "Publish an existing file from this Session's workdir as an explicit AOS artifact. "
+        "Returns a reference receipt; it does not place file contents in model context."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "title": {"type": "string", "minLength": 1, "maxLength": 255},
+            "mimeType": {"type": "string", "minLength": 1, "maxLength": 255},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+}
+
 
 def _native_home() -> Path | None:
     try:
@@ -134,6 +153,28 @@ def register(ctx: Any) -> None:
     ctx.register_tool(
         name=START_SCHEMA["name"], toolset="aos-session-handoff",
         schema=START_SCHEMA, handler=start_session,
+    )
+    publisher = ArtifactPublisher()
+
+    def present_artifact(args: dict[str, Any], **kwargs: Any) -> str:
+        try:
+            return json.dumps(publisher.publish(
+                str(args.get("path") or ""),
+                task_id=kwargs.get("task_id"),
+                session_id=kwargs.get("session_id"),
+                title=str(args["title"]) if args.get("title") is not None else None,
+                mime_type=str(args["mimeType"]) if args.get("mimeType") is not None else None,
+            ), separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            return json.dumps({
+                "ok": False,
+                "status": "rejected",
+                "error": str(exc),
+            }, separators=(",", ":"), ensure_ascii=False)
+
+    ctx.register_tool(
+        name=ARTIFACT_SCHEMA["name"], toolset="aos-presentation",
+        schema=ARTIFACT_SCHEMA, handler=present_artifact,
     )
     ctx.register_system_prompt_section(
         "aos.presentation", str(artifact.get("instructions") or "")[:4000],

@@ -5,6 +5,7 @@ import type {
 } from "@assistant-ui/react"
 
 import { createBrowserId } from "@/lib/browser-id"
+import { projectHermesArtifactReceipt } from "./hermes-artifacts"
 import {
   HermesAttachmentStagingError,
   hermesImagePaths,
@@ -1778,6 +1779,21 @@ export class HermesNativeClient {
       }
       if (index >= 0) content[index] = { ...content[index], ...part }
       else content.push(part)
+      const artifact =
+        complete && part.toolName === "present_artifact" && !payload.error
+          ? projectHermesArtifactReceipt(payload.result)
+          : undefined
+      if (
+        artifact &&
+        !content.some(
+          (item) =>
+            item.type === "data" &&
+            item.name === "aos.artifact" &&
+            isRecord(item.data) &&
+            item.data.id === artifact.data.id
+        )
+      )
+        content.push(artifact)
       return { ...message, content }
     })
   }

@@ -509,6 +509,7 @@ export function OpenCodeAosUiApp({
   defaultModel,
   nowIso,
   composerFeatures,
+  artifactHtmlAssetOrigins,
 }: {
   locale: Locale
   dictionary: Dictionary
@@ -517,6 +518,7 @@ export function OpenCodeAosUiApp({
   defaultModel?: { providerID: string; modelID: string }
   nowIso: string
   composerFeatures?: ComposerFeatureConfig
+  artifactHtmlAssetOrigins?: readonly string[]
 }) {
   const bundle = useOpenCodeRuntimeBundle({
     baseUrl,
@@ -549,6 +551,7 @@ export function OpenCodeAosUiApp({
         composer={composer}
         client={bundle.client}
         composerFeatureConfig={composerFeatures}
+        artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
       />
     </AssistantRuntimeProvider>
   )

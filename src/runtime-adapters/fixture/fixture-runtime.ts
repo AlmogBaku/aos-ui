@@ -25,6 +25,10 @@ import {
   createFixtureWorkspace,
   type FixtureWorkspace,
 } from "./fixture-workspace"
+import {
+  FIXTURE_ARTIFACT_CATALOG,
+  createFixtureArtifactAdapter,
+} from "./fixture-artifacts"
 
 const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
   new SimpleImageAttachmentAdapter(),
@@ -67,7 +71,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         content: [
           {
             type: "text",
-            text: "Enterprise AI spend continues to broaden and deepen.\n\nAcross our coverage universe, Q4’24 and Q1’25 show accelerating investment in platforms and applied AI, with a clear shift from pilots to scaled deployments. Budgets are concentrating around data foundations, model governance, and measurable productivity outcomes.",
+            text: "Enterprise AI spend continues to broaden and deepen.\n\nAcross our coverage universe, Q4’24 and Q1’25 show accelerating investment in platforms and applied AI, with a clear shift from pilots to scaled deployments. Budgets are concentrating around data foundations, model governance, and measurable productivity outcomes.\n\n```ts\nconst growthRate = (57 - 42) / 42\n```",
           },
           {
             type: "tool-call",
@@ -89,6 +93,11 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
               summary: "Validated three market segments.",
             },
           },
+          ...Object.values(FIXTURE_ARTIFACT_CATALOG.examples).map((data) => ({
+            type: "data" as const,
+            name: "aos.artifact",
+            data,
+          })),
         ],
         createdAt: new Date("2026-09-03T09:12:00.000Z"),
       },
@@ -549,6 +558,7 @@ export function useFixtureRuntimeBundle({
     () => createFixtureThreadListAdapter(workspace),
     [workspace]
   )
+  const artifacts = useMemo(() => createFixtureArtifactAdapter(), [])
   const chatModel = useMemo(
     () => createFixtureChatModel(workspace, { streamDelayMs }),
     [streamDelayMs, workspace]
@@ -570,7 +580,7 @@ export function useFixtureRuntimeBundle({
   })
 
   return useMemo(
-    () => ({ assistantRuntime, workspace }),
-    [assistantRuntime, workspace]
+    () => ({ assistantRuntime, workspace, artifacts }),
+    [artifacts, assistantRuntime, workspace]
   )
 }

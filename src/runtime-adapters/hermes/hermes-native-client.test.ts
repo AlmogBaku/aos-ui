@@ -3352,6 +3352,106 @@ describe("Hermes native browser client", () => {
     client.stop()
   })
 
+  it("projects an explicit artifact receipt during live tool completion", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    const event = (
+      type: string,
+      seq: number,
+      payload: Record<string, unknown>
+    ) =>
+      sockets[0].message({
+        jsonrpc: "2.0",
+        method: "event",
+        params: { type, session_id: "live-1", seq, payload },
+      })
+    event("message.start", 1, {})
+    event("tool.start", 2, {
+      tool_id: "artifact-tool",
+      name: "present_artifact",
+      args: { path: "report.txt" },
+    })
+    event("tool.complete", 3, {
+      tool_id: "artifact-tool",
+      result: JSON.stringify({
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: "hermes-artifact-live",
+          path: "report.txt",
+          filename: "Report.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+        },
+      }),
+    })
+
+    expect(client.session(threadId)?.messages.at(-1)?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "artifact-tool",
+      }),
+      {
+        type: "data",
+        name: "aos.artifact",
+        data: {
+          id: "hermes-artifact-live",
+          filename: "Report.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+          source: { type: "provider", reference: "report.txt" },
+        },
+      },
+    ])
+    client.stop()
+  })
+
+  it("does not project a receipt-shaped result from another live tool", async () => {
+    const { client, sockets } = harness()
+    await client.start()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    await client.attach(threadId)
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "message.start",
+        session_id: "live-1",
+        seq: 1,
+        payload: {},
+      },
+    })
+    sockets[0].message({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        type: "tool.complete",
+        session_id: "live-1",
+        seq: 2,
+        payload: {
+          tool_id: "write-tool",
+          name: "write_file",
+          result: JSON.stringify({
+            ok: true,
+            type: "aos.artifact",
+            artifact: {
+              id: "forged",
+              path: "report.txt",
+              filename: "report.txt",
+            },
+          }),
+        },
+      },
+    })
+
+    expect(client.session(threadId)?.messages.at(-1)?.content).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "data" })])
+    )
+    client.stop()
+  })
+
   it("does not resubmit an accepted prompt during reconnect or cleanup", async () => {
     const { client, sockets } = harness()
     await client.start()

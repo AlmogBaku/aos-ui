@@ -26,6 +26,7 @@ import {
   type AgUiWorkspaceTransport,
 } from "./ag-ui-workspace"
 import { AgUiThreadListBridge } from "./ag-ui-thread-list-bridge"
+import { createBrowserArtifactAdapter } from "@/artifacts/browser-artifact-adapter"
 
 export type UseAgUiRuntimeBundleOptions = Omit<
   UseAgUiRuntimeOptions,
@@ -74,42 +75,45 @@ export function useAgUiRuntimeBundle({
       feedback: adapters?.feedback,
     }
   }, [adapters])
-  const runtimeHook = useCallback(function useThreadRuntime() {
-    const remoteId = useAuiState((state) => state.threadListItem.remoteId)
-    const localId = useAuiState((state) => state.threadListItem.id)
-    const threadId = remoteId ?? localId
-    return useAgUiRuntime({
-      logger,
-      showThinking,
+  const runtimeHook = useCallback(
+    function useThreadRuntime() {
+      const remoteId = useAuiState((state) => state.threadListItem.remoteId)
+      const localId = useAuiState((state) => state.threadListItem.id)
+      const threadId = remoteId ?? localId
+      return useAgUiRuntime({
+        logger,
+        showThinking,
+        autoCancelPendingToolCalls,
+        isDisabled,
+        isSendDisabled,
+        unstable_capabilities,
+        suggestions,
+        agent: bridge.agentForThread(threadId),
+        onError,
+        // Cancelling this browser runtime only detaches its cloned HttpAgent.
+        // A provider-native Stop callback must never be bound here.
+        onCancel: undefined,
+        unstable_enableMessageQueue: unstable_enableMessageQueue ?? true,
+        adapters: {
+          ...threadAdapters,
+          history: bridge.historyForThread(threadId),
+        },
+      })
+    },
+    [
       autoCancelPendingToolCalls,
+      bridge,
       isDisabled,
       isSendDisabled,
-      unstable_capabilities,
-      suggestions,
-      agent: bridge.agentForThread(threadId),
+      logger,
       onError,
-      // Cancelling this browser runtime only detaches its cloned HttpAgent.
-      // A provider-native Stop callback must never be bound here.
-      onCancel: undefined,
-      unstable_enableMessageQueue: unstable_enableMessageQueue ?? true,
-      adapters: {
-        ...threadAdapters,
-        history: bridge.historyForThread(threadId),
-      },
-    })
-  }, [
-    autoCancelPendingToolCalls,
-    bridge,
-    isDisabled,
-    isSendDisabled,
-    logger,
-    onError,
-    showThinking,
-    suggestions,
-    threadAdapters,
-    unstable_capabilities,
-    unstable_enableMessageQueue,
-  ])
+      showThinking,
+      suggestions,
+      threadAdapters,
+      unstable_capabilities,
+      unstable_enableMessageQueue,
+    ]
+  )
   const [settledThreadId, setSettledThreadId] = useState<string | undefined>()
   const settledThreadIdRef = useRef<string | undefined>(undefined)
   const assistantRuntimeRef = useRef<AssistantRuntime | undefined>(undefined)
@@ -117,9 +121,8 @@ export function useAgUiRuntimeBundle({
     (threadId: string | undefined) => {
       const previousThreadId = settledThreadIdRef.current
       if (previousThreadId && previousThreadId !== threadId) {
-        const previousRuntime = assistantRuntimeRef.current?.threads.getById(
-          previousThreadId
-        )
+        const previousRuntime =
+          assistantRuntimeRef.current?.threads.getById(previousThreadId)
         if (previousRuntime?.getState().isRunning) previousRuntime.cancelRun()
       }
       bridge.select(threadId)
@@ -184,6 +187,7 @@ export function useAgUiRuntimeBundle({
       }),
     [activityPublisher, bridge, suppliedWorkspace]
   )
+  const artifacts = useMemo(() => createBrowserArtifactAdapter(), [])
   useEffect(() => {
     void bridge.initialize().catch((error: unknown) => {
       onError?.(error instanceof Error ? error : new Error(String(error)))
@@ -220,7 +224,7 @@ export function useAgUiRuntimeBundle({
   ])
 
   return useMemo(
-    () => ({ assistantRuntime, workspace }),
-    [assistantRuntime, workspace]
+    () => ({ assistantRuntime, workspace, artifacts }),
+    [artifacts, assistantRuntime, workspace]
   )
 }

@@ -108,6 +108,7 @@ function RuntimeApp({
         locale={locale}
         dictionary={dictionary}
         composerFeatures={config.composerFeatures}
+        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
       />
     )
   }
@@ -121,6 +122,7 @@ function RuntimeApp({
         defaultModel={config.defaultModel}
         nowIso={nowIso}
         composerFeatures={config.composerFeatures}
+        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
       />
     )
   }
@@ -133,6 +135,7 @@ function RuntimeApp({
         workspaceUrl={config.workspaceUrl}
         nowIso={nowIso}
         composerFeatures={config.composerFeatures}
+        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
       />
     )
   }
@@ -144,6 +147,7 @@ function RuntimeApp({
       baseUrl={config.baseUrl}
       nowIso={nowIso}
       composerFeatures={config.composerFeatures}
+      artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
     />
   )
 }

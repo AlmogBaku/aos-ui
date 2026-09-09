@@ -5,23 +5,24 @@ import { describe, expect, it, vi } from "vitest"
 
 import { getWorkspaceCapabilities } from "../workspace-state"
 
-const { officialRuntime, useAgUiRuntime, useRemoteThreadListRuntime } = vi.hoisted(() => {
-  const officialRuntime = {
-    thread: {
-      getState: () => ({ metadata: { remoteId: undefined } }),
-    },
-    threads: {
-      reload: vi.fn(),
-      getLoadThreadsPromise: () => Promise.resolve(),
-      switchToThread: vi.fn(),
-    },
-  } as unknown as AssistantRuntime
-  return {
-    officialRuntime,
-    useAgUiRuntime: vi.fn(() => officialRuntime),
-    useRemoteThreadListRuntime: vi.fn(() => officialRuntime),
-  }
-})
+const { officialRuntime, useAgUiRuntime, useRemoteThreadListRuntime } =
+  vi.hoisted(() => {
+    const officialRuntime = {
+      thread: {
+        getState: () => ({ metadata: { remoteId: undefined } }),
+      },
+      threads: {
+        reload: vi.fn(),
+        getLoadThreadsPromise: () => Promise.resolve(),
+        switchToThread: vi.fn(),
+      },
+    } as unknown as AssistantRuntime
+    return {
+      officialRuntime,
+      useAgUiRuntime: vi.fn(() => officialRuntime),
+      useRemoteThreadListRuntime: vi.fn(() => officialRuntime),
+    }
+  })
 
 vi.mock("@assistant-ui/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@assistant-ui/react")>()),

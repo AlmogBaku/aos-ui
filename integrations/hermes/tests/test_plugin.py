@@ -45,13 +45,62 @@ def test_legacy_plugin_registers_browser_independent_tools_and_prompt(tmp_path, 
     context = FakeContext()
     register(context)
     assert {tool["name"] for tool in context.tools} == {
-        "render_chart", "render_map", "render_stats", "present_plan", "aos_start_session"
+        "render_chart", "render_map", "render_stats", "present_plan", "aos_start_session",
+        "present_artifact",
     }
     assert context.sections == [(('aos.presentation', 'Use structured presentation tools.'), {
         'position': 'after_memory', 'max_chars': 4000
     })]
     start = next(tool for tool in context.tools if tool["name"] == "aos_start_session")
     assert start["schema"]["parameters"]["required"] == ["profile", "workdir", "prompt"]
+    artifact = next(tool for tool in context.tools if tool["name"] == "present_artifact")
+    assert artifact["schema"]["parameters"] == {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "title": {"type": "string", "minLength": 1, "maxLength": 255},
+            "mimeType": {"type": "string", "minLength": 1, "maxLength": 255},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    }
+
+
+def test_artifact_tool_uses_the_calling_session_workdir(tmp_path, monkeypatch):
+    _artifact(tmp_path, monkeypatch)
+    _native_home(tmp_path, monkeypatch, "name: researcher\n")
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    (workdir / "answer.txt").write_text("forty-two")
+    terminal = types.ModuleType("tools.terminal_tool")
+    terminal.get_session_cwd = lambda task_id: str(workdir) if task_id == "task-1" else None
+    monkeypatch.setitem(sys.modules, "tools.terminal_tool", terminal)
+    context = FakeContext()
+    register(context)
+    tool = next(tool for tool in context.tools if tool["name"] == "present_artifact")
+
+    result = json.loads(tool["handler"](
+        {"path": "answer.txt"}, task_id="task-1", session_id="session-1"
+    ))
+
+    assert result["ok"] is True
+    assert result["artifact"]["path"] == "answer.txt"
+
+
+def test_artifact_tool_returns_a_rejection_without_native_call_context(tmp_path, monkeypatch):
+    _artifact(tmp_path, monkeypatch)
+    _native_home(tmp_path, monkeypatch, "name: researcher\n")
+    context = FakeContext()
+    register(context)
+    tool = next(tool for tool in context.tools if tool["name"] == "present_artifact")
+
+    result = json.loads(tool["handler"]({"path": "answer.txt"}))
+
+    assert result == {
+        "ok": False,
+        "status": "rejected",
+        "error": "Artifact publication requires a Session workdir",
+    }
 
 
 def test_creator_tool_requires_explicit_native_creator_metadata(tmp_path, monkeypatch):

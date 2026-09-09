@@ -38,6 +38,7 @@ import {
 } from "react"
 
 import { aosOpenCodeExtras } from "./opencode-runtime-extras"
+import { projectOpenCodeArtifacts } from "./opencode-artifacts"
 import {
   createOpenCodeSessionQueue,
   type OpenCodeSessionQueue,
@@ -341,7 +342,10 @@ function useThreadStore(
   const messages = useMemo(
     () =>
       ExportedMessageRepository.fromArray(
-        projectOpenCodeThreadMessages(state, timing)
+        projectOpenCodeArtifacts(
+          state,
+          projectOpenCodeThreadMessages(state, timing)
+        )
       ),
     [state, timing]
   )

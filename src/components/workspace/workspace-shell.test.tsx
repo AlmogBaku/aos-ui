@@ -128,6 +128,45 @@ function renderShell(
 }
 
 describe("WorkspaceShell", () => {
+  it("shows Session Outputs in the inspector and replaces them with an open artifact", () => {
+    const ResizeObserverBefore = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(
+        private readonly callback: ResizeObserverCallback
+      ) {}
+      observe() {
+        this.callback(
+          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    const { rerender, props } = renderShell({
+      artifactOutputs: <div>Published outputs</div>,
+    })
+    let inspector = screen.getByRole("complementary", {
+      name: "Agent details",
+    })
+    expect(within(inspector).getByText("Published outputs")).toBeVisible()
+
+    rerender(
+      <WorkspaceShell
+        {...props}
+        artifactOutputs={<div>Published outputs</div>}
+        artifactViewer={<div>Artifact preview body</div>}
+        artifactViewerOpen
+        artifactViewerLabel="Output preview"
+        onCloseArtifactViewer={vi.fn()}
+      />
+    )
+    inspector = screen.getByRole("complementary", { name: "Output preview" })
+    expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
+    expect(within(inspector).queryByText("Published outputs")).toBeNull()
+    globalThis.ResizeObserver = ResizeObserverBefore
+  })
+
   it("searches the selected Agent's open Sessions and history in the desktop inspector", () => {
     renderShell()
 

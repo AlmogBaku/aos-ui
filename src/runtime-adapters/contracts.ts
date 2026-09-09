@@ -181,10 +181,35 @@ export type RuntimeInteractionAdapter = {
   reject(request: RuntimeQuestionRequest): Promise<void>
 }
 
+export type ArtifactSource =
+  | { type: "inline"; data: string; encoding: "utf8" | "base64" }
+  | { type: "url"; url: string }
+  | { type: "provider"; reference: string }
+
+export type ArtifactDescriptor = {
+  id: string
+  filename: string
+  mimeType?: string
+  sizeBytes?: number
+  source: ArtifactSource
+}
+
+export type ArtifactResolveOptions = {
+  artifact: ArtifactDescriptor
+  agentId: string
+  threadId: string
+  signal: AbortSignal
+}
+
+export type ArtifactAdapter = {
+  resolve(input: ArtifactResolveOptions): Promise<Blob>
+}
+
 export type RuntimeBundle = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
   interactions?: RuntimeInteractionAdapter
+  artifacts?: ArtifactAdapter
 }
 
 export type RuntimeMode = "fixture" | "opencode" | "hermes" | "ag-ui"
