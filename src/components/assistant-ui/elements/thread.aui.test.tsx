@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createComposerHistorySelector,
   Thread,
+  THREAD_VIEWPORT_SCROLL_BEHAVIOR,
   type ThreadComponents,
   type ThreadLabels,
 } from "./thread.aui"
@@ -57,6 +58,16 @@ describe("composer history performance", () => {
     ])
 
     expect(next).toBe(first)
+  })
+})
+
+describe("thread scroll ownership", () => {
+  it("leaves automatic scrolling to the reading-position controller", () => {
+    expect(THREAD_VIEWPORT_SCROLL_BEHAVIOR).toEqual({
+      autoScroll: false,
+      scrollToBottomOnInitialize: false,
+      scrollToBottomOnThreadSwitch: false,
+    })
   })
 })
 
@@ -545,14 +556,10 @@ describe("Thread accessibility", () => {
     expect(screen.getByText("Tools")).toBeInTheDocument()
     expect(screen.getByText("Messages")).toBeInTheDocument()
     expect(screen.getByText("4k / 8k")).toBeInTheDocument()
-    const toolbar = document.querySelector(
-      '[data-slot="aui_composer-toolbar"]'
-    )
+    const toolbar = document.querySelector('[data-slot="aui_composer-toolbar"]')
     expect(toolbar).not.toBeNull()
     expect(toolbar).toContainElement(model)
-    expect(toolbar).toContainElement(
-      context
-    )
+    expect(toolbar).toContainElement(context)
     expect(context).toHaveAttribute("data-slot", "composer-context-trigger")
 
     model.focus()

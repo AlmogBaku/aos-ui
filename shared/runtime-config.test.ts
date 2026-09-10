@@ -198,6 +198,20 @@ describe("public configuration", () => {
   it("exports a strict public parser", () => {
     expect(config).toHaveProperty("parsePublicRuntimeConfiguration")
   })
+  it("recognizes the isolated guest surface without treating it as a runtime", () => {
+    expect(
+      config.parsePublicApplicationConfiguration({ surface: "guest" })
+    ).toEqual({
+      status: "ready",
+      surface: "guest",
+    })
+    expect(
+      config.parsePublicApplicationConfiguration({
+        surface: "guest",
+        mode: "hermes",
+      })
+    ).toEqual({ status: "unavailable", reason: "invalid-public-config" })
+  })
   it("rejects secret fields and missing deployment configuration", () => {
     for (const input of [
       undefined,
@@ -220,6 +234,24 @@ describe("public configuration", () => {
       status: "ready",
       mode: "hermes",
       baseUrl: "/api/hermes",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
+    })
+  })
+  it("accepts a same-origin OpenCode proxy prefix", () => {
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "opencode",
+        baseUrl: "/opencode",
+        directory: "/external/agents",
+      })
+    ).toEqual({
+      status: "ready",
+      mode: "opencode",
+      baseUrl: "/opencode",
+      directory: "/external/agents",
       composerFeatures: {
         modelSelectorEnabled: true,
         contextEnabled: true,

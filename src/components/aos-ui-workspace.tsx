@@ -28,9 +28,9 @@ import {
 import {
   Thread,
   type ThreadComponents,
-  type ThreadLabels,
 } from "@/components/assistant-ui/elements/thread.aui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { ToolUiLocaleProvider, RichToolRenderer } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
@@ -60,99 +60,6 @@ import type {
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
-
-const threadLabels: Record<Locale, ThreadLabels> = {
-  en: {
-    loadingConversation: "Loading conversation",
-    scrollToBottom: "Scroll to bottom",
-    welcome: "What would you like to work on?",
-    composerPlaceholder: "Message",
-    messageInput: "Message input",
-    voiceInput: "Voice input",
-    startVoiceInput: "Start voice input",
-    stopDictation: "Stop dictation",
-    stopVoiceInput: "Stop voice input",
-    sendMessage: "Send message",
-    stopGenerating: "Stop generating",
-    assistantWorking: "Agent is working",
-    copy: "Copy",
-    refresh: "Retry response",
-    more: "More actions",
-    exportMarkdown: "Export as Markdown",
-    edit: "Edit message",
-    cancel: "Cancel",
-    update: "Update",
-    historySearch: "Search conversation history",
-    historySearchPlaceholder: "Filter sent messages…",
-    historyCancel: "Cancel history search",
-    queuedMessages: "Queued messages",
-    previous: "Previous branch",
-    next: "Next branch",
-    conversationHeading: "Conversation",
-    modelSelector: "Choose model",
-    contextUsage: "Context usage",
-    contextTitle: "Context",
-    contextSystem: "System",
-    contextTools: "Tools",
-    contextMessages: "Messages",
-    contextTotal: "Total",
-    attachments: {
-      add: "Add attachment",
-      remove: "Remove attachment",
-      preview: "Attachment preview",
-      image: "Image attachment",
-      document: "Document attachment",
-      file: "File attachment",
-      uploading: "Uploading",
-      uploadFailed: "Upload failed",
-    },
-  },
-  he: {
-    loadingConversation: "השיחה נטענת",
-    scrollToBottom: "גלילה לתחתית",
-    welcome: "על מה תרצו לעבוד?",
-    composerPlaceholder: "הודעה",
-    messageInput: "שדה הודעה",
-    voiceInput: "קלט קולי",
-    startVoiceInput: "התחלת קלט קולי",
-    stopDictation: "עצירת הכתבה",
-    stopVoiceInput: "עצירת קלט קולי",
-    sendMessage: "שליחת הודעה",
-    stopGenerating: "עצירת התשובה",
-    assistantWorking: "הסוכן עובד",
-    copy: "העתקה",
-    refresh: "ניסיון חוזר",
-    more: "פעולות נוספות",
-    exportMarkdown: "ייצוא כ-Markdown",
-    edit: "עריכת ההודעה",
-    cancel: "ביטול",
-    update: "עדכון",
-    historySearch: "חיפוש בהיסטוריית השיחה",
-    historySearchPlaceholder: "סינון הודעות שנשלחו…",
-    historyCancel: "ביטול חיפוש בהיסטוריה",
-    queuedMessages: "הודעות בתור",
-    previous: "הסתעפות קודמת",
-    next: "הסתעפות הבאה",
-    conversationHeading: "שיחה",
-    modelSelector: "בחירת מודל",
-    contextUsage: "שימוש בהקשר",
-    contextTitle: "הקשר",
-    contextSystem: "מערכת",
-    contextTools: "כלים",
-    contextMessages: "הודעות",
-    contextTotal: "סה״כ",
-    attachments: {
-      add: "הוספת קובץ מצורף",
-      remove: "הסרת קובץ מצורף",
-      preview: "תצוגה מקדימה של קובץ מצורף",
-      image: "תמונה מצורפת",
-      document: "מסמך מצורף",
-      file: "קובץ מצורף",
-      uploading: "בהעלאה",
-      uploadFailed: "ההעלאה נכשלה",
-    },
-  },
-}
 
 const workspaceCopy = {
   en: {

@@ -31,6 +31,7 @@ import {
   useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
   type ReactNode,
 } from "react"
@@ -139,7 +140,47 @@ export type WorkspaceShellProps = {
   artifactViewerOpen?: boolean
   artifactViewerLabel?: string
   onCloseArtifactViewer?: () => void
+  conversationHeader?: ReactNode
+  navigationHidden?: boolean
   children: ReactNode
+}
+
+export type WorkspaceConversationShellProps = Pick<
+  WorkspaceShellProps,
+  | "locale"
+  | "dictionary"
+  | "artifactViewer"
+  | "artifactViewerOpen"
+  | "artifactViewerLabel"
+  | "onCloseArtifactViewer"
+  | "children"
+> & {
+  header: ReactNode
+}
+
+const noWorkspaceAction = () => undefined
+
+export function WorkspaceConversationShell({
+  header,
+  ...props
+}: WorkspaceConversationShellProps) {
+  return (
+    <WorkspaceShell
+      {...props}
+      agents={[]}
+      openSessions={[]}
+      olderSessions={[]}
+      selectedAgentId={null}
+      activeThreadId={null}
+      onSelectAgent={noWorkspaceAction}
+      onOpenSession={noWorkspaceAction}
+      onCloseSession={noWorkspaceAction}
+      onCreateSession={noWorkspaceAction}
+      onOpenAgentBuilder={noWorkspaceAction}
+      conversationHeader={header}
+      navigationHidden
+    />
+  )
 }
 
 const agentSymbols: Record<
@@ -160,6 +201,26 @@ const fallbackSymbols = Object.keys(agentSymbols) as Array<
 const fallbackTones = ["indigo", "purple", "teal", "ochre", "slate"] as const
 const inspectorPreferenceKey = "aos_ui:workspace:inspector-open"
 const inspectorPreferenceEvent = "aos_ui:inspector-preference-change"
+const artifactWidthPreferenceKey = "aos_ui:workspace:artifact-width"
+const artifactWidthMin = 320
+const artifactWidthMax = 640
+const artifactWidthStep = 16
+const artifactWidthDefault = 416
+
+function readArtifactWidthPreference() {
+  try {
+    const width = Number(
+      window.localStorage.getItem(artifactWidthPreferenceKey)
+    )
+    return Number.isFinite(width) &&
+      width >= artifactWidthMin &&
+      width <= artifactWidthMax
+      ? width
+      : null
+  } catch {
+    return null
+  }
+}
 
 function subscribeToInspectorPreference(listener: () => void) {
   window.addEventListener("storage", listener)
@@ -1013,9 +1074,15 @@ export function WorkspaceShell({
   artifactViewerOpen = false,
   artifactViewerLabel,
   onCloseArtifactViewer,
+  conversationHeader,
+  navigationHidden = false,
   children,
 }: WorkspaceShellProps) {
   const shellRef = useRef<HTMLElement>(null)
+  const artifactPanelRef = useRef<HTMLElement>(null)
+  const [artifactWidth, setArtifactWidth] = useState<number | null>(
+    readArtifactWidthPreference
+  )
   const [mobileNavigator, dispatchMobileNavigator] = useReducer(
     mobileNavigatorReducer,
     { view: "closed" }
@@ -1031,7 +1098,9 @@ export function WorkspaceShell({
     boolean | null
   >(null)
   const desktopInspectorOpen = volatileInspectorOpen ?? storedInspectorOpen
-  const effectiveInspectorOpen = desktopInspectorOpen || artifactViewerOpen
+  const effectiveInspectorOpen = navigationHidden
+    ? artifactViewerOpen
+    : desktopInspectorOpen || artifactViewerOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
   const artifactDrawerOpen = artifactViewerOpen && !desktopLayout
@@ -1136,6 +1205,95 @@ export function WorkspaceShell({
     }
   }
 
+  const artifactWidthBounds = useCallback(() => {
+    const shellWidth = shellRef.current?.getBoundingClientRect().width ?? 0
+    const navigationWidth = navigationHidden
+      ? 0
+      : (shellRef.current
+          ?.querySelector<HTMLElement>(`.${styles.desktopAgents}`)
+          ?.getBoundingClientRect().width ?? 0)
+    const available = shellWidth - navigationWidth - artifactWidthMin
+    return {
+      min: artifactWidthMin,
+      max:
+        shellWidth > 0
+          ? Math.max(artifactWidthMin, Math.min(artifactWidthMax, available))
+          : artifactWidthMax,
+    }
+  }, [navigationHidden])
+
+  const commitArtifactWidth = useCallback(
+    (width: number) => {
+      const bounds = artifactWidthBounds()
+      const next = Math.round(Math.min(bounds.max, Math.max(bounds.min, width)))
+      setArtifactWidth(next)
+      try {
+        window.localStorage.setItem(artifactWidthPreferenceKey, String(next))
+      } catch {
+        // The in-memory preference still works when storage is unavailable.
+      }
+    },
+    [artifactWidthBounds]
+  )
+
+  const resizeArtifactFromPointer = useCallback(
+    (clientX: number) => {
+      const shell = shellRef.current?.getBoundingClientRect()
+      if (!shell) return
+      commitArtifactWidth(
+        getLocaleDirection(locale) === "rtl"
+          ? clientX - shell.left
+          : shell.right - clientX
+      )
+    },
+    [commitArtifactWidth, locale]
+  )
+
+  const onArtifactResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      resizeArtifactFromPointer(event.clientX)
+    },
+    [resizeArtifactFromPointer]
+  )
+
+  const onArtifactResizePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+      resizeArtifactFromPointer(event.clientX)
+    },
+    [resizeArtifactFromPointer]
+  )
+
+  const onArtifactResizeKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      const bounds = artifactWidthBounds()
+      const renderedWidth =
+        artifactPanelRef.current?.getBoundingClientRect().width
+      const current = artifactWidth || renderedWidth || artifactWidthDefault
+      let next: number | undefined
+      if (event.key === "Home") next = bounds.min
+      if (event.key === "End") next = bounds.max
+      if (event.key === "ArrowLeft")
+        next =
+          current +
+          (getLocaleDirection(locale) === "rtl"
+            ? -artifactWidthStep
+            : artifactWidthStep)
+      if (event.key === "ArrowRight")
+        next =
+          current +
+          (getLocaleDirection(locale) === "rtl"
+            ? artifactWidthStep
+            : -artifactWidthStep)
+      if (next === undefined) return
+      event.preventDefault()
+      commitArtifactWidth(next)
+    },
+    [artifactWidth, artifactWidthBounds, commitArtifactWidth, locale]
+  )
+
   const agentsPanelProps: AgentsPanelProps = {
     activity,
     agents: rosterAgents,
@@ -1176,6 +1334,16 @@ export function WorkspaceShell({
     agent: selectedAgent,
     artifactOutputs,
   }
+  const skipLink = (
+    <a
+      className={styles.skipLink}
+      href="#workspace-conversation-panel"
+      aria-hidden={modalDrawerOpen || undefined}
+      inert={modalDrawerOpen ? true : undefined}
+    >
+      {dictionary.accessibility.skipToConversation}
+    </a>
+  )
 
   return (
     <div className={styles.workspaceContainer}>
@@ -1184,120 +1352,138 @@ export function WorkspaceShell({
         className={styles.shell}
         data-inspector-open={effectiveInspectorOpen ? "true" : "false"}
         data-artifact-viewer-open={artifactViewerOpen ? "true" : "false"}
+        data-navigation-hidden={navigationHidden ? "true" : undefined}
         dir={getLocaleDirection(locale)}
+        style={
+          {
+            ...(navigationHidden
+              ? {
+                  "--workspace-artifact-default-width": "min(40rem, 50cqi)",
+                }
+              : {}),
+            ...(artifactWidth === null
+              ? {}
+              : {
+                  "--workspace-artifact-width": `${artifactWidth}px`,
+                }),
+          } as CSSProperties
+        }
       >
-        <a
-          className={styles.skipLink}
-          href="#workspace-conversation-panel"
-          aria-hidden={modalDrawerOpen || undefined}
-          inert={modalDrawerOpen ? true : undefined}
-        >
-          {dictionary.accessibility.skipToConversation}
-        </a>
+        {!navigationHidden ? skipLink : null}
 
-        <header
-          className={styles.mobileHeader}
-          aria-hidden={modalDrawerOpen || undefined}
-          inert={modalDrawerOpen ? true : undefined}
-        >
-          <Button
-            className={styles.drawerTrigger}
-            ref={agentDrawerTriggerRef}
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={dictionary.actions.openAgents}
-            aria-expanded={mobileNavigatorOpen}
-            onClick={() => {
-              dispatchMobileNavigator({ type: "OPEN", selectedAgentId })
-            }}
+        {!navigationHidden ? (
+          <header
+            className={styles.mobileHeader}
+            aria-hidden={modalDrawerOpen || undefined}
+            inert={modalDrawerOpen ? true : undefined}
           >
-            <Menu />
-          </Button>
-          {selectedAgent ? (
-            <div
-              className={styles.mobileIdentity}
-              role="group"
-              aria-label={[
-                selectedAgent.name,
-                activeSession?.title,
-                `${dictionary.status.label}: ${agentStatusLabel(
-                  selectedAgent.status,
-                  dictionary
-                )}`,
-              ]
-                .filter(Boolean)
-                .join(", ")}
+            <Button
+              className={styles.drawerTrigger}
+              ref={agentDrawerTriggerRef}
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={dictionary.actions.openAgents}
+              aria-expanded={mobileNavigatorOpen}
+              onClick={() => {
+                dispatchMobileNavigator({ type: "OPEN", selectedAgentId })
+              }}
             >
-              <AgentGlyph agent={selectedAgent} />
-              <span className={styles.mobileIdentityText}>
-                <bdi className={styles.mobileAgentName}>
-                  {selectedAgent.name}
-                </bdi>
-                {activeSession ? (
-                  <bdi className={styles.mobileSessionName}>
-                    {activeSession.title}
+              <Menu />
+            </Button>
+            {selectedAgent ? (
+              <div
+                className={styles.mobileIdentity}
+                role="group"
+                aria-label={[
+                  selectedAgent.name,
+                  activeSession?.title,
+                  `${dictionary.status.label}: ${agentStatusLabel(
+                    selectedAgent.status,
+                    dictionary
+                  )}`,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+              >
+                <AgentGlyph agent={selectedAgent} />
+                <span className={styles.mobileIdentityText}>
+                  <bdi className={styles.mobileAgentName}>
+                    {selectedAgent.name}
                   </bdi>
-                ) : null}
+                  {activeSession ? (
+                    <bdi className={styles.mobileSessionName}>
+                      {activeSession.title}
+                    </bdi>
+                  ) : null}
+                </span>
+                <span
+                  className={styles.statusDot}
+                  data-status={selectedAgent.status ?? "idle"}
+                  title={agentStatusLabel(selectedAgent.status, dictionary)}
+                  aria-hidden="true"
+                />
+              </div>
+            ) : (
+              <span className={styles.mobileAgentName}>
+                {dictionary.productName}
               </span>
-              <span
-                className={styles.statusDot}
-                data-status={selectedAgent.status ?? "idle"}
-                title={agentStatusLabel(selectedAgent.status, dictionary)}
-                aria-hidden="true"
-              />
-            </div>
-          ) : (
-            <span className={styles.mobileAgentName}>
-              {dictionary.productName}
-            </span>
-          )}
-          {activityButton}
-          {environmentLabel ? (
-            <span className={styles.environmentLabel}>{environmentLabel}</span>
-          ) : null}
-        </header>
+            )}
+            {activityButton}
+            {environmentLabel ? (
+              <span className={styles.environmentLabel}>
+                {environmentLabel}
+              </span>
+            ) : null}
+          </header>
+        ) : null}
 
-        <aside
-          className={styles.desktopAgents}
-          data-keyboard-region="agents"
-          aria-label={dictionary.workspace.agents}
-          aria-hidden={modalDrawerOpen || undefined}
-          inert={modalDrawerOpen ? true : undefined}
-        >
-          <AgentsPanel
-            {...agentsPanelProps}
-            activityButton={activityButton}
-            commandsHost
-          />
-        </aside>
+        {!navigationHidden ? (
+          <aside
+            className={styles.desktopAgents}
+            data-keyboard-region="agents"
+            aria-label={dictionary.workspace.agents}
+            aria-hidden={modalDrawerOpen || undefined}
+            inert={modalDrawerOpen ? true : undefined}
+          >
+            <AgentsPanel
+              {...agentsPanelProps}
+              activityButton={activityButton}
+              commandsHost
+            />
+          </aside>
+        ) : null}
 
         <div
           className={styles.conversationColumn}
           aria-hidden={modalDrawerOpen || undefined}
           inert={modalDrawerOpen ? true : undefined}
         >
-          <div data-keyboard-region="sessions" className="contents">
-            <SessionTabs
-              activity={activity}
-              locale={locale}
-              dictionary={dictionary}
-              openSessions={openSessions}
-              activeThreadId={activeThreadId}
-              selectedAgentId={selectedAgentId}
-              onOpenSession={onOpenSession}
-              onCloseSession={onCloseSession}
-              onCreateSession={onCreateSession}
-              onActionError={onActionError}
-              threadListRuntime={threadListRuntime}
-              inspectorOpen={effectiveInspectorOpen}
-              onToggleInspector={
-                artifactViewerOpen && onCloseArtifactViewer
-                  ? onCloseArtifactViewer
-                  : toggleDesktopInspector
-              }
-            />
-          </div>
+          {navigationHidden ? skipLink : null}
+          {conversationHeader}
+          {!navigationHidden ? (
+            <div data-keyboard-region="sessions" className="contents">
+              <SessionTabs
+                activity={activity}
+                locale={locale}
+                dictionary={dictionary}
+                openSessions={openSessions}
+                activeThreadId={activeThreadId}
+                selectedAgentId={selectedAgentId}
+                onOpenSession={onOpenSession}
+                onCloseSession={onCloseSession}
+                onCreateSession={onCreateSession}
+                onActionError={onActionError}
+                threadListRuntime={threadListRuntime}
+                inspectorOpen={effectiveInspectorOpen}
+                onToggleInspector={
+                  artifactViewerOpen && onCloseArtifactViewer
+                    ? onCloseArtifactViewer
+                    : toggleDesktopInspector
+                }
+              />
+            </div>
+          ) : null}
           <main
             className={styles.conversation}
             data-keyboard-region="conversation"
@@ -1315,44 +1501,66 @@ export function WorkspaceShell({
           </main>
         </div>
 
-        <aside
-          id="workspace-agent-inspector"
-          className={styles.desktopInspector}
-          data-keyboard-region="inspector"
-          aria-label={
-            artifactViewerOpen
-              ? (artifactViewerLabel ?? dictionary.workspace.agentDetails)
-              : dictionary.workspace.agentDetails
-          }
-          aria-hidden={modalDrawerOpen || undefined}
-          inert={modalDrawerOpen ? true : undefined}
-          hidden={!effectiveInspectorOpen}
-        >
-          {artifactViewerOpen && artifactViewer ? (
-            artifactViewer
-          ) : (
-            <InspectorPanel
-              key={selectedAgentId ?? "no-agent"}
-              {...inspectorPanelProps}
-            />
-          )}
-        </aside>
+        {!navigationHidden || artifactViewerOpen ? (
+          <aside
+            ref={artifactPanelRef}
+            id="workspace-agent-inspector"
+            className={styles.desktopInspector}
+            data-keyboard-region="inspector"
+            aria-label={
+              artifactViewerOpen
+                ? (artifactViewerLabel ?? dictionary.workspace.agentDetails)
+                : dictionary.workspace.agentDetails
+            }
+            aria-hidden={modalDrawerOpen || undefined}
+            inert={modalDrawerOpen ? true : undefined}
+            hidden={!effectiveInspectorOpen}
+          >
+            {artifactViewerOpen ? (
+              <div
+                className={styles.artifactResizeHandle}
+                role="separator"
+                aria-label={`${dictionary.workspace.resizeArtifact} ${(
+                  artifactViewerLabel ?? dictionary.workspace.agentDetails
+                ).toLocaleLowerCase(locale)}`}
+                aria-orientation="vertical"
+                aria-valuemin={artifactWidthMin}
+                aria-valuemax={artifactWidthMax}
+                aria-valuenow={artifactWidth ?? artifactWidthDefault}
+                tabIndex={0}
+                onKeyDown={onArtifactResizeKeyDown}
+                onPointerDown={onArtifactResizePointerDown}
+                onPointerMove={onArtifactResizePointerMove}
+              />
+            ) : null}
+            {artifactViewerOpen && artifactViewer ? (
+              artifactViewer
+            ) : (
+              <InspectorPanel
+                key={selectedAgentId ?? "no-agent"}
+                {...inspectorPanelProps}
+              />
+            )}
+          </aside>
+        ) : null}
 
-        <WorkspaceKeyboard
-          locale={locale}
-          rootRef={shellRef}
-          agents={rosterAgents}
-          openSessions={openSessions}
-          olderSessions={olderSessions}
-          selectedAgentId={selectedAgentId}
-          activeThreadId={activeThreadId}
-          agentBuilderAvailable={agentBuilderAvailable}
-          canCreateSession={Boolean(selectedAgentId)}
-          onSelectAgent={onSelectAgent}
-          onOpenSession={onOpenSession}
-          onCreateSession={onCreateSession}
-          onOpenAgentBuilder={onOpenAgentBuilder}
-        />
+        {!navigationHidden ? (
+          <WorkspaceKeyboard
+            locale={locale}
+            rootRef={shellRef}
+            agents={rosterAgents}
+            openSessions={openSessions}
+            olderSessions={olderSessions}
+            selectedAgentId={selectedAgentId}
+            activeThreadId={activeThreadId}
+            agentBuilderAvailable={agentBuilderAvailable}
+            canCreateSession={Boolean(selectedAgentId)}
+            onSelectAgent={onSelectAgent}
+            onOpenSession={onOpenSession}
+            onCreateSession={onCreateSession}
+            onOpenAgentBuilder={onOpenAgentBuilder}
+          />
+        ) : null}
 
         {tabUndo ? (
           <div
@@ -1375,97 +1583,102 @@ export function WorkspaceShell({
           </div>
         ) : null}
 
-        <FocusDrawer
-          open={mobileNavigatorOpen}
-          side="start"
-          title={
-            mobileNavigator.view === "sessions"
-              ? dictionary.workspace.sessions
-              : dictionary.workspace.agents
-          }
-          closeLabel={dictionary.actions.closePanel}
-          onClose={() => dispatchMobileNavigator({ type: "DISMISS" })}
-          returnFocusRef={agentDrawerTriggerRef}
-          chrome={false}
-          initialFocusSelector="[data-mobile-navigator-heading]"
-        >
-          <MobileNavigator
-            state={mobileNavigator}
-            threadListRuntime={threadListRuntime}
-            agents={rosterAgents}
-            selectedAgentId={selectedAgentId}
-            activeThreadId={activeThreadId}
-            sessionsByAgentId={
-              [
-                ...navigationCatalog.values(),
-              ] satisfies MobileAgentSessionCatalog[]
-            }
-            agentActivity={Object.fromEntries(
-              rosterAgents.map((agent) => [
-                agent.id,
-                getAgentNavigationActivity(activity?.items ?? [], agent.id),
-              ])
-            )}
-            otherAgentsActivity={getOtherVisibleAgentsNavigationActivity(
-              activity?.items ?? [],
+        {!navigationHidden ? (
+          <FocusDrawer
+            open={mobileNavigatorOpen}
+            side="start"
+            title={
               mobileNavigator.view === "sessions"
-                ? mobileNavigator.agentId
-                : selectedAgentId,
-              rosterAgents.map((agent) => agent.id)
-            )}
-            sessionActivity={Object.fromEntries(
-              [...navigationCatalog.values()].flatMap((catalog) =>
-                [...catalog.openSessions, ...catalog.historySessions].map(
-                  (session) => [
-                    session.threadId,
-                    getSessionNavigationActivity(
-                      activity?.items ?? [],
-                      catalog.agentId,
-                      session.threadId
-                    ),
-                  ]
+                ? dictionary.workspace.sessions
+                : dictionary.workspace.agents
+            }
+            closeLabel={dictionary.actions.closePanel}
+            onClose={() => dispatchMobileNavigator({ type: "DISMISS" })}
+            returnFocusRef={agentDrawerTriggerRef}
+            chrome={false}
+            initialFocusSelector="[data-mobile-navigator-heading]"
+          >
+            <MobileNavigator
+              state={mobileNavigator}
+              threadListRuntime={threadListRuntime}
+              agents={rosterAgents}
+              selectedAgentId={selectedAgentId}
+              activeThreadId={activeThreadId}
+              sessionsByAgentId={
+                [
+                  ...navigationCatalog.values(),
+                ] satisfies MobileAgentSessionCatalog[]
+              }
+              agentActivity={Object.fromEntries(
+                rosterAgents.map((agent) => [
+                  agent.id,
+                  getAgentNavigationActivity(activity?.items ?? [], agent.id),
+                ])
+              )}
+              otherAgentsActivity={getOtherVisibleAgentsNavigationActivity(
+                activity?.items ?? [],
+                mobileNavigator.view === "sessions"
+                  ? mobileNavigator.agentId
+                  : selectedAgentId,
+                rosterAgents.map((agent) => agent.id)
+              )}
+              sessionActivity={Object.fromEntries(
+                [...navigationCatalog.values()].flatMap((catalog) =>
+                  [...catalog.openSessions, ...catalog.historySessions].map(
+                    (session) => [
+                      session.threadId,
+                      getSessionNavigationActivity(
+                        activity?.items ?? [],
+                        catalog.agentId,
+                        session.threadId
+                      ),
+                    ]
+                  )
                 )
-              )
-            )}
-            locale={locale}
-            copy={mobileNavigatorCopy(dictionary)}
-            onActionError={onActionError}
-            onStateChange={dispatchMobileNavigator}
-            onOpenSession={(_agentId, threadId) =>
-              runAction(() => onOpenSession(threadId), onActionError)
-            }
-            onCreateSession={(agentId) =>
-              runAction(() => onCreateSession(agentId), onActionError)
-            }
-            onRemoveOpenSession={(agentId, threadId) =>
-              runAction(() => onCloseSession(threadId, agentId), onActionError)
-            }
-            onNewAgent={
-              agentBuilderAvailable
-                ? () => {
-                    dispatchMobileNavigator({ type: "DISMISS" })
-                    runAction(onOpenAgentBuilder, onActionError)
-                  }
-                : undefined
-            }
-            onManageAgents={
-              onManageAgents
-                ? () => {
-                    dispatchMobileNavigator({ type: "DISMISS" })
-                    onManageAgents()
-                  }
-                : undefined
-            }
-            preferences={
-              <WorkspacePreferences
-                locale={locale}
-                dictionary={dictionary}
-                commandsHost
-              />
-            }
-            renderAgentIcon={(agent) => <AgentGlyph agent={agent} />}
-          />
-        </FocusDrawer>
+              )}
+              locale={locale}
+              copy={mobileNavigatorCopy(dictionary)}
+              onActionError={onActionError}
+              onStateChange={dispatchMobileNavigator}
+              onOpenSession={(_agentId, threadId) =>
+                runAction(() => onOpenSession(threadId), onActionError)
+              }
+              onCreateSession={(agentId) =>
+                runAction(() => onCreateSession(agentId), onActionError)
+              }
+              onRemoveOpenSession={(agentId, threadId) =>
+                runAction(
+                  () => onCloseSession(threadId, agentId),
+                  onActionError
+                )
+              }
+              onNewAgent={
+                agentBuilderAvailable
+                  ? () => {
+                      dispatchMobileNavigator({ type: "DISMISS" })
+                      runAction(onOpenAgentBuilder, onActionError)
+                    }
+                  : undefined
+              }
+              onManageAgents={
+                onManageAgents
+                  ? () => {
+                      dispatchMobileNavigator({ type: "DISMISS" })
+                      onManageAgents()
+                    }
+                  : undefined
+              }
+              preferences={
+                <WorkspacePreferences
+                  locale={locale}
+                  dictionary={dictionary}
+                  commandsHost
+                />
+              }
+              renderAgentIcon={(agent) => <AgentGlyph agent={agent} />}
+            />
+          </FocusDrawer>
+        ) : null}
 
         <FocusDrawer
           open={artifactDrawerOpen}
@@ -1478,29 +1691,31 @@ export function WorkspaceShell({
           {artifactViewer}
         </FocusDrawer>
 
-        {!modalDrawerOpen ? (
+        {!navigationHidden && !modalDrawerOpen ? (
           <ActivityNotice
             notice={activity?.notice ?? null}
             dictionary={dictionary}
             onDismiss={() => activity?.dismissNotice()}
           />
         ) : null}
-        <FocusDrawer
-          open={activityOpen}
-          desktop
-          side="end"
-          title={dictionary.activity.title}
-          closeLabel={dictionary.actions.closePanel}
-          onClose={() => setActivityOpen(false)}
-        >
-          <ActivityPanel
-            activity={activity}
-            locale={locale}
-            dictionary={dictionary}
-            settings={browserSettings}
-            onOpened={() => setActivityOpen(false)}
-          />
-        </FocusDrawer>
+        {!navigationHidden ? (
+          <FocusDrawer
+            open={activityOpen}
+            desktop
+            side="end"
+            title={dictionary.activity.title}
+            closeLabel={dictionary.actions.closePanel}
+            onClose={() => setActivityOpen(false)}
+          >
+            <ActivityPanel
+              activity={activity}
+              locale={locale}
+              dictionary={dictionary}
+              settings={browserSettings}
+              onOpened={() => setActivityOpen(false)}
+            />
+          </FocusDrawer>
+        ) : null}
       </section>
     </div>
   )

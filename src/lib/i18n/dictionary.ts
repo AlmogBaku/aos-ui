@@ -65,6 +65,7 @@ export type Dictionary = {
     recentSessions: string
     manageAgents: string
     conversation: string
+    resizeArtifact: string
     fixtureLabel: string
   }
   mobileNavigation: {

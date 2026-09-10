@@ -78,6 +78,10 @@ export type PublicRuntimeConfiguration =
     } & ArtifactHtmlConfiguration)
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
+export type GuestSurfaceConfiguration = { status: "ready"; surface: "guest" }
+export type ApplicationConfiguration =
+  RuntimeConfiguration | GuestSurfaceConfiguration
+
 type RuntimeEnvironment = Partial<
   Record<
     | "AOS_UI_RUNTIME_MODE"
@@ -159,9 +163,11 @@ export function resolveRuntimeConfiguration(
       : { status: "unavailable", reason: "invalid-hermes-base-url" }
   }
   if (mode === "opencode") {
-    const configuredBaseUrl = resolveHttpUrl(
-      environment.AOS_UI_OPENCODE_BASE_URL
-    )
+    const rawBaseUrl = environment.AOS_UI_OPENCODE_BASE_URL
+    const configuredBaseUrl =
+      rawBaseUrl && /^\/(?!\/)[A-Za-z0-9/_-]+$/.test(rawBaseUrl)
+        ? rawBaseUrl.replace(/\/+$/, "")
+        : resolveHttpUrl(rawBaseUrl)
     if (configuredBaseUrl === null) {
       return { status: "unavailable", reason: "invalid-opencode-base-url" }
     }
@@ -380,4 +386,15 @@ export function parsePublicRuntimeConfiguration(
       ...composerEnvironment,
     })
   )
+}
+
+const guestSurfaceSchema = z.object({ surface: z.literal("guest") }).strict()
+
+/** Selects the guest surface before runtime parsing; guest code never selects a provider. */
+export function parsePublicApplicationConfiguration(
+  input: unknown
+): ApplicationConfiguration {
+  if (guestSurfaceSchema.safeParse(input).success)
+    return { status: "ready", surface: "guest" }
+  return parsePublicRuntimeConfiguration(input)
 }

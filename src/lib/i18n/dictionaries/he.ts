@@ -68,6 +68,7 @@ export const he = {
     recentSessions: "כל השיחות",
     manageAgents: "ניהול סוכנים",
     conversation: "שיחה",
+    resizeArtifact: "שינוי רוחב",
     fixtureLabel: "סביבת הדגמה",
   },
   mobileNavigation: {

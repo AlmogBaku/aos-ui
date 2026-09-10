@@ -684,6 +684,29 @@ describe("real Assistant UI voice composer", () => {
     expect(h.model.run).not.toHaveBeenCalled()
   })
 
+  it("keeps read-aloud playing when the browser window becomes hidden", async () => {
+    const h = setup({
+      initialMessages: [
+        {
+          id: "answer",
+          role: "assistant",
+          content: [{ type: "text", text: "Keep reading this answer" }],
+        },
+      ],
+    })
+    const answer = screen
+      .getByText("Keep reading this answer")
+      .closest<HTMLElement>('[data-role="assistant"]')!
+    fireEvent.mouseEnter(answer)
+    fireEvent.click(within(answer).getByRole("button", { name: "Read aloud" }))
+    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
+
+    h.media.handleHidden()
+
+    expect(h.audio.pause).not.toHaveBeenCalled()
+    expect(h.audio.paused).toBe(false)
+  })
+
   it("keeps a visible retryable notice after speech synthesis fails", async () => {
     const synthesize = vi.fn(async () => {
       throw new Error("synthesis failed")

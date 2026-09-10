@@ -219,6 +219,12 @@ const DEFAULT_LABELS: ThreadLabels = {
   attachments: DEFAULT_ATTACHMENT_LABELS,
 }
 
+export const THREAD_VIEWPORT_SCROLL_BEHAVIOR = {
+  autoScroll: false,
+  scrollToBottomOnInitialize: false,
+  scrollToBottomOnThreadSwitch: false,
+} as const
+
 const EMPTY_COMPONENTS: ThreadComponents = {}
 
 const ThreadComponentsContext =
@@ -368,9 +374,8 @@ const ThreadRoot: FC<{
       </span>
       <ThreadPrimitive.Viewport
         ref={viewportRef}
+        {...THREAD_VIEWPORT_SCROLL_BEHAVIOR}
         turnAnchor="top"
-        scrollToBottomOnInitialize={false}
-        scrollToBottomOnThreadSwitch={false}
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}
@@ -985,7 +990,7 @@ const Composer: FC<{
           <div
             data-slot="aui_composer-shell"
             className={cn(
-              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:bg-popover @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-[45rem]"
+              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-[45rem] dark:bg-popover"
             )}
           />
         }
@@ -1280,7 +1285,7 @@ const AssistantActionBar: FC = () => {
     <ActionBarPrimitive.Root
       hideWhenRunning={!reading}
       autohide="not-last"
-      className="aui-assistant-action-bar-root col-start-3 row-start-2 -ms-1 flex animate-in gap-1 text-muted-foreground duration-200 fade-in motion-reduce:animate-none"
+      className="aui-assistant-action-bar-root col-start-3 row-start-2 -ms-1 flex animate-in items-center gap-1 text-muted-foreground duration-200 fade-in motion-reduce:animate-none"
     >
       <ActionBarPrimitive.Copy
         render={<TooltipIconButton tooltip={labels.copy} />}

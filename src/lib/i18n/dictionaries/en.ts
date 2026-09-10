@@ -73,6 +73,7 @@ export const en = {
     recentSessions: "All sessions",
     manageAgents: "Manage Agents",
     conversation: "Conversation",
+    resizeArtifact: "Resize",
     fixtureLabel: "Demo workspace",
   },
   mobileNavigation: {

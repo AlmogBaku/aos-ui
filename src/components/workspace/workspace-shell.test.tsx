@@ -16,6 +16,7 @@ import { he } from "@/lib/i18n/dictionaries/he"
 import { useSessionTabUndo } from "./session-tab-undo"
 
 import {
+  WorkspaceConversationShell,
   WorkspaceShell,
   type WorkspaceAgent,
   type WorkspaceSession,
@@ -128,12 +129,163 @@ function renderShell(
 }
 
 describe("WorkspaceShell", () => {
+  it("reuses the workspace conversation and artifact pane without navigation chrome", () => {
+    const ResizeObserverBefore = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback(
+          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    render(
+      <WorkspaceConversationShell
+        locale="en"
+        dictionary={en}
+        header={<header>Invited by Northwind</header>}
+        artifactViewer={<div>Artifact preview body</div>}
+        artifactViewerOpen
+        artifactViewerLabel="Output preview"
+      >
+        <div>Assistant UI conversation</div>
+      </WorkspaceConversationShell>
+    )
+
+    expect(screen.getByText("Invited by Northwind")).toBeVisible()
+    expect(screen.getByText("Assistant UI conversation")).toBeVisible()
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "Output preview" })
+      ).getByText("Artifact preview body")
+    ).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Open Agents" })).toBeNull()
+    expect(screen.queryByRole("tab")).toBeNull()
+    expect(
+      screen
+        .getByText("Assistant UI conversation")
+        .closest("section")!
+        .style.getPropertyValue("--workspace-artifact-default-width")
+    ).toBe("min(40rem, 50cqi)")
+    globalThis.ResizeObserver = ResizeObserverBefore
+  })
+
+  it("keeps the regular workspace artifact default independent", () => {
+    renderShell({
+      artifactViewer: <div>Artifact</div>,
+      artifactViewerOpen: true,
+      artifactViewerLabel: "Output preview",
+    })
+
+    expect(
+      screen
+        .getByText("Assistant UI conversation")
+        .closest("section")!
+        .style.getPropertyValue("--workspace-artifact-default-width")
+    ).toBe("")
+  })
+
+  it("resizes the shared desktop artifact pane with the keyboard and persists its width", () => {
+    const ResizeObserverBefore = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback(
+          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    const view = render(
+      <WorkspaceConversationShell
+        locale="en"
+        dictionary={en}
+        header={<header>Guest</header>}
+        artifactViewer={<div>Artifact</div>}
+        artifactViewerOpen
+        artifactViewerLabel="Output preview"
+      >
+        <div>Conversation</div>
+      </WorkspaceConversationShell>
+    )
+    const separator = screen.getByRole("separator", {
+      name: "Resize output preview",
+    })
+    const shell = separator.closest("section")!
+    vi.spyOn(
+      screen.getByRole("complementary", { name: "Output preview" }),
+      "getBoundingClientRect"
+    ).mockReturnValue({ width: 480 } as DOMRect)
+
+    fireEvent.keyDown(separator, { key: "ArrowLeft" })
+
+    expect(shell.style.getPropertyValue("--workspace-artifact-width")).toBe(
+      "496px"
+    )
+    expect(window.localStorage.getItem("aos_ui:workspace:artifact-width")).toBe(
+      "496"
+    )
+
+    view.unmount()
+    renderShell({
+      artifactViewer: <div>Artifact</div>,
+      artifactViewerOpen: true,
+      artifactViewerLabel: "Output preview",
+    })
+    expect(
+      screen
+        .getByRole("separator", { name: "Resize output preview" })
+        .closest("section")!
+        .style.getPropertyValue("--workspace-artifact-width")
+    ).toBe("496px")
+    globalThis.ResizeObserver = ResizeObserverBefore
+  })
+
+  it("uses physical arrow direction for the RTL artifact separator", () => {
+    const ResizeObserverBefore = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback(
+          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    renderShell({
+      locale: "he",
+      dictionary: he,
+      artifactViewer: <div>Artifact</div>,
+      artifactViewerOpen: true,
+      artifactViewerLabel: "תצוגה מקדימה של התוצר",
+    })
+    const separator = screen.getByRole("separator", {
+      name: "שינוי רוחב תצוגה מקדימה של התוצר",
+    })
+
+    fireEvent.keyDown(separator, { key: "ArrowRight" })
+
+    expect(
+      separator
+        .closest("section")!
+        .style.getPropertyValue("--workspace-artifact-width")
+    ).toBe("432px")
+    globalThis.ResizeObserver = ResizeObserverBefore
+  })
+
   it("shows Session Outputs in the inspector and replaces them with an open artifact", () => {
     const ResizeObserverBefore = globalThis.ResizeObserver
     globalThis.ResizeObserver = class {
-      constructor(
-        private readonly callback: ResizeObserverCallback
-      ) {}
+      constructor(private readonly callback: ResizeObserverCallback) {}
       observe() {
         this.callback(
           [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
