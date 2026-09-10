@@ -99,6 +99,7 @@ export function VoiceComposerField({ children }: PropsWithChildren) {
 export function VoiceComposerControl() {
   const aui = useAui()
   const media = useVoiceContext()?.media
+  const hasDictation = useAuiState((s) => s.thread.capabilities.dictation)
   const labels = useVoiceLabels()
   const capture = useVoiceState((s) => s?.capture)
   const mode = useVoiceState((s) => s?.mode ?? "transcription")
@@ -112,7 +113,7 @@ export function VoiceComposerControl() {
     if (capture?.phase === "recording")
       completionButton.current?.focus({ preventScroll: true })
   }, [capture?.phase])
-  if (!media) return null
+  if (!media || !hasDictation) return null
 
   const start = () => {
     // Recheck live state at the gesture boundary, not only the last render.

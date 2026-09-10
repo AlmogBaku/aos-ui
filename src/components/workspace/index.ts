@@ -1,7 +1,9 @@
 export {
   AgentGlyph,
+  WorkspaceConversationShell,
   WorkspaceShell,
   type WorkspaceActionResult,
+  type WorkspaceConversationShellProps,
   type WorkspaceAgent,
   type WorkspaceAgentIcon,
   type WorkspaceAgentStatus,

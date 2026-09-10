@@ -26,6 +26,13 @@ vi.mock("@/runtime-adapters/fixture/composition", () => ({
 vi.mock("@/components/theme-provider", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
+vi.mock("@/components/guest", () => ({
+  GuestApp: ({ inviteToken }: { inviteToken?: string }) => (
+    <div data-invite-token={inviteToken} data-testid="guest-app">
+      guest
+    </div>
+  ),
+}))
 
 beforeEach(() => {
   document.cookie = "aos-ui-locale=en; Max-Age=31536000; Path=/"
@@ -96,6 +103,42 @@ describe("App", () => {
     const fixture = await screen.findByTestId("fixture-app")
     expect(fixture).toHaveAttribute("data-model-selector-enabled", "false")
     expect(fixture).toHaveAttribute("data-context-enabled", "true")
+  })
+
+  it("loads the provider-neutral guest surface without a runtime configuration", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ surface: "guest" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+    render(<App />)
+    expect(await screen.findByTestId("guest-app")).toBeVisible()
+    expect(screen.queryByTestId("fixture-app")).not.toBeInTheDocument()
+  })
+
+  it("scrubs and retains an invitation before runtime configuration loads", async () => {
+    let resolveConfiguration!: (response: Response) => void
+    vi.mocked(fetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveConfiguration = resolve
+      })
+    )
+    window.history.replaceState({}, "", "/#invite=early-secret")
+
+    render(<App />)
+
+    expect(window.location.hash).toBe("")
+    resolveConfiguration(
+      new Response(JSON.stringify({ surface: "guest" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+    expect(await screen.findByTestId("guest-app")).toHaveAttribute(
+      "data-invite-token",
+      "early-secret"
+    )
   })
 
   it("migrates a locale-prefixed deep link to the compact URL and preference", async () => {

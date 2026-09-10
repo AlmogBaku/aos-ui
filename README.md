@@ -68,6 +68,17 @@ supported `MediaRecorder`. See [Chat voice setup and use](docs/chat-voice.md)
 for configuration, limits, privacy, troubleshooting and the pending live
 acceptance gate. Automated fixtures do not certify live speech support.
 
+### Optional same-origin helper and guest invitations
+
+`gateway/cmd/aos-gateway` can serve the existing operator UI through a
+same-origin native proxy and a separate, restricted guest chat. Guest access is
+an expiring encrypted Agent+reference invitation; the helper keeps no Session
+database and native runtime persistence remains authoritative. See
+[Same-origin helper and invited chat](docs/invite-chat.md) for build, runtime
+credentials, invitation minting, first-turn prefill/private instruction, HTTPS,
+recovery, and security limitations. Run `aos-gateway --help`, `aos-gateway help
+serve`, or `aos-gateway help invite` for the complete read-only CLI reference.
+
 ### Generic AG-UI
 
 Set `AOS_UI_RUNTIME_MODE=ag-ui`, `AOS_UI_AG_UI_URL`, and `AOS_UI_AG_UI_WORKSPACE_URL`. The workspace host implements `GET /agents`, `GET /sessions`, `POST /sessions`, and `GET /sessions/:threadId`. Capabilities absent from the integration remain visibly unavailable.
@@ -165,6 +176,7 @@ coverage and the manual host OS check.
 - `shared/`: public runtime configuration, presentation schemas/examples, portable creator skill.
 - `integrations/`: native OpenCode and Hermes packages; independent optional Monty.
 - `deploy/`: static hosting and public configuration examples.
+- `gateway/`: optional Go same-origin proxy and invited-chat API.
 
 Browser code never imports native implementations. Shared definitions contain no React, browser state, filesystem access, SDKs, or secrets. Split TypeScript targets and import restrictions enforce these boundaries.
 

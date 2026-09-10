@@ -26,10 +26,16 @@ import {
 import { getDictionary } from "@/lib/i18n/get-dictionary"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { stripLocaleFromPathname } from "@/lib/i18n/routing"
+import { captureInviteToken } from "@/lib/invite-fragment"
 import {
-  parsePublicRuntimeConfiguration,
+  parsePublicApplicationConfiguration,
+  type ApplicationConfiguration,
   type RuntimeConfiguration,
 } from "@shared/runtime-config"
+
+const GuestApp = lazy(() =>
+  import("@/components/guest").then(({ GuestApp }) => ({ default: GuestApp }))
+)
 
 const FixtureAosUiApp = lazy(() =>
   import("@/runtime-adapters/fixture/composition").then(
@@ -63,11 +69,11 @@ const invalidConfig: RuntimeConfiguration = {
   reason: "invalid-public-config",
 }
 
-async function loadRuntimeConfiguration(): Promise<RuntimeConfiguration> {
+async function loadRuntimeConfiguration(): Promise<ApplicationConfiguration> {
   try {
     const response = await fetch("/runtime-config.json", { cache: "no-store" })
     if (!response.ok) return invalidConfig
-    return parsePublicRuntimeConfiguration(await response.json())
+    return parsePublicApplicationConfiguration(await response.json())
   } catch {
     return invalidConfig
   }
@@ -247,9 +253,10 @@ function Application() {
   const [locale, setLocale] = useState<Locale>(
     () => readPreferredLocale() ?? defaultLocale
   )
-  const [config, setConfig] = useState<RuntimeConfiguration | null>(null)
+  const [config, setConfig] = useState<ApplicationConfiguration | null>(null)
   const [dictionary, setDictionary] = useState<Dictionary | null>(null)
   const [nowIso] = useState(() => new Date().toISOString())
+  const [inviteToken] = useState(captureInviteToken)
 
   useEffect(() => {
     const onLocaleChange = (event: Event) => {
@@ -283,7 +290,19 @@ function Application() {
     if (dictionary) document.title = dictionary.productName
   }, [dictionary])
 
-  if (!config || !dictionary) return <LoadingWorkspace locale={locale} />
+  if (!config) return <LoadingWorkspace locale={locale} />
+
+  if (config.status === "ready" && "surface" in config) {
+    return (
+      <RuntimeErrorBoundary locale={locale}>
+        <Suspense fallback={<LoadingWorkspace locale={locale} />}>
+          <GuestApp inviteToken={inviteToken} />
+        </Suspense>
+      </RuntimeErrorBoundary>
+    )
+  }
+
+  if (!dictionary) return <LoadingWorkspace locale={locale} />
 
   return (
     <ThemeProvider>
