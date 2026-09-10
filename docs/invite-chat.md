@@ -59,6 +59,12 @@ The operator listener forwards only the selected native prefix. The guest listen
 > [!IMPORTANT]
 > The helper binds to loopback and does not provision TLS. Terminate public HTTPS at an operator-managed reverse proxy and forward only the intended guest origin to the guest listener.
 
+The guest origin is a signed invitation audience, not a cosmetic link prefix.
+Set `AOS_GATEWAY_GUEST_ORIGIN` to the final HTTPS guest origin in both the
+gateway's managed service environment and any deliberately authorized minting
+process. Changing it invalidates existing links. A `.env` file is not enough
+for a systemd-managed process unless its unit imports that file.
+
 ## Create an invitation
 
 Mint invitations locally; there is no HTTP minting endpoint. The Agent and
@@ -102,7 +108,6 @@ not use it for secrets.
 The native OpenCode and Hermes integrations include the `aos-invite-link`
 skill. Ask the Agent to create an invite and provide:
 
-- the deployed guest origin;
 - the exact target Agent or Hermes profile identifier; and
 - the inline first-turn instruction.
 
@@ -111,11 +116,14 @@ logo URL, accent, title, or welcome message. The skill verifies the exact native
 target before it runs `aos-gateway`. It never assumes that the current Agent is
 the invite target.
 
-The `aos-gateway` binary and `AOS_GATEWAY_INVITE_SIGNING_KEY` must be available
-to the native Agent process. In OpenCode Compose deployments the supplied image
-contains the binary and the overlay passes the key from `.env`. For local
-OpenCode and Hermes installations, build the binary above, place it on the
-process `PATH`, and provision the key in that process environment.
+The `aos-gateway` binary must be available to the native Agent process. It uses
+`AOS_GATEWAY_GUEST_ORIGIN` when configured and asks only when it is absent. In
+OpenCode Compose deployments the supplied image contains the binary. For local
+OpenCode and Hermes installations, build the binary above and place it on the
+process `PATH`. `AOS_GATEWAY_INVITE_SIGNING_KEY` authorizes bearer-link
+minting, so grant it to an Agent process only after an explicit opt-in; do not
+put it in a shell profile. The gateway itself needs the key, but an Agent may
+safely lack it and report that minting is unavailable.
 
 > [!WARNING]
 > Every shell-capable Agent in the same native process may be able to read the

@@ -5,9 +5,15 @@ description: Use when a user asks to create a signed AOS guest invitation for a 
 
 # Create an invite link
 
+Resolve the guest origin before collecting user input:
+
+- when `AOS_GATEWAY_GUEST_ORIGIN` is non-empty, use it as the deployed guest
+  origin and do not ask for it;
+- otherwise, collect the deployed HTTPS guest origin, such as
+  `https://guest.example.com`, and set it only for the mint command.
+
 Collect these required values from the user without inferring them:
 
-- the deployed guest origin, such as `https://guest.example.com`;
 - the exact target Agent identifier; and
 - the inline first-turn Agent instruction.
 
@@ -30,7 +36,11 @@ Invoke `aos-gateway` with a Bash array so each value remains one argument. Encod
 args=(aos-gateway invite --agent "$agent" --instruction "$instruction")
 # Append only the optional flags the user supplied:
 # --ref --expires-in --prefill --lang --name --logo --accent --title --message
-AOS_GATEWAY_GUEST_ORIGIN="$guest_origin" "${args[@]}"
+if [[ -n ${AOS_GATEWAY_GUEST_ORIGIN:-} ]]; then
+  "${args[@]}"
+else
+  AOS_GATEWAY_GUEST_ORIGIN="$guest_origin" "${args[@]}"
+fi
 ```
 
 Execute the array directly. Treat a missing signing key, failed Agent lookup, nonzero CLI exit, or output that is not exactly one invite URL as failure. Never retry an uncertain mint automatically.

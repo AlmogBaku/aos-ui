@@ -12,7 +12,7 @@ Use this documentation to evaluate, configure, and operate AOS UI: a workspace f
 - [OpenCode](runtimes/opencode.md) — attach AOS to an independently operated OpenCode server.
 - [Hermes](runtimes/hermes.md) — attach AOS to an independently operated Hermes server.
 - [Generic AG-UI](runtimes/ag-ui.md) — connect separate AG-UI run and workspace services.
-- [Deployment](deployment.md) — build static assets or run the supplied Compose stack.
+- [Deployment](deployment.md) — build static assets, run Compose, or operate private systemd services.
 
 ## Operate
 

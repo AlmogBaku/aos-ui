@@ -1,0 +1,18 @@
+[Unit]
+Description=AOS private operator UI
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=@AOS_CHECKOUT@
+EnvironmentFile=/etc/aos-ui/aos-ui.env
+ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml up --remove-orphans
+ExecStop=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml down
+Restart=always
+RestartSec=5
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

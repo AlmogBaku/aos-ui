@@ -55,9 +55,16 @@ Use `file:///absolute/path/to/aos-ui#integrations/hermes` instead of the reposit
 
 The plugin registers the read-only skill as
 `aos-integration:aos-invite-link`. When asked for a guest invite, Hermes loads
-it with `skill_view`. Install `aos-gateway` on the Hermes process `PATH` and set
-`AOS_GATEWAY_INVITE_SIGNING_KEY` in that process environment to enable minting.
-See [Invited chat](../invite-chat.md) for usage and security guidance.
+it with `skill_view`. Install `aos-gateway` on the Hermes process `PATH` and
+set `AOS_GATEWAY_GUEST_ORIGIN` in its managed service environment to avoid a
+per-invite domain prompt. Grant `AOS_GATEWAY_INVITE_SIGNING_KEY` to Hermes only
+when an operator intentionally authorizes shell-capable Agents to mint bearer
+links. See [Invited chat](../invite-chat.md) for usage and security guidance.
+
+For upgrades, install from a new full committed SHA, run `plugins doctor`,
+enable the required tools, then restart the managed Hermes gateway. Do not patch
+an installed plugin cache to carry local or uncommitted AOS changes; commit and
+reinstall from an immutable ref instead.
 
 ## Run with Compose
 

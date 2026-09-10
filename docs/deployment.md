@@ -106,6 +106,48 @@ All published ports bind to `127.0.0.1` by default. Set `AOS_UI_BIND_ADDRESS` on
 
 Hermes must listen on an address reachable from the web container. A host-loopback-only listener is not reachable through `host.docker.internal`.
 
+## Systemd and a private operator UI
+
+For a host-managed deployment, use the provider-neutral templates in
+[`deploy/systemd`](../deploy/systemd). They model two distinct surfaces:
+
+- `aos-ui.service.template` runs the regular operator UI as a private Compose
+  service. Bind it to loopback or a trusted private network; do not publish it
+  through the guest host.
+- `aos-gateway.service.template` runs the optional invited-chat gateway. Both
+  of its listeners are loopback-bound: the operator listener remains private,
+  while an external reverse proxy may reach only the guest listener.
+- `aos-guest-nginx.conf.template` is an example guest-only virtual host. It
+  sends the guest UI and `/api/guest/*` to the guest listener and has no route
+  to native Hermes/OpenCode endpoints.
+
+Copy and substitute the templates outside the checkout; they are not an
+installer and intentionally contain no domain, proxy provider, tunnel, or
+credential defaults. Follow [`aos-deploy`'s systemd reference](../.agents/skills/aos-deploy/references/systemd.md)
+when using those templates.
+
+Keep public runtime JSON separate from service configuration. A process managed
+by systemd receives only its unit, `EnvironmentFile=`, credentials, and other
+service-manager settings: editing a runtime `.env` does not update that
+process. Store native tokens and invite signing keys in an operator-managed
+secret facility such as systemd encrypted credentials, never in
+`/runtime-config.json`, `VITE_*`, or a shell startup file.
+
+After changing a unit or proxy configuration, validate it before reload:
+
+```bash
+systemd-analyze verify /etc/systemd/system/aos-ui.service
+systemd-analyze verify /etc/systemd/system/aos-gateway.service
+systemctl daemon-reload
+```
+
+Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
+target the loopback guest listener exclusively; it must not expose the private
+operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
+Then verify the guest root, unauthenticated `GET /api/guest/bootstrap` (`401`),
+and that `/hermes/`, `/auth/`, and non-guest `/api/` routes cannot reach the
+native runtime.
+
 ## Persistence and shutdown
 
 Provider persistence remains native:
