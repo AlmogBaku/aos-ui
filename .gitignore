@@ -25,6 +25,7 @@
 *.pem
 /.worktrees/
 /.claude/
+/.agents/skills/
 /.impeccable/
 /.hermes/plans/.chromium-pdf-profile/
 /skills-lock.json
