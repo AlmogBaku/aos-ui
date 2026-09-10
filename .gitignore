@@ -27,7 +27,9 @@
 /.claude/
 /.agents/skills/
 /.impeccable/
-/.hermes/plans/.chromium-pdf-profile/
+/.hermes/
+/.opencode/
+/.superpowers/
 /skills-lock.json
 
 # debug
