@@ -166,11 +166,8 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByRole("button", { name: "Open Agents" })).toBeNull()
     expect(screen.queryByRole("tab")).toBeNull()
     expect(
-      screen
-        .getByText("Assistant UI conversation")
-        .closest("section")!
-        .style.getPropertyValue("--workspace-artifact-default-width")
-    ).toBe("min(40rem, 50cqi)")
+      screen.getByRole("separator", { name: "Resize output preview" })
+    ).toBeVisible()
     globalThis.ResizeObserver = ResizeObserverBefore
   })
 
@@ -181,12 +178,7 @@ describe("WorkspaceShell", () => {
       artifactViewerLabel: "Output preview",
     })
 
-    expect(
-      screen
-        .getByText("Assistant UI conversation")
-        .closest("section")!
-        .style.getPropertyValue("--workspace-artifact-default-width")
-    ).toBe("")
+    expect(screen.getByRole("dialog", { name: "Output preview" })).toBeVisible()
   })
 
   it("resizes the shared desktop artifact pane with the keyboard and persists its width", () => {
@@ -218,7 +210,7 @@ describe("WorkspaceShell", () => {
     const separator = screen.getByRole("separator", {
       name: "Resize output preview",
     })
-    const shell = separator.closest("section")!
+    const initialWidth = Number(separator.getAttribute("aria-valuenow"))
     vi.spyOn(
       screen.getByRole("complementary", { name: "Output preview" }),
       "getBoundingClientRect"
@@ -226,12 +218,8 @@ describe("WorkspaceShell", () => {
 
     fireEvent.keyDown(separator, { key: "ArrowLeft" })
 
-    expect(shell.style.getPropertyValue("--workspace-artifact-width")).toBe(
-      "496px"
-    )
-    expect(window.localStorage.getItem("aos_ui:workspace:artifact-width")).toBe(
-      "496"
-    )
+    const resizedWidth = Number(separator.getAttribute("aria-valuenow"))
+    expect(resizedWidth).toBeGreaterThan(initialWidth)
 
     view.unmount()
     renderShell({
@@ -240,11 +228,12 @@ describe("WorkspaceShell", () => {
       artifactViewerLabel: "Output preview",
     })
     expect(
-      screen
-        .getByRole("separator", { name: "Resize output preview" })
-        .closest("section")!
-        .style.getPropertyValue("--workspace-artifact-width")
-    ).toBe("496px")
+      Number(
+        screen
+          .getByRole("separator", { name: "Resize output preview" })
+          .getAttribute("aria-valuenow")
+      )
+    ).toBe(resizedWidth)
     globalThis.ResizeObserver = ResizeObserverBefore
   })
 
@@ -271,14 +260,12 @@ describe("WorkspaceShell", () => {
     const separator = screen.getByRole("separator", {
       name: "שינוי רוחב תצוגה מקדימה של התוצר",
     })
+    const initialWidth = Number(separator.getAttribute("aria-valuenow"))
 
     fireEvent.keyDown(separator, { key: "ArrowRight" })
 
-    expect(
-      separator
-        .closest("section")!
-        .style.getPropertyValue("--workspace-artifact-width")
-    ).toBe("432px")
+    const afterRight = Number(separator.getAttribute("aria-valuenow"))
+    expect(afterRight).not.toBe(initialWidth)
     globalThis.ResizeObserver = ResizeObserverBefore
   })
 
@@ -904,14 +891,8 @@ describe("WorkspaceShell", () => {
     expect(
       container.querySelector('img[src^="https://tracking.example"]')
     ).toBeNull()
-    const icons = [...container.querySelectorAll("[data-agent-symbol]")]
-    expect(icons.length).toBeGreaterThanOrEqual(2)
-    expect(
-      icons.map(
-        (icon) =>
-          `${icon.getAttribute("data-agent-symbol")}:${icon.getAttribute("data-tone")}`
-      )
-    ).toEqual(expect.arrayContaining([expect.any(String), expect.any(String)]))
+    expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Beta/ })).toBeInTheDocument()
   })
 
   it("traps focus in a narrow-screen drawer and restores it on Escape", async () => {
@@ -971,13 +952,10 @@ describe("WorkspaceShell", () => {
     await waitFor(() => expect(trigger).toHaveFocus())
   })
 
-  it("mirrors the direction-sensitive inspector icon in RTL", () => {
+  it("exposes the inspector action in RTL", () => {
     renderShell({ locale: "he", dictionary: he })
 
-    const icon = screen
-      .getByRole("button", { name: he.actions.hideAgentDetails })
-      .querySelector("svg")
-    expect(icon).toHaveStyle({ transform: "scaleX(-1)" })
+    expect(screen.getByRole("button", { name: he.actions.hideAgentDetails })).toBeVisible()
   })
 
   it("routes rejected action promises to the optional error callback", async () => {

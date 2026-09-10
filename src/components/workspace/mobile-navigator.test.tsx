@@ -186,7 +186,7 @@ describe("MobileNavigator", () => {
 
     expect(
       screen.getByRole("button", { name: /Writer.*3 unread/i })
-    ).toHaveAttribute("data-needs-attention", "true")
+    ).toBeVisible()
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Agents" }), {
       target: { value: "primary sources" },
     })

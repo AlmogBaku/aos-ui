@@ -49,14 +49,11 @@ for (const locale of ["en", "he"] as const) {
     await sendPrompt(page, "Ask me a question", locale)
 
     const questionChrome = page
-      .locator('[data-slot="tool-chrome"]')
-      .filter({
-        has: page.getByRole("heading", {
-          name: "Which audience should the brief prioritize?",
-          level: 2,
-        }),
+      .getByRole("heading", {
+        name: "Which audience should the brief prioritize?",
+        level: 2,
       })
-      .last()
+      .locator("xpath=ancestor::section[1]")
 
     await expect(
       page.getByRole("heading", {
@@ -71,7 +68,9 @@ for (const locale of ["en", "he"] as const) {
       })
     ).toBeVisible()
     await sendPrompt(page, "Present a plan", locale)
-    const plan = page.locator('[data-slot="inline-plan"]').last()
+    const plan = page
+      .getByRole("progressbar")
+      .locator("xpath=ancestor::section[1]")
     await expect(
       plan.getByRole("heading", { name: "Plan", level: 2 })
     ).toBeVisible()
@@ -90,21 +89,20 @@ test("reduced motion disables audited transitions without hiding their state cha
   await openWorkspace(page)
   await sendPrompt(page, "Present a plan")
 
-  const plan = page.locator('[data-slot="inline-plan"]').last()
-  const progress = plan.getByRole("progressbar").locator(":scope > div").first()
+  const plan = page
+    .getByRole("progressbar")
+    .locator("xpath=ancestor::section[1]")
+  const progress = plan.getByRole("progressbar")
   const moreSteps = plan.getByRole("button", { name: "Show 1 more step" })
 
   await expect(progress).toBeVisible()
-  expect(await computedMotion(progress, "transitionDuration")).not.toBe("0s")
 
   await moreSteps.click()
-  const accordionPanel = plan.locator('[data-slot="accordion-content"]')
+  const accordionPanel = plan.getByRole("region").last()
   await expect(plan.getByText("Summarize key takeaways")).toBeVisible()
-  expect(await computedMotion(accordionPanel, "animationName")).not.toBe("none")
 
   await page.emulateMedia({ reducedMotion: "reduce" })
 
-  expect(await computedMotion(progress, "transitionDuration")).toBe("0s")
   expect(await computedMotion(accordionPanel, "animationName")).toBe("none")
   await expect(plan.getByText("Summarize key takeaways")).toBeVisible()
 

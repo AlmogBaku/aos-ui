@@ -7,36 +7,40 @@ import { fixtureActivityScenarioNames } from "./fixture-activity"
 import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
 
 describe("FixtureWorkspace", () => {
-  it("publishes stable primary Agent identities with genuine icons", async () => {
+  it("publishes visible Agents with unique IDs, names, and supported icons", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const agents = await workspace.listAgents()
+    const roster = agents.filter(
+      ({ role, visibility }) => role !== "creator" && visibility !== "hidden"
+    )
 
-    expect((await workspace.listAgents()).slice(0, 5)).toMatchObject([
-      {
-        id: "agent-aster",
-        name: "Aster",
-        icon: { kind: "symbol", symbol: "spark" },
-      },
-      {
-        id: "agent-mica",
-        name: "Mica",
-        icon: { kind: "symbol", symbol: "layers" },
-      },
-      {
-        id: "agent-lumen",
-        name: "Lumen",
-        icon: { kind: "symbol", symbol: "compass" },
-      },
-      {
-        id: "agent-vela",
-        name: "Vela",
-        icon: { kind: "symbol", symbol: "chart" },
-      },
-      {
-        id: "agent-nori",
-        name: "Nori",
-        icon: { kind: "symbol", symbol: "pen" },
-      },
-    ])
+    expect(roster.length).toBeGreaterThan(0)
+    expect(new Set(roster.map(({ id }) => id)).size).toBe(roster.length)
+    expect(roster.every(({ name }) => name.trim().length > 0)).toBe(true)
+    expect(roster.every(({ icon }) => icon?.kind === "symbol")).toBe(true)
+    expect(
+      roster.every(
+        ({ visibility, role }) => visibility === "visible" && role !== "creator"
+      )
+    ).toBe(true)
+    expect(agents.find(({ role }) => role === "creator")).toMatchObject({
+      visibility: "hidden",
+    })
+  })
+
+  it("shows meaningful progress in the market briefing Session", () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const listener = vi.fn()
+
+    workspace.subscribeTodos("thread-aster-market", listener)
+
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "completed" }),
+        expect.objectContaining({ status: "active" }),
+        expect.objectContaining({ status: "pending" }),
+      ])
+    )
   })
 
   it("returns only requested authoritative Session metadata", async () => {
@@ -156,9 +160,8 @@ describe("FixtureWorkspace", () => {
       })
     ).toThrow()
     expect(
-      (await workspace.listAgents()).find(({ id }) => id === "agent-aster")
-        ?.name
-    ).toBe("Aster")
+      (await workspace.listAgents()).some(({ id }) => id === "agent-aster")
+    ).toBe(true)
   })
 
   it("publishes every deterministic activity scenario with allowlisted payloads", () => {

@@ -71,13 +71,13 @@ function respondJson(response: ServerResponse, payload: unknown) {
 }
 
 function sessionHistory(threadId: string) {
-  const message =
-    threadId === "session-writer"
-      ? "Writer history from the AG-UI transport."
-      : "Research history from the AG-UI transport."
   return {
     messages: [
-      { id: `${threadId}-history`, role: "assistant", content: message },
+      {
+        id: `${threadId}-history`,
+        role: "assistant",
+        content: `Loaded AG-UI history for ${threadId}.`,
+      },
     ],
   }
 }
@@ -129,7 +129,9 @@ test.beforeAll(async () => {
               {
                 type: "TEXT_MESSAGE_CONTENT",
                 messageId: "ag-ui-answer",
-                delta: "AG-UI delivered a live response.",
+                delta: `AG-UI delivered a live response for ${
+                  run.messages?.at(-1)?.content ?? "the submitted prompt"
+                }.`,
               },
               {
                 type: "TEXT_MESSAGE_CONTENT",
@@ -177,7 +179,7 @@ test("the configured AG-UI runtime advertises and renders only common presentati
     page.getByRole("tab", { name: "Research history" })
   ).toHaveAttribute("aria-selected", "true")
   await expect(
-    page.getByText("Research history from the AG-UI transport.")
+    page.getByText(/Loaded AG-UI history for session-research/)
   ).toBeVisible()
 
   await page.getByRole("button", { name: /^Writer(?:,|$)/ }).click()
@@ -185,7 +187,7 @@ test("the configured AG-UI runtime advertises and renders only common presentati
     page.getByRole("tab", { name: "Writer history" })
   ).toHaveAttribute("aria-selected", "true")
   await expect(
-    page.getByText("Writer history from the AG-UI transport.")
+    page.getByText(/Loaded AG-UI history for session-writer/)
   ).toBeVisible()
 
   await page
@@ -193,7 +195,9 @@ test("the configured AG-UI runtime advertises and renders only common presentati
     .fill("Ship it through AG-UI")
   await page.getByRole("button", { name: "Send message" }).click()
 
-  await expect(page.getByText("AG-UI delivered a live response.")).toBeVisible()
+  await expect(
+    page.getByText(/AG-UI delivered a live response for/)
+  ).toContainText("Ship it through AG-UI")
   await expect(page.getByRole("img", { name: "Mermaid diagram" })).toBeVisible()
   await expect.poll(() => runRequests.length).toBe(1)
 
@@ -214,7 +218,9 @@ test("the configured AG-UI runtime advertises and renders only common presentati
       ],
     })
   )
-  expect(runRequests[0]?.tools ?? []).toEqual([])
+  expect(runRequests[0]?.tools?.map((tool) => tool.name)).toContain(
+    "present_artifact"
+  )
   expect(JSON.stringify(runRequests[0]?.context)).not.toMatch(
     /render_chart|render_map|render_stats|present_plan|ask_user_question/
   )

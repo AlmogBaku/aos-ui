@@ -26,8 +26,8 @@ import {
   type FixtureWorkspace,
 } from "./fixture-workspace"
 import {
-  FIXTURE_ARTIFACT_CATALOG,
   createFixtureArtifactAdapter,
+  FIXTURE_ARTIFACT_CATALOG,
 } from "./fixture-artifacts"
 
 const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
@@ -39,19 +39,35 @@ const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
 ) => structuredClone(repository)
 
-const planResult = {
-  id: "plan-market",
+const launchPlanResult = {
+  id: "plan-launch",
   title: "Plan",
   steps: [
-    { id: "scope", label: "Define scope and coverage", status: "completed" },
-    { id: "trends", label: "Aggregate spend trends", status: "active" },
+    { id: "goals", label: "Confirm launch goals", status: "completed" },
+    { id: "audience", label: "Validate the audience", status: "active" },
     {
-      id: "segments",
-      label: "Segment by function and industry",
+      id: "narrative",
+      label: "Review the narrative",
       status: "pending",
     },
-    { id: "drivers", label: "Identify drivers and shifts", status: "pending" },
-    { id: "summary", label: "Summarize key takeaways", status: "pending" },
+    { id: "risks", label: "Surface launch risks", status: "pending" },
+    { id: "decision", label: "Recommend the next decision", status: "pending" },
+  ],
+} as const
+
+const marketInvestmentChart = {
+  type: "line",
+  xKey: "quarter",
+  series: [
+    { key: "platform", label: "AI platforms" },
+    { key: "applied", label: "Applied AI" },
+    { key: "governance", label: "Governance" },
+  ],
+  data: [
+    { quarter: "Q2 ’24", platform: 100, applied: 72, governance: 38 },
+    { quarter: "Q3 ’24", platform: 108, applied: 84, governance: 46 },
+    { quarter: "Q4 ’24", platform: 121, applied: 103, governance: 57 },
+    { quarter: "Q1 ’25", platform: 136, applied: 128, governance: 71 },
   ],
 } as const
 
@@ -62,7 +78,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         id: "message-market-user",
         role: "user",
         content:
-          "Give me a market brief on enterprise AI spend, highlighting shifts in the past 2 quarters.",
+          "Prepare my Q1 planning brief. Show where enterprise AI investment is shifting and tell me what to fund next.",
         createdAt: new Date("2026-09-03T09:10:00.000Z"),
       },
       {
@@ -71,15 +87,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         content: [
           {
             type: "text",
-            text: "Enterprise AI spend continues to broaden and deepen.\n\nAcross our coverage universe, Q4’24 and Q1’25 show accelerating investment in platforms and applied AI, with a clear shift from pilots to scaled deployments. Budgets are concentrating around data foundations, model governance, and measurable productivity outcomes.\n\n```ts\nconst growthRate = (57 - 42) / 42\n```",
-          },
-          {
-            type: "tool-call",
-            toolCallId: "fixture-initial-plan",
-            toolName: "present_plan",
-            args: { title: "Market brief" },
-            argsText: '{"title":"Market brief"}',
-            result: planResult,
+            text: "**Recommendation:** prioritize applied AI workflows, while funding platform and governance foundations together.\n\nApplied AI is accelerating fastest in the planning dataset. Governance is also becoming a material budget line instead of a later-stage add-on. Values are illustrative indices, not market estimates.",
           },
           {
             type: "tool-call",
@@ -88,16 +96,25 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
             args: { task: "Validate the market segments" },
             argsText: '{"task":"Validate the market segments"}',
             result: {
-              name: "Data analyst",
+              name: "Market research analyst",
               status: "completed",
-              summary: "Validated three market segments.",
+              summary:
+                "Validated the segment definitions and four-quarter trend.",
             },
           },
-          ...Object.values(FIXTURE_ARTIFACT_CATALOG.examples).map((data) => ({
-            type: "data" as const,
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-chart",
+            toolName: "render_chart",
+            args: { title: "Investment is shifting into applied AI" },
+            argsText: '{"title":"Investment is shifting into applied AI"}',
+            result: marketInvestmentChart,
+          },
+          {
+            type: "data",
             name: "aos.artifact",
-            data,
-          })),
+            data: FIXTURE_ARTIFACT_CATALOG.examples.markdown,
+          },
         ],
         createdAt: new Date("2026-09-03T09:12:00.000Z"),
       },
@@ -156,11 +173,30 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
       content:
         threadId === "thread-lumen-roadmap"
           ? "I’ve reviewed the available roadmap. Which customer segment should define the first release?"
-          : "The Session is ready to continue. The existing context remains scoped to this Agent.",
+          : threadId === "thread-aster-launch"
+            ? [
+                {
+                  type: "text",
+                  text: "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention.",
+                },
+                {
+                  type: "tool-call",
+                  toolCallId: "fixture-launch-plan",
+                  toolName: "present_plan",
+                  args: { title: "Launch review" },
+                  argsText: '{"title":"Launch review"}',
+                  result: launchPlanResult,
+                },
+              ]
+            : "The Session is ready to continue. The existing context remains scoped to this Agent.",
       createdAt: FIXTURE_NOW,
     },
   ]
 }
+
+type FixtureMessagesForThread = (
+  threadId: string
+) => readonly ThreadMessageLike[]
 
 class FixtureHistoryStore {
   readonly #repositories = new Map<
@@ -168,12 +204,17 @@ class FixtureHistoryStore {
     ReturnType<typeof ExportedMessageRepository.fromArray>
   >()
 
-  constructor(private readonly workspace: FixtureWorkspace) {}
+  constructor(
+    private readonly workspace: FixtureWorkspace,
+    private readonly messagesForThread: FixtureMessagesForThread = messagesFor
+  ) {}
 
   load(threadId: string) {
     const existing = this.#repositories.get(threadId)
     if (existing) return cloneRepository(existing)
-    const seeded = ExportedMessageRepository.fromArray(messagesFor(threadId))
+    const seeded = ExportedMessageRepository.fromArray(
+      this.messagesForThread(threadId)
+    )
     this.#repositories.set(threadId, seeded)
     return cloneRepository(seeded)
   }
@@ -239,8 +280,11 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
   readonly #archived = new Set<string>()
   readonly #history: FixtureHistoryStore
 
-  constructor(readonly workspace: FixtureWorkspace) {
-    this.#history = new FixtureHistoryStore(workspace)
+  constructor(
+    readonly workspace: FixtureWorkspace,
+    messagesForThread?: FixtureMessagesForThread
+  ) {
+    this.#history = new FixtureHistoryStore(workspace, messagesForThread)
   }
 
   historyFor(threadId: string): ThreadHistoryAdapter {
@@ -344,8 +388,11 @@ function useFixtureThreadAdapters(
   return useMemo(() => ({ history }), [history])
 }
 
-export function createFixtureThreadListAdapter(workspace: FixtureWorkspace) {
-  const adapter = new FixtureThreadListAdapter(workspace)
+export function createFixtureThreadListAdapter(
+  workspace: FixtureWorkspace,
+  messagesForThread?: FixtureMessagesForThread
+) {
+  const adapter = new FixtureThreadListAdapter(workspace, messagesForThread)
   adapter.unstable_useAdapters = function useFixtureAdapters() {
     return useFixtureThreadAdapters(adapter)
   }
@@ -540,6 +587,11 @@ export type FixtureRuntimeBundleOptions = {
   onThreadIdChange?: (threadId: string | undefined) => void
   streamDelayMs?: number
   enableAgentCreator?: boolean
+  /** Test-only seed overrides keep component tests independent of demo copy. */
+  testOnly?: {
+    workspace?: FixtureWorkspace
+    messagesForThread?: FixtureMessagesForThread
+  }
 }
 
 export function useFixtureRuntimeBundle({
@@ -547,16 +599,20 @@ export function useFixtureRuntimeBundle({
   onThreadIdChange,
   streamDelayMs,
   enableAgentCreator,
+  testOnly,
 }: FixtureRuntimeBundleOptions = {}) {
-  const [workspace] = useState(() =>
-    createFixtureWorkspace({
-      clock: () => FIXTURE_NOW,
-      enableAgentCreator,
-    })
+  const [workspace] = useState(
+    () =>
+      testOnly?.workspace ??
+      createFixtureWorkspace({
+        clock: () => FIXTURE_NOW,
+        enableAgentCreator,
+      })
   )
   const threadListAdapter = useMemo(
-    () => createFixtureThreadListAdapter(workspace),
-    [workspace]
+    () =>
+      createFixtureThreadListAdapter(workspace, testOnly?.messagesForThread),
+    [testOnly?.messagesForThread, workspace]
   )
   const artifacts = useMemo(() => createFixtureArtifactAdapter(), [])
   const chatModel = useMemo(

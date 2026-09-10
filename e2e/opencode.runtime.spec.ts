@@ -45,6 +45,10 @@ async function installOpenCodeProvider(
   options: { running?: boolean } = {}
 ) {
   let running = options.running ?? false
+  const responseTexts = {
+    initial: `provider-response-initial-${test.info().parallelIndex}`,
+    regenerated: `provider-response-regenerated-${test.info().parallelIndex}`,
+  }
   const sessions = [session("existing-session", "build", "Provider session")]
   const createdAgents: string[] = []
   const promptedAgents: string[] = []
@@ -111,7 +115,7 @@ async function installOpenCodeProvider(
           sessionID: "existing-session",
           messageID: "provider-assistant-1",
           type: "text",
-          text: "Initial provider response",
+          text: responseTexts.initial,
         },
       ],
     },
@@ -240,7 +244,7 @@ async function installOpenCodeProvider(
             parts: (payload.parts ?? []).filter(isRecord),
           })
         } else {
-          existingMessages[1]!.parts[0]!.text = "Regenerated provider response"
+          existingMessages[1]!.parts[0]!.text = responseTexts.regenerated
         }
       }
       await json(route, {})
@@ -276,6 +280,7 @@ async function installOpenCodeProvider(
     questionReplies,
     revertedMessageIds,
     existingMessages,
+    responseTexts,
   }
 }
 
@@ -324,13 +329,13 @@ test("reattaches a running OpenCode Session on the initial stream connection", a
   const provider = await installOpenCodeProvider(page, { running: true })
 
   await page.goto("/en")
-  await expect(page.getByText("Initial provider response")).toBeVisible()
+  await expect(page.getByText(provider.responseTexts.initial)).toBeVisible()
   await expect(
     page.getByRole("button", { name: "Stop generating" })
   ).toBeVisible()
 
   await page.reload()
-  await expect(page.getByText("Initial provider response")).toBeVisible()
+  await expect(page.getByText(provider.responseTexts.initial)).toBeVisible()
   await expect(
     page.getByRole("button", { name: "Stop generating" })
   ).toBeVisible()
@@ -393,7 +398,7 @@ test("Retry response reverts then regenerates the visible OpenCode reply", async
   const provider = await installOpenCodeProvider(page)
 
   await page.goto("/en")
-  await expect(page.getByText("Initial provider response")).toBeVisible()
+  await expect(page.getByText(provider.responseTexts.initial)).toBeVisible()
   await page.getByRole("button", { name: "Retry response" }).click()
 
   await expect
@@ -408,7 +413,7 @@ test("Retry response reverts then regenerates the visible OpenCode reply", async
   // SSE update refreshes this same history; reload makes the rendered state
   // deterministic without relying on a live network stream in CI.
   await page.reload()
-  await expect(page.getByText("Regenerated provider response")).toBeVisible()
+  await expect(page.getByText(provider.responseTexts.regenerated)).toBeVisible()
 })
 
 test("answers OpenCode's reserved native question through its provider endpoint", async ({

@@ -129,6 +129,13 @@ Hermes uses native HTTP/WebSocket APIs; no AOS server, registry, or SQLite.
   boundaries. Validate external HTTP payloads before adapting them.
 - Add or update focused tests with behavior changes. Fixtures must stay
   deterministic and provider mocks must preserve ownership semantics.
+- Treat tests as contracts for observable behavior. Exact text is appropriate
+  for accessible names, user-authored input, provider fidelity, protocols,
+  security, configuration, and localization keys; editorial fixture copy is
+  not a readiness or state contract. Do not assert private CSS classes,
+  `data-slot` markup, icon internals, or storage keys. Restrict pixel checks
+  to documented accessibility or responsive invariants, and do not add test
+  IDs solely to preserve implementation-coupled tests.
 - Load public runtime configuration from `/runtime-config.json`, separate from the frontend build. Never put credentials in it or `VITE_*`. Production is static Nginx, not a custom app server.
 - Use `@/` imports for project modules and logical CSS properties for RTL-safe
   layout.

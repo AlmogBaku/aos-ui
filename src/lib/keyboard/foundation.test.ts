@@ -8,7 +8,6 @@ import {
   normalizeKeyboardEvent,
   resolveEffectiveBindings,
   keyboardEventSafetyReason,
-  type KeyboardActionId,
 } from "@/lib/keyboard"
 
 describe("keyboard action catalogue", () => {
@@ -226,11 +225,6 @@ describe("keyboard ownership dispatch", () => {
       actionId: "workspace.focusNextPane",
     })
     expect(event.defaultPrevented).toBe(true)
-  })
-
-  it("supports typed action IDs for downstream command and settings owners", () => {
-    const action: KeyboardActionId = "commands.open"
-    expect(action).toBe("commands.open")
   })
 
   it("honors composition reported by a React-style native event", () => {

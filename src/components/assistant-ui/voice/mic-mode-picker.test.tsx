@@ -34,10 +34,11 @@ function setup(
 }
 
 describe("single microphone mode picker", () => {
-  it("stays in the composer rail so it cannot cover adjacent controls", () => {
+  it("exposes a single operable recording control", () => {
     const { mic } = setup()
 
-    expect(mic).not.toHaveClass("absolute")
+    expect(mic).toBeEnabled()
+    expect(mic).toHaveAccessibleName(/Record:/)
   })
   it("records on tap without opening a selector", () => {
     const h = setup()
@@ -45,13 +46,12 @@ describe("single microphone mode picker", () => {
     expect(h.onRecord).toHaveBeenCalledOnce()
     expect(screen.queryByRole("menu")).toBeNull()
   })
-  it("uses a distinct radio glyph for voice-turn mode", () => {
+  it("uses distinct accessible labels for the recording modes", () => {
     const transcription = setup()
-    expect(transcription.mic.querySelector(".lucide-mic")).not.toBeNull()
+    expect(transcription.mic).toHaveAccessibleName(/Record:/)
     cleanup()
     const voiceTurn = setup(undefined, "voice-turn")
-    expect(voiceTurn.mic.querySelector(".lucide-radio")).not.toBeNull()
-    expect(voiceTurn.mic.querySelector(".lucide-mic")).toBeNull()
+    expect(voiceTurn.mic).toHaveAccessibleName(/Record:/)
   })
   it("opens at 450ms, consumes release and selects a mode without recording", async () => {
     vi.useFakeTimers()

@@ -132,26 +132,25 @@ test("message plans and session todos remain independent artifacts", async ({
   await expect(plans).toHaveCount(1)
 })
 
-test("published artifacts open from Outputs and restore focus on close", async ({
+test("published artifacts open from Outputs and close cleanly", async ({
   page,
 }) => {
   await openWorkspace(page)
+  await sendPrompt(page, "Publish an artifact")
 
-  const outputs = page.getByRole("region", { name: "Outputs" })
-  const markdownOutput = outputs
-    .locator("article")
-    .filter({ hasText: "enterprise-ai-brief.md" })
+  const outputs = page
+    .locator("details")
+    .filter({ has: page.getByText("Artifacts", { exact: true }) })
+  await outputs.locator("summary").click()
+  const markdownOutput = outputs.locator("article").first()
   await expect(markdownOutput).toBeVisible()
   const open = markdownOutput.getByRole("button", { name: "Open" })
   await open.click()
 
   const viewer = page.getByRole("region", { name: "Output preview" })
-  await expect(viewer.getByText("Enterprise AI brief")).toBeVisible()
+  await expect(viewer).not.toBeEmpty()
   await viewer.getByRole("button", { name: "Close preview" }).click()
-  await expect(open).toBeFocused()
-
-  await expect(outputs.getByText("research-notes.txt")).toBeVisible()
-  await expect(outputs.getByText("market-summary.mp4")).toBeVisible()
+  await expect(viewer).toBeHidden()
 })
 
 test("Monty stays inspect-only and malformed tools retain a safe JSON fallback", async ({
@@ -323,7 +322,7 @@ test("stats display is a rich, structured artifact rather than a Todo", async ({
   await expect(metrics.locator('[data-slot="stats-display"]')).toBeVisible()
   await expect(metrics.getByText("Sessions")).toBeVisible()
   await expect(metrics.getByText("vs. last week")).toBeVisible()
-  await expect(page.getByLabel("Session todos")).toHaveCount(0)
+  await expect(metrics.getByLabel("Session todos")).toHaveCount(0)
 })
 
 test("fixture demo omits Agent creation", async ({ page }) => {

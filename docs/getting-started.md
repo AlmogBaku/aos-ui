@@ -1,22 +1,51 @@
 # Get started with AOS
 
-This tutorial runs AOS in fixture mode and introduces the workspace without requiring an AI runtime, model account, or credentials.
+This tutorial attaches AOS UI to an independently operated agent harness, then introduces the workspace. AOS UI provides the operator interface; the harness provides agent execution, authentication, and durable data.
 
 ## Before you begin
 
-Install [Bun](https://bun.sh/) and use a current desktop browser. Clone the repository if you have not already:
+For real work, you need:
+
+- one installed agent harness—[OpenCode](runtimes/opencode.md), [Hermes](runtimes/hermes.md), or compatible [AG-UI services](runtimes/ag-ui.md)
+- any credentials required by that harness
+- [Bun](https://bun.sh/)
+- a current desktop browser
+
+You can skip the harness and its credentials only when following the fixture preview later in this tutorial.
+
+Clone the repository if you have not already:
 
 ```bash
 git clone https://github.com/AlmogBaku/aos-ui.git
 cd aos-ui
 ```
 
-## Start the fixture
+## Install AOS UI
 
-Install dependencies and start Vite with the fixture runtime selected:
+Install the frontend dependencies:
 
 ```bash
 bun install
+```
+
+## Connect your harness
+
+Start and authenticate your harness independently, then choose **one** connection guide:
+
+- [Connect OpenCode](runtimes/opencode.md)
+- [Connect Hermes](runtimes/hermes.md)
+- [Connect generic AG-UI services](runtimes/ag-ui.md)
+
+Follow the local-development steps in that guide. When both the harness and AOS UI are running, open <http://localhost:3000>.
+
+> [!IMPORTANT]
+> AOS UI does not install or start the harness. Stopping AOS leaves the harness and its data running independently.
+
+## Preview without a harness
+
+If you only want to evaluate the interface, run the deterministic fixture instead:
+
+```bash
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
@@ -28,12 +57,11 @@ Open <http://localhost:3000>. You should see Aster selected with the **Market br
 ## Tour the workspace
 
 1. Select another Agent in the left rail. The Session list changes with the Agent because every Session has exactly one owner.
-2. Return to Aster and open a different Session tab. The conversation, Todos, and published Outputs change together.
-3. Inspect the active Plan and Todo list. Plans belong to the message that produced them; Todos belong to the Session.
-4. Open a published Output in the inspector. Close it to return to the Agent details.
-5. Open Activity from the bell. Activity keeps notification history and unread state without becoming the source of truth for runtime work.
-6. Open settings to switch appearance or language. Hebrew changes the workspace to RTL while preserving the same Agent and Session route.
-7. Press `Ctrl`/`Cmd`+`K` to open the command palette. The keyboard reference in settings lists the current shortcuts.
+2. Return to Aster and inspect the recommendation, completed research subagent, investment chart, and Session Todo list in **Market brief**.
+3. Open **Launch review** and inspect its Plan. Plans belong to the message that produced them; Todos belong to the Session.
+4. Open Activity from the bell. Activity keeps notification history and unread state without becoming the source of truth for runtime work.
+5. Open settings to switch appearance or language. Hebrew changes the workspace to RTL while preserving the same Agent and Session route.
+6. Press `Ctrl`/`Cmd`+`K` to open the command palette. The keyboard reference in settings lists the current shortcuts.
 
 On a narrow viewport, use the Agent and Session drawer instead of the desktop rails and tab strip.
 
@@ -41,12 +69,4 @@ On a narrow viewport, use the Agent and Session drawer instead of the desktop ra
 
 Return to the terminal and press `Ctrl+C`.
 
-## Connect real work
-
-Install, authenticate, and start one runtime independently, then attach AOS to it. AOS does not own the runtime process or its data:
-
-- [OpenCode](runtimes/opencode.md)
-- [Hermes](runtimes/hermes.md)
-- [Generic AG-UI](runtimes/ag-ui.md)
-
-Compare them first in the [runtime capability matrix](runtime-capabilities.md). For container hosting, continue to [Deployment](deployment.md).
+Compare providers in the [runtime capability matrix](runtime-capabilities.md). For container hosting, continue to [Deployment](deployment.md).

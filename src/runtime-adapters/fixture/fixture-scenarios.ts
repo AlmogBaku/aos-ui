@@ -1,4 +1,5 @@
 import type { TodoItem } from "../contracts"
+import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 
 // Assistant UI's public type lives in @assistant-ui/react. Re-exporting a local
 // alias keeps all fixture-only provider payloads inside this adapter directory.
@@ -14,6 +15,7 @@ export const fixtureScenarioNames = [
   "chart",
   "map",
   "stats",
+  "artifact",
   "mermaid",
   "mermaid-incomplete",
   "mermaid-malformed",
@@ -255,6 +257,19 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
             ],
           }
         ),
+      ],
+    }
+  }
+
+  if (input.includes("artifact") || input.includes("deliverable")) {
+    return {
+      name: "artifact",
+      parts: [
+        {
+          type: "data",
+          name: "aos.artifact",
+          data: FIXTURE_ARTIFACT_CATALOG.examples.markdown,
+        } as AssistantPart,
       ],
     }
   }

@@ -115,16 +115,11 @@ function ArtifactWorkspaceBridge({
     messages: readonly ArtifactMessage[]
   ) => readonly ArtifactMessage[]
 } & WorkspaceShellProps) {
-  const selectArtifactMessages = useMemo(
-    () => {
-      const stabilize = createArtifactMessageStabilizer(
-        artifactMessageProjector
-      )
-      return (state: AssistantState) =>
-        stabilize(state.thread.messages as readonly ArtifactMessage[])
-    },
-    [artifactMessageProjector]
-  )
+  const selectArtifactMessages = useMemo(() => {
+    const stabilize = createArtifactMessageStabilizer(artifactMessageProjector)
+    return (state: AssistantState) =>
+      stabilize(state.thread.messages as readonly ArtifactMessage[])
+  }, [artifactMessageProjector])
   const artifactMessages = useAuiState(selectArtifactMessages)
 
   return (
@@ -193,6 +188,8 @@ function TodoDock({
     <details
       className="group border-y border-border/70 bg-background @md:rounded-2xl @md:border @md:bg-card/90 @md:shadow-sm"
       data-slot="todo-dock"
+      role="region"
+      aria-label={copy.tasks}
       open={error ? true : undefined}
     >
       <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring @md:gap-3 @md:px-4 @md:py-3 [&::-webkit-details-marker]:hidden">

@@ -24,7 +24,7 @@ export const fixtureAgents: AgentSummary[] = [
     kind: "ready",
     id: "agent-aster",
     name: "Aster",
-    description: "General analysis and synthesis",
+    description: "Executive assistant",
     status: "running",
     icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
   },
@@ -32,7 +32,7 @@ export const fixtureAgents: AgentSummary[] = [
     kind: "ready",
     id: "agent-mica",
     name: "Mica",
-    description: "Long-form synthesis",
+    description: "Accounting and finance",
     status: "idle",
     icon: { kind: "symbol", symbol: "layers", tone: "purple" },
   },
@@ -40,7 +40,7 @@ export const fixtureAgents: AgentSummary[] = [
     kind: "ready",
     id: "agent-lumen",
     name: "Lumen",
-    description: "Planning and review",
+    description: "Product strategy",
     status: "attention",
     icon: { kind: "symbol", symbol: "compass", tone: "teal" },
   },
@@ -48,7 +48,7 @@ export const fixtureAgents: AgentSummary[] = [
     kind: "ready",
     id: "agent-vela",
     name: "Vela",
-    description: "Data interpretation",
+    description: "Marketing analysis",
     status: "idle",
     icon: { kind: "symbol", symbol: "chart", tone: "ochre" },
   },
@@ -56,7 +56,7 @@ export const fixtureAgents: AgentSummary[] = [
     kind: "ready",
     id: "agent-nori",
     name: "Nori",
-    description: "Writing and editing",
+    description: "Ghostwriting and editing",
     status: "idle",
     icon: { kind: "symbol", symbol: "pen", tone: "slate" },
   },
@@ -140,18 +140,32 @@ const fixtureTodos = new Map<string, TodoItem[]>([
         label: "Define scope and coverage",
         status: "completed",
       },
-      { id: "todo-trends", label: "Aggregate spend trends", status: "active" },
-      { id: "todo-segments", label: "Segment the market", status: "pending" },
-      { id: "todo-drivers", label: "Identify key drivers", status: "pending" },
+      {
+        id: "todo-trends",
+        label: "Aggregate spend trends",
+        status: "completed",
+      },
+      {
+        id: "todo-segments",
+        label: "Segment the market",
+        status: "completed",
+      },
+      { id: "todo-drivers", label: "Identify key drivers", status: "active" },
       { id: "todo-summary", label: "Summarize takeaways", status: "pending" },
     ],
   ],
 ])
 
-type FixtureWorkspaceOptions = {
+export type FixtureWorkspaceOptions = {
   clock?: FixtureClock
   activityIdFactory?: () => string
   enableAgentCreator?: boolean
+  /** Test-only seeds let UI tests describe ownership without demo identities. */
+  agents?: readonly AgentSummary[]
+  hiddenAgentIds?: readonly string[]
+  sessions?: readonly SessionMetadata[]
+  todos?: Readonly<Record<string, readonly TodoItem[]>>
+  sessionTitles?: Readonly<Record<string, string>>
 }
 
 type ActivitySubscription = {
@@ -173,40 +187,63 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   readonly #clock: FixtureClock
   readonly #activityIdFactory: () => string
-  readonly #agents: AgentSummary[] = [
-    ...structuredClone(fixtureAgents),
-    {
-      kind: "ready",
-      id: "agent-sable",
-      name: "Sable",
-      description: "Research and discovery",
-      status: "idle",
-      icon: { kind: "symbol", symbol: "compass", tone: "slate" },
-    },
-  ]
-  readonly #hiddenAgents = new Set(["agent-sable"])
-  readonly #sessions = structuredClone(fixtureSessions)
-  readonly #todos = new Map(
-    [...fixtureTodos].map(([threadId, todos]) => [
-      threadId,
-      structuredClone(todos),
-    ])
-  )
+  readonly #agents: AgentSummary[]
+  readonly #hiddenAgents: Set<string>
+  readonly #sessions: SessionMetadata[]
+  readonly #todos: Map<string, TodoItem[]>
   readonly #todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   readonly #agentCatalogListeners = new Set<() => void>()
 
   readonly #activityListeners = new Set<ActivitySubscription>()
-  readonly #sessionTitles = new Map(fixtureSessionTitles)
+  readonly #sessionTitles: Map<string, string>
   #sessionSequence = 0
 
   constructor({
     clock = () => new Date(),
     activityIdFactory = createBrowserId,
     enableAgentCreator = true,
+    agents,
+    hiddenAgentIds,
+    sessions,
+    todos,
+    sessionTitles,
   }: FixtureWorkspaceOptions = {}) {
     this.#clock = clock
     this.#activityIdFactory = activityIdFactory
-    if (enableAgentCreator)
+    this.#agents = structuredClone([
+      ...(agents ?? [
+        ...fixtureAgents,
+        {
+          kind: "ready" as const,
+          id: "agent-sable",
+          name: "Sable",
+          description: "Research and discovery",
+          status: "idle" as const,
+          icon: { kind: "symbol" as const, symbol: "compass", tone: "slate" },
+        },
+      ]),
+    ])
+    this.#hiddenAgents = new Set(
+      hiddenAgentIds ??
+        (agents
+          ? this.#agents
+              .filter((agent) => agent.visibility === "hidden")
+              .map((agent) => agent.id)
+          : ["agent-sable"])
+    )
+    this.#sessions = structuredClone([...(sessions ?? fixtureSessions)])
+    this.#todos = new Map(
+      Object.entries(todos ?? Object.fromEntries(fixtureTodos)).map(
+        ([threadId, items]) => [threadId, structuredClone([...items])]
+      )
+    )
+    this.#sessionTitles = new Map(
+      Object.entries(sessionTitles ?? Object.fromEntries(fixtureSessionTitles))
+    )
+    if (
+      enableAgentCreator &&
+      !this.#agents.some((agent) => agent.role === "creator")
+    )
       this.#agents.push({
         kind: "ready",
         id: "agent-builder",

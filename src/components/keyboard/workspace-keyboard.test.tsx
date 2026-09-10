@@ -55,9 +55,8 @@ describe("workspace keyboard discovery", () => {
     const trigger = screen.getByRole("button", { name: /^Commands \(/ })
     const preferences = trigger.closest("[data-workspace-preferences]")
     expect(preferences).not.toBeNull()
-    expect(trigger).toHaveTextContent("❖+K")
-    expect(trigger).not.toHaveTextContent("Commands")
-    expect(trigger).toHaveAttribute("title", "Open Commands")
+    expect(trigger).toHaveAccessibleName(/Commands/)
+    expect(trigger).toBeEnabled()
     expect(
       preferences?.querySelector('[aria-label="Switch to Hebrew"]')
     ).not.toBeNull()

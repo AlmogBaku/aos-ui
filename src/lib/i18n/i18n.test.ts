@@ -52,35 +52,47 @@ describe("locale routing", () => {
 })
 
 describe("typed dictionaries", () => {
-  it("loads localized workspace chrome for both supported locales", async () => {
+  it("loads complete, nonempty dictionaries for both supported locales", async () => {
     const english = await getDictionary("en")
     const hebrew = await getDictionary("he")
 
-    expect(english.workspace.agents).toBe("Agents")
-    expect(hebrew.workspace.agents).toBe("סוכנים")
-    expect(hebrew.workspace.sessions).not.toBe(english.workspace.sessions)
-    expect(hebrew.status.waitingForInput).not.toBe(
-      english.status.waitingForInput
-    )
-    expect(english.workspace.fixtureLabel).toBe("Demo workspace")
-    expect(hebrew.workspace.fixtureLabel).toBe("סביבת הדגמה")
+    const collectPaths = (value: unknown, prefix = ""): string[] => {
+      if (typeof value === "string") return [prefix]
+      if (!value || typeof value !== "object") return []
+      return Object.entries(value).flatMap(([key, child]) =>
+        collectPaths(child, prefix ? `${prefix}.${key}` : key)
+      )
+    }
+
+    const englishPaths = collectPaths(english)
+    const hebrewPaths = collectPaths(hebrew)
+    expect(englishPaths.length).toBeGreaterThan(0)
+    expect(hebrewPaths).toEqual(englishPaths)
+    const collectLeaves = (value: unknown): string[] => {
+      if (typeof value === "string") return [value]
+      if (!value || typeof value !== "object") return []
+      return Object.values(value).flatMap(collectLeaves)
+    }
+    expect(
+      collectLeaves(english).every((value) => value.trim().length > 0)
+    ).toBe(true)
+    expect(
+      collectLeaves(hebrew).every((value) => value.trim().length > 0)
+    ).toBe(true)
   })
 
   it("provides complete artifact actions and states in both locales", async () => {
     const english = await getDictionary("en")
     const hebrew = await getDictionary("he")
 
-    expect(english.artifacts).toMatchObject({
-      outputs: "Outputs",
-      open: "Open",
-      download: "Download",
-      preview: "Preview",
-      source: "Source",
-    })
-    expect(hebrew.artifacts.outputs).toBe("תוצרים")
-    expect(hebrew.artifacts.open).not.toBe(english.artifacts.open)
-    expect(hebrew.artifacts.fileTooLarge).not.toBe(
-      english.artifacts.fileTooLarge
-    )
+    for (const key of Object.keys(english.artifacts)) {
+      expect(english.artifacts[key as keyof typeof english.artifacts]).toEqual(
+        expect.any(String)
+      )
+      expect(hebrew.artifacts[key as keyof typeof hebrew.artifacts]).toEqual(
+        expect.any(String)
+      )
+    }
+    expect(hebrew.artifacts).not.toEqual(english.artifacts)
   })
 })

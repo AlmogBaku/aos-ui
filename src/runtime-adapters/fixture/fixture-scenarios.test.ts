@@ -3,28 +3,44 @@ import { describe, expect, it } from "vitest"
 import { buildFixtureScenario, fixtureScenarioNames } from "./fixture-scenarios"
 
 describe("deterministic fixture scenarios", () => {
-  it("covers the complete interactive and failure matrix", () => {
-    expect(fixtureScenarioNames).toEqual(
-      expect.arrayContaining([
-        "default",
-        "question",
-        "permission",
-        "subagent",
-        "plan",
-        "todos",
-        "chart",
-        "map",
-        "stats",
-        "mermaid",
-        "mermaid-incomplete",
-        "mermaid-malformed",
-        "mermaid-oversized",
-        "monty-success",
-        "monty-failure",
-        "malformed-tool",
-        "provider-outage",
-      ])
+  it("routes representative prompts to every supported scenario", () => {
+    const cases = [
+      ["default brief", "default"],
+      ["ask a question", "question"],
+      ["request permission", "permission"],
+      ["delegate to a subagent", "subagent"],
+      ["show a plan", "plan"],
+      ["update todos", "todos"],
+      ["render a chart", "chart"],
+      ["show a map", "map"],
+      ["show metrics", "stats"],
+      ["show mermaid", "mermaid"],
+      ["show incomplete mermaid stream", "mermaid-incomplete"],
+      ["show malformed mermaid", "mermaid-malformed"],
+      ["show oversized mermaid", "mermaid-oversized"],
+      ["run monty", "monty-success"],
+      ["make monty fail", "monty-failure"],
+      ["return a malformed tool", "malformed-tool"],
+      ["simulate provider outage", "provider-outage"],
+    ]
+    const scenarios = cases.map(([prompt, expected]) => {
+      expect(buildFixtureScenario(prompt).name).toBe(expected)
+      return buildFixtureScenario(prompt)
+    })
+    expect(new Set(scenarios.map(({ name }) => name))).toEqual(
+      new Set(fixtureScenarioNames)
     )
+    expect(
+      scenarios.every(
+        ({ parts }) =>
+          parts.length > 0 &&
+          parts.every((part) =>
+            part.type === "text"
+              ? part.text.trim().length > 0
+              : part.type === "tool-call" && Boolean(part.toolName)
+          )
+      )
+    ).toBe(true)
   })
 
   it("keeps Question and Permission payloads distinct", () => {

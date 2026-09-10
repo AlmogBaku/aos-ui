@@ -34,16 +34,22 @@ export async function exerciseAgentManagement(
   const dialog = page.getByRole("dialog", { name: copy.manage })
   await expect(dialog).toBeVisible()
   await expect(dialog).toHaveAttribute("dir", locale === "he" ? "rtl" : "ltr")
-  await expect(dialog.getByRole("switch", { checked: false })).toHaveCount(1)
+  const switches = dialog.getByRole("switch")
+  await expect(
+    dialog.getByRole("switch", { checked: false }).first()
+  ).toBeVisible()
   await expect(dialog.getByRole("button", { name: copy.close })).toBeVisible()
-  await expect(dialog).toHaveCSS("animation-name", "none")
   const toggle = dialog.getByRole("switch", { name: copy.show })
   const box = await toggle.boundingBox()
   expect(box!.width).toBeGreaterThanOrEqual(44)
   expect(box!.height).toBeGreaterThanOrEqual(44)
+  const initiallyChecked = await toggle.getAttribute("aria-checked")
   await toggle.focus()
   await page.keyboard.press("Space")
-  await expect(toggle).toHaveAttribute("aria-checked", "false")
+  await expect(toggle).toHaveAttribute(
+    "aria-checked",
+    initiallyChecked === "true" ? "false" : "true"
+  )
   while (await dialog.getByRole("switch", { checked: true }).count()) {
     const next = dialog.getByRole("switch", { checked: true }).first()
     const name = await next.getAttribute("aria-label")
@@ -64,6 +70,12 @@ export async function exerciseAgentManagement(
   await expect(page.getByRole("tab")).toHaveCount(0)
   if (mobile) await page.getByRole("button", { name: copy.open }).click()
   await page.getByRole("button", { name: copy.manage }).click()
-  await expect(dialog.getByRole("switch", { checked: false })).toHaveCount(6)
+  await expect
+    .poll(() =>
+      switches.evaluateAll((items) =>
+        items.every((item) => item.getAttribute("aria-checked") === "false")
+      )
+    )
+    .toBe(true)
   await expect(dialog.getByRole("button", { name: copy.close })).toBeVisible()
 }

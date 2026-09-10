@@ -4,15 +4,15 @@
 
 # AOS UI
 
-**The operator workspace for business agents—and the UI companion to the [AOS kit](https://github.com/AlmogBaku/aos).**
+**A UI for personal agent harnesses serving real business use cases—and the companion to the [AOS kit](https://github.com/AlmogBaku/aos).**
 
 [Get started](docs/getting-started.md) · [Choose a runtime](docs/runtime-capabilities.md) · [Deploy AOS](docs/deployment.md) · [Operator docs](docs/README.md)
 
-![AOS workspace with an Agent roster, Session tabs, published outputs, Todos, and composer](docs/assets/aos-workspace.png)
+![AOS workspace showing a Q1 planning request, an executive-assistant recommendation, and an investment chart alongside personal business agents and Sessions](docs/assets/aos-workspace.png)
 
 </div>
 
-Most agent harnesses present a coding-agent interface. AOS UI is for operating business agents: named roles that research, plan, analyze, write, coordinate, and deliver ongoing work. It gives people one place to move between those Agents and Sessions without losing ownership, execution state, or pending work.
+Most agent harnesses present a coding-agent interface. AOS UI gives your personal harness a workspace for business use cases: an accountant, executive assistant, marketing agent, ghostwriter, product partner, hiring agent, or any other role you configure. It keeps their Agents and Sessions in one place without losing ownership, execution state, or pending work.
 
 AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. OpenCode and Hermes keep control of execution, credentials, Agent definitions, and durable history; AOS UI provides the operator workspace around them.
 
@@ -30,27 +30,26 @@ One runtime is selected for each deployment. See the [runtime capability matrix]
 
 ## Quick start
 
-Use fixture mode to explore the workspace without a backend or model credentials.
+AOS UI is not an agent harness. It attaches to a harness that you install, authenticate, and run separately.
 
 ### Prerequisites
 
+- One supported harness:
+  - [OpenCode](docs/runtimes/opencode.md), installed and running as a server; or
+  - [Hermes](docs/runtimes/hermes.md), installed, authenticated, and running as a server; or
+  - compatible [AG-UI run and workspace services](docs/runtimes/ag-ui.md)
 - [Bun](https://bun.sh/)
 - A current desktop browser
+
+Install AOS UI:
 
 ```bash
 git clone https://github.com/AlmogBaku/aos-ui.git
 cd aos-ui
 bun install
-AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-Open <http://localhost:3000>. The fixture is deterministic and intentionally does not create or modify native Agents.
-
-Continue with the [guided fixture tour](docs/getting-started.md).
-
-## Attach an existing runtime
-
-AOS does not install, start, or replace your AI runtime. Install and authenticate OpenCode or Hermes separately, start its native server, then point AOS at it. Stopping AOS does not stop or remove the runtime or its data.
+Then choose **one** of the following runtime connections. Do not run both configurations.
 
 ### OpenCode
 
@@ -88,9 +87,23 @@ See [Run AOS with Hermes](docs/runtimes/hermes.md) for authentication, profiles,
 
 Generic providers use separate [AG-UI run and workspace services](docs/runtimes/ag-ui.md).
 
+Open <http://localhost:3000> after starting AOS. Stopping AOS does not stop or remove the harness or its data.
+
+### Preview without a harness
+
+Fixture mode is an optional, backend-free preview of the interface. It is not a substitute for OpenCode, Hermes, or another compatible harness:
+
+```bash
+AOS_UI_RUNTIME_MODE=fixture bun run dev
+```
+
+The fixture is deterministic and cannot create or modify native Agents. Continue with the [guided workspace tour](docs/getting-started.md).
+
 ## Deployment
 
 AOS builds to static assets and ships with an Nginx container. Runtime selection comes from `/runtime-config.json`, so operators can change the selected runtime without rebuilding the frontend.
+
+For a containerized fixture preview:
 
 ```bash
 cp .env.compose.example .env

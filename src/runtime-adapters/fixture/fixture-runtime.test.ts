@@ -2,6 +2,7 @@ import {
   ExportedMessageRepository,
   type ChatModelRunOptions,
   type ChatModelRunResult,
+  type ThreadAssistantMessagePart,
 } from "@assistant-ui/react"
 import { describe, expect, it, vi } from "vitest"
 
@@ -13,6 +14,7 @@ import {
   createFixtureChatModel,
   createFixtureThreadListAdapter,
 } from "./fixture-runtime"
+import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
 
 function runOptions(
@@ -157,7 +159,7 @@ describe("fixture Assistant UI thread adapter", () => {
     )
   })
 
-  it("loads each Session history independently, including an inline Plan", async () => {
+  it("keeps the Plan in the launch Session instead of the chart showcase", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const adapter = createFixtureThreadListAdapter(workspace)
 
@@ -165,58 +167,98 @@ describe("fixture Assistant UI thread adapter", () => {
     const launch = await adapter.historyFor("thread-aster-launch").load()
 
     expect(
-      market.messages.some(({ message }) =>
+      launch.messages.some(({ message }) =>
         message.content.some(
           (part) =>
             part.type === "tool-call" && part.toolName === "present_plan"
         )
       )
     ).toBe(true)
+    expect(
+      market.messages.some(({ message }) =>
+        message.content.some(
+          (part) =>
+            part.type === "tool-call" && part.toolName === "present_plan"
+        )
+      )
+    ).toBe(false)
     expect(launch.messages).not.toEqual(market.messages)
   })
 
-  it("includes deterministic artifact data parts in the market Session", async () => {
+  it("keeps artifact descriptors parseable and uniquely identified", async () => {
+    const artifacts = Object.values(FIXTURE_ARTIFACT_CATALOG.examples)
+
+    const parsed = artifacts.map(parseArtifactDescriptor)
+    expect(parsed.length).toBeGreaterThan(0)
+    expect(parsed.every((artifact) => artifact !== null)).toBe(true)
+    const ids = parsed.flatMap((artifact) => (artifact ? [artifact.id] : []))
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it("finishes the market Session with a decision-ready investment chart", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const adapter = createFixtureThreadListAdapter(workspace)
     const market = await adapter.historyFor("thread-aster-market").load()
 
-    const artifacts = market.messages.flatMap(({ message }) =>
-      message.content.flatMap((part) =>
-        part.type === "data" && part.name === "aos.artifact" ? [part.data] : []
+    const chart = market.messages
+      .flatMap(({ message }) =>
+        Array.isArray(message.content) ? message.content : []
       )
-    )
+      .filter(
+        (
+          part
+        ): part is Extract<ThreadAssistantMessagePart, { type: "tool-call" }> =>
+          part.type === "tool-call"
+      )
+      .find((part) => part.toolName === "render_chart")
 
-    expect(artifacts).toEqual([
-      expect.objectContaining({ id: "fixture-market-brief" }),
-      expect.objectContaining({ id: "fixture-text" }),
-      expect.objectContaining({ id: "fixture-code" }),
-      expect.objectContaining({ id: "fixture-json" }),
-      expect.objectContaining({ id: "fixture-market-data" }),
-      expect.objectContaining({ id: "fixture-image" }),
-      expect.objectContaining({ id: "fixture-pdf" }),
-      expect.objectContaining({ id: "fixture-audio" }),
-      expect.objectContaining({ id: "fixture-video" }),
-      expect.objectContaining({ id: "fixture-market-html" }),
-      expect.objectContaining({ id: "fixture-unsupported" }),
-    ])
-    expect(
-      artifacts.flatMap((value) => {
-        const artifact = parseArtifactDescriptor(value)
-        return artifact ? [artifact.id] : []
+    expect(chart).toMatchObject({
+      type: "tool-call",
+      toolName: "render_chart",
+      args: expect.objectContaining({ title: expect.any(String) }),
+      result: expect.objectContaining({
+        type: "line",
+        xKey: expect.any(String),
+      }),
+    })
+    if (!chart || chart.type !== "tool-call") throw new Error("Missing chart")
+    const result = chart.result
+    expect(result).toEqual(
+      expect.objectContaining({
+        series: expect.any(Array),
+        data: expect.any(Array),
       })
-    ).toEqual([
-      "fixture-market-brief",
-      "fixture-text",
-      "fixture-code",
-      "fixture-json",
-      "fixture-market-data",
-      "fixture-image",
-      "fixture-pdf",
-      "fixture-audio",
-      "fixture-video",
-      "fixture-market-html",
-      "fixture-unsupported",
-    ])
+    )
+    if (!result || typeof result !== "object")
+      throw new Error("Invalid chart result")
+    const resultRecord = result as {
+      series?: unknown[]
+      data?: unknown[]
+      xKey?: unknown
+    }
+    const series = resultRecord.series ?? []
+    const data = resultRecord.data ?? []
+    expect(series.length).toBeGreaterThan(0)
+    expect(data.length).toBeGreaterThan(0)
+    for (const row of data) {
+      if (!row || typeof row !== "object") throw new Error("Invalid chart row")
+      const rowRecord = row as Record<string, unknown>
+      expect(row).toEqual(
+        expect.objectContaining({
+          [String(resultRecord.xKey)]: expect.any(String),
+        })
+      )
+      for (const item of series) {
+        if (!item || typeof item !== "object")
+          throw new Error("Invalid chart series")
+        const key = (item as { key?: unknown }).key
+        expect(typeof key).toBe("string")
+        if (typeof key !== "string") throw new Error("Invalid chart series key")
+        expect(key.trim().length).toBeGreaterThan(0)
+        expect(row).toHaveProperty(key)
+        expect(Number.isFinite(rowRecord[key])).toBe(true)
+      }
+    }
   })
 
   it("includes a deterministic long-thread fixture for manual viewport traces", async () => {
@@ -224,11 +266,22 @@ describe("fixture Assistant UI thread adapter", () => {
     const adapter = createFixtureThreadListAdapter(workspace)
     const history = await adapter.historyFor("thread-aster-interviews").load()
 
-    expect(history.messages).toHaveLength(64)
-    expect(history.messages[0]?.message.id).toBe("message-interviews-user-01")
-    expect(history.messages.at(-1)?.message.id).toBe(
-      "message-interviews-assistant-32"
-    )
+    expect(history.messages.length).toBeGreaterThan(32)
+    const ids = history.messages.map(({ message }) => message.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(
+      history.messages.every(({ message }) => message.createdAt instanceof Date)
+    ).toBe(true)
+    for (let index = 1; index < history.messages.length; index += 1) {
+      expect(
+        history.messages[index]?.message.createdAt.getTime()
+      ).toBeGreaterThanOrEqual(
+        history.messages[index - 1]?.message.createdAt.getTime() ?? 0
+      )
+      expect(history.messages[index]?.message.role).not.toBe(
+        history.messages[index - 1]?.message.role
+      )
+    }
   })
 
   it("rejects fetching a deleted or unknown Session with a visible error source", async () => {
@@ -500,9 +553,19 @@ describe("fixture ChatModelAdapter", () => {
     )
 
     expect(updates.length).toBeGreaterThan(1)
+    const texts = updates.flatMap((update) =>
+      (update.content ?? []).flatMap((part) =>
+        part.type === "text" ? [part.text] : []
+      )
+    )
+    expect(texts.length).toBeGreaterThan(1)
+    for (let index = 1; index < texts.length; index += 1) {
+      expect(texts[index]?.startsWith(texts[index - 1] ?? "")).toBe(true)
+    }
+    expect(texts.at(-1)).toMatch(/\S/)
     expect(updates.at(-1)?.content?.[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("Enterprise AI spend"),
+      text: expect.stringMatching(/\S/),
     })
   })
 

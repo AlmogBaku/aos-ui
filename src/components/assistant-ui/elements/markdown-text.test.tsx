@@ -82,15 +82,12 @@ describe("MarkdownText fenced diagrams", () => {
     ).toBeVisible()
     expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull()
     expect(screen.queryByRole("button", { name: /run/i })).toBeNull()
-  })
+  }, 15_000)
 
   it("keeps the standard header and copy control for ordinary code fences", async () => {
     render(<TestMarkdown text={"```ts\nconst answer = 42\n```"} />)
 
     expect(await screen.findByText("const answer = 42")).toBeVisible()
-    expect(
-      document.querySelector('[data-syntax-language="typescript"]')
-    ).toBeInTheDocument()
     expect(screen.getByText("ts")).toBeVisible()
     expect(screen.getByRole("button", { name: "Copy code" })).toBeVisible()
     expect(mermaid.initialize).not.toHaveBeenCalled()

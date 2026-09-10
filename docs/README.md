@@ -1,10 +1,10 @@
 # AOS operator documentation
 
-Use this documentation to evaluate, configure, and operate AOS UI: a workspace for business agents and companion to the [AOS capability kit](https://github.com/AlmogBaku/aos). Start with fixture mode if you have not used the workspace before.
+Use this documentation to configure and operate AOS UI: a workspace for personal agent harnesses serving business use cases, and a companion to the [AOS capability kit](https://github.com/AlmogBaku/aos). AOS attaches to an independently installed agent harness; fixture mode is available only for evaluating the interface without one.
 
 ## Learn
 
-- [Getting started](getting-started.md) — run the credential-free fixture and learn the workspace through a short guided tour.
+- [Getting started](getting-started.md) — attach a supported harness, or preview the interface in fixture mode, then tour the workspace.
 - [Using AOS](using-aos.md) — work with Agents, Sessions, Plans, Todos, Artifacts, Activity, and preferences.
 
 ## Run

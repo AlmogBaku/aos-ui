@@ -112,7 +112,33 @@ describe("artifact workspace", () => {
     expect(screen.getByText("ag-ui-output.txt")).toBeInTheDocument()
   })
 
-  it("lists Outputs newest first and opens a resolved text preview", async () => {
+  it("renders Artifacts collapsed by default and reveals them on request", () => {
+    render(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve: vi.fn<ArtifactAdapter["resolve"]>() }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={messages}
+      >
+        <ArtifactOutputs />
+      </ArtifactWorkspaceProvider>
+    )
+
+    const summary = screen.getByText("Artifacts").closest("summary")
+    const disclosure = summary?.closest("details")
+
+    expect(summary).not.toBeNull()
+    expect(disclosure).not.toHaveAttribute("open")
+    expect(screen.getByText("newer.txt")).not.toBeVisible()
+
+    fireEvent.click(summary!)
+
+    expect(disclosure).toHaveAttribute("open")
+    expect(screen.getByText("newer.txt")).toBeVisible()
+  })
+
+  it("lists Artifacts newest first and opens a resolved text preview", async () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>(async ({ artifact }) =>
       Promise.resolve(
         new Blob([
@@ -133,9 +159,11 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
+    fireEvent.click(screen.getByText("Artifacts"))
+
     expect(
       screen
-        .getAllByTestId("artifact-filename")
+        .getAllByText(/\.txt$/)
         .map(({ textContent }) => textContent)
     ).toEqual(["newer.txt", "older.txt"])
 
@@ -551,7 +579,7 @@ describe("artifact workspace", () => {
     expect(screen.queryByTitle("HTML preview")).not.toBeInTheDocument()
   })
 
-  it("renders localized RTL Outputs controls", () => {
+  it("renders localized RTL Artifacts controls", () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>()
     render(
       <ArtifactWorkspaceProvider
@@ -565,10 +593,11 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    expect(screen.getByRole("region", { name: "תוצרים" })).toHaveAttribute(
-      "dir",
-      "rtl"
-    )
+    const summary = screen.getByText("ארטיפקטים").closest("summary")
+    expect(summary?.closest("details")).toHaveAttribute("dir", "rtl")
+
+    fireEvent.click(summary!)
+
     expect(screen.getAllByRole("button", { name: "פתיחה" })).toHaveLength(2)
   })
 

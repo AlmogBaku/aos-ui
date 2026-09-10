@@ -4,6 +4,7 @@ import { makeAssistantDataUI } from "@assistant-ui/react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
+  ChevronDownIcon,
   DownloadIcon,
   ExternalLinkIcon,
   FileIcon,
@@ -139,9 +140,7 @@ function sameArtifactOccurrence(
 }
 
 export function createArtifactMessageStabilizer(
-  project?: (
-    messages: readonly ArtifactMessage[]
-  ) => readonly ArtifactMessage[]
+  project?: (messages: readonly ArtifactMessage[]) => readonly ArtifactMessage[]
 ) {
   let previousMessages: readonly ArtifactMessage[] = []
   let previousPathKey = ""
@@ -348,19 +347,28 @@ export function ArtifactCard({
     <article
       className={
         compact
-          ? "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/70 px-3 py-2.5 text-card-foreground last:border-b-0"
+          ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 border-b border-border/70 px-2 py-1.5 text-card-foreground last:border-b-0"
           : "rounded-xl border border-border bg-card p-3 text-card-foreground"
       }
     >
       <div
         className={
           compact
-            ? "col-span-2 flex min-w-0 items-start gap-3"
+            ? "flex min-w-0 items-center gap-2"
             : "flex min-w-0 items-start gap-3"
         }
       >
-        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <FileIcon className="size-4" aria-hidden="true" />
+        <div
+          className={
+            compact
+              ? "flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+              : "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+          }
+        >
+          <FileIcon
+            className={compact ? "size-3.5" : "size-4"}
+            aria-hidden="true"
+          />
         </div>
         <div className="min-w-0 flex-1">
           <p
@@ -387,19 +395,19 @@ export function ArtifactCard({
       <div
         className={
           compact
-            ? "col-start-3 row-start-1 flex items-center gap-0.5"
+            ? "col-start-2 row-start-1 flex items-center gap-0.5"
             : "mt-3 flex flex-wrap justify-end gap-2"
         }
       >
         <Button
           type="button"
           variant="outline"
-          size={compact ? "icon" : "default"}
+          size={compact ? "icon-xs" : "default"}
           aria-label={compact ? labels.open : undefined}
           title={compact ? labels.open : undefined}
           data-artifact-open-id={artifact.id}
           onClick={(event) => openArtifact(artifact, event.currentTarget)}
-          className="motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+          className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
         >
           <ExternalLinkIcon data-icon="inline-start" />
           {!compact && labels.open}
@@ -407,12 +415,12 @@ export function ArtifactCard({
         <Button
           type="button"
           variant="ghost"
-          size={compact ? "icon" : "default"}
+          size={compact ? "icon-xs" : "default"}
           aria-label={compact ? labels.download : undefined}
           title={compact ? labels.download : undefined}
           disabled={!adapter}
           onClick={() => void download()}
-          className="motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+          className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
         >
           <DownloadIcon data-icon="inline-start" />
           {!compact && labels.download}
@@ -432,24 +440,33 @@ export function ArtifactOutputs({ className = "" }: { className?: string }) {
   const titleId = useId()
 
   return (
-    <section
-      className={className}
-      aria-labelledby={titleId}
+    <details
+      className={`group ${className}`}
       dir={locale === "he" ? "rtl" : "ltr"}
+      role="region"
+      aria-label={labels.outputs}
     >
-      <h2 id={titleId} className="text-sm font-semibold">
-        {labels.outputs}
-      </h2>
-      {occurrences.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">{labels.empty}</p>
-      ) : (
-        <div className="mt-3 overflow-hidden rounded-xl border border-border bg-card">
-          {occurrences.toReversed().map(({ key, artifact }) => (
-            <ArtifactCard key={key} artifact={artifact} compact />
-          ))}
-        </div>
-      )}
-    </section>
+      <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ChevronDownIcon
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none"
+          aria-hidden="true"
+        />
+        <h2 id={titleId} className="text-sm font-semibold">
+          {labels.outputs}
+        </h2>
+      </summary>
+      <div aria-labelledby={titleId}>
+        {occurrences.length === 0 ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">{labels.empty}</p>
+        ) : (
+          <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
+            {occurrences.toReversed().map(({ key, artifact }) => (
+              <ArtifactCard key={key} artifact={artifact} compact />
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
   )
 }
 

@@ -53,22 +53,22 @@ def test_legacy_plugin_registers_browser_independent_tools_and_prompt(tmp_path, 
         "render_chart", "render_map", "render_stats", "present_plan", "aos_start_session",
         "present_artifact",
     }
-    assert context.sections == [
-        (('aos.presentation', 'Use structured presentation tools.'), {
-            'position': 'after_memory', 'max_chars': 4000
-        }),
-        (('aos.invite_link', (
-            'When the user asks for an AOS guest invite, load '
-            '`aos-integration:aos-invite-link` with `skill_view` and follow it.'
-        )), {'position': 'after_memory', 'max_chars': 300}),
+    assert [args[0] for args, _ in context.sections] == [
+        "aos.presentation",
+        "aos.invite_link",
     ]
+    for args, kwargs in context.sections:
+        assert isinstance(args[1], str) and args[1].strip()
+        assert kwargs["position"] == "after_memory"
+        assert isinstance(kwargs["max_chars"], int) and kwargs["max_chars"] > 0
+    assert "aos-invite-link" in context.sections[1][0][1]
     assert len(context.skills) == 1
     args, kwargs = context.skills[0]
     assert args == ()
     assert kwargs["name"] == "aos-invite-link"
     assert isinstance(kwargs["path"], Path)
     assert Path(kwargs["path"]).name == "invite-link.md"
-    assert kwargs["description"].startswith("Create a signed AOS guest invitation")
+    assert isinstance(kwargs["description"], str) and kwargs["description"].strip()
     start = next(tool for tool in context.tools if tool["name"] == "aos_start_session")
     assert start["schema"]["parameters"]["required"] == ["profile", "workdir", "prompt"]
     artifact = next(tool for tool in context.tools if tool["name"] == "present_artifact")

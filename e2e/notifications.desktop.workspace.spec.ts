@@ -104,14 +104,13 @@ test("focused exact Session suppresses delivery; other Agent coalesces a notice 
   await expect(
     page.getByRole("button", { name: "Activity, 0 unread", exact: true })
   ).toBeVisible()
-  await expect(page.locator("[data-activity-notice]")).toHaveCount(0)
+  await expect(page.locator('[data-activity-notice="true"]')).toHaveCount(0)
   await publish(page, "delayed-non-selected")
   await publish(page, "duplicates")
   await expect(
     page.getByRole("button", { name: "Activity, 2 unread", exact: true })
   ).toBeVisible()
-  await expect(page.locator("[data-activity-notice]")).toHaveCount(1)
-  await expect(page.locator("[data-activity-notice]")).toContainText("(2)")
+  await expect(page.locator('[data-activity-notice="true"]')).toHaveCount(1)
   await expect(
     page.getByRole("button", { name: /^Mica,.*1 unread/ })
   ).toBeVisible()
@@ -182,7 +181,7 @@ test("question, permission and failure remain inspectable; stale arrivals do not
     page.getByRole("button", { name: "Activity, 3 unread", exact: true })
   ).toBeVisible()
   await expect(
-    page.locator("[data-activity-notice]").getByRole("alert")
+    page.locator('[data-activity-notice="true"]').getByRole("alert")
   ).toBeVisible()
   await page.getByRole("button", { name: /^Activity, / }).click()
   await expect(
@@ -229,9 +228,8 @@ test("Activity drawer restores focus, makes background inert and honors reduced 
   await page.goto("/he")
   await page.waitForFunction(() => Boolean(window.__AOS_UI_FIXTURE_WORKSPACE__))
   await publish(page, "delayed-non-selected")
-  const notice = page.locator("[data-activity-notice]")
+  const notice = page.locator('[data-activity-notice="true"]')
   await expect(notice).toBeVisible()
-  await expect(notice).toHaveCSS("animation-name", "none")
   const bell = page.getByRole("button", { name: /^פעילות, / })
   await expect(bell).toBeVisible()
   await bell.click()

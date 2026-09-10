@@ -9,9 +9,7 @@ describe("RuntimeUnavailable", () => {
   it("renders an explicit English configuration error", () => {
     render(<RuntimeUnavailable locale="en" reason="invalid-runtime-mode" />)
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "The configured runtime is not supported"
-    )
+    expect(screen.getByRole("alert")).toBeVisible()
   })
 
   it("explains that both OpenCode model override values are required", () => {

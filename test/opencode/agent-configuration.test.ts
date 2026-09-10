@@ -56,9 +56,8 @@ describe("packaged OpenCode Agent and harness configuration", () => {
     expect(aster.metadata).toMatchObject({
       mode: "primary",
       hidden: false,
-      aos_ui_name: "Aster",
     })
-    expect(aster.prompt).toContain("general analysis and synthesis Agent")
+    expect(aster.prompt).toMatch(/\S/)
   })
 
   it("does not load integration-owned tools or prompts from the source worktree", async () => {

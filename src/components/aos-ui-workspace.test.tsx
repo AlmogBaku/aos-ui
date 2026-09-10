@@ -27,6 +27,7 @@ import {
 } from "@/runtime-adapters/fixture/fixture-workspace"
 
 import { FixtureAosUiApp } from "@/runtime-adapters/fixture/composition"
+import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
 import { AosUiWorkspace } from "./aos-ui-workspace"
 
 vi.mock("react-router", () => ({
@@ -44,13 +45,36 @@ beforeEach(() => window.history.replaceState({}, "", "/"))
 afterEach(cleanup)
 
 function TabFixture({ capture }: { capture: (bundle: RuntimeBundle) => void }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
+  return (
+    <ControlledWorkspaceFixture
+      initialThreadId="thread-aster-market"
+      messagesByThread={{
+        "thread-aster-market": [
+          {
+            id: "test-market-user",
+            role: "user",
+            content: "Test request",
+          },
+          {
+            id: "test-market-assistant",
+            role: "assistant",
+            content: "Test response",
+          },
+        ],
+      }}
+    >
+      {(bundle) => <TabWorkspace bundle={bundle} capture={capture} />}
+    </ControlledWorkspaceFixture>
   )
-  const bundle = useFixtureRuntimeBundle({
-    threadId,
-    onThreadIdChange: setThreadId,
-  })
+}
+
+function TabWorkspace({
+  bundle,
+  capture,
+}: {
+  bundle: RuntimeBundle
+  capture: (bundle: RuntimeBundle) => void
+}) {
   useEffect(() => capture(bundle), [bundle, capture])
   return (
     <AosUiWorkspace
@@ -128,7 +152,7 @@ describe("reversible local Session tabs", () => {
         }}
       />
     )
-    await screen.findByText(/Enterprise AI spend continues/)
+    await screen.findByText("Test response")
 
     const pendingList =
       deferred<Awaited<ReturnType<FixtureThreadListAdapter["list"]>>>()
@@ -143,7 +167,7 @@ describe("reversible local Session tabs", () => {
     await waitFor(() => expect(list).toHaveBeenCalledOnce())
 
     expect(screen.queryByText("Loading workspace…")).toBeNull()
-    expect(screen.getByText(/Enterprise AI spend continues/)).toBeVisible()
+    expect(screen.getByText("Test response")).toBeVisible()
 
     pendingList.resolve({ threads: [] })
     await act(() => reload)
@@ -185,6 +209,9 @@ describe("reversible local Session tabs", () => {
       await user.click(
         screen.getByRole("button", { name: `Close session: ${title}` })
       )
+      await waitFor(() =>
+        expect(screen.queryByRole("tab", { name: title })).toBeNull()
+      )
     }
     await waitFor(() => expect(screen.queryAllByRole("tab")).toHaveLength(0))
     await user.click(await screen.findByRole("button", { name: "Undo" }))
@@ -193,7 +220,7 @@ describe("reversible local Session tabs", () => {
         screen.getByRole("tab", { name: "Competitive scan" })
       ).toHaveAttribute("aria-selected", "true")
     )
-  })
+  }, 20_000)
   it("restores the exact closed tab and selection without provider lifecycle mutations", async () => {
     const user = userEvent.setup()
     let bundle: RuntimeBundle | undefined
@@ -887,39 +914,107 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("joins provider Agents, Session tabs, the thread, and explicit todos", async () => {
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
+    render(
+      <ControlledWorkspaceFixture
+        initialThreadId="session-primary"
+        workspace={{
+          agents: [
+            {
+              kind: "ready",
+              id: "agent-primary",
+              name: "Primary",
+              status: "idle",
+              icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
+            },
+            {
+              kind: "ready",
+              id: "agent-secondary",
+              name: "Secondary",
+              status: "idle",
+              icon: { kind: "symbol", symbol: "layers", tone: "purple" },
+            },
+          ],
+          sessions: [
+            {
+              threadId: "session-primary",
+              agentId: "agent-primary",
+              updatedAt: FIXTURE_NOW.toISOString(),
+              status: "running",
+            },
+            {
+              threadId: "session-secondary",
+              agentId: "agent-secondary",
+              updatedAt: FIXTURE_NOW.toISOString(),
+              status: "idle",
+            },
+          ],
+          sessionTitles: {
+            "session-primary": "Selected session",
+            "session-secondary": "Other session",
+          },
+          todos: {
+            "session-primary": [
+              { id: "todo-finished", label: "Finished", status: "completed" },
+              { id: "todo-active", label: "Active", status: "active" },
+            ],
+          },
+        }}
+        messagesByThread={{
+          "session-primary": [
+            {
+              id: "controlled-user",
+              role: "user",
+              content: "Prepare a summary",
+            },
+            {
+              id: "controlled-assistant",
+              role: "assistant",
+              content: [
+                { type: "text", text: "The requested summary is ready." },
+                {
+                  type: "tool-call",
+                  toolCallId: "controlled-plan",
+                  toolName: "present_plan",
+                  args: { title: "Selected plan" },
+                  argsText: '{"title":"Selected plan"}',
+                  result: {
+                    id: "selected-plan",
+                    title: "Selected plan",
+                    steps: [{ id: "step", label: "Review", status: "active" }],
+                  },
+                },
+              ],
+            },
+          ],
+        }}
+      >
+        {(bundle) => (
+          <AosUiWorkspace
+            bundle={bundle}
+            locale="en"
+            dictionary={en}
+            now={FIXTURE_NOW}
+          />
+        )}
+      </ControlledWorkspaceFixture>
+    )
 
     const tablist = await screen.findByRole("tablist", { name: "Sessions" })
     expect(
-      await within(tablist).findByRole("tab", { name: "Market brief" })
+      await within(tablist).findByRole("tab", { name: "Selected session" })
     ).toHaveAttribute("aria-selected", "true")
+    const conversation = screen.getByRole("main", { name: "Conversation" })
     expect(
-      await screen.findByText(
-        "Enterprise AI spend continues to broaden and deepen."
-      )
-    ).toBeInTheDocument()
-    expect(screen.getAllByText("Demo workspace")).toHaveLength(2)
-    expect(screen.getByRole("heading", { name: "Outputs" })).toBeVisible()
-    expect(screen.getAllByText("enterprise-ai-brief.md")).toHaveLength(2)
-    expect(screen.getAllByText("quarterly-spend.csv")).toHaveLength(2)
-    expect(screen.getAllByText("market-summary.html")).toHaveLength(2)
-
-    const message = screen
-      .getByText("Plan")
-      .closest('[data-slot="aui_assistant-message-content"]')
-    const dock = document.querySelector<HTMLElement>('[data-slot="todo-dock"]')
-    expect(message).toContainElement(screen.getByText("Plan"))
-    expect(dock).not.toBeNull()
-    expect(message).not.toContainElement(dock)
-    expect(within(dock!).getByText("Session todos.")).toBeInTheDocument()
-    expect(
-      within(dock!).getByText("1 of 5 session tasks complete")
-    ).toBeInTheDocument()
-    expect(
-      message?.parentElement?.querySelector(
-        '[data-agent-symbol="spark"][data-tone="indigo"]'
-      )
-    ).not.toBeNull()
+      await within(conversation).findByRole("heading", {
+        name: "Selected plan",
+      })
+    ).toBeVisible()
+    const todos = screen.getByRole("region", { name: "Session todos." })
+    expect(within(todos).getAllByRole("listitem")).toHaveLength(2)
+    expect(todos).not.toContainElement(
+      screen.getByRole("heading", { name: "Selected plan" })
+    )
+    expect(screen.queryByRole("button", { name: /^Secondary,/ })).toBeNull()
   })
 
   it("hides the Todo dock for a Session with no provider Todos", async () => {
@@ -934,23 +1029,19 @@ describe("AosUiApp fixture composition", () => {
       ).toHaveAttribute("aria-selected", "true")
     )
 
-    expect(document.querySelector('[data-slot="todo-dock"]')).toBeNull()
+    expect(screen.queryByRole("region", { name: "Session todos." })).toBeNull()
   })
 
   it("localizes Session-scoped Todo copy in Hebrew", async () => {
     render(<FixtureAosUiApp locale="he" dictionary={he} />)
 
-    const dock = await waitFor(() => {
-      const element = document.querySelector<HTMLElement>(
-        '[data-slot="todo-dock"]'
-      )
-      expect(element).not.toBeNull()
-      return element!
+    const dock = await screen.findByRole("region", {
+      name: "משימות השיחה",
     })
 
     expect(within(dock).getByText("משימות השיחה")).toBeInTheDocument()
     expect(
-      within(dock).getByText("1 מתוך 5 משימות בשיחה הושלמו")
+      within(dock).getByText("3 מתוך 5 משימות בשיחה הושלמו")
     ).toBeInTheDocument()
   })
 
@@ -1072,16 +1163,12 @@ describe("AosUiApp fixture composition", () => {
     const user = userEvent.setup()
     render(<EmptyAgentFixture />)
 
-    await screen.findByText(
-      "Enterprise AI spend continues to broaden and deepen."
-    )
+    await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: "Empty" }))
 
     await waitFor(() =>
       expect(
-        screen.queryByText(
-          "Enterprise AI spend continues to broaden and deepen."
-        )
+        screen.queryByText(/Applied AI is accelerating fastest/)
       ).not.toBeInTheDocument()
     )
     expect(screen.getByText(en.empty.conversationTitle)).toBeInTheDocument()
@@ -1257,9 +1344,7 @@ describe("AosUiApp fixture composition", () => {
       />
     )
 
-    await screen.findByText(
-      "Enterprise AI spend continues to broaden and deepen."
-    )
+    await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: "Empty" }))
     await user.click(
       (

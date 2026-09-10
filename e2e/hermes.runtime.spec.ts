@@ -43,6 +43,12 @@ test("Hermes authentication errors use a compact dismissible toast", async ({
 test("Hermes uses the native authenticated RPC wire without history resubmission", async ({
   page,
 }) => {
+  // Keep the fixture values owned by this test and assert what the mocked
+  // provider sent. The copy is deliberately not a readiness/state contract.
+  const fixtureText = {
+    history: `hydrated-history-${test.info().parallelIndex}`,
+    response: `submitted-response-${test.info().parallelIndex}`,
+  }
   let submissions = 0
   let activityAt = 0
   const rpcMethods: string[] = []
@@ -89,7 +95,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
           {
             id: "history-message",
             role: "assistant",
-            content: "Persisted Hermes history.",
+            content: fixtureText.history,
           },
           ...(submissions
             ? [
@@ -101,7 +107,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
                 {
                   id: "native-answer",
                   role: "assistant",
-                  content: "Hermes delivered exactly one submitted response.",
+                  content: fixtureText.response,
                   tool_calls: [
                     {
                       id: "native-plan",
@@ -182,6 +188,13 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
           context_source: "provider_usage",
           context_estimated: false,
         }
+      if (request.method === "session.context_breakdown")
+        return {
+          context_used: 2_048,
+          context_max: 65_536,
+          context_source: "provider_usage",
+          context_estimated: false,
+        }
       throw new Error(`Unexpected Hermes RPC ${request.method}`)
     }
   )
@@ -239,7 +252,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
                 session_id: "live-history",
                 seq: 2,
                 payload: {
-                  text: "Hermes delivered exactly one submitted response.",
+                  text: fixtureText.response,
                 },
               },
               {
@@ -268,7 +281,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
                 session_id: "live-history",
                 seq: 5,
                 payload: {
-                  text: "Hermes delivered exactly one submitted response.",
+                  text: fixtureText.response,
                 },
               },
             ])
@@ -292,7 +305,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
 
   await page.goto("/research/hermes%3Aresearch%3Ahistory")
   await expect(
-    page.getByText("Persisted Hermes history.", { exact: true })
+    page.getByText(fixtureText.history, { exact: true })
   ).toBeVisible()
   await expect(page.getByText("Idle", { exact: true }).first()).toBeVisible()
   await expect(
@@ -316,7 +329,7 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
     .fill("Please respond once")
   await page.getByRole("button", { name: "Send message" }).click()
   await expect(
-    page.getByText("Hermes delivered exactly one submitted response.", {
+    page.getByText(fixtureText.response, {
       exact: true,
     })
   ).toBeVisible()
@@ -324,15 +337,16 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
   expect(
     rpcMethods.filter((method) => method === "prompt.submit")
   ).toHaveLength(1)
-  await expect(
-    page.getByRole("heading", { name: "Illustrative plan" })
-  ).toBeVisible()
+  // The native completion is authoritative after hydration. Checking the
+  // rendered history after reload also proves the response was persisted and
+  // avoids coupling this contract to the timing of live event reconciliation.
   await page.reload()
   await expect(
-    page.getByText("Hermes delivered exactly one submitted response.", {
+    page.getByText(fixtureText.response, {
       exact: true,
     })
   ).toBeVisible()
+  await expect(page.getByRole("heading", { name: plan.title })).toBeVisible()
   expect(submissions).toBe(1)
   expect(
     rpcMethods.filter((method) => method === "prompt.submit")
