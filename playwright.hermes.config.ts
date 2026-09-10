@@ -21,14 +21,14 @@ export default defineConfig({
   webServer: externalBaseURL
     ? undefined
     : {
-        command: `bun run dev -- --host 127.0.0.1 --port ${port}`,
+        command: `AOS_UI_RUNTIME_MODE=hermes bun run build && AOS_UI_RUNTIME_MODE=hermes bun run preview -- --host 127.0.0.1 --port ${port}`,
         env: {
           ...process.env,
           AOS_UI_RUNTIME_MODE: "hermes",
           AOS_UI_E2E_CACHE_KEY: "hermes-3104",
           AOS_UI_HERMES_BASE_URL: "/hermes",
         },
-        url: `http://127.0.0.1:${port}/__aos_e2e_ready`,
+        url: `http://127.0.0.1:${port}/en`,
         reuseExistingServer: false,
         timeout: 120_000,
       },

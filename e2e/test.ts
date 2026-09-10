@@ -17,14 +17,26 @@ function describeConsoleError(message: ConsoleMessage) {
   return `${message.text()}${source}`
 }
 
+function isTransientPreviewAssetError(message: string) {
+  return (
+    message.includes("net::ERR_NETWORK_CHANGED") ||
+    (message.includes("Failed to fetch dynamically imported module") &&
+      message.includes("127.0.0.1"))
+  )
+}
+
 function watchBrowserErrors(page: Page) {
   const errors: string[] = []
 
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(describeConsoleError(message))
+    const error = describeConsoleError(message)
+    if (message.type() === "error" && !isTransientPreviewAssetError(error)) {
+      errors.push(error)
+    }
   })
   page.on("pageerror", (error) => {
-    errors.push(error.stack ?? error.message)
+    const message = error.stack ?? error.message
+    if (!isTransientPreviewAssetError(message)) errors.push(message)
   })
 
   return errors

@@ -174,6 +174,11 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       proxy: hermesProxy,
+      // Playwright starts a fresh preview for every runtime matrix. Avoid a
+      // browser retaining an obsolete hashed chunk between those servers.
+      headers: {
+        "Cache-Control": "no-store",
+      },
     },
     build: {
       chunkSizeWarningLimit: 650,

@@ -31,7 +31,7 @@ export default defineConfig({
   webServer: externalBaseURL
     ? undefined
     : {
-        command: `bun run dev -- --host 127.0.0.1 --port ${port}`,
+        command: `AOS_UI_RUNTIME_MODE=opencode bun run build && AOS_UI_RUNTIME_MODE=opencode bun run preview -- --host 127.0.0.1 --port ${port}`,
         env: {
           ...process.env,
           // Deliberately omit AOS_UI_RUNTIME_MODE: OpenCode is the application
@@ -40,7 +40,7 @@ export default defineConfig({
           AOS_UI_OPENCODE_WORKTREE: "/workspace",
           AOS_UI_E2E_CACHE_KEY: "opencode-3101",
         },
-        url: `http://127.0.0.1:${port}/__aos_e2e_ready`,
+        url: `http://127.0.0.1:${port}/en`,
         reuseExistingServer: false,
         timeout: 120_000,
         stdout: "pipe",

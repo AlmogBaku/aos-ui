@@ -431,6 +431,7 @@ export class VoiceMediaController {
     }
   }
   handleHidden = () => {
+    this.#playback?.pause()
     this.disarm()
   }
   authenticationLost = () => {

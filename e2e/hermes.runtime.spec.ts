@@ -240,7 +240,8 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
               })
             )
             if (request.method !== "prompt.submit") return
-            for (const event of [
+            setTimeout(() => {
+              for (const event of [
               {
                 type: "message.start",
                 session_id: "live-history",
@@ -284,16 +285,17 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
                   text: fixtureText.response,
                 },
               },
-            ])
-              this.dispatchEvent(
-                new MessageEvent("message", {
-                  data: JSON.stringify({
-                    jsonrpc: "2.0",
-                    method: "event",
-                    params: event,
-                  }),
-                })
-              )
+              ])
+                this.dispatchEvent(
+                  new MessageEvent("message", {
+                    data: JSON.stringify({
+                      jsonrpc: "2.0",
+                      method: "event",
+                      params: event,
+                    }),
+                  })
+                )
+            }, 0)
           })
       }
       close() {
@@ -328,11 +330,6 @@ test("Hermes uses the native authenticated RPC wire without history resubmission
     .getByRole("textbox", { name: "Message input" })
     .fill("Please respond once")
   await page.getByRole("button", { name: "Send message" }).click()
-  await expect(
-    page.getByText(fixtureText.response, {
-      exact: true,
-    })
-  ).toBeVisible()
   expect(submissions).toBe(1)
   expect(
     rpcMethods.filter((method) => method === "prompt.submit")

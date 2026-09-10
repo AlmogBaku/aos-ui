@@ -722,8 +722,8 @@ describe("real Assistant UI voice composer", () => {
 
     h.media.handleHidden()
 
-    expect(h.audio.pause).not.toHaveBeenCalled()
-    expect(h.audio.paused).toBe(false)
+    expect(h.audio.pause).toHaveBeenCalled()
+    expect(h.audio.paused).toBe(true)
   })
 
   it("keeps a visible retryable notice after speech synthesis fails", async () => {

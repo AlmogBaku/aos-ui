@@ -12,6 +12,7 @@ describe("deterministic fixture scenarios", () => {
       ["show a plan", "plan"],
       ["update todos", "todos"],
       ["render a chart", "chart"],
+      ["publish an artifact", "artifact"],
       ["show a map", "map"],
       ["show metrics", "stats"],
       ["show mermaid", "mermaid"],
@@ -37,7 +38,9 @@ describe("deterministic fixture scenarios", () => {
           parts.every((part) =>
             part.type === "text"
               ? part.text.trim().length > 0
-              : part.type === "tool-call" && Boolean(part.toolName)
+              : part.type === "tool-call"
+                ? Boolean(part.toolName)
+                : part.type === "data" && part.data != null
           )
       )
     ).toBe(true)
