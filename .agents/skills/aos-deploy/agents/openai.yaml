@@ -1,0 +1,6 @@
+interface:
+  display_name: "Deploy AOS"
+  short_description: "Plan and safely operate AOS services"
+  default_prompt: "Use $aos-deploy to inspect and plan this AOS deployment."
+policy:
+  allow_implicit_invocation: false
