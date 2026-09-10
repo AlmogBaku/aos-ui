@@ -1,143 +1,80 @@
-# Chat voice: setup and use
+# Use voice with Hermes
 
-Voice v1 uses Hermes's native speech services. AOS remains a static frontend;
-there is no additional server, speech-provider account integration, browser
-speech fallback or separate voice Agent. OpenCode, generic AG-UI and fixture
-deployments do not expose voice controls.
+AOS uses Hermes's native speech services for transcription and read-aloud. There is no browser speech fallback, extra AOS speech server, or separate voice Agent. Other runtime modes do not expose voice controls.
 
-Release status: implemented for evaluation, **pending approved-profile live
-microphone, transcription and playback acceptance**. Mocked browser tests prove
-orchestration, not provider availability or long-response audio completeness.
+Voice support is implemented for evaluation but still requires live acceptance with an approved, speech-enabled Hermes profile. Browser mocks verify orchestration, not provider availability or long-response completeness.
 
-## Configure Hermes
+## Configure speech
 
-1. Run the existing Hermes composition and configure native authentication as
-   described in the [operator guide](../README.md#hermes).
-2. Configure speech-to-text (STT) and/or text-to-speech (TTS) in the owning native
-   Hermes profile. AOS does not select a different provider, edit configuration
-   or collect provider credentials. A native default is Hermes's decision.
-3. Open an existing Session belonging to that profile. AOS reads the non-secret
-   `stt` and `tts` toolset configuration metadata independently. These are picker
-   hints, not an authoritative voice-readiness API: native speech also supports
-   automatic selection and credential pools that the picker checks can miss.
-   Valid but negative hints are unverified, not a reason to block an explicit
-   speech request. Hermes resolves its configured provider when you use speech.
-   Unavailable interfaces/connectivity remain disabled with contextual help.
-4. Use HTTPS or `localhost` for recording and allow microphone permission when
-   you explicitly start recording. A plain HTTP LAN address is not a secure
-   microphone context. Production TLS belongs to the operator's deployment;
-   the default Compose stack does not provide it.
+1. Connect AOS to Hermes by following [Run with Hermes](runtimes/hermes.md).
+2. Configure STT, TTS, or both in the owning native Hermes profile. AOS neither selects providers nor stores their credentials.
+3. Open a Session owned by that profile. AOS checks non-secret native configuration hints independently for STT and TTS; Hermes makes the final provider selection when speech is requested.
+4. Use HTTPS or `localhost` and grant microphone permission only when you start recording.
 
-For local development, Vite already forwards `/hermes` to the native endpoint:
+For local development, Vite provides the required same-origin forwarding:
 
 ```bash
 AOS_UI_RUNTIME_MODE=hermes \
 AOS_UI_HERMES_BASE_URL=/hermes \
 AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
-bun run dev
+  bun run dev
 ```
 
-Setup/connectivity guidance belongs to the microphone or speaker tooltip, not
-a permanent paragraph under the composer. Recording failures and review notices
-appear only after an operation. Changing microphone mode never asks for microphone permission. The selected
-mode is a local view preference, not a native profile setting.
+Selecting a microphone mode does not request permission. The choice is a local view preference, not a Hermes profile setting.
 
-## Transcribe a draft
+## Transcribe into the composer
 
-Tap the microphone, speak, then choose **Finish**. The final transcript is
-appended to the existing composer draft, where you can edit it before ordinary
-Send. Existing attachments remain attached. Typing and attachment changes are
-disabled during recording/finalization. **Discard recording** restores the
-pre-recording draft.
+Tap the microphone, speak, then choose **Finish**. AOS appends the final transcript to the existing draft. Review or edit it before using the ordinary Send action. Existing attachments remain attached.
 
-Recording stops at 15 minutes or 5 MiB. A limit always goes to review, never
-Send. If a recorder chunk would cross the byte cap, AOS transcribes the capture
-up to its last safe chunk. A first chunk larger than the complete cap cannot be
-uploaded; make a shorter recording. Silence and failed transcription send nothing. A failed recording
-can be explicitly retried from memory without another microphone capture;
-review the resulting transcript before sending.
+While capture and finalization are active, typing and attachment changes are disabled. **Discard recording** restores the draft from before capture. Silence or failed transcription sends nothing; an eligible failure can be retried from the in-memory recording.
 
-AOS requests mono, 16 kHz speech capture with echo cancellation, noise
-suppression, automatic gain and a 32 kbps recording bitrate so a typical
-15-minute Opus capture remains below the byte and proxy-body limits. Browser
-constraints are advisory; the 5 MiB cap is therefore authoritative and can end
-a recording earlier.
+Capture stops at 15 minutes or 5 MiB and always moves to review. When a new recorder chunk would cross the byte limit, AOS transcribes through the last complete safe chunk. A first chunk larger than the cap cannot be uploaded.
 
-## Send an explicit voice turn
+AOS requests mono 16 kHz capture with echo cancellation, noise suppression, automatic gain, and a 32 kbps bitrate. Browser constraints are advisory; the byte cap is authoritative.
 
-Hold the same microphone for **450 ms**, then choose **Voice turn**. With
-keyboard focus on the mic, Arrow Down or Shift+F10 opens the same picker;
-Escape dismisses it and restores focus. Releasing a long press does not record.
+## Send a voice turn
 
-Voice turn requires an attached, connected, safely idle Session, no pending
-approval, an empty draft/attachment list and queue, and both native STT and TTS.
-Blocked recording does not prevent opening the mode picker.
+Hold the microphone for 450 ms, then choose **Voice turn**. With keyboard focus on the microphone, Arrow Down or Shift+F10 opens the same menu; Escape closes it and restores focus.
 
-Tap to record and choose **Send** when finished. AOS waits for final transcription
-and the committed composer text, submits once through ordinary Send, then
-arms a one-shot read for that Assistant UI turn. After the run settles, AOS
-reads the newest completed assistant prose after the single submitted user
-message. Reasoning, tool payloads and tool-only results are never candidates.
-Typed and queued messages do not enable automatic reading. Recording never
-restarts automatically.
+Voice turn requires:
 
-The one-shot ownership rule is runtime-agnostic; Hermes supplies STT/TTS
-transport and readiness only. A queued or second user submission, reconnection,
-interruption, failed or non-prose completion, ambiguous message activity, scope
-change, authentication loss or hidden page disarms automatic reading. If the
-turn cannot be identified safely, use the response's speaker action manually.
-AOS never retries a possibly accepted chat submission automatically.
+- an attached, connected, idle Session;
+- no pending approval;
+- an empty draft, attachment list, and queue; and
+- both native STT and TTS.
 
-## Read an assistant response
+Record and choose **Send**. AOS transcribes, submits once through the ordinary composer, then arms automatic reading for that exact turn. It reads only the newest completed assistant prose after the submitted user message. Reasoning, tool payloads, and tool-only results are excluded.
 
-Choose the small speaker beside Retry. Assistant UI's ReadAloud appears inside
-that assistant message in place of its prose; tools, reasoning, attachments,
-branches and message actions remain inspectable. Stop or natural completion
-restores ordinary Markdown. Stopping speech does not stop the Agent.
+A second submission, reconnect, interruption, failure, ambiguous message activity, scope change, authentication loss, or hidden page disarms automatic reading. AOS never retries a possibly accepted chat submission.
 
-Pause and Play resume the same generated audio without generating it again.
-Speed cycles through 1×, 1.25×, 1.5× and 2×. Elapsed time and duration come from
-the audio element. Hermes supplies no word timestamps here: `spokenIndex=-1`
-means no highlighted words and the upstream word-progress bar stays at 0%.
+## Read a response aloud
 
-Starting another response replaces playback; recording stops playback. If the
-browser blocks autoplay, choose Play explicitly. Switching tabs or windows does
-not stop an active capture; it continues until Finish, Send, Discard or a safety
-limit. Hiding the page pauses audio and disarms pending automatic reading.
+Choose the speaker action beside an assistant response. Read-aloud replaces that message's prose while tools, reasoning, attachments, and actions remain inspectable. Stop restores ordinary Markdown and does not stop the Agent.
 
-## Troubleshoot safely
+Pause and Play reuse the generated audio. Successful synthesis is also cached for one hour in browser IndexedDB, so reading the same unchanged message again within that hour does not make another Hermes synthesis request. The cache belongs to one browser profile and origin; it is not shared across devices, browsers, developers, or differently hosted AOS instances. Edited projected text gets a new entry, while playback speed does not affect cache identity. Playback speed cycles through 1×, 1.25×, 1.5×, and 2×. Starting another response replaces playback; starting a recording stops it. If autoplay is blocked, choose Play explicitly.
 
-- **Mic unavailable:** check HTTPS/localhost, browser/device support, microphone
-  permission, native login and the owning profile's STT configuration.
-- **Voice turn unavailable:** clear or send the draft, attachments and queue;
-  wait for the Session to attach and become idle; resolve any approval; ensure
-  both native speech interfaces are available.
-- **Read-aloud unavailable or fails:** check native TTS configuration/login.
-  Use Play after autoplay rejection. Generation failures leave the original
-  message intact and allow an explicit Read aloud retry.
-- **Incomplete long audio:** v1 uses the native complete-audio endpoint and its
-  limits. AOS neither truncates the text nor streams/chunks synthesis. Validate
-  completeness with the actual configured provider before release.
-- **Large-upload rejection:** production Nginx allows an 8 MiB request body only
-  on the exact Hermes transcription route, enough for the 5 MiB recording plus
-  base64/JSON overhead. Other routes keep their existing limit. An upstream
-  proxy can impose a smaller limit; align it only for this route.
+Hermes does not provide word timestamps through this interface, so AOS drives progress from elapsed audio time without synchronized word highlighting. Once audio is ready, its timeline can seek within the already-generated Blob by click/touch or keyboard; zero or missing duration reports 0%, and progress is clamped to 0–100%.
 
-Recordings and generated audio exist only in browser memory. Scope changes,
-authentication loss and unmount invalidate pending operations and release
-microphone tracks, audio and object URLs. Only ordinary chat messages and the
-view preference persist. Audio and transcript contents are not logged. Do not
-put credentials in public runtime configuration or `VITE_*` variables.
+## Privacy and lifecycle
 
-## Live acceptance before release
+Recordings remain in browser memory. Successfully generated read-aloud audio has an absolute one-hour IndexedDB expiry beginning after synthesis succeeds; reads do not extend it. The app prunes expired entries when the cache initializes and with one full-cache sweep every five minutes while active. Every lookup also validates expiry, so expired audio is never reused when browser suspension or closure delays physical deletion. Browser eviction, private-browsing policy, or clearing site data can remove entries earlier.
 
-Use an explicitly approved configured profile and disposable Session; never
-modify existing user profiles for a routine test. Check desktop and mobile
-permission/capture, editable transcription, repeated explicit voice turns,
-manual inline playback, pause/resume/speed, autoplay rejection, scope changes,
-visibility changes and a long-response completeness case. Record the provider,
-browser, native version and outcome without recording audio/transcript contents.
+Scope changes, authentication loss, or unmounting release microphone tracks, active audio, and temporary object URLs without clearing unexpired cached audio. Ordinary chat messages and the local mode preference also persist. AOS does not log audio or transcript content.
 
-Hands-free, durable audio notes, streamed TTS and synchronized word highlighting
-remain deferred. See the [implementation plan](superpowers/plans/2026-09-08-chat-voice.md)
-for the native interfaces, ownership rules and automated verification matrix.
+Switching browser tabs or windows does not stop active capture; use Finish, Send, or Discard. Hiding the page pauses audio and disarms pending automatic reading.
+
+## Troubleshoot voice
+
+- **Microphone unavailable:** use HTTPS or `localhost`; check device support, browser permission, native login, and profile STT configuration.
+- **Voice turn unavailable:** clear the draft, attachments, and queue; wait for an idle attached Session; resolve approvals; confirm both STT and TTS.
+- **Read-aloud unavailable:** check native TTS configuration and authentication. Retry explicitly after generation failure or autoplay rejection.
+- **Upload rejected:** AOS permits 8 MiB only on the exact Hermes transcription proxy route, enough for the 5 MiB recording plus JSON/base64 overhead. Check any upstream proxy for a smaller limit.
+- **Long response is incomplete:** the current integration uses Hermes's complete-audio response rather than streaming or chunking. Test the configured provider's limit before release.
+
+See [Troubleshooting](troubleshooting.md) for authentication, WebSocket, and container issues.
+
+## Complete live acceptance
+
+Use an approved configured profile and disposable Session. Check desktop and mobile capture, editable transcription, repeated voice turns, manual playback, pause/resume/speed, autoplay rejection, scope and visibility changes, and a long-response completeness case.
+
+Record the provider, browser, native version, and outcome without retaining speech or transcript contents. Hands-free mode, durable audio notes, streamed TTS, and word-synchronized highlighting are outside the current feature.

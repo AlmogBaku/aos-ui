@@ -1,28 +1,20 @@
-# Same-origin helper and invited chat
+# Share an invited chat
 
-`aos-gateway` is an optional Go helper for two deployment shapes that the
-static frontend cannot provide alone:
+`aos-gateway` is an optional Go helper that serves two isolated surfaces for one selected Hermes or OpenCode runtime:
 
-- an operator UI whose native Hermes or OpenCode traffic is forwarded through
-  the UI origin, avoiding browser CORS differences; and
-- a restricted guest chat reached through an expiring invitation link.
+- an operator listener with the regular AOS UI and same-origin native forwarding; and
+- a guest listener with restricted chat reached through a signed, expiring invitation.
 
-The helper is not a runtime. Hermes or OpenCode still owns Agents, Sessions,
-messages, credentials, tools, and persistence. The helper has no database and
-selects exactly one native runtime at startup.
+The gateway is not a runtime or conversation database. The selected native runtime still owns Agents, Sessions, messages, tools, credentials, and persistence.
 
-## Build and configure
-
-Build the existing frontend and the helper:
+## Build the gateway
 
 ```bash
 bun run build
 go build -C gateway -o ../aos-gateway ./cmd/aos-gateway
 ```
 
-The executable uses Cobra and documents its complete operator surface. This is
-also the preferred discovery path for an automation Agent; help is read-only
-and does not inspect configuration or start listeners:
+Inspect the current CLI surface without starting a listener:
 
 ```bash
 ./aos-gateway --help
@@ -30,56 +22,48 @@ and does not inspect configuration or start listeners:
 ./aos-gateway help invite
 ```
 
-Create a random 32-byte base64url encryption key and store it outside the
-repository. The same key is used to create and redeem invitations. Rotating it
-invalidates every outstanding invitation.
+## Configure the listeners
 
-Set these variables before either `serve` or `invite`:
+Generate a random 32-byte base64url signing key and keep it outside the repository. The same key signs and verifies invitations; rotating it invalidates outstanding links.
 
 ```bash
-export AOS_GATEWAY_INVITE_KEY='<base64url-encoded 32-byte key>'
+export AOS_GATEWAY_INVITE_SIGNING_KEY='<base64url-encoded 32-byte key>'
 export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 ```
 
-Common server configuration:
+| Variable                         | Required value or default                        |
+| -------------------------------- | ------------------------------------------------ |
+| `AOS_GATEWAY_RUNTIME`            | Required: `hermes` or `opencode`                 |
+| `AOS_GATEWAY_UPSTREAM`           | Required fixed native HTTP origin                |
+| `AOS_GATEWAY_DIST`               | `dist`                                           |
+| `AOS_GATEWAY_OPERATOR_ADDR`      | `127.0.0.1:8080`                                 |
+| `AOS_GATEWAY_GUEST_ADDR`         | `127.0.0.1:8081`                                 |
+| `AOS_GATEWAY_HERMES_TOKEN`       | Required Hermes Desktop Session token for Hermes |
+| `AOS_GATEWAY_OPENCODE_DIRECTORY` | Required fixed native directory for OpenCode     |
+| `AOS_GATEWAY_OPENCODE_USERNAME`  | Optional OpenCode Basic-auth username            |
+| `AOS_GATEWAY_OPENCODE_PASSWORD`  | Optional OpenCode Basic-auth password            |
 
-| Variable | Meaning | Default |
-|---|---|---|
-| `AOS_GATEWAY_RUNTIME` | `hermes` or `opencode` | required |
-| `AOS_GATEWAY_UPSTREAM` | fixed native HTTP origin | required |
-| `AOS_GATEWAY_DIST` | frontend build directory | `dist` |
-| `AOS_GATEWAY_OPERATOR_ADDR` | operator listener | `127.0.0.1:8080` |
-| `AOS_GATEWAY_GUEST_ADDR` | guest listener | `127.0.0.1:8081` |
-
-Hermes additionally requires `AOS_GATEWAY_HERMES_TOKEN`. OpenCode requires
-`AOS_GATEWAY_OPENCODE_DIRECTORY`; set
-`AOS_GATEWAY_OPENCODE_USERNAME` and `AOS_GATEWAY_OPENCODE_PASSWORD` when the
-native server uses Basic authentication.
+Example Hermes server:
 
 ```bash
 AOS_GATEWAY_RUNTIME=hermes \
 AOS_GATEWAY_UPSTREAM=http://127.0.0.1:9119 \
 AOS_GATEWAY_HERMES_TOKEN="$HERMES_SESSION_TOKEN" \
-./aos-gateway serve
+  ./aos-gateway serve
 ```
 
-The operator listener serves the regular UI and only forwards the selected
-native prefix (`/hermes` or `/opencode`). Native operator authentication remains
-in force. The guest listener never exposes that forwarding route or operator
-APIs.
+The operator listener forwards only the selected native prefix. The guest listener exposes neither native forwarding nor operator APIs.
 
-Terminate public HTTPS at an existing reverse proxy and forward only the guest
-origin to the guest listener. TLS provisioning and SSH tunnel management are
-outside this helper. An SSH tunnel may be used for the fixed native upstream.
+> [!IMPORTANT]
+> The helper binds to loopback and does not provision TLS. Terminate public HTTPS at an operator-managed reverse proxy and forward only the intended guest origin to the guest listener.
 
 ## Create an invitation
 
-Use the local CLI; there is no HTTP minting endpoint:
+Mint invitations locally; there is no HTTP minting endpoint:
 
 ```bash
 ./aos-gateway invite \
   --agent interviewer \
-  --ref dan-2026 \
   --expires-in 24h \
   --prefill 'Hey, Almog sent me here!' \
   --instruction-file /secure/path/dan-instructions.txt \
@@ -89,87 +73,35 @@ Use the local CLI; there is no HTTP minting endpoint:
   --lang en
 ```
 
-Run `./aos-gateway invite --help` for every optional branding and first-turn
-field. Missing or invalid arguments produce a concise error and point back to
-that command-specific help.
+Run `./aos-gateway invite --help` for optional branding fields. The command prints a URL such as `https://guest.example.com/#invite=<JWT>`.
 
-The command prints `https://guest.example.com/#invite=<JWE>`. The browser
-removes the fragment immediately, redeems the token, and keeps it in a Secure,
-HttpOnly, host-only, SameSite=Strict cookie. The encrypted token remains a
-bearer credential; anyone with the link has its access until expiration.
+By default the CLI generates a unique conversation reference, so each invitation starts an independently recoverable guest conversation. Supply `--ref STABLE_REFERENCE` only when another invitation should deliberately resolve to the same Agent and conversation. Keep explicit references opaque and free of personal or secret data.
 
-To audit an invitation locally, save its URL (or raw token) to a protected file
-and inspect it with the same encryption key and guest origin used to create it:
+The link is a reusable bearer credential until expiration. Share it through an appropriate private channel. The browser immediately exchanges the fragment for a Secure, HttpOnly, host-only, SameSite=Strict cookie and removes the fragment from the visible URL.
 
-```bash
-aos-gateway invite inspect --link-file ./invite-link.txt
-```
+> [!WARNING]
+> The invitation is a signed JWT, not an encrypted container. Its recipient can read every claim, including first-turn instructions. Never place secrets in an invitation.
 
-Use `--link-file -` to read from stdin. The command contacts no runtime and
-prints formatted JSON containing every claim, including the private first-turn
-instruction. Treat that output as sensitive. It validates the configured
-audience and rejects expired or tampered invitations. Run
-`aos-gateway invite inspect --help` for complete usage.
+## Use first-turn content
 
-`--prefill` is an editable draft placed in the guest composer. It is never sent
-until the guest submits it. The private instruction is read only from
-`--instruction-file` (use `-` for stdin), is never returned to browser code,
-and is applied only while initializing the native Session for the first
-submitted message:
+`--prefill` places an editable draft in the guest composer. It is not sent until the guest submits it.
 
-- OpenCode sends it through native `prompt_async.system`.
-- Hermes seeds it as a private, preloaded user-history instruction during
-  `session.create`. Hermes sends that seed with the first participant turn but
-  does not persist the preloaded row in the native transcript. A system-history
-  row is not used because Hermes' Responses transport drops additional system
-  rows after its assembled Session system prompt.
+First-turn instructions are accepted only through `--instruction-file`; pass `-` to read from standard input. The guest UI does not display the instruction after redemption, but the link recipient can decode it from the JWT. The gateway applies it only while initializing the first submitted participant turn.
 
-OpenCode persists a namespaced initialization marker and stable native message
-identity before prompting, so delayed message visibility or a helper restart
-cannot reapply the instruction. Once initialization is complete—or durable
-messages already exist—renewed invitations ignore both first-turn fields.
-Opening, refreshing, or dismissing the welcome note never creates a Session or
-submits a prompt.
+The runtime stores a durable initialization marker or recoverable native Session identity so refreshes, delayed messages, and gateway restarts do not reapply first-turn content. Opening or dismissing the welcome screen does not create a Session or send a prompt.
 
-Hermes recovers a reference through an exact reserved Session title scoped to
-the configured profile. OpenCode recovers it from namespaced native Session
-metadata while preserving unrelated metadata. Native Hermes WebSocket and
-OpenCode SSE observation drive guest refreshes; the helper does not continuously
-poll complete histories. Manual deletion, renaming, archival, or metadata edits
-can make recovery fail. Run only one helper instance for a given runtime state;
-distributed creation locks are intentionally absent.
+## Understand guest limits
 
-## Security and capability limits
+Every guest mutation checks the configured Origin, invitation expiry, and the Agent/reference binding. Guest history may include participant messages, attachments, and supported rich displays. It excludes system rows, reasoning, raw tool data, Subagents, permissions, management, unrelated Sessions, model changes, and executable slash commands.
 
-Every guest mutation checks the configured Origin, invitation expiry, and a
-conversation binding derived from the invitation's Agent and reference. Guest
-history and events project participant messages, attachments, and explicitly
-supported rich displays. System rows, reasoning, raw tool calls/results,
-Subagent activity, permissions, management, unrelated Sessions, model changes,
-and executable slash commands are not available.
+Hermes and OpenCode provide chat, streaming, Stop, reconnect, and attachments where native support exists. OpenCode additionally supports its safe edit/regenerate flow and pending questions. Hermes execution approvals remain excluded from guest chat. Branch navigation is disabled.
 
-This filtering is not a sandbox. Configure the invited Agent's native tools,
-filesystem access, network access, and permissions for the guest's trust level.
-The Agent can repeat private instructions or runtime-owned background in its
-ordinary answers, and a Hermes operator can inspect the native system row.
+> [!WARNING]
+> Guest filtering is not an Agent sandbox. Configure the invited Agent's native filesystem, network, tools, and permissions for the guest's trust level. An Agent can repeat first-turn instructions or other runtime context in an ordinary answer.
 
-Capabilities remain provider-driven. Hermes and OpenCode both support chat,
-streaming, Stop, attachments where native support exists, and reconnect.
-OpenCode additionally exposes safe native edit/regenerate operations and its
-pending-question flow: ordered batches, multiple selection, custom answers and
-rejection. The guest sees only bounded question text and an opaque handle;
-every response is reauthorized against the current native Session. Hermes voice
-is offered only when native STT/TTS configuration is available. Branch
-navigation remains disabled because neither regular runtime UI currently
-exposes it; OpenCode's lower-level fork API is not made into a guest escape
-hatch. Hermes execution approvals remain intentionally excluded.
+Run one gateway instance for a given runtime state. Distributed creation locks are not provided. Manual native Session renaming, deletion, archival, or metadata edits can break reference recovery.
 
-NanoClaw and OpenClaw are not implemented. A future adapter can implement the
-same provider-neutral Go conversation contract if it can provide durable
-Agent+reference lookup, ownership checks, scoped operations, and safe output
-projection without importing native details into the browser.
-
-## Focused verification
+## Verify
 
 ```bash
 go -C gateway test ./...
@@ -180,5 +112,4 @@ bun run lint
 bun run build
 ```
 
-Live acceptance requires configured credentials and approved disposable native
-Agents. Fixture tests are not evidence of a live Hermes or OpenCode journey.
+Use disposable native Agents and real credentials for live acceptance. Fixture or mocked tests do not establish a live invitation journey.

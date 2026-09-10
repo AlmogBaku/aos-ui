@@ -17,7 +17,7 @@ type LinkOptions struct {
 	UI          *UI
 }
 
-// CreateLink validates options, encrypts the invitation, and returns its full URL.
+// CreateLink validates options, signs the invitation, and returns its full URL.
 func CreateLink(auth *Auth, now time.Time, options LinkOptions) (string, error) {
 	if auth == nil {
 		return "", errors.New("invitation authentication is required")
@@ -35,7 +35,7 @@ func CreateLink(auth *Auth, now time.Time, options LinkOptions) (string, error) 
 	if options.Prefill != "" || options.Instruction != "" {
 		claims.FirstTurn = &FirstTurn{Prefill: options.Prefill, Instruction: options.Instruction}
 	}
-	token, err := auth.Encrypt(claims)
+	token, err := auth.Sign(claims)
 	if err != nil {
 		return "", fmt.Errorf("create invitation: %w", err)
 	}

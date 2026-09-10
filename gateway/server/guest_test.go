@@ -121,7 +121,7 @@ func setup(t *testing.T) (http.Handler, *invite.Auth, invite.Claims, *native) {
 }
 func request(t *testing.T, h http.Handler, a *invite.Auth, c invite.Claims, method, path, body string, scope bool) *httptest.ResponseRecorder {
 	t.Helper()
-	token, err := a.Encrypt(c)
+	token, err := a.Sign(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func request(t *testing.T, h http.Handler, a *invite.Auth, c invite.Claims, meth
 
 func TestRedeemReturnsNewPrefillButNeverInstruction(t *testing.T) {
 	h, a, c, _ := setup(t)
-	token, _ := a.Encrypt(c)
+	token, _ := a.Sign(c)
 	r := httptest.NewRequest("POST", "/api/guest/redeem", strings.NewReader(`{"token":"`+token+`"}`))
 	r.Header.Set("Origin", a.Origin())
 	r.Header.Set("Content-Type", "application/json")
@@ -346,7 +346,7 @@ func TestIdleEventObservationDoesNotPollFullHistoryWithoutAProviderChange(t *tes
 	n.state = conversation.StatusExisting
 	ctx, cancel := context.WithTimeout(context.Background(), 3200*time.Millisecond)
 	defer cancel()
-	token, _ := a.Encrypt(c)
+	token, _ := a.Sign(c)
 	r := httptest.NewRequest("GET", "/api/guest/events?conversation="+c.ConversationKey(), nil).WithContext(ctx)
 	r.AddCookie(&http.Cookie{Name: "__Host-aos-invite", Value: token})
 	w := httptest.NewRecorder()
@@ -361,7 +361,7 @@ func TestEventObservationReloadsHistoryAfterAProviderChange(t *testing.T) {
 	n.state = conversation.StatusExisting
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	token, _ := a.Encrypt(c)
+	token, _ := a.Sign(c)
 	r := httptest.NewRequest("GET", "/api/guest/events?conversation="+c.ConversationKey(), nil).WithContext(ctx)
 	r.AddCookie(&http.Cookie{Name: "__Host-aos-invite", Value: token})
 	done := make(chan struct{})

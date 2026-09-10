@@ -1,0 +1,96 @@
+# Troubleshoot AOS
+
+Start with the symptom you see. AOS fails closed when runtime configuration or provider data cannot be trusted, so an unavailable control is often an intentional capability boundary rather than a hidden fallback.
+
+## The runtime is unavailable
+
+1. Open `/runtime-config.json` in the same browser origin.
+2. Confirm it is valid JSON and uses exactly one shape from the [configuration reference](configuration.md).
+3. Remove unknown fields and credentials.
+4. For OpenCode, confirm `directory` is an absolute path understood by the server.
+5. For generic AG-UI, confirm both `runUrl` and `workspaceUrl` are present absolute HTTP(S) URLs.
+
+If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
+
+## OpenCode does not start
+
+- Confirm `AOS_UI_OPENCODE_WORKTREE` exists and resolves to an absolute external directory.
+- Run `bun run integrations:build` before `bun run opencode:serve`.
+- Check whether `127.0.0.1:4096` is already occupied. Reuse the existing server or change `AOS_UI_OPENCODE_PORT` consistently.
+- Set both `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID`, or leave both unset.
+- For OpenAI-compatible models, set all three `AOS_UI_OPENAI_COMPATIBLE_*` values in the native process environment.
+- In Compose, verify host UID/GID access to the worktree and credential files.
+
+## A new OpenCode Agent is not ready
+
+OpenCode `1.18.29` caches Agent definitions. Wait for active runs to finish, restart the native harness, then refresh the catalog. AOS does not automatically dispose a shared OpenCode instance because doing so can abort unrelated runs.
+
+## Hermes asks you to sign in
+
+Use the **Sign in to Hermes** action, complete native authentication in the new tab, then reload AOS. The browser relies on Hermes cookies and single-use WebSocket tickets; credentials never belong in public runtime configuration.
+
+When Hermes is mounted at `/hermes`, keep the supplied `/auth` forwarding enabled because the native login page submits to that absolute path.
+
+## Hermes HTTP works but live updates fail
+
+- Confirm the reverse proxy forwards WebSocket upgrades on `/hermes`.
+- Confirm browser cookies apply to the mounted path and origin.
+- Verify the configured public base URL includes `/hermes`.
+- Check that the server version exposes the native interfaces described in the [Hermes guide](runtimes/hermes.md).
+
+AOS reconnects to the native Session without submitting a prompt. Recovery and auto-continue policy remain Hermes settings.
+
+## The web container cannot reach Hermes
+
+A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then set `AOS_UI_HERMES_HOST` and `AOS_UI_HERMES_PORT`.
+
+From the web container, verify the configured host and port resolve and accept connections. Keep browser-facing configuration on the same-origin `/hermes` path.
+
+## Generic AG-UI Agents or Sessions do not load
+
+- Verify the workspace service implements every required endpoint in the [AG-UI guide](runtimes/ag-ui.md).
+- Confirm Session records include matching `threadId` and `agentId` values.
+- Confirm a newly created Session reports the Agent that was requested.
+- Check browser CORS errors for both the run and workspace origins.
+- Ensure history responses contain valid message data and resumable state when advertised.
+
+## A capability is missing
+
+Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenCode visibility is read-only; generic AG-UI lacks shared Todos and Agent creation.
+
+## Browser notifications do not appear
+
+1. Enable notifications in Activity settings.
+2. Grant browser permission and check operating-system notification settings or Do Not Disturb.
+3. Keep at least one AOS tab loaded.
+4. Test from another Session, a hidden tab, or an unfocused browser window. The exact visible and focused Session suppresses its own alert.
+
+Denied or unsupported permission does not disable Activity. Multiple tabs elect one delivery tab, so only one operating-system notification is expected.
+
+## Microphone or read-aloud is unavailable
+
+Voice requires Hermes plus the relevant native STT/TTS configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Chat voice](chat-voice.md) for mode-specific checks and safety limits.
+
+## A published Artifact cannot load
+
+- Confirm the active conversation branch contains an explicit `present_artifact` result.
+- Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
+- For HTML dependencies, add only the required credential-free HTTPS origins to `artifactHtmlAssetOrigins`.
+- Inspect the Source or textual fallback when preview rendering is unavailable.
+
+## A route points to missing work
+
+AOS validates Agent and Session ownership before selecting a route. Refresh the provider catalog. If the native record was deleted, hidden, renamed, or archived, choose a current Session instead; AOS does not create a browser-owned replacement.
+
+## Collect useful diagnostics
+
+Record the runtime mode, browser, native runtime version, failing Agent/Session identifiers, and the first relevant browser-console or native-server error. Exclude credentials, invitation tokens, conversation content, tool payloads, and speech data.
+
+For code-level verification, run:
+
+```bash
+bun run test
+bun run typecheck
+bun run lint
+bun run build
+```

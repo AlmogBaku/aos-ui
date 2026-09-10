@@ -24,7 +24,7 @@ helper does not provision TLS.
 Environment:
   AOS_GATEWAY_RUNTIME              hermes or opencode (required)
   AOS_GATEWAY_UPSTREAM             fixed native HTTP origin (required)
-  AOS_GATEWAY_INVITE_KEY           32 random base64url-encoded bytes (required)
+  AOS_GATEWAY_INVITE_SIGNING_KEY   32 random base64url-encoded bytes (required)
   AOS_GATEWAY_GUEST_ORIGIN         public HTTPS guest origin (required)
   AOS_GATEWAY_DIST                 frontend build directory (default dist)
   AOS_GATEWAY_OPERATOR_ADDR        operator listener (default 127.0.0.1:8080)
@@ -55,7 +55,7 @@ Environment:
 func configFromEnvironment(getenv func(string) string) gateway.Config {
 	config := gateway.Config{
 		Runtime: getenv("AOS_GATEWAY_RUNTIME"), Upstream: getenv("AOS_GATEWAY_UPSTREAM"),
-		InviteKey: getenv("AOS_GATEWAY_INVITE_KEY"), GuestOrigin: getenv("AOS_GATEWAY_GUEST_ORIGIN"),
+		InviteSigningKey: getenv("AOS_GATEWAY_INVITE_SIGNING_KEY"), GuestOrigin: getenv("AOS_GATEWAY_GUEST_ORIGIN"),
 		Dist: getenv("AOS_GATEWAY_DIST"), OperatorAddress: getenv("AOS_GATEWAY_OPERATOR_ADDR"), GuestAddress: getenv("AOS_GATEWAY_GUEST_ADDR"),
 		HermesToken: getenv("AOS_GATEWAY_HERMES_TOKEN"),
 		OpenCode: gateway.OpenCodeConfig{

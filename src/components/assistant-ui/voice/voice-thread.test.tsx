@@ -582,7 +582,8 @@ describe("real Assistant UI voice composer", () => {
     ).toBeNull()
   })
 
-  it("reads only the requested message after projection, never history on mount", async () => {
+  it("reads only the requested message when IndexedDB is unavailable", async () => {
+    vi.stubGlobal("indexedDB", undefined)
     const OriginalURL = URL
     vi.stubGlobal(
       "URL",
@@ -664,10 +665,20 @@ describe("real Assistant UI voice composer", () => {
     expect(first.querySelector('[data-slot="read-aloud"]')).not.toBeNull()
     expect(second.querySelector('[data-slot="read-aloud"]')).toBeNull()
     expect(h.synthesize.mock.calls[0]?.[0]).toBe("First answer")
-    expect(within(first).getByRole("progressbar")).toHaveAttribute(
+    expect(within(first).getByRole("slider")).toHaveAttribute(
       "aria-valuenow",
       "0"
     )
+    act(() => {
+      h.audio.currentTime = 6
+      h.audio.duration = 24
+      h.audio.dispatchEvent(new Event("timeupdate"))
+    })
+    const timeline = within(first).getByRole("slider")
+    expect(timeline).toHaveAttribute("aria-valuenow", "6")
+    fireEvent.keyDown(timeline, { key: "End" })
+    expect(h.audio.currentTime).toBe(24)
+    expect(h.synthesize).toHaveBeenCalledOnce()
     expect(
       first.querySelector('[data-slot="aui_chain-of-thought"]')
     ).not.toBeNull()

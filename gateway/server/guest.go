@@ -106,7 +106,7 @@ func (g *Guest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			failure(w, 400, "invalid-request")
 			return
 		}
-		c, err := g.auth.Decrypt(body.Token)
+		c, err := g.auth.Verify(body.Token)
 		if err != nil {
 			failure(w, 401, "invalid-invite")
 			return
@@ -130,7 +130,7 @@ func (g *Guest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "invalid-invite")
 		return
 	}
-	c, err := g.auth.Decrypt(cookie.Value)
+	c, err := g.auth.Verify(cookie.Value)
 	if err != nil {
 		failure(w, 401, "invalid-invite")
 		return

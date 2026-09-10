@@ -1142,13 +1142,18 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("opens an ordinary closable creator Session and sends one interview kickoff", async () => {
+    const startedAt = performance.now()
     const user = userEvent.setup()
     render(<CreatorFixtureAosUiApp locale="en" />)
+    console.info("creator:render", performance.now() - startedAt)
     await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    console.info("creator:click", performance.now() - startedAt)
     expect(await screen.findByText("Let's create a new Agent.")).toBeVisible()
+    console.info("creator:prompt", performance.now() - startedAt)
     expect(
       await screen.findByRole("button", { name: "Close session: New Agent" })
     ).toBeEnabled()
+    console.info("creator:close", performance.now() - startedAt)
     expect(window.location.pathname).toContain("agent-builder")
     expect(screen.queryByRole("button", { name: /^Agent Creator,/ })).toBeNull()
     expect(screen.queryByText("Delete Agent draft")).toBeNull()

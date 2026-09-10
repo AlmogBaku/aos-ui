@@ -4,6 +4,7 @@ import { ActionBarPrimitive, useAui, useAuiState } from "@assistant-ui/react"
 import { useEffect, useRef } from "react"
 import { SquareIcon, Volume2Icon } from "lucide-react"
 import { ReadAloud } from "../elements/read-aloud"
+import { pct } from "../elements/voice-surfaces"
 import { TooltipIconButton } from "../elements/tooltip-icon-button"
 import {
   useVoiceCaptureActive,
@@ -144,10 +145,14 @@ export function InlineReadAloud() {
         loading={playback.loading}
         elapsed={time(playback.elapsed)}
         duration={time(playback.duration)}
+        progress={pct(playback.elapsed, playback.duration)}
+        elapsedSeconds={playback.elapsed}
+        durationSeconds={playback.duration}
         rate={playback.rate}
         labels={labels.playback}
         onToggle={() => void media.togglePlayback()}
         onRateChange={media.cycleRate}
+        onSeek={media.seekPlayback}
         className="max-w-none"
       />
       {playback.loading || playback.blocked ? (

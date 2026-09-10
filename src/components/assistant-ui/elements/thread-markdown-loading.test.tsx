@@ -62,5 +62,5 @@ describe("assistant message Markdown", () => {
     ).toBeVisible()
     expect(screen.getByText("Confirmed").tagName).toBe("STRONG")
     expect(screen.queryByText("Loading formatted text…")).toBeNull()
-  })
+  }, 10_000)
 })

@@ -13,6 +13,11 @@ import {
   type MicLevelMeterLike,
 } from "./mic-level-meter"
 import { VoicePlayback, type PlaybackState } from "./voice-playback"
+import {
+  getCachedAudio,
+  putCachedAudio,
+  VOICE_AUDIO_TTL_MS,
+} from "./voice-audio-cache"
 
 export type VoiceMode = "transcription" | "voice-turn"
 export type VoiceAvailability =
@@ -295,10 +300,39 @@ export class VoiceMediaController {
           this.#pendingPlaybackOwner = undefined
           this.stopSpeech()
           this.#audio ??= this.#options.createAudio?.() ?? new Audio()
+          const projectedText = services.projectText(text)
+          const cacheKey = owner
+            ? JSON.stringify([
+                "v1",
+                owner.scopeId,
+                owner.messageId,
+                projectedText,
+              ])
+            : undefined
           const playback = new VoicePlayback({
-            text: services.projectText(text),
+            text: projectedText,
             audio: this.#audio,
-            synthesize: services.synthesize,
+            synthesize: async (speechText, signal) => {
+              if (cacheKey) {
+                try {
+                  const cached = await getCachedAudio(cacheKey)
+                  if (cached) return cached
+                } catch {
+                  /* Browser persistence must never block speech. */
+                }
+              }
+              const audio = await services.synthesize(speechText, signal)
+              if (cacheKey) {
+                void putCachedAudio(
+                  cacheKey,
+                  audio,
+                  Date.now() + VOICE_AUDIO_TTL_MS
+                ).catch(() => {
+                  /* Browser persistence must never block speech. */
+                })
+              }
+              return audio
+            },
             onState: (state) => {
               if (this.#playback !== playback) return
               if (playback.status.type === "ended") {
@@ -370,6 +404,9 @@ export class VoiceMediaController {
   }
   cycleRate = () => {
     this.#playback?.cycleRate()
+  }
+  seekPlayback = (seconds: number) => {
+    this.#playback?.seek(seconds)
   }
   submitVoiceTurn = (
     baselineMessageIds: readonly string[],

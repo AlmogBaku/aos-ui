@@ -2,8 +2,9 @@
 
 ## Read first
 
-- `README.md` is the operator and contributor guide. Keep its commands aligned
-  with `package.json`, the Compose files, and the environment examples.
+- `README.md` is the operator entry point. Keep its commands aligned with
+  `package.json`, the Compose files, and the environment examples; follow
+  `docs/README.md` for the maintained operator documentation map.
 - `PRODUCT.md` defines product terminology, ownership, scope, and accessibility
   commitments.
 - `docs/design/agent-workspace-design-lock.md` is the visual design authority.
@@ -149,7 +150,8 @@ Additional checks by area:
   ```bash
   bunx vitest run test/containers/compose.test.ts
   docker compose -f compose.yaml config --quiet
-  docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
+  AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
+    docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
   docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
   ```
 

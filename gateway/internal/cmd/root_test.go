@@ -46,3 +46,19 @@ func TestUnknownCommandReturnsConciseErrorAndHelpHint(t *testing.T) {
 		}
 	}
 }
+
+func TestRemovedInviteInspectReturnsInviteHelpHint(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Execute(context.Background(), []string{"invite", "inspect"}, Streams{Out: &stdout, Err: &stderr}, Dependencies{})
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("exit = %d, stdout = %q", code, stdout.String())
+	}
+	for _, text := range []string{"unknown command", "aos-gateway invite --help"} {
+		if !strings.Contains(stderr.String(), text) {
+			t.Fatalf("stderr does not contain %q: %s", text, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "invite inspect --help") {
+		t.Fatalf("removed command was suggested: %s", stderr.String())
+	}
+}

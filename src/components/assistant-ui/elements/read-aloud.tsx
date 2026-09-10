@@ -43,8 +43,12 @@ export function ReadAloud({
   rate,
   elapsed,
   duration,
+  progress,
+  elapsedSeconds,
+  durationSeconds,
   onToggle,
   onRateChange,
+  onSeek,
   labels = DEFAULT_LABELS,
   className,
   ...props
@@ -56,11 +60,26 @@ export function ReadAloud({
   rate: number
   elapsed: string
   duration: string
+  progress?: number
+  elapsedSeconds?: number
+  durationSeconds?: number
   onToggle?: () => void
   onRateChange?: () => void
+  onSeek?: (seconds: number) => void
   labels?: ReadAloudLabels
 }) {
-  const progress = pct(spokenIndex, words.length)
+  const progressValue =
+    progress === undefined ? pct(spokenIndex, words.length) : pct(progress, 100)
+  const seekable = Boolean(
+    !loading &&
+    onSeek &&
+    Number.isFinite(durationSeconds) &&
+    (durationSeconds ?? 0) > 0
+  )
+  const seek = (value: number) => {
+    if (!seekable || !onSeek || !durationSeconds) return
+    onSeek(Math.min(durationSeconds, Math.max(0, value)))
+  }
   return (
     <div
       data-slot="read-aloud"
@@ -110,18 +129,48 @@ export function ReadAloud({
           )}
         </button>
         <span
-          role="progressbar"
+          role={seekable ? "slider" : "progressbar"}
           aria-label={labels.progress}
           aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={announced(progress)}
+          aria-valuemax={seekable ? durationSeconds : 100}
+          aria-valuenow={announced(
+            seekable ? (elapsedSeconds ?? 0) : progressValue
+          )}
           aria-valuetext={labels.time(elapsed, duration)}
-          className="h-[3px] min-w-0 flex-1 overflow-hidden rounded-full bg-foreground/[0.08]"
+          tabIndex={seekable ? 0 : undefined}
+          onPointerDown={(event) => {
+            if (!seekable) return
+            const bounds = event.currentTarget.getBoundingClientRect()
+            if (bounds.width > 0)
+              seek(
+                ((event.clientX - bounds.left) / bounds.width) *
+                  (durationSeconds ?? 0)
+              )
+          }}
+          onKeyDown={(event) => {
+            if (!seekable) return
+            const current = elapsedSeconds ?? 0
+            if (event.key === "ArrowLeft" || event.key === "ArrowDown")
+              seek(current - 5)
+            else if (event.key === "ArrowRight" || event.key === "ArrowUp")
+              seek(current + 5)
+            else if (event.key === "Home") seek(0)
+            else if (event.key === "End") seek(durationSeconds ?? 0)
+            else return
+            event.preventDefault()
+          }}
+          className={cn(
+            "flex h-11 min-w-0 flex-1 items-center rounded-full",
+            seekable &&
+              "cursor-pointer touch-none focus-visible:ring-1 focus-visible:ring-foreground/20 focus-visible:outline-none"
+          )}
         >
-          <span
-            className="block h-full rounded-full bg-blue-500 transition-[width] duration-200 ease-linear motion-reduce:transition-none dark:bg-blue-400"
-            style={{ width: `${progress}%` }}
-          />
+          <span className="h-[3px] w-full overflow-hidden rounded-full bg-foreground/[0.08]">
+            <span
+              className="block h-full rounded-full bg-blue-500 transition-[width] duration-200 ease-linear motion-reduce:transition-none dark:bg-blue-400"
+              style={{ width: `${progressValue}%` }}
+            />
+          </span>
         </span>
         <span
           dir="ltr"

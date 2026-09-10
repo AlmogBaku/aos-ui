@@ -90,6 +90,17 @@ export class VoicePlayback implements SpeechSynthesisAdapter.Utterance {
     this.#update({ rate })
   }
 
+  seek = (seconds: number) => {
+    if (this.status.type === "ended") return
+    const duration = this.#options.audio.duration
+    if (!Number.isFinite(duration) || duration <= 0) return
+    this.#options.audio.currentTime = Math.min(
+      duration,
+      Math.max(0, Number.isFinite(seconds) ? seconds : 0)
+    )
+    this.#sync()
+  }
+
   async #load() {
     if (this.#abort.signal.aborted) return
     try {

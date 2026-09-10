@@ -13,8 +13,10 @@ commit [`0afb5989cc3e2f1b9343f687025bbef009151ca0`](https://github.com/assistant
 - `../elements/read-aloud.tsx`: upstream
   `packages/ui/src/components/react/assistant-ui/elements/read-aloud.tsx`.
   Local changes: localized accessible labels/time/speed, touch targets and LTR
-  numeric clock. Word-highlight/progress logic is unchanged; the current
-  complete-audio adapter passes -1.
+  numeric clock. The current complete-audio adapter passes -1 for word
+  highlighting, drives the timeline from real audio time, and adds local Blob
+  seeking by pointer or keyboard. Assistant UI's speech adapter does not
+  expose media seeking.
 - `../elements/voice-surfaces.tsx`: selected surface/typography/ShimmerLabel
   helpers from `elements/surfaces.tsx` and equivalent range helpers from
   `elements/utils/range.ts`. No whole-composer or thread regeneration.

@@ -99,6 +99,18 @@ describe("complete-audio playback", () => {
     expect(h.audio.src).toBe("")
   })
 
+  it("seeks within generated audio without synthesizing again", async () => {
+    const h = setup()
+    await vi.waitFor(() => expect(h.playback.state.playing).toBe(true))
+
+    h.playback.seek(18)
+
+    expect(h.audio.currentTime).toBe(18)
+    expect(h.playback.state.elapsed).toBe(18)
+    expect(h.synthesize).toHaveBeenCalledOnce()
+    h.playback.cancel()
+  })
+
   it("keeps blocked autoplay available for an explicit Play", async () => {
     const h = setup()
     h.audio.play.mockRejectedValueOnce(

@@ -34,7 +34,7 @@ func TestServeMapsEnvironmentToTypedConfig(t *testing.T) {
 		"AOS_GATEWAY_OPENCODE_DIRECTORY": "/worktree",
 		"AOS_GATEWAY_OPENCODE_USERNAME":  "operator",
 		"AOS_GATEWAY_OPENCODE_PASSWORD":  "secret",
-		"AOS_GATEWAY_INVITE_KEY":         "key",
+		"AOS_GATEWAY_INVITE_SIGNING_KEY": "key",
 		"AOS_GATEWAY_GUEST_ORIGIN":       "https://guest.example",
 		"AOS_GATEWAY_DIST":               "/dist",
 		"AOS_GATEWAY_OPERATOR_ADDR":      "127.0.0.1:9000",
@@ -48,7 +48,7 @@ func TestServeMapsEnvironmentToTypedConfig(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if received.Runtime != "opencode" || received.Upstream != "http://127.0.0.1:4096" || received.OpenCode.Directory != "/worktree" || received.OpenCode.Username != "operator" || received.OpenCode.Password != "secret" || received.InviteKey != "key" || received.GuestOrigin != "https://guest.example" || received.Dist != "/dist" || received.OperatorAddress != "127.0.0.1:9000" || received.GuestAddress != "127.0.0.1:9001" {
+	if received.Runtime != "opencode" || received.Upstream != "http://127.0.0.1:4096" || received.OpenCode.Directory != "/worktree" || received.OpenCode.Username != "operator" || received.OpenCode.Password != "secret" || received.InviteSigningKey != "key" || received.GuestOrigin != "https://guest.example" || received.Dist != "/dist" || received.OperatorAddress != "127.0.0.1:9000" || received.GuestAddress != "127.0.0.1:9001" {
 		t.Fatalf("config = %#v", received)
 	}
 }

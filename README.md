@@ -1,212 +1,89 @@
-# AOS-ui
+<div align="center">
 
-AOS is a multilingual React workspace for native AI harnesses. OpenCode and Hermes own execution, persistence, credentials, and Agent configuration. Assistant UI owns frontend conversations; a small workspace adapter adds Agent catalogs, verified Session ownership, Todos, and optional capabilities.
+<img src="public/logo-adaptive.svg" alt="AOS logo" width="76" />
 
-One engine is selected per deployment. English and Hebrew, RTL, keyboard navigation, rich-message fallbacks, generic AG-UI, and explicit fixtures are supported. URLs are `/{agentId}/{sessionId}`; language preference is stored locally. Legacy `/en` and `/he` links remain recognized.
+# AOS
 
-## Development
+**A multilingual workspace for operating provider-owned AI agents and their conversations.**
 
-Use Bun. Fixture mode needs no backend or model credentials and intentionally
-does not offer Agent creation:
+[Get started](docs/getting-started.md) · [Choose a runtime](docs/runtime-capabilities.md) · [Deploy AOS](docs/deployment.md) · [Operator docs](docs/README.md)
+
+![AOS workspace with an Agent roster, Session tabs, published outputs, Todos, and composer](docs/assets/aos-workspace.png)
+
+</div>
+
+AOS gives people one place to move between AI Agents and Sessions without losing ownership, execution state, or pending work. OpenCode and Hermes keep control of execution, credentials, Agent definitions, and durable history. AOS provides the browser workspace around them.
+
+## What AOS provides
+
+- Agent and Session navigation with provider-verified ownership
+- Streaming chat, queued messages, Stop, questions, approvals, and attachments where the selected runtime supports them
+- Session-scoped Todos and message-scoped Plans
+- Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
+- Activity history and opt-in browser notifications
+- English LTR and Hebrew RTL layouts with keyboard-first navigation
+- Optional Hermes voice controls and restricted guest invitations
+
+One runtime is selected for each deployment. See the [runtime capability matrix](docs/runtime-capabilities.md) before choosing OpenCode, Hermes, or generic AG-UI.
+
+## Quick start
+
+Use fixture mode to explore the workspace without a backend or model credentials.
+
+### Prerequisites
+
+- [Bun](https://bun.sh/)
+- A current desktop browser
 
 ```bash
+git clone https://github.com/AlmogBaku/aos-ui.git
+cd aos-ui
 bun install
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-Open http://localhost:3000. Vite serves development only; production is static Nginx hosting.
+Open <http://localhost:3000>. The fixture is deterministic and intentionally does not create or modify native Agents.
 
-### OpenCode
+Continue with the [guided fixture tour](docs/getting-started.md), then connect a runtime:
 
-Install OpenCode separately and configure its model credentials outside this checkout. Build the integration, then run in separate terminals:
+- [Run with OpenCode](docs/runtimes/opencode.md)
+- [Run with Hermes](docs/runtimes/hermes.md)
+- [Connect a generic AG-UI runtime](docs/runtimes/ag-ui.md)
 
-```bash
-bun run integrations:build
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree bun run opencode:serve
-```
+## Deployment
 
-```bash
-AOS_UI_RUNTIME_MODE=opencode \
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
-bun run dev
-```
-
-The same external directory scopes the native process, SDK requests, Agent writes, and native tools. Existing definitions are never overwritten. The launcher installs its dedicated creator Agent and portable skill; ordinary Agent content stays external. Secure Agent writes currently require Linux directory descriptors; use the supplied OpenCode container on other hosts. Old user-owned content remaining in this checkout is preserved but is not migrated or loaded automatically.
-
-OpenCode 1.18.29 caches Agent definitions. Newly saved Agents can report `setup-needed` until an operator restarts the harness after its runs finish. AOS does not automatically use the instance-disposal endpoint: it can abort unrelated runs. Saving a definition is not reported as readiness.
-
-OpenCode defaults to port 4096. Agent visibility is read from native metadata; management is read-only when native mutation support is absent. Leave model selection native, or set `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID` together. Optional `AOS_UI_OPENAI_COMPATIBLE_BASE_URL`, `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, and `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` are all-or-none and belong only in the native process environment.
-
-### Hermes
-
-Hermes itself is operator-managed. AOS connects directly to the native `hermes serve` HTTP/WebSocket API and discovers profiles through `profiles.list`. There is no AOS bridge, profile registry, or database. Follow the [Hermes installation guide](integrations/hermes/README.md) for native presentation, inbound-session, and creator tools.
-
-```bash
-bun run integrations:build
-uv sync --project integrations/hermes --frozen
-AOS_UI_RUNTIME_MODE=hermes AOS_UI_HERMES_BASE_URL=/hermes bun run dev
-```
-
-Vite forwards `/hermes` to `AOS_UI_HERMES_TARGET` (default `http://127.0.0.1:9119`). Configure native authentication. Hermes owns recovery policy, including auto-continue; AOS does not require changing it or submit prompts on reattachment. The browser uses native login/cookies and single-use WebSocket tickets; never put credentials in public configuration. Production requires a native public URL including the `/hermes` prefix.
-
-The live native API baseline is checkout `b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b`; the required direct RPC surface was also verified in unmodified Hermes `v2026.9.7`. Incompatible interfaces remain unavailable. Native CLI/cron Sessions can be discoverable without gateway live control; Stop uses native Session interruption, not an AOS cancellation layer.
-
-Automated Hermes Agent creation is currently blocked: upstream profile creation is not atomic against concurrent creators. The interview remains available, but the writer fails without native writes. See the integration guide for the exact upstream prerequisite.
-
-Hermes voice v1 adds native transcription and in-message read-aloud. Tap the
-microphone to record; hold for 450 ms (or use Arrow Down / Shift+F10) to choose
-Transcription or explicit Voice turn. Native STT and TTS are checked independently
-using non-secret profile configuration metadata. No browser speech fallback or
-additional AOS server is used. The recording bars reflect the active microphone;
-capture continues across tab/window switches until an explicit action or safety
-limit. PTT auto-read coordination uses Assistant UI thread/run/queue state and
-does not depend on Hermes completion events; Hermes provides the native speech
-transport only. OpenCode, generic AG-UI and fixtures omit voice in v1.
-
-Microphone capture requires HTTPS or localhost, browser permission, and a
-supported `MediaRecorder`. See [Chat voice setup and use](docs/chat-voice.md)
-for configuration, limits, privacy, troubleshooting and the pending live
-acceptance gate. Automated fixtures do not certify live speech support.
-
-### Optional same-origin helper and guest invitations
-
-`gateway/cmd/aos-gateway` can serve the existing operator UI through a
-same-origin native proxy and a separate, restricted guest chat. Guest access is
-an expiring encrypted Agent+reference invitation; the helper keeps no Session
-database and native runtime persistence remains authoritative. See
-[Same-origin helper and invited chat](docs/invite-chat.md) for build, runtime
-credentials, invitation minting, first-turn prefill/private instruction, HTTPS,
-recovery, and security limitations. Run `aos-gateway --help`, `aos-gateway help
-serve`, or `aos-gateway help invite` for the complete read-only CLI reference.
-
-### Generic AG-UI
-
-Set `AOS_UI_RUNTIME_MODE=ag-ui`, `AOS_UI_AG_UI_URL`, and `AOS_UI_AG_UI_WORKSPACE_URL`. The workspace host implements `GET /agents`, `GET /sessions`, `POST /sessions`, and `GET /sessions/:threadId`. Capabilities absent from the integration remain visibly unavailable.
-
-Generic AG-UI composition uses public `HttpAgent` instances, one per Session. Navigation detaches the outgoing HTTP stream and parks its queue; it does not invoke a native Stop callback. Custom agents with native cancellation side effects are not supported by this composition.
-
-### Optional Monty
-
-Core startup does not require Monty. Configure it explicitly on the harness side; credentials and downstream tools remain native:
-
-```bash
-bun run monty:sync
-```
-
-See [Monty](integrations/monty/README.md). Its implementation, MIT license, and upstream attribution remain independent.
-
-## Public configuration and static deployment
-
-The browser fetches `/runtime-config.json` without caching. This deployment file is separate from the frontend build; do not put secrets in it or in `VITE_*`. Missing/invalid configuration renders unavailable state, never fixture fallback. Development accepts the same file via `AOS_UI_RUNTIME_CONFIG_FILE`, or the allowlisted environment values in [.env.example](.env.example).
-
-The shared composer model selector and authoritative context indicator are
-enabled by default. Public JSON may set `composerModelSelectorEnabled` or
-`composerContextEnabled` to `false` independently; environment-derived config
-uses `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
-`AOS_UI_COMPOSER_CONTEXT_ENABLED`.
-
-Every ready runtime configuration may include
-`"artifactHtmlAssetOrigins": ["https://cdn.example.com"]`. Entries must be
-credential-free HTTPS origins without paths, queries, or fragments. They are
-used only by sandboxed previews of trusted generated HTML; omit the field to
-block external HTML assets.
-
-Public examples are in `deploy/runtime-config.fixture.json`,
-`deploy/runtime-config.opencode.json`, and
-`deploy/runtime-config.hermes-native.json`. OpenCode's `directory` is the path
-inside the native server/container, not necessarily the browser host's path.
+AOS builds to static assets and ships with an Nginx container. Runtime selection comes from `/runtime-config.json`, so operators can change the selected runtime without rebuilding the frontend.
 
 ```bash
 cp .env.compose.example .env
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json docker compose up --build
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
+  docker compose up --build
 ```
 
-The base composition is web-only. The OpenCode overlay runs native OpenCode; the Hermes overlay only forwards to operator-managed Hermes:
+> [!IMPORTANT]
+> Compose binds to loopback by default. AOS does not provide TLS or public multi-user authentication. Expose it more widely only behind controls appropriate for a trusted private network.
 
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
-docker compose -f compose.yaml -f compose.opencode.yaml up --build
-```
+See [Deployment](docs/deployment.md) for native-runtime overlays, networking, health checks, and persistence.
 
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
-docker compose -f compose.yaml -f compose.hermes.yaml up --build
-```
+## Documentation
 
-Add `-f compose.dev.yaml` for hot-reloading frontend development. Source mounts and native content/state mounts are separate. Configuration is mounted read-only; changes require no frontend rebuild. Hashed assets are immutable, HTML revalidates, and proxy errors never fall through to the SPA. Event-stream forwarding disables buffering.
+| Goal                                      | Guide                                            |
+| ----------------------------------------- | ------------------------------------------------ |
+| Learn the workspace                       | [Getting started](docs/getting-started.md)       |
+| Operate Agents and Sessions               | [Using AOS](docs/using-aos.md)                   |
+| Configure a deployment                    | [Configuration reference](docs/configuration.md) |
+| Resolve a problem                         | [Troubleshooting](docs/troubleshooting.md)       |
+| Understand ownership and trust boundaries | [Architecture](docs/architecture.md)             |
 
-Loopback is the default. Wider exposure requires appropriate protection; this is not a public multi-user authentication system. Web health is `/api/health`; OpenCode is `/global/health`. Hermes must be reachable from the web container; a host-loopback-only listener is not reachable through Docker's host gateway. Use the same Compose files with `down` to stop; do not use `down -v` unless you intend to delete the named native-state volumes.
+The [operator documentation index](docs/README.md) lists every maintained guide.
 
-## Activity and live notifications
-
-Activity is the persistent inbox for notification history and unread state;
-provider data remains authoritative for the work itself. Open it from the bell
-in the desktop Agents heading or mobile header. Inline conversation state,
-Activity, coalesced in-app notices, and optional browser notifications form the
-four notification surfaces.
-
-In Activity → Notification settings, explicitly enable browser notifications and
-grant browser permission. Delivery requires at least one loaded AOS tab.
-Switching tabs (hidden) and switching windows/apps (visible but unfocused) both
-allow eligible notifications. The exact visible, focused conversation suppresses
-alerts; another Session in the foreground gets unread markers and one coalesced
-in-app notice. Denied or unsupported browser permissions leave Activity usable.
-
-OS text is generic: no Agent/Session names, conversation, tool, question,
-permission, or error content. Clicking focuses the app and opens the owning
-Agent/Session only after provider validation; deleted targets are unavailable.
-Tabs synchronize read state and elect one delivery tab. Reloaded history never
-replays OS notifications. Browser/OS settings and background throttling can delay
-or suppress delivery; Activity remains the place to check.
-
-OpenCode observes workspace activity; fixtures provide deterministic scenarios;
-AG-UI covers only the selected Session, as explained in settings. V1 has no
-service worker, Web Push, notification backend, email, or closed-app delivery.
-Once all AOS tabs close, no new notifications can be delivered. See the
-[notification journey matrix](./docs/notification-journeys.md) for verification
-coverage and the manual host OS check.
-
-## Architecture
-
-- `src/app/`: bootstrap, React Router, selected runtime loading.
-- `src/components/`: workspace, Assistant UI, safe tool renderers, keyboard and UI primitives.
-- `src/runtime-adapters/`: contracts and OpenCode/Hermes/AG-UI/fixture implementations.
-- `src/lib/`: browser locale, preferences, and helpers.
-- `shared/`: public runtime configuration, presentation schemas/examples, portable creator skill.
-- `integrations/`: native OpenCode and Hermes packages; independent optional Monty.
-- `deploy/`: static hosting and public configuration examples.
-- `gateway/`: optional Go same-origin proxy and invited-chat API.
-
-Browser code never imports native implementations. Shared definitions contain no React, browser state, filesystem access, SDKs, or secrets. Split TypeScript targets and import restrictions enforce these boundaries.
-
-Assistant UI packages are version-pinned and installed without dependency patches.
-Adapters compose public upstream APIs; upgrades must retain focused lifecycle and
-ownership regressions. Stop parks the upstream queue; a subsequent explicit send
-may restart it. There is no custom single-item Resume operation.
-
-Agent creation is an ordinary creator-owned Session opened through `New Agent`;
-the creator is discovered from native metadata (`aos_ui_role: creator` in OpenCode,
-`ui_meta.aos.role: creator` in Hermes) and never appears in the ordinary Agent roster
-or management catalog. Native safe writers return inspectable outcomes;
-creation never changes the interview's owner or starts the new Agent's first
-Session automatically. Native `start_session` support works without a browser.
-Discovery must not steal selection.
-
-Read [PRODUCT.md](PRODUCT.md) for ownership and [the design lock](docs/design/agent-workspace-design-lock.md) for the visual direction.
-
-## Verification
+## Verify a checkout
 
 ```bash
 bun run test
 bun run typecheck
 bun run lint
 bun run build
-bun run integrations:build
-bun run hermes:test
-bun run test:e2e
 ```
 
-Install Chromium with `bunx playwright install chromium`. Run `bun run monty:test` when changing Monty. Container changes also require Compose validation, image builds, and health/streaming smoke checks.
-
-Automated browser tests use deterministic harnesses. Required live acceptance uses real models and disposable external targets: chat/persistence, inbound Sessions, usable Agent creation, rich output, reconnect/Stop, and exact-request approval on each engine. Missing credentials, API support, or disposable-target approval blocks live acceptance; skipped checks are not passes.
+Additional checks are documented beside the runtime or deployment they cover.

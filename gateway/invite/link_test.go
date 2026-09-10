@@ -26,7 +26,7 @@ func TestCreateLinkBuildsValidatedInvitation(t *testing.T) {
 	if !strings.HasPrefix(link, prefix) {
 		t.Fatalf("link = %q", link)
 	}
-	claims, err := auth.Decrypt(strings.TrimPrefix(link, prefix))
+	claims, err := auth.Verify(strings.TrimPrefix(link, prefix))
 	if err != nil {
 		t.Fatal(err)
 	}

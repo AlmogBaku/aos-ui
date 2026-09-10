@@ -17,7 +17,7 @@ import (
 
 // Serve runs the operator and guest listeners until the context is cancelled or a listener fails.
 func Serve(ctx context.Context, config Config) error {
-	auth, err := invite.New(config.InviteKey, config.GuestOrigin)
+	auth, err := invite.New(config.InviteSigningKey, config.GuestOrigin)
 	if err != nil {
 		return err
 	}

@@ -51,7 +51,111 @@ type VoiceBrowser = Window & {
     snapshot: () => BrowserMediaSnapshot
     finalizeRecorder: () => void
     events: (events: NativeEvent[]) => void
+    setAudioTime: (seconds: number) => void
+    intervalCount: (delay: number) => number
+    runIntervals: (delay: number) => number
   }
+}
+
+const VOICE_CACHE_DATABASE = "aos-voice-audio-v1"
+const VOICE_CACHE_STORE = "playbacks"
+
+async function voiceCacheRecords(page: Page) {
+  return page.evaluate(
+    async ({ databaseName, storeName }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(databaseName)
+        request.addEventListener(
+          "upgradeneeded",
+          () => request.result.createObjectStore(storeName),
+          { once: true }
+        )
+        request.addEventListener("success", () => resolve(request.result), {
+          once: true,
+        })
+        request.addEventListener("error", () => reject(request.error), {
+          once: true,
+        })
+      })
+      const transaction = database.transaction(storeName, "readonly")
+      const store = transaction.objectStore(storeName)
+      const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+        const request = store.getAllKeys()
+        request.addEventListener("success", () => resolve(request.result), {
+          once: true,
+        })
+        request.addEventListener("error", () => reject(request.error), {
+          once: true,
+        })
+      })
+      const values = await new Promise<Array<{ expiresAt: number }>>(
+        (resolve, reject) => {
+          const request = store.getAll()
+          request.addEventListener("success", () => resolve(request.result), {
+            once: true,
+          })
+          request.addEventListener("error", () => reject(request.error), {
+            once: true,
+          })
+        }
+      )
+      database.close()
+      return keys.map((key, index) => ({
+        key: String(key),
+        expiresAt: values[index]!.expiresAt,
+      }))
+    },
+    { databaseName: VOICE_CACHE_DATABASE, storeName: VOICE_CACHE_STORE }
+  )
+}
+
+async function seedVoiceCache(
+  page: Page,
+  records: Array<{ key: string; expiresAt: number }>
+) {
+  await page.evaluate(
+    async ({ databaseName, storeName, records: seeded }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(databaseName)
+        request.addEventListener(
+          "upgradeneeded",
+          () => request.result.createObjectStore(storeName),
+          { once: true }
+        )
+        request.addEventListener("success", () => resolve(request.result), {
+          once: true,
+        })
+        request.addEventListener("error", () => reject(request.error), {
+          once: true,
+        })
+      })
+      const transaction = database.transaction(storeName, "readwrite")
+      const done = new Promise<void>((resolve, reject) => {
+        transaction.addEventListener("complete", () => resolve(), {
+          once: true,
+        })
+        transaction.addEventListener("error", () => reject(transaction.error), {
+          once: true,
+        })
+      })
+      const store = transaction.objectStore(storeName)
+      for (const record of seeded)
+        store.put(
+          {
+            audio: new Blob([record.key], { type: "audio/mpeg" }),
+            expiresAt: record.expiresAt,
+          },
+          record.key
+        )
+      await done
+      database.close()
+    },
+    {
+      databaseName: VOICE_CACHE_DATABASE,
+      storeName: VOICE_CACHE_STORE,
+      records,
+    }
+  )
 }
 
 function deferred<T>() {
@@ -66,6 +170,15 @@ async function mediaSnapshot(page: Page) {
   return page.evaluate(() =>
     (window as unknown as VoiceBrowser).__voiceBrowser.snapshot()
   )
+}
+
+async function openVoiceConversation(page: Page) {
+  const first = page.locator('[data-slot="aui_assistant-message-root"]').first()
+  await expect(async () => {
+    await page.goto(conversationUrl)
+    await expect(first).toBeVisible({ timeout: 20_000 })
+  }).toPass({ timeout: 80_000, intervals: [0, 1_000, 2_000] })
+  return first
 }
 
 async function installHermesVoiceMock(
@@ -222,6 +335,13 @@ async function installHermesVoiceMock(
         context_source: "provider_usage",
         context_estimated: false,
       }
+    if (request.method === "session.context_breakdown")
+      return {
+        context_used: 1_024,
+        context_max: 32_768,
+        context_source: "provider_usage",
+        context_estimated: false,
+      }
     if (request.method === "prompt.submit") {
       running = true
       return { status: "streaming" }
@@ -241,10 +361,24 @@ async function installHermesVoiceMock(
     const sockets: NativeSocket[] = []
     const createdUrls: string[] = []
     const revokedUrls: string[] = []
+    const intervals: Array<{
+      delay: number
+      handler: TimerHandler
+      args: unknown[]
+    }> = []
     let microphoneRequests = 0
     let stoppedTracks = 0
     let blockedPlaybacks = settings.blockPlayback ? 1 : 0
     let sequence = 10
+    const nativeSetInterval = window.setInterval.bind(window)
+    window.setInterval = ((
+      handler: TimerHandler,
+      delay = 0,
+      ...args: unknown[]
+    ) => {
+      intervals.push({ delay, handler, args })
+      return nativeSetInterval(handler, delay, ...args)
+    }) as typeof window.setInterval
     class Track extends EventTarget {
       readyState = "live"
       stop() {
@@ -465,6 +599,23 @@ async function installHermesVoiceMock(
         const socket = sockets.findLast((value) => value.readyState === 1)
         for (const event of events)
           socket?.notify(event.type, event.payload, event.sessionId)
+      },
+      setAudioTime: (seconds) => {
+        const value = audio.at(-1)
+        if (!value) return
+        value.currentTime = seconds
+        value.dispatchEvent(new Event("timeupdate"))
+      },
+      intervalCount: (delay) =>
+        intervals.filter((interval) => interval.delay === delay).length,
+      runIntervals: (delay) => {
+        const matching = intervals.filter(
+          (interval) => interval.delay === delay
+        )
+        for (const interval of matching)
+          if (typeof interval.handler === "function")
+            interval.handler(...interval.args)
+        return matching.length
       },
     }
   }, options)
@@ -742,12 +893,18 @@ test("a 450 ms microphone hold opens the picker without recording and restores k
 test("manual inline read-aloud preserves tools and restores rich prose after pause, speed, and stop", async ({
   page,
 }) => {
+  test.slow()
   await page.setViewportSize({ width: 1440, height: 1000 })
   const native = await installHermesVoiceMock(page)
-  await page.goto(conversationUrl)
   const first = page.locator('[data-slot="aui_assistant-message-root"]').first()
   const second = page.locator('[data-slot="aui_assistant-message-root"]').nth(1)
-  await expect(first.getByRole("link", { name: "reference" })).toBeVisible()
+  await expect(async () => {
+    await page.goto(conversationUrl)
+    await expect(first.getByRole("link", { name: "reference" })).toBeVisible({
+      timeout: 20_000,
+    })
+  }).toPass({ timeout: 80_000, intervals: [0, 1_000, 2_000] })
+  const generatedAfter = Date.now()
   await expect(
     first.getByRole("heading", { name: "Illustrative plan" })
   ).toBeVisible()
@@ -763,6 +920,20 @@ test("manual inline read-aloud preserves tools and restores rich prose after pau
       body: { text: "A formatted answer with a reference." },
     },
   ])
+  const cached = await voiceCacheRecords(page)
+  expect(cached).toHaveLength(1)
+  expect(cached[0]!.key).toBe(
+    JSON.stringify([
+      "v1",
+      "hermes:research:history",
+      "hermes-row-2",
+      "A formatted answer with a reference.",
+    ])
+  )
+  expect(cached[0]!.expiresAt).toBeGreaterThanOrEqual(
+    generatedAfter + 60 * 60 * 1_000
+  )
+  expect(cached[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1_000)
   await expect(
     first.getByRole("heading", { name: "Illustrative plan" })
   ).toBeVisible()
@@ -772,14 +943,18 @@ test("manual inline read-aloud preserves tools and restores rich prose after pau
   await expect(
     second.getByText("The same reply.", { exact: true })
   ).toBeVisible()
-  await expect(playback.getByRole("progressbar")).toHaveAttribute(
-    "aria-valuenow",
-    "0"
+  const timeline = playback.getByRole("slider", {
+    name: "Read aloud progress",
+  })
+  await expect(timeline).toHaveAttribute("aria-valuenow", "0")
+  await expect(timeline).toHaveAttribute("aria-valuetext", "0:00 of 0:24")
+  await page.evaluate(() =>
+    (window as unknown as VoiceBrowser).__voiceBrowser.setAudioTime(6)
   )
-  await expect(playback.getByRole("progressbar")).toHaveAttribute(
-    "aria-valuetext",
-    "0:00 of 0:24"
-  )
+  await expect(timeline).toHaveAttribute("aria-valuenow", "6")
+  await timeline.press("End")
+  await expect(timeline).toHaveAttribute("aria-valuenow", "24")
+  expect(native.speech).toHaveLength(1)
   await page.screenshot({
     path: "test-results/voice-evidence/read-aloud-desktop.png",
   })
@@ -818,6 +993,112 @@ test("manual inline read-aloud preserves tools and restores rich prose after pau
   expect(media.revokedUrls).toEqual(media.createdUrls)
   expect(media.createdUrls).toHaveLength(1)
   expect(native.submissions()).toHaveLength(0)
+  expect(native.unexpected).toEqual([])
+
+  const reloaded = page
+    .locator('[data-slot="aui_assistant-message-root"]')
+    .first()
+  await expect(async () => {
+    await page.reload()
+    await expect(reloaded).toBeVisible({ timeout: 20_000 })
+  }).toPass({ timeout: 80_000, intervals: [0, 1_000, 2_000] })
+  await reloaded.hover()
+  await reloaded
+    .getByRole("button", { name: "Read aloud", exact: true })
+    .click()
+  await expect(
+    reloaded.getByRole("button", { name: "Pause", exact: true })
+  ).toBeVisible()
+  expect(native.speech).toHaveLength(1)
+  expect(native.unexpected).toEqual([])
+})
+
+test("read-aloud deletes an expired lookup and synthesizes it again", async ({
+  page,
+}) => {
+  test.slow()
+  const native = await installHermesVoiceMock(page)
+  const first = await openVoiceConversation(page)
+  await first.hover()
+  await first.getByRole("button", { name: "Read aloud", exact: true }).click()
+  await expect(
+    first.getByRole("button", { name: "Pause", exact: true })
+  ).toBeVisible()
+  await first.getByRole("button", { name: "Stop reading", exact: true }).click()
+  const [cached] = await voiceCacheRecords(page)
+  await seedVoiceCache(page, [{ key: cached!.key, expiresAt: Date.now() - 1 }])
+
+  await first.hover()
+  await first.getByRole("button", { name: "Read aloud", exact: true }).click()
+  await expect(
+    first.getByRole("button", { name: "Pause", exact: true })
+  ).toBeVisible()
+  expect(native.speech).toHaveLength(2)
+  expect((await voiceCacheRecords(page))[0]!.expiresAt).toBeGreaterThan(
+    Date.now()
+  )
+  expect(native.unexpected).toEqual([])
+})
+
+test("one application timer prunes every expired audio record", async ({
+  page,
+}) => {
+  test.slow()
+  const native = await installHermesVoiceMock(page)
+  const first = await openVoiceConversation(page)
+  await seedVoiceCache(page, [
+    { key: "initial-expired", expiresAt: Date.now() - 1 },
+    { key: "initial-valid", expiresAt: Date.now() + 60_000 },
+  ])
+  await first.hover()
+  await first.getByRole("button", { name: "Read aloud", exact: true }).click()
+  await expect(
+    first.getByRole("button", { name: "Pause", exact: true })
+  ).toBeVisible()
+  await expect
+    .poll(async () =>
+      (await voiceCacheRecords(page)).map((record) => record.key)
+    )
+    .toEqual([
+      JSON.stringify([
+        "v1",
+        "hermes:research:history",
+        "hermes-row-2",
+        "A formatted answer with a reference.",
+      ]),
+      "initial-valid",
+    ])
+  await seedVoiceCache(page, [
+    { key: "expired-one", expiresAt: Date.now() - 2 },
+    { key: "expired-two", expiresAt: Date.now() - 1 },
+    { key: "valid", expiresAt: Date.now() + 60_000 },
+  ])
+
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as VoiceBrowser).__voiceBrowser.intervalCount(300_000)
+    )
+  ).toBe(1)
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as VoiceBrowser).__voiceBrowser.runIntervals(300_000)
+    )
+  ).toBe(1)
+  await expect
+    .poll(async () =>
+      (await voiceCacheRecords(page)).map((record) => record.key)
+    )
+    .toEqual([
+      JSON.stringify([
+        "v1",
+        "hermes:research:history",
+        "hermes-row-2",
+        "A formatted answer with a reference.",
+      ]),
+      "initial-valid",
+      "valid",
+    ])
+  expect(native.speech).toHaveLength(1)
   expect(native.unexpected).toEqual([])
 })
 

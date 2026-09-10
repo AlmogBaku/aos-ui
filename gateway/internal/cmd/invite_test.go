@@ -14,8 +14,8 @@ import (
 
 func inviteEnvironment() map[string]string {
 	return map[string]string{
-		"AOS_GATEWAY_INVITE_KEY":   base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{'k'}, 32)),
-		"AOS_GATEWAY_GUEST_ORIGIN": "https://guest.example",
+		"AOS_GATEWAY_INVITE_SIGNING_KEY": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{'k'}, 32)),
+		"AOS_GATEWAY_GUEST_ORIGIN":       "https://guest.example",
 	}
 }
 
@@ -27,14 +27,14 @@ func TestInviteHelpDocumentsSecureUsageWithoutReadingEnvironment(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
-	for _, text := range []string{"--agent", "--ref", "--instruction-file", "AOS_GATEWAY_INVITE_KEY", "AOS_GATEWAY_GUEST_ORIGIN", "bearer credential", "Examples:"} {
+	for _, text := range []string{"--agent", "--ref", "--instruction-file", "AOS_GATEWAY_INVITE_SIGNING_KEY", "AOS_GATEWAY_GUEST_ORIGIN", "bearer credential", "readable", "Examples:"} {
 		if !strings.Contains(stdout.String(), text) {
 			t.Fatalf("help does not contain %q:\n%s", text, stdout.String())
 		}
 	}
 }
 
-func TestInviteReadsPrivateInstructionAndUsesInjectedClock(t *testing.T) {
+func TestInviteReadsInstructionAndUsesInjectedClock(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "instruction-*.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +58,8 @@ func TestInviteReadsPrivateInstructionAndUsesInjectedClock(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
 	}
 	token := strings.TrimPrefix(strings.TrimSpace(stdout.String()), "https://guest.example/#invite=")
-	auth, _ := invite.New(environment["AOS_GATEWAY_INVITE_KEY"], environment["AOS_GATEWAY_GUEST_ORIGIN"])
-	claims, err := auth.Decrypt(token)
+	auth, _ := invite.New(environment["AOS_GATEWAY_INVITE_SIGNING_KEY"], environment["AOS_GATEWAY_GUEST_ORIGIN"])
+	claims, err := auth.Verify(token)
 	if err != nil {
 		t.Fatal(err)
 	}

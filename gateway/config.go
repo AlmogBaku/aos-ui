@@ -3,15 +3,15 @@ package gateway
 
 // Config contains all server-side settings for one gateway deployment.
 type Config struct {
-	Runtime         string
-	Upstream        string
-	Dist            string
-	OperatorAddress string
-	GuestAddress    string
-	InviteKey       string
-	GuestOrigin     string
-	HermesToken     string
-	OpenCode        OpenCodeConfig
+	Runtime          string
+	Upstream         string
+	Dist             string
+	OperatorAddress  string
+	GuestAddress     string
+	InviteSigningKey string
+	GuestOrigin      string
+	HermesToken      string
+	OpenCode         OpenCodeConfig
 }
 
 type OpenCodeConfig struct {

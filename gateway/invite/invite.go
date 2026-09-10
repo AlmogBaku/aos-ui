@@ -1,4 +1,4 @@
-// Package invite encrypts and validates stateless conversation invitations.
+// Package invite signs and validates stateless conversation invitations.
 package invite
 
 import (
@@ -17,7 +17,7 @@ import (
 
 	"aosui/gateway/conversation"
 	"github.com/lestrrat-go/jwx/v3/jwa"
-	"github.com/lestrrat-go/jwx/v3/jwe"
+	"github.com/lestrrat-go/jwx/v3/jws"
 )
 
 const MaxTokenBytes = 3 * 1024
@@ -60,7 +60,7 @@ func (c Claims) Scope() conversation.Scope { return conversation.Scope{Agent: c.
 func New(encodedKey, origin string) (*Auth, error) {
 	key, err := base64.RawURLEncoding.DecodeString(encodedKey)
 	if err != nil || len(key) != 32 {
-		return nil, errors.New("invite encryption key must be 32 base64url-encoded bytes")
+		return nil, errors.New("invite signing key must be 32 base64url-encoded bytes")
 	}
 	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -71,7 +71,7 @@ func New(encodedKey, origin string) (*Auth, error) {
 
 func (a *Auth) Origin() string { return a.origin }
 
-func (a *Auth) Encrypt(c Claims) (string, error) {
+func (a *Auth) Sign(c Claims) (string, error) {
 	if err := a.validate(c); err != nil {
 		return "", err
 	}
@@ -79,27 +79,22 @@ func (a *Auth) Encrypt(c Claims) (string, error) {
 	if err != nil {
 		return "", ErrInvalid
 	}
-	sealed, err := jwe.Encrypt(payload, jwe.WithKey(jwa.DIRECT(), a.key), jwe.WithContentEncryption(jwa.A256GCM()), jwe.WithCompact())
-	if err != nil || len(sealed) > MaxTokenBytes {
+	signed, err := jws.Sign(payload, jws.WithKey(jwa.HS256(), a.key))
+	if err != nil || len(signed) > MaxTokenBytes {
 		return "", ErrInvalid
 	}
-	return string(sealed), nil
+	return string(signed), nil
 }
 
-func (a *Auth) Decrypt(raw string) (Claims, error) {
+func (a *Auth) Verify(raw string) (Claims, error) {
 	if raw == "" || len(raw) > MaxTokenBytes {
 		return Claims{}, ErrInvalid
 	}
-	message, err := jwe.Parse([]byte(raw))
-	if err != nil || message.ProtectedHeaders() == nil {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return Claims{}, ErrInvalid
 	}
-	algorithm, hasAlgorithm := message.ProtectedHeaders().Algorithm()
-	contentEncryption, hasContentEncryption := message.ProtectedHeaders().ContentEncryption()
-	if !hasAlgorithm || algorithm != jwa.DIRECT() || !hasContentEncryption || contentEncryption != jwa.A256GCM() {
-		return Claims{}, ErrInvalid
-	}
-	payload, err := jwe.Decrypt([]byte(raw), jwe.WithKey(jwa.DIRECT(), a.key))
+	payload, err := jws.Verify([]byte(raw), jws.WithKey(jwa.HS256(), a.key))
 	if err != nil {
 		return Claims{}, ErrInvalid
 	}

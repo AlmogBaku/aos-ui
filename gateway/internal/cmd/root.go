@@ -35,9 +35,7 @@ func Execute(ctx context.Context, args []string, streams Streams, dependencies D
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
 		hint := "aos-gateway --help"
-		if len(args) > 1 && args[0] == "invite" && args[1] == "inspect" {
-			hint = "aos-gateway invite inspect --help"
-		} else if len(args) > 0 && (args[0] == "invite" || args[0] == "serve") {
+		if len(args) > 0 && (args[0] == "invite" || args[0] == "serve") {
 			hint = "aos-gateway " + args[0] + " --help"
 		}
 		fmt.Fprintf(streams.Err, "Error: %v\nRun '%s' for usage.\n", err, hint)
