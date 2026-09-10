@@ -1,8 +1,11 @@
 # AOS Hermes integration package
 
-This directory packages native AOS tools for Hermes. For browser, server, authentication, Compose, and runtime operations, follow the canonical [Hermes operator guide](../../docs/runtimes/hermes.md).
+This directory packages optional native AOS tools for an independently installed Hermes runtime. It does not install or start Hermes. For browser attachment, server authentication, Compose, and runtime operations, follow the canonical [Hermes operator guide](../../docs/runtimes/hermes.md).
 
-Hermes owns profiles, Sessions, messages, runs, and durable state. This package adds presentation tools, Session handoff, and creator guidance; it contains no AOS bridge, registry, or conversation database.
+Hermes owns profiles, Sessions, messages, runs, and durable state. This package
+adds presentation tools, Session handoff, creator guidance, and the read-only
+`aos-integration:aos-invite-link` skill; it contains no AOS bridge, registry,
+or conversation database.
 
 ## Install the plugin
 
@@ -28,6 +31,13 @@ hermes -p PROFILE chat --in WORKTREE -c UNIQUE_TITLE --create-if-missing -Q --qu
 ```
 
 The prompt file is mode `0600` and deleted after invocation. A timeout or lost subprocess outcome is reported as uncertain and is never retried automatically.
+
+When a user asks for a guest invite, the plugin points Hermes to
+`aos-integration:aos-invite-link` through `skill_view`. The skill requires an
+exact target profile, verifies it with `hermes profile show`, and invokes the
+stateless `aos-gateway` binary. Install that binary on the Hermes process
+`PATH`, provision `AOS_GATEWAY_INVITE_SIGNING_KEY` in the same environment, and
+follow the canonical [invited-chat guide](../../docs/invite-chat.md).
 
 ## Provision the creator
 

@@ -56,7 +56,8 @@ Navigating away from a running Session detaches its cloned HTTP stream and parks
 
 ```bash
 bunx vitest run src/runtime-adapters/ag-ui
-bunx playwright test -c playwright.ag-ui.config.ts
 ```
+
+For live acceptance, create a disposable Session, send one request, navigate away and back while it streams, and confirm that ownership and resumable state still come from the workspace service.
 
 See [Troubleshooting](../troubleshooting.md) for configuration, CORS, and ownership failures.

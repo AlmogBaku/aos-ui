@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+from pathlib import Path
 
 from aos_hermes.plugin import register
 
@@ -9,12 +10,16 @@ class FakeContext:
     def __init__(self):
         self.tools = []
         self.sections = []
+        self.skills = []
 
     def register_tool(self, **kwargs):
         self.tools.append(kwargs)
 
     def register_system_prompt_section(self, *args, **kwargs):
         self.sections.append((args, kwargs))
+
+    def register_skill(self, *args, **kwargs):
+        self.skills.append((args, kwargs))
 
 
 def _artifact(tmp_path, monkeypatch):
@@ -48,9 +53,22 @@ def test_legacy_plugin_registers_browser_independent_tools_and_prompt(tmp_path, 
         "render_chart", "render_map", "render_stats", "present_plan", "aos_start_session",
         "present_artifact",
     }
-    assert context.sections == [(('aos.presentation', 'Use structured presentation tools.'), {
-        'position': 'after_memory', 'max_chars': 4000
-    })]
+    assert context.sections == [
+        (('aos.presentation', 'Use structured presentation tools.'), {
+            'position': 'after_memory', 'max_chars': 4000
+        }),
+        (('aos.invite_link', (
+            'When the user asks for an AOS guest invite, load '
+            '`aos-integration:aos-invite-link` with `skill_view` and follow it.'
+        )), {'position': 'after_memory', 'max_chars': 300}),
+    ]
+    assert len(context.skills) == 1
+    args, kwargs = context.skills[0]
+    assert args == ()
+    assert kwargs["name"] == "aos-invite-link"
+    assert isinstance(kwargs["path"], Path)
+    assert Path(kwargs["path"]).name == "invite-link.md"
+    assert kwargs["description"].startswith("Create a signed AOS guest invitation")
     start = next(tool for tool in context.tools if tool["name"] == "aos_start_session")
     assert start["schema"]["parameters"]["required"] == ["profile", "workdir", "prompt"]
     artifact = next(tool for tool in context.tools if tool["name"] == "present_artifact")

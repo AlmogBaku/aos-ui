@@ -29,7 +29,30 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 
 Open <http://localhost:3000>. The web health endpoint is <http://localhost:3000/api/health>.
 
-## Add OpenCode
+## Attach existing OpenCode
+
+Start OpenCode independently, then create a public configuration using its browser-reachable URL and the absolute directory understood by that server:
+
+```json
+{
+  "mode": "opencode",
+  "baseUrl": "https://opencode.example.test",
+  "directory": "/srv/agents"
+}
+```
+
+Run the web-only composition with that file:
+
+```bash
+AOS_UI_RUNTIME_CONFIG_FILE=/absolute/path/to/runtime-config.opencode.json \
+  docker compose -f compose.yaml up --build
+```
+
+AOS does not start or mount this runtime. Configure OpenCode to allow the public AOS browser origin.
+
+## Optionally add bundled OpenCode
+
+The supplied overlay is a local all-in-one convenience for operators who explicitly want Compose to start an OpenCode container:
 
 ```bash
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
@@ -37,11 +60,11 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
-The overlay builds and starts OpenCode, mounts the external worktree at `/workspace`, and publishes native port `4096` on loopback by default. Its health endpoint is `/global/health`.
+The overlay builds and starts OpenCode, mounts the external worktree at `/workspace`, and publishes native port `4096` on loopback by default. Its health endpoint is `/global/health`. This optional composition does not change the general attachment model.
 
 Read [Run with OpenCode](runtimes/opencode.md) before adding model credentials or changing host identity settings.
 
-## Connect operator-managed Hermes
+## Attach existing Hermes
 
 ```bash
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
@@ -87,11 +110,18 @@ Hermes must listen on an address reachable from the web container. A host-loopba
 
 Provider persistence remains native:
 
-- OpenCode uses the external worktree plus the `opencode-data` named volume.
+- Independently operated OpenCode keeps all state in its own worktree and native data directories.
+- The optional OpenCode overlay uses the external worktree plus the `opencode-data` named volume.
 - Hermes keeps all state in the operator-managed Hermes installation.
 - The web container holds no conversation database.
 
-Stop a composition with the same file set used to start it:
+Stop AOS with the same file set used to start it. For the web-only attachment:
+
+```bash
+docker compose -f compose.yaml down
+```
+
+For the optional bundled OpenCode composition:
 
 ```bash
 docker compose -f compose.yaml -f compose.opencode.yaml down

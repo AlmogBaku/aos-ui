@@ -5,6 +5,9 @@
 - `README.md` is the operator entry point. Keep its commands aligned with
   `package.json`, the Compose files, and the environment examples; follow
   `docs/README.md` for the maintained operator documentation map.
+- OpenCode and Hermes are independently installed and operated runtimes. AOS
+  attaches to their native servers; treat repository launchers and runtime
+  overlays as optional development conveniences.
 - `PRODUCT.md` defines product terminology, ownership, scope, and accessibility
   commitments.
 - `docs/design/agent-workspace-design-lock.md` is the visual design authority.
@@ -26,7 +29,9 @@ Run fixture mode for backend-free UI work:
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-Run the real local OpenCode composition in two terminals:
+For integration development, the optional launcher invokes a separately
+installed OpenCode binary and loads the checkout's native integration. Run it
+and the attaching frontend in two terminals:
 
 ```bash
 bun run integrations:build

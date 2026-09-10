@@ -1,6 +1,6 @@
 # AOS operator documentation
 
-Use this documentation to evaluate, configure, and operate AOS. Start with fixture mode if you have not used the workspace before.
+Use this documentation to evaluate, configure, and operate AOS UI: a workspace for business agents and companion to the [AOS capability kit](https://github.com/AlmogBaku/aos). Start with fixture mode if you have not used the workspace before.
 
 ## Learn
 
@@ -9,8 +9,8 @@ Use this documentation to evaluate, configure, and operate AOS. Start with fixtu
 
 ## Run
 
-- [OpenCode](runtimes/opencode.md) — connect AOS to a local or containerized OpenCode server.
-- [Hermes](runtimes/hermes.md) — connect AOS to an operator-managed Hermes server.
+- [OpenCode](runtimes/opencode.md) — attach AOS to an independently operated OpenCode server.
+- [Hermes](runtimes/hermes.md) — attach AOS to an independently operated Hermes server.
 - [Generic AG-UI](runtimes/ag-ui.md) — connect separate AG-UI run and workspace services.
 - [Deployment](deployment.md) — build static assets or run the supplied Compose stack.
 

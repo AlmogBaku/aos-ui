@@ -35,3 +35,4 @@ def test_wheel_contains_generated_native_assets(tmp_path):
         names = set(archive.namelist())
     assert "aos_hermes/_generated/presentation.json" in names
     assert "aos_hermes/_generated/agent-creator.md" in names
+    assert "aos_hermes/_generated/invite-link.md" in names

@@ -43,7 +43,7 @@ Return to the terminal and press `Ctrl+C`.
 
 ## Connect real work
 
-Choose one runtime for the deployment:
+Install, authenticate, and start one runtime independently, then attach AOS to it. AOS does not own the runtime process or its data:
 
 - [OpenCode](runtimes/opencode.md)
 - [Hermes](runtimes/hermes.md)

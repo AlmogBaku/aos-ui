@@ -180,6 +180,18 @@ def register(ctx: Any) -> None:
         "aos.presentation", str(artifact.get("instructions") or "")[:4000],
         position="after_memory", max_chars=4000,
     )
+    invite_guidance = Path(__file__).parent / "_generated" / "invite-link.md"
+    ctx.register_skill(
+        name="aos-invite-link",
+        path=invite_guidance,
+        description="Create a signed AOS guest invitation for an explicit Hermes profile.",
+    )
+    ctx.register_system_prompt_section(
+        "aos.invite_link",
+        "When the user asks for an AOS guest invite, load "
+        "`aos-integration:aos-invite-link` with `skill_view` and follow it.",
+        position="after_memory", max_chars=300,
+    )
 
     # Creator authority is operator-provisioned native metadata, not an env
     # switch and never a self-write by this plugin.

@@ -38,6 +38,8 @@ export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 | `AOS_GATEWAY_DIST`               | `dist`                                           |
 | `AOS_GATEWAY_OPERATOR_ADDR`      | `127.0.0.1:8080`                                 |
 | `AOS_GATEWAY_GUEST_ADDR`         | `127.0.0.1:8081`                                 |
+| `AOS_GATEWAY_INVITE_SIGNING_KEY` | Required: 32 random base64url-encoded bytes      |
+| `AOS_GATEWAY_GUEST_ORIGIN`       | Required public HTTPS guest origin               |
 | `AOS_GATEWAY_HERMES_TOKEN`       | Required Hermes Desktop Session token for Hermes |
 | `AOS_GATEWAY_OPENCODE_DIRECTORY` | Required fixed native directory for OpenCode     |
 | `AOS_GATEWAY_OPENCODE_USERNAME`  | Optional OpenCode Basic-auth username            |
@@ -59,21 +61,23 @@ The operator listener forwards only the selected native prefix. The guest listen
 
 ## Create an invitation
 
-Mint invitations locally; there is no HTTP minting endpoint:
+Mint invitations locally; there is no HTTP minting endpoint. The Agent and
+inline instruction are required. The reference is generated when omitted:
 
 ```bash
 ./aos-gateway invite \
   --agent interviewer \
   --expires-in 24h \
   --prefill 'Hey, Almog sent me here!' \
-  --instruction-file /secure/path/dan-instructions.txt \
+  --instruction 'Load the interview skill for Dan.' \
   --name 'Almog' \
   --title 'Interview' \
   --message 'Thanks for taking the time to speak with us.' \
   --lang en
 ```
 
-Run `./aos-gateway invite --help` for optional branding fields. The command prints a URL such as `https://guest.example.com/#invite=<JWT>`.
+Run `./aos-gateway invite --help` for optional branding fields. The command
+prints only a URL such as `https://guest.example.com/#invite=<JWT>`.
 
 By default the CLI generates a unique conversation reference, so each invitation starts an independently recoverable guest conversation. Supply `--ref STABLE_REFERENCE` only when another invitation should deliberately resolve to the same Agent and conversation. Keep explicit references opaque and free of personal or secret data.
 
@@ -86,7 +90,37 @@ The link is a reusable bearer credential until expiration. Share it through an a
 
 `--prefill` places an editable draft in the guest composer. It is not sent until the guest submits it.
 
-First-turn instructions are accepted only through `--instruction-file`; pass `-` to read from standard input. The guest UI does not display the instruction after redemption, but the link recipient can decode it from the JWT. The gateway applies it only while initializing the first submitted participant turn.
+`--instruction` supplies the required first-turn Agent instruction as one shell
+argument. The guest UI does not display it after redemption, but the link
+recipient can decode it from the JWT. The gateway applies it only while
+initializing the first submitted participant turn. It may also appear in the
+process argument list, shell history, or a native Agent's tool transcript; do
+not use it for secrets.
+
+## Create an invitation through an Agent
+
+The native OpenCode and Hermes integrations include the `aos-invite-link`
+skill. Ask the Agent to create an invite and provide:
+
+- the deployed guest origin;
+- the exact target Agent or Hermes profile identifier; and
+- the inline first-turn instruction.
+
+You may also provide a stable reference, expiry, prefill, language, guest name,
+logo URL, accent, title, or welcome message. The skill verifies the exact native
+target before it runs `aos-gateway`. It never assumes that the current Agent is
+the invite target.
+
+The `aos-gateway` binary and `AOS_GATEWAY_INVITE_SIGNING_KEY` must be available
+to the native Agent process. In OpenCode Compose deployments the supplied image
+contains the binary and the overlay passes the key from `.env`. For local
+OpenCode and Hermes installations, build the binary above, place it on the
+process `PATH`, and provision the key in that process environment.
+
+> [!WARNING]
+> Every shell-capable Agent in the same native process may be able to read the
+> signing key and mint invitations. Prefer a dedicated deployment and restrict
+> the invited Agent's native tools and permissions for the guest's trust level.
 
 The runtime stores a durable initialization marker or recoverable native Session identity so refreshes, delayed messages, and gateway restarts do not reapply first-turn content. Opening or dismissing the welcome screen does not create a Session or send a prompt.
 

@@ -2,9 +2,9 @@
 
 <img src="public/logo-adaptive.svg" alt="AOS logo" width="76" />
 
-# AOS
+# AOS UI
 
-**A multilingual workspace for operating provider-owned AI agents and their conversations.**
+**The operator workspace for business agents—and the UI companion to the [AOS kit](https://github.com/AlmogBaku/aos).**
 
 [Get started](docs/getting-started.md) · [Choose a runtime](docs/runtime-capabilities.md) · [Deploy AOS](docs/deployment.md) · [Operator docs](docs/README.md)
 
@@ -12,7 +12,9 @@
 
 </div>
 
-AOS gives people one place to move between AI Agents and Sessions without losing ownership, execution state, or pending work. OpenCode and Hermes keep control of execution, credentials, Agent definitions, and durable history. AOS provides the browser workspace around them.
+Most agent harnesses present a coding-agent interface. AOS UI is for operating business agents: named roles that research, plan, analyze, write, coordinate, and deliver ongoing work. It gives people one place to move between those Agents and Sessions without losing ownership, execution state, or pending work.
+
+AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. OpenCode and Hermes keep control of execution, credentials, Agent definitions, and durable history; AOS UI provides the operator workspace around them.
 
 ## What AOS provides
 
@@ -44,11 +46,47 @@ AOS_UI_RUNTIME_MODE=fixture bun run dev
 
 Open <http://localhost:3000>. The fixture is deterministic and intentionally does not create or modify native Agents.
 
-Continue with the [guided fixture tour](docs/getting-started.md), then connect a runtime:
+Continue with the [guided fixture tour](docs/getting-started.md).
 
-- [Run with OpenCode](docs/runtimes/opencode.md)
-- [Run with Hermes](docs/runtimes/hermes.md)
-- [Connect a generic AG-UI runtime](docs/runtimes/ag-ui.md)
+## Attach an existing runtime
+
+AOS does not install, start, or replace your AI runtime. Install and authenticate OpenCode or Hermes separately, start its native server, then point AOS at it. Stopping AOS does not stop or remove the runtime or its data.
+
+### OpenCode
+
+Start OpenCode in the worktree it should own and allow the AOS browser origin:
+
+```bash
+cd /absolute/path/to/opencode-worktree
+opencode serve --hostname 127.0.0.1 --port 4096 \
+  --cors http://localhost:3000
+```
+
+In the AOS checkout:
+
+```bash
+AOS_UI_RUNTIME_MODE=opencode \
+AOS_UI_OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/opencode-worktree \
+  bun run dev
+```
+
+See [Run AOS with OpenCode](docs/runtimes/opencode.md) for native ownership, optional AOS integration tools, models, and containers.
+
+### Hermes
+
+Start your authenticated `hermes serve` installation independently. In the AOS checkout, attach through the development proxy:
+
+```bash
+AOS_UI_RUNTIME_MODE=hermes \
+AOS_UI_HERMES_BASE_URL=/hermes \
+AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
+  bun run dev
+```
+
+See [Run AOS with Hermes](docs/runtimes/hermes.md) for authentication, profiles, the optional native plugin, and containers.
+
+Generic providers use separate [AG-UI run and workspace services](docs/runtimes/ag-ui.md).
 
 ## Deployment
 

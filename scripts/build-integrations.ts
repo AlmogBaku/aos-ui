@@ -26,7 +26,13 @@ await writeFile(
   resolve(generated, "agent-creator.md"),
   await readFile(resolve(root, "shared/agent-creator/SKILL.md"))
 )
-console.log("Generated portable Hermes presentation and creator assets")
+await writeFile(
+  resolve(generated, "invite-link.md"),
+  await readFile(resolve(root, "shared/invite-link/SKILL.md"))
+)
+console.log(
+  "Generated portable Hermes presentation, creator, and invite assets"
+)
 const creatorSkill = await readFile(
   resolve(root, "shared/agent-creator/SKILL.md"),
   "utf8"
@@ -35,6 +41,17 @@ await writeFile(
   resolve(root, "integrations/opencode/creator-skill.generated.ts"),
   await format(
     `// Generated from shared/agent-creator/SKILL.md by scripts/build-integrations.ts.\nexport const agentCreatorSkill = ${JSON.stringify(creatorSkill)}\n`,
+    { parser: "typescript", semi: false, trailingComma: "es5", printWidth: 80 }
+  )
+)
+const inviteLinkSkill = await readFile(
+  resolve(root, "shared/invite-link/SKILL.md"),
+  "utf8"
+)
+await writeFile(
+  resolve(root, "integrations/opencode/invite-link.generated.ts"),
+  await format(
+    `// Generated from shared/invite-link/SKILL.md by scripts/build-integrations.ts.\nexport const inviteLinkSkill = ${JSON.stringify(inviteLinkSkill)}\n`,
     { parser: "typescript", semi: false, trailingComma: "es5", printWidth: 80 }
   )
 )

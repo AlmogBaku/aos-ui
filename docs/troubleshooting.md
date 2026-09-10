@@ -12,14 +12,15 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
-## OpenCode does not start
+## AOS cannot reach OpenCode
 
-- Confirm `AOS_UI_OPENCODE_WORKTREE` exists and resolves to an absolute external directory.
-- Run `bun run integrations:build` before `bun run opencode:serve`.
-- Check whether `127.0.0.1:4096` is already occupied. Reuse the existing server or change `AOS_UI_OPENCODE_PORT` consistently.
+- Confirm the independently operated OpenCode server is running and that `/global/health` responds at its configured origin.
+- Confirm `AOS_UI_OPENCODE_BASE_URL` is reachable by the browser and matches the server's host and port.
+- Configure OpenCode CORS for the exact AOS browser origin.
+- Confirm `AOS_UI_OPENCODE_WORKTREE` exists and is the absolute directory understood by that server.
 - Set both `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID`, or leave both unset.
-- For OpenAI-compatible models, set all three `AOS_UI_OPENAI_COMPATIBLE_*` values in the native process environment.
-- In Compose, verify host UID/GID access to the worktree and credential files.
+
+If you deliberately use the optional AOS launcher, run `bun run integrations:build` before `bun run opencode:serve`, check whether `127.0.0.1:4096` is already occupied, and set all three `AOS_UI_OPENAI_COMPATIBLE_*` values together when using that convenience provider. For the optional bundled Compose overlay, also verify host UID/GID access to the worktree and credential files.
 
 ## A new OpenCode Agent is not ready
 

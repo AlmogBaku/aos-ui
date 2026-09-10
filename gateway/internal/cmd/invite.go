@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -13,16 +15,16 @@ import (
 )
 
 type inviteFlags struct {
-	agent, ref, prefill, instructionFile string
-	lang, name, logoURL, accent          string
-	title, message                       string
-	expiresIn                            time.Duration
+	agent, ref, prefill, instruction string
+	lang, name, logoURL, accent      string
+	title, message                   string
+	expiresIn                        time.Duration
 }
 
 func newInviteCommand(streams Streams, dependencies Dependencies) *cobra.Command {
 	options := inviteFlags{}
 	command := &cobra.Command{
-		Use:   "invite --agent NAME --ref REF [flags]",
+		Use:   "invite --agent NAME --instruction TEXT [flags]",
 		Short: "Create an expiring guest invitation",
 		Long: `Create a signed bearer link for one Agent and conversation reference.
 
@@ -31,15 +33,15 @@ signing key and public guest origin from AOS_GATEWAY_INVITE_SIGNING_KEY and
 AOS_GATEWAY_GUEST_ORIGIN. Keep the printed link private: it is a reusable
 bearer credential until it expires.
 
-First-turn instructions are accepted only through --instruction-file; use - to
-read them from stdin. All JWT claims, including the instruction, are readable
-by the link recipient, although the instruction is not shown in the guest UI.`,
-		Example: `  aos-gateway invite --agent interviewer --ref dan-2026 \
+First-turn instructions are supplied inline. All JWT claims, including the
+instruction, are readable by the link recipient, although the instruction is
+not shown in the guest UI.`,
+		Example: `  aos-gateway invite --agent interviewer \
     --expires-in 24h --prefill "Hey, Almog sent me here!" \
-    --instruction-file /secure/path/dan.txt --lang en
+    --instruction 'Load the interview skill for Dan.' --lang en
 
-  printf 'Load the interview skill for Dan.' | \
-    aos-gateway invite --agent interviewer --ref dan-2026 --instruction-file -`,
+	  aos-gateway invite --agent interviewer --ref returning-guest \
+	    --instruction 'Continue the scheduled interview.'`,
 		Args: inviteArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runInvite(streams, dependencies, options)
@@ -47,13 +49,13 @@ by the link recipient, although the instruction is not shown in the guest UI.`,
 	}
 	flags := command.Flags()
 	flags.StringVar(&options.agent, "agent", "", "Native Agent or Hermes profile name (required)")
-	flags.StringVar(&options.ref, "ref", "", "Stable conversation reference (required)")
+	flags.StringVar(&options.ref, "ref", "", "Stable conversation reference; generated when omitted")
 	flags.DurationVar(&options.expiresIn, "expires-in", 24*time.Hour, "Invitation lifetime")
 	flags.StringVar(&options.prefill, "prefill", "", "Editable first-message draft")
-	flags.StringVar(&options.instructionFile, "instruction-file", "", "First-turn instruction file, or - for stdin")
+	flags.StringVar(&options.instruction, "instruction", "", "Inline first-turn Agent instruction (required)")
 	flags.StringVar(&options.lang, "lang", "", "Default UI language: en or he")
 	flags.StringVar(&options.name, "name", "", "Guest header name")
-	flags.StringVar(&options.logoURL, "logo-url", "", "HTTPS guest logo URL")
+	flags.StringVar(&options.logoURL, "logo", "", "HTTPS guest logo URL")
 	flags.StringVar(&options.accent, "accent", "", "Guest accent color, for example #2563eb")
 	flags.StringVar(&options.title, "title", "", "Conversation title")
 	flags.StringVar(&options.message, "message", "", "Visible welcome note")
@@ -71,18 +73,28 @@ func inviteArgs(command *cobra.Command, args []string) error {
 }
 
 func runInvite(streams Streams, dependencies Dependencies, flags inviteFlags) error {
-	if strings.TrimSpace(flags.agent) == "" || strings.TrimSpace(flags.ref) == "" || flags.expiresIn <= 0 {
-		return errors.New("--agent, --ref, and a positive --expires-in are required")
+	agent := strings.TrimSpace(flags.agent)
+	instruction := strings.TrimSpace(flags.instruction)
+	if agent == "" || instruction == "" || flags.expiresIn <= 0 {
+		return errors.New("--agent, --instruction, and a positive --expires-in are required")
+	}
+	ref := strings.TrimSpace(flags.ref)
+	if ref == "" {
+		data := make([]byte, 16)
+		random := dependencies.Random
+		if random == nil {
+			random = rand.Reader
+		}
+		if _, err := io.ReadFull(random, data); err != nil {
+			return fmt.Errorf("generate invitation reference: %w", err)
+		}
+		ref = base64.RawURLEncoding.EncodeToString(data)
 	}
 	getenv := dependencies.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
 	}
 	auth, err := invite.New(getenv("AOS_GATEWAY_INVITE_SIGNING_KEY"), getenv("AOS_GATEWAY_GUEST_ORIGIN"))
-	if err != nil {
-		return err
-	}
-	instruction, err := readInstruction(flags.instructionFile, streams.In)
 	if err != nil {
 		return err
 	}
@@ -95,7 +107,7 @@ func runInvite(streams Streams, dependencies Dependencies, flags inviteFlags) er
 		ui = nil
 	}
 	link, err := invite.CreateLink(auth, now(), invite.LinkOptions{
-		Agent: flags.agent, Ref: flags.ref, Lifetime: flags.expiresIn,
+		Agent: agent, Ref: ref, Lifetime: flags.expiresIn,
 		Prefill: flags.prefill, Instruction: instruction, UI: ui,
 	})
 	if err != nil {
@@ -103,32 +115,4 @@ func runInvite(streams Streams, dependencies Dependencies, flags inviteFlags) er
 	}
 	_, err = fmt.Fprintln(streams.Out, link)
 	return err
-}
-
-func readInstruction(path string, stdin io.Reader) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	reader := stdin
-	var file *os.File
-	var err error
-	if path != "-" {
-		file, err = os.Open(path)
-		if err != nil {
-			return "", fmt.Errorf("read instruction: %w", err)
-		}
-		defer file.Close()
-		reader = file
-	}
-	if reader == nil {
-		return "", errors.New("read instruction: stdin is unavailable")
-	}
-	data, err := io.ReadAll(io.LimitReader(reader, 2001))
-	if err != nil {
-		return "", fmt.Errorf("read instruction: %w", err)
-	}
-	if len(data) > 2000 {
-		return "", errors.New("instruction exceeds 2000 bytes")
-	}
-	return strings.TrimSpace(string(data)), nil
 }

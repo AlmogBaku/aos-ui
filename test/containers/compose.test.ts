@@ -66,6 +66,7 @@ describe("container orchestration", () => {
         root,
         "deploy/runtime-config.opencode.json"
       ),
+      AOS_GATEWAY_INVITE_SIGNING_KEY: "test-signing-key",
     })
 
     expect(Object.keys(config.services).sort()).toEqual(["opencode", "web"])
@@ -76,8 +77,25 @@ describe("container orchestration", () => {
       resolve(root, "deploy/runtime-config.opencode.json")
     )
     expect(config.services.opencode.environment).toMatchObject({
+      AOS_GATEWAY_INVITE_SIGNING_KEY: "test-signing-key",
       AOS_UI_OPENCODE_WORKTREE: "/workspace",
     })
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_GATEWAY_INVITE_SIGNING_KEY"
+    )
+  })
+
+  it("packages the invite CLI in the OpenCode runtime image", () => {
+    const dockerfile = readFileSync(
+      resolve(root, "Dockerfile.opencode"),
+      "utf8"
+    )
+
+    expect(dockerfile).toMatch(/FROM golang:[^\n]+ AS gateway-build/)
+    expect(dockerfile).toMatch(/go build [^\n]*-o \/out\/aos-gateway/)
+    expect(dockerfile).toContain(
+      "COPY --from=gateway-build /out/aos-gateway /usr/local/bin/aos-gateway"
+    )
   })
 
   it("forwards to operator-managed Hermes without adding an AOS service", () => {

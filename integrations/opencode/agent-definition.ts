@@ -8,6 +8,7 @@ import {
   creatorAgentDefinition,
   creatorSkillSource,
 } from "./creator-template"
+import { inviteLinkSkill } from "./invite-link.generated"
 
 export const AGENT_DEFINITION_LIMITS = {
   id: 48,
@@ -335,6 +336,12 @@ export async function installCreatorDefinition(worktree: string) {
     creatorSkillSource,
     "Conflicting AOS Agent creator skill; refusing to overwrite it."
   )
+  await preflightFixedAsset(
+    worktree,
+    [".opencode", "skills", "aos-invite-link", "SKILL.md"],
+    inviteLinkSkill,
+    "Conflicting AOS invite-link skill; refusing to overwrite it."
+  )
   const status = await installFixedAsset(
     worktree,
     [".opencode", "agents", `${CREATOR_AGENT_ID}.md`],
@@ -346,6 +353,12 @@ export async function installCreatorDefinition(worktree: string) {
     [".opencode", "skills", "aos-agent-creator", "SKILL.md"],
     creatorSkillSource,
     "Conflicting AOS Agent creator skill; refusing to overwrite it."
+  )
+  await installFixedAsset(
+    worktree,
+    [".opencode", "skills", "aos-invite-link", "SKILL.md"],
+    inviteLinkSkill,
+    "Conflicting AOS invite-link skill; refusing to overwrite it."
   )
   return { status, agentId: CREATOR_AGENT_ID }
 }

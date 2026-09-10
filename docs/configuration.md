@@ -1,6 +1,6 @@
 # Configuration reference
 
-AOS loads runtime selection from browser-readable JSON or, during local Vite development, from an allowlisted set of environment variables.
+AOS loads runtime selection from browser-readable JSON or, during local Vite development, from an allowlisted set of environment variables. These values tell the browser how to attach to an already-running runtime; they do not install or start it.
 
 ## Configuration precedence
 
@@ -10,6 +10,9 @@ The browser fetches the file without caching. Invalid or missing configuration r
 
 > [!WARNING]
 > Everything in `/runtime-config.json` is public to the browser. Keep credentials in the native runtime or server environment. Never put secrets in this file or in `VITE_*` variables.
+
+Guest-invitation signing keys are native-process secrets, not browser runtime
+configuration. See [Invited chat](invite-chat.md) for gateway and skill setup.
 
 ## Public runtime JSON
 
@@ -108,7 +111,7 @@ Omit the field to block external assets in published HTML previews.
 | `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set to `false` to hide the selector.                |
 | `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set to `false` to hide context usage.               |
 
-OpenCode launcher and model credential variables are described in [Run with OpenCode](runtimes/opencode.md).
+The optional OpenCode launcher and its credential-forwarding variables are described in [Run with OpenCode](runtimes/opencode.md). They are not required when attaching to an independently configured server.
 
 ## Compose environment
 

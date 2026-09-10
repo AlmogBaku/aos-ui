@@ -1,6 +1,6 @@
 # Architecture and trust boundaries
 
-AOS is a static browser workspace around native AI harnesses. It deliberately avoids becoming another agent server or conversation database.
+AOS UI is the business-agent workspace and UI companion to the [AOS capability kit](https://github.com/AlmogBaku/aos). It is a static browser application that attaches to an independently installed and operated AI runtime. It does not install or replace that runtime, and it deliberately avoids becoming another agent server or conversation database. Starting or stopping AOS UI does not start, stop, or delete provider state.
 
 ## Ownership model
 

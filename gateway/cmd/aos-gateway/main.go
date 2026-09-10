@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,6 @@ func main() {
 	os.Exit(cmd.Execute(ctx, os.Args[1:], cmd.Streams{
 		In: os.Stdin, Out: os.Stdout, Err: os.Stderr,
 	}, cmd.Dependencies{
-		Getenv: os.Getenv, Now: time.Now, Serve: gateway.Serve,
+		Getenv: os.Getenv, Now: time.Now, Random: rand.Reader, Serve: gateway.Serve,
 	}))
 }

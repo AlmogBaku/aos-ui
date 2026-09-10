@@ -27,6 +27,7 @@ func noPositionalArgs(_ *cobra.Command, args []string) error {
 type Dependencies struct {
 	Getenv func(string) string
 	Now    func() time.Time
+	Random io.Reader
 	Serve  serveFunc
 }
 

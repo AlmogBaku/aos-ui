@@ -18,6 +18,7 @@ import {
   writeAgentDefinition,
 } from "./agent-definition"
 import { agentCreatorSkill } from "./creator-skill.generated"
+import { inviteLinkSkill } from "./invite-link.generated"
 
 const valid = {
   agentId: "release-guide",
@@ -28,10 +29,28 @@ const valid = {
 }
 
 describe("packaged OpenCode Agent definitions", () => {
+  it("has one shared invite-link skill source", async () => {
+    await expect(
+      readFile(
+        new URL("../../shared/invite-link/SKILL.md", import.meta.url),
+        "utf8"
+      )
+    ).resolves.toContain("name: aos-invite-link")
+  })
+
   it("keeps the bundled creator skill generated from the shared source", async () => {
     expect(agentCreatorSkill).toBe(
       await readFile(
         new URL("../../shared/agent-creator/SKILL.md", import.meta.url),
+        "utf8"
+      )
+    )
+  })
+
+  it("keeps the bundled invite skill generated from the shared source", async () => {
+    expect(inviteLinkSkill).toBe(
+      await readFile(
+        new URL("../../shared/invite-link/SKILL.md", import.meta.url),
         "utf8"
       )
     )
@@ -93,6 +112,12 @@ describe("packaged OpenCode Agent definitions", () => {
       agentId: "agent-builder",
     })
     expect(await readFile(userAgent, "utf8")).toBe("user-owned definition\n")
+    expect(
+      await readFile(
+        join(worktree, ".opencode", "skills", "aos-invite-link", "SKILL.md"),
+        "utf8"
+      )
+    ).toBe(inviteLinkSkill)
   })
 
   it("rejects a conflicting creator instead of overwriting it", async () => {
@@ -124,6 +149,32 @@ describe("packaged OpenCode Agent definitions", () => {
     )
     await expect(
       access(join(worktree, ".opencode", "agents", "agent-builder.md"))
+    ).rejects.toMatchObject({ code: "ENOENT" })
+    expect(await readFile(skill, "utf8")).toBe("user-owned skill\n")
+  })
+
+  it("preflights a conflicting invite skill before installing any asset", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "aos-ui-worktree-"))
+    const skillDirectory = join(
+      worktree,
+      ".opencode",
+      "skills",
+      "aos-invite-link"
+    )
+    await mkdir(skillDirectory, { recursive: true })
+    const skill = join(skillDirectory, "SKILL.md")
+    await writeFile(skill, "user-owned skill\n")
+
+    await expect(installCreatorDefinition(worktree)).rejects.toThrow(
+      /conflicting AOS invite-link skill/i
+    )
+    await expect(
+      access(join(worktree, ".opencode", "agents", "agent-builder.md"))
+    ).rejects.toMatchObject({ code: "ENOENT" })
+    await expect(
+      access(
+        join(worktree, ".opencode", "skills", "aos-agent-creator", "SKILL.md")
+      )
     ).rejects.toMatchObject({ code: "ENOENT" })
     expect(await readFile(skill, "utf8")).toBe("user-owned skill\n")
   })
