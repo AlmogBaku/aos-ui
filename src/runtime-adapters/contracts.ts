@@ -240,7 +240,7 @@ export type HarnessRuntime = {
   composer?: ComposerFeatureViewModel
   media?: VoiceMediaController
   assistantConfig?: { instructions?: string; toolkit?: Toolkit }
-  activityCoverage: "workspace" | "active-session" | "unavailable"
+  activityCoverage: "workspace" | "active-session"
   environmentLabel?: string
 }
 
