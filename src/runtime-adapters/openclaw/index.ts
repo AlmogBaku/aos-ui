@@ -1,2 +1,2 @@
-export { OpenClawClient, type OpenClawClientOptions } from "./openclaw-client"
-export { useOpenClawRuntime } from "./use-openclaw-runtime"
+/** The only public entry point for this runtime package. */
+export { runtimeAdapter } from "./composition"

@@ -16,14 +16,12 @@ import {
   useSyncExternalStore,
 } from "react"
 import type { Locale } from "@/lib/i18n/config"
-import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { HermesAudioClient } from "./hermes-audio-client"
 import { HermesArtifactAdapter } from "./hermes-artifacts"
 import { HermesMediaBinding } from "./hermes-media-binding"
 import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
 import type {
-  RuntimeBundle,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "../contracts"
@@ -225,9 +223,7 @@ export type UseHermesRuntimeBundleOptions = HermesNativeClientOptions & {
   onRecovered?: () => void
 }
 
-export function useHermesRuntimeBundle(
-  options: UseHermesRuntimeBundleOptions
-): RuntimeBundle & { client: HermesNativeClient; media: VoiceMediaController } {
+export function useHermesRuntimeBundle(options: UseHermesRuntimeBundleOptions) {
   const onRecovered = options.onRecovered
   const client = useMemo(
     () =>

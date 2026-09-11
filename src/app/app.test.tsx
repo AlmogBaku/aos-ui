@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { App, RuntimeErrorBoundary } from "./app"
 
-vi.mock("@/runtime-adapters/fixture/composition", () => ({
+vi.mock("@/runtime-adapters/fixture", () => ({
   runtimeAdapter: {
     mode: "fixture",
     Provider: ({

@@ -9,7 +9,7 @@ import { RuntimeErrorContext } from "@/runtime-adapters/runtime-error-context"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import { useHermesComposerFeatures } from "./use-hermes-composer-features"
-import { useHermesRuntimeBundle } from "@/runtime-adapters/hermes"
+import { useHermesRuntimeBundle } from "./use-hermes-runtime-bundle"
 
 function HermesRuntimeProvider({
   config,

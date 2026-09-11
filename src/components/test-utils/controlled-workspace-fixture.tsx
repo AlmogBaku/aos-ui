@@ -4,7 +4,8 @@ import { useCallback, useState } from "react"
 import type { ThreadMessageLike } from "@assistant-ui/react"
 
 import type {
-  RuntimeBundle,
+  HarnessRuntime,
+  ArtifactAdapter,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import {
@@ -16,13 +17,19 @@ import {
   type FixtureWorkspaceOptions,
 } from "@/runtime-adapters/fixture/fixture-workspace"
 
+/** Test-only projection used to inject controlled native fixtures. */
+export type WorkspaceFixtureRuntime = Pick<
+  HarnessRuntime,
+  "assistantRuntime" | "workspace"
+> & { artifacts?: ArtifactAdapter }
+
 type ControlledWorkspaceFixtureProps = {
   initialThreadId: string
   workspace?: FixtureWorkspaceOptions
   messagesByThread?: Readonly<Record<string, readonly ThreadMessageLike[]>>
   workspaceOverrides?: Partial<WorkspaceAdapter>
   onThreadIdChange?: (threadId: string | undefined) => void
-  children: (bundle: RuntimeBundle) => ReactNode
+  children: (bundle: WorkspaceFixtureRuntime) => ReactNode
 }
 
 /**
@@ -75,7 +82,7 @@ export function ControlledWorkspaceFixture({
     },
   } satisfies FixtureRuntimeBundleOptions)
 
-  const bundle: RuntimeBundle = workspaceOverrides
+  const bundle: WorkspaceFixtureRuntime = workspaceOverrides
     ? {
         ...fixture,
         workspace: Object.assign(

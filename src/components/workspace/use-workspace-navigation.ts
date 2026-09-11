@@ -10,7 +10,7 @@ import {
 import { useLocation, useNavigate } from "react-router"
 import type { AssistantRuntime } from "@assistant-ui/react"
 import type {
-  RuntimeBundle,
+  HarnessRuntime,
   SessionMetadata,
   TodoItem,
 } from "@/runtime-adapters/contracts"
@@ -83,7 +83,7 @@ export function useWorkspaceNavigation({
   now,
   readNow,
 }: {
-  bundle: Pick<RuntimeBundle, "assistantRuntime" | "workspace">
+  bundle: Pick<HarnessRuntime, "assistantRuntime" | "workspace">
   locale: Locale
   dictionary: Dictionary
   now: Date

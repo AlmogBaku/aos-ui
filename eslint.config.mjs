@@ -3,6 +3,7 @@ import { defineConfig, globalIgnores } from "eslint/config"
 import reactHooks from "eslint-plugin-react-hooks"
 import globals from "globals"
 import tseslint from "typescript-eslint"
+import runtimeBoundaries from "./scripts/eslint-runtime-boundaries.mjs"
 
 export default defineConfig([
   globalIgnores([
@@ -19,6 +20,11 @@ export default defineConfig([
   js.configs.recommended,
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
+  {
+    files: ["**/*.{js,cjs,mjs,ts,tsx,mts,cts}"],
+    plugins: { aos: runtimeBoundaries },
+    rules: { "aos/runtime-package-boundaries": "error" },
+  },
   {
     files: ["src/**/*.{ts,tsx}"],
     languageOptions: {

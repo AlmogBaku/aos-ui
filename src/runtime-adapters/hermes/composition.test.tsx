@@ -70,7 +70,8 @@ vi.mock("./use-hermes-composer-features", () => ({
     return mocks.features
   },
 }))
-vi.mock("@/runtime-adapters/hermes", () => ({
+vi.mock("./use-hermes-runtime-bundle", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./use-hermes-runtime-bundle")>()),
   useHermesRuntimeBundle: (options: typeof mocks.options) => {
     mocks.options = options
     return {

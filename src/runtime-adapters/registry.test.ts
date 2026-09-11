@@ -4,7 +4,7 @@ import { afterEach, expect, expectTypeOf, it, vi } from "vitest"
 import type { ComponentProps } from "react"
 import type { HarnessRuntime } from "./contracts"
 import { getRuntimeAdapter, HarnessRuntimeProvider } from "./registry"
-import { runtimeAdapter as agUiAdapter } from "./ag-ui/composition"
+import { runtimeAdapter as agUiAdapter } from "./ag-ui"
 
 afterEach(() => {
   cleanup()
@@ -18,10 +18,26 @@ it("does not load a default provider for an unknown mode", () => {
 })
 
 it("resolves every configured provider to its own adapter", () => {
-  for (const mode of ["fixture", "opencode", "hermes", "ag-ui"]) {
+  for (const mode of ["fixture", "opencode", "hermes", "ag-ui", "openclaw"]) {
     expect(getRuntimeAdapter(mode)?.mode).toBe(mode)
   }
 })
+
+it.each([
+  ["fixture", () => import("./fixture")],
+  ["opencode", () => import("./opencode")],
+  ["hermes", () => import("./hermes")],
+  ["ag-ui", () => import("./ag-ui")],
+  ["openclaw", () => import("./openclaw")],
+] as const)(
+  "exposes only the unified runtime adapter from the %s package",
+  async (mode, load) => {
+    const entrypoint = await load()
+    expect(Object.keys(entrypoint)).toEqual(["runtimeAdapter"])
+    expect(entrypoint.runtimeAdapter.mode).toBe(mode)
+    expect(entrypoint.runtimeAdapter.Provider).toBeTypeOf("function")
+  }
+)
 
 it("preserves the selected mode in the public Provider configuration type", () => {
   const adapter = getRuntimeAdapter("fixture")!

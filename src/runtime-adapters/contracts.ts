@@ -218,13 +218,6 @@ export type ArtifactAdapter = {
   resolve(input: ArtifactResolveOptions): Promise<Blob>
 }
 
-export type RuntimeBundle = {
-  assistantRuntime: AssistantRuntime
-  workspace: WorkspaceAdapter
-  interactions?: RuntimeInteractionAdapter
-  artifacts?: ArtifactAdapter
-}
-
 /** The complete provider-neutral browser interface consumed by the workspace. */
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime

@@ -8,7 +8,7 @@ import {
 } from "@assistant-ui/react-opencode"
 
 import { createBrowserArtifactAdapter } from "@/artifacts/browser-artifact-adapter"
-import type { RuntimeBundle } from "../contracts"
+import type { ArtifactAdapter, HarnessRuntime } from "../contracts"
 import { createOpenCodeRuntimeInteractions } from "./opencode-interactions"
 import { aosOpenCodeExtras } from "./opencode-runtime-extras"
 import { createOpenCodeWorkspace } from "./opencode-workspace"
@@ -25,7 +25,11 @@ export type UseOpenCodeRuntimeBundleOptions = OpenCodeRuntimeOptions & {
   directory: string
   onInteractionError?: (error: Error | undefined, threadId: string) => void
 }
-export type OpenCodeRuntimeBundle = RuntimeBundle & {
+export type OpenCodeRuntimeBundle = Pick<
+  HarnessRuntime,
+  "assistantRuntime" | "workspace"
+> & {
+  artifacts?: ArtifactAdapter
   client: ReturnType<typeof createOpencodeClient>
   interactions: ReturnType<typeof createOpenCodeRuntimeInteractions>
 }

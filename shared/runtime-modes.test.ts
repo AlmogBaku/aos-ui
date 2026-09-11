@@ -23,10 +23,10 @@ describe("runtime selection", () => {
 
   it("selects the requested provider entrypoint", () => {
     expect(getRuntimeEntrypoint("fixture")).toBe(
-      "/src/runtime-adapters/fixture/composition.tsx"
+      "/src/runtime-adapters/fixture/index.ts"
     )
     expect(getRuntimeEntrypoint("ag-ui")).toBe(
-      "/src/runtime-adapters/ag-ui/composition.tsx"
+      "/src/runtime-adapters/ag-ui/index.ts"
     )
   })
 })

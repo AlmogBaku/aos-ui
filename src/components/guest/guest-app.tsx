@@ -49,8 +49,8 @@ import {
   captureInviteToken,
   GuestClient,
   loadGuestBootstrap,
-} from "@/runtime-adapters/guest/guest-client"
-import { useGuestRuntime } from "@/runtime-adapters/guest/use-guest-runtime"
+  useGuestRuntime,
+} from "@/runtime-adapters/guest"
 
 const copy = {
   en: {

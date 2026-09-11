@@ -16,7 +16,6 @@ import type {
   HarnessRuntime,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
-  RuntimeBundle,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import {
@@ -30,7 +29,10 @@ import {
 } from "@/runtime-adapters/fixture/fixture-workspace"
 
 import { FixtureAosUiApp } from "@/runtime-adapters/fixture/composition"
-import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
+import {
+  ControlledWorkspaceFixture,
+  type WorkspaceFixtureRuntime,
+} from "./test-utils/controlled-workspace-fixture"
 import { AosUiWorkspace } from "./aos-ui-workspace"
 
 vi.mock("react-router", () => ({
@@ -47,7 +49,7 @@ vi.mock("react-router", () => ({
 beforeEach(() => window.history.replaceState({}, "", "/"))
 afterEach(cleanup)
 
-function asHarnessRuntime(bundle: RuntimeBundle): HarnessRuntime {
+function asHarnessRuntime(bundle: WorkspaceFixtureRuntime): HarnessRuntime {
   return {
     assistantRuntime: bundle.assistantRuntime,
     workspace: bundle.workspace,
@@ -99,7 +101,11 @@ it("renders pending provider interactions through the unified runtime and submit
   })
 })
 
-function TabFixture({ capture }: { capture: (bundle: RuntimeBundle) => void }) {
+function TabFixture({
+  capture,
+}: {
+  capture: (bundle: WorkspaceFixtureRuntime) => void
+}) {
   return (
     <ControlledWorkspaceFixture
       initialThreadId="thread-aster-market"
@@ -127,8 +133,8 @@ function TabWorkspace({
   bundle,
   capture,
 }: {
-  bundle: RuntimeBundle
-  capture: (bundle: RuntimeBundle) => void
+  bundle: WorkspaceFixtureRuntime
+  capture: (bundle: WorkspaceFixtureRuntime) => void
 }) {
   useEffect(() => capture(bundle), [bundle, capture])
   return (
@@ -163,8 +169,8 @@ function CreatorFixtureAosUiApp({ locale }: { locale: "en" | "he" }) {
 describe("reversible local Session tabs", () => {
   it("applies browser navigation while a previous Session switch is finishing", async () => {
     const user = userEvent.setup()
-    let bundle: RuntimeBundle | undefined
-    const capture = (value: RuntimeBundle) => {
+    let bundle: WorkspaceFixtureRuntime | undefined
+    const capture = (value: WorkspaceFixtureRuntime) => {
       bundle = value
     }
     const view = render(<TabFixture capture={capture} />)
@@ -199,7 +205,7 @@ describe("reversible local Session tabs", () => {
   }, 20_000)
 
   it("keeps the resolved conversation mounted during a background Session reload", async () => {
-    let bundle: RuntimeBundle | undefined
+    let bundle: WorkspaceFixtureRuntime | undefined
     render(
       <TabFixture
         capture={(value) => {
@@ -278,7 +284,7 @@ describe("reversible local Session tabs", () => {
   }, 20_000)
   it("restores the exact closed tab and selection without provider lifecycle mutations", async () => {
     const user = userEvent.setup()
-    let bundle: RuntimeBundle | undefined
+    let bundle: WorkspaceFixtureRuntime | undefined
     render(
       <TabFixture
         capture={(value) => {
@@ -650,7 +656,7 @@ function BuilderSignalFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const bundle = useMemo<RuntimeBundle>(() => {
+  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       refreshAgents: async () => [
         ...(await fixture.workspace.listAgents()),
@@ -739,7 +745,7 @@ function EmptyAgentFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const bundle = useMemo<RuntimeBundle>(() => {
+  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       listAgents: async () => [
         ...(await fixture.workspace.listAgents()).filter(
@@ -781,7 +787,7 @@ function StaleTodoFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const bundle = useMemo<RuntimeBundle>(() => {
+  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       subscribeTodos: (subscribedThreadId, listener) => {
         if (subscribedThreadId === "thread-aster-market") {
@@ -833,7 +839,7 @@ function SessionMetadataSignalFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const bundle = useMemo<RuntimeBundle>(() => {
+  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       ...(initialMetadata ? { getSessionMetadata: () => initialMetadata } : {}),
       subscribeSessionMetadata: (_threadIds, listener, onError) => {

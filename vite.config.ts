@@ -169,7 +169,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     optimizeDeps: {
-      entries: ["index.html", "src/runtime-adapters/*/composition.tsx"],
+      entries: ["index.html", "src/runtime-adapters/*/index.ts"],
       include: ["@base-ui/react/direction-provider", "@base-ui/react/select"],
     },
     server: {

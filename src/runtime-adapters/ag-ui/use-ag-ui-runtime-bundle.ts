@@ -19,7 +19,7 @@ import {
   type UseAgUiRuntimeOptions,
 } from "@assistant-ui/react-ag-ui"
 
-import type { RuntimeBundle, WorkspaceAdapter } from "../contracts"
+import type { WorkspaceAdapter } from "../contracts"
 import { createAgUiActivityPublisher } from "./ag-ui-activity"
 import {
   createAgUiWorkspace,
@@ -56,7 +56,7 @@ export function useAgUiRuntimeBundle({
   isSendDisabled,
   unstable_capabilities,
   suggestions,
-}: UseAgUiRuntimeBundleOptions): RuntimeBundle {
+}: UseAgUiRuntimeBundleOptions) {
   const bridge = useMemo(
     () => new AgUiThreadListBridge(agent, workspaceTransport),
     [agent, workspaceTransport]

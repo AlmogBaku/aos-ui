@@ -30,17 +30,11 @@ function defineLazyAdapter<M extends RuntimeMode>(
 
 /** Exhaustive registry. Adding a mode requires an explicit lazy browser adapter. */
 const runtimeAdapters = {
-  fixture: defineLazyAdapter("fixture", () => import("./fixture/composition")),
-  opencode: defineLazyAdapter(
-    "opencode",
-    () => import("./opencode/composition")
-  ),
-  hermes: defineLazyAdapter("hermes", () => import("./hermes/composition")),
-  "ag-ui": defineLazyAdapter("ag-ui", () => import("./ag-ui/composition")),
-  openclaw: defineLazyAdapter(
-    "openclaw",
-    () => import("./openclaw/composition")
-  ),
+  fixture: defineLazyAdapter("fixture", () => import("./fixture")),
+  opencode: defineLazyAdapter("opencode", () => import("./opencode")),
+  hermes: defineLazyAdapter("hermes", () => import("./hermes")),
+  "ag-ui": defineLazyAdapter("ag-ui", () => import("./ag-ui")),
+  openclaw: defineLazyAdapter("openclaw", () => import("./openclaw")),
 } satisfies { [M in RuntimeMode]: RuntimeAdapterDefinition<M> }
 
 export function getRuntimeAdapter<M extends RuntimeMode>(
