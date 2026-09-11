@@ -1,9 +1,9 @@
 import { createElement, Suspense } from "react"
 import { cleanup, render, screen } from "@testing-library/react"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, expect, expectTypeOf, it, vi } from "vitest"
+import type { ComponentProps } from "react"
 import type { HarnessRuntime } from "./contracts"
-import { getRuntimeAdapter } from "./registry"
-import { runtimeAdapter as fixtureAdapter } from "./fixture/composition"
+import { getRuntimeAdapter, HarnessRuntimeProvider } from "./registry"
 import { runtimeAdapter as agUiAdapter } from "./ag-ui/composition"
 
 afterEach(() => {
@@ -23,14 +23,20 @@ it("resolves every configured provider to its own adapter", () => {
   }
 })
 
+it("preserves the selected mode in the public Provider configuration type", () => {
+  const adapter = getRuntimeAdapter("fixture")!
+  expect(adapter.mode).toBe("fixture")
+  type Config = ComponentProps<typeof adapter.Provider>["config"]
+  expectTypeOf<Config["mode"]>().toEqualTypeOf<"fixture">()
+})
+
 it("loads the fixture provider through the public render-prop seam with independently disabled composer features", async () => {
-  const adapter = fixtureAdapter
   let runtime: HarnessRuntime | undefined
   render(
     createElement(
       Suspense,
       { fallback: "Loading" },
-      createElement(adapter.Provider, {
+      createElement(HarnessRuntimeProvider, {
         locale: "en",
         config: {
           status: "ready",

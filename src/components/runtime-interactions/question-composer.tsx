@@ -17,7 +17,7 @@ import type { RichToolState } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 import type {
-  RuntimeInteractionActions,
+  RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 
@@ -77,7 +77,7 @@ const questionCopy: Record<Locale, QuestionCopy> = {
 }
 
 type AnswerDraft = {
-  selected: readonly string[]
+  selected: readonly { id: string; value: string }[]
   custom: string
   customActive: boolean
 }
@@ -94,7 +94,7 @@ export function RuntimeQuestionComposer({
 }: {
   locale: Locale
   request: RuntimeQuestionRequest
-  interactions: RuntimeInteractionActions
+  interactions: Pick<RuntimeInteractionAdapter, "respond" | "reject">
   expired?: boolean
   recovered?: boolean
   onDismissExpired: () => void
@@ -142,13 +142,8 @@ export function RuntimeQuestionComposer({
     focusAnswerControl(questionIndex)
   }, [focusAnswerControl, questionIndex])
 
-  const answers = drafts.map(({ selected, custom, customActive }, index) => [
-    ...selected.map(
-      (label) =>
-        request.questions[index]?.options.find(
-          (option) => option.label === label
-        )?.value ?? label
-    ),
+  const answers = drafts.map(({ selected, custom, customActive }) => [
+    ...selected.map((option) => option.value),
     ...(customActive && custom.trim() ? [custom.trim()] : []),
   ])
   const activeQuestion = request.questions[questionIndex]
@@ -168,7 +163,7 @@ export function RuntimeQuestionComposer({
       ?.focus()
   }, [activeDraft?.customActive, questionIndex, request.requestId])
 
-  function selectOptions(index: number, selected: readonly string[]) {
+  function selectOptions(index: number, selected: AnswerDraft["selected"]) {
     setDrafts((current) =>
       current.map((draft, draftIndex) => {
         if (draftIndex !== index) return draft
@@ -263,17 +258,13 @@ export function RuntimeQuestionComposer({
     (option, index) => ({
       id: `${request.requestId}-${questionIndex}-${index}`,
       label: option.label,
+      value: option.value ?? option.label,
       description: option.description,
       disabled: busy || Boolean(recovered),
     })
   )
   const customAllowed = activeQuestion ? activeQuestion.custom !== false : false
-  const optionIdByLabel = new Map(
-    optionEntries.map((option) => [option.label, option.id])
-  )
-  const optionLabelById = new Map(
-    optionEntries.map((option) => [option.id, option.label])
-  )
+  const optionById = new Map(optionEntries.map((option) => [option.id, option]))
 
   function handleTabKeyDown(
     event: KeyboardEvent<HTMLButtonElement>,
@@ -426,13 +417,10 @@ export function RuntimeQuestionComposer({
                             }
                             value={
                               activeQuestion.multiple
-                                ? activeDraft.selected.flatMap((label) => {
-                                    const id = optionIdByLabel.get(label)
-                                    return id ? [id] : []
-                                  })
-                                : (optionIdByLabel.get(
-                                    activeDraft.selected[0] ?? ""
-                                  ) ?? null)
+                                ? activeDraft.selected.map(
+                                    (option) => option.id
+                                  )
+                                : (activeDraft.selected[0]?.id ?? null)
                             }
                             onChange={(value) => {
                               const selectedIds =
@@ -444,8 +432,10 @@ export function RuntimeQuestionComposer({
                               selectOptions(
                                 questionIndex,
                                 selectedIds.flatMap((id) => {
-                                  const label = optionLabelById.get(id)
-                                  return label ? [label] : []
+                                  const option = optionById.get(id)
+                                  return option
+                                    ? [{ id, value: option.value }]
+                                    : []
                                 })
                               )
                             }}
