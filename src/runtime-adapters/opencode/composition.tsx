@@ -17,7 +17,7 @@ import {
 
 import type { ThreadComposerOverrideProps } from "@/components/assistant-ui/elements/thread.aui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
-import { AosUiWorkspace } from "@/components/aos-ui-workspace"
+import { LegacyAosUiWorkspace as AosUiWorkspace } from "@/components/aos-ui-workspace"
 import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
@@ -25,7 +25,11 @@ import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import type {
-  RuntimeInteractionAdapter,
+  RuntimeAdapterDefinition,
+  RuntimeAdapterProps,
+} from "@/runtime-adapters/definition"
+import type {
+  RuntimeInteractionActions,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import {
@@ -41,6 +45,30 @@ import {
 } from "./use-opencode-runtime-bundle"
 
 const REQUEST_OPTIONS = { throwOnError: true } as const
+
+/** Temporary minimal provider; the legacy application below retains feature behavior until migration. */
+function OpenCodeRuntimeProvider({
+  config,
+  children,
+}: RuntimeAdapterProps<"opencode">) {
+  const bundle = useOpenCodeRuntimeBundle(config)
+  return children({
+    assistantRuntime: bundle.assistantRuntime,
+    workspace: bundle.workspace,
+    activityCoverage: "workspace",
+    artifacts: bundle.artifacts
+      ? {
+          resolver: bundle.artifacts,
+          htmlAssetOrigins: config.artifactHtmlAssetOrigins,
+        }
+      : undefined,
+  })
+}
+
+export const runtimeAdapter: RuntimeAdapterDefinition<"opencode"> = {
+  mode: "opencode",
+  Provider: OpenCodeRuntimeProvider,
+}
 const emptyQuestionIds = new Set<string>()
 
 type QuestionListSnapshot = {
@@ -114,7 +142,7 @@ function OpenCodeQuestionForm({
 }: {
   locale: Locale
   request: OpenCodeQuestionRequest
-  interactions: RuntimeInteractionAdapter
+  interactions: RuntimeInteractionActions
   expired?: boolean
   recovered?: boolean
   onDismissExpired: () => void
@@ -151,7 +179,7 @@ export function OpenCodeQuestionBridge({
 }: {
   locale: Locale
   client: OpencodeClient
-  interactions?: RuntimeInteractionAdapter
+  interactions?: RuntimeInteractionActions
   fallback?: ReactNode
 }) {
   const session = useOpenCodeSession()

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import type {
-  RuntimeInteractionAdapter,
+  RuntimeInteractionActions,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { RuntimeQuestionComposer } from "./question-composer"
@@ -27,7 +27,7 @@ const request: RuntimeQuestionRequest = {
 describe("RuntimeQuestionComposer", () => {
   it("submits selected labels through the neutral interaction adapter", async () => {
     const user = userEvent.setup()
-    const interactions: RuntimeInteractionAdapter = {
+    const interactions: RuntimeInteractionActions = {
       respond: vi.fn().mockResolvedValue(undefined),
       reject: vi.fn().mockResolvedValue(undefined),
     }

@@ -1,4 +1,8 @@
-import type { AssistantRuntime } from "@assistant-ui/react"
+import type { AssistantRuntime, Toolkit } from "@assistant-ui/react"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
+import type { ArtifactMessage } from "@/artifacts/artifacts"
+export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -173,12 +177,22 @@ export type RuntimeQuestionResponse = {
 }
 
 /** Provider-owned interaction actions exposed to shared runtime UI. */
-export type RuntimeInteractionAdapter = {
+export type RuntimeInteractionActions = {
   respond(
     request: RuntimeQuestionRequest,
     response: RuntimeQuestionResponse
   ): Promise<void>
   reject(request: RuntimeQuestionRequest): Promise<void>
+}
+
+/** Snapshots are immutable and stable until subscribe signals a change. */
+export type RuntimeInteractionAdapter = RuntimeInteractionActions & {
+  getPending(threadId: string): RuntimeQuestionRequest | undefined
+  subscribe(
+    threadId: string,
+    listener: () => void,
+    onError?: (error: Error) => void
+  ): () => void
 }
 
 export type ArtifactSource =
@@ -208,11 +222,28 @@ export type ArtifactAdapter = {
 export type RuntimeBundle = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
-  interactions?: RuntimeInteractionAdapter
+  interactions?: RuntimeInteractionActions
   artifacts?: ArtifactAdapter
 }
 
-export type RuntimeMode = "fixture" | "opencode" | "hermes" | "ag-ui"
+/** The complete provider-neutral browser interface consumed by the workspace. */
+export type HarnessRuntime = {
+  assistantRuntime: AssistantRuntime
+  workspace: WorkspaceAdapter
+  interactions?: RuntimeInteractionAdapter
+  artifacts?: {
+    resolver: ArtifactAdapter
+    projectMessages?: (
+      messages: readonly ArtifactMessage[]
+    ) => readonly ArtifactMessage[]
+    htmlAssetOrigins?: readonly string[]
+  }
+  composer?: ComposerFeatureViewModel
+  media?: VoiceMediaController
+  assistantConfig?: { instructions?: string; toolkit?: Toolkit }
+  activityCoverage: "workspace" | "active-session" | "unavailable"
+  environmentLabel?: string
+}
 
 export type WorkspaceCapabilities = {
   agentCatalog: boolean

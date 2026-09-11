@@ -1,5 +1,36 @@
 "use client"
 
+import type {
+  RuntimeAdapterDefinition,
+  RuntimeAdapterProps,
+} from "@/runtime-adapters/definition"
+
+/** Temporary minimal provider; the legacy application retains feature behavior until migration. */
+function HermesRuntimeProvider({
+  config,
+  locale,
+  children,
+}: RuntimeAdapterProps<"hermes">) {
+  const bundle = useHermesRuntimeBundle({ baseUrl: config.baseUrl, locale })
+  return children({
+    assistantRuntime: bundle.assistantRuntime,
+    workspace: bundle.workspace,
+    activityCoverage: "active-session",
+    media: bundle.media,
+    artifacts: bundle.artifacts
+      ? {
+          resolver: bundle.artifacts,
+          htmlAssetOrigins: config.artifactHtmlAssetOrigins,
+        }
+      : undefined,
+  })
+}
+
+export const runtimeAdapter: RuntimeAdapterDefinition<"hermes"> = {
+  mode: "hermes",
+  Provider: HermesRuntimeProvider,
+}
+
 import {
   useCallback,
   useMemo,
@@ -8,7 +39,7 @@ import {
   type ReactNode,
 } from "react"
 
-import { AosUiWorkspace } from "@/components/aos-ui-workspace"
+import { LegacyAosUiWorkspace as AosUiWorkspace } from "@/components/aos-ui-workspace"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { RuntimeQuestionComposer } from "@/components/runtime-interactions/question-composer"
 import { Button, buttonVariants } from "@/components/ui/button"

@@ -54,12 +54,85 @@ import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentSummary,
+  HarnessRuntime,
   RuntimeBundle,
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
+import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
+import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+
+type AosUiWorkspaceProps = {
+  runtime: HarnessRuntime
+  locale: Locale
+  dictionary: Dictionary
+  now: Date
+  readNow?: () => Date
+  browserSettings?: BrowserSettingsView
+  browserNotificationPort?: BrowserNotificationPort
+}
+
+export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
+  const interactions = runtime.interactions
+  const locale = props.locale
+  const composer = useMemo<ThreadComponents["Composer"]>(
+    () =>
+      interactions
+        ? function PendingComposer({ fallback }) {
+            const threadId = useAuiState(
+              (state) =>
+                state.threadListItem.remoteId ?? state.threadListItem.id
+            )
+            return (
+              <PendingInteractionComposer
+                locale={locale}
+                threadId={threadId}
+                interactions={interactions}
+                fallback={fallback}
+              />
+            )
+          }
+        : undefined,
+    [interactions, locale]
+  )
+  const bundle = useMemo<RuntimeBundle>(
+    () => ({
+      assistantRuntime: runtime.assistantRuntime,
+      workspace: runtime.workspace,
+      artifacts: runtime.artifacts?.resolver,
+      interactions,
+    }),
+    [
+      runtime.assistantRuntime,
+      runtime.workspace,
+      runtime.artifacts?.resolver,
+      interactions,
+    ]
+  )
+  const workspace = (
+    <LegacyAosUiWorkspace
+      {...props}
+      bundle={bundle}
+      composer={composer}
+      composerFeatures={runtime.composer}
+      assistantInstructions={runtime.assistantConfig?.instructions}
+      assistantToolkit={runtime.assistantConfig?.toolkit}
+      activityCoverage={runtime.activityCoverage}
+      environmentLabel={runtime.environmentLabel}
+      artifactMessageProjector={runtime.artifacts?.projectMessages}
+      artifactHtmlAssetOrigins={runtime.artifacts?.htmlAssetOrigins}
+    />
+  )
+  return runtime.media ? (
+    <VoiceMediaProvider media={runtime.media} locale={props.locale}>
+      {workspace}
+    </VoiceMediaProvider>
+  ) : (
+    workspace
+  )
+}
 
 const workspaceCopy = {
   en: {
@@ -398,7 +471,8 @@ function ConversationEmpty({
   )
 }
 
-export function AosUiWorkspace({
+/** Temporary migration shim for OpenCode/Hermes; remove after their runtime migration. */
+export function LegacyAosUiWorkspace({
   bundle,
   locale,
   dictionary,
@@ -429,7 +503,7 @@ export function AosUiWorkspace({
   composerFeatures?: ComposerFeatureViewModel
   onStopRun?: () => void | Promise<void>
   onWorkspaceError?: (error: Error) => void
-  activityCoverage?: "workspace" | "active-session"
+  activityCoverage?: "workspace" | "active-session" | "unavailable"
   browserSettings?: BrowserSettingsView
   browserNotificationPort?: BrowserNotificationPort
   artifactHtmlAssetOrigins?: readonly string[]

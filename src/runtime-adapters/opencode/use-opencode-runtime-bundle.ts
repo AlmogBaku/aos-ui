@@ -8,7 +8,7 @@ import {
 } from "@assistant-ui/react-opencode"
 
 import { createBrowserArtifactAdapter } from "@/artifacts/browser-artifact-adapter"
-import type { RuntimeBundle, RuntimeInteractionAdapter } from "../contracts"
+import type { RuntimeBundle, RuntimeInteractionActions } from "../contracts"
 import { createOpenCodeWorkspace } from "./opencode-workspace"
 import {
   createAgentScopedOpenCodeClient,
@@ -24,14 +24,14 @@ export type UseOpenCodeRuntimeBundleOptions = OpenCodeRuntimeOptions & {
 }
 export type OpenCodeRuntimeBundle = RuntimeBundle & {
   client: ReturnType<typeof createOpencodeClient>
-  interactions: RuntimeInteractionAdapter
+  interactions: RuntimeInteractionActions
 }
 
 const REQUEST_OPTIONS = { throwOnError: true } as const
 
 export function createOpenCodeRuntimeInteractions(
   client: ReturnType<typeof createOpencodeClient>
-): RuntimeInteractionAdapter {
+): RuntimeInteractionActions {
   return {
     async respond(request, response) {
       if (request.kind !== "question" || response.kind !== "question") {

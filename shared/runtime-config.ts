@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { DEFAULT_RUNTIME_MODE } from "./runtime-modes"
 
 export type RuntimeUnavailableReason =
   | "invalid-public-config"
@@ -140,7 +141,7 @@ function resolveComposerFeatures(
 export function resolveRuntimeConfiguration(
   environment: RuntimeEnvironment
 ): RuntimeConfiguration {
-  const mode = environment.AOS_UI_RUNTIME_MODE ?? "opencode"
+  const mode = environment.AOS_UI_RUNTIME_MODE ?? DEFAULT_RUNTIME_MODE
   const composerFeatures = resolveComposerFeatures(environment)
 
   if (mode === "fixture") {

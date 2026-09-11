@@ -1,5 +1,6 @@
 import { createBrowserId } from "@/lib/browser-id"
 
+import { createRuntimeClock } from "@shared/runtime-modes"
 import type {
   AgentSummary,
   AgentCatalogEntry,
@@ -15,7 +16,7 @@ import {
   type FixtureActivityScenarioName,
 } from "./fixture-activity"
 
-export const FIXTURE_NOW = new Date("2026-09-03T12:00:00.000Z")
+export const FIXTURE_NOW = createRuntimeClock("fixture").now
 
 export type FixtureClock = () => Date
 

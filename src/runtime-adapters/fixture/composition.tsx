@@ -13,6 +13,10 @@ import {
 import { useFixtureComposerFeatures } from "./fixture-composer-features"
 import { useFixtureRuntimeBundle } from "./fixture-runtime"
 import { FIXTURE_NOW } from "./fixture-workspace"
+import type {
+  RuntimeAdapterDefinition,
+  RuntimeAdapterProps,
+} from "@/runtime-adapters/definition"
 
 export function FixtureAosUiApp({
   locale,
@@ -25,6 +29,36 @@ export function FixtureAosUiApp({
   composerFeatures?: ComposerFeatureConfig
   artifactHtmlAssetOrigins?: readonly string[]
 }) {
+  return (
+    <FixtureRuntimeProvider
+      locale={locale}
+      config={{
+        status: "ready",
+        mode: "fixture",
+        composerFeatures,
+        artifactHtmlAssetOrigins: artifactHtmlAssetOrigins
+          ? [...artifactHtmlAssetOrigins]
+          : undefined,
+      }}
+    >
+      {(runtime) => (
+        <AosUiWorkspace
+          locale={locale}
+          dictionary={dictionary}
+          runtime={runtime}
+          now={FIXTURE_NOW}
+          readNow={() => FIXTURE_NOW}
+        />
+      )}
+    </FixtureRuntimeProvider>
+  )
+}
+
+function FixtureRuntimeProvider({
+  config,
+  locale,
+  children,
+}: RuntimeAdapterProps<"fixture">) {
   const [threadId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
@@ -35,7 +69,7 @@ export function FixtureAosUiApp({
   })
   const composerFeatureViewModel = useFixtureComposerFeatures({
     threadId,
-    config: composerFeatures,
+    config: config.composerFeatures,
     runtime: bundle.assistantRuntime,
   })
 
@@ -49,17 +83,21 @@ export function FixtureAosUiApp({
     }
   }, [bundle.workspace])
 
-  return (
-    <AosUiWorkspace
-      locale={locale}
-      dictionary={dictionary}
-      bundle={bundle}
-      now={FIXTURE_NOW}
-      readNow={() => FIXTURE_NOW}
-      environmentLabel={dictionary.workspace.fixtureLabel}
-      assistantInstructions={fixtureProviderInstructions}
-      composerFeatures={composerFeatureViewModel}
-      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
-    />
-  )
+  return children({
+    assistantRuntime: bundle.assistantRuntime,
+    workspace: bundle.workspace,
+    composer: composerFeatureViewModel,
+    activityCoverage: "workspace",
+    assistantConfig: { instructions: fixtureProviderInstructions },
+    environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",
+    artifacts: {
+      resolver: bundle.artifacts,
+      htmlAssetOrigins: config.artifactHtmlAssetOrigins,
+    },
+  })
+}
+
+export const runtimeAdapter: RuntimeAdapterDefinition<"fixture"> = {
+  mode: "fixture",
+  Provider: FixtureRuntimeProvider,
 }

@@ -70,7 +70,7 @@ vi.mock("@/runtime-adapters/hermes", () => ({
   stopCurrentHermesRun: vi.fn(),
 }))
 vi.mock("@/components/aos-ui-workspace", () => ({
-  AosUiWorkspace: ({
+  LegacyAosUiWorkspace: ({
     composerFeatures,
     composer: Composer,
   }: {

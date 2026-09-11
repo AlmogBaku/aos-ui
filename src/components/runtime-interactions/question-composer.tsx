@@ -17,7 +17,7 @@ import type { RichToolState } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 import type {
-  RuntimeInteractionAdapter,
+  RuntimeInteractionActions,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 
@@ -94,7 +94,7 @@ export function RuntimeQuestionComposer({
 }: {
   locale: Locale
   request: RuntimeQuestionRequest
-  interactions: RuntimeInteractionAdapter
+  interactions: RuntimeInteractionActions
   expired?: boolean
   recovered?: boolean
   onDismissExpired: () => void
@@ -142,8 +142,13 @@ export function RuntimeQuestionComposer({
     focusAnswerControl(questionIndex)
   }, [focusAnswerControl, questionIndex])
 
-  const answers = drafts.map(({ selected, custom, customActive }) => [
-    ...selected,
+  const answers = drafts.map(({ selected, custom, customActive }, index) => [
+    ...selected.map(
+      (label) =>
+        request.questions[index]?.options.find(
+          (option) => option.label === label
+        )?.value ?? label
+    ),
     ...(customActive && custom.trim() ? [custom.trim()] : []),
   ])
   const activeQuestion = request.questions[questionIndex]

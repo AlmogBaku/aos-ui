@@ -4,24 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { App, RuntimeErrorBoundary } from "./app"
 
 vi.mock("@/runtime-adapters/fixture/composition", () => ({
-  FixtureAosUiApp: ({
-    locale,
-    composerFeatures,
-  }: {
-    locale: string
-    composerFeatures: {
-      modelSelectorEnabled: boolean
-      contextEnabled: boolean
-    }
-  }) => (
-    <div
-      data-testid="fixture-app"
-      data-model-selector-enabled={composerFeatures.modelSelectorEnabled}
-      data-context-enabled={composerFeatures.contextEnabled}
-    >
-      {locale}
-    </div>
-  ),
+  runtimeAdapter: {
+    mode: "fixture",
+    Provider: ({
+      locale,
+      config: { composerFeatures },
+    }: {
+      locale: string
+      config: {
+        composerFeatures: {
+          modelSelectorEnabled: boolean
+          contextEnabled: boolean
+        }
+      }
+    }) => (
+      <div
+        data-testid="fixture-app"
+        data-model-selector-enabled={composerFeatures.modelSelectorEnabled}
+        data-context-enabled={composerFeatures.contextEnabled}
+      >
+        {locale}
+      </div>
+    ),
+  },
 }))
 vi.mock("@/components/theme-provider", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,

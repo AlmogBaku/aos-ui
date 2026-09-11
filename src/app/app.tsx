@@ -27,6 +27,9 @@ import { getDictionary } from "@/lib/i18n/get-dictionary"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { stripLocaleFromPathname } from "@/lib/i18n/routing"
 import { captureInviteToken } from "@/lib/invite-fragment"
+import { AosUiWorkspace } from "@/components/aos-ui-workspace"
+import { getRuntimeAdapter } from "@/runtime-adapters/registry"
+import { createRuntimeClock } from "@shared/runtime-modes"
 import {
   parsePublicApplicationConfiguration,
   type ApplicationConfiguration,
@@ -37,24 +40,13 @@ const GuestApp = lazy(() =>
   import("@/components/guest").then(({ GuestApp }) => ({ default: GuestApp }))
 )
 
-const FixtureAosUiApp = lazy(() =>
-  import("@/runtime-adapters/fixture/composition").then(
-    ({ FixtureAosUiApp }) => ({
-      default: FixtureAosUiApp,
-    })
-  )
-)
+// Temporary composition dispatch until OpenCode and Hermes migrate their feature bindings.
 const OpenCodeAosUiApp = lazy(() =>
   import("@/runtime-adapters/opencode/composition").then(
     ({ OpenCodeAosUiApp }) => ({
       default: OpenCodeAosUiApp,
     })
   )
-)
-const AgUiAosUiApp = lazy(() =>
-  import("@/runtime-adapters/ag-ui/composition").then(({ AgUiAosUiApp }) => ({
-    default: AgUiAosUiApp,
-  }))
 )
 const HermesAosUiApp = lazy(() =>
   import("@/runtime-adapters/hermes/composition").then(
@@ -105,18 +97,14 @@ function RuntimeApp({
   dictionary: Dictionary
   nowIso: string
 }) {
+  const [clock] = useState(() =>
+    createRuntimeClock(
+      config.status === "ready" ? config.mode : undefined,
+      new Date(nowIso)
+    )
+  )
   if (config.status === "unavailable") {
     return <RuntimeUnavailable locale={locale} reason={config.reason} />
-  }
-  if (config.mode === "fixture") {
-    return (
-      <FixtureAosUiApp
-        locale={locale}
-        dictionary={dictionary}
-        composerFeatures={config.composerFeatures}
-        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
-      />
-    )
   }
   if (config.mode === "opencode") {
     return (
@@ -132,29 +120,34 @@ function RuntimeApp({
       />
     )
   }
-  if (config.mode === "ag-ui") {
+  if (config.mode === "hermes") {
     return (
-      <AgUiAosUiApp
+      <HermesAosUiApp
         locale={locale}
         dictionary={dictionary}
-        runUrl={config.runUrl}
-        workspaceUrl={config.workspaceUrl}
+        baseUrl={config.baseUrl}
         nowIso={nowIso}
         composerFeatures={config.composerFeatures}
         artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
       />
     )
   }
-
+  const adapter = getRuntimeAdapter(config.mode)
+  if (!adapter)
+    return <RuntimeUnavailable locale={locale} reason="invalid-runtime-mode" />
+  const Provider = adapter.Provider
   return (
-    <HermesAosUiApp
-      locale={locale}
-      dictionary={dictionary}
-      baseUrl={config.baseUrl}
-      nowIso={nowIso}
-      composerFeatures={config.composerFeatures}
-      artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
-    />
+    <Provider config={config} locale={locale}>
+      {(runtime) => (
+        <AosUiWorkspace
+          runtime={runtime}
+          locale={locale}
+          dictionary={dictionary}
+          now={clock.now}
+          readNow={clock.readNow}
+        />
+      )}
+    </Provider>
   )
 }
 

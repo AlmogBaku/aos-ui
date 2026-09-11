@@ -13,6 +13,10 @@ import {
   resolveRuntimeConfiguration,
   serializePublicRuntimeConfiguration,
 } from "./shared/runtime-config.ts"
+import {
+  DEFAULT_RUNTIME_MODE,
+  getRuntimeEntrypoint,
+} from "./shared/runtime-modes.ts"
 
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
@@ -71,15 +75,8 @@ function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
 }
 
 function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
-  const runtimeMode = environment.AOS_UI_RUNTIME_MODE ?? "opencode"
-  const runtimeEntry =
-    runtimeMode === "fixture"
-      ? "/src/runtime-adapters/fixture/composition.tsx"
-      : runtimeMode === "hermes"
-        ? "/src/runtime-adapters/hermes/composition.tsx"
-        : runtimeMode === "ag-ui"
-          ? "/src/runtime-adapters/ag-ui/composition.tsx"
-          : "/src/runtime-adapters/opencode/composition.tsx"
+  const runtimeMode = environment.AOS_UI_RUNTIME_MODE ?? DEFAULT_RUNTIME_MODE
+  const runtimeEntry = getRuntimeEntrypoint(runtimeMode)
   return {
     name: "aos-e2e-readiness",
     configureServer(server) {
@@ -97,7 +94,7 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
             )
             await Promise.all([
               server.warmupRequest("/src/main.tsx"),
-              server.warmupRequest(runtimeEntry),
+              ...(runtimeEntry ? [server.warmupRequest(runtimeEntry)] : []),
             ])
             await server.waitForRequestsIdle()
             await Promise.all(
@@ -127,7 +124,7 @@ export default defineConfig(({ mode }) => {
   const cacheKey = (
     environment.AOS_UI_E2E_CACHE_KEY ??
     environment.AOS_UI_RUNTIME_MODE ??
-    "opencode"
+    DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
   const hermesProxy = {
     "/auth": {
@@ -162,10 +159,7 @@ export default defineConfig(({ mode }) => {
     },
     optimizeDeps: {
       entries: ["index.html", "src/runtime-adapters/*/composition.tsx"],
-      include: [
-        "@base-ui/react/direction-provider",
-        "@base-ui/react/select",
-      ],
+      include: ["@base-ui/react/direction-provider", "@base-ui/react/select"],
     },
     server: {
       host: "127.0.0.1",

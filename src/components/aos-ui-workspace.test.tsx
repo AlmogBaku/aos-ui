@@ -13,6 +13,9 @@ import { useEffect, useMemo, useState } from "react"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type {
+  HarnessRuntime,
+  RuntimeInteractionAdapter,
+  RuntimeQuestionRequest,
   RuntimeBundle,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
@@ -43,6 +46,58 @@ vi.mock("react-router", () => ({
 
 beforeEach(() => window.history.replaceState({}, "", "/"))
 afterEach(cleanup)
+
+function asHarnessRuntime(bundle: RuntimeBundle): HarnessRuntime {
+  return {
+    assistantRuntime: bundle.assistantRuntime,
+    workspace: bundle.workspace,
+    artifacts: bundle.artifacts ? { resolver: bundle.artifacts } : undefined,
+    activityCoverage: "workspace",
+  }
+}
+
+it("renders pending provider interactions through the unified runtime and submits to their owning Session", async () => {
+  const user = userEvent.setup()
+  const request: RuntimeQuestionRequest = {
+    kind: "question",
+    requestId: "pending-choice",
+    sessionId: "thread-aster-market",
+    questions: [
+      {
+        header: "Direction",
+        prompt: "Choose the direction",
+        options: [{ label: "Proceed", value: "continue" }],
+      },
+    ],
+  }
+  const respond = vi.fn(async () => {})
+  const interactions: RuntimeInteractionAdapter = {
+    getPending: (threadId) =>
+      threadId === request.sessionId ? request : undefined,
+    subscribe: () => () => {},
+    respond,
+    reject: async () => {},
+  }
+  render(
+    <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
+      {(bundle) => (
+        <AosUiWorkspace
+          runtime={{ ...asHarnessRuntime(bundle), interactions }}
+          locale="en"
+          dictionary={en}
+          now={FIXTURE_NOW}
+        />
+      )}
+    </ControlledWorkspaceFixture>
+  )
+  expect(await screen.findByText("Choose the direction")).toBeVisible()
+  await user.click(screen.getByText("Proceed"))
+  await user.click(screen.getByRole("button", { name: "Send answer" }))
+  expect(respond).toHaveBeenCalledWith(request, {
+    kind: "question",
+    answers: [["continue"]],
+  })
+})
 
 function TabFixture({ capture }: { capture: (bundle: RuntimeBundle) => void }) {
   return (
@@ -78,7 +133,7 @@ function TabWorkspace({
   useEffect(() => capture(bundle), [bundle, capture])
   return (
     <AosUiWorkspace
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       locale="en"
       dictionary={en}
       now={FIXTURE_NOW}
@@ -97,7 +152,7 @@ function CreatorFixtureAosUiApp({ locale }: { locale: "en" | "he" }) {
   })
   return (
     <AosUiWorkspace
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       locale={locale}
       dictionary={locale === "he" ? he : en}
       now={FIXTURE_NOW}
@@ -359,7 +414,10 @@ function CatalogFixture({
   )
   return (
     <AosUiWorkspace
-      bundle={{ assistantRuntime: fixture.assistantRuntime, workspace }}
+      runtime={asHarnessRuntime({
+        assistantRuntime: fixture.assistantRuntime,
+        workspace,
+      })}
       locale={locale}
       dictionary={locale === "he" ? he : en}
       now={FIXTURE_NOW}
@@ -636,7 +694,7 @@ function BuilderSignalFixture({
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       now={FIXTURE_NOW}
     />
   )
@@ -663,7 +721,7 @@ function BuilderLifecycleFixture({
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={fixture}
+      runtime={asHarnessRuntime(fixture)}
       now={FIXTURE_NOW}
     />
   )
@@ -705,7 +763,7 @@ function EmptyAgentFixture({
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       now={FIXTURE_NOW}
     />
   )
@@ -748,7 +806,7 @@ function StaleTodoFixture({
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       now={FIXTURE_NOW}
     />
   )
@@ -798,7 +856,7 @@ function SessionMetadataSignalFixture({
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={bundle}
+      runtime={asHarnessRuntime(bundle)}
       now={FIXTURE_NOW}
     />
   )
@@ -817,7 +875,7 @@ function ClockBoundaryFixture({ readNow }: { readNow: () => Date }) {
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      bundle={fixture}
+      runtime={asHarnessRuntime(fixture)}
       now={readNow()}
       readNow={readNow}
     />
@@ -842,7 +900,7 @@ describe("AosUiApp fixture composition", () => {
       }, [bundle.workspace])
       return (
         <AosUiWorkspace
-          bundle={bundle}
+          runtime={asHarnessRuntime(bundle)}
           locale="en"
           dictionary={en}
           now={FIXTURE_NOW}
@@ -990,7 +1048,7 @@ describe("AosUiApp fixture composition", () => {
       >
         {(bundle) => (
           <AosUiWorkspace
-            bundle={bundle}
+            runtime={asHarnessRuntime(bundle)}
             locale="en"
             dictionary={en}
             now={FIXTURE_NOW}

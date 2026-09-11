@@ -22,7 +22,7 @@ import { HermesArtifactAdapter } from "./hermes-artifacts"
 import { HermesMediaBinding } from "./hermes-media-binding"
 import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
-import type { RuntimeBundle, RuntimeInteractionAdapter } from "../contracts"
+import type { RuntimeBundle, RuntimeInteractionActions } from "../contracts"
 import {
   HermesNativeClient,
   type HermesNativeClientOptions,
@@ -43,7 +43,7 @@ export function createHermesInteractions(
     HermesNativeClient,
     "answerClarification" | "rejectClarification"
   >
-): RuntimeInteractionAdapter {
+): RuntimeInteractionActions {
   return {
     async respond(request, response) {
       await client.answerClarification(
