@@ -6,7 +6,6 @@ import {
   Tools,
   useAuiState,
   type AssistantState,
-  type Toolkit,
 } from "@assistant-ui/react"
 import {
   AlertCircle,
@@ -29,7 +28,6 @@ import {
   Thread,
   type ThreadComponents,
 } from "@/components/assistant-ui/elements/thread.aui"
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { ToolUiLocaleProvider, RichToolRenderer } from "@/components/tool-ui"
@@ -55,7 +53,6 @@ import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentSummary,
   HarnessRuntime,
-  RuntimeBundle,
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
@@ -63,6 +60,7 @@ import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+import { useRuntimeErrorReporter } from "@/runtime-adapters/runtime-error-context"
 
 type AosUiWorkspaceProps = {
   runtime: HarnessRuntime
@@ -97,33 +95,8 @@ export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
         : undefined,
     [interactions, locale]
   )
-  const bundle = useMemo<RuntimeBundle>(
-    () => ({
-      assistantRuntime: runtime.assistantRuntime,
-      workspace: runtime.workspace,
-      artifacts: runtime.artifacts?.resolver,
-      interactions,
-    }),
-    [
-      runtime.assistantRuntime,
-      runtime.workspace,
-      runtime.artifacts?.resolver,
-      interactions,
-    ]
-  )
   const workspace = (
-    <LegacyAosUiWorkspace
-      {...props}
-      bundle={bundle}
-      composer={composer}
-      composerFeatures={runtime.composer}
-      assistantInstructions={runtime.assistantConfig?.instructions}
-      assistantToolkit={runtime.assistantConfig?.toolkit}
-      activityCoverage={runtime.activityCoverage}
-      environmentLabel={runtime.environmentLabel}
-      artifactMessageProjector={runtime.artifacts?.projectMessages}
-      artifactHtmlAssetOrigins={runtime.artifacts?.htmlAssetOrigins}
-    />
+    <WorkspaceContent {...props} harness={runtime} composer={composer} />
   )
   return runtime.media ? (
     <VoiceMediaProvider media={runtime.media} locale={props.locale}>
@@ -179,7 +152,7 @@ function ArtifactWorkspaceBridge({
   children,
   ...shell
 }: {
-  bundle: RuntimeBundle
+  bundle: HarnessRuntime
   locale: Locale
   agentId: string
   threadId: string
@@ -198,7 +171,7 @@ function ArtifactWorkspaceBridge({
   return (
     <ArtifactWorkspaceProvider
       locale={locale}
-      adapter={bundle.artifacts}
+      adapter={bundle.artifacts?.resolver}
       agentId={agentId}
       threadId={threadId}
       messages={artifactMessages}
@@ -471,47 +444,30 @@ function ConversationEmpty({
   )
 }
 
-/** Temporary migration shim for OpenCode/Hermes; remove after their runtime migration. */
-export function LegacyAosUiWorkspace({
-  bundle,
+function WorkspaceContent({
+  harness: bundle,
   locale,
   dictionary,
   now,
   readNow = readSystemClock,
-  environmentLabel,
-  assistantInstructions,
-  assistantToolkit,
   composer,
-  composerFeatures,
-  onStopRun,
-  onWorkspaceError,
-  activityCoverage = "workspace",
   browserSettings,
   browserNotificationPort,
-  artifactHtmlAssetOrigins = [],
-  artifactMessageProjector,
-}: {
-  bundle: RuntimeBundle
-  locale: Locale
-  dictionary: Dictionary
-  now: Date
-  readNow?: () => Date
-  environmentLabel?: string
-  assistantInstructions?: string
-  assistantToolkit?: Toolkit
+}: Omit<AosUiWorkspaceProps, "runtime"> & {
+  harness: HarnessRuntime
   composer?: ThreadComponents["Composer"]
-  composerFeatures?: ComposerFeatureViewModel
-  onStopRun?: () => void | Promise<void>
-  onWorkspaceError?: (error: Error) => void
-  activityCoverage?: "workspace" | "active-session" | "unavailable"
-  browserSettings?: BrowserSettingsView
-  browserNotificationPort?: BrowserNotificationPort
-  artifactHtmlAssetOrigins?: readonly string[]
-  artifactMessageProjector?: (
-    messages: readonly ArtifactMessage[]
-  ) => readonly ArtifactMessage[]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
+  const onWorkspaceError = useRuntimeErrorReporter()
+  const {
+    environmentLabel,
+    activityCoverage,
+    composer: composerFeatures,
+  } = bundle
+  const assistantInstructions = bundle.assistantConfig?.instructions
+  const assistantToolkit = bundle.assistantConfig?.toolkit
+  const artifactHtmlAssetOrigins = bundle.artifacts?.htmlAssetOrigins ?? []
+  const artifactMessageProjector = bundle.artifacts?.projectMessages
   const assistantConfig = useMemo(
     () =>
       assistantToolkit
@@ -667,17 +623,6 @@ export function LegacyAosUiWorkspace({
             ) : selectedAgent && visibleThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
                 <Thread
-                  onStopRun={
-                    onStopRun
-                      ? () => {
-                          void Promise.resolve()
-                            .then(onStopRun)
-                            .catch((reason: unknown) =>
-                              setActionError(toError(reason))
-                            )
-                        }
-                      : undefined
-                  }
                   autoFocus={false}
                   direction={getLocaleDirection(locale)}
                   labels={threadLabels[locale]}

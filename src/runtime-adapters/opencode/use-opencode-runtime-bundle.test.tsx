@@ -14,7 +14,12 @@ const {
   createOpenCodeWorkspace,
   createOpencodeClient,
 } = vi.hoisted(() => {
-  const officialRuntime = {} as AssistantRuntime
+  const officialRuntime = {
+    thread: {
+      getState: () => ({ extras: undefined }),
+      subscribe: () => () => {},
+    },
+  } as unknown as AssistantRuntime
   const replyToQuestion = vi.fn().mockResolvedValue(undefined)
   const rejectQuestion = vi.fn().mockResolvedValue(undefined)
   const client = {

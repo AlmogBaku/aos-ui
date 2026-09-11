@@ -27,15 +27,25 @@ export function PendingInteractionComposer({
   )
   const request = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   if (!request || request.sessionId !== threadId) return fallback
-  return (
+  const composer = (
     <RuntimeQuestionComposer
       key={`${threadId}:${request.requestId}`}
       locale={locale}
       request={request}
       interactions={interactions}
-      onDismissExpired={noop}
+      expired={request.status === "expired"}
+      recovered={request.status === "recovered"}
+      onDismissExpired={() => interactions.dismiss?.(request)}
       onResponsePending={noop}
       onResolved={noop}
     />
+  )
+  return request.status === "recovered" ? (
+    <>
+      <div className="mx-auto flex w-full max-w-2xl px-4 pb-3">{composer}</div>
+      {fallback}
+    </>
+  ) : (
+    composer
   )
 }

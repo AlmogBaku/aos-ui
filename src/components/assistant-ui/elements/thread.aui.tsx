@@ -136,8 +136,6 @@ export type ThreadComposerOverrideProps = {
 }
 
 export type ThreadProps = {
-  /** Explicit user Stop only. Cleanup must never invoke this native control. */
-  onStopRun?: () => void
   components?: ThreadComponents | undefined
   autoFocus?: boolean | undefined
   labels?: Partial<ThreadLabels> | undefined
@@ -229,7 +227,6 @@ const EMPTY_COMPONENTS: ThreadComponents = {}
 
 const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS)
-const ThreadStopContext = createContext<(() => void) | undefined>(undefined)
 const ThreadLabelsContext = createContext<ThreadLabels>(DEFAULT_LABELS)
 const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
   {}
@@ -286,7 +283,6 @@ export const Thread: FC<ThreadProps> = ({
   autoFocus = true,
   labels,
   direction = "ltr",
-  onStopRun,
   composerFeatures = {},
 }) => {
   const isEmpty = useAuiState(isNewChatView)
@@ -304,13 +300,11 @@ export const Thread: FC<ThreadProps> = ({
       <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
         <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
           <ThreadComponentsContext.Provider value={components}>
-            <ThreadStopContext.Provider value={onStopRun}>
-              <ThreadRoot
-                isEmpty={isEmpty}
-                autoFocus={autoFocus}
-                direction={direction}
-              />
-            </ThreadStopContext.Provider>
+            <ThreadRoot
+              isEmpty={isEmpty}
+              autoFocus={autoFocus}
+              direction={direction}
+            />
           </ThreadComponentsContext.Provider>
         </ThreadComposerFeaturesContext.Provider>
       </AttachmentLabelsContext.Provider>
@@ -330,7 +324,6 @@ const ThreadRoot: FC<{
   } = useContext(ThreadComponentsContext)
   const labels = useContext(ThreadLabelsContext)
   const aui = useAui()
-  const onStopRun = useContext(ThreadStopContext)
   const viewportRef = useRef<HTMLDivElement>(null)
   const threadId = useAuiState((state) => state.threadListItem.id)
   const contentReady = useAuiState((state) => !state.thread.isLoading)
@@ -347,10 +340,9 @@ const ThreadRoot: FC<{
       }
       if (!aui.thread.getState().isRunning) return
       event.preventDefault()
-      if (onStopRun) onStopRun()
-      else aui.thread.cancelRun()
+      aui.thread.cancelRun()
     },
-    [aui, onStopRun]
+    [aui]
   )
 
   return (
@@ -1090,7 +1082,6 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
 
 const ComposerToolbar: FC<PropsWithChildren> = ({ children }) => {
   const labels = useContext(ThreadLabelsContext)
-  const onStopRun = useContext(ThreadStopContext)
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
   return (
@@ -1120,36 +1111,20 @@ const ComposerToolbar: FC<PropsWithChildren> = ({ children }) => {
               </ComposerPrimitive.Send>
             </AuiIf>
             <AuiIf condition={(s) => s.thread.isRunning}>
-              {onStopRun ? (
-                <Button
-                  type="button"
-                  className="aui-composer-cancel grid size-11 shrink-0 place-items-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary"
-                  aria-label={labels.stopGenerating}
-                  onClick={() => {
-                    voice?.media.disarm()
-                    onStopRun()
-                  }}
-                >
-                  <span className="grid size-9 place-items-center rounded-full bg-primary @min-[64rem]/workspace:contents">
-                    <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-                  </span>
-                </Button>
-              ) : (
-                <ComposerPrimitive.Cancel
-                  render={
-                    <Button
-                      type="button"
-                      className="aui-composer-cancel grid size-11 shrink-0 place-items-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary"
-                      aria-label={labels.stopGenerating}
-                      onClick={() => voice?.media.disarm()}
-                    />
-                  }
-                >
-                  <span className="grid size-9 place-items-center rounded-full bg-primary @min-[64rem]/workspace:contents">
-                    <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-                  </span>
-                </ComposerPrimitive.Cancel>
-              )}
+              <ComposerPrimitive.Cancel
+                render={
+                  <Button
+                    type="button"
+                    className="aui-composer-cancel grid size-11 shrink-0 place-items-center rounded-full bg-transparent text-primary-foreground @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary"
+                    aria-label={labels.stopGenerating}
+                    onClick={() => voice?.media.disarm()}
+                  />
+                }
+              >
+                <span className="grid size-9 place-items-center rounded-full bg-primary @min-[64rem]/workspace:contents">
+                  <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+                </span>
+              </ComposerPrimitive.Cancel>
             </AuiIf>
           </>
         ) : null}

@@ -22,9 +22,14 @@ import { HermesArtifactAdapter } from "./hermes-artifacts"
 import { HermesMediaBinding } from "./hermes-media-binding"
 import { HermesAttachmentAdapter } from "./hermes-attachment-adapter"
 
-import type { RuntimeBundle, RuntimeInteractionActions } from "../contracts"
+import type {
+  RuntimeBundle,
+  RuntimeInteractionAdapter,
+  RuntimeQuestionRequest,
+} from "../contracts"
 import {
   HermesNativeClient,
+  type HermesSession,
   type HermesNativeClientOptions,
 } from "./hermes-native-client"
 import { HermesThreadListAdapter } from "./hermes-thread-list"
@@ -37,14 +42,63 @@ import { createHermesWorkspace } from "./hermes-workspace"
 
 const EMPTY_MESSAGES: readonly ThreadMessageLike[] = []
 const COMPLETE_STATUS: MessageStatus = { type: "complete", reason: "unknown" }
+type Clarification = Pick<
+  NonNullable<HermesSession["clarification"]>,
+  "requestId" | "questions"
+>
 
 export function createHermesInteractions(
   client: Pick<
     HermesNativeClient,
     "answerClarification" | "rejectClarification"
-  >
-): RuntimeInteractionActions {
+  > & {
+    subscribe(listener: () => void): () => void
+    session(threadId: string): { clarification?: Clarification } | undefined
+  },
+  locale: Locale = "en"
+): RuntimeInteractionAdapter {
+  const snapshots = new Map<
+    string,
+    {
+      clarification: Clarification | undefined
+      request: RuntimeQuestionRequest | undefined
+    }
+  >()
+  const getPending = (threadId: string) => {
+    const clarification = client.session(threadId)?.clarification
+    const previous = snapshots.get(threadId)
+    if (previous && previous.clarification === clarification)
+      return previous.request
+    const request: RuntimeQuestionRequest | undefined = clarification
+      ? {
+          kind: "question",
+          requestId: clarification.requestId,
+          sessionId: threadId,
+          questions: clarification.questions.map((question, index) => ({
+            ...(question.id ? { id: question.id } : {}),
+            header:
+              locale === "he" ? `שאלה ${index + 1}` : `Question ${index + 1}`,
+            prompt: question.question,
+            options: (question.choices ?? []).map((label) => ({ label })),
+            multiple: question.multiple,
+            custom: true,
+          })),
+        }
+      : undefined
+    snapshots.set(threadId, { clarification, request })
+    return request
+  }
   return {
+    getPending,
+    subscribe(threadId, listener) {
+      let snapshot = getPending(threadId)
+      return client.subscribe(() => {
+        const next = getPending(threadId)
+        if (next === snapshot) return
+        snapshot = next
+        listener()
+      })
+    },
     async respond(request, response) {
       await client.answerClarification(
         request.sessionId,
@@ -148,7 +202,11 @@ function useHermesThreadRuntime(
       await client.regenerate(threadId, parentId)
     },
     async onCancel() {
-      if (threadId) await client.stopRun(threadId)
+      try {
+        if (threadId) await client.stopRun(threadId)
+      } catch (reason) {
+        onError?.(reason instanceof Error ? reason : new Error(String(reason)))
+      }
     },
     async onRefetchThread() {
       if (threadId) await client.loadHistory(threadId)
@@ -190,7 +248,10 @@ export function useHermesRuntimeBundle(
   )
   const adapter = useMemo(() => new HermesThreadListAdapter(client), [client])
   const workspace = useMemo(() => createHermesWorkspace(client), [client])
-  const interactions = useMemo(() => createHermesInteractions(client), [client])
+  const interactions = useMemo(
+    () => createHermesInteractions(client, options.locale),
+    [client, options.locale]
+  )
   const artifacts = useMemo(
     () =>
       new HermesArtifactAdapter({

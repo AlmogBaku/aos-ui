@@ -114,11 +114,9 @@ function LocalThread({
   composerFeatures,
   enableMessageQueue = false,
   attachmentAdapter,
-  onStopRun,
 }: {
   labels?: Partial<ThreadLabels>
   direction?: "ltr" | "rtl"
-  onStopRun?: () => void
   model?: ChatModelAdapter
   exposeRuntime?: (runtime: AssistantRuntime) => void
   initialMessages?: readonly ThreadMessageLike[]
@@ -153,7 +151,6 @@ function LocalThread({
       <Thread
         labels={labels}
         direction={direction}
-        onStopRun={onStopRun}
         autoFocus={false}
         composerFeatures={composerFeatures}
         components={{ ToolFallback: toolFallback, Composer: composer }}
@@ -235,7 +232,9 @@ describe("Thread accessibility", () => {
   it("renders the welcome state accessibly", () => {
     render(<LocalThread initialMessages={[]} />)
 
-    expect(screen.getByRole("heading", { name: "How can I help you today?" })).toBeVisible()
+    expect(
+      screen.getByRole("heading", { name: "How can I help you today?" })
+    ).toBeVisible()
   })
 
   it("renders populated thread content", async () => {
@@ -420,7 +419,7 @@ describe("Thread accessibility", () => {
   })
 
   it.each(["button", "escape"])(
-    "routes explicit Stop (%s) to the supplied harness control, never during unmount",
+    "routes explicit Stop (%s) through the runtime exactly once",
     async (trigger) => {
       const user = userEvent.setup()
       const stop = vi.fn()
@@ -428,13 +427,20 @@ describe("Thread accessibility", () => {
         async *run({ abortSignal }) {
           yield { content: [{ type: "text", text: "Waiting on native run" }] }
           await new Promise<void>((resolve) =>
-            abortSignal.addEventListener("abort", () => resolve(), {
-              once: true,
-            })
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                stop()
+                resolve()
+              },
+              {
+                once: true,
+              }
+            )
           )
         },
       }
-      const view = render(<LocalThread model={model} onStopRun={stop} />)
+      const view = render(<LocalThread model={model} />)
       await user.type(
         screen.getByRole("textbox", { name: "Message input" }),
         "Run"
@@ -636,7 +642,9 @@ describe("Thread accessibility", () => {
     await user.click(screen.getByRole("combobox", { name: "בחירת מודל" }))
 
     expect(await screen.findByRole("listbox")).toBeVisible()
-    expect((await screen.findByRole("listbox")).closest("[dir='rtl']")).not.toBeNull()
+    expect(
+      (await screen.findByRole("listbox")).closest("[dir='rtl']")
+    ).not.toBeNull()
   })
 
   it("preserves a complete attachment when editing only the message text", async () => {

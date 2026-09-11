@@ -1,6 +1,9 @@
 "use client"
 
-import type { OpencodeClient } from "@assistant-ui/react-opencode"
+import type {
+  OpencodeClient,
+  OpenCodeRuntimeExtras,
+} from "@assistant-ui/react-opencode"
 import { useEffect, useRef, useState } from "react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
@@ -85,6 +88,15 @@ export function useOpenCodeComposerFeatures(
   onError?: (error: Error, sessionId: string) => void
 ): ComposerFeatureViewModel {
   const extras = aosOpenCodeExtras.use((extras) => extras, undefined)
+  return useOpenCodeComposerState(client, extras, config, onError)
+}
+
+export function useOpenCodeComposerState(
+  client: OpencodeClient,
+  extras: OpenCodeRuntimeExtras | undefined,
+  config: ComposerFeatureConfig = DEFAULT_COMPOSER_FEATURE_CONFIG,
+  onError?: (error: Error, sessionId: string) => void
+): ComposerFeatureViewModel {
   const selections = useRef(new Map<string, Promise<void>>())
   const [catalog, setCatalog] = useState<{
     client: OpencodeClient
@@ -119,8 +131,7 @@ export function useOpenCodeComposerFeatures(
     ? readOpenCodeComposerContext(state, selected.maxTokens)
     : undefined
   return {
-    context:
-      config.contextEnabled && sessionId ? context : undefined,
+    context: config.contextEnabled && sessionId ? context : undefined,
     model:
       config.modelSelectorEnabled && selected && sessionId
         ? {

@@ -8,7 +8,9 @@ import {
 } from "@assistant-ui/react-opencode"
 
 import { createBrowserArtifactAdapter } from "@/artifacts/browser-artifact-adapter"
-import type { RuntimeBundle, RuntimeInteractionActions } from "../contracts"
+import type { RuntimeBundle } from "../contracts"
+import { createOpenCodeRuntimeInteractions } from "./opencode-interactions"
+import { aosOpenCodeExtras } from "./opencode-runtime-extras"
 import { createOpenCodeWorkspace } from "./opencode-workspace"
 import {
   createAgentScopedOpenCodeClient,
@@ -21,34 +23,11 @@ import {
 
 export type UseOpenCodeRuntimeBundleOptions = OpenCodeRuntimeOptions & {
   directory: string
+  onInteractionError?: (error: Error | undefined, threadId: string) => void
 }
 export type OpenCodeRuntimeBundle = RuntimeBundle & {
   client: ReturnType<typeof createOpencodeClient>
-  interactions: RuntimeInteractionActions
-}
-
-const REQUEST_OPTIONS = { throwOnError: true } as const
-
-export function createOpenCodeRuntimeInteractions(
-  client: ReturnType<typeof createOpencodeClient>
-): RuntimeInteractionActions {
-  return {
-    async respond(request, response) {
-      if (request.kind !== "question" || response.kind !== "question") {
-        throw new Error("OpenCode only supports question responses here")
-      }
-      await client.question.reply(
-        { requestID: request.requestId, answers: response.answers },
-        REQUEST_OPTIONS
-      )
-    },
-    async reject(request) {
-      await client.question.reject(
-        { requestID: request.requestId },
-        REQUEST_OPTIONS
-      )
-    },
-  }
+  interactions: ReturnType<typeof createOpenCodeRuntimeInteractions>
 }
 
 class ThreadReloadBinding {
@@ -132,8 +111,27 @@ export function useOpenCodeRuntimeBundle(
     [assistantRuntime, threadReload]
   )
   const interactions = useMemo(
-    () => createOpenCodeRuntimeInteractions(scopedClient),
-    [scopedClient]
+    () =>
+      createOpenCodeRuntimeInteractions(
+        scopedClient,
+        {
+          read(threadId) {
+            const extras = aosOpenCodeExtras.tryGet(
+              assistantRuntime.thread.getState().extras
+            )
+            return extras?.session?.id === threadId
+              ? {
+                  state: extras.state,
+                  questions: Object.values(extras.questions),
+                }
+              : undefined
+          },
+          subscribe: (listener) => assistantRuntime.thread.subscribe(listener),
+        },
+        eventHub,
+        options.onInteractionError
+      ),
+    [scopedClient, assistantRuntime, eventHub, options.onInteractionError]
   )
   const artifacts = useMemo(() => createBrowserArtifactAdapter(), [])
 

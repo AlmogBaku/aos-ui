@@ -12,7 +12,12 @@ import {
   waitFor,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { PropsWithChildren } from "react"
+import {
+  useLayoutEffect,
+  useState,
+  type PropsWithChildren,
+  type ReactNode,
+} from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
@@ -66,7 +71,73 @@ vi.mock("@assistant-ui/react", async (importOriginal) => ({
   AssistantRuntimeProvider: ({ children }: PropsWithChildren) => children,
 }))
 
-import { OpenCodeQuestionBridge } from "./composition"
+import { createOpenCodeRuntimeInteractions } from "./opencode-interactions"
+import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+import type { Locale } from "@/lib/i18n/config"
+
+// Exercise the shared composer against the public native interaction adapter.
+class QuestionRuntimeSource {
+  #current: {
+    sessionId: string
+    state: OpenCodeThreadState
+    questions: readonly OpenCodeQuestionRequest[]
+  }
+  #listeners = new Set<() => void>()
+  constructor(current: QuestionRuntimeSource["current"]) {
+    this.#current = current
+  }
+  get current() {
+    return this.#current
+  }
+  update(current: QuestionRuntimeSource["current"]) {
+    this.#current = current
+    for (const listener of this.#listeners) listener()
+  }
+  read = (threadId: string) =>
+    threadId === this.#current.sessionId ? this.#current : undefined
+  subscribe = (listener: () => void) => {
+    this.#listeners.add(listener)
+    return () => {
+      this.#listeners.delete(listener)
+    }
+  }
+}
+function OpenCodeQuestionBridge({
+  locale,
+  client,
+  fallback = null,
+}: {
+  locale: Locale
+  client: OpencodeClient
+  fallback?: ReactNode
+}) {
+  const session = useOpenCodeSession()
+  const questions = useOpenCodeQuestions()
+  const { state } = useOpenCodeRuntimeExtras()
+  const [source] = useState(
+    () =>
+      new QuestionRuntimeSource({
+        sessionId: session?.id ?? "",
+        state,
+        questions,
+      })
+  )
+  const [interactions] = useState(() =>
+    createOpenCodeRuntimeInteractions(client, source)
+  )
+  useLayoutEffect(
+    () => source.update({ sessionId: session?.id ?? "", state, questions }),
+    [source, session, state, questions]
+  )
+  return (
+    <PendingInteractionComposer
+      locale={locale}
+      threadId={session?.id ?? ""}
+      interactions={interactions}
+      fallback={fallback}
+    />
+  )
+}
 
 const request = {
   id: "question-1",

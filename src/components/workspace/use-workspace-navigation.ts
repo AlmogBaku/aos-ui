@@ -83,7 +83,7 @@ export function useWorkspaceNavigation({
   now,
   readNow,
 }: {
-  bundle: RuntimeBundle
+  bundle: Pick<RuntimeBundle, "assistantRuntime" | "workspace">
   locale: Locale
   dictionary: Dictionary
   now: Date

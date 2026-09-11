@@ -169,6 +169,8 @@ export type RuntimeQuestionRequest = {
   requestId: string
   sessionId: string
   questions: readonly RuntimeQuestion[]
+  /** Non-actionable native requests remain inspectable after expiry/recovery. */
+  status?: "expired" | "recovered"
 }
 
 export type RuntimeQuestionResponse = {
@@ -176,17 +178,14 @@ export type RuntimeQuestionResponse = {
   answers: string[][]
 }
 
-/** Provider-owned interaction actions exposed to shared runtime UI. */
-export type RuntimeInteractionActions = {
+/** Snapshots are immutable and stable until subscribe signals a change. */
+export type RuntimeInteractionAdapter = {
   respond(
     request: RuntimeQuestionRequest,
     response: RuntimeQuestionResponse
   ): Promise<void>
   reject(request: RuntimeQuestionRequest): Promise<void>
-}
-
-/** Snapshots are immutable and stable until subscribe signals a change. */
-export type RuntimeInteractionAdapter = RuntimeInteractionActions & {
+  dismiss?(request: RuntimeQuestionRequest): void
   getPending(threadId: string): RuntimeQuestionRequest | undefined
   subscribe(
     threadId: string,
@@ -222,7 +221,7 @@ export type ArtifactAdapter = {
 export type RuntimeBundle = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
-  interactions?: RuntimeInteractionActions
+  interactions?: RuntimeInteractionAdapter
   artifacts?: ArtifactAdapter
 }
 

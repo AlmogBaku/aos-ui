@@ -28,7 +28,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary"
 import { stripLocaleFromPathname } from "@/lib/i18n/routing"
 import { captureInviteToken } from "@/lib/invite-fragment"
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
-import { getRuntimeAdapter } from "@/runtime-adapters/registry"
+import { HarnessRuntimeProvider } from "@/runtime-adapters/registry"
 import { createRuntimeClock } from "@shared/runtime-modes"
 import {
   parsePublicApplicationConfiguration,
@@ -38,22 +38,6 @@ import {
 
 const GuestApp = lazy(() =>
   import("@/components/guest").then(({ GuestApp }) => ({ default: GuestApp }))
-)
-
-// Temporary composition dispatch until OpenCode and Hermes migrate their feature bindings.
-const OpenCodeAosUiApp = lazy(() =>
-  import("@/runtime-adapters/opencode/composition").then(
-    ({ OpenCodeAosUiApp }) => ({
-      default: OpenCodeAosUiApp,
-    })
-  )
-)
-const HermesAosUiApp = lazy(() =>
-  import("@/runtime-adapters/hermes/composition").then(
-    ({ HermesAosUiApp }) => ({
-      default: HermesAosUiApp,
-    })
-  )
 )
 
 const invalidConfig: RuntimeConfiguration = {
@@ -106,38 +90,8 @@ function RuntimeApp({
   if (config.status === "unavailable") {
     return <RuntimeUnavailable locale={locale} reason={config.reason} />
   }
-  if (config.mode === "opencode") {
-    return (
-      <OpenCodeAosUiApp
-        locale={locale}
-        dictionary={dictionary}
-        baseUrl={config.baseUrl}
-        directory={config.directory}
-        defaultModel={config.defaultModel}
-        nowIso={nowIso}
-        composerFeatures={config.composerFeatures}
-        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
-      />
-    )
-  }
-  if (config.mode === "hermes") {
-    return (
-      <HermesAosUiApp
-        locale={locale}
-        dictionary={dictionary}
-        baseUrl={config.baseUrl}
-        nowIso={nowIso}
-        composerFeatures={config.composerFeatures}
-        artifactHtmlAssetOrigins={config.artifactHtmlAssetOrigins}
-      />
-    )
-  }
-  const adapter = getRuntimeAdapter(config.mode)
-  if (!adapter)
-    return <RuntimeUnavailable locale={locale} reason="invalid-runtime-mode" />
-  const Provider = adapter.Provider
   return (
-    <Provider config={config} locale={locale}>
+    <HarnessRuntimeProvider config={config} locale={locale}>
       {(runtime) => (
         <AosUiWorkspace
           runtime={runtime}
@@ -147,7 +101,7 @@ function RuntimeApp({
           readNow={clock.readNow}
         />
       )}
-    </Provider>
+    </HarnessRuntimeProvider>
   )
 }
 

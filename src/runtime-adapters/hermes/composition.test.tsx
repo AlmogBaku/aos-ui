@@ -1,9 +1,15 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
-import type { ComponentType, ReactNode } from "react"
+import { useEffect } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
-import { HermesAosUiApp } from "./composition"
+import { runtimeAdapter } from "./composition"
+import { createHermesInteractions } from "./use-hermes-runtime-bundle"
+import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+import type { Locale } from "@/lib/i18n/config"
+import type { Dictionary } from "@/lib/i18n/dictionary"
+import type { HarnessRuntime } from "@/runtime-adapters/contracts"
+import { useRuntimeErrorReporter } from "@/runtime-adapters/runtime-error-context"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
@@ -23,10 +29,12 @@ type MockHermesSession = Pick<HermesSession, "threadId"> & {
 const mocks = vi.hoisted(() => ({
   featureConfig: undefined as ComposerFeatureConfig | undefined,
   workspaceFeatures: undefined as ComposerFeatureViewModel | undefined,
+  workspaceError: undefined as ((error: Error) => void) | undefined,
   features: {
     context: { usage: { system: 0, tools: 0, messages: 17, total: 100 } },
   },
   options: {} as {
+    locale?: Locale
     onError?: (error: Error) => void
     onRecovered?: () => void
   },
@@ -65,27 +73,78 @@ vi.mock("./use-hermes-composer-features", () => ({
 vi.mock("@/runtime-adapters/hermes", () => ({
   useHermesRuntimeBundle: (options: typeof mocks.options) => {
     mocks.options = options
-    return mocks.bundle
-  },
-  stopCurrentHermesRun: vi.fn(),
-}))
-vi.mock("@/components/aos-ui-workspace", () => ({
-  LegacyAosUiWorkspace: ({
-    composerFeatures,
-    composer: Composer,
-  }: {
-    composerFeatures?: ComposerFeatureViewModel
-    composer?: ComponentType<{ fallback: ReactNode }>
-  }) => {
-    mocks.workspaceFeatures = composerFeatures
-    return (
-      <main>
-        Workspace remains available
-        {Composer ? <Composer fallback={<span>Fallback composer</span>} /> : null}
-      </main>
-    )
+    return {
+      ...mocks.bundle,
+      interactions: {
+        ...createHermesInteractions(
+          {
+            ...mocks.bundle.client,
+            answerClarification: vi.fn(),
+            rejectClarification: vi.fn(),
+          },
+          options.locale
+        ),
+        ...mocks.bundle.interactions,
+      },
+    }
   },
 }))
+function WorkspaceProbe({
+  runtime,
+  locale,
+}: {
+  runtime: HarnessRuntime
+  locale: Locale
+}) {
+  const reportError = useRuntimeErrorReporter()
+  useEffect(() => {
+    mocks.workspaceFeatures = runtime.composer
+    mocks.workspaceError = reportError
+  }, [runtime.composer, reportError])
+  return (
+    <main>
+      Workspace remains available
+      {runtime.interactions ? (
+        <PendingInteractionComposer
+          locale={locale}
+          threadId="thread-one"
+          interactions={runtime.interactions}
+          fallback={<span>Fallback composer</span>}
+        />
+      ) : null}
+    </main>
+  )
+}
+
+function HermesAosUiApp({
+  locale,
+  baseUrl,
+  composerFeatures,
+}: {
+  locale: Locale
+  baseUrl: string
+  composerFeatures?: ComposerFeatureConfig
+  dictionary: Dictionary
+  nowIso: string
+}) {
+  const Provider = runtimeAdapter.Provider
+  return (
+    <Provider
+      config={{
+        status: "ready",
+        mode: "hermes",
+        baseUrl,
+        composerFeatures: composerFeatures ?? {
+          modelSelectorEnabled: true,
+          contextEnabled: true,
+        },
+      }}
+      locale={locale}
+    >
+      {(runtime) => <WorkspaceProbe runtime={runtime} locale={locale} />}
+    </Provider>
+  )
+}
 
 afterEach(() => {
   cleanup()
@@ -107,6 +166,17 @@ function showApp(locale: "en" | "he" = "en") {
 }
 
 describe("Hermes error toasts", () => {
+  it("routes workspace authentication failures to the provider sign-in UI", () => {
+    showApp()
+    act(() =>
+      mocks.workspaceError!(new Error("Hermes authentication failed (401)"))
+    )
+    expect(
+      screen.getByRole("link", { name: "Sign in to Hermes" })
+    ).toHaveAttribute("href", "/hermes/login")
+    expect(screen.getByRole("main")).toBeVisible()
+  })
+
   it("passes independent composer flags and the provider view model to the workspace", () => {
     mocks.bundle.media = new VoiceMediaController()
     const config = { modelSelectorEnabled: false, contextEnabled: true }

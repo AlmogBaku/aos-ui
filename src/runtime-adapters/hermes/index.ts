@@ -14,7 +14,6 @@ export {
   projectHermesArtifactReceipt,
 } from "./hermes-artifacts"
 export { createHermesWorkspace } from "./hermes-workspace"
-export { stopCurrentHermesRun } from "./stop-hermes-run"
 export {
   useHermesRuntimeBundle,
   type UseHermesRuntimeBundleOptions,
