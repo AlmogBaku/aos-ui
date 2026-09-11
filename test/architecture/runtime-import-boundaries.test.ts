@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { ESLint } from "eslint"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
 
 const eslint = new ESLint()
 async function boundaryErrors(filePath: string, code: string) {
@@ -11,6 +11,10 @@ async function boundaryErrors(filePath: string, code: string) {
 }
 
 describe("runtime package import boundaries", () => {
+  beforeAll(async () => {
+    await eslint.calculateConfigForFile("src/components/example.tsx")
+  }, 15_000)
+
   it.each([
     'import { runtimeAdapter } from "@/runtime-adapters/hermes/composition"',
     'export { HermesNativeClient } from "../runtime-adapters/hermes/hermes-native-client"',
