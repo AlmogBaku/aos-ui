@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 
 import { describe, expect, it, vi } from "vitest"
 
@@ -23,7 +24,7 @@ describe("OpenClaw external plugin contract", () => {
 
   it("advertises only available tools in the shipped manifest", async () => {
     const manifest = JSON.parse(
-      await readFile(new URL("./openclaw.plugin.json", import.meta.url), "utf8")
+      await readFile(join(import.meta.dirname, "openclaw.plugin.json"), "utf8")
     )
 
     expect(manifest.contracts.tools.sort()).toEqual([
