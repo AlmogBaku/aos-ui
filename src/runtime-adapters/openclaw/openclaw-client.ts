@@ -21,6 +21,11 @@ import type {
 import { createOpenClawDeviceAuth } from "./openclaw-auth"
 
 const object = z.record(z.string(), z.unknown())
+function modelIdentity(model: string, provider?: string) {
+  return provider && !model.startsWith(`${provider}/`)
+    ? `${provider}/${model}`
+    : model
+}
 const agentSchema = z
   .object({
     id: z.string().min(1),
@@ -43,6 +48,7 @@ const sessionSchema = z
     hasActiveRun: z.boolean().optional(),
     activeRunIds: z.array(z.string()).nullable().optional(),
     model: z.string().optional(),
+    modelProvider: z.string().optional(),
     contextTokens: z.number().optional(),
     totalTokens: z.number().optional(),
   })
@@ -50,7 +56,7 @@ const sessionSchema = z
 const questionSchema = z
   .object({
     id: z.string(),
-    sessionKey: z.string(),
+    sessionKey: z.string().optional(),
     agentId: z.string().optional(),
     status: z.enum(["pending", "answered", "cancelled", "expired"]),
     questions: z.array(
@@ -70,6 +76,7 @@ const questionSchema = z
   })
   .passthrough()
 type NativeQuestion = z.infer<typeof questionSchema>
+type ScopedNativeQuestion = NativeQuestion & { sessionKey: string }
 const approvalSchema = z
   .object({
     id: z.string(),
@@ -192,12 +199,13 @@ export class OpenClawClient {
   }
   private listeners = new Set<() => void>()
   private activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
-  private questions = new Map<string, NativeQuestion>()
+  private questions = new Map<string, ScopedNativeQuestion>()
   private approvals = new Map<string, OpenClawApproval>()
   private catalogListeners = new Set<() => void>()
   private rosterSubscribed = false
   private resolvedInteractions = new Set<string>()
   private sequences = new Map<string, number>()
+  private runScopes = new Map<string, string>()
   private terminalRuns = new Set<string>()
   private selected = new Set<string>()
   private historyVersions = new Map<string, number>()
@@ -525,22 +533,64 @@ export class OpenClawClient {
                 : "unknown",
             activeRunIds: row.activeRunIds ?? undefined,
             runId: previous?.runId,
-            model: row.model,
+            model: row.model
+              ? modelIdentity(row.model, row.modelProvider)
+              : undefined,
             contextTokens: row.contextTokens,
             totalTokens: row.totalTokens,
           }
         }),
     })
+    this.discardRemovedSessionState()
     if (this.supports("question.list")) {
+      const previous = new Map(this.questions)
       const list = z
         .object({ questions: z.array(questionSchema) })
         .parse(await this.request("question.list"))
+      const pendingIds = new Set(
+        list.questions
+          .filter(
+            (question) =>
+              question.sessionKey &&
+              this.session(question.sessionKey) &&
+              question.status === "pending" &&
+              question.expiresAtMs > Date.now() &&
+              (!question.agentId ||
+                this.session(question.sessionKey)?.agentId === question.agentId)
+          )
+          .map((question) => question.id)
+      )
+      this.reconcileInteractionSnapshot(
+        previous,
+        this.questions,
+        pendingIds,
+        (question) => question.sessionKey
+      )
       for (const question of list.questions) this.acceptQuestion(question)
     }
     if (this.supports("exec.approval.list")) {
+      const previous = new Map(this.approvals)
       const approvals = z
         .array(approvalSchema)
         .parse(await this.request("exec.approval.list"))
+      const pendingIds = new Set(
+        approvals
+          .filter(
+            (approval) =>
+              this.session(approval.request.sessionKey) &&
+              approval.expiresAtMs > Date.now() &&
+              (!approval.request.agentId ||
+                this.session(approval.request.sessionKey)?.agentId ===
+                  approval.request.agentId)
+          )
+          .map((approval) => approval.id)
+      )
+      this.reconcileInteractionSnapshot(
+        previous,
+        this.approvals,
+        pendingIds,
+        (approval) => approval.request.sessionKey
+      )
       for (const approval of approvals) this.acceptApproval(approval)
     }
     this.patch()
@@ -549,6 +599,42 @@ export class OpenClawClient {
   private async recover() {
     await this.refresh()
     await Promise.all([...this.selected].map((key) => this.loadHistory(key)))
+  }
+  private reconcileInteractionSnapshot<T>(
+    previous: Map<string, T>,
+    current: Map<string, T>,
+    pendingIds: Set<string>,
+    sessionKey: (request: T) => string
+  ) {
+    for (const [id, request] of previous) {
+      // Live events received during the read supersede its older snapshot.
+      if (pendingIds.has(id) || current.get(id) !== request) continue
+      current.delete(id)
+      this.resolvedInteractions.add(id)
+      const key = sessionKey(request)
+      // The refreshed catalog already supplies the authoritative run status.
+      if (this.session(key)) this.emitAttention(key, id)
+    }
+  }
+  private discardRemovedSessionState() {
+    const live = new Set(
+      this.snapshot.sessions.map((session) => session.threadId)
+    )
+    for (const key of this.selected)
+      if (!live.has(key)) this.selected.delete(key)
+    for (const key of this.historyVersions.keys())
+      if (!live.has(key)) this.historyVersions.delete(key)
+    for (const [id, question] of this.questions)
+      if (!live.has(question.sessionKey)) this.questions.delete(id)
+    for (const [id, approval] of this.approvals)
+      if (!live.has(approval.request.sessionKey)) this.approvals.delete(id)
+    for (const [runKey, sessionKey] of this.runScopes) {
+      if (live.has(sessionKey)) continue
+      this.runScopes.delete(runKey)
+      this.sequences.delete(runKey)
+      this.sequences.delete(`agent:${runKey}`)
+      this.terminalRuns.delete(runKey)
+    }
   }
   async loadHistory(key: string) {
     const session = this.requireSession(key)
@@ -734,7 +820,7 @@ export class OpenClawClient {
       })
       .parse(await this.request("models.list"))
     return result.models.map((model) => ({
-      id: `${model.provider}/${model.id}`,
+      id: modelIdentity(model.id, model.provider),
       label: model.name,
       group: model.provider,
     }))
@@ -829,6 +915,7 @@ export class OpenClawClient {
     this.patch()
   }
   private acceptQuestion(question: NativeQuestion) {
+    if (!question.sessionKey) return
     const session = this.session(question.sessionKey)
     if (
       !session ||
@@ -838,7 +925,10 @@ export class OpenClawClient {
       return
     if (question.status === "pending") {
       const fresh = !this.questions.has(question.id)
-      this.questions.set(question.id, question)
+      this.questions.set(question.id, {
+        ...question,
+        sessionKey: question.sessionKey,
+      })
       this.updateSession(question.sessionKey, { status: "waiting-for-input" })
       if (fresh)
         this.emitAttention(question.sessionKey, question.id, "question")
@@ -995,6 +1085,7 @@ export class OpenClawClient {
       const session = this.session(data.sessionKey)
       if (!session || (data.agentId && data.agentId !== session.agentId)) return
       const sequenceKey = `${data.sessionKey}:${data.runId}`
+      this.runScopes.set(sequenceKey, data.sessionKey)
       if (this.terminalRuns.has(sequenceKey)) return
       const previous = this.sequences.get(sequenceKey)
       if (previous !== undefined && data.seq <= previous) return
@@ -1097,6 +1188,7 @@ export class OpenClawClient {
     if (owners.length !== 1) return
     const session = owners[0]!
     const key = `${session.threadId}:${event.runId}`
+    this.runScopes.set(key, session.threadId)
     if (this.terminalRuns.has(key)) return
     const previous = this.sequences.get(`agent:${key}`)
     if (previous !== undefined && event.seq <= previous) return

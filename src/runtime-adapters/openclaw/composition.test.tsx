@@ -6,6 +6,22 @@ import { MockGateway } from "./mock-gateway"
 
 it("composes the shared HarnessRuntime from an authenticated native Gateway", async () => {
   const gateway = new MockGateway()
+  gateway.responses.set("models.list", {
+    models: [{ id: "model-a", provider: "provider-a", name: "Model A" }],
+  })
+  gateway.responses.set("sessions.patch", { ok: true })
+  gateway.responses.set("sessions.list", {
+    sessions: [
+      {
+        key: "agent:alice:main",
+        agentId: "alice",
+        activeRunIds: [],
+        model: "model-a",
+        modelProvider: "provider-a",
+      },
+      { key: "agent:bob:main", agentId: "bob", activeRunIds: [] },
+    ],
+  })
   const options = {
     gatewayUrl: "ws://localhost:18789",
     createSocket: gateway.createSocket,
@@ -41,6 +57,12 @@ it("composes the shared HarnessRuntime from an authenticated native Gateway", as
       "agent:alice:main"
     )
   })
+  await waitFor(() =>
+    expect(result.current.runtime.composer?.model).toMatchObject({
+      selectedId: "provider-a/model-a",
+      options: [{ id: "provider-a/model-a", label: "Model A" }],
+    })
+  )
   await waitFor(() =>
     expect(
       result.current.runtime.assistantRuntime.thread.getState().messages[0]

@@ -21,6 +21,160 @@ afterEach(() => {
 })
 
 describe("OpenClaw browser Gateway", () => {
+  it("reconnects after a previously visited Session is removed and discards its retained state", async () => {
+    const { gateway, client } = setup()
+    await client.start()
+    await client.loadHistory("agent:alice:main")
+    await client.loadHistory("agent:bob:main")
+    gateway.event("chat", {
+      sessionKey: "agent:alice:main",
+      runId: "old-run",
+      seq: 1,
+      state: "final",
+      message: { role: "assistant", content: "Old result" },
+    })
+    gateway.event("question.requested", {
+      id: "old-question",
+      sessionKey: "agent:alice:main",
+      status: "pending",
+      expiresAtMs: 9999999999999,
+      questions: [
+        { questionId: "pick", header: "Pick", question: "Pick", options: [] },
+      ],
+    })
+    gateway.event("exec.approval.requested", {
+      id: "old-approval",
+      request: { sessionKey: "agent:alice:main", command: "pwd" },
+      createdAtMs: 0,
+      expiresAtMs: 9999999999999,
+    })
+    const originalRoster = gateway.responses.get("sessions.list")
+    gateway.responses.set("sessions.list", {
+      sessions: [{ key: "agent:bob:main", agentId: "bob", activeRunIds: [] }],
+    })
+    const requestsBeforeReconnect = gateway.requests.length
+    gateway.handlers?.close(1006, "network lost")
+    await vi.waitFor(
+      () => expect(client.getSnapshot().connection).toBe("ready"),
+      { timeout: 3000 }
+    )
+    expect(client.session("agent:alice:main")).toBeUndefined()
+    expect(client.pendingQuestions("agent:alice:main")).toEqual([])
+    expect(client.pendingApprovals("agent:alice:main")).toEqual([])
+    expect(
+      gateway.requests
+        .slice(requestsBeforeReconnect)
+        .filter((request) => request.method === "chat.history")
+        .map((request) => request.params.sessionKey)
+    ).toEqual(["agent:bob:main"])
+    gateway.responses.set("sessions.list", originalRoster)
+    await client.refresh()
+    gateway.event("chat", {
+      sessionKey: "agent:alice:main",
+      runId: "old-run",
+      seq: 1,
+      state: "delta",
+      deltaText: "Fresh projection",
+    })
+    expect(
+      client.session("agent:alice:main")?.messages.at(-1)?.content
+    ).toEqual([{ type: "text", text: "Fresh projection" }])
+  })
+  it("accepts valid unscoped questions without blocking startup or exposing them to another Session", async () => {
+    const { gateway, client } = setup()
+    const question = {
+      id: "unscoped",
+      agentId: "alice",
+      status: "pending",
+      expiresAtMs: 9999999999999,
+      questions: [
+        { questionId: "pick", header: "Pick", question: "Pick", options: [] },
+      ],
+    }
+    gateway.responses.set("question.list", {
+      questions: [
+        question,
+        { ...question, id: "unowned", sessionKey: "agent:missing:main" },
+      ],
+    })
+    await expect(client.start()).resolves.toBeUndefined()
+    gateway.event("question.requested", { ...question, id: "event-unscoped" })
+    expect(client.getSnapshot().error).toBeUndefined()
+    expect(client.pendingQuestions("agent:alice:main")).toEqual([])
+    expect(client.pendingQuestions("agent:bob:main")).toEqual([])
+  })
+  it("removes questions and approvals absent from authoritative backfill and resolves their attention", async () => {
+    const { gateway, client } = setup()
+    gateway.responses.set("question.list", {
+      questions: [
+        {
+          id: "q",
+          sessionKey: "agent:alice:main",
+          status: "pending",
+          expiresAtMs: 9999999999999,
+          questions: [
+            {
+              questionId: "pick",
+              header: "Pick",
+              question: "Pick",
+              options: [],
+            },
+          ],
+        },
+      ],
+    })
+    gateway.responses.set("exec.approval.list", [
+      {
+        id: "a",
+        request: { sessionKey: "agent:alice:main", command: "pwd" },
+        createdAtMs: 0,
+        expiresAtMs: 9999999999999,
+      },
+    ])
+    await client.start()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    gateway.responses.set("question.list", { questions: [] })
+    gateway.responses.set("exec.approval.list", [])
+    await client.refresh()
+    expect(client.pendingQuestions("agent:alice:main")).toEqual([])
+    expect(client.pendingApprovals("agent:alice:main")).toEqual([])
+    expect(events).toMatchObject([
+      { type: "attention-resolved", requestId: "q", agentId: "alice" },
+      { type: "attention-resolved", requestId: "a", agentId: "alice" },
+    ])
+    expect(client.session("agent:alice:main")?.status).toBe("idle")
+  })
+  it("preserves live requests that arrive while an older empty backfill snapshot is being read", async () => {
+    const { gateway, client } = setup()
+    await client.start()
+    gateway.responders.set("question.list", () => {
+      gateway.event("question.requested", {
+        id: "new-q",
+        sessionKey: "agent:alice:main",
+        status: "pending",
+        expiresAtMs: 9999999999999,
+        questions: [
+          { questionId: "pick", header: "Pick", question: "Pick", options: [] },
+        ],
+      })
+      return { questions: [] }
+    })
+    gateway.responders.set("exec.approval.list", () => {
+      gateway.event("exec.approval.requested", {
+        id: "new-a",
+        request: { sessionKey: "agent:alice:main", command: "pwd" },
+        createdAtMs: 0,
+        expiresAtMs: 9999999999999,
+      })
+      return []
+    })
+    await client.refresh()
+    expect(client.pendingQuestions("agent:alice:main")[0]?.requestId).toBe(
+      "new-q"
+    )
+    expect(client.pendingApprovals("agent:alice:main")[0]?.id).toBe("new-a")
+  })
   it("negotiates v4 and preserves native Agent ownership", async () => {
     const { gateway, client } = setup()
     await client.start()
