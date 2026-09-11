@@ -11,16 +11,6 @@ export type NativeTool = {
   execute: (toolCallId: string, params: unknown) => Promise<TextResult>
 }
 
-export type Gateway = {
-  request(method: string, params?: Record<string, unknown>): Promise<unknown>
-}
-
-export type ToolContext = {
-  agentId?: string
-  sessionKey?: string
-  workspaceDir?: string
-}
-
 export function textResult(
   text: string,
   details: Record<string, unknown>

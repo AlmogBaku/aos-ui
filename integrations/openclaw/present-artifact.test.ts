@@ -29,6 +29,7 @@ describe("presentArtifact", () => {
     expect(result.details).toEqual({
       ok: true,
       type: "aos.artifact-publication",
+      status: "unsupported",
       published: false,
       candidate: {
         path: "reports/result.json",

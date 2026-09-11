@@ -121,6 +121,7 @@ export async function presentArtifact(workspace: string, input: unknown) {
     {
       ok: true,
       type: "aos.artifact-publication",
+      status: "unsupported",
       published: false,
       candidate,
     }
