@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +49,9 @@ func newGatewayClient(rawURL, token, deviceFile string) (*gatewayClient, error) 
 	token = strings.TrimSpace(token)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || deviceFile == "" {
 		return nil, errors.New("invalid OpenClaw configuration")
+	}
+	if !filepath.IsAbs(deviceFile) {
+		return nil, errors.New("OpenClaw device state path must be absolute")
 	}
 	switch u.Scheme {
 	case "http":

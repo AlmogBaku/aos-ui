@@ -265,3 +265,28 @@ func TestGatewayClientRejectsPublicCredentialsAndUnsupportedURL(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayClientRequiresAbsoluteDeviceStatePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if _, err := newGatewayClient("wss://example.test", "secret", "unpaired.json"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("token-present relative path error = %v", err)
+	}
+
+	state, err := newDeviceState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DeviceToken = "paired"
+	state.Scopes = append([]string(nil), requiredScopes...)
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("paired.json", raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newGatewayClient("wss://example.test", "", "paired.json"); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("tokenless relative path error = %v", err)
+	}
+}
