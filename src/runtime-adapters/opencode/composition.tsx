@@ -32,17 +32,13 @@ function OpenCodeRuntimeProvider({
   children,
 }: RuntimeAdapterProps<"opencode">) {
   const [errors, setErrors] = useState<
-    Record<string, { kind: "model" | "questions"; error: Error } | undefined>
+    Record<string, { model?: Error; questions?: Error } | undefined>
   >({})
   const onInteractionError = useCallback(
     (error: Error | undefined, threadId: string) => {
       setErrors((previous) => ({
         ...previous,
-        [threadId]: error
-          ? { kind: "questions", error }
-          : previous[threadId]?.kind === "questions"
-            ? undefined
-            : previous[threadId],
+        [threadId]: { ...previous[threadId], questions: error },
       }))
     },
     []
@@ -63,12 +59,18 @@ function OpenCodeRuntimeProvider({
     (error, threadId) => {
       setErrors((previous) => ({
         ...previous,
-        [threadId]: { kind: "model", error },
+        [threadId]: { ...previous[threadId], model: error },
       }))
     }
   )
   const threadId = extras?.session?.id
   const failure = threadId ? errors[threadId] : undefined
+  function dismiss(kind: "model" | "questions", sessionId: string) {
+    setErrors((previous) => ({
+      ...previous,
+      [sessionId]: { ...previous[sessionId], [kind]: undefined },
+    }))
+  }
   return (
     <>
       {children({
@@ -85,40 +87,44 @@ function OpenCodeRuntimeProvider({
           : undefined,
       })}
       {failure && threadId ? (
-        <ErrorToast
-          locale={locale}
-          title={
-            failure.kind === "model"
-              ? locale === "he"
-                ? "שינוי המודל נכשל"
-                : "Model change failed"
-              : locale === "he"
-                ? "לא ניתן לטעון שאלות ממתינות מ-OpenCode."
-                : "Pending OpenCode questions could not be loaded."
-          }
-          message={failure.error.message}
-          onDismiss={() =>
-            setErrors((previous) => ({ ...previous, [threadId]: undefined }))
-          }
-          actions={
-            failure.kind === "questions" ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setErrors((previous) => ({
-                    ...previous,
-                    [threadId]: undefined,
-                  }))
-                  bundle.interactions.retry(threadId)
-                }}
-              >
-                {locale === "he" ? "ניסיון חוזר" : "Try again"}
-              </Button>
-            ) : undefined
-          }
-        />
+        <div className="fixed end-4 bottom-[calc(7rem+env(safe-area-inset-bottom))] z-[100] flex w-[calc(100%-2rem)] max-w-sm flex-col gap-3 lg:bottom-[max(1rem,env(safe-area-inset-bottom))] [&>div]:static [&>div]:w-full">
+          {(["model", "questions"] as const).map((kind) => {
+            const error = failure[kind]
+            if (!error) return null
+            return (
+              <ErrorToast
+                key={kind}
+                locale={locale}
+                title={
+                  kind === "model"
+                    ? locale === "he"
+                      ? "שינוי המודל נכשל"
+                      : "Model change failed"
+                    : locale === "he"
+                      ? "לא ניתן לטעון שאלות ממתינות מ-OpenCode."
+                      : "Pending OpenCode questions could not be loaded."
+                }
+                message={error.message}
+                onDismiss={() => dismiss(kind, threadId)}
+                actions={
+                  kind === "questions" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        dismiss("questions", threadId)
+                        bundle.interactions.retry(threadId)
+                      }}
+                    >
+                      {locale === "he" ? "ניסיון חוזר" : "Try again"}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )
+          })}
+        </div>
       ) : null}
     </>
   )
