@@ -64,3 +64,19 @@ const build = await Bun.build({
 })
 if (!build.success)
   throw new AggregateError(build.logs, "OpenCode integration build failed")
+
+const openClawDirectory = resolve(root, "integrations/openclaw")
+const openClawInstall = Bun.spawn(["bun", "install", "--frozen-lockfile"], {
+  cwd: openClawDirectory,
+  stdout: "inherit",
+  stderr: "inherit",
+})
+if ((await openClawInstall.exited) !== 0)
+  throw new Error("OpenClaw integration dependency install failed")
+const openClawBuild = Bun.spawn(["bun", "run", "build"], {
+  cwd: openClawDirectory,
+  stdout: "inherit",
+  stderr: "inherit",
+})
+if ((await openClawBuild.exited) !== 0)
+  throw new Error("OpenClaw integration build failed")

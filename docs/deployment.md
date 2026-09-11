@@ -75,6 +75,15 @@ The Hermes overlay does not start Hermes. It configures the web container to for
 
 Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
 
+## Attach existing OpenClaw
+
+```bash
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
+  docker compose -f compose.yaml -f compose.openclaw.yaml up --build
+```
+
+The OpenClaw overlay starts no runtime. It forwards `/openclaw` WebSockets to `AOS_UI_OPENCLAW_HOST:AOS_UI_OPENCLAW_PORT`; browser device/token authentication remains native. See [Run with OpenClaw](runtimes/openclaw.md).
+
 ## Use hot reload in containers
 
 Add `compose.dev.yaml` to the selected composition. For example:
@@ -155,6 +164,7 @@ Provider persistence remains native:
 - Independently operated OpenCode keeps all state in its own worktree and native data directories.
 - The optional OpenCode overlay uses the external worktree plus the `opencode-data` named volume.
 - Hermes keeps all state in the operator-managed Hermes installation.
+- OpenClaw keeps all state and device credentials in the operator-managed OpenClaw installation.
 - The web container holds no conversation database.
 
 Stop AOS with the same file set used to start it. For the web-only attachment:
@@ -179,6 +189,7 @@ docker compose -f compose.yaml config --quiet
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
 docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
 ```
 
 When runtime container behavior changes, also build the affected image and smoke its health and streaming endpoints.

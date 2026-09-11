@@ -12,10 +12,15 @@ type Config struct {
 	GuestOrigin      string
 	HermesToken      string
 	OpenCode         OpenCodeConfig
+	OpenClaw         OpenClawConfig
 }
 
 type OpenCodeConfig struct {
 	Directory string
 	Username  string
 	Password  string
+}
+
+type OpenClawConfig struct {
+	Token string
 }

@@ -13,12 +13,22 @@ type OperatorConfig struct{ Runtime, Upstream, Directory, Dist string }
 const operatorOpenCodeDirectory = "/__aos_opencode__"
 
 func NewOperator(c OperatorConfig) (http.Handler, error) {
-	if c.Runtime != "hermes" && c.Runtime != "opencode" {
-		return nil, errors.New("runtime must be hermes or opencode")
+	if c.Runtime != "hermes" && c.Runtime != "opencode" && c.Runtime != "openclaw" {
+		return nil, errors.New("runtime must be hermes, opencode, or openclaw")
 	}
 	u, err := url.Parse(c.Upstream)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u == nil {
 		return nil, errors.New("invalid upstream URL")
+	}
+	validScheme := u.Scheme == "http" || u.Scheme == "https" || (c.Runtime == "openclaw" && (u.Scheme == "ws" || u.Scheme == "wss"))
+	if u.Host == "" || !validScheme || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("invalid upstream URL")
+	}
+	if u.Scheme == "ws" {
+		u.Scheme = "http"
+	}
+	if u.Scheme == "wss" {
+		u.Scheme = "https"
 	}
 	if c.Runtime == "opencode" && c.Directory == "" {
 		return nil, errors.New("OpenCode directory required")
@@ -85,7 +95,7 @@ func NewOperator(c OperatorConfig) (http.Handler, error) {
 			http.NotFound(w, r)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/hermes/") || strings.HasPrefix(r.URL.Path, "/opencode/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/hermes/") || strings.HasPrefix(r.URL.Path, "/opencode/") || strings.HasPrefix(r.URL.Path, "/openclaw/") {
 			http.NotFound(w, r)
 			return
 		}

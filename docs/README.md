@@ -12,6 +12,7 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 - [OpenCode](runtimes/opencode.md) — attach AOS to an independently operated OpenCode server.
 - [Hermes](runtimes/hermes.md) — attach AOS to an independently operated Hermes server.
 - [Generic AG-UI](runtimes/ag-ui.md) — connect separate AG-UI run and workspace services.
+- [OpenClaw](runtimes/openclaw.md) — connect the official Gateway WebSocket and optional AOS plugin.
 - [Deployment](deployment.md) — build static assets, run Compose, or operate private systemd services.
 
 ## Operate
@@ -23,7 +24,7 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 ## Reference
 
 - [Configuration](configuration.md) — public runtime JSON, local environment variables, and deployment settings.
-- [Runtime capabilities](runtime-capabilities.md) — compare fixture, OpenCode, Hermes, and generic AG-UI.
+- [Runtime capabilities](runtime-capabilities.md) — compare fixture, OpenCode, Hermes, OpenClaw, and generic AG-UI.
 
 ## Understand
 

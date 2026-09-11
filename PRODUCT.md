@@ -16,7 +16,7 @@ AOS provides one calm workspace for selecting a primary Agent, resuming its Sess
 
 ## Positioning
 
-AOS is a UI for native harnesses, with Agent creation and rich messages around their conversations. OpenCode and Hermes use separate integrations behind a small workspace boundary; generic AG-UI and explicit fixtures remain available. Monty is an independent optional integration.
+AOS is a UI for native harnesses, with Agent creation and rich messages around their conversations. OpenCode, Hermes, and OpenClaw use separate integrations behind one harness-runtime boundary; generic AG-UI and explicit fixtures remain available. Monty is an independent optional integration.
 
 ## Operating Context
 

@@ -82,6 +82,10 @@ describe("public configuration", () => {
       AOS_UI_AG_UI_URL: "https://agents.example/run",
       AOS_UI_AG_UI_WORKSPACE_URL: "https://agents.example/workspace",
     },
+    {
+      AOS_UI_RUNTIME_MODE: "openclaw",
+      AOS_UI_OPENCLAW_BASE_URL: "/openclaw",
+    },
   ] as const)(
     "round-trips environment-derived %s config through the public boundary",
     (environment) => {
@@ -257,6 +261,31 @@ describe("public configuration", () => {
         contextEnabled: true,
       },
     })
+  })
+  it("accepts a credential-free OpenClaw WebSocket proxy and rejects secrets", () => {
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "openclaw",
+        baseUrl: "/openclaw",
+        creatorAgentId: "creator",
+      })
+    ).toEqual({
+      status: "ready",
+      mode: "openclaw",
+      baseUrl: "/openclaw",
+      creatorAgentId: "creator",
+      composerFeatures: {
+        modelSelectorEnabled: true,
+        contextEnabled: true,
+      },
+    })
+    expect(
+      config.parsePublicRuntimeConfiguration({
+        mode: "openclaw",
+        baseUrl: "/openclaw",
+        token: "secret",
+      })
+    ).toEqual({ status: "unavailable", reason: "invalid-public-config" })
   })
   it("rejects credentials or query strings in Hermes URLs", () => {
     for (const baseUrl of [

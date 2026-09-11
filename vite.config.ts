@@ -28,6 +28,9 @@ function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
     AOS_UI_OPENCODE_WORKTREE: environment.AOS_UI_OPENCODE_WORKTREE,
     AOS_UI_AG_UI_URL: environment.AOS_UI_AG_UI_URL,
     AOS_UI_AG_UI_WORKSPACE_URL: environment.AOS_UI_AG_UI_WORKSPACE_URL,
+    AOS_UI_OPENCLAW_BASE_URL: environment.AOS_UI_OPENCLAW_BASE_URL,
+    AOS_UI_OPENCLAW_CREATOR_AGENT_ID:
+      environment.AOS_UI_OPENCLAW_CREATOR_AGENT_ID,
     AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
       environment.AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED,
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
@@ -140,6 +143,14 @@ export default defineConfig(({ mode }) => {
       rewrite: (pathname: string) => pathname.replace(/^\/hermes/, ""),
     },
   }
+  const openClawProxy = {
+    "/openclaw": {
+      target: environment.AOS_UI_OPENCLAW_TARGET ?? "ws://127.0.0.1:18789",
+      changeOrigin: false,
+      ws: true,
+      rewrite: (pathname: string) => pathname.replace(/^\/openclaw/, ""),
+    },
+  }
 
   return {
     cacheDir: path.resolve(
@@ -164,10 +175,10 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "127.0.0.1",
       port: 3000,
-      proxy: hermesProxy,
+      proxy: { ...hermesProxy, ...openClawProxy },
     },
     preview: {
-      proxy: hermesProxy,
+      proxy: { ...hermesProxy, ...openClawProxy },
       // Playwright starts a fresh preview for every runtime matrix. Avoid a
       // browser retaining an obsolete hashed chunk between those servers.
       headers: {

@@ -1,6 +1,6 @@
 # Share an invited chat
 
-`aos-gateway` is an optional Go helper that serves two isolated surfaces for one selected Hermes or OpenCode runtime:
+`aos-gateway` is an optional Go helper that serves two isolated surfaces for one selected Hermes, OpenCode, or OpenClaw runtime:
 
 - an operator listener with the regular AOS UI and same-origin native forwarding; and
 - a guest listener with restricted chat reached through a signed, expiring invitation.
@@ -33,7 +33,7 @@ export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 
 | Variable                         | Required value or default                        |
 | -------------------------------- | ------------------------------------------------ |
-| `AOS_GATEWAY_RUNTIME`            | Required: `hermes` or `opencode`                 |
+| `AOS_GATEWAY_RUNTIME`            | Required: `hermes`, `opencode`, or `openclaw`    |
 | `AOS_GATEWAY_UPSTREAM`           | Required fixed native HTTP origin                |
 | `AOS_GATEWAY_DIST`               | `dist`                                           |
 | `AOS_GATEWAY_OPERATOR_ADDR`      | `127.0.0.1:8080`                                 |
@@ -44,6 +44,7 @@ export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 | `AOS_GATEWAY_OPENCODE_DIRECTORY` | Required fixed native directory for OpenCode     |
 | `AOS_GATEWAY_OPENCODE_USERNAME`  | Optional OpenCode Basic-auth username            |
 | `AOS_GATEWAY_OPENCODE_PASSWORD`  | Optional OpenCode Basic-auth password            |
+| `AOS_GATEWAY_OPENCLAW_TOKEN`     | Required OpenClaw operator token for OpenClaw    |
 
 Example Hermes server:
 
@@ -136,7 +137,7 @@ The runtime stores a durable initialization marker or recoverable native Session
 
 Every guest mutation checks the configured Origin, invitation expiry, and the Agent/reference binding. Guest history may include participant messages, attachments, and supported rich displays. It excludes system rows, reasoning, raw tool data, Subagents, permissions, management, unrelated Sessions, model changes, and executable slash commands.
 
-Hermes and OpenCode provide chat, streaming, Stop, reconnect, and attachments where native support exists. OpenCode additionally supports its safe edit/regenerate flow and pending questions. Hermes execution approvals remain excluded from guest chat. Branch navigation is disabled.
+Hermes, OpenCode, and OpenClaw provide chat, streaming, Stop, reconnect, and attachments where native support exists. OpenCode additionally supports its safe edit/regenerate flow. OpenCode and OpenClaw expose pending questions. OpenClaw guest edit/regenerate, Todos, transcription, and branches are explicitly unavailable. Hermes execution approvals remain excluded from guest chat.
 
 > [!WARNING]
 > Guest filtering is not an Agent sandbox. Configure the invited Agent's native filesystem, network, tools, and permissions for the guest's trust level. An Agent can repeat first-turn instructions or other runtime context in an ordinary answer.

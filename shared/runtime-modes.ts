@@ -7,6 +7,7 @@ export const runtimeCatalog = {
   opencode: { entrypoint: "/src/runtime-adapters/opencode/composition.tsx" },
   hermes: { entrypoint: "/src/runtime-adapters/hermes/composition.tsx" },
   "ag-ui": { entrypoint: "/src/runtime-adapters/ag-ui/composition.tsx" },
+  openclaw: { entrypoint: "/src/runtime-adapters/openclaw/composition.tsx" },
 } as const
 
 export type RuntimeMode = keyof typeof runtimeCatalog

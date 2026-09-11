@@ -25,6 +25,31 @@ server {
   }
 
   location = /hermes { return 308 /hermes/; }
+  # Internally rewrite the exact WebSocket endpoint; browser WebSocket clients
+  # do not consistently follow HTTP redirects during their handshake.
+  location = /openclaw { rewrite ^ /openclaw/ last; }
+
+  # The browser performs OpenClaw's official device/token handshake over this
+  # same-origin WebSocket. No Gateway credential is stored in runtime config.
+  location ^~ /openclaw/ {
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $openclaw_upstream http://${AOS_UI_OPENCLAW_HOST}:${AOS_UI_OPENCLAW_PORT};
+    rewrite ^/openclaw/?(.*)$ /$1 break;
+    proxy_pass $openclaw_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $scheme://$http_host;
+    proxy_set_header X-Forwarded-Prefix /openclaw;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
 
   # Hermes' native login page currently submits to an absolute /auth path even
   # when X-Forwarded-Prefix is set. Keep authentication native while routing

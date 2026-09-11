@@ -12,7 +12,7 @@ const copy = {
     },
     description: {
       runtime:
-        "Configure fixture, opencode, hermes, or ag-ui in runtime-config.json.",
+        "Configure fixture, opencode, hermes, openclaw, or ag-ui in runtime-config.json.",
       opencodeUrl:
         "AOS_UI_OPENCODE_BASE_URL must be an absolute HTTP or HTTPS URL.",
       opencodeDirectory:
@@ -30,6 +30,8 @@ const copy = {
       invalidRunUrl: "AOS_UI_AG_UI_URL must be an absolute HTTP or HTTPS URL.",
       invalidWorkspaceUrl:
         "AOS_UI_AG_UI_WORKSPACE_URL must be an absolute HTTP or HTTPS URL.",
+      openclawUrl:
+        "Configure a credential-free OpenClaw WebSocket URL or same-origin proxy path, such as /openclaw.",
     },
   },
   he: {
@@ -40,7 +42,7 @@ const copy = {
     },
     description: {
       runtime:
-        "יש להגדיר fixture, opencode, hermes או ag-ui בקובץ runtime-config.json.",
+        "יש להגדיר fixture, opencode, hermes, openclaw או ag-ui בקובץ runtime-config.json.",
       opencodeUrl:
         "הערך AOS_UI_OPENCODE_BASE_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
       opencodeDirectory:
@@ -57,6 +59,8 @@ const copy = {
         "הערך AOS_UI_AG_UI_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
       invalidWorkspaceUrl:
         "הערך AOS_UI_AG_UI_WORKSPACE_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
+      openclawUrl:
+        "יש להגדיר כתובת WebSocket של OpenClaw ללא פרטי גישה או נתיב מתווך באותו מקור, למשל ‎/openclaw.",
     },
   },
 } as const
@@ -110,6 +114,12 @@ function getMessage(locale: Locale, reason: RuntimeUnavailableReason) {
       return {
         title: labels.title.agUi,
         body: labels.description.invalidWorkspaceUrl,
+      }
+    case "missing-openclaw-base-url":
+    case "invalid-openclaw-base-url":
+      return {
+        title: labels.title.runtime,
+        body: labels.description.openclawUrl,
       }
   }
 }

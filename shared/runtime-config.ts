@@ -14,6 +14,8 @@ export type RuntimeUnavailableReason =
   | "invalid-ag-ui-run-url"
   | "missing-ag-ui-workspace-url"
   | "invalid-ag-ui-workspace-url"
+  | "missing-openclaw-base-url"
+  | "invalid-openclaw-base-url"
 
 export type ComposerFeatureConfig = {
   readonly modelSelectorEnabled: boolean
@@ -48,6 +50,11 @@ export type RuntimeConfiguration =
       runUrl: string
       workspaceUrl: string
     })
+  | (ReadyRuntimeConfiguration & {
+      mode: "openclaw"
+      baseUrl: string
+      creatorAgentId?: string
+    })
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 export type PublicRuntimeConfiguration =
@@ -77,6 +84,13 @@ export type PublicRuntimeConfiguration =
       composerModelSelectorEnabled: boolean
       composerContextEnabled: boolean
     } & ArtifactHtmlConfiguration)
+  | ({
+      mode: "openclaw"
+      baseUrl: string
+      creatorAgentId?: string
+      composerModelSelectorEnabled: boolean
+      composerContextEnabled: boolean
+    } & ArtifactHtmlConfiguration)
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 export type GuestSurfaceConfiguration = { status: "ready"; surface: "guest" }
@@ -93,6 +107,8 @@ type RuntimeEnvironment = Partial<
     | "AOS_UI_OPENCODE_MODEL_ID"
     | "AOS_UI_AG_UI_URL"
     | "AOS_UI_AG_UI_WORKSPACE_URL"
+    | "AOS_UI_OPENCLAW_BASE_URL"
+    | "AOS_UI_OPENCLAW_CREATOR_AGENT_ID"
     | "AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED"
     | "AOS_UI_COMPOSER_CONTEXT_ENABLED",
     string | undefined
@@ -113,6 +129,24 @@ function resolveHttpUrl(value: string | undefined) {
       return null
     }
 
+    return parsed.toString().replace(/\/$/, "")
+  } catch {
+    return null
+  }
+}
+
+function resolveGatewayUrl(value: string | undefined) {
+  if (!value) return undefined
+  if (/^\/(?!\/)[A-Za-z0-9/_-]+$/.test(value)) return value.replace(/\/+$/, "")
+  try {
+    const parsed = new URL(value)
+    if (
+      !["http:", "https:", "ws:", "wss:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      /[?#]/.test(parsed.href)
+    )
+      return null
     return parsed.toString().replace(/\/$/, "")
   } catch {
     return null
@@ -202,6 +236,23 @@ export function resolveRuntimeConfiguration(
         : {}),
     }
   }
+  if (mode === "openclaw") {
+    const baseUrl = resolveGatewayUrl(environment.AOS_UI_OPENCLAW_BASE_URL)
+    if (baseUrl === undefined)
+      return { status: "unavailable", reason: "missing-openclaw-base-url" }
+    if (baseUrl === null)
+      return { status: "unavailable", reason: "invalid-openclaw-base-url" }
+    const creatorAgentId = environment.AOS_UI_OPENCLAW_CREATOR_AGENT_ID?.trim()
+    if (creatorAgentId && !/^[A-Za-z0-9_-]{1,128}$/.test(creatorAgentId))
+      return { status: "unavailable", reason: "invalid-openclaw-base-url" }
+    return {
+      status: "ready",
+      mode,
+      baseUrl,
+      ...(creatorAgentId ? { creatorAgentId } : {}),
+      composerFeatures,
+    }
+  }
   if (mode !== "ag-ui") {
     return { status: "unavailable", reason: "invalid-runtime-mode" }
   }
@@ -253,6 +304,16 @@ export function serializePublicRuntimeConfiguration(
       baseUrl: config.baseUrl,
       directory: config.directory,
       ...(config.defaultModel ? { defaultModel: config.defaultModel } : {}),
+      ...featureFields,
+    }
+  }
+  if (config.mode === "openclaw") {
+    return {
+      mode: config.mode,
+      baseUrl: config.baseUrl,
+      ...(config.creatorAgentId
+        ? { creatorAgentId: config.creatorAgentId }
+        : {}),
       ...featureFields,
     }
   }
@@ -330,6 +391,16 @@ const publicConfigurationSchema = z.discriminatedUnion("mode", [
       artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
     })
     .strict(),
+  z
+    .object({
+      mode: z.literal("openclaw"),
+      status: z.literal("ready").optional(),
+      baseUrl: z.string().min(1),
+      creatorAgentId: z.string().min(1).max(128).optional(),
+      ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
+    })
+    .strict(),
 ])
 
 /** Deliberately allowlists public fields; native credentials are never accepted. */
@@ -376,6 +447,15 @@ export function parsePublicRuntimeConfiguration(
         AOS_UI_OPENCODE_WORKTREE: config.directory,
         AOS_UI_OPENCODE_PROVIDER_ID: config.defaultModel?.providerID,
         AOS_UI_OPENCODE_MODEL_ID: config.defaultModel?.modelID,
+        ...composerEnvironment,
+      })
+    )
+  if (config.mode === "openclaw")
+    return withArtifactOrigins(
+      resolveRuntimeConfiguration({
+        AOS_UI_RUNTIME_MODE: "openclaw",
+        AOS_UI_OPENCLAW_BASE_URL: config.baseUrl,
+        AOS_UI_OPENCLAW_CREATOR_AGENT_ID: config.creatorAgentId,
         ...composerEnvironment,
       })
     )

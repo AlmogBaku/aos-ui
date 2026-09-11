@@ -17,7 +17,7 @@
     "test:watch": "vitest",
     "monty:sync": "uv sync --project integrations/monty --frozen",
     "monty:test": "uv run --project integrations/monty --frozen pytest -q integrations/monty/tests",
-    "test:e2e": "playwright test && playwright test -c playwright.opencode.config.ts && playwright test -c playwright.keyboard-opencode.config.ts && playwright test -c playwright.ag-ui.config.ts && playwright test -c playwright.hermes.config.ts"
+    "test:e2e": "playwright test && playwright test -c playwright.opencode.config.ts && playwright test -c playwright.keyboard-opencode.config.ts && playwright test -c playwright.ag-ui.config.ts && playwright test -c playwright.hermes.config.ts && playwright test -c playwright.openclaw.config.ts"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.59",

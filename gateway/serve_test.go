@@ -3,9 +3,21 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestAdapterSelectionIncludesOpenClawAndRejectsUnknownRuntime(t *testing.T) {
+	adapter, err := newAdapter(Config{Runtime: "openclaw", Upstream: "ws://127.0.0.1:18789", OpenClaw: OpenClawConfig{Token: "secret"}})
+	if err != nil || adapter == nil {
+		t.Fatalf("openclaw adapter = %T, %v", adapter, err)
+	}
+	_, err = newAdapter(Config{Runtime: "unknown"})
+	if err == nil || !strings.Contains(err.Error(), "openclaw") {
+		t.Fatalf("unknown runtime error = %v", err)
+	}
+}
 
 func TestPublicServerBoundsRequestReadsWithoutTimingOutStreams(t *testing.T) {
 	configured := configuredServer(http.NotFoundHandler())

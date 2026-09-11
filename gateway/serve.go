@@ -11,6 +11,7 @@ import (
 	"aosui/gateway/conversation"
 	"aosui/gateway/hermes"
 	"aosui/gateway/invite"
+	"aosui/gateway/openclaw"
 	"aosui/gateway/opencode"
 	"aosui/gateway/server"
 )
@@ -44,8 +45,10 @@ func newAdapter(config Config) (conversation.Adapter, error) {
 			BaseURL: config.Upstream, Directory: config.OpenCode.Directory,
 			Username: config.OpenCode.Username, Password: config.OpenCode.Password,
 		})
+	case "openclaw":
+		return openclaw.New(openclaw.Config{BaseURL: config.Upstream, Token: config.OpenClaw.Token})
 	default:
-		return nil, errors.New("AOS_GATEWAY_RUNTIME must be hermes or opencode")
+		return nil, errors.New("AOS_GATEWAY_RUNTIME must be hermes, opencode, or openclaw")
 	}
 }
 

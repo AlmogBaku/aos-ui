@@ -9,6 +9,7 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 3. Remove unknown fields and credentials.
 4. For OpenCode, confirm `directory` is an absolute path understood by the server.
 5. For generic AG-UI, confirm both `runUrl` and `workspaceUrl` are present absolute HTTP(S) URLs.
+6. For OpenClaw, confirm `baseUrl` is a credential-free `ws://`/`wss://` URL or `/openclaw` proxy path; enter pairing credentials only in the connection UI.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
@@ -50,6 +51,13 @@ From the web container, verify the configured host and port resolve and accept c
 ## Generic AG-UI Agents or Sessions do not load
 
 - Verify the workspace service implements every required endpoint in the [AG-UI guide](runtimes/ag-ui.md).
+
+## OpenClaw does not connect
+
+- Verify protocol v4 is enabled and the Gateway is reachable at the configured WebSocket URL.
+- Grant the browser device `operator.read` and `operator.write`, plus `operator.questions` and `operator.approvals` for those controls.
+- With Compose, use `compose.openclaw.yaml` and check `AOS_UI_OPENCLAW_HOST`/`AOS_UI_OPENCLAW_PORT`; never put a token in `runtime-config.json`.
+- A missing Todo, visibility, edit/regenerate, creator, handoff, or STT control is an explicit capability limit, not a connection failure.
 - Confirm Session records include matching `threadId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Check browser CORS errors for both the run and workspace origins.

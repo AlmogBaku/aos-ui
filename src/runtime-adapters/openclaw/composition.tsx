@@ -9,6 +9,7 @@ import type { Locale } from "@/lib/i18n/config"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { Button } from "@/components/ui/button"
 import { useOpenClawRuntime } from "./use-openclaw-runtime"
+import { resolveOpenClawGatewayUrl } from "./gateway-url"
 
 export type OpenClawRuntimeProviderProps = {
   config: {
@@ -38,7 +39,10 @@ export function OpenClawRuntimeProvider({
   const onError = useCallback((error: Error) => setError(error), [])
   const { runtime, client } = useOpenClawRuntime(
     {
-      gatewayUrl: config.baseUrl,
+      gatewayUrl: resolveOpenClawGatewayUrl(
+        config.baseUrl,
+        window.location.href
+      ),
       creatorAgentId: config.creatorAgentId,
       ...credentials,
       onError,

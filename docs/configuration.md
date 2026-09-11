@@ -84,6 +84,18 @@ Use the same-origin `/hermes` prefix with the supplied Vite or Nginx forwarding.
 
 Both URLs are required absolute HTTP(S) URLs without credentials, queries, or fragments.
 
+### OpenClaw
+
+```json
+{
+  "mode": "openclaw",
+  "baseUrl": "/openclaw",
+  "creatorAgentId": "creator"
+}
+```
+
+`baseUrl` is a credential-free `ws://`/`wss://` URL or same-origin proxy path. `creatorAgentId` is optional. Gateway tokens and passwords are never public fields.
+
 ## Artifact HTML assets
 
 `artifactHtmlAssetOrigins` accepts at most 16 credential-free HTTPS origins. Each entry must contain only the origin, with no path, query, or fragment:
@@ -99,13 +111,15 @@ Omit the field to block external assets in published HTML previews.
 | Variable                                 | Default                 | Use                                                 |
 | ---------------------------------------- | ----------------------- | --------------------------------------------------- |
 | `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Absolute path to public runtime JSON.               |
-| `AOS_UI_RUNTIME_MODE`                    | `opencode`              | `fixture`, `opencode`, `hermes`, or `ag-ui`.        |
+| `AOS_UI_RUNTIME_MODE`                    | `opencode`              | `fixture`, `opencode`, `hermes`, `openclaw`, or `ag-ui`. |
 | `AOS_UI_OPENCODE_BASE_URL`               | `http://127.0.0.1:4096` | Browser-reachable OpenCode URL or same-origin path. |
 | `AOS_UI_OPENCODE_WORKTREE`               | required for OpenCode   | Absolute native working directory.                  |
 | `AOS_UI_OPENCODE_PROVIDER_ID`            | unset                   | Optional model provider; set with model ID.         |
 | `AOS_UI_OPENCODE_MODEL_ID`               | unset                   | Optional model ID; set with provider ID.            |
 | `AOS_UI_HERMES_BASE_URL`                 | required for Hermes     | Absolute URL or same-origin path such as `/hermes`. |
 | `AOS_UI_HERMES_TARGET`                   | `http://127.0.0.1:9119` | Vite forwarding target.                             |
+| `AOS_UI_OPENCLAW_BASE_URL`               | required for OpenClaw   | Gateway WebSocket URL or `/openclaw` proxy path.    |
+| `AOS_UI_OPENCLAW_CREATOR_AGENT_ID`       | unset                   | Optional configured creator Agent ID.               |
 | `AOS_UI_AG_UI_URL`                       | required for AG-UI      | AG-UI run endpoint.                                 |
 | `AOS_UI_AG_UI_WORKSPACE_URL`             | required for AG-UI      | Workspace-service base URL.                         |
 | `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set to `false` to hide the selector.                |
@@ -125,5 +139,7 @@ The optional OpenCode launcher and its credential-forwarding variables are descr
 | `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                                     | Non-root OpenCode container identity.         |
 | `AOS_UI_HERMES_HOST`                  | `host.docker.internal` with Hermes overlay | Hermes host reachable from the web container. |
 | `AOS_UI_HERMES_PORT`                  | `9119`                                     | Native Hermes port.                           |
+| `AOS_UI_OPENCLAW_HOST`                | `host.docker.internal` with overlay        | OpenClaw host reachable from the web container. |
+| `AOS_UI_OPENCLAW_PORT`                | `18789`                                    | Native OpenClaw Gateway port.                  |
 
 Copy [`.env.compose.example`](../.env.compose.example) to `.env` for local overrides. See [Deployment](deployment.md) for complete commands.

@@ -1,0 +1,8 @@
+# OpenClaw is independently operated; this overlay only forwards its Gateway.
+services:
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      AOS_UI_OPENCLAW_HOST: ${AOS_UI_OPENCLAW_HOST:-host.docker.internal}
+      AOS_UI_OPENCLAW_PORT: ${AOS_UI_OPENCLAW_PORT:-18789}

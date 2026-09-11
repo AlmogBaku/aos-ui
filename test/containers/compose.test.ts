@@ -116,6 +116,27 @@ describe("container orchestration", () => {
     )
   })
 
+  it("forwards to independently operated OpenClaw without exposing credentials", () => {
+    const config = composeConfig(["compose.yaml", "compose.openclaw.yaml"], {
+      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
+        root,
+        "deploy/runtime-config.openclaw.json"
+      ),
+    })
+
+    expect(Object.keys(config.services)).toEqual(["web"])
+    expect(config.services.web.environment).toMatchObject({
+      AOS_UI_OPENCLAW_HOST: "host.docker.internal",
+      AOS_UI_OPENCLAW_PORT: "18789",
+    })
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_GATEWAY_OPENCLAW_TOKEN"
+    )
+    expect(config.configs?.["runtime-config"]?.file).toBe(
+      resolve(root, "deploy/runtime-config.openclaw.json")
+    )
+  })
+
   it("uses the Vite development target and source mount", () => {
     const config = composeConfig(["compose.yaml", "compose.dev.yaml"])
     const web = config.services.web
@@ -155,6 +176,10 @@ describe("container orchestration", () => {
     expect(nginx).toContain("location = /api/health")
     expect(nginx).toContain("location = /runtime-config.json")
     expect(nginx).toContain("location ^~ /auth/")
+    expect(nginx).toContain("location ^~ /openclaw/")
+    expect(nginx).toContain("location = /openclaw { rewrite ^ /openclaw/ last; }")
+    expect(nginx).not.toContain("location = /openclaw { return 308")
+    expect(nginx).toContain("rewrite ^/openclaw/?(.*)$ /$1 break;")
     expect(nginx).toContain("proxy_buffering off")
     expect(nginx).toContain("max-age=31536000, immutable")
   })

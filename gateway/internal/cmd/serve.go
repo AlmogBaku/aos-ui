@@ -22,7 +22,7 @@ loopback by default. Supply public HTTPS with an external reverse proxy; this
 helper does not provision TLS.
 
 Environment:
-  AOS_GATEWAY_RUNTIME              hermes or opencode (required)
+  AOS_GATEWAY_RUNTIME              hermes, opencode, or openclaw (required)
   AOS_GATEWAY_UPSTREAM             fixed native HTTP origin (required)
   AOS_GATEWAY_INVITE_SIGNING_KEY   32 random base64url-encoded bytes (required)
   AOS_GATEWAY_GUEST_ORIGIN         public HTTPS guest origin (required)
@@ -32,7 +32,8 @@ Environment:
   AOS_GATEWAY_HERMES_TOKEN         Hermes Desktop Session token
   AOS_GATEWAY_OPENCODE_DIRECTORY   fixed OpenCode working directory
   AOS_GATEWAY_OPENCODE_USERNAME    optional native Basic auth username
-  AOS_GATEWAY_OPENCODE_PASSWORD    optional native Basic auth password`,
+  AOS_GATEWAY_OPENCODE_PASSWORD    optional native Basic auth password
+  AOS_GATEWAY_OPENCLAW_TOKEN       OpenClaw Gateway operator token`,
 		Example: `  AOS_GATEWAY_RUNTIME=hermes \
   AOS_GATEWAY_UPSTREAM=http://127.0.0.1:9119 \
   AOS_GATEWAY_HERMES_TOKEN="$HERMES_SESSION_TOKEN" \
@@ -61,6 +62,7 @@ func configFromEnvironment(getenv func(string) string) gateway.Config {
 		OpenCode: gateway.OpenCodeConfig{
 			Directory: getenv("AOS_GATEWAY_OPENCODE_DIRECTORY"), Username: getenv("AOS_GATEWAY_OPENCODE_USERNAME"), Password: getenv("AOS_GATEWAY_OPENCODE_PASSWORD"),
 		},
+		OpenClaw: gateway.OpenClawConfig{Token: getenv("AOS_GATEWAY_OPENCLAW_TOKEN")},
 	}
 	if config.Dist == "" {
 		config.Dist = "dist"
