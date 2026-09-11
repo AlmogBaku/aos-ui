@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "*.ts",
+    "../../shared/presentation/chart.ts",
+    "../../shared/presentation/tools.ts"
+  ],
+  "exclude": ["*.test.ts", "test-files.ts", "dist", "node_modules"]
+}

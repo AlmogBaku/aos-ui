@@ -1,0 +1,32 @@
+{
+  "id": "aos-ui",
+  "name": "AOS UI native tools",
+  "description": "Structured presentation, safe artifacts, Session handoff, and Agent creator tools for AOS UI.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "creatorAgentId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "default": "agent-builder"
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "render_chart",
+      "render_map",
+      "render_stats",
+      "present_plan",
+      "present_artifact",
+      "start_session",
+      "create_agent"
+    ]
+  }
+}
