@@ -46,7 +46,7 @@ func newAdapter(config Config) (conversation.Adapter, error) {
 			Username: config.OpenCode.Username, Password: config.OpenCode.Password,
 		})
 	case "openclaw":
-		return openclaw.New(openclaw.Config{BaseURL: config.Upstream, Token: config.OpenClaw.Token})
+		return openclaw.New(openclaw.Config{BaseURL: config.Upstream, Token: config.OpenClaw.Token, DeviceFile: config.OpenClaw.DeviceFile})
 	default:
 		return nil, errors.New("AOS_GATEWAY_RUNTIME must be hermes, opencode, or openclaw")
 	}

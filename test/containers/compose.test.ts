@@ -177,9 +177,13 @@ describe("container orchestration", () => {
     expect(nginx).toContain("location = /runtime-config.json")
     expect(nginx).toContain("location ^~ /auth/")
     expect(nginx).toContain("location ^~ /openclaw/")
-    expect(nginx).toContain("location = /openclaw { rewrite ^ /openclaw/ last; }")
+    expect(nginx).toContain(
+      "location = /openclaw { rewrite ^ /openclaw/ last; }"
+    )
     expect(nginx).not.toContain("location = /openclaw { return 308")
     expect(nginx).toContain("rewrite ^/openclaw/?(.*)$ /$1 break;")
+    expect(nginx).toContain("proxy_set_header Origin $http_origin;")
+    expect(nginx).not.toContain("proxy_set_header Origin $scheme://$http_host;")
     expect(nginx).toContain("proxy_buffering off")
     expect(nginx).toContain("max-age=31536000, immutable")
   })

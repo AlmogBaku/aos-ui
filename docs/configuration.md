@@ -96,6 +96,12 @@ Both URLs are required absolute HTTP(S) URLs without credentials, queries, or fr
 
 `baseUrl` is a credential-free `ws://`/`wss://` URL or same-origin proxy path. `creatorAgentId` is optional. Gateway tokens and passwords are never public fields.
 
+The optional private invited-chat gateway has separate server-only settings:
+`AOS_GATEWAY_OPENCLAW_TOKEN` supplies the initial operator bootstrap secret and
+`AOS_GATEWAY_OPENCLAW_DEVICE_FILE` names an absolute, persistent, writable path
+for its paired device key and token. Neither value belongs in this public JSON
+or in a `VITE_*` value.
+
 ## Artifact HTML assets
 
 `artifactHtmlAssetOrigins` accepts at most 16 credential-free HTTPS origins. Each entry must contain only the origin, with no path, query, or fragment:
@@ -108,38 +114,38 @@ Omit the field to block external assets in published HTML previews.
 
 ## Local Vite environment
 
-| Variable                                 | Default                 | Use                                                 |
-| ---------------------------------------- | ----------------------- | --------------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Absolute path to public runtime JSON.               |
+| Variable                                 | Default                 | Use                                                      |
+| ---------------------------------------- | ----------------------- | -------------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Absolute path to public runtime JSON.                    |
 | `AOS_UI_RUNTIME_MODE`                    | `opencode`              | `fixture`, `opencode`, `hermes`, `openclaw`, or `ag-ui`. |
-| `AOS_UI_OPENCODE_BASE_URL`               | `http://127.0.0.1:4096` | Browser-reachable OpenCode URL or same-origin path. |
-| `AOS_UI_OPENCODE_WORKTREE`               | required for OpenCode   | Absolute native working directory.                  |
-| `AOS_UI_OPENCODE_PROVIDER_ID`            | unset                   | Optional model provider; set with model ID.         |
-| `AOS_UI_OPENCODE_MODEL_ID`               | unset                   | Optional model ID; set with provider ID.            |
-| `AOS_UI_HERMES_BASE_URL`                 | required for Hermes     | Absolute URL or same-origin path such as `/hermes`. |
-| `AOS_UI_HERMES_TARGET`                   | `http://127.0.0.1:9119` | Vite forwarding target.                             |
-| `AOS_UI_OPENCLAW_BASE_URL`               | required for OpenClaw   | Gateway WebSocket URL or `/openclaw` proxy path.    |
-| `AOS_UI_OPENCLAW_CREATOR_AGENT_ID`       | unset                   | Optional configured creator Agent ID.               |
-| `AOS_UI_AG_UI_URL`                       | required for AG-UI      | AG-UI run endpoint.                                 |
-| `AOS_UI_AG_UI_WORKSPACE_URL`             | required for AG-UI      | Workspace-service base URL.                         |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set to `false` to hide the selector.                |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set to `false` to hide context usage.               |
+| `AOS_UI_OPENCODE_BASE_URL`               | `http://127.0.0.1:4096` | Browser-reachable OpenCode URL or same-origin path.      |
+| `AOS_UI_OPENCODE_WORKTREE`               | required for OpenCode   | Absolute native working directory.                       |
+| `AOS_UI_OPENCODE_PROVIDER_ID`            | unset                   | Optional model provider; set with model ID.              |
+| `AOS_UI_OPENCODE_MODEL_ID`               | unset                   | Optional model ID; set with provider ID.                 |
+| `AOS_UI_HERMES_BASE_URL`                 | required for Hermes     | Absolute URL or same-origin path such as `/hermes`.      |
+| `AOS_UI_HERMES_TARGET`                   | `http://127.0.0.1:9119` | Vite forwarding target.                                  |
+| `AOS_UI_OPENCLAW_BASE_URL`               | required for OpenClaw   | Gateway WebSocket URL or `/openclaw` proxy path.         |
+| `AOS_UI_OPENCLAW_CREATOR_AGENT_ID`       | unset                   | Optional configured creator Agent ID.                    |
+| `AOS_UI_AG_UI_URL`                       | required for AG-UI      | AG-UI run endpoint.                                      |
+| `AOS_UI_AG_UI_WORKSPACE_URL`             | required for AG-UI      | Workspace-service base URL.                              |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set to `false` to hide the selector.                     |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set to `false` to hide context usage.                    |
 
 The optional OpenCode launcher and its credential-forwarding variables are described in [Run with OpenCode](runtimes/opencode.md). They are not required when attaching to an independently configured server.
 
 ## Compose environment
 
-| Variable                              | Default                                    | Use                                           |
-| ------------------------------------- | ------------------------------------------ | --------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json`             | Public JSON mounted read-only.                |
-| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                                | Published-service bind address.               |
-| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                                     | Web port on the host.                         |
-| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                                     | OpenCode port on the host.                    |
-| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay               | External worktree mounted at `/workspace`.    |
-| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                                     | Non-root OpenCode container identity.         |
-| `AOS_UI_HERMES_HOST`                  | `host.docker.internal` with Hermes overlay | Hermes host reachable from the web container. |
-| `AOS_UI_HERMES_PORT`                  | `9119`                                     | Native Hermes port.                           |
+| Variable                              | Default                                    | Use                                             |
+| ------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json`             | Public JSON mounted read-only.                  |
+| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                                | Published-service bind address.                 |
+| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                                     | Web port on the host.                           |
+| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                                     | OpenCode port on the host.                      |
+| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay               | External worktree mounted at `/workspace`.      |
+| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                                     | Non-root OpenCode container identity.           |
+| `AOS_UI_HERMES_HOST`                  | `host.docker.internal` with Hermes overlay | Hermes host reachable from the web container.   |
+| `AOS_UI_HERMES_PORT`                  | `9119`                                     | Native Hermes port.                             |
 | `AOS_UI_OPENCLAW_HOST`                | `host.docker.internal` with overlay        | OpenClaw host reachable from the web container. |
-| `AOS_UI_OPENCLAW_PORT`                | `18789`                                    | Native OpenClaw Gateway port.                  |
+| `AOS_UI_OPENCLAW_PORT`                | `18789`                                    | Native OpenClaw Gateway port.                   |
 
 Copy [`.env.compose.example`](../.env.compose.example) to `.env` for local overrides. See [Deployment](deployment.md) for complete commands.

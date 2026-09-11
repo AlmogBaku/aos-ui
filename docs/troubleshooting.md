@@ -57,6 +57,8 @@ From the web container, verify the configured host and port resolve and accept c
 - Verify protocol v4 is enabled and the Gateway is reachable at the configured WebSocket URL.
 - Grant the browser device `operator.read` and `operator.write`, plus `operator.questions` and `operator.approvals` for those controls.
 - With Compose, use `compose.openclaw.yaml` and check `AOS_UI_OPENCLAW_HOST`/`AOS_UI_OPENCLAW_PORT`; never put a token in `runtime-config.json`.
+- For invited chat, set `AOS_GATEWAY_OPENCLAW_DEVICE_FILE` to an absolute writable persistent path. The file must be a regular `0600` file, not a symlink. If first start reports `PAIRING_REQUIRED`, run `openclaw devices list`, approve the exact current request with `openclaw devices approve <requestId>`, and restart the guest gateway.
+- If invited chat reports a missing scope, re-pair that device for exactly `operator.read`, `operator.write`, and `operator.questions`; do not delete or replace a working device file merely to bypass approval.
 - A missing Todo, visibility, edit/regenerate, creator, handoff, or STT control is an explicit capability limit, not a connection failure.
 - Confirm Session records include matching `threadId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.

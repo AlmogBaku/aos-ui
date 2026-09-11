@@ -33,7 +33,8 @@ Environment:
   AOS_GATEWAY_OPENCODE_DIRECTORY   fixed OpenCode working directory
   AOS_GATEWAY_OPENCODE_USERNAME    optional native Basic auth username
   AOS_GATEWAY_OPENCODE_PASSWORD    optional native Basic auth password
-  AOS_GATEWAY_OPENCLAW_TOKEN       OpenClaw Gateway operator token`,
+  AOS_GATEWAY_OPENCLAW_TOKEN       OpenClaw Gateway bootstrap operator token
+  AOS_GATEWAY_OPENCLAW_DEVICE_FILE Absolute path to private persistent device state`,
 		Example: `  AOS_GATEWAY_RUNTIME=hermes \
   AOS_GATEWAY_UPSTREAM=http://127.0.0.1:9119 \
   AOS_GATEWAY_HERMES_TOKEN="$HERMES_SESSION_TOKEN" \
@@ -62,7 +63,7 @@ func configFromEnvironment(getenv func(string) string) gateway.Config {
 		OpenCode: gateway.OpenCodeConfig{
 			Directory: getenv("AOS_GATEWAY_OPENCODE_DIRECTORY"), Username: getenv("AOS_GATEWAY_OPENCODE_USERNAME"), Password: getenv("AOS_GATEWAY_OPENCODE_PASSWORD"),
 		},
-		OpenClaw: gateway.OpenClawConfig{Token: getenv("AOS_GATEWAY_OPENCLAW_TOKEN")},
+		OpenClaw: gateway.OpenClawConfig{Token: getenv("AOS_GATEWAY_OPENCLAW_TOKEN"), DeviceFile: getenv("AOS_GATEWAY_OPENCLAW_DEVICE_FILE")},
 	}
 	if config.Dist == "" {
 		config.Dist = "dist"

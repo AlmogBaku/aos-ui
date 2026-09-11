@@ -20,7 +20,7 @@ func TestServeHelpDocumentsConfigurationWithoutStartingListeners(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 || called {
 		t.Fatalf("exit = %d, called = %v, stderr = %q", code, called, stderr.String())
 	}
-	for _, text := range []string{"AOS_GATEWAY_RUNTIME", "AOS_GATEWAY_UPSTREAM", "AOS_GATEWAY_HERMES_TOKEN", "AOS_GATEWAY_OPENCODE_DIRECTORY", "127.0.0.1:8080", "127.0.0.1:8081", "HTTPS"} {
+	for _, text := range []string{"AOS_GATEWAY_RUNTIME", "AOS_GATEWAY_UPSTREAM", "AOS_GATEWAY_HERMES_TOKEN", "AOS_GATEWAY_OPENCODE_DIRECTORY", "AOS_GATEWAY_OPENCLAW_DEVICE_FILE", "127.0.0.1:8080", "127.0.0.1:8081", "HTTPS"} {
 		if !strings.Contains(stdout.String(), text) {
 			t.Fatalf("help does not contain %q:\n%s", text, stdout.String())
 		}
@@ -29,17 +29,18 @@ func TestServeHelpDocumentsConfigurationWithoutStartingListeners(t *testing.T) {
 
 func TestServeMapsEnvironmentToTypedConfig(t *testing.T) {
 	environment := map[string]string{
-		"AOS_GATEWAY_RUNTIME":            "opencode",
-		"AOS_GATEWAY_UPSTREAM":           "http://127.0.0.1:4096",
-		"AOS_GATEWAY_OPENCODE_DIRECTORY": "/worktree",
-		"AOS_GATEWAY_OPENCODE_USERNAME":  "operator",
-		"AOS_GATEWAY_OPENCODE_PASSWORD":  "secret",
-		"AOS_GATEWAY_INVITE_SIGNING_KEY": "key",
-		"AOS_GATEWAY_GUEST_ORIGIN":       "https://guest.example",
-		"AOS_GATEWAY_DIST":               "/dist",
-		"AOS_GATEWAY_OPERATOR_ADDR":      "127.0.0.1:9000",
-		"AOS_GATEWAY_GUEST_ADDR":         "127.0.0.1:9001",
-		"AOS_GATEWAY_OPENCLAW_TOKEN":     "openclaw-secret",
+		"AOS_GATEWAY_RUNTIME":              "opencode",
+		"AOS_GATEWAY_UPSTREAM":             "http://127.0.0.1:4096",
+		"AOS_GATEWAY_OPENCODE_DIRECTORY":   "/worktree",
+		"AOS_GATEWAY_OPENCODE_USERNAME":    "operator",
+		"AOS_GATEWAY_OPENCODE_PASSWORD":    "secret",
+		"AOS_GATEWAY_INVITE_SIGNING_KEY":   "key",
+		"AOS_GATEWAY_GUEST_ORIGIN":         "https://guest.example",
+		"AOS_GATEWAY_DIST":                 "/dist",
+		"AOS_GATEWAY_OPERATOR_ADDR":        "127.0.0.1:9000",
+		"AOS_GATEWAY_GUEST_ADDR":           "127.0.0.1:9001",
+		"AOS_GATEWAY_OPENCLAW_TOKEN":       "openclaw-secret",
+		"AOS_GATEWAY_OPENCLAW_DEVICE_FILE": "/run/secrets/openclaw-device.json",
 	}
 	var received gateway.Config
 	code := Execute(context.Background(), []string{"serve"}, Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, Dependencies{
@@ -49,7 +50,7 @@ func TestServeMapsEnvironmentToTypedConfig(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if received.Runtime != "opencode" || received.Upstream != "http://127.0.0.1:4096" || received.OpenCode.Directory != "/worktree" || received.OpenCode.Username != "operator" || received.OpenCode.Password != "secret" || received.OpenClaw.Token != "openclaw-secret" || received.InviteSigningKey != "key" || received.GuestOrigin != "https://guest.example" || received.Dist != "/dist" || received.OperatorAddress != "127.0.0.1:9000" || received.GuestAddress != "127.0.0.1:9001" {
+	if received.Runtime != "opencode" || received.Upstream != "http://127.0.0.1:4096" || received.OpenCode.Directory != "/worktree" || received.OpenCode.Username != "operator" || received.OpenCode.Password != "secret" || received.OpenClaw.Token != "openclaw-secret" || received.OpenClaw.DeviceFile != "/run/secrets/openclaw-device.json" || received.InviteSigningKey != "key" || received.GuestOrigin != "https://guest.example" || received.Dist != "/dist" || received.OperatorAddress != "127.0.0.1:9000" || received.GuestAddress != "127.0.0.1:9001" {
 		t.Fatalf("config = %#v", received)
 	}
 }

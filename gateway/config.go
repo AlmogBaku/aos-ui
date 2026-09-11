@@ -22,5 +22,6 @@ type OpenCodeConfig struct {
 }
 
 type OpenClawConfig struct {
-	Token string
+	Token      string
+	DeviceFile string
 }

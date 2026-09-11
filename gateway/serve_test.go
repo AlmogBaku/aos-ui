@@ -9,7 +9,7 @@ import (
 )
 
 func TestAdapterSelectionIncludesOpenClawAndRejectsUnknownRuntime(t *testing.T) {
-	adapter, err := newAdapter(Config{Runtime: "openclaw", Upstream: "ws://127.0.0.1:18789", OpenClaw: OpenClawConfig{Token: "secret"}})
+	adapter, err := newAdapter(Config{Runtime: "openclaw", Upstream: "ws://127.0.0.1:18789", OpenClaw: OpenClawConfig{Token: "secret", DeviceFile: t.TempDir() + "/device.json"}})
 	if err != nil || adapter == nil {
 		t.Fatalf("openclaw adapter = %T, %v", adapter, err)
 	}

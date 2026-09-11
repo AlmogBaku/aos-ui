@@ -45,7 +45,9 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $http_host;
-    proxy_set_header Origin $scheme://$http_host;
+    # Preserve the browser's actual Origin so OpenClaw can enforce its native
+    # allowed-origin policy. Never synthesize a trusted same-origin value.
+    proxy_set_header Origin $http_origin;
     proxy_set_header X-Forwarded-Prefix /openclaw;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;

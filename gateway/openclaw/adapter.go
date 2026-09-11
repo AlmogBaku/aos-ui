@@ -18,8 +18,9 @@ import (
 var referencePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type Config struct {
-	BaseURL string
-	Token   string
+	BaseURL    string
+	Token      string
+	DeviceFile string
 }
 
 type event struct {
@@ -41,7 +42,7 @@ var _ conversation.ArtifactReader = (*Adapter)(nil)
 var _ conversation.Audio = (*Adapter)(nil)
 
 func New(config Config) (*Adapter, error) {
-	rpc, err := newGatewayClient(config.BaseURL, config.Token)
+	rpc, err := newGatewayClient(config.BaseURL, config.Token, config.DeviceFile)
 	if err != nil {
 		return nil, err
 	}
@@ -158,10 +159,33 @@ func (a *Adapter) History(ctx context.Context, scope conversation.Scope) (conver
 		return conversation.Snapshot{}, err
 	}
 	messages := make([]conversation.Message, 0, len(history.Messages)+1)
+	messageIndexes := make(map[int]int, len(history.Messages))
 	for index, raw := range history.Messages {
 		if message, ok := projectMessage(raw, fmt.Sprintf("openclaw-%d", index)); ok {
+			messageIndexes[index+1] = len(messages)
 			messages = append(messages, message)
 		}
+	}
+	var artifactResult struct {
+		Artifacts []struct {
+			ID, Title, MimeType, SessionKey string
+			SizeBytes                       int64
+			MessageSeq                      int
+			Download                        struct{ Mode string }
+		} `json:"artifacts"`
+	}
+	if err := a.rpc.Request(ctx, "artifacts.list", map[string]any{"sessionKey": sessionKey(scope), "agentId": scope.Agent}, &artifactResult); err != nil {
+		return conversation.Snapshot{}, err
+	}
+	for _, artifact := range artifactResult.Artifacts {
+		messageIndex, ok := messageIndexes[artifact.MessageSeq]
+		if !ok || messages[messageIndex].Role != "assistant" || artifact.ID == "" || artifact.Title == "" || artifact.SessionKey != sessionKey(scope) || artifact.Download.Mode != "bytes" {
+			continue
+		}
+		messages[messageIndex].Content = append(messages[messageIndex].Content, conversation.Part{Type: "artifact", Artifact: &conversation.Artifact{
+			ID: artifact.ID, Filename: artifact.Title, MimeType: artifact.MimeType, SizeBytes: artifact.SizeBytes,
+			Source: conversation.ArtifactSource{Type: "provider", Reference: artifact.ID},
+		}})
 	}
 	if history.InFlightRun != nil && history.InFlightRun.Text != "" {
 		messages = append(messages, conversation.Message{ID: history.InFlightRun.RunID, Role: "assistant", Content: []conversation.Part{{Type: "text", Text: history.InFlightRun.Text}}})
@@ -196,12 +220,8 @@ func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Messag
 		return conversation.Message{ID: row.ID, Role: row.Role, Content: []conversation.Part{{Type: "text", Text: text}}}, true
 	}
 	var nativeParts []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		Artifact *struct {
-			ID, Title, MimeType string
-			SizeBytes           int64
-		} `json:"artifact"`
+		Type string `json:"type"`
+		Text string `json:"text"`
 	}
 	if json.Unmarshal(row.Content, &nativeParts) != nil {
 		return conversation.Message{}, false
@@ -211,11 +231,6 @@ func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Messag
 		switch {
 		case part.Type == "text" && strings.TrimSpace(part.Text) != "":
 			parts = append(parts, conversation.Part{Type: "text", Text: part.Text})
-		case part.Type == "artifact" && part.Artifact != nil && part.Artifact.ID != "" && part.Artifact.Title != "":
-			parts = append(parts, conversation.Part{Type: "artifact", Artifact: &conversation.Artifact{
-				ID: part.Artifact.ID, Filename: part.Artifact.Title, MimeType: part.Artifact.MimeType, SizeBytes: part.Artifact.SizeBytes,
-				Source: conversation.ArtifactSource{Type: "provider", Reference: part.Artifact.ID},
-			}})
 		}
 	}
 	return conversation.Message{ID: row.ID, Role: row.Role, Content: parts}, len(parts) > 0
@@ -258,18 +273,24 @@ func (a *Adapter) Send(ctx context.Context, scope conversation.Scope, input conv
 	if err != nil {
 		return err
 	}
-	params := map[string]any{
-		"agentId": scope.Agent, "message": message, "attachments": attachments, "idempotencyKey": requestID(),
+	params := map[string]any{"agentId": scope.Agent, "message": message, "idempotencyKey": requestID()}
+	if len(attachments) > 0 {
+		params["attachments"] = attachments
 	}
 	if !found {
 		params["key"] = sessionKey(scope)
-		params["label"] = "AOS invited chat"
+		params["displayName"] = "AOS invited chat"
 		if input.FirstTurn != nil && input.FirstTurn.Instruction != "" {
-			params["task"] = input.FirstTurn.Instruction
+			params["message"] = input.FirstTurn.Instruction + "\n\n" + message
 		}
 		var created struct {
-			OK  bool   `json:"ok"`
-			Key string `json:"key"`
+			OK         bool   `json:"ok"`
+			Key        string `json:"key"`
+			RunStarted bool   `json:"runStarted"`
+			RunID      string `json:"runId"`
+			RunError   *struct {
+				Code, Message string
+			} `json:"runError"`
 		}
 		if err := a.rpc.Request(ctx, "sessions.create", params, &created); err != nil {
 			return conversation.ErrUncertain
@@ -277,7 +298,19 @@ func (a *Adapter) Send(ctx context.Context, scope conversation.Scope, input conv
 		if !created.OK || created.Key != sessionKey(scope) {
 			return conversation.ErrForbidden
 		}
+		if !created.RunStarted || created.RunID == "" || created.RunError != nil {
+			return conversation.ErrUncertain
+		}
 		return nil
+	}
+	var existing historyResult
+	if err := a.rpc.Request(ctx, "chat.history", map[string]any{
+		"sessionKey": sessionKey(scope), "agentId": scope.Agent, "limit": 1,
+	}, &existing); err != nil {
+		return err
+	}
+	if len(existing.Messages) == 0 && existing.InFlightRun == nil && !existing.SessionInfo.HasActiveRun && len(existing.SessionInfo.ActiveRunIDs) == 0 {
+		return conversation.ErrUncertain
 	}
 	params["sessionKey"] = sessionKey(scope)
 	var sent struct {

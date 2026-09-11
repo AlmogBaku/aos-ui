@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,9 +18,12 @@ import (
 const protocolVersion = 4
 
 type gatewayClient struct {
-	url   string
-	token string
-	next  atomic.Uint64
+	url        string
+	token      string
+	deviceFile string
+	deviceMu   sync.Mutex
+	device     deviceState
+	next       atomic.Uint64
 }
 
 type wireFrame struct {
@@ -35,9 +39,13 @@ type wireFrame struct {
 	} `json:"error,omitempty"`
 }
 
-func newGatewayClient(rawURL, token string) (*gatewayClient, error) {
+var requiredScopes = []string{"operator.read", "operator.write", "operator.questions"}
+
+func newGatewayClient(rawURL, token, deviceFile string) (*gatewayClient, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.TrimSpace(token) == "" {
+	deviceFile = strings.TrimSpace(deviceFile)
+	token = strings.TrimSpace(token)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || deviceFile == "" {
 		return nil, errors.New("invalid OpenClaw configuration")
 	}
 	switch u.Scheme {
@@ -49,12 +57,29 @@ func newGatewayClient(rawURL, token string) (*gatewayClient, error) {
 	default:
 		return nil, errors.New("invalid OpenClaw configuration")
 	}
-	return &gatewayClient{url: u.String(), token: strings.TrimSpace(token)}, nil
+	var state deviceState
+	if token == "" {
+		state, err = readDeviceState(deviceFile)
+		if err == nil && state.DeviceToken == "" {
+			err = errors.New("OpenClaw bootstrap token required before device pairing")
+		}
+	} else {
+		state, err = loadOrCreateDeviceState(deviceFile)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &gatewayClient{url: u.String(), token: token, deviceFile: deviceFile, device: state}, nil
 }
 
 func (c *gatewayClient) id() string { return fmt.Sprintf("aos-%d", c.next.Add(1)) }
 
 func (c *gatewayClient) connect(ctx context.Context) (*websocket.Conn, error) {
+	// Pairing and token rotation are one device-state transaction. Serializing
+	// this short handshake prevents concurrent first requests from presenting
+	// the bootstrap token after another request has already paired the device.
+	c.deviceMu.Lock()
+	defer c.deviceMu.Unlock()
 	connection, response, err := websocket.Dial(ctx, c.url, &websocket.DialOptions{HTTPHeader: http.Header{"User-Agent": []string{"aos-gateway/openclaw"}}})
 	if response != nil && response.Body != nil {
 		response.Body.Close()
@@ -71,19 +96,39 @@ func (c *gatewayClient) connect(ctx context.Context) (*websocket.Conn, error) {
 	if err := readJSON(handshakeCtx, connection, &challenge); err != nil {
 		return closeWithError(err)
 	}
-	var nonce struct {
+	var challengePayload struct {
 		Nonce string `json:"nonce"`
+		TS    int64  `json:"ts"`
 	}
-	if challenge.Type != "event" || challenge.Event != "connect.challenge" || json.Unmarshal(challenge.Payload, &nonce) != nil || nonce.Nonce == "" {
+	if challenge.Type != "event" || challenge.Event != "connect.challenge" || json.Unmarshal(challenge.Payload, &challengePayload) != nil || challengePayload.Nonce == "" || challengePayload.TS <= 0 {
 		return closeWithError(errors.New("invalid OpenClaw challenge"))
+	}
+	device := c.device
+	authToken := c.token
+	if device.DeviceToken != "" {
+		authToken = device.DeviceToken
+	}
+	publicKey, err := device.publicKeyBase64URL()
+	if err != nil {
+		return closeWithError(err)
+	}
+	const clientID, clientMode, platform, deviceFamily = "gateway-client", "backend", "go", "server"
+	signedPayload := strings.Join([]string{
+		"v3", device.DeviceID, clientID, clientMode, "operator", strings.Join(requiredScopes, ","),
+		fmt.Sprintf("%d", challengePayload.TS), authToken, challengePayload.Nonce, platform, deviceFamily,
+	}, "|")
+	signature, err := device.sign(signedPayload)
+	if err != nil {
+		return closeWithError(err)
 	}
 	id := c.id()
 	params := map[string]any{
 		"minProtocol": protocolVersion, "maxProtocol": protocolVersion,
-		"client": map[string]any{"id": "gateway-client", "displayName": "AOS Gateway", "version": "1", "platform": "go", "mode": "backend", "instanceId": id},
+		"client": map[string]any{"id": clientID, "displayName": "AOS Gateway", "version": "1", "platform": platform, "mode": clientMode, "instanceId": id},
 		"caps":   []string{"tool-events", "session-events"},
-		"role":   "operator", "scopes": []string{"operator.read", "operator.write", "operator.questions"},
-		"auth": map[string]any{"token": c.token},
+		"role":   "operator", "scopes": requiredScopes,
+		"auth":   map[string]any{"token": authToken},
+		"device": map[string]any{"id": device.DeviceID, "publicKey": publicKey, "signature": signature, "signedAt": challengePayload.TS, "nonce": challengePayload.Nonce},
 	}
 	if err := writeJSON(handshakeCtx, connection, map[string]any{"type": "req", "id": id, "method": "connect", "params": params}); err != nil {
 		return closeWithError(err)
@@ -98,11 +143,48 @@ func (c *gatewayClient) connect(ctx context.Context) (*websocket.Conn, error) {
 	var hello struct {
 		Type     string `json:"type"`
 		Protocol int    `json:"protocol"`
+		Auth     struct {
+			DeviceToken string   `json:"deviceToken"`
+			Role        string   `json:"role"`
+			Scopes      []string `json:"scopes"`
+		} `json:"auth"`
 	}
 	if json.Unmarshal(responseFrame.Payload, &hello) != nil || hello.Type != "hello-ok" || hello.Protocol != protocolVersion {
 		return closeWithError(errors.New("OpenClaw protocol mismatch"))
 	}
+	if hello.Auth.Role != "operator" || hello.Auth.DeviceToken == "" {
+		return closeWithError(errors.New("OpenClaw paired device authority missing"))
+	}
+	liveScopes := make(map[string]bool, len(hello.Auth.Scopes))
+	for _, scope := range hello.Auth.Scopes {
+		liveScopes[scope] = true
+	}
+	for _, scope := range requiredScopes {
+		if !liveScopes[scope] {
+			return closeWithError(fmt.Errorf("missing required OpenClaw scope %s", scope))
+		}
+	}
+	if device.DeviceToken != hello.Auth.DeviceToken || !equalStrings(device.Scopes, hello.Auth.Scopes) {
+		device.DeviceToken = hello.Auth.DeviceToken
+		device.Scopes = append([]string(nil), hello.Auth.Scopes...)
+		if err := replaceDeviceState(c.deviceFile, device); err != nil {
+			return closeWithError(fmt.Errorf("persist OpenClaw device token: %w", err))
+		}
+		c.device = device
+	}
 	return connection, nil
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *gatewayClient) Request(ctx context.Context, method string, params any, out any) error {
