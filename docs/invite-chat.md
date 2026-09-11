@@ -68,6 +68,11 @@ directory if you package the guest gateway in a container. The supplied
 Compose OpenClaw overlay contains only the web proxy and therefore has no guest
 gateway volume to configure.
 
+The client uses OpenClaw's ordinary `cli` identity and pairing policy. It does
+not claim the reserved `gateway-client`/`backend` loopback exemption, because
+that internal helper path does not create a pairing record or reusable device
+token.
+
 On its first connection, start the gateway once to create a pending device
 request. On the OpenClaw host, inspect and approve that exact request:
 

@@ -43,7 +43,8 @@ func TestGatewayClientPersistsAndSignsProtocolV4DeviceHandshake(t *testing.T) {
 				MinProtocol, MaxProtocol int
 				Scopes                   []string
 				Auth                     struct{ Token string }
-				Client                   struct{ ID, Mode, Platform string }
+				Role                     string
+				Client                   struct{ ID, Mode, Platform, DeviceFamily string }
 				Device                   struct {
 					ID, PublicKey, Signature, Nonce string
 					SignedAt                        int64
@@ -61,8 +62,8 @@ func TestGatewayClientPersistsAndSignsProtocolV4DeviceHandshake(t *testing.T) {
 		publicKey, err := base64.RawURLEncoding.DecodeString(connect.Params.Device.PublicKey)
 		signature, signatureErr := base64.RawURLEncoding.DecodeString(connect.Params.Device.Signature)
 		fingerprint := sha256.Sum256(publicKey)
-		signedPayload := strings.Join([]string{"v3", connect.Params.Device.ID, connect.Params.Client.ID, connect.Params.Client.Mode, "operator", strings.Join(connect.Params.Scopes, ","), strconv.FormatInt(connect.Params.Device.SignedAt, 10), wantToken, "n-1", strings.ToLower(connect.Params.Client.Platform), "server"}, "|")
-		if err != nil || signatureErr != nil || connect.Params.Device.ID != fmt.Sprintf("%x", fingerprint) || connect.Params.Device.Nonce != "n-1" || connect.Params.Device.SignedAt != 1710000000000 || !ed25519.Verify(publicKey, []byte(signedPayload), signature) {
+		signedPayload := strings.Join([]string{"v3", connect.Params.Device.ID, connect.Params.Client.ID, connect.Params.Client.Mode, connect.Params.Role, strings.Join(connect.Params.Scopes, ","), strconv.FormatInt(connect.Params.Device.SignedAt, 10), wantToken, "n-1", strings.ToLower(connect.Params.Client.Platform), strings.ToLower(connect.Params.Client.DeviceFamily)}, "|")
+		if err != nil || signatureErr != nil || connect.Params.Client.ID == "gateway-client" || connect.Params.Client.Mode == "backend" || connect.Params.Client.DeviceFamily == "" || connect.Params.Device.ID != fmt.Sprintf("%x", fingerprint) || connect.Params.Device.Nonce != "n-1" || connect.Params.Device.SignedAt != 1710000000000 || !ed25519.Verify(publicKey, []byte(signedPayload), signature) {
 			t.Errorf("invalid signed device handshake: %s", raw)
 			return
 		}
@@ -124,6 +125,69 @@ func TestGatewayClientPersistsAndSignsProtocolV4DeviceHandshake(t *testing.T) {
 	}
 	if info, err := os.Stat(deviceFile); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("device file mode = %v, %v", info, err)
+	}
+}
+
+func TestGatewayClientKeepsNormalPairingIdentityAcrossPendingRetry(t *testing.T) {
+	var attempts atomic.Int32
+	var firstDeviceID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer connection.CloseNow()
+		ctx := r.Context()
+		_ = connection.Write(ctx, websocket.MessageText, []byte(`{"type":"event","event":"connect.challenge","payload":{"nonce":"pair","ts":2}}`))
+		_, raw, _ := connection.Read(ctx)
+		var connect struct {
+			ID     string
+			Params struct {
+				Client struct{ ID, Mode string }
+				Device struct{ ID string }
+				Scopes []string
+			}
+		}
+		_ = json.Unmarshal(raw, &connect)
+		if connect.Params.Client.ID == "gateway-client" && connect.Params.Client.Mode == "backend" {
+			t.Errorf("reserved local exemption used: %s", raw)
+			return
+		}
+		attempt := attempts.Add(1)
+		if attempt == 1 {
+			firstDeviceID = connect.Params.Device.ID
+			payload, _ := json.Marshal(map[string]any{"type": "res", "id": connect.ID, "ok": false, "error": map[string]any{"code": "PAIRING_REQUIRED", "message": "device pairing required", "details": map[string]any{"requestId": "pair-1"}}})
+			_ = connection.Write(ctx, websocket.MessageText, payload)
+			return
+		}
+		if connect.Params.Device.ID != firstDeviceID {
+			t.Errorf("device identity changed across pairing retry")
+			return
+		}
+		hello := map[string]any{"type": "hello-ok", "protocol": 4, "auth": map[string]any{"deviceToken": "paired", "role": "operator", "scopes": connect.Params.Scopes}}
+		payload, _ := json.Marshal(map[string]any{"type": "res", "id": connect.ID, "ok": true, "payload": hello})
+		_ = connection.Write(ctx, websocket.MessageText, payload)
+		_, raw, _ = connection.Read(ctx)
+		var request struct{ ID string }
+		_ = json.Unmarshal(raw, &request)
+		payload, _ = json.Marshal(map[string]any{"type": "res", "id": request.ID, "ok": true, "payload": map[string]any{"sessions": []any{}}})
+		_ = connection.Write(ctx, websocket.MessageText, payload)
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClient("ws"+strings.TrimPrefix(server.URL, "http"), "secret", filepath.Join(t.TempDir(), "device.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Sessions []any `json:"sessions"`
+	}
+	if err := client.Request(context.Background(), "sessions.list", map[string]any{}, &result); err == nil || !strings.Contains(err.Error(), "PAIRING_REQUIRED") || !strings.Contains(err.Error(), "pair-1") {
+		t.Fatalf("pairing error = %v", err)
+	}
+	if err := client.Request(context.Background(), "sessions.list", map[string]any{}, &result); err != nil {
+		t.Fatal(err)
 	}
 }
 

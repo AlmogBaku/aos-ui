@@ -175,14 +175,14 @@ func TestHistoryProjectsTextRunQuestionsAndArtifacts(t *testing.T) {
 	rpc.responses["sessions.list"] = map[string]any{"sessions": []any{map[string]any{"key": sessionKey(scope()), "agentId": "interviewer"}}}
 	rpc.responses["chat.history"] = map[string]any{
 		"messages": []any{
-			map[string]any{"id": "u1", "role": "user", "content": "Hello"},
-			map[string]any{"id": "a1", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Hi"}, map[string]any{"type": "artifact", "artifact": map[string]any{"id": "art-1", "title": "report.pdf", "mimeType": "application/pdf", "sizeBytes": 12}}}},
+			map[string]any{"id": "u1", "role": "user", "content": "Hello", "__openclaw": map[string]any{"seq": 101}},
+			map[string]any{"id": "a1", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Hi"}, map[string]any{"type": "artifact", "artifact": map[string]any{"id": "art-1", "title": "report.pdf", "mimeType": "application/pdf", "sizeBytes": 12}}}, "__openclaw": map[string]any{"seq": 205}},
 		},
 		"sessionInfo": map[string]any{"hasActiveRun": true, "activeRunIds": []string{"run-1"}},
 	}
 	rpc.responses["artifacts.list"] = map[string]any{"artifacts": []any{map[string]any{
 		"id": "art-1", "type": "file", "title": "report.pdf", "mimeType": "application/pdf", "sizeBytes": 12,
-		"sessionKey": sessionKey(scope()), "messageSeq": 2, "download": map[string]any{"mode": "bytes"},
+		"sessionKey": sessionKey(scope()), "messageSeq": 205, "download": map[string]any{"mode": "bytes"},
 	}}}
 	rpc.responses["question.list"] = map[string]any{"questions": []any{map[string]any{
 		"id": "q1", "agentId": "interviewer", "sessionKey": sessionKey(scope()), "status": "pending", "expiresAtMs": time.Now().Add(time.Hour).UnixMilli(),
@@ -192,7 +192,7 @@ func TestHistoryProjectsTextRunQuestionsAndArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Running || len(got.Messages) != 2 || got.Messages[1].Content[1].Artifact.Source.Reference != "art-1" || len(got.PendingQuestions) != 1 {
+	if !got.Running || len(got.Messages) != 2 || len(got.Messages[1].Content) != 2 || got.Messages[1].Content[1].Artifact == nil || got.Messages[1].Content[1].Artifact.Source.Reference != "art-1" || len(got.PendingQuestions) != 1 {
 		t.Fatalf("snapshot = %#v", got)
 	}
 	for _, call := range rpc.requests {
@@ -202,6 +202,27 @@ func TestHistoryProjectsTextRunQuestionsAndArtifacts(t *testing.T) {
 		if call.method == "artifacts.list" && !reflect.DeepEqual(call.params, map[string]any{"sessionKey": sessionKey(scope()), "agentId": scope().Agent}) {
 			t.Fatalf("artifacts.list is not exactly scoped: %#v", call.params)
 		}
+	}
+}
+
+func TestHistoryUsesAuthoritativeNoncontiguousSequenceAndKeepsArtifactOnlyMessage(t *testing.T) {
+	a, rpc := newFake()
+	rpc.responses["sessions.list"] = map[string]any{"sessions": []any{map[string]any{"key": sessionKey(scope()), "agentId": scope().Agent}}}
+	rpc.responses["chat.history"] = map[string]any{"messages": []any{
+		map[string]any{"id": "u1", "role": "user", "content": "Earlier page", "__openclaw": map[string]any{"seq": 400}},
+		map[string]any{"id": "a1", "role": "assistant", "content": []any{map[string]any{"type": "artifact", "artifact": map[string]any{"id": "untrusted"}}}, "__openclaw": map[string]any{"seq": 917}},
+		map[string]any{"id": "a2", "role": "assistant", "content": "Later", "__openclaw": map[string]any{"seq": 1204}},
+	}}
+	rpc.responses["artifacts.list"] = map[string]any{"artifacts": []any{map[string]any{
+		"id": "receipt", "type": "file", "title": "result.csv", "sessionKey": sessionKey(scope()), "messageSeq": 917, "download": map[string]any{"mode": "bytes"},
+	}}}
+	rpc.responses["question.list"] = map[string]any{"questions": []any{}}
+	got, err := a.History(context.Background(), scope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 3 || len(got.Messages[1].Content) != 1 || got.Messages[1].Content[0].Artifact == nil || got.Messages[1].Content[0].Artifact.ID != "receipt" {
+		t.Fatalf("messages = %#v", got.Messages)
 	}
 }
 

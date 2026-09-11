@@ -47,6 +47,8 @@ from the guest-gateway environment; reconnect uses the scoped device token.
 
 Guest history projects artifacts only from Session-scoped authoritative
 `artifacts.list` receipts with a byte-download mode and exact message sequence;
-unscoped chat-content lookalikes are ignored. The browser-only OpenClaw Compose
-overlay does not run the guest gateway. If you containerize it separately,
-bind-mount the device-file directory as writable persistent private storage.
+the receipt's `messageSeq` must match the transcript message's authoritative
+`__openclaw.seq`, including paginated or noncontiguous history. Unscoped
+chat-content lookalikes are ignored. The browser-only OpenClaw Compose overlay
+does not run the guest gateway. If you containerize it separately, bind-mount
+the device-file directory as writable persistent private storage.

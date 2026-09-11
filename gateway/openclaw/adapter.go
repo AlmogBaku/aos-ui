@@ -161,8 +161,14 @@ func (a *Adapter) History(ctx context.Context, scope conversation.Scope) (conver
 	messages := make([]conversation.Message, 0, len(history.Messages)+1)
 	messageIndexes := make(map[int]int, len(history.Messages))
 	for index, raw := range history.Messages {
-		if message, ok := projectMessage(raw, fmt.Sprintf("openclaw-%d", index)); ok {
-			messageIndexes[index+1] = len(messages)
+		if message, sequence, ok := projectMessage(raw, fmt.Sprintf("openclaw-%d", index)); ok {
+			if sequence > 0 {
+				if _, duplicate := messageIndexes[sequence]; duplicate {
+					messageIndexes[sequence] = -1
+				} else {
+					messageIndexes[sequence] = len(messages)
+				}
+			}
 			messages = append(messages, message)
 		}
 	}
@@ -179,7 +185,7 @@ func (a *Adapter) History(ctx context.Context, scope conversation.Scope) (conver
 	}
 	for _, artifact := range artifactResult.Artifacts {
 		messageIndex, ok := messageIndexes[artifact.MessageSeq]
-		if !ok || messages[messageIndex].Role != "assistant" || artifact.ID == "" || artifact.Title == "" || artifact.SessionKey != sessionKey(scope) || artifact.Download.Mode != "bytes" {
+		if !ok || messageIndex < 0 || messages[messageIndex].Role != "assistant" || artifact.ID == "" || artifact.Title == "" || artifact.SessionKey != sessionKey(scope) || artifact.Download.Mode != "bytes" {
 			continue
 		}
 		messages[messageIndex].Content = append(messages[messageIndex].Content, conversation.Part{Type: "artifact", Artifact: &conversation.Artifact{
@@ -187,6 +193,13 @@ func (a *Adapter) History(ctx context.Context, scope conversation.Scope) (conver
 			Source: conversation.ArtifactSource{Type: "provider", Reference: artifact.ID},
 		}})
 	}
+	visibleMessages := messages[:0]
+	for _, message := range messages {
+		if len(message.Content) > 0 {
+			visibleMessages = append(visibleMessages, message)
+		}
+	}
+	messages = visibleMessages
 	if history.InFlightRun != nil && history.InFlightRun.Text != "" {
 		messages = append(messages, conversation.Message{ID: history.InFlightRun.RunID, Role: "assistant", Content: []conversation.Part{{Type: "text", Text: history.InFlightRun.Text}}})
 	}
@@ -200,14 +213,17 @@ func (a *Adapter) History(ctx context.Context, scope conversation.Scope) (conver
 	}, nil
 }
 
-func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Message, bool) {
+func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Message, int, bool) {
 	var row struct {
-		ID      string          `json:"id"`
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		ID       string          `json:"id"`
+		Role     string          `json:"role"`
+		Content  json.RawMessage `json:"content"`
+		OpenClaw struct {
+			Sequence int `json:"seq"`
+		} `json:"__openclaw"`
 	}
 	if json.Unmarshal(raw, &row) != nil || (row.Role != "user" && row.Role != "assistant") {
-		return conversation.Message{}, false
+		return conversation.Message{}, 0, false
 	}
 	if row.ID == "" {
 		row.ID = fallbackID
@@ -215,16 +231,16 @@ func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Messag
 	var text string
 	if json.Unmarshal(row.Content, &text) == nil {
 		if strings.TrimSpace(text) == "" {
-			return conversation.Message{}, false
+			return conversation.Message{ID: row.ID, Role: row.Role}, row.OpenClaw.Sequence, row.Role == "assistant" && row.OpenClaw.Sequence > 0
 		}
-		return conversation.Message{ID: row.ID, Role: row.Role, Content: []conversation.Part{{Type: "text", Text: text}}}, true
+		return conversation.Message{ID: row.ID, Role: row.Role, Content: []conversation.Part{{Type: "text", Text: text}}}, row.OpenClaw.Sequence, true
 	}
 	var nativeParts []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
 	if json.Unmarshal(row.Content, &nativeParts) != nil {
-		return conversation.Message{}, false
+		return conversation.Message{}, 0, false
 	}
 	parts := make([]conversation.Part, 0, len(nativeParts))
 	for _, part := range nativeParts {
@@ -233,7 +249,7 @@ func projectMessage(raw json.RawMessage, fallbackID string) (conversation.Messag
 			parts = append(parts, conversation.Part{Type: "text", Text: part.Text})
 		}
 	}
-	return conversation.Message{ID: row.ID, Role: row.Role, Content: parts}, len(parts) > 0
+	return conversation.Message{ID: row.ID, Role: row.Role, Content: parts}, row.OpenClaw.Sequence, len(parts) > 0 || (row.Role == "assistant" && row.OpenClaw.Sequence > 0)
 }
 
 func content(input conversation.SendInput) (string, []map[string]any, error) {

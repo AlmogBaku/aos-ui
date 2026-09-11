@@ -34,8 +34,9 @@ type wireFrame struct {
 	OK      bool            `json:"ok,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	Error   *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+		Details json.RawMessage `json:"details"`
 	} `json:"error,omitempty"`
 }
 
@@ -112,7 +113,9 @@ func (c *gatewayClient) connect(ctx context.Context) (*websocket.Conn, error) {
 	if err != nil {
 		return closeWithError(err)
 	}
-	const clientID, clientMode, platform, deviceFamily = "gateway-client", "backend", "go", "server"
+	// The reserved gateway-client/backend identity bypasses normal pairing on
+	// loopback and therefore cannot mint the persistent device token we require.
+	const clientID, clientMode, platform, deviceFamily = "cli", "cli", "go", "server"
 	signedPayload := strings.Join([]string{
 		"v3", device.DeviceID, clientID, clientMode, "operator", strings.Join(requiredScopes, ","),
 		fmt.Sprintf("%d", challengePayload.TS), authToken, challengePayload.Nonce, platform, deviceFamily,
@@ -124,7 +127,7 @@ func (c *gatewayClient) connect(ctx context.Context) (*websocket.Conn, error) {
 	id := c.id()
 	params := map[string]any{
 		"minProtocol": protocolVersion, "maxProtocol": protocolVersion,
-		"client": map[string]any{"id": clientID, "displayName": "AOS Gateway", "version": "1", "platform": platform, "mode": clientMode, "instanceId": id},
+		"client": map[string]any{"id": clientID, "displayName": "AOS Gateway", "version": "1", "platform": platform, "deviceFamily": deviceFamily, "mode": clientMode, "instanceId": id},
 		"caps":   []string{"tool-events", "session-events"},
 		"role":   "operator", "scopes": requiredScopes,
 		"auth":   map[string]any{"token": authToken},
@@ -270,6 +273,9 @@ func writeJSON(ctx context.Context, connection *websocket.Conn, value any) error
 func frameError(frame wireFrame) error {
 	if frame.Error == nil {
 		return errors.New("OpenClaw request failed")
+	}
+	if len(frame.Error.Details) > 0 && string(frame.Error.Details) != "null" {
+		return fmt.Errorf("OpenClaw request failed (%s): %s: %s", frame.Error.Code, frame.Error.Message, frame.Error.Details)
 	}
 	return fmt.Errorf("OpenClaw request failed (%s): %s", frame.Error.Code, frame.Error.Message)
 }
