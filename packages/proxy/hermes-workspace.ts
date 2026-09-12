@@ -56,12 +56,14 @@ export type HermesWorkspaceCapabilities = {
     source: "provider-usage-or-estimate"
     breakdown: "provider-categories"
   }
-  todos: {
-    status: "available"
-    scope: "session"
-    mode: "read-only-projection"
-    source: "latest-completed-todo-tool-result"
-  }
+  todos:
+    | {
+        status: "available"
+        scope: "session"
+        mode: "read-only-projection"
+        source: "latest-completed-todo-tool-result"
+      }
+    | { status: "unavailable"; reason: "history-unavailable" }
   activity: {
     status: "available"
     scope: "attached-active-session"
@@ -397,12 +399,14 @@ export function createHermesWorkspaceOperations(input: {
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },
-        todos: {
-          status: "available",
-          scope: "session",
-          mode: "read-only-projection",
-          source: "latest-completed-todo-tool-result",
-        },
+        todos: input.transport.history
+          ? {
+              status: "available",
+              scope: "session",
+              mode: "read-only-projection",
+              source: "latest-completed-todo-tool-result",
+            }
+          : { status: "unavailable", reason: "history-unavailable" },
         activity: {
           status: "available",
           scope: "attached-active-session",

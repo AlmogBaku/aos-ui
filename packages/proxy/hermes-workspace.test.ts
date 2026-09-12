@@ -21,6 +21,7 @@ function harness(overrides?: {
     params: Readonly<Record<string, unknown>>
   ) => unknown
   history?: readonly unknown[]
+  historyAvailable?: boolean
 }) {
   const request = vi.fn(
     async (method: string, params: Readonly<Record<string, unknown>>) =>
@@ -34,7 +35,10 @@ function harness(overrides?: {
     history,
     operations: createHermesWorkspaceOperations({
       authority: { requireSession },
-      transport: { request, history },
+      transport: {
+        request,
+        ...(overrides?.historyAvailable === false ? {} : { history }),
+      },
     }),
   }
 }
@@ -68,6 +72,15 @@ describe("Hermes workspace operations", () => {
         coverage: "active-session-only",
         source: "session.info",
       },
+    })
+  })
+
+  it("does not advertise projected Todos when scoped durable history is unavailable", () => {
+    const { operations } = harness({ historyAvailable: false })
+
+    expect(operations.capabilities().todos).toEqual({
+      status: "unavailable",
+      reason: "history-unavailable",
     })
   })
 
