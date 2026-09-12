@@ -1,25 +1,12 @@
-# Run AOS with OpenClaw
+# OpenClaw (planned/unavailable)
 
-AOS attaches to an independently installed OpenClaw Gateway through its official protocol-v4 WebSocket. AOS does not install OpenClaw, manage its model credentials, or store its device identity in public runtime configuration.
+AOS does not currently attach a browser to OpenClaw. The Hermes-first
+normalized deployment returns `404` for `/openclaw`; the retained Compose
+overlay and runtime-config example are explicitly fail-closed. OpenClaw does
+not install, manage, or expose model credentials through AOS.
 
-## Browser connection
-
-Start OpenClaw with a Gateway endpoint reachable by AOS, then run:
-
-```bash
-AOS_UI_RUNTIME_MODE=openclaw \
-AOS_UI_OPENCLAW_BASE_URL=ws://127.0.0.1:18789 \
-  bun run dev
-```
-
-For a same-origin container deployment, use the supplied proxy:
-
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
-  docker compose -f compose.yaml -f compose.openclaw.yaml up --build
-```
-
-The browser performs OpenClaw's official challenge, device pairing, and scoped token flow. Bootstrap credentials are entered in the connection form, retained only in memory, and never belong in `runtime-config.json` or a `VITE_*` value. Grant `operator.read`, `operator.write`, `operator.questions`, and `operator.approvals`; Talk access is needed only for speech.
+There is no supported browser connection command until the normalized proxy,
+runtime configuration, and live acceptance coverage are restored together.
 
 ## Optional native tools
 

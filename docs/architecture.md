@@ -24,7 +24,13 @@ Assistant UI manages the frontend projection of threads, messages, runs, branche
 
 ## Runtime boundaries
 
-OpenCode, Hermes, and OpenClaw have independent native integrations behind the shared harness-runtime contract. OpenClaw uses its official Gateway WebSocket, not AG-UI. Generic AG-UI uses one HTTP Agent per Session and a separate workspace service. Fixture mode is explicit synthetic data for evaluation and tests; invalid real-runtime configuration renders an unavailable screen rather than falling back to fixtures.
+OpenCode, Hermes, and the planned OpenClaw integration have independent native
+adapters behind the shared harness-runtime contract. OpenClaw uses its official
+Gateway WebSocket, not AG-UI, but is unavailable on the current normalized
+deployment path. Generic AG-UI uses one HTTP Agent per Session and a separate
+workspace service. Fixture mode is explicit synthetic data for evaluation and
+tests; invalid real-runtime configuration renders an unavailable screen rather
+than falling back to fixtures.
 
 Browser code never imports native filesystem writers or provider implementations. Native packages install presentation tools and, only where the harness exposes the required safe authority, creator support. Agent profiles, worktrees, secrets, and runtime state remain outside the frontend checkout.
 

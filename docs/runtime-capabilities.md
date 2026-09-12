@@ -2,25 +2,28 @@
 
 AOS selects exactly one runtime mode per deployment. Unsupported behavior remains visibly unavailable instead of being emulated by the browser.
 
-OpenCode, Hermes, and OpenClaw are installed and run independently of AOS. The matrix describes the complete supported composition; rows backed by an AOS native integration require that optional integration to be installed in the runtime.
+OpenCode and Hermes are installed and run independently of AOS. OpenClaw is a
+planned integration but unavailable on the current normalized deployment path.
+The matrix describes the deployable composition; rows backed by an AOS native
+integration require that optional integration to be installed in the runtime.
 
-| Capability                      | Fixture      | OpenCode                 | Hermes                                   | OpenClaw                                      | Generic AG-UI               |
-| ------------------------------- | ------------ | ------------------------ | ---------------------------------------- | --------------------------------------------- | --------------------------- |
-| Provider-backed durable history | No           | Yes                      | Yes                                      | Native                                        | Workspace service           |
-| Multiple Agents and Sessions    | Demo data    | Yes                      | Yes                                      | Native                                        | Workspace service           |
-| Create Sessions                 | Temporary    | Yes                      | Yes                                      | Native                                        | Required workspace endpoint |
-| Agent catalog                   | Demo catalog | Native                   | Native profiles                          | Native, read-only in AOS                       | Required workspace endpoint |
-| Change Agent visibility         | Temporary    | Read-only                | Native                                   | No exact operation                            | Optional workspace mutation |
-| Agent creation                  | No           | Optional AOS integration | Optional integration; safe write blocked | Unavailable across external-plugin authority   | No shared support           |
-| Session Todos                   | Demo data    | Native                   | Projected from native tool results       | No; tasks/goals are not relabeled              | No shared support           |
-| Workspace-wide Activity         | Demo events  | Yes                      | Active Session only                      | Active Session only                            | Active Session only         |
-| Questions                       | Demo flows   | Native batches           | Native clarification                     | Native, non-secret questions                   | Provider-dependent messages |
-| Execution approvals             | Demo flows   | Native                   | Native                                   | Native operator approvals                      | Provider-dependent messages |
-| Attachments                     | Demo flows   | Native                   | Native                                   | Native policy-bounded base64                    | Agent-dependent             |
-| Edit/regenerate                 | Demo flows   | Native                   | Native truncate/resubmit                 | Disabled; rewind is not equivalent             | Provider-dependent          |
-| Published Artifacts             | Demo data    | Optional AOS integration | Optional AOS integration                 | Native authoritative receipts/downloads only   | Shared presentation tools   |
-| Rich presentation tools         | Demo data    | Optional AOS integration | Optional AOS integration                 | Optional plugin; textual/JSON fallback          | Shared presentation tools   |
-| Voice                           | No           | No                       | Native STT/TTS                           | Native TTS only; no exact STT                  | No                          |
+| Capability                      | Fixture      | OpenCode                 | Hermes                                   | OpenClaw              | Generic AG-UI               |
+| ------------------------------- | ------------ | ------------------------ | ---------------------------------------- | --------------------- | --------------------------- |
+| Provider-backed durable history | No           | Yes                      | Yes                                      | Unavailable (cutover) | Workspace service           |
+| Multiple Agents and Sessions    | Demo data    | Yes                      | Yes                                      | Unavailable (cutover) | Workspace service           |
+| Create Sessions                 | Temporary    | Yes                      | Yes                                      | Unavailable (cutover) | Required workspace endpoint |
+| Agent catalog                   | Demo catalog | Native                   | Native profiles                          | Unavailable (cutover) | Required workspace endpoint |
+| Change Agent visibility         | Temporary    | Read-only                | Native                                   | Unavailable (cutover) | Optional workspace mutation |
+| Agent creation                  | No           | Optional AOS integration | Optional integration; safe write blocked | Unavailable (cutover) | No shared support           |
+| Session Todos                   | Demo data    | Native                   | Projected from native tool results       | Unavailable (cutover) | No shared support           |
+| Workspace-wide Activity         | Demo events  | Yes                      | Active Session only                      | Unavailable (cutover) | Active Session only         |
+| Questions                       | Demo flows   | Native batches           | Native clarification                     | Unavailable (cutover) | Provider-dependent messages |
+| Execution approvals             | Demo flows   | Native                   | Native                                   | Unavailable (cutover) | Provider-dependent messages |
+| Attachments                     | Demo flows   | Native                   | Native                                   | Unavailable (cutover) | Agent-dependent             |
+| Edit/regenerate                 | Demo flows   | Native                   | Native truncate/resubmit                 | Unavailable (cutover) | Provider-dependent          |
+| Published Artifacts             | Demo data    | Optional AOS integration | Optional AOS integration                 | Unavailable (cutover) | Shared presentation tools   |
+| Rich presentation tools         | Demo data    | Optional AOS integration | Optional AOS integration                 | Unavailable (cutover) | Shared presentation tools   |
+| Voice                           | No           | No                       | Native STT/TTS                           | Unavailable (cutover) | No                          |
 
 ## Fixture
 
@@ -36,7 +39,9 @@ Hermes owns profiles, Sessions, authentication, speech providers, tools, and per
 
 ## OpenClaw
 
-OpenClaw owns Agents, Sessions, Gateway authentication, execution, artifacts, and persistence. AOS uses the official Gateway protocol. The optional external plugin adds structured presentation tools and safe artifact-path validation with textual fallback. External plugins cannot register native downloadable artifacts, create Agents, or initiate cross-Agent Sessions through the required authority boundary, so AOS does not advertise those operations. Guest chat supports scoped history, send, Stop, questions, attachments, authoritative native artifact downloads, and TTS; edit/regenerate, branches, Todos, and transcription remain unavailable.
+OpenClaw remains a code-level integration, but its normalized deployment lane is
+unavailable in this cutover. The retained adapter and guest documentation do
+not make `/openclaw` or a browser Gateway route deployable.
 
 ## Generic AG-UI
 

@@ -94,14 +94,12 @@ only `{ "mode": "aos" }`.
 
 Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
 
-## Attach existing OpenClaw
+## OpenClaw status
 
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
-  docker compose -f compose.yaml -f compose.openclaw.yaml up --build
-```
-
-The OpenClaw overlay starts no runtime. It forwards `/openclaw` WebSockets to `AOS_UI_OPENCLAW_HOST:AOS_UI_OPENCLAW_PORT`; browser device/token authentication remains native. See [Run with OpenClaw](runtimes/openclaw.md).
+OpenClaw is planned but unavailable on the Hermes-first normalized deployment
+path. The retained `compose.openclaw.yaml` overlay and
+`deploy/runtime-config.openclaw.json` are deliberately fail-closed and do not
+provide a browser Gateway route or accept OpenClaw host, port, or credentials.
 
 ## Use hot reload in containers
 
@@ -184,7 +182,8 @@ Provider persistence remains native:
 - Independently operated OpenCode keeps all state in its own worktree and native data directories.
 - The optional OpenCode overlay uses the external worktree plus the `opencode-data` named volume.
 - Hermes keeps all state in the operator-managed Hermes installation.
-- OpenClaw keeps all state and device credentials in the operator-managed OpenClaw installation.
+- The separately operated OpenClaw guest gateway keeps all state and device
+  credentials in its own installation; the browser runtime lane is unavailable.
 - The web container holds no conversation database.
 
 Stop AOS with the same file set used to start it. For the web-only attachment:
@@ -209,7 +208,6 @@ docker compose -f compose.yaml config --quiet
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
 docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
-docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
 ```
 
 When runtime container behavior changes, also build the affected image and
@@ -220,12 +218,12 @@ smoke its health and streaming endpoints.
 The old native forwarding artifacts remain in the checkout until parity is
 proven and are not part of the Hermes operator deployment:
 
-- the local Vite Hermes/OpenClaw forwarding shortcuts and their direct runtime
-  configuration examples;
+- the local Vite Hermes forwarding shortcut and its direct runtime configuration
+  example; OpenClaw's runtime example is already fail-closed;
 - the optional Go `aos-gateway` guest listener, which still owns the public
   `/api/guest/*` HTTP surface while the TypeScript proxy's guest listener
   wiring is completed; and
-- alternate OpenCode/OpenClaw Compose overlays and live acceptance coverage.
+- the planned OpenClaw deployment overlay and live acceptance coverage.
 
 Delete those artifacts only after an approved Hermes operator and guest
 acceptance run proves authentication, Agent/Session ownership, history,

@@ -46,7 +46,71 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
-  location ^~ /api/aos/v1/ {
+  # The default AOS run body is bounded by the proxy at 1,100,000 bytes.
+  # Keep Nginx at the same ceiling while allowing the larger media envelopes
+  # only on their normalized, server-owned endpoints below.
+  location /api/aos/v1/ {
+    client_max_body_size 1100000;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $aos_upstream http://${AOS_UI_PROXY_HOST}:${AOS_UI_PROXY_PORT};
+    proxy_pass $aos_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ~ ^/api/aos/v1/agents/[^/]+/sessions/[^/]+/attachments/stage$ {
+    client_max_body_size 35500000;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $aos_upstream http://${AOS_UI_PROXY_HOST}:${AOS_UI_PROXY_PORT};
+    proxy_pass $aos_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ~ ^/api/aos/v1/agents/[^/]+/sessions/[^/]+/audio/transcribe$ {
+    client_max_body_size 7500000;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $aos_upstream http://${AOS_UI_PROXY_HOST}:${AOS_UI_PROXY_PORT};
+    proxy_pass $aos_upstream;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ~ ^/api/aos/v1/agents/[^/]+/sessions/[^/]+/audio/speak$ {
+    client_max_body_size 40000;
     resolver 127.0.0.11 valid=10s ipv6=off;
     set $aos_upstream http://${AOS_UI_PROXY_HOST}:${AOS_UI_PROXY_PORT};
     proxy_pass $aos_upstream;

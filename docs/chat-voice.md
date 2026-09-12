@@ -1,6 +1,9 @@
 # Use voice with Hermes
 
-AOS uses Hermes's native speech services for transcription and read-aloud. OpenClaw exposes native read-aloud when its Gateway advertises TTS, but has no exact shared transcription operation. There is no browser speech fallback, extra AOS speech server, or separate voice Agent.
+AOS uses Hermes's native speech services for transcription and read-aloud. The
+planned OpenClaw lane is unavailable in the current normalized deployment.
+There is no browser speech fallback, extra AOS speech server, or separate voice
+Agent.
 
 Voice support is implemented for evaluation but still requires live acceptance with an approved, speech-enabled Hermes profile. Browser mocks verify orchestration, not provider availability or long-response completeness.
 

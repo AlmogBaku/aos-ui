@@ -225,7 +225,7 @@ describe("container orchestration", () => {
     )
   })
 
-  it("forwards to independently operated OpenClaw without exposing credentials", () => {
+  it("keeps the planned OpenClaw overlay fail-closed", () => {
     const config = composeConfig(["compose.yaml", "compose.openclaw.yaml"], {
       AOS_UI_RUNTIME_CONFIG_FILE: resolve(
         root,
@@ -234,16 +234,26 @@ describe("container orchestration", () => {
     })
 
     expect(Object.keys(config.services)).toEqual(["web"])
-    expect(config.services.web.environment).toMatchObject({
-      AOS_UI_OPENCLAW_HOST: "host.docker.internal",
-      AOS_UI_OPENCLAW_PORT: "18789",
-    })
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_OPENCLAW_HOST"
+    )
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_OPENCLAW_PORT"
+    )
     expect(config.services.web.environment).not.toHaveProperty(
       "AOS_GATEWAY_OPENCLAW_TOKEN"
     )
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.openclaw.json")
     )
+    expect(
+      JSON.parse(
+        readFileSync(
+          resolve(root, "deploy/runtime-config.openclaw.json"),
+          "utf8"
+        )
+      )
+    ).toEqual({ status: "unavailable", reason: "invalid-runtime-mode" })
   })
 
   it("uses the Vite development target and source mount", () => {
@@ -285,7 +295,12 @@ describe("container orchestration", () => {
     expect(nginx).toContain("location = /api/health")
     expect(nginx).toContain("location = /runtime-config.json")
     expect(nginx).toContain("location = /api/aos/v1")
-    expect(nginx).toContain("location ^~ /api/aos/v1/")
+    expect(nginx).toContain("location /api/aos/v1/")
+    expect(nginx).not.toContain("location ^~ /api/aos/v1/")
+    expect(nginx).toContain("client_max_body_size 1100000;")
+    expect(nginx).toContain("client_max_body_size 35500000;")
+    expect(nginx).toContain("client_max_body_size 7500000;")
+    expect(nginx).toContain("client_max_body_size 40000;")
     expect(nginx).toContain("proxy_set_header Upgrade $http_upgrade;")
     expect(nginx).toContain("proxy_set_header Connection $connection_upgrade;")
     expect(nginx).toContain("proxy_set_header Origin $http_origin;")
@@ -315,8 +330,8 @@ describe("container orchestration", () => {
     expect(nginx).not.toContain("AOS_UI_HERMES_HOST")
     expect(nginx).not.toContain("AOS_UI_OPENCLAW_HOST")
     expect(nginx).not.toContain("/hermes/api/audio/transcribe")
-    expect(nginx.match(/proxy_pass/g)).toHaveLength(2)
-    expect(nginx.match(/proxy_pass \$aos_upstream/g)).toHaveLength(2)
+    expect(nginx.match(/proxy_pass/g)).toHaveLength(5)
+    expect(nginx.match(/proxy_pass \$aos_upstream/g)).toHaveLength(5)
     expect(nginx).toContain("private TypeScript proxy")
   })
 })

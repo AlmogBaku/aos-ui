@@ -9,7 +9,7 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 3. Remove unknown fields and credentials.
 4. For OpenCode, confirm `directory` is an absolute path understood by the server.
 5. For generic AG-UI, confirm both `runUrl` and `workspaceUrl` are present absolute HTTP(S) URLs.
-6. For OpenClaw, confirm `baseUrl` is a credential-free `ws://`/`wss://` URL or `/openclaw` proxy path; enter pairing credentials only in the connection UI.
+6. OpenClaw is unavailable on the current normalized deployment path; its retained runtime example intentionally renders unavailable.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
@@ -58,11 +58,12 @@ same-origin `/api/aos/v1` path.
 
 - Verify the workspace service implements every required endpoint in the [AG-UI guide](runtimes/ag-ui.md).
 
-## OpenClaw does not connect
+## OpenClaw is unavailable
 
-- Verify protocol v4 is enabled and the Gateway is reachable at the configured WebSocket URL.
-- Grant the browser device `operator.read` and `operator.write`, plus `operator.questions` and `operator.approvals` for those controls.
-- With Compose, use `compose.openclaw.yaml` and check `AOS_UI_OPENCLAW_HOST`/`AOS_UI_OPENCLAW_PORT`; never put a token in `runtime-config.json`.
+- The normalized Hermes-first deployment intentionally returns `404` for
+  `/openclaw` and does not attach a browser Gateway.
+- `compose.openclaw.yaml` and `deploy/runtime-config.openclaw.json` are retained
+  only as an explicit fail-closed marker; do not use them as a connection command.
 - For invited chat, set `AOS_GATEWAY_OPENCLAW_DEVICE_FILE` to an absolute writable persistent path. The file must be a regular `0600` file, not a symlink. If first start reports `PAIRING_REQUIRED`, run `openclaw devices list`, approve the exact current request with `openclaw devices approve <requestId>`, and restart the guest gateway.
 - If invited chat reports a missing scope, re-pair that device for exactly `operator.read`, `operator.write`, and `operator.questions`; do not delete or replace a working device file merely to bypass approval.
 - A missing Todo, visibility, edit/regenerate, creator, handoff, or STT control is an explicit capability limit, not a connection failure.

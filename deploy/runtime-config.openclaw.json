@@ -1,4 +1,4 @@
 {
-  "mode": "openclaw",
-  "baseUrl": "/openclaw"
+  "status": "unavailable",
+  "reason": "invalid-runtime-mode"
 }
