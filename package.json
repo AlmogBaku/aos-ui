@@ -38,6 +38,7 @@
     "clsx": "^2.1.1",
     "commander": "14.0.3",
     "hono": "4.13.5",
+    "jose": "6.2.12",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.40.0",
     "mermaid": "11.17.2",
