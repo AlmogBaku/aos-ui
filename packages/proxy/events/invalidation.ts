@@ -1,4 +1,8 @@
-import type { ReconnectCursorBinding } from "./cursor"
+import type {
+  ReconnectCursorBinding,
+  ReconnectCursorCodec,
+  ReconnectCursorSealClaims,
+} from "./cursor"
 
 const MAX_FRAME_BYTES = 16_384
 const MAX_STREAMS = 32
@@ -6,6 +10,7 @@ const MAX_IDENTIFIER_LENGTH = 256
 const MAX_STREAM_ID_LENGTH = 128
 const MAX_CURSOR_LENGTH = 4_096
 const MAX_AUTHORIZATION_DELAY_MS = 2_147_483_647
+const MAX_CURSOR_LIFETIME_SECONDS = 3_600
 
 export interface EventScope {
   workspaceId: string
@@ -55,13 +60,6 @@ export interface EventAuthorization {
   expiresAt: number
 }
 
-export interface ReconnectCursorService {
-  /** The result must be false for every invalid or mismatched cursor. */
-  open(cursor: string, binding: ReconnectCursorBinding): boolean
-  /** Creates an opaque cursor bound to this exact ready stream. */
-  seal(binding: ReconnectCursorBinding): string
-}
-
 export interface InvalidationConnectionOptions {
   /** Authorizes the exact authenticated principal/lane and requested Agent/Session. */
   authorize(request: {
@@ -77,7 +75,8 @@ export interface InvalidationConnectionOptions {
     invalidate(): void
     reset(): void
   }): Promise<NativeEventObservation>
-  cursor?: ReconnectCursorService
+  /** The actual sealed-cursor codec; no adapter or unbound cursor bridge. */
+  cursor?: ReconnectCursorCodec
   send(frame: ServerEventFrame): void
   close(code: number, reason: string): void
   now?: () => number
@@ -99,6 +98,7 @@ interface ActiveStream {
   generation: number
   ready: boolean
   stopped: boolean
+  observerStopped: boolean
   observer?: NativeEventObservation
   expiryTimer?: unknown
 }
@@ -129,10 +129,14 @@ export function createInvalidationConnection(
   }
 
   function stopStream(stream: ActiveStream) {
-    if (stream.stopped) return
-    stream.stopped = true
-    if (stream.expiryTimer !== undefined) cancel(stream.expiryTimer)
-    stream.observer?.stop()
+    if (!stream.stopped) {
+      stream.stopped = true
+      if (stream.expiryTimer !== undefined) cancel(stream.expiryTimer)
+    }
+    if (stream.observer !== undefined && !stream.observerStopped) {
+      stream.observerStopped = true
+      stream.observer.stop()
+    }
   }
 
   function wake(stream: ActiveStream, type: "invalidate" | "reset") {
@@ -197,7 +201,7 @@ export function createInvalidationConnection(
     if (
       frame.cursor !== undefined &&
       (options.cursor === undefined ||
-        !options.cursor.open(frame.cursor, binding))
+        options.cursor.open(frame.cursor, binding) === null)
     ) {
       options.send({
         type: "error",
@@ -213,17 +217,19 @@ export function createInvalidationConnection(
       generation: 0,
       ready: false,
       stopped: false,
+      observerStopped: false,
     }
     streams.set(stream.streamId, stream)
     try {
-      stream.observer = await options.observe({
+      const observer = await options.observe({
         scope: stream.scope,
         invalidate: () => wake(stream, "invalidate"),
         reset: () => wake(stream, "reset"),
       })
+      stream.observer = observer
     } catch {
       streams.delete(stream.streamId)
-      stream.stopped = true
+      stopStream(stream)
       options.send({
         type: "error",
         streamId: stream.streamId,
@@ -245,9 +251,17 @@ export function createInvalidationConnection(
       Math.min(remaining, MAX_AUTHORIZATION_DELAY_MS),
       () => expire(stream)
     )
+    const cursorClaims = cursorClaimsFor(
+      binding,
+      authorization.expiresAt,
+      now()
+    )
     let cursor: string | undefined
     try {
-      cursor = options.cursor?.seal(binding)
+      cursor =
+        options.cursor === undefined || cursorClaims === null
+          ? undefined
+          : options.cursor.seal(cursorClaims)
     } catch {
       stopStream(stream)
       streams.delete(stream.streamId)
@@ -307,6 +321,19 @@ export function createInvalidationConnection(
       finish()
     },
   }
+}
+
+function cursorClaimsFor(
+  binding: ReconnectCursorBinding,
+  authorizationExpiresAt: number,
+  currentTime: number
+): ReconnectCursorSealClaims | null {
+  const iat = Math.floor(currentTime / 1_000)
+  const exp = Math.min(
+    Math.floor(authorizationExpiresAt / 1_000),
+    iat + MAX_CURSOR_LIFETIME_SECONDS
+  )
+  return exp > iat ? { ...binding, iat, exp } : null
 }
 
 function parseClientFrame(raw: string | Uint8Array): ClientEventFrame | null {
