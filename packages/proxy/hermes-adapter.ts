@@ -16,6 +16,7 @@ import {
 } from "../protocol"
 import { HermesAuthenticationError, HermesHttpError } from "./hermes-transport"
 import { projectHermesHistory } from "./hermes-history"
+import type { HermesRunNative, HermesRunScope } from "./hermes-run"
 
 export interface HermesRpcTransport {
   request(
@@ -27,6 +28,10 @@ export interface HermesRpcTransport {
     init?: { method?: string; body?: unknown }
   ): Promise<unknown>
   authState?(): Promise<HermesAuthState>
+  observeEvents?(
+    listener: (event: unknown) => void,
+    disconnected: (error?: Error) => void
+  ): Promise<() => void>
   close?(): Promise<void>
 }
 
@@ -150,7 +155,7 @@ function timestamp(value: unknown) {
     : new Date(0).toISOString()
 }
 
-export class HermesServerAdapter {
+export class HermesServerAdapter implements HermesRunNative {
   constructor(private readonly transport: HermesRpcTransport) {}
 
   async authState(): Promise<HermesAuthState> {
@@ -236,6 +241,14 @@ export class HermesServerAdapter {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
+          sessionRun: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionStop: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
         },
       })
     }
@@ -268,6 +281,8 @@ export class HermesServerAdapter {
         sessionTitle: { status: "available" },
         sessionArchival: { status: "available" },
         sessionDeletion: { status: "available" },
+        sessionRun: { status: "available" },
+        sessionStop: { status: "available" },
       },
     })
   }
@@ -336,6 +351,114 @@ export class HermesServerAdapter {
 
   async close() {
     await this.transport.close?.()
+  }
+
+  async resume(scope: HermesRunScope) {
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.resume", {
+        session_id: scope.sessionId,
+        profile: scope.agentId,
+        omit_messages: true,
+      })
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    const liveSessionId = isRecord(payload)
+      ? nonEmptyString(payload.session_id)
+      : undefined
+    if (!liveSessionId) throw new HermesUnavailableError()
+    return { liveSessionId }
+  }
+
+  async observe(
+    _liveSessionId: string,
+    listener: (event: unknown) => void,
+    disconnected?: (error?: Error) => void
+  ) {
+    if (!this.transport.observeEvents) throw new HermesUnavailableError()
+    try {
+      return await this.transport.observeEvents(
+        listener,
+        disconnected ?? (() => undefined)
+      )
+    } catch {
+      throw new HermesUnavailableError()
+    }
+  }
+
+  async recover(liveSessionId: string, lastSeen?: number) {
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.events.since", {
+        session_id: liveSessionId,
+        ...(lastSeen === undefined ? {} : { last_seen: lastSeen }),
+      })
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.events))
+      throw new HermesUnavailableError()
+    const epoch = nonEmptyString(payload.epoch)
+    const nativeLastSeen = payload.last_seen
+    if (
+      !epoch ||
+      typeof nativeLastSeen !== "number" ||
+      !Number.isSafeInteger(nativeLastSeen) ||
+      nativeLastSeen < 0 ||
+      (payload.truncated !== undefined &&
+        typeof payload.truncated !== "boolean")
+    )
+      throw new HermesUnavailableError()
+    return {
+      epoch,
+      lastSeen: nativeLastSeen,
+      truncated: payload.truncated === true,
+      events: payload.events,
+    }
+  }
+
+  async submit(liveSessionId: string, prompt: { text: string; runId: string }) {
+    try {
+      await this.transport.request("prompt.submit", {
+        session_id: liveSessionId,
+        text: prompt.text,
+      })
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    return { acknowledgement: "accepted" as const }
+  }
+
+  async interrupt(liveSessionId: string) {
+    try {
+      await this.transport.request("session.interrupt", {
+        session_id: liveSessionId,
+      })
+    } catch {
+      throw new HermesUnavailableError()
+    }
+  }
+
+  async status(liveSessionId: string) {
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.active_list", {})
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.sessions))
+      throw new HermesUnavailableError()
+    const session = payload.sessions.find(
+      (value) => isRecord(value) && nonEmptyString(value.id) === liveSessionId
+    )
+    if (!session) return "idle" as const
+    if (!isRecord(session)) throw new HermesUnavailableError()
+    if (session.status === "waiting") return "waiting" as const
+    if (session.status === "working" || session.status === "starting")
+      return "running" as const
+    if (session.status === "idle") return "idle" as const
+    throw new HermesUnavailableError()
   }
 
   async listSessions(profile: string, limit: number, offset: number) {

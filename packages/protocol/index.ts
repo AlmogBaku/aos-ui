@@ -95,6 +95,8 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionTitle: OperationCapabilitySchema,
     sessionArchival: OperationCapabilitySchema,
     sessionDeletion: OperationCapabilitySchema,
+    sessionRun: OperationCapabilitySchema,
+    sessionStop: OperationCapabilitySchema,
   }),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
@@ -231,6 +233,11 @@ export const SessionPatchRequestSchema = z
     (value) => (value.title !== undefined) !== (value.archived !== undefined)
   )
 
+export const RunStopResponseSchema = z.strictObject({
+  status: z.enum(["stopping", "idle"]),
+})
+export type RunStopResponse = z.infer<typeof RunStopResponseSchema>
+
 export const ErrorResponseSchema = z.strictObject({
   error: z.strictObject({
     code: z.enum([
@@ -239,6 +246,8 @@ export const ErrorResponseSchema = z.strictObject({
       "invalid_request",
       "not_found",
       "revision_conflict",
+      "run_conflict",
+      "run_capacity_exceeded",
       "temporarily_unavailable",
       "internal_error",
     ]),

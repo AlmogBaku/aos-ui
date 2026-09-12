@@ -1,10 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 
 import { createProxyApp } from "../../../packages/proxy/app"
 import { HermesServerAdapter } from "../../../packages/proxy/hermes-adapter"
 import { createOperatorAuthenticator } from "../../../packages/proxy/operator-auth"
+import type { HermesRunEngine } from "../../../packages/proxy/hermes-run"
 import type { HarnessRuntime } from "../contracts"
 import { runtimeAdapter } from "./composition"
 
@@ -14,7 +15,26 @@ afterEach(() => {
 })
 
 describe("AOS normalized Session browser integration", () => {
-  it("lists owned Sessions newest-first and hydrates history only after an explicit switch", async () => {
+  it("opens normalized history, sends one turn, and issues separate deliberate Stop", async () => {
+    let finishObservation: (() => void) | undefined
+    const observationFinished = new Promise<void>((resolve) => {
+      finishObservation = resolve
+    })
+    const stop = vi.fn(async () => "stopping" as const)
+    const disconnect = vi.fn(() => finishObservation?.())
+    const start = vi.fn(async (_scope, input) => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_STARTED" as const,
+          threadId: "hermes:alpha:stored-alpha",
+          runId: input.runId,
+        }
+        await observationFinished
+      })(),
+      stop,
+      disconnect,
+      recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
+    }))
     const nativeRequest = vi.fn(async (method: string) => {
       if (method === "profiles.list")
         return {
@@ -100,13 +120,18 @@ describe("AOS normalized Session browser integration", () => {
         request: nativeRequest,
         http: nativeHttp,
       }),
+      runEngine: { start } as unknown as HermesRunEngine,
       logger: { info: vi.fn(), error: vi.fn() },
     })
     const browserFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
       app.request(
         new Request(new URL(String(input), "http://app.test"), {
           ...init,
-          headers: { cookie: "aos_operator=valid", ...init?.headers },
+          headers: {
+            cookie: "aos_operator=valid",
+            ...(init?.method === "POST" ? { origin: "http://app.test" } : {}),
+            ...init?.headers,
+          },
         })
       )
     )
@@ -206,5 +231,29 @@ describe("AOS normalized Session browser integration", () => {
     expect(browserState).not.toContain("private_path")
     expect(browserState).not.toContain("/api/sessions")
     expect(browserState).not.toContain("/srv/hermes")
+
+    act(() => {
+      supplied!.assistantRuntime.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Continue" }],
+      })
+    })
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+    expect(start.mock.calls[0]![1]).toMatchObject({
+      state: {},
+      messages: [
+        expect.objectContaining({ role: "user", content: "Continue" }),
+      ],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    act(() => supplied!.assistantRuntime.thread.cancelRun())
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1))
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
+      "/api/aos/v1/agents/alpha/sessions/hermes%3Aalpha%3Astored-alpha/runs/stop"
+    )
   })
 })

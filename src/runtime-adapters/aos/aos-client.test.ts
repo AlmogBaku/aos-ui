@@ -61,6 +61,8 @@ describe("provider-neutral AOS browser client", () => {
                 sessionTitle: { status: "available" },
                 sessionArchival: { status: "available" },
                 sessionDeletion: { status: "available" },
+                sessionRun: { status: "available" },
+                sessionStop: { status: "available" },
               },
             }
           : catalog
@@ -305,5 +307,43 @@ describe("provider-neutral AOS browser client", () => {
       ]
     )
     expect(JSON.stringify(fetcher.mock.calls)).not.toContain("/api/sessions")
+  })
+
+  it("sends deliberate Stop to the selected normalized Session route", async () => {
+    const session = {
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Research",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "running" as const,
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+        return Response.json({
+          sessions: [session],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      if (
+        path.endsWith(
+          "/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/stop"
+        )
+      )
+        return Response.json({ status: "stopping" }, { status: 202 })
+      throw new Error(`Unexpected normalized request: ${path}`)
+    })
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+
+    await expect(client.stopRun("hermes:researcher:stored")).resolves.toEqual({
+      status: "stopping",
+    })
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/stop",
+      expect.objectContaining({ method: "POST", credentials: "same-origin" })
+    )
   })
 })

@@ -26,6 +26,62 @@ function profile(hidden = false, revision: number | null = 7) {
 }
 
 describe("Hermes server adapter", () => {
+  it("implements the server-only native run boundary over exact Hermes operations", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return { session_id: "live-secret", running: false }
+      if (method === "session.events.since")
+        return {
+          epoch: "epoch-1",
+          last_seen: 4,
+          truncated: false,
+          events: [],
+        }
+      if (method === "prompt.submit") return { accepted: true }
+      if (method === "session.interrupt") return { interrupted: true }
+      if (method === "session.active_list")
+        return { sessions: [{ id: "live-secret", status: "working" }] }
+      throw new Error(`unexpected ${method}`)
+    })
+    const stopObservation = vi.fn()
+    const observeEvents = vi.fn(async () => stopObservation)
+    const adapter = new HermesServerAdapter({ request, observeEvents })
+    const scope = {
+      agentId: "researcher",
+      sessionId: "stored",
+      threadId: "hermes:researcher:stored",
+    }
+
+    await expect(adapter.resume(scope)).resolves.toEqual({
+      liveSessionId: "live-secret",
+    })
+    await expect(
+      adapter.observe("live-secret", vi.fn(), vi.fn())
+    ).resolves.toBe(stopObservation)
+    await expect(adapter.recover("live-secret", 2)).resolves.toEqual({
+      epoch: "epoch-1",
+      lastSeen: 4,
+      truncated: false,
+      events: [],
+    })
+    await expect(
+      adapter.submit("live-secret", { text: "Hello", runId: "run-1" })
+    ).resolves.toEqual({ acknowledgement: "accepted" })
+    await expect(adapter.interrupt("live-secret")).resolves.toBeUndefined()
+    await expect(adapter.status("live-secret")).resolves.toBe("running")
+    expect(request.mock.calls).toEqual([
+      [
+        "session.resume",
+        { session_id: "stored", profile: "researcher", omit_messages: true },
+      ],
+      ["session.events.since", { session_id: "live-secret", last_seen: 2 }],
+      ["prompt.submit", { session_id: "live-secret", text: "Hello" }],
+      ["session.interrupt", { session_id: "live-secret" }],
+      ["session.active_list", {}],
+    ])
+    expect(observeEvents).toHaveBeenCalledTimes(1)
+  })
+
   it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
     const rows = (profileName: string, newest: number, count: number) =>
       Array.from({ length: count }, (_, index) => ({

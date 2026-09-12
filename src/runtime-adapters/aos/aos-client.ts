@@ -1,9 +1,15 @@
 import type { z } from "zod"
+import {
+  HttpAgent,
+  RunAgentInputSchema,
+  type HttpAgentFetchFn,
+} from "@ag-ui/client"
 
 import {
   AgentCatalogResponseSchema,
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
+  RunStopResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
@@ -24,6 +30,52 @@ type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
 export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
+}
+
+export function createAosRunAgent({
+  agentId,
+  threadId,
+  fetcher = globalThis.fetch.bind(globalThis),
+}: {
+  agentId: string
+  threadId: string
+  fetcher?: typeof fetch
+}) {
+  const url = `/api/aos/v1/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
+  const runFetch: HttpAgentFetchFn = async (requestUrl, init) => {
+    if (requestUrl !== url || typeof init.body !== "string")
+      throw new Error("Invalid AOS run request")
+    let candidate: unknown
+    try {
+      candidate = JSON.parse(init.body) as unknown
+    } catch {
+      throw new Error("Invalid AOS run request")
+    }
+    const input = RunAgentInputSchema.parse(candidate)
+    const message = input.messages.at(-1)
+    if (!message || message.role !== "user")
+      throw new Error("AOS runs require a trailing user turn")
+    return fetcher(url, {
+      ...init,
+      credentials: "same-origin",
+      body: JSON.stringify({
+        threadId: input.threadId,
+        runId: input.runId,
+        ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+        state: {},
+        messages: [message],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      }),
+    })
+  }
+  return new HttpAgent({
+    url,
+    agentId,
+    threadId,
+    fetch: runFetch,
+  })
 }
 
 export class AosRemoteClient implements WorkspaceAdapter {
@@ -244,6 +296,15 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
     this.#sessions.delete(threadId)
     this.#sessionOwners.delete(threadId)
+  }
+
+  stopRun(threadId: string) {
+    const agentId = this.#owner(threadId)
+    return this.#read(
+      `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/stop`,
+      RunStopResponseSchema,
+      { method: "POST" }
+    )
   }
 
   async #patchSession(

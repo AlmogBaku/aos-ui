@@ -4,6 +4,7 @@ import { createProxyApp } from "./app"
 import { HermesServerAdapter } from "./hermes-adapter"
 import { HermesHttpError } from "./hermes-transport"
 import { createOperatorAuthenticator } from "./operator-auth"
+import { HermesRunPublicError, type HermesRunEngine } from "./hermes-run"
 
 const origin = "http://127.0.0.1:3000"
 
@@ -27,6 +28,730 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("streams an owned Session run and rejects cross-Agent scope before run I/O", async () => {
+    const start = vi.fn(async () => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_STARTED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+        }
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: async () => "idle" as const,
+      disconnect: vi.fn(),
+      recoveryPosition: () => ({ epoch: "epoch-1", lastSeen: 2 }),
+    }))
+    const runEngine = { start } as unknown as HermesRunEngine
+    const http = vi.fn(async () => ({
+      id: "stored",
+      profile: "researcher",
+      title: "Owned",
+    }))
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({ request: vi.fn(), http }),
+      runEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const body = JSON.stringify({
+      threadId: "hermes:researcher:stored",
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "user-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    const crossScope = await app.request(
+      request(
+        "/api/aos/v1/agents/other/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body,
+        }
+      )
+    )
+    expect(crossScope.status).toBe(404)
+    expect(start).not.toHaveBeenCalled()
+    expect(http).not.toHaveBeenCalled()
+
+    const response = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body,
+        }
+      )
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("text/event-stream")
+    expect(await response.text()).toBe(
+      'data: {"type":"RUN_STARTED","threadId":"hermes:researcher:stored","runId":"run-1"}\n\ndata: {"type":"RUN_FINISHED","threadId":"hermes:researcher:stored","runId":"run-1","outcome":{"type":"success"}}\n\n'
+    )
+    expect(start).toHaveBeenCalledWith(
+      {
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "hermes:researcher:stored",
+      },
+      JSON.parse(body)
+    )
+  })
+
+  it("wires the Hermes native boundary to public AG-UI reasoning and tool SSE", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const nativeRequest = vi.fn(async (method: string) => {
+      if (method === "session.resume") return { session_id: "live-secret" }
+      if (method === "session.events.since")
+        return { epoch: "epoch-secret", last_seen: 0, events: [] }
+      if (method === "session.active_list") return { sessions: [] }
+      if (method === "prompt.submit") {
+        for (const [seq, type, payload] of [
+          [1, "message.start", { message_id: "assistant-1" }],
+          [2, "reasoning.delta", { text: "Inspecting" }],
+          [
+            3,
+            "tool.start",
+            {
+              tool_id: "terminal-1",
+              name: "terminal",
+              args: { command: "pwd", path: "/srv/hermes/private" },
+            },
+          ],
+          [
+            4,
+            "tool.complete",
+            {
+              tool_id: "terminal-1",
+              name: "terminal",
+              result: { status: "ok", path: "/srv/hermes/private" },
+            },
+          ],
+          [5, "message.delta", { text: "Done" }],
+          [6, "message.complete", {}],
+        ] as const)
+          publish?.({ type, session_id: "live-secret", seq, payload })
+        return { accepted: true }
+      }
+      throw new Error(`unexpected ${method}`)
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+        observeEvents: vi.fn(async (listener) => {
+          publish = listener
+          return () => undefined
+        }),
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "hermes:researcher:stored",
+            runId: "run-1",
+            state: {},
+            messages: [{ id: "user-1", role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+    )
+
+    expect(response.status).toBe(200)
+    const stream = await response.text()
+    expect(stream).toContain('"type":"REASONING_MESSAGE_CONTENT"')
+    expect(stream).toContain('"type":"TOOL_CALL_START"')
+    expect(stream).toContain('"toolCallName":"terminal"')
+    expect(stream).toContain('"delta":"{\\"command\\":\\"pwd\\"}"')
+    expect(stream).toContain('"type":"RUN_FINISHED"')
+    for (const leak of [
+      "live-secret",
+      "epoch-secret",
+      "session_id",
+      "/srv/hermes",
+      '"payload"',
+      '"seq"',
+    ])
+      expect(stream).not.toContain(leak)
+  })
+
+  it("detaches a closed stream without stopping and interrupts only on Stop POST", async () => {
+    let finishObservation: (() => void) | undefined
+    const observationFinished = new Promise<void>((resolve) => {
+      finishObservation = resolve
+    })
+    const disconnect = vi.fn(() => finishObservation?.())
+    const stop = vi.fn(async () => "stopping" as const)
+    const runEngine = {
+      start: vi.fn(async () => ({
+        events: (async function* () {
+          yield {
+            type: "RUN_STARTED" as const,
+            threadId: "hermes:researcher:stored",
+            runId: "run-1",
+          }
+          await observationFinished
+        })(),
+        stop,
+        disconnect,
+        recoveryPosition: () => ({ epoch: "epoch-1", lastSeen: 0 }),
+      })),
+    } as unknown as HermesRunEngine
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      runEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const response = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "hermes:researcher:stored",
+            runId: "run-1",
+            state: {},
+            messages: [{ id: "user-1", role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+    )
+
+    await response.body?.cancel()
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(stop).not.toHaveBeenCalled()
+
+    const stopped = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/stop",
+        { method: "POST", headers: { origin } }
+      )
+    )
+    expect(stopped.status).toBe(202)
+    expect(await stopped.json()).toEqual({ status: "stopping" })
+    expect(stop).toHaveBeenCalledTimes(1)
+
+    const stillStopping = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/stop",
+        { method: "POST", headers: { origin } }
+      )
+    )
+    expect(stillStopping.status).toBe(202)
+    expect(await stillStopping.json()).toEqual({ status: "stopping" })
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
+
+  it("routes deliberate Stop through native interrupt and remains stopping", async () => {
+    let statusReads = 0
+    const nativeRequest = vi.fn(async (method: string) => {
+      if (method === "session.resume") return { session_id: "live-secret" }
+      if (method === "session.events.since")
+        return { epoch: "epoch-secret", last_seen: 0, events: [] }
+      if (method === "session.active_list") {
+        statusReads += 1
+        return statusReads === 1
+          ? { sessions: [] }
+          : { sessions: [{ id: "live-secret", status: "working" }] }
+      }
+      if (method === "prompt.submit" || method === "session.interrupt")
+        return { accepted: true }
+      throw new Error(`unexpected ${method}`)
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+        observeEvents: vi.fn(async () => () => undefined),
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const route =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs"
+    const response = await app.request(
+      request(route, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+          state: {},
+          messages: [{ id: "user-1", role: "user", content: "Hello" }],
+          tools: [],
+          context: [],
+          forwardedProps: {},
+        }),
+      })
+    )
+    expect(response.status).toBe(200)
+
+    const stopped = await app.request(
+      request(`${route}/stop`, { method: "POST", headers: { origin } })
+    )
+    expect(stopped.status).toBe(202)
+    expect(await stopped.json()).toEqual({ status: "stopping" })
+    expect(nativeRequest.mock.calls).toContainEqual([
+      "session.interrupt",
+      { session_id: "live-secret" },
+    ])
+    await response.body?.cancel()
+  })
+
+  it("bounds and strictly validates run requests before native run I/O", async () => {
+    const nativeRequest = vi.fn()
+    const nativeHttp = vi.fn(async () => ({
+      id: "stored",
+      profile: "researcher",
+      title: "Owned",
+    }))
+    const start = vi.fn()
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: nativeHttp,
+      }),
+      runEngine: { start } as unknown as HermesRunEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const path =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs"
+    const validBody = JSON.stringify({
+      threadId: "hermes:researcher:stored",
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "user-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(
+      (
+        await app.request(
+          request(path, {
+            method: "POST",
+            headers: {
+              origin: "http://attacker.test",
+              "content-type": "application/json",
+            },
+            body: validBody,
+          })
+        )
+      ).status
+    ).toBe(403)
+    expect(
+      (
+        await app.request(
+          request(path, {
+            method: "POST",
+            headers: { origin },
+            body: validBody,
+          })
+        )
+      ).status
+    ).toBe(400)
+    expect(
+      (
+        await app.request(
+          request(path, {
+            method: "POST",
+            headers: {
+              origin,
+              "content-type": "application/json",
+              "content-length": "1100001",
+            },
+            body: validBody,
+          })
+        )
+      ).status
+    ).toBe(400)
+    expect(
+      (
+        await app.request(
+          request(path, {
+            method: "POST",
+            headers: { origin, "content-type": "application/json" },
+            body: JSON.stringify({ oversized: "é".repeat(550_001) }),
+          })
+        )
+      ).status
+    ).toBe(400)
+    expect(nativeHttp).not.toHaveBeenCalled()
+    expect(nativeRequest).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+  })
+
+  it("rejects browser run authority beyond one new user turn", async () => {
+    const nativeRequest = vi.fn()
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+        observeEvents: vi.fn(),
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const route =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs"
+    const base = {
+      threadId: "hermes:researcher:stored",
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "user-new", role: "user", content: "New" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }
+    const forbidden = [
+      {
+        ...base,
+        messages: [
+          { id: "user-old", role: "user", content: "Old" },
+          ...base.messages,
+        ],
+      },
+      { ...base, state: { native: true } },
+      {
+        ...base,
+        tools: [
+          { name: "browser_tool", description: "unsafe", parameters: {} },
+        ],
+      },
+      { ...base, context: [{ description: "role", value: "admin" }] },
+      { ...base, forwardedProps: { provider: "native" } },
+      { ...base, resume: [{ interruptId: "native", payload: "unsafe" }] },
+      { ...base, native_session_id: "live-secret" },
+    ]
+
+    for (const candidate of forbidden) {
+      const response = await app.request(
+        request(route, {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify(candidate),
+        })
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: { code: "invalid_request" },
+      })
+    }
+    expect(nativeRequest).not.toHaveBeenCalled()
+  })
+
+  it("returns a precise conflict for duplicate admission and redacts setup outages", async () => {
+    const pending = new Promise<void>(() => undefined)
+    const start = vi
+      .fn()
+      .mockResolvedValueOnce({
+        events: (async function* () {
+          await pending
+          yield {
+            type: "RUN_FINISHED" as const,
+            threadId: "hermes:researcher:stored",
+            runId: "run-1",
+            outcome: { type: "success" as const },
+          }
+        })(),
+        stop: vi.fn(async () => "stopping" as const),
+        disconnect: vi.fn(),
+        recoveryPosition: () => ({ epoch: "secret-epoch", lastSeen: 0 }),
+      })
+      .mockRejectedValueOnce(
+        new HermesRunPublicError(
+          "AOS_PROVIDER_UNAVAILABLE",
+          "native https://secret.invalid failed with token=secret"
+        )
+      )
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async (path: string) => ({
+          id: path.includes("/other?") ? "other" : "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      runEngine: { start } as unknown as HermesRunEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const runRequest = (threadId: string, runId: string) =>
+      request(
+        `/api/aos/v1/agents/researcher/sessions/${encodeURIComponent(threadId)}/runs`,
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId,
+            runId,
+            state: {},
+            messages: [{ id: `user-${runId}`, role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+
+    expect(
+      (await app.request(runRequest("hermes:researcher:stored", "run-1")))
+        .status
+    ).toBe(200)
+    const conflict = await app.request(
+      runRequest("hermes:researcher:stored", "run-2")
+    )
+    expect(conflict.status).toBe(409)
+    expect(await conflict.json()).toEqual({ error: { code: "run_conflict" } })
+    expect(start).toHaveBeenCalledTimes(1)
+
+    const outage = await app.request(
+      runRequest("hermes:researcher:other", "run-3")
+    )
+    expect(outage.status).toBe(503)
+    expect(await outage.text()).toBe(
+      JSON.stringify({ error: { code: "temporarily_unavailable" } })
+    )
+    expect(start).toHaveBeenCalledTimes(2)
+  })
+
+  it("caps global active runs before Session or native run I/O", async () => {
+    const pending = new Promise<void>(() => undefined)
+    const start = vi.fn(async () => ({
+      events: (async function* () {
+        await pending
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:first",
+          runId: "run-first",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: vi.fn(async () => "stopping" as const),
+      disconnect: vi.fn(),
+      recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
+    }))
+    const nativeHttp = vi.fn(async (path: string) => ({
+      id: path.includes("/first?") ? "first" : "second",
+      profile: "researcher",
+      title: "Owned",
+    }))
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({ request: vi.fn(), http: nativeHttp }),
+      runEngine: { start } as unknown as HermesRunEngine,
+      maxActiveRuns: 1,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const runRequest = (storedId: string, runId: string) => {
+      const threadId = `hermes:researcher:${storedId}`
+      return request(
+        `/api/aos/v1/agents/researcher/sessions/${encodeURIComponent(threadId)}/runs`,
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId,
+            runId,
+            state: {},
+            messages: [{ id: `user-${runId}`, role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+    }
+
+    expect((await app.request(runRequest("first", "run-first"))).status).toBe(
+      200
+    )
+    const sameScope = await app.request(runRequest("first", "run-duplicate"))
+    expect(sameScope.status).toBe(409)
+    expect(await sameScope.json()).toEqual({ error: { code: "run_conflict" } })
+    const atCapacity = await app.request(runRequest("second", "run-second"))
+    expect(atCapacity.status).toBe(503)
+    expect(await atCapacity.json()).toEqual({
+      error: { code: "run_capacity_exceeded" },
+    })
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(nativeHttp).toHaveBeenCalledTimes(1)
+  })
+
+  it("fences an uncertain native send without retrying or disclosing its error", async () => {
+    const nativeRequest = vi.fn(async (method: string) => {
+      if (method === "session.resume") return { session_id: "live-secret" }
+      if (method === "session.events.since")
+        return { epoch: "epoch-secret", last_seen: 0, events: [] }
+      if (method === "session.active_list") return { sessions: [] }
+      if (method === "prompt.submit")
+        throw new Error(
+          "POST https://native.invalid/private failed token=native-secret"
+        )
+      throw new Error(`unexpected ${method}`)
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+        observeEvents: vi.fn(async () => () => undefined),
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const body = JSON.stringify({
+      threadId: "hermes:researcher:stored",
+      runId: "run-uncertain",
+      state: {},
+      messages: [{ id: "user-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+    const route =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs"
+
+    const response = await app.request(
+      request(route, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body,
+      })
+    )
+    expect(response.status).toBe(200)
+    const stream = await response.text()
+    expect(stream).toContain('"type":"RUN_STARTED"')
+    expect(stream).toContain('"code":"AOS_SEND_UNCERTAIN"')
+    expect(
+      nativeRequest.mock.calls.filter(([method]) => method === "prompt.submit")
+    ).toHaveLength(1)
+    for (const leak of [
+      "live-secret",
+      "epoch-secret",
+      "native.invalid",
+      "native-secret",
+      "/private",
+    ])
+      expect(stream).not.toContain(leak)
+
+    const duplicate = await app.request(
+      request(route, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: body.replace("run-uncertain", "run-duplicate"),
+      })
+    )
+    expect(duplicate.status).toBe(409)
+    expect(
+      nativeRequest.mock.calls.filter(([method]) => method === "prompt.submit")
+    ).toHaveLength(1)
+  })
+
   it("serves the complete normalized Session lifecycle without native identity disclosure", async () => {
     const nativeRequest = vi.fn(async (method: string) => {
       if (method === "profiles.list") return { profiles: [nativeProfile()] }

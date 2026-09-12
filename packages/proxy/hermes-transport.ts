@@ -1,5 +1,11 @@
 import type { HermesRpcTransport } from "./hermes-adapter"
 
+const MAX_TICKET_RESPONSE_BYTES = 8 * 1024
+const MAX_NATIVE_HTTP_RESPONSE_BYTES = 64 * 1024 * 1024
+const MAX_NATIVE_SOCKET_FRAME_BYTES = 2 * 1024 * 1024
+const MAX_NATIVE_JSON_DEPTH = 32
+const MAX_NATIVE_JSON_NODES = 200_000
+
 export interface HermesSocket {
   readonly readyState: number
   addEventListener(type: string, listener: (event: unknown) => void): void
@@ -57,6 +63,120 @@ function webSocketUrl(baseUrl: string) {
   return url.toString()
 }
 
+function declaredLength(response: Response, maxBytes: number) {
+  const value = response.headers.get("content-length")
+  if (value === null) return
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) throw new Error()
+  const length = Number(value)
+  if (!Number.isSafeInteger(length) || length > maxBytes) throw new Error()
+}
+
+function cancelBody(response: Response) {
+  void response.body?.cancel().catch(() => undefined)
+}
+
+async function boundedJsonResponse(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal
+) {
+  try {
+    declaredLength(response, maxBytes)
+  } catch {
+    cancelBody(response)
+    throw new Error()
+  }
+  if (!response.body) throw new Error()
+  const reader = response.body.getReader()
+  let abortReject: ((error: Error) => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortReject = reject
+  })
+  const onAbort = () => {
+    void reader.cancel().catch(() => undefined)
+    abortReject?.(new Error())
+  }
+  signal.addEventListener("abort", onAbort, { once: true })
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    if (signal.aborted) onAbort()
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), aborted])
+      if (done) break
+      if (value.byteLength > maxBytes - total) {
+        void reader.cancel().catch(() => undefined)
+        throw new Error()
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+    try {
+      reader.releaseLock()
+    } catch {
+      // An adversarial stream may leave a read pending after cancellation.
+    }
+  }
+  if (total === 0) throw new Error()
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  const value = JSON.parse(text) as unknown
+  if (!boundedJsonShape(value)) throw new Error()
+  return value
+}
+
+function boundedJsonShape(value: unknown) {
+  const pending: { value: unknown; depth: number }[] = [{ value, depth: 0 }]
+  let nodes = 0
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    nodes += 1
+    if (nodes > MAX_NATIVE_JSON_NODES || current.depth > MAX_NATIVE_JSON_DEPTH)
+      return false
+    if (typeof current.value !== "object" || current.value === null) continue
+    for (const child of Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value))
+      pending.push({ value: child, depth: current.depth + 1 })
+  }
+  return true
+}
+
+async function boundedSocketJson(event: unknown) {
+  if (!event || typeof event !== "object" || !("data" in event))
+    throw new Error()
+  const data = event.data
+  let bytes: Uint8Array
+  if (typeof data === "string") {
+    if (data.length > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    bytes = new TextEncoder().encode(data)
+  } else if (data instanceof ArrayBuffer) {
+    if (data.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    bytes = new Uint8Array(data)
+  } else if (ArrayBuffer.isView(data)) {
+    if (data.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  } else if (typeof Blob !== "undefined" && data instanceof Blob) {
+    if (data.size > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    bytes = new Uint8Array(await data.arrayBuffer())
+  } else {
+    throw new Error()
+  }
+  if (bytes.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+  const frame: unknown = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  )
+  if (!boundedJsonShape(frame)) throw new Error()
+  return frame
+}
+
 export class HermesWebSocketRpcTransport implements HermesRpcTransport {
   readonly #baseUrl: string
   readonly #credentials: HermesCredentials
@@ -77,10 +197,13 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
   }
 
   async http(path: string, init: { method?: string; body?: unknown } = {}) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.#timeoutMs)
     let response: Response
     try {
       response = await this.#fetch(`${this.#baseUrl}${path}`, {
         method: init.method,
+        signal: controller.signal,
         headers: {
           accept: "application/json",
           ...(init.body ? { "content-type": "application/json" } : {}),
@@ -88,17 +211,32 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         },
         ...(init.body ? { body: JSON.stringify(init.body) } : {}),
       })
-    } catch {
-      throw new Error("Hermes connection failed")
-    }
-    if (response.status === 401 || response.status === 403)
-      throw new HermesAuthenticationError()
-    if (!response.ok) throw new HermesHttpError(response.status)
-    if (init.method === "DELETE" || response.status === 204) return undefined
-    try {
-      return await response.json()
-    } catch {
+      if (response.status === 401 || response.status === 403) {
+        cancelBody(response)
+        throw new HermesAuthenticationError()
+      }
+      if (!response.ok) {
+        cancelBody(response)
+        throw new HermesHttpError(response.status)
+      }
+      if (init.method === "DELETE" || response.status === 204) {
+        cancelBody(response)
+        return undefined
+      }
+      return await boundedJsonResponse(
+        response,
+        MAX_NATIVE_HTTP_RESPONSE_BYTES,
+        controller.signal
+      )
+    } catch (error) {
+      if (
+        error instanceof HermesAuthenticationError ||
+        error instanceof HermesHttpError
+      )
+        throw error
       throw new Error("Hermes request failed")
+    } finally {
+      clearTimeout(timer)
     }
   }
 
@@ -106,39 +244,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     method: string,
     params: Readonly<Record<string, unknown>>
   ): Promise<unknown> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs)
-    let response: Response
-    try {
-      response = await this.#fetch(`${this.#baseUrl}/api/auth/ws-ticket`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          ...(await this.#credentials()),
-        },
-      })
-    } catch {
-      throw new Error("Hermes connection failed")
-    } finally {
-      clearTimeout(timer)
-    }
-    if (response.status === 401 || response.status === 403)
-      throw new HermesAuthenticationError()
-    if (!response.ok) throw new Error("Hermes connection failed")
-    let ticket: unknown
-    try {
-      const payload: unknown = await response.json()
-      ticket =
-        payload && typeof payload === "object" && "ticket" in payload
-          ? payload.ticket
-          : undefined
-    } catch {
-      throw new Error("Hermes connection failed")
-    }
-    if (typeof ticket !== "string" || !ticket || ticket.length > 4096)
-      throw new Error("Hermes connection failed")
-
+    const ticket = await this.#ticket()
     const socket = this.#socketFactory(webSocketUrl(this.#baseUrl), [
       "hermes-gateway-v1",
       `hermes-gateway-ticket.${ticket}`,
@@ -171,13 +277,9 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
           finish(() => reject(new Error("Hermes connection failed")))
         }
       }
-      const onMessage = (event: unknown) => {
+      const onMessage = async (event: unknown) => {
         try {
-          const data =
-            event && typeof event === "object" && "data" in event
-              ? String(event.data)
-              : ""
-          const frame: unknown = JSON.parse(data)
+          const frame = await boundedSocketJson(event)
           if (
             !frame ||
             typeof frame !== "object" ||
@@ -206,5 +308,124 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
       socket.addEventListener("error", onFailure)
       socket.addEventListener("close", onFailure)
     })
+  }
+
+  async observeEvents(
+    listener: (event: unknown) => void,
+    disconnected: (error?: Error) => void
+  ) {
+    const ticket = await this.#ticket()
+    const socket = this.#socketFactory(webSocketUrl(this.#baseUrl), [
+      "hermes-gateway-v1",
+      `hermes-gateway-ticket.${ticket}`,
+    ])
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const timeout = setTimeout(() => {
+        finish(() => reject(new Error("Hermes connection timed out")))
+      }, this.#timeoutMs)
+      const cleanup = () => {
+        clearTimeout(timeout)
+        socket.removeEventListener("open", onOpen)
+        socket.removeEventListener("error", onFailure)
+        socket.removeEventListener("close", onFailure)
+      }
+      const finish = (complete: () => void) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        complete()
+      }
+      const onOpen = () => finish(resolve)
+      const onFailure = () =>
+        finish(() => reject(new Error("Hermes connection failed")))
+      socket.addEventListener("open", onOpen)
+      socket.addEventListener("error", onFailure)
+      socket.addEventListener("close", onFailure)
+    })
+
+    let stopped = false
+    const cleanup = () => {
+      socket.removeEventListener("message", onMessage)
+      socket.removeEventListener("error", onDisconnected)
+      socket.removeEventListener("close", onDisconnected)
+    }
+    const failObservation = () => {
+      if (stopped) return
+      stopped = true
+      cleanup()
+      socket.close()
+      disconnected(new Error("Hermes connection failed"))
+    }
+    const onMessage = async (event: unknown) => {
+      try {
+        const frame = await boundedSocketJson(event)
+        if (stopped) return
+        if (
+          !frame ||
+          typeof frame !== "object" ||
+          !("jsonrpc" in frame) ||
+          frame.jsonrpc !== "2.0" ||
+          !("method" in frame) ||
+          frame.method !== "event" ||
+          !("params" in frame)
+        )
+          throw new Error()
+        listener(frame.params)
+      } catch {
+        failObservation()
+      }
+    }
+    const onDisconnected = () => failObservation()
+    socket.addEventListener("message", onMessage)
+    socket.addEventListener("error", onDisconnected)
+    socket.addEventListener("close", onDisconnected)
+    return () => {
+      if (stopped) return
+      stopped = true
+      cleanup()
+      socket.close()
+    }
+  }
+
+  async #ticket() {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.#timeoutMs)
+    let response: Response
+    try {
+      response = await this.#fetch(`${this.#baseUrl}/api/auth/ws-ticket`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          accept: "application/json",
+          ...(await this.#credentials()),
+        },
+      })
+      if (response.status === 401 || response.status === 403) {
+        cancelBody(response)
+        throw new HermesAuthenticationError()
+      }
+      if (!response.ok) {
+        cancelBody(response)
+        throw new Error()
+      }
+      const payload = await boundedJsonResponse(
+        response,
+        MAX_TICKET_RESPONSE_BYTES,
+        controller.signal
+      )
+      const ticket =
+        payload && typeof payload === "object" && "ticket" in payload
+          ? payload.ticket
+          : undefined
+      if (typeof ticket !== "string" || !ticket || ticket.length > 4096)
+        throw new Error()
+      return ticket
+    } catch (error) {
+      if (error instanceof HermesAuthenticationError) throw error
+      throw new Error("Hermes connection failed")
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }

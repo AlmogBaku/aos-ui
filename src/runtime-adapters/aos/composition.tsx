@@ -1,6 +1,5 @@
 "use client"
 
-import { HttpAgent } from "@ag-ui/client"
 import { useCallback, useMemo } from "react"
 import { useAuiState, useRemoteThreadListRuntime } from "@assistant-ui/react"
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
@@ -9,7 +8,7 @@ import type {
   RuntimeAdapterDefinition,
   RuntimeAdapterProps,
 } from "../definition"
-import { AosRemoteClient } from "./aos-client"
+import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
 function AosRuntimeProvider({ children }: RuntimeAdapterProps<"aos">) {
@@ -24,10 +23,9 @@ function AosRuntimeProvider({ children }: RuntimeAdapterProps<"aos">) {
       })
       const agent = useMemo(
         () =>
-          new HttpAgent({
-            url: "/api/aos/v1/runs",
-            ...(remoteId ? { threadId: remoteId } : {}),
-            ...(agentId ? { agentId } : {}),
+          createAosRunAgent({
+            agentId: agentId ?? "",
+            threadId: remoteId ?? "",
           }),
         [agentId, remoteId]
       )
@@ -37,11 +35,14 @@ function AosRuntimeProvider({ children }: RuntimeAdapterProps<"aos">) {
       )
       return useAgUiRuntime({
         agent,
-        isDisabled: !remoteId,
+        isDisabled: !remoteId || !agentId,
         adapters: { history },
+        onCancel: () => {
+          if (remoteId) void client.stopRun(remoteId).catch(() => undefined)
+        },
       })
     },
-    [threadList]
+    [client, threadList]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadList,

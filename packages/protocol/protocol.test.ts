@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest"
 
 import {
   AgentCatalogResponseSchema,
+  ErrorResponseSchema,
   HermesAuthStateSchema,
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
+  RunStopResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
@@ -12,6 +14,18 @@ import {
 } from "./index"
 
 describe("AOS v1 normalized protocol", () => {
+  it("exposes only the normalized Stop settlement state", () => {
+    expect(RunStopResponseSchema.parse({ status: "stopping" })).toEqual({
+      status: "stopping",
+    })
+    expect(() =>
+      RunStopResponseSchema.parse({
+        status: "stopping",
+        liveSessionId: "native-secret",
+      })
+    ).toThrow()
+  })
+
   it("accepts only the public operator authentication states", () => {
     expect(
       OperatorAuthStateSchema.parse({
@@ -78,6 +92,8 @@ describe("AOS v1 normalized protocol", () => {
           sessionTitle: { status: "available" },
           sessionArchival: { status: "available" },
           sessionDeletion: { status: "available" },
+          sessionRun: { status: "available" },
+          sessionStop: { status: "available" },
         },
       }).status
     ).toBe("ready")
@@ -88,6 +104,17 @@ describe("AOS v1 normalized protocol", () => {
         capabilities: { agentCatalog: true },
       })
     ).toThrow()
+  })
+
+  it("exposes a provider-neutral run admission conflict", () => {
+    expect(
+      ErrorResponseSchema.parse({ error: { code: "run_conflict" } })
+    ).toEqual({ error: { code: "run_conflict" } })
+    expect(
+      ErrorResponseSchema.parse({
+        error: { code: "run_capacity_exceeded" },
+      })
+    ).toEqual({ error: { code: "run_capacity_exceeded" } })
   })
 
   it("validates normalized Agent entries and rejects native profile metadata", () => {

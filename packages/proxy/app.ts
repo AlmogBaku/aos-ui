@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { EventEncoder } from "@ag-ui/encoder"
 import { Hono } from "hono"
 
 import {
@@ -6,6 +7,7 @@ import {
   HermesAuthStateSchema,
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
+  RunStopResponseSchema,
   VisibilityUpdateRequestSchema,
   SessionCreateRequestSchema,
   SessionPatchRequestSchema,
@@ -21,6 +23,12 @@ import {
 } from "./hermes-adapter"
 import { OperatorAuthError, type OperatorAuthenticator } from "./operator-auth"
 import { redactForLog } from "./redaction"
+import {
+  HermesRunEngine,
+  HermesRunPublicError,
+  type HermesRunHandle,
+  type HermesRunScope,
+} from "./hermes-run"
 
 type Logger = {
   info(value: unknown): void
@@ -31,6 +39,8 @@ export type ProxyAppOptions = {
   publicOrigin: string
   operatorAuth: OperatorAuthenticator
   hermes: HermesServerAdapter
+  runEngine?: HermesRunEngine
+  maxActiveRuns?: number
   logger: Logger
   clock?: () => number
 }
@@ -49,6 +59,8 @@ type ErrorCode =
   | "invalid_request"
   | "not_found"
   | "revision_conflict"
+  | "run_conflict"
+  | "run_capacity_exceeded"
   | "temporarily_unavailable"
   | "internal_error"
 
@@ -83,6 +95,13 @@ function validIdentifier(value: string) {
       const code = character.charCodeAt(0)
       return code >= 32 && code !== 127
     })
+  )
+}
+
+function isRunConflict(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message === "An AOS run is already active for this Session"
   )
 }
 
@@ -123,7 +142,7 @@ function pageQuery(
   return { limit, offset }
 }
 
-async function boundedJson(request: Request) {
+async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   if (
     request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"
   )
@@ -132,12 +151,13 @@ async function boundedJson(request: Request) {
   if (rawLength !== null) {
     if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) return undefined
     const contentLength = Number(rawLength)
-    if (!Number.isSafeInteger(contentLength) || contentLength > 16 * 1024)
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
       return undefined
   }
   try {
     const text = await request.text()
-    if (!text || text.length > 16 * 1024) return undefined
+    if (!text || new TextEncoder().encode(text).byteLength > maxBytes)
+      return undefined
     return JSON.parse(text) as unknown
   } catch {
     return undefined
@@ -147,6 +167,19 @@ async function boundedJson(request: Request) {
 export function createProxyApp(options: ProxyAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
+  const runEngine = options.runEngine ?? new HermesRunEngine(options.hermes)
+  const activeRuns = new Map<string, HermesRunHandle>()
+  const runAdmissions = new Set<string>()
+  const maxActiveRuns = options.maxActiveRuns ?? 256
+  if (
+    !Number.isSafeInteger(maxActiveRuns) ||
+    maxActiveRuns < 1 ||
+    maxActiveRuns > 4_096
+  )
+    throw new Error("Invalid active run limit")
+
+  const runKey = (scope: Pick<HermesRunScope, "agentId" | "sessionId">) =>
+    `${scope.agentId}\u0000${scope.sessionId}`
 
   app.use("*", async (context, next) => {
     const requestId = randomUUID()
@@ -367,6 +400,126 @@ export function createProxyApp(options: ProxyAppOptions) {
         "DELETE"
       )
       return new Response(null, { status: 204 })
+    }
+  )
+
+  app.post(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      if (context.req.header("origin") !== options.publicOrigin)
+        return errorResponse("forbidden", 403)
+      const agentId = context.req.param("agentId")
+      const threadId = context.req.param("sessionId")
+      const sessionId = storedSessionId(agentId, threadId)
+      if (!sessionId) return errorResponse("not_found", 404)
+      const input = await boundedJson(context.req.raw, 1_100_000)
+      if (input === undefined) return errorResponse("invalid_request", 400)
+      const scope = { agentId, sessionId, threadId }
+      const key = runKey(scope)
+      if (activeRuns.has(key) || runAdmissions.has(key))
+        return errorResponse("run_conflict", 409)
+      if (activeRuns.size + runAdmissions.size >= maxActiveRuns)
+        return errorResponse("run_capacity_exceeded", 503)
+      runAdmissions.add(key)
+      try {
+        await options.hermes.getSession(agentId, sessionId)
+      } catch (cause) {
+        runAdmissions.delete(key)
+        throw cause
+      }
+      let handle: HermesRunHandle
+      try {
+        handle = await runEngine.start(scope, input)
+      } catch (cause) {
+        options.logger.error(
+          redactForLog({
+            event: "run.start.failed",
+            requestId: context.get("requestId"),
+            error: cause,
+          })
+        )
+        return isRunConflict(cause)
+          ? errorResponse("run_conflict", 409)
+          : cause instanceof HermesRunPublicError
+            ? errorResponse("temporarily_unavailable", 503)
+            : errorResponse("invalid_request", 400)
+      } finally {
+        runAdmissions.delete(key)
+      }
+      activeRuns.set(key, handle)
+      const encoder = new EventEncoder({ accept: "text/event-stream" })
+      const textEncoder = new TextEncoder()
+      let detached = false
+      let cancelled = false
+      const disconnect = () => {
+        if (detached) return
+        detached = true
+        handle.disconnect()
+      }
+      context.req.raw.signal.addEventListener("abort", disconnect, {
+        once: true,
+      })
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          let terminal = false
+          try {
+            for await (const event of handle.events) {
+              if (cancelled) break
+              terminal =
+                event.type === "RUN_FINISHED" ||
+                (event.type === "RUN_ERROR" &&
+                  event.code !== "AOS_SEND_UNCERTAIN" &&
+                  event.code !== "AOS_CONNECTION_INTERRUPTED")
+              if (!cancelled)
+                controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
+            }
+          } finally {
+            context.req.raw.signal.removeEventListener("abort", disconnect)
+            if (terminal && activeRuns.get(key) === handle)
+              activeRuns.delete(key)
+            if (!cancelled) controller.close()
+          }
+        },
+        cancel() {
+          cancelled = true
+          context.req.raw.signal.removeEventListener("abort", disconnect)
+          disconnect()
+        },
+      })
+      return new Response(stream, {
+        headers: { "content-type": encoder.getContentType() },
+      })
+    }
+  )
+
+  app.post(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs/stop",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      if (context.req.header("origin") !== options.publicOrigin)
+        return errorResponse("forbidden", 403)
+      const agentId = context.req.param("agentId")
+      const sessionId = storedSessionId(agentId, context.req.param("sessionId"))
+      if (!sessionId) return errorResponse("not_found", 404)
+      const key = runKey({ agentId, sessionId })
+      const handle = activeRuns.get(key)
+      if (!handle) return errorResponse("not_found", 404)
+      let status: "stopping" | "idle"
+      try {
+        status = await handle.stop()
+      } catch {
+        return errorResponse("temporarily_unavailable", 503)
+      }
+      if (status === "idle" && activeRuns.get(key) === handle)
+        activeRuns.delete(key)
+      return new Response(
+        JSON.stringify(RunStopResponseSchema.parse({ status })),
+        {
+          status: status === "stopping" ? 202 : 200,
+          headers: { "content-type": "application/json; charset=UTF-8" },
+        }
+      )
     }
   )
 

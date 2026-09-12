@@ -51,6 +51,50 @@ class FakeSocket implements HermesSocket {
 }
 
 describe("Hermes WebSocket RPC transport", () => {
+  it("observes native notifications on a server-only ticketed socket", async () => {
+    const socket = new FakeSocket()
+    const observed = vi.fn()
+    const disconnected = vi.fn()
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "observe-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    const stop = await transport.observeEvents(observed, disconnected)
+    socket.emit("message", {
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          type: "message.delta",
+          session_id: "live-secret",
+          seq: 2,
+          payload: { text: "Hello" },
+        },
+      }),
+    })
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1))
+    expect(observed).toHaveBeenCalledWith({
+      type: "message.delta",
+      session_id: "live-secret",
+      seq: 2,
+      payload: { text: "Hello" },
+    })
+    expect(disconnected).not.toHaveBeenCalled()
+    socket.emit("error", {})
+    socket.emit("close", {})
+    expect(disconnected).toHaveBeenCalledTimes(1)
+
+    stop()
+    expect(socket.readyState).toBe(3)
+  })
+
   it.each([404, 409])(
     "preserves native REST status %i without exposing its response body",
     async (status) => {
@@ -155,4 +199,199 @@ describe("Hermes WebSocket RPC transport", () => {
       ).rejects.toBeInstanceOf(HermesAuthenticationError)
     }
   )
+
+  it.each([
+    [
+      "declared oversized",
+      () =>
+        new Response(JSON.stringify({ ticket: "ignored" }), {
+          headers: { "content-length": "8193" },
+        }),
+    ],
+    [
+      "chunked oversized",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(4_096))
+              controller.enqueue(new Uint8Array(4_097))
+              controller.close()
+            },
+          })
+        ),
+    ],
+    [
+      "never-ending",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull() {
+              return new Promise<void>(() => undefined)
+            },
+          })
+        ),
+    ],
+  ])(
+    "bounds %s ticket responses through the full deadline",
+    async (_name, response) => {
+      const transport = new HermesWebSocketRpcTransport({
+        baseUrl: "http://127.0.0.1:9119",
+        credentials: async () => ({
+          "X-Hermes-Session-Token": "native-secret",
+        }),
+        fetcher: vi.fn(async () => response()),
+        socketFactory: vi.fn(),
+        timeoutMs: 20,
+      })
+
+      await expect(transport.request("profiles.list", {})).rejects.toThrow(
+        "Hermes connection failed"
+      )
+    }
+  )
+
+  it.each([
+    [
+      "declared oversized",
+      () =>
+        new Response("{}", {
+          headers: { "content-length": String(64 * 1024 * 1024 + 1) },
+        }),
+    ],
+    [
+      "chunked oversized",
+      () => {
+        const chunk = new Uint8Array(1024 * 1024)
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (let index = 0; index < 65; index += 1)
+                controller.enqueue(chunk)
+              controller.close()
+            },
+          })
+        )
+      },
+    ],
+    [
+      "never-ending",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull() {
+              return new Promise<void>(() => undefined)
+            },
+          })
+        ),
+    ],
+  ])("bounds %s native HTTP responses", async (_name, response) => {
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => response()),
+      timeoutMs: 20,
+    })
+
+    await expect(transport.http("/api/sessions")).rejects.toThrow(
+      "Hermes request failed"
+    )
+  })
+
+  it.each([
+    ["oversized text", "x".repeat(2 * 1024 * 1024 + 1)],
+    ["oversized ArrayBuffer", new ArrayBuffer(2 * 1024 * 1024 + 1)],
+    ["oversized Blob", new Blob([new Uint8Array(2 * 1024 * 1024 + 1)])],
+    ["malformed JSON", "{"],
+    [
+      "excessive depth",
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "event",
+        params: JSON.parse(`${"[".repeat(40)}null${"]".repeat(40)}`),
+      }),
+    ],
+  ])("closes on %s native event frames", async (_name, data) => {
+    const socket = new FakeSocket()
+    const observed = vi.fn()
+    const disconnected = vi.fn()
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "observe-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    await transport.observeEvents(observed, disconnected)
+    socket.emit("message", { data })
+    await vi.waitFor(() => expect(socket.readyState).toBe(3))
+    expect(observed).not.toHaveBeenCalled()
+    expect(disconnected).toHaveBeenCalledTimes(1)
+  })
+
+  it("bounds native RPC response frames before decoding", async () => {
+    const socket = new FakeSocket()
+    socket.send = () => {
+      queueMicrotask(() =>
+        socket.emit("message", { data: "x".repeat(2 * 1024 * 1024 + 1) })
+      )
+    }
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "rpc-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    await expect(transport.request("profiles.list", {})).rejects.toThrow(
+      "Hermes connection failed"
+    )
+    expect(socket.readyState).toBe(3)
+  })
+
+  it("cancels rejected declared-length bodies and redacts credential failures", async () => {
+    const cancelled = vi.fn()
+    const oversized = new Response(
+      new ReadableStream<Uint8Array>({ cancel: cancelled }),
+      { headers: { "content-length": "8193" } }
+    )
+    const ticketTransport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => oversized),
+      socketFactory: vi.fn(),
+      timeoutMs: 1_000,
+    })
+    await expect(ticketTransport.request("profiles.list", {})).rejects.toThrow(
+      "Hermes connection failed"
+    )
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(1))
+
+    const credentialFailure = new Error(
+      "token=native-secret from /srv/hermes/private"
+    )
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: vi.fn(async () => {
+        throw credentialFailure
+      }),
+      fetcher: vi.fn(),
+      socketFactory: vi.fn(),
+      timeoutMs: 1_000,
+    })
+    const rpc = transport.request("profiles.list", {})
+    await expect(rpc).rejects.toThrow("Hermes connection failed")
+    await expect(rpc).rejects.not.toThrow("native-secret")
+    const http = transport.http("/api/sessions")
+    await expect(http).rejects.toThrow("Hermes request failed")
+    await expect(http).rejects.not.toThrow("/srv/hermes")
+  })
 })
