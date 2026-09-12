@@ -112,6 +112,44 @@ export type VisibilityUpdateResponse = z.infer<
   typeof VisibilityUpdateResponseSchema
 >
 
+const SessionStatusSchema = z.enum([
+  "idle",
+  "running",
+  "waiting-for-input",
+  "failed",
+  "unknown",
+])
+export const SessionSchema = z.strictObject({
+  id: IdentifierSchema,
+  agentId: IdentifierSchema,
+  title: z.string().min(1).max(4096),
+  archived: z.boolean(),
+  updatedAt: z.string().datetime(),
+  status: SessionStatusSchema,
+})
+export type Session = z.infer<typeof SessionSchema>
+export const SessionCatalogResponseSchema = z.strictObject({
+  sessions: z.array(SessionSchema).max(100),
+  total: z.number().int().min(0),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().min(0),
+})
+export type SessionCatalogResponse = z.infer<typeof SessionCatalogResponseSchema>
+export const SessionHistoryResponseSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+  messages: z.array(z.unknown()).max(500),
+  total: z.number().int().min(0),
+  limit: z.number().int().min(1).max(500),
+  offset: z.number().int().min(0),
+})
+export type SessionHistoryResponse = z.infer<typeof SessionHistoryResponseSchema>
+export const SessionCreateRequestSchema = z.strictObject({
+  title: z.string().min(1).max(4096).optional(),
+})
+export const SessionPatchRequestSchema = z
+  .strictObject({ title: z.string().min(1).max(4096).optional(), archived: z.boolean().optional() })
+  .refine((value) => (value.title !== undefined) !== (value.archived !== undefined))
+
 export const ErrorResponseSchema = z.strictObject({
   error: z.strictObject({
     code: z.enum([

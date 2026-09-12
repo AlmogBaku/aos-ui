@@ -16,6 +16,7 @@ export interface HermesRpcTransport {
     method: string,
     params: Readonly<Record<string, unknown>>
   ): Promise<unknown>
+  http?(path: string): Promise<unknown>
   authState?(): Promise<HermesAuthState>
   close?(): Promise<void>
 }
@@ -111,6 +112,17 @@ function catalogRevision(agents: readonly AgentCatalogEntry[]) {
     .map(({ summary, revision }) => `${summary.id}@${revision}`)
     .sort()
     .join(",")}`
+}
+
+function sessionId(profile: string, storedId: string) {
+  return `hermes:${encodeURIComponent(profile)}:${encodeURIComponent(storedId)}`
+}
+
+function timestamp(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(numeric) && numeric > 0
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString()
+    : new Date(0).toISOString()
 }
 
 export class HermesServerAdapter {
@@ -252,5 +264,31 @@ export class HermesServerAdapter {
 
   async close() {
     await this.transport.close?.()
+  }
+
+  async listSessions(profile: string, limit: number, offset: number) {
+    if (!this.transport.http) throw new HermesUnavailableError()
+    const query = new URLSearchParams({ profile, limit: String(limit), offset: String(offset), order: "recent", archived: "include", exclude_sources: "cron,tool,kanban" })
+    let payload: unknown
+    try { payload = await this.transport.http(`/api/sessions?${query}`) } catch { throw new HermesUnavailableError() }
+    if (!isRecord(payload) || !Array.isArray(payload.sessions)) throw new HermesUnavailableError()
+    const seen = new Set<string>()
+    const sessions = payload.sessions.map((row) => {
+      if (!isRecord(row)) throw new HermesUnavailableError()
+      const storedId = nonEmptyString(row.id)
+      if (!storedId || nonEmptyString(row.profile) !== profile || seen.has(storedId)) throw new HermesUnavailableError()
+      seen.add(storedId)
+      return { id: sessionId(profile, storedId), agentId: profile, title: nonEmptyString(row.title) ?? storedId, archived: row.archived === true, updatedAt: timestamp(row.last_active ?? row.started_at), status: "unknown" as const }
+    })
+    return { sessions, total: typeof payload.total === "number" && payload.total >= 0 ? payload.total : sessions.length, limit, offset }
+  }
+
+  async history(profile: string, storedId: string, limit: number, offset: number) {
+    if (!this.transport.http) throw new HermesUnavailableError()
+    const query = new URLSearchParams({ profile, limit: String(limit), offset: String(offset), order: "oldest", include_compacted: "true" })
+    let payload: unknown
+    try { payload = await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`) } catch { throw new HermesUnavailableError() }
+    if (!isRecord(payload) || nonEmptyString(payload.session_id) !== storedId || !Array.isArray(payload.messages)) throw new HermesUnavailableError()
+    return { sessionId: sessionId(profile, storedId), messages: payload.messages, total: isRecord(payload.pagination) && typeof payload.pagination.total === "number" ? payload.pagination.total : payload.messages.length, limit, offset }
   }
 }

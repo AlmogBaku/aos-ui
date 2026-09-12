@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   HermesAgentNotFoundError,
   HermesRevisionConflictError,
+  HermesUnavailableError,
   HermesServerAdapter,
   type HermesRpcTransport,
 } from "./hermes-adapter"
@@ -22,6 +23,20 @@ function profile(hidden = false, revision: number | null = 7) {
 }
 
 describe("Hermes server adapter", () => {
+  it("uses the bounded native recent catalog and exposes only stable stored identities", async () => {
+    const http = vi.fn(async (path: string) => {
+      expect(path).toBe("/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban")
+      return { sessions: [{ id: "stored/1", profile: "researcher", title: "One", last_active: 1, session_id: "live-secret" }], total: 1 }
+    })
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+    await expect(adapter.listSessions("researcher", 50, 0)).resolves.toEqual({ sessions: [{ id: "hermes:researcher:stored%2F1", agentId: "researcher", title: "One", archived: false, updatedAt: "1970-01-01T00:00:01.000Z", status: "unknown" }], total: 1, limit: 50, offset: 0 })
+  })
+
+  it("rejects duplicate or cross-owner stored Session IDs and keeps compacted chronological history paged", async () => {
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http: vi.fn(async (path: string) => path.startsWith("/api/sessions?profile=researcher") ? { sessions: [{ id: "same", profile: "researcher" }, { id: "same", profile: "researcher" }] } : { session_id: "stored", messages: [{ role: "user", content: "first" }, { role: "assistant", content: "second" }], pagination: { total: 2 } }) })
+    await expect(adapter.listSessions("researcher", 50, 0)).rejects.toBeInstanceOf(HermesUnavailableError)
+    await expect(adapter.history("researcher", "stored", 200, 0)).resolves.toMatchObject({ sessionId: "hermes:researcher:stored", total: 2, limit: 200 })
+  })
   it("projects profile names as Agent IDs without leaking native metadata", async () => {
     const request = vi.fn(async () => ({ profiles: [profile()] }))
     const adapter = new HermesServerAdapter({ request } as HermesRpcTransport)

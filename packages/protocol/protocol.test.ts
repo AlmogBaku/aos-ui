@@ -6,6 +6,7 @@ import {
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
   VisibilityUpdateRequestSchema,
+  SessionCatalogResponseSchema,
 } from "./index"
 
 describe("AOS v1 normalized protocol", () => {
@@ -113,6 +114,34 @@ describe("AOS v1 normalized protocol", () => {
     ).toEqual({ visibility: "hidden", revision: "hermes-bots:7" })
     expect(() =>
       VisibilityUpdateRequestSchema.parse({ visibility: "hidden" })
+    ).toThrow()
+  })
+
+  it("accepts bounded normalized Session pages without native identities", () => {
+    expect(
+      SessionCatalogResponseSchema.parse({
+        sessions: [
+          {
+            id: "hermes:researcher:stored-1",
+            agentId: "researcher",
+            title: "Research",
+            archived: false,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            status: "idle",
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+    ).toMatchObject({ total: 1 })
+    expect(() =>
+      SessionCatalogResponseSchema.parse({
+        sessions: [],
+        total: 0,
+        limit: 101,
+        offset: 0,
+      })
     ).toThrow()
   })
 })
