@@ -4,6 +4,9 @@ export type Dictionary = {
     outputs: string
     empty: string
     open: string
+    copy: string
+    copied: string
+    copyFailed: string
     download: string
     close: string
     loading: string

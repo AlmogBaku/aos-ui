@@ -58,7 +58,7 @@ export function buildAosUiHarnessPrompt(
   if (capabilities.artifactPublicationTool) {
     const artifactTool = assertToolName(capabilities.artifactPublicationTool)
     sections.push(
-      `- Use \`${artifactTool}\` only to publish a completed user-facing deliverable. Ordinary file creation or editing never publishes an Artifact; call the tool again only when the edited file should be republished.`
+      `- Artifact handoff: When the user's request concerns a file, call \`${artifactTool}\` on each existing worktree file that answers the request before the final response. This includes files you locate and files you create. If you change a published file, call the tool again. Leave unrelated working files unpublished.`
     )
   }
 
