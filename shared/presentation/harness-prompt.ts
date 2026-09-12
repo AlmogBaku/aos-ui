@@ -58,8 +58,7 @@ export function buildAosUiHarnessPrompt(
   if (capabilities.artifactPublicationTool) {
     const artifactTool = assertToolName(capabilities.artifactPublicationTool)
     sections.push(
-      `- Artifact delivery: Use \`${artifactTool}\` when a concrete file is part of the answer delivered to the user—whether as its source, subject, or output. A file qualifies only after it is selected for the final response; inspecting a candidate does not qualify. Publish each selected file after its final edit and before the final response.`,
-      "- Temporary artifacts: Create presentation-only files in a temporary subdirectory of the current Session workdir."
+      `- Artifact delivery: Use \`${artifactTool}\` when a concrete file is part of the answer delivered to the user—whether as its source, subject, or output. A file qualifies only after it is selected for the final response; inspecting a candidate does not qualify. Publish each selected file after its final edit and before the final response.`
     )
   }
 
