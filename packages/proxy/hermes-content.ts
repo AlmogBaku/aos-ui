@@ -66,7 +66,7 @@ export interface HermesContentTransport {
   ): Promise<unknown>
   transcribe?(
     scope: HermesContentSession,
-    request: { dataUrl: string; mimeType: string }
+    request: { data_url: string; mime_type: string }
   ): Promise<unknown>
   speak?(scope: HermesContentSession, text: string): Promise<unknown>
 }
@@ -480,8 +480,8 @@ export function createHermesContentOperations(input: {
       let result: unknown
       try {
         result = await input.transport.transcribe(scope, {
-          dataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
-          mimeType,
+          data_url: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
+          mime_type: mimeType,
         })
       } catch {
         throw new HermesContentUnavailableError()

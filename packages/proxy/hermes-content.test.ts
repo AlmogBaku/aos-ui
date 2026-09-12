@@ -277,8 +277,8 @@ describe("Hermes content operations", () => {
       )
     ).resolves.toBe("transcript")
     expect(h.transcribe).toHaveBeenCalledWith(scope, {
-      dataUrl: "data:audio/webm;codecs=opus;base64,AQID",
-      mimeType: "audio/webm;codecs=opus",
+      data_url: "data:audio/webm;codecs=opus;base64,AQID",
+      mime_type: "audio/webm;codecs=opus",
     })
   })
 
