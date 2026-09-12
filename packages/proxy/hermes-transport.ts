@@ -3,6 +3,7 @@ import type { HermesRpcTransport } from "./hermes-adapter"
 const MAX_TICKET_RESPONSE_BYTES = 8 * 1024
 const MAX_NATIVE_HTTP_RESPONSE_BYTES = 64 * 1024 * 1024
 const MAX_NATIVE_SOCKET_FRAME_BYTES = 2 * 1024 * 1024
+const MAX_PENDING_NATIVE_SOCKET_FRAMES = 64
 const MAX_NATIVE_JSON_DEPTH = 32
 const MAX_NATIVE_JSON_NODES = 200_000
 
@@ -14,7 +15,9 @@ export interface HermesSocket {
   close(): void
 }
 
-export type HermesCredentials = () => Promise<Readonly<Record<string, string>>>
+export type HermesCredentials = (
+  signal?: AbortSignal
+) => Promise<Readonly<Record<string, string>>>
 
 export type HermesWebSocketRpcTransportOptions = {
   baseUrl: string
@@ -73,6 +76,30 @@ function declaredLength(response: Response, maxBytes: number) {
 
 function cancelBody(response: Response) {
   void response.body?.cancel().catch(() => undefined)
+}
+
+function withinDeadline<T>(operation: () => Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (complete: () => void) => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener("abort", onAbort)
+      complete()
+    }
+    const onAbort = () => finish(() => reject(new Error()))
+    signal.addEventListener("abort", onAbort, { once: true })
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    Promise.resolve()
+      .then(operation)
+      .then(
+        (value) => finish(() => resolve(value)),
+        () => finish(() => reject(new Error()))
+      )
+  })
 }
 
 async function boundedJsonResponse(
@@ -177,6 +204,18 @@ async function boundedSocketJson(event: unknown) {
   return frame
 }
 
+function socketFrameWithinBound(event: unknown) {
+  if (!event || typeof event !== "object" || !("data" in event)) return false
+  const data = event.data
+  if (typeof data === "string")
+    return data.length <= MAX_NATIVE_SOCKET_FRAME_BYTES
+  if (data instanceof ArrayBuffer || ArrayBuffer.isView(data))
+    return data.byteLength <= MAX_NATIVE_SOCKET_FRAME_BYTES
+  if (typeof Blob !== "undefined" && data instanceof Blob)
+    return data.size <= MAX_NATIVE_SOCKET_FRAME_BYTES
+  return false
+}
+
 export class HermesWebSocketRpcTransport implements HermesRpcTransport {
   readonly #baseUrl: string
   readonly #credentials: HermesCredentials
@@ -207,7 +246,10 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         headers: {
           accept: "application/json",
           ...(init.body ? { "content-type": "application/json" } : {}),
-          ...(await this.#credentials()),
+          ...(await withinDeadline(
+            () => this.#credentials(controller.signal),
+            controller.signal
+          )),
         },
         ...(init.body ? { body: JSON.stringify(init.body) } : {}),
       })
@@ -252,6 +294,8 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     const id = `aos-${++this.#nextId}`
     return new Promise((resolve, reject) => {
       let settled = false
+      let pendingFrames = 0
+      let frameChain = Promise.resolve()
       const timeout = setTimeout(
         () => finish(() => reject(new Error("Hermes request timed out"))),
         this.#timeoutMs
@@ -277,29 +321,44 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
           finish(() => reject(new Error("Hermes connection failed")))
         }
       }
-      const onMessage = async (event: unknown) => {
-        try {
-          const frame = await boundedSocketJson(event)
-          if (
-            !frame ||
-            typeof frame !== "object" ||
-            !("id" in frame) ||
-            frame.id !== id
-          )
-            return
-          if ("error" in frame && frame.error)
-            finish(() => reject(new Error("Hermes RPC failed")))
-          else
-            finish(() =>
-              resolve(
-                "result" in frame
-                  ? (frame as { result: unknown }).result
-                  : undefined
-              )
-            )
-        } catch {
+      const onMessage = (event: unknown) => {
+        if (
+          settled ||
+          !socketFrameWithinBound(event) ||
+          pendingFrames >= MAX_PENDING_NATIVE_SOCKET_FRAMES
+        ) {
           finish(() => reject(new Error("Hermes connection failed")))
+          return
         }
+        pendingFrames += 1
+        frameChain = frameChain
+          .then(async () => {
+            if (settled) return
+            const frame = await boundedSocketJson(event)
+            if (
+              !frame ||
+              typeof frame !== "object" ||
+              !("id" in frame) ||
+              frame.id !== id
+            )
+              return
+            if ("error" in frame && frame.error)
+              finish(() => reject(new Error("Hermes RPC failed")))
+            else
+              finish(() =>
+                resolve(
+                  "result" in frame
+                    ? (frame as { result: unknown }).result
+                    : undefined
+                )
+              )
+          })
+          .catch(() =>
+            finish(() => reject(new Error("Hermes connection failed")))
+          )
+          .finally(() => {
+            pendingFrames -= 1
+          })
       }
       const onFailure = () =>
         finish(() => reject(new Error("Hermes connection failed")))
@@ -345,6 +404,8 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     })
 
     let stopped = false
+    let pendingFrames = 0
+    let frameChain = Promise.resolve()
     const cleanup = () => {
       socket.removeEventListener("message", onMessage)
       socket.removeEventListener("error", onDisconnected)
@@ -357,24 +418,37 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
       socket.close()
       disconnected(new Error("Hermes connection failed"))
     }
-    const onMessage = async (event: unknown) => {
-      try {
-        const frame = await boundedSocketJson(event)
-        if (stopped) return
-        if (
-          !frame ||
-          typeof frame !== "object" ||
-          !("jsonrpc" in frame) ||
-          frame.jsonrpc !== "2.0" ||
-          !("method" in frame) ||
-          frame.method !== "event" ||
-          !("params" in frame)
-        )
-          throw new Error()
-        listener(frame.params)
-      } catch {
+    const onMessage = (event: unknown) => {
+      if (
+        stopped ||
+        !socketFrameWithinBound(event) ||
+        pendingFrames >= MAX_PENDING_NATIVE_SOCKET_FRAMES
+      ) {
         failObservation()
+        return
       }
+      pendingFrames += 1
+      frameChain = frameChain
+        .then(async () => {
+          if (stopped) return
+          const frame = await boundedSocketJson(event)
+          if (stopped) return
+          if (
+            !frame ||
+            typeof frame !== "object" ||
+            !("jsonrpc" in frame) ||
+            frame.jsonrpc !== "2.0" ||
+            !("method" in frame) ||
+            frame.method !== "event" ||
+            !("params" in frame)
+          )
+            throw new Error()
+          listener(frame.params)
+        })
+        .catch(() => failObservation())
+        .finally(() => {
+          pendingFrames -= 1
+        })
     }
     const onDisconnected = () => failObservation()
     socket.addEventListener("message", onMessage)
@@ -398,7 +472,10 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         signal: controller.signal,
         headers: {
           accept: "application/json",
-          ...(await this.#credentials()),
+          ...(await withinDeadline(
+            () => this.#credentials(controller.signal),
+            controller.signal
+          )),
         },
       })
       if (response.status === 401 || response.status === 403) {

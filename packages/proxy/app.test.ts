@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest"
 
 import { createProxyApp } from "./app"
 import { HermesServerAdapter } from "./hermes-adapter"
-import { HermesHttpError } from "./hermes-transport"
+import {
+  HermesHttpError,
+  HermesWebSocketRpcTransport,
+} from "./hermes-transport"
 import { createOperatorAuthenticator } from "./operator-auth"
 import { HermesRunPublicError, type HermesRunEngine } from "./hermes-run"
 
@@ -294,6 +297,85 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(stillStopping.status).toBe(202)
     expect(await stillStopping.json()).toEqual({ status: "stopping" })
     expect(stop).toHaveBeenCalledTimes(2)
+  })
+
+  it("pulls at most one AG-UI event ahead of a slow SSE consumer", async () => {
+    let index = 0
+    const next = vi.fn(async () => {
+      index += 1
+      return index <= 20
+        ? {
+            done: false as const,
+            value: {
+              type: "RUN_STARTED" as const,
+              threadId: "hermes:researcher:stored",
+              runId: `run-${index}`,
+            },
+          }
+        : { done: true as const, value: undefined }
+    })
+    const closeIterator = vi.fn(async () => ({
+      done: true as const,
+      value: undefined,
+    }))
+    const disconnect = vi.fn()
+    const runEngine = {
+      start: vi.fn(async () => ({
+        events: {
+          [Symbol.asyncIterator]: () => ({ next, return: closeIterator }),
+        },
+        stop: vi.fn(async () => "stopping" as const),
+        disconnect,
+        recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
+      })),
+    } as unknown as HermesRunEngine
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      runEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const response = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "hermes:researcher:stored",
+            runId: "run-1",
+            state: {},
+            messages: [{ id: "user-1", role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(next.mock.calls.length).toBeLessThanOrEqual(1)
+    const reader = response.body!.getReader()
+    expect((await reader.read()).done).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(next.mock.calls.length).toBeLessThanOrEqual(2)
+    await reader.cancel()
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(closeIterator).toHaveBeenCalledTimes(1)
   })
 
   it("routes deliberate Stop through native interrupt and remains stopping", async () => {
@@ -671,6 +753,78 @@ describe("AOS v1 proxy walking skeleton", () => {
     })
     expect(start).toHaveBeenCalledTimes(1)
     expect(nativeHttp).toHaveBeenCalledTimes(1)
+  })
+
+  it("releases run admission after credential acquisition times out", async () => {
+    let releaseLateCredentials: (() => void) | undefined
+    const lateCredentials = new Promise<void>((resolve) => {
+      releaseLateCredentials = resolve
+    })
+    let credentialCalls = 0
+    const fetcher = vi.fn(async () =>
+      Response.json({ id: "stored", profile: "researcher", title: "Owned" })
+    )
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => {
+        credentialCalls += 1
+        if (credentialCalls === 1) await lateCredentials
+        return { "X-Hermes-Session-Token": "native-secret" }
+      },
+      fetcher,
+      socketFactory: vi.fn(),
+      timeoutMs: 20,
+    })
+    const start = vi.fn(async () => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-retry",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: vi.fn(async () => "idle" as const),
+      disconnect: vi.fn(),
+      recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
+    }))
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter(transport),
+      runEngine: { start } as unknown as HermesRunEngine,
+      maxActiveRuns: 1,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const runRequest = (runId: string) =>
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "hermes:researcher:stored",
+            runId,
+            state: {},
+            messages: [{ id: `user-${runId}`, role: "user", content: "Hello" }],
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        }
+      )
+
+    expect((await app.request(runRequest("run-timeout"))).status).toBe(503)
+    expect((await app.request(runRequest("run-retry"))).status).toBe(200)
+    releaseLateCredentials?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
   it("fences an uncertain native send without retrying or disclosing its error", async () => {

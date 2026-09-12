@@ -95,6 +95,80 @@ describe("Hermes WebSocket RPC transport", () => {
     expect(socket.readyState).toBe(3)
   })
 
+  it("dispatches asynchronously decoded native notifications in arrival order", async () => {
+    const socket = new FakeSocket()
+    const observed = vi.fn()
+    const deferredFrame = (seq: number) => {
+      let resolve: (() => void) | undefined
+      const ready = new Promise<void>((done) => {
+        resolve = done
+      })
+      const bytes = new TextEncoder().encode(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "event",
+          params: { type: "message.delta", session_id: "live", seq },
+        })
+      )
+      const blob = new Blob([bytes])
+      Object.defineProperty(blob, "arrayBuffer", {
+        value: async () => {
+          await ready
+          return bytes.buffer
+        },
+      })
+      return { blob, resolve: () => resolve?.() }
+    }
+    const first = deferredFrame(1)
+    const second = deferredFrame(2)
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "observe-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    const stop = await transport.observeEvents(observed, vi.fn())
+    socket.emit("message", { data: first.blob })
+    socket.emit("message", { data: second.blob })
+    second.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(observed).not.toHaveBeenCalled()
+    first.resolve()
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2))
+    expect(observed.mock.calls.map(([event]) => event.seq)).toEqual([1, 2])
+    stop()
+  })
+
+  it("closes an observation whose asynchronous frame queue exceeds its bound", async () => {
+    const socket = new FakeSocket()
+    const disconnected = vi.fn()
+    const pending = new Promise<ArrayBuffer>(() => undefined)
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "observe-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+    await transport.observeEvents(vi.fn(), disconnected)
+    const frame = new Blob(["{}"])
+    Object.defineProperty(frame, "arrayBuffer", { value: () => pending })
+
+    for (let index = 0; index < 65; index += 1)
+      socket.emit("message", { data: frame })
+
+    expect(socket.readyState).toBe(3)
+    expect(disconnected).toHaveBeenCalledTimes(1)
+  })
+
   it.each([404, 409])(
     "preserves native REST status %i without exposing its response body",
     async (status) => {
@@ -357,6 +431,56 @@ describe("Hermes WebSocket RPC transport", () => {
     expect(socket.readyState).toBe(3)
   })
 
+  it("settles matching asynchronous RPC frames in arrival order", async () => {
+    const socket = new FakeSocket()
+    socket.send = (value) => socket.sent.push(value)
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "rpc-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+    const requestPromise = transport.request("profiles.list", {})
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const id = (JSON.parse(socket.sent[0]!) as { id: string }).id
+    const deferredFrame = (frame: unknown) => {
+      let resolve: (() => void) | undefined
+      const ready = new Promise<void>((done) => {
+        resolve = done
+      })
+      const bytes = new TextEncoder().encode(JSON.stringify(frame))
+      const blob = new Blob([bytes])
+      Object.defineProperty(blob, "arrayBuffer", {
+        value: async () => {
+          await ready
+          return bytes.buffer
+        },
+      })
+      return { blob, resolve: () => resolve?.() }
+    }
+    const first = deferredFrame({
+      jsonrpc: "2.0",
+      id,
+      result: { profiles: ["first"] },
+    })
+    const second = deferredFrame({
+      jsonrpc: "2.0",
+      id,
+      error: { message: "late" },
+    })
+    socket.emit("message", { data: first.blob })
+    socket.emit("message", { data: second.blob })
+    second.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    first.resolve()
+
+    await expect(requestPromise).resolves.toEqual({ profiles: ["first"] })
+  })
+
   it("cancels rejected declared-length bodies and redacts credential failures", async () => {
     const cancelled = vi.fn()
     const oversized = new Response(
@@ -394,4 +518,60 @@ describe("Hermes WebSocket RPC transport", () => {
     await expect(http).rejects.toThrow("Hermes request failed")
     await expect(http).rejects.not.toThrow("/srv/hermes")
   })
+
+  it.each([
+    ["native HTTP", "Hermes request failed"],
+    ["ticket brokerage", "Hermes connection failed"],
+  ])(
+    "includes stalled %s credentials in the deadline and discards late results",
+    async (operation, expectedError) => {
+      let releaseCredentials: (() => void) | undefined
+      let credentialSignal: AbortSignal | undefined
+      const credentialsReady = new Promise<void>((resolve) => {
+        releaseCredentials = resolve
+      })
+      const fetcher = vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith("/api/auth/ws-ticket")
+          ? Response.json({ ticket: "late-ticket" })
+          : Response.json({ sessions: [] })
+      )
+      const socketFactory = vi.fn(() => {
+        const socket = new FakeSocket()
+        queueMicrotask(() => socket.open())
+        return socket
+      })
+      const transport = new HermesWebSocketRpcTransport({
+        baseUrl: "http://127.0.0.1:9119",
+        credentials: async (signal) => {
+          credentialSignal = signal
+          await credentialsReady
+          return { "X-Hermes-Session-Token": "late-secret" }
+        },
+        fetcher,
+        socketFactory,
+        timeoutMs: 20,
+      })
+      const pending =
+        operation === "native HTTP"
+          ? transport.http("/api/sessions")
+          : transport.request("profiles.list", {})
+      const outcome = await Promise.race([
+        pending.then(
+          () => "resolved",
+          (error: unknown) =>
+            error instanceof Error ? error.message : "unknown error"
+        ),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("deadline missed"), 100)
+        ),
+      ])
+      releaseCredentials?.()
+      await pending.catch(() => undefined)
+
+      expect(outcome).toBe(expectedError)
+      expect(credentialSignal).toBeInstanceOf(AbortSignal)
+      expect(fetcher).not.toHaveBeenCalled()
+      expect(socketFactory).not.toHaveBeenCalled()
+    }
+  )
 })

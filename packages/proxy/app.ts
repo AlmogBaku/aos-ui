@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import type { AGUIEvent } from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import { Hono } from "hono"
 
@@ -451,40 +452,79 @@ export function createProxyApp(options: ProxyAppOptions) {
       const encoder = new EventEncoder({ accept: "text/event-stream" })
       const textEncoder = new TextEncoder()
       let detached = false
-      let cancelled = false
+      let state: "open" | "terminal" | "closed" | "cancelled" = "open"
+      let readInFlight: Promise<IteratorResult<AGUIEvent>> | undefined
+      let iteratorClose: Promise<void> | undefined
+      const iterator = handle.events[Symbol.asyncIterator]()
       const disconnect = () => {
         if (detached) return
         detached = true
         handle.disconnect()
       }
+      const removeAbortListener = () =>
+        context.req.raw.signal.removeEventListener("abort", disconnect)
+      const closeIterator = () => {
+        if (iteratorClose) return iteratorClose
+        iteratorClose = Promise.resolve(iterator.return?.()).then(
+          () => undefined,
+          () => undefined
+        )
+        return iteratorClose
+      }
       context.req.raw.signal.addEventListener("abort", disconnect, {
         once: true,
       })
       const stream = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          let terminal = false
+        async pull(controller) {
+          if (state !== "open" || readInFlight) return
+          readInFlight = Promise.resolve(iterator.next())
           try {
-            for await (const event of handle.events) {
-              if (cancelled) break
-              terminal =
-                event.type === "RUN_FINISHED" ||
-                (event.type === "RUN_ERROR" &&
-                  event.code !== "AOS_SEND_UNCERTAIN" &&
-                  event.code !== "AOS_CONNECTION_INTERRUPTED")
-              if (!cancelled)
-                controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
+            const result = await readInFlight
+            if (state !== "open") return
+            if (result.done) {
+              state = "closed"
+              removeAbortListener()
+              controller.close()
+              return
+            }
+            const event = result.value
+            const terminal =
+              event.type === "RUN_FINISHED" ||
+              (event.type === "RUN_ERROR" &&
+                event.code !== "AOS_SEND_UNCERTAIN" &&
+                event.code !== "AOS_CONNECTION_INTERRUPTED")
+            controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
+            if (terminal) {
+              state = "terminal"
+              removeAbortListener()
+              if (activeRuns.get(key) === handle) activeRuns.delete(key)
+              await closeIterator()
+              if (state === "terminal") {
+                state = "closed"
+                controller.close()
+              }
+            }
+          } catch {
+            if (state === "open") {
+              state = "closed"
+              removeAbortListener()
+              await closeIterator()
+              controller.error(new Error("AOS run stream failed"))
             }
           } finally {
-            context.req.raw.signal.removeEventListener("abort", disconnect)
-            if (terminal && activeRuns.get(key) === handle)
-              activeRuns.delete(key)
-            if (!cancelled) controller.close()
+            readInFlight = undefined
           }
         },
-        cancel() {
-          cancelled = true
-          context.req.raw.signal.removeEventListener("abort", disconnect)
+        async cancel() {
+          if (state === "closed" || state === "cancelled") return
+          state = "cancelled"
+          removeAbortListener()
           disconnect()
+          const pendingRead = readInFlight
+          await Promise.allSettled([
+            closeIterator(),
+            ...(pendingRead ? [pendingRead] : []),
+          ])
         },
       })
       return new Response(stream, {
