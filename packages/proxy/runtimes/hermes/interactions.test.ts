@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { HermesInteractions } from "./hermes-interactions"
+import { HermesInteractions } from "./interactions"
 
 const scope = {
   agentId: "research",

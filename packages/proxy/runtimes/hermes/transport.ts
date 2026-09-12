@@ -1,4 +1,4 @@
-import type { HermesRpcTransport } from "./hermes-adapter"
+import type { HermesRpcTransport } from "./adapter"
 
 const MAX_TICKET_RESPONSE_BYTES = 8 * 1024
 const MAX_NATIVE_HTTP_RESPONSE_BYTES = 64 * 1024 * 1024

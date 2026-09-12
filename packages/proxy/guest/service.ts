@@ -19,14 +19,14 @@ import {
   type EventsSocket,
   type EventSocketServerFrame,
 } from "../events/socket"
-import type { createHermesContentOperations } from "../hermes-content"
+import type { createHermesContentOperations } from "../runtimes/hermes/content"
 import {
   HermesRunEngine,
   type HermesReconnectRequest,
   type HermesRunHandle,
   type HermesRunNative,
   type HermesRunScope,
-} from "../hermes-run"
+} from "../runtimes/hermes/run"
 
 const securityHeaders = {
   "cache-control": "no-store",

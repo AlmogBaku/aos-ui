@@ -8,9 +8,9 @@ import {
   HermesUnavailableError,
   HermesServerAdapter,
   type HermesRpcTransport,
-} from "./hermes-adapter"
-import { HermesAuthenticationError } from "./hermes-transport"
-import { HermesHttpError } from "./hermes-transport"
+} from "./adapter"
+import { HermesAuthenticationError } from "./transport"
+import { HermesHttpError } from "./transport"
 
 function profile(hidden = false, revision: number | null = 7) {
   return {

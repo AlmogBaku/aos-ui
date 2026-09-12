@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { projectHermesHistory } from "./hermes-history"
+import { projectHermesHistory } from "./history"
 
 describe("server-side Hermes history projection", () => {
   it("preserves message IDs, reasoning, tools, images, and safe rich descriptors without native disclosure", () => {

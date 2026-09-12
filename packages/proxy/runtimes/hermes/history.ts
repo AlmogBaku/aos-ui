@@ -1,4 +1,4 @@
-import type { SessionMessage } from "../protocol"
+import type { SessionMessage } from "../../../protocol"
 
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }

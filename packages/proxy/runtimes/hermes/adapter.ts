@@ -13,20 +13,20 @@ import {
   type RuntimeAuthState,
   type RuntimeInfo,
   type VisibilityUpdateResponse,
-} from "../protocol"
-import { HermesAuthenticationError, HermesHttpError } from "./hermes-transport"
-import { projectHermesHistory } from "./hermes-history"
-import type { HermesRunNative, HermesRunScope } from "./hermes-run"
+} from "../../../protocol"
+import { HermesAuthenticationError, HermesHttpError } from "./transport"
+import { projectHermesHistory } from "./history"
+import type { HermesRunNative, HermesRunScope } from "./run"
 import {
   createHermesWorkspaceOperations,
   type HermesWorkspaceOperations,
   type HermesWorkspaceSession,
-} from "./hermes-workspace"
+} from "./workspace"
 import {
   createHermesContentOperations,
   type HermesContentAttachment,
-} from "./hermes-content"
-import { HermesInteractions } from "./hermes-interactions"
+} from "./content"
+import { HermesInteractions } from "./interactions"
 import type { ResumeEntry } from "@ag-ui/core"
 
 export interface HermesRpcTransport {

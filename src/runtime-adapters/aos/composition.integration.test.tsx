@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 
 import { createProxyApp } from "../../../packages/proxy/app"
-import { HermesServerAdapter } from "../../../packages/proxy/hermes-adapter"
+import { HermesServerAdapter } from "../../../packages/proxy/runtimes/hermes/adapter"
 import { createOperatorAuthenticator } from "../../../packages/proxy/operator-auth"
-import type { HermesRunEngine } from "../../../packages/proxy/hermes-run"
+import type { HermesRunEngine } from "../../../packages/proxy/runtimes/hermes/run"
 import type { HarnessRuntime } from "../contracts"
 import { runtimeAdapter } from "./composition"
 

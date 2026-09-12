@@ -1,6 +1,6 @@
 import type { RuntimeAuthState } from "../../protocol"
 import type { OperatorSession } from "../auth/session-cookie"
-import type { HermesServerAdapter } from "../hermes-adapter"
+import type { HermesServerAdapter } from "../runtimes/hermes/adapter"
 import type { ReconnectCursorCodec } from "./cursor"
 import { createEventsSocket, type EventsSocket } from "./socket"
 

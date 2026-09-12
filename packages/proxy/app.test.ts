@@ -2,15 +2,18 @@ import { describe, expect, it, vi } from "vitest"
 
 import { createProxyApp } from "./app"
 import { OidcAuthenticationError } from "./auth/oidc"
-import { HermesServerAdapter } from "./hermes-adapter"
-import { HermesBrowserAuthenticationError } from "./hermes-auth-broker"
+import { HermesServerAdapter } from "./runtimes/hermes/adapter"
+import { HermesBrowserAuthenticationError } from "./runtimes/hermes/auth-broker"
 import {
   HermesAuthenticationError,
   HermesHttpError,
   HermesWebSocketRpcTransport,
-} from "./hermes-transport"
+} from "./runtimes/hermes/transport"
 import { createOperatorAuthenticator } from "./operator-auth"
-import { HermesRunPublicError, type HermesRunEngine } from "./hermes-run"
+import {
+  HermesRunPublicError,
+  type HermesRunEngine,
+} from "./runtimes/hermes/run"
 
 const origin = "http://127.0.0.1:3000"
 

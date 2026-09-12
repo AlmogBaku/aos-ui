@@ -5,7 +5,7 @@ import {
   HermesBrowserAuthenticationError,
   createHermesBrowserAuthBroker,
   type HermesBrowserAuthBinding,
-} from "./hermes-auth-broker"
+} from "./auth-broker"
 
 const callbackUrl =
   "https://aos.example.test/api/aos/v1/auth/hermes/upstream/auth/callback"

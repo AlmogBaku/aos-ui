@@ -7,11 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { OidcProvider } from "./auth/oidc"
 import { createConfiguredProxy } from "./composition"
-import type { HermesRpcTransport } from "./hermes-adapter"
+import type { HermesRpcTransport } from "./runtimes/hermes/adapter"
 import {
   HermesAuthenticationError,
   type HermesWebSocketRpcTransportOptions,
-} from "./hermes-transport"
+} from "./runtimes/hermes/transport"
 
 const directories: string[] = []
 afterEach(async () => {

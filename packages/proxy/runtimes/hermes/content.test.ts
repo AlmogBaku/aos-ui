@@ -5,7 +5,7 @@ import {
   HermesContentScopeError,
   HermesContentUnavailableError,
   createHermesContentOperations,
-} from "./hermes-content"
+} from "./content"
 
 const scope = {
   agentId: "research",

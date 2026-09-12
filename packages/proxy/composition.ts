@@ -9,16 +9,19 @@ import { createGuestInvitationService } from "./auth/guest-invitation"
 import { parseProxyConfig } from "./config"
 import { createReconnectCursorCodec } from "./events/cursor"
 import { createOperatorEventService } from "./events/service"
-import { HermesServerAdapter, type HermesRpcTransport } from "./hermes-adapter"
+import {
+  HermesServerAdapter,
+  type HermesRpcTransport,
+} from "./runtimes/hermes/adapter"
 import {
   createHermesBrowserAuthBroker,
   type HermesBrowserAuthBrokerOptions,
-} from "./hermes-auth-broker"
+} from "./runtimes/hermes/auth-broker"
 import {
   HermesAuthenticationError,
   HermesWebSocketRpcTransport,
   type HermesWebSocketRpcTransportOptions,
-} from "./hermes-transport"
+} from "./runtimes/hermes/transport"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import { createGuestListenerService } from "./guest/service"
 

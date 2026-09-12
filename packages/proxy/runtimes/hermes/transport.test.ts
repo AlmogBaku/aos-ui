@@ -5,7 +5,7 @@ import {
   HermesHttpError,
   HermesWebSocketRpcTransport,
   type HermesSocket,
-} from "./hermes-transport"
+} from "./transport"
 
 class FakeSocket implements HermesSocket {
   readonly listeners = new Map<string, Set<(event: unknown) => void>>()

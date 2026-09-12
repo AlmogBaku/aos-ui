@@ -1,7 +1,7 @@
 import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it } from "vitest"
 
-import { HermesRunEngine, type HermesRunNative } from "./hermes-run"
+import { HermesRunEngine, type HermesRunNative } from "./run"
 
 const scope = {
   agentId: "research",

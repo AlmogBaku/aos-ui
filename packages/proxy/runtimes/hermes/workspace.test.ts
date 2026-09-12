@@ -4,7 +4,7 @@ import {
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
   createHermesWorkspaceOperations,
-} from "./hermes-workspace"
+} from "./workspace"
 
 const scope = {
   agentId: "research",

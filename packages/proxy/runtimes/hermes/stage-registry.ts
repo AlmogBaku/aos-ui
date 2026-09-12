@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import type { HermesPublicAttachment } from "./hermes-content"
+import type { HermesPublicAttachment } from "./content"
 
 export type HermesAttachmentStage = {
   public: readonly HermesPublicAttachment[]
