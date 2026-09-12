@@ -212,6 +212,57 @@ describe("Hermes content operations", () => {
     ).resolves.toMatchObject({ public: [] })
   })
 
+  it("requires an exact native detach acknowledgement before releasing cleanup fencing", async () => {
+    for (const detachResult of [
+      undefined,
+      {},
+      { detached: false },
+      { detached: true, path: "/private/a.png" },
+    ]) {
+      const h = harness({
+        request(method) {
+          if (method === "image.attach_bytes")
+            return { attached: true, path: "/private/a.png" }
+          if (method === "file.attach") return { attached: false }
+          if (method === "image.detach") return detachResult
+        },
+      })
+      await expect(
+        h.operations.stage("research", "session-public-1", [
+          { type: "image", dataUrl: png },
+          { type: "file", dataUrl: text, mimeType: "text/plain" },
+        ])
+      ).rejects.toBeInstanceOf(HermesContentCleanupRequiredError)
+      await expect(
+        h.operations.stage("research", "session-public-1", [])
+      ).rejects.toBeInstanceOf(HermesContentCleanupRequiredError)
+    }
+
+    let detached = false
+    const h = harness({
+      request(method) {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/private/a.png" }
+        if (method === "file.attach") return { attached: false }
+        if (method === "image.detach") return { detached }
+      },
+    })
+    let failure: unknown
+    try {
+      await h.operations.stage("research", "session-public-1", [
+        { type: "image", dataUrl: png },
+        { type: "file", dataUrl: text, mimeType: "text/plain" },
+      ])
+    } catch (error) {
+      failure = error
+    }
+    detached = true
+    await (failure as HermesContentCleanupRequiredError).retry()
+    await expect(
+      h.operations.stage("research", "session-public-1", [])
+    ).resolves.toMatchObject({ public: [] })
+  })
+
   it("reports exact per-operation capabilities and unavailable transport reasons", async () => {
     const h = harness()
     expect(h.operations.capabilities()).toMatchObject({
@@ -255,7 +306,16 @@ describe("Hermes content operations", () => {
           "audio/x-wav",
           "video/webm",
         ],
-        allowsMimeParameters: true,
+        mimeParameter: "codecs",
+        codecValues: [
+          "aac",
+          "flac",
+          "mp3",
+          "mp4a.40.2",
+          "opus",
+          "pcm",
+          "vorbis",
+        ],
       },
       speech: { maxTextBytes: 32_000, maxAudioBytes: 20_971_520 },
     })
@@ -540,6 +600,27 @@ describe("Hermes content operations", () => {
         "audio/webm"
       )
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    expect(h.transcribe).not.toHaveBeenCalled()
+  })
+
+  it("allows only one bounded safe codecs parameter in recording MIME", async () => {
+    const h = harness()
+    for (const mimeType of [
+      "audio/webm;codecs=opus;foo=bar",
+      "audio/webm;codec=opus",
+      'audio/webm;codecs="opus"',
+      "audio/webm;codecs=opus,vorbis",
+      "audio/webm;codecs=opus\r\nX-Injected: yes",
+      `audio/webm;codecs=${"a".repeat(129)}`,
+    ])
+      await expect(
+        h.operations.transcribe(
+          "research",
+          "session-public-1",
+          Uint8Array.of(1),
+          mimeType
+        )
+      ).rejects.toBeInstanceOf(HermesContentUnavailableError)
     expect(h.transcribe).not.toHaveBeenCalled()
   })
 

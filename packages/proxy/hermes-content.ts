@@ -24,8 +24,30 @@ const IMAGE_MIME = new Set([
   "image/webp",
   "image/bmp",
 ])
-const RECORDING_MIME =
-  /^(?:audio\/(?:aac|flac|m4a|mp3|mp4|mpeg|ogg|wav|wave|webm|x-m4a|x-wav)|video\/webm)(?:;[^,\r\n]+)*$/u
+const RECORDING_MIME_TYPES = new Set([
+  "audio/aac",
+  "audio/flac",
+  "audio/m4a",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/wave",
+  "audio/webm",
+  "audio/x-m4a",
+  "audio/x-wav",
+  "video/webm",
+])
+const RECORDING_CODECS = new Set([
+  "aac",
+  "flac",
+  "mp3",
+  "mp4a.40.2",
+  "opus",
+  "pcm",
+  "vorbis",
+])
 const SPEECH_MIME = /^(?:audio\/(?:mpeg|ogg|wav|flac))$/u
 const FILE_REFERENCE = /^@file:(?:`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)$/u
 
@@ -191,6 +213,27 @@ function validBase64(encoded: string) {
       return false
   }
   return true
+}
+
+function safeRecordingMime(value: unknown) {
+  if (typeof value !== "string" || utf8BytesAtMost(value, 128) === undefined)
+    return undefined
+  const separator = value.indexOf(";")
+  const type = separator < 0 ? value : value.slice(0, separator)
+  if (!RECORDING_MIME_TYPES.has(type)) return undefined
+  if (separator < 0) return type
+  const parameter = value.slice(separator + 1)
+  if (!parameter.startsWith("codecs=")) return undefined
+  const codec = parameter.slice("codecs=".length)
+  return RECORDING_CODECS.has(codec) ? `${type};codecs=${codec}` : undefined
+}
+
+function exactDetachResult(value: unknown) {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    value.detached === true
+  )
 }
 
 function parseDataUrl(value: unknown, maxBytes: number) {
@@ -469,7 +512,8 @@ export function createHermesContentOperations(input: {
                   "audio/x-wav",
                   "video/webm",
                 ] as const,
-                allowsMimeParameters: true,
+                mimeParameter: "codecs" as const,
+                codecValues: [...RECORDING_CODECS],
                 maxRecordingBytes: MAX_RECORDING_BYTES,
                 maxTranscriptBytes: MAX_TRANSCRIPT_BYTES,
               }
@@ -516,6 +560,9 @@ export function createHermesContentOperations(input: {
             nativeRequest("image.detach", {
               session_id: scope.liveSessionId,
               path,
+            }).then((result) => {
+              if (!exactDetachResult(result))
+                throw new HermesContentUnavailableError()
             })
           )
         )
@@ -671,21 +718,23 @@ export function createHermesContentOperations(input: {
       signal?.throwIfAborted()
       const scope = await requireScope(agentId, sessionId)
       signal?.throwIfAborted()
+      const recordingMime = safeRecordingMime(mimeType)
       if (
         !input.transport.transcribe ||
         !(bytes instanceof Uint8Array) ||
         bytes.length === 0 ||
         bytes.length > MAX_RECORDING_BYTES ||
-        !RECORDING_MIME.test(mimeType)
+        !recordingMime
       )
         throw new HermesContentUnavailableError()
+      signal?.throwIfAborted()
       let result: unknown
       try {
         result = await input.transport.transcribe(
           scope,
           {
-            data_url: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
-            mime_type: mimeType,
+            data_url: `data:${recordingMime};base64,${bytesToBase64(bytes)}`,
+            mime_type: recordingMime,
           },
           signal,
           MAX_TRANSCRIPT_RESPONSE_BYTES
