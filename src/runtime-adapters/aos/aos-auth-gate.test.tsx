@@ -100,7 +100,12 @@ describe("AosAuthGate", () => {
   it.each([
     ["provider-unavailable", new AuthGateFailure("provider-unavailable"), "Runtime provider temporarily unavailable", "Try again"],
     ["connection-interrupted", new AuthGateFailure("connection-interrupted"), "Connection interrupted", "Reconnect"],
-    ["proxy-failure", new AuthGateFailure("proxy-failure"), "AOS could not safely load the runtime", "Try again"],
+    [
+      "proxy-failure",
+      new Error("private transport detail"),
+      "AOS could not safely load the runtime",
+      "Try again",
+    ],
   ] as const)("renders a distinct safe %s state", async (_kind, failure, message, action) => {
     renderGate({ operatorAuth: vi.fn(async () => Promise.reject(failure)) })
 
