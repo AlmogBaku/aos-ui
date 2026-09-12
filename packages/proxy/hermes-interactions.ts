@@ -25,8 +25,6 @@ export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxAnswerValuesPerQuestion: 64,
   maxStringBytes: 4_096,
   maxPending: 64,
-  maxReactionBytes: 64,
-  maxReactionTargets: 4_096,
 })
 
 export class HermesInteractionPublicError extends Error {
@@ -94,25 +92,6 @@ export type HermesInteractionResult = {
     "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
 }
 
-export type HermesReactionResult =
-  | {
-      status: "resolved"
-      messageId: string
-      reactions: ReadonlyArray<{
-        emoji: string
-        author: "user" | "agent"
-        at: number
-      }>
-    }
-  | { status: "uncertain"; messageId: string }
-
-type ReactionRecord = {
-  scope: HermesInteractionScope
-  fingerprint: string
-  result?: HermesReactionResult
-  promise?: Promise<HermesReactionResult>
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -127,6 +106,18 @@ function validString(
 ) {
   return typeof value === "string" && value.trim() && utf8Bytes(value) <= max
     ? value.trim()
+    : undefined
+}
+
+function nativeText(
+  value: unknown,
+  max: number = HERMES_INTERACTION_LIMITS.maxStringBytes,
+  allowEmpty = false
+) {
+  return typeof value === "string" &&
+    utf8Bytes(value) <= max &&
+    (allowEmpty || value.length > 0)
+    ? value
     : undefined
 }
 
@@ -194,7 +185,9 @@ function parseChoices(value: unknown): string[] | null | undefined {
     value.length > HERMES_INTERACTION_LIMITS.maxChoicesPerQuestion
   )
     return undefined
-  const choices = value.map((choice) => validString(choice))
+  const choices = value.map((choice) =>
+    nativeText(choice, HERMES_INTERACTION_LIMITS.maxStringBytes, true)
+  )
   if (choices.some((choice) => choice === undefined)) return undefined
   const normalized = choices as string[]
   return new Set(normalized).size === normalized.length ? normalized : undefined
@@ -213,7 +206,7 @@ function parseClarification(payload: Record<string, unknown>) {
     questions = payload.questions.map((candidate) => {
       if (!isRecord(candidate)) invalidNative()
       const id = validString(candidate.qid, 256)
-      const question = validString(candidate.question)
+      const question = nativeText(candidate.question)
       const nativeChoices = parseChoices(candidate.choices)
       if (
         !id ||
@@ -233,7 +226,7 @@ function parseClarification(payload: Record<string, unknown>) {
     if (new Set(questions.map(({ id }) => id)).size !== questions.length)
       invalidNative()
   } else {
-    const question = validString(payload.question)
+    const question = nativeText(payload.question)
     const nativeChoices = parseChoices(payload.choices)
     if (!question || nativeChoices === undefined) invalidNative()
     questions = [
@@ -262,10 +255,17 @@ function parseClarification(payload: Record<string, unknown>) {
           const parsed: unknown = JSON.parse(encoded)
           if (
             !Array.isArray(parsed) ||
-            parsed.some((answer) => !validString(answer))
+            parsed.some(
+              (answer) =>
+                nativeText(
+                  answer,
+                  HERMES_INTERACTION_LIMITS.maxStringBytes,
+                  true
+                ) === undefined
+            )
           )
             invalidNative()
-          nativeAnswers = parsed.map(String)
+          nativeAnswers = parsed as string[]
         } catch (error) {
           if (error instanceof HermesInteractionPublicError) throw error
           invalidNative()
@@ -348,7 +348,7 @@ function sessionKey(scope: HermesInteractionScope) {
 function strictResume(value: unknown) {
   if (!isRecord(value))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-  const allowed = new Set(["interruptId", "status", "payload"])
+  const allowed = new Set(["interruptId", "status", "payload", "metadata"])
   if (Object.keys(value).some((key) => !allowed.has(key)))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
   const interruptId = validString(value.interruptId, 256)
@@ -359,6 +359,8 @@ function strictResume(value: unknown) {
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
   if (!boundedJson(value))
     throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
+  if (value.metadata !== undefined && !isRecord(value.metadata))
+    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
   return { interruptId, status: value.status, payload: value.payload }
 }
 
@@ -381,7 +383,9 @@ function answerSets(value: unknown, questions: Question[]) {
           : 1)
     )
       throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-    const answers = candidate.map((answer) => validString(answer))
+    const answers = candidate.map((answer) =>
+      nativeText(answer, HERMES_INTERACTION_LIMITS.maxStringBytes, true)
+    )
     if (
       answers.some((answer) => answer === undefined) ||
       new Set(answers).size !== answers.length ||
@@ -400,26 +404,6 @@ function answerSets(value: unknown, questions: Question[]) {
         JSON.stringify(question.locked) === JSON.stringify(publicAnswers),
     }
   })
-}
-
-function validApprovalResult(value: unknown) {
-  return (
-    isRecord(value) &&
-    Number.isSafeInteger(value.resolved) &&
-    (value.resolved as number) >= 0
-  )
-}
-
-function validClarifyResult(value: unknown) {
-  return (
-    isRecord(value) &&
-    (value.status === "ok" || value.status === "expired") &&
-    (value.remaining === undefined ||
-      (Array.isArray(value.remaining) &&
-        value.remaining.length <= HERMES_INTERACTION_LIMITS.maxQuestions &&
-        new Set(value.remaining).size === value.remaining.length &&
-        value.remaining.every((id) => validString(id, 256))))
-  )
 }
 
 function approvalChoices(payload: Record<string, unknown>): ApprovalChoice[] {
@@ -447,8 +431,6 @@ export class HermesInteractions {
     string,
     { scope: HermesInteractionScope; liveSessionId: string }
   >()
-  readonly #reactions = new Map<string, ReactionRecord>()
-  readonly #reactionTargets = new Map<string, ReadonlySet<string>>()
   readonly #resumeGenerations = new Map<string, number>()
   #sequence = 0
 
@@ -564,13 +546,14 @@ export class HermesInteractions {
       this.#live.set(sessionKey(scope), { scope: { ...scope }, liveSessionId })
       return remembered
     }
-    const id = validString(event.payload.request_id, 256)
-    const message = validString(
-      event.payload.message ??
-        event.payload.command ??
-        event.payload.description
-    )
-    if (!id || !message) invalidNative()
+    const id = validString(event.payload.request_id ?? event.payload.id, 256)
+    const message =
+      validString(
+        event.payload.message ??
+          event.payload.command ??
+          event.payload.description
+      ) ?? "Hermes is requesting permission to continue."
+    if (!id) invalidNative()
     const choices = approvalChoices(event.payload)
     if (choices.length === 0) invalidNative()
     const choiceScopes = Object.fromEntries(
@@ -700,15 +683,15 @@ export class HermesInteractions {
       let expired = false
       for (const call of calls) {
         const result = await this.transport.request(call.method, call.params)
-        if (!boundedJson(result)) throw new Error("invalid response")
-        if (interaction.kind === "approval") {
-          if (!validApprovalResult(result)) throw new Error("invalid response")
-          expired = (result as { resolved: number }).resolved === 0
-        } else {
-          if (!validClarifyResult(result)) throw new Error("invalid response")
-          expired ||= (result as { status: string }).status === "expired"
-          if (expired) break
-        }
+        if (result !== undefined && !boundedJson(result))
+          throw new Error("invalid response")
+        if (
+          interaction.kind === "questions" &&
+          isRecord(result) &&
+          result.status === "expired"
+        )
+          expired = true
+        if (expired) break
       }
       const outcome: HermesInteractionResult = {
         status: expired ? "expired" : "resolved",
@@ -758,19 +741,17 @@ export class HermesInteractions {
     const pendingSnapshot = new Map(this.#pending)
     const completedSnapshot = new Map(this.#completed)
     const liveSnapshot = new Map(this.#live)
-    const reactionsSnapshot = new Map(this.#reactions)
-    const reactionTargetsSnapshot = new Map(this.#reactionTargets)
     const interrupts = []
     try {
       for (const [key, interaction] of this.#pending) {
         if (sameScope(interaction.scope, scope)) this.#pending.delete(key)
       }
-      const existingLive = this.#live.get(sessionKey(scope))
-      if (existingLive && existingLive.liveSessionId !== liveSessionId)
-        this.#clearReactionState(scope)
       this.#live.set(sessionKey(scope), { scope: { ...scope }, liveSessionId })
       if (isRecord(result.pending_approval)) {
-        const requestId = validString(result.pending_approval.request_id, 256)
+        const requestId = validString(
+          result.pending_approval.request_id ?? result.pending_approval.id,
+          256
+        )
         if (requestId) this.#completed.delete(interactionKey(scope, requestId))
         const outcome = this.acceptNative(scope, liveSessionId, {
           type: "approval.request",
@@ -798,11 +779,6 @@ export class HermesInteractions {
       for (const entry of completedSnapshot) this.#completed.set(...entry)
       this.#live.clear()
       for (const entry of liveSnapshot) this.#live.set(...entry)
-      this.#reactions.clear()
-      for (const entry of reactionsSnapshot) this.#reactions.set(...entry)
-      this.#reactionTargets.clear()
-      for (const entry of reactionTargetsSnapshot)
-        this.#reactionTargets.set(...entry)
       throw error
     }
     return {
@@ -823,113 +799,6 @@ export class HermesInteractions {
           }
         : {}),
     }
-  }
-
-  async react(
-    scope: HermesInteractionScope,
-    candidate: unknown
-  ): Promise<HermesReactionResult> {
-    if (!isRecord(candidate) || !boundedJson(candidate))
-      throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-    const allowed = new Set(["operationId", "messageId", "emoji"])
-    if (Object.keys(candidate).some((key) => !allowed.has(key)))
-      throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-    const operationId = validString(candidate.operationId, 256)
-    const messageId = validString(candidate.messageId, 256)
-    const match = messageId?.match(/^hermes-row-([1-9]\d*)$/u)
-    const rowId = match ? Number(match[1]) : Number.NaN
-    const emoji =
-      candidate.emoji === null
-        ? null
-        : validString(
-            candidate.emoji,
-            HERMES_INTERACTION_LIMITS.maxReactionBytes
-          )
-    if (
-      !operationId ||
-      !messageId ||
-      !Number.isSafeInteger(rowId) ||
-      rowId <= 0 ||
-      emoji === undefined
-    )
-      throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-    const binding = this.#live.get(sessionKey(scope))
-    if (!binding || !sameScope(binding.scope, scope))
-      throw new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    if (!this.#reactionTargets.get(sessionKey(scope))?.has(messageId))
-      throw new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-
-    const key = interactionKey(scope, `reaction:${operationId}`)
-    const fingerprint = JSON.stringify([messageId, emoji])
-    const existing = this.#reactions.get(key)
-    if (existing) {
-      if (existing.fingerprint !== fingerprint)
-        throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-      if (existing.result) return existing.result
-      if (existing.promise) return existing.promise
-    }
-    const record: ReactionRecord = { scope: { ...scope }, fingerprint }
-    const operation = (async (): Promise<HermesReactionResult> => {
-      try {
-        const native = await this.transport.request("message.react", {
-          session_id: binding.liveSessionId,
-          row_id: rowId,
-          emoji,
-          author: "user",
-        })
-        if (
-          !boundedJson(native) ||
-          !isRecord(native) ||
-          native.row_id !== rowId ||
-          !Array.isArray(native.reactions) ||
-          native.reactions.length > 2
-        )
-          throw new Error("invalid response")
-        const reactions = native.reactions.map((reaction) => {
-          if (!isRecord(reaction)) throw new Error("invalid response")
-          const projectedEmoji = validString(
-            reaction.emoji,
-            HERMES_INTERACTION_LIMITS.maxReactionBytes
-          )
-          if (
-            !projectedEmoji ||
-            (reaction.author !== "user" && reaction.author !== "agent") ||
-            typeof reaction.at !== "number" ||
-            !Number.isFinite(reaction.at) ||
-            reaction.at < 0
-          )
-            throw new Error("invalid response")
-          return {
-            emoji: projectedEmoji,
-            author: reaction.author as "user" | "agent",
-            at: reaction.at,
-          }
-        })
-        reactions.sort(
-          (left, right) =>
-            left.at - right.at ||
-            (left.author === right.author
-              ? left.emoji.localeCompare(right.emoji)
-              : left.author === "user"
-                ? -1
-                : 1)
-        )
-        return { status: "resolved", messageId, reactions }
-      } catch {
-        return { status: "uncertain", messageId }
-      }
-    })()
-    record.promise = operation
-    this.#reactions.set(key, record)
-    const projected = await operation
-    record.result = projected
-    delete record.promise
-    while (this.#reactions.size > HERMES_INTERACTION_LIMITS.maxPending * 2) {
-      const oldest = this.#reactions.keys().next().value
-      if (oldest === undefined) break
-      this.#reactions.delete(oldest)
-    }
-    return projected
   }
 
   capabilities() {
@@ -959,57 +828,9 @@ export class HermesInteractions {
         maxStringBytes: HERMES_INTERACTION_LIMITS.maxStringBytes,
       },
       reactions: {
-        status: "available" as const,
-        scope: "persisted-message" as const,
-        semantics: "one-per-author-toggle" as const,
-        author: "user" as const,
-        choices: ["❤️", "👍", "👎", "😂", "‼️", "❓"] as const,
-        custom: true as const,
-        maxEmojiBytes: HERMES_INTERACTION_LIMITS.maxReactionBytes,
-        maxAuthorizedTargets: HERMES_INTERACTION_LIMITS.maxReactionTargets,
-        targetAuthorization: "trusted-history-projection" as const,
-        idempotency: {
-          status: "limited" as const,
-          scope: "proxy-process" as const,
-          reason: "native-toggle-has-no-idempotency-key" as const,
-        },
-        liveMessage: {
-          status: "unavailable" as const,
-          reason: "stable-message-id-required" as const,
-        },
+        status: "unavailable" as const,
+        reason: "native-reaction-operation-unavailable" as const,
       },
-    }
-  }
-
-  authorizeReactionTargets(
-    scope: HermesInteractionScope,
-    messageIds: readonly string[]
-  ) {
-    if (
-      !Array.isArray(messageIds) ||
-      messageIds.length > HERMES_INTERACTION_LIMITS.maxReactionTargets
-    )
-      throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
-    const targets = new Set<string>()
-    for (const candidate of messageIds) {
-      const messageId = validString(candidate, 256)
-      const match = messageId?.match(/^hermes-row-([1-9]\d*)$/u)
-      if (
-        !messageId ||
-        !match ||
-        !Number.isSafeInteger(Number(match[1])) ||
-        targets.has(messageId)
-      )
-        throw new HermesInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-      targets.add(messageId)
-    }
-    this.#reactionTargets.set(sessionKey(scope), targets)
-  }
-
-  #clearReactionState(scope: HermesInteractionScope) {
-    this.#reactionTargets.delete(sessionKey(scope))
-    for (const [key, record] of this.#reactions) {
-      if (sameScope(record.scope, scope)) this.#reactions.delete(key)
     }
   }
 

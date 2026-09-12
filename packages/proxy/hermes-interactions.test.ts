@@ -50,6 +50,25 @@ describe("HermesInteractions", () => {
     expect(JSON.stringify(outcome)).not.toContain("live-private")
   })
 
+  it("uses the existing safe fallback for an approval without display text", () => {
+    const interactions = new HermesInteractions({ request: vi.fn() })
+
+    expect(
+      interactions.acceptNative(scope, "live-private", {
+        type: "approval.request",
+        session_id: "live-private",
+        payload: { request_id: "approval-untitled" },
+      })
+    ).toMatchObject({
+      interrupts: [
+        {
+          id: "approval-untitled",
+          message: "Hermes is requesting permission to continue.",
+        },
+      ],
+    })
+  })
+
   it("normalizes ordered native clarification questions without exposing question wire ids", () => {
     const interactions = new HermesInteractions({ request: vi.fn() })
 
@@ -192,6 +211,109 @@ describe("HermesInteractions", () => {
       request_id: "approval-1",
       choice: "session",
     })
+  })
+
+  it("treats the existing Hermes boolean response fixtures as successful acknowledgements", async () => {
+    const request = vi.fn().mockResolvedValue({ resolved: true })
+    const interactions = new HermesInteractions({ request })
+    interactions.acceptNative(scope, "live-private", {
+      type: "approval.request",
+      session_id: "live-private",
+      payload: { id: "approval-from-id", command: "deploy" },
+    })
+
+    await expect(
+      interactions.respond(scope, {
+        interruptId: "approval-from-id",
+        status: "resolved",
+        payload: "once",
+        metadata: { presentation: { selectedBy: "keyboard" } },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+    expect(request).toHaveBeenCalledWith("approval.respond", {
+      session_id: "live-private",
+      request_id: "approval-from-id",
+      choice: "once",
+    })
+
+    request.mockResolvedValue({ resolved: true })
+    interactions.acceptNative(scope, "live-private", {
+      type: "clarify.request",
+      session_id: "live-private",
+      payload: { request_id: "clarify-fixture", question: "Continue?" },
+    })
+    await expect(
+      interactions.respond(scope, {
+        interruptId: "clarify-fixture",
+        status: "resolved",
+        payload: { answers: [["yes"]] },
+        metadata: { ignored: true },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+  })
+
+  it("preserves exact native clarification choices and free-text answer whitespace", async () => {
+    const request = vi.fn().mockResolvedValue({ resolved: true })
+    const interactions = new HermesInteractions({ request })
+    const outcome = interactions.acceptNative(scope, "live-private", {
+      type: "clarify.request",
+      session_id: "live-private",
+      payload: {
+        request_id: "clarify-whitespace",
+        questions: [
+          {
+            qid: "choice",
+            question: "Pick exact",
+            choices: ["  padded choice  ", "plain"],
+            multi_select: false,
+          },
+          {
+            qid: "free",
+            question: "Free text",
+            choices: null,
+            multi_select: false,
+          },
+        ],
+      },
+    })
+    expect(
+      outcome &&
+        "interrupts" in outcome &&
+        outcome.interrupts[0]?.responseSchema?.properties
+    ).toMatchObject({
+      answers: {
+        prefixItems: [
+          { items: { enum: ["  padded choice  ", "plain"] } },
+          { items: { type: "string" } },
+        ],
+      },
+    })
+
+    await interactions.respond(scope, {
+      interruptId: "clarify-whitespace",
+      status: "resolved",
+      payload: { answers: [["  padded choice  "], ["  free text  "]] },
+    })
+    expect(request.mock.calls).toEqual([
+      [
+        "clarify.respond",
+        {
+          session_id: "live-private",
+          request_id: "clarify-whitespace",
+          question_id: "choice",
+          answer: "  padded choice  ",
+        },
+      ],
+      [
+        "clarify.respond",
+        {
+          session_id: "live-private",
+          request_id: "clarify-whitespace",
+          question_id: "free",
+          answer: "  free text  ",
+        },
+      ],
+    ])
   })
 
   it("rejects cross-Agent, cross-Session, and cross-run interaction substitution", async () => {
@@ -463,82 +585,6 @@ describe("HermesInteractions", () => {
     expect(interactions.pending(scope)).toEqual([])
   })
 
-  it("sets or clears a user reaction on a stable message with idempotent operation identity", async () => {
-    const request = vi.fn().mockResolvedValue({
-      row_id: 41,
-      reactions: [
-        { emoji: "🔥", author: "agent", at: 20 },
-        { emoji: "👍", author: "user", at: 10 },
-      ],
-    })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "hold" },
-    })
-    interactions.authorizeReactionTargets(scope, ["hermes-row-41"])
-
-    const first = await interactions.react(scope, {
-      operationId: "reaction-op-1",
-      messageId: "hermes-row-41",
-      emoji: "👍",
-    })
-    const replay = await interactions.react(scope, {
-      operationId: "reaction-op-1",
-      messageId: "hermes-row-41",
-      emoji: "👍",
-    })
-
-    expect(first).toEqual({
-      status: "resolved",
-      messageId: "hermes-row-41",
-      reactions: [
-        { emoji: "👍", author: "user", at: 10 },
-        { emoji: "🔥", author: "agent", at: 20 },
-      ],
-    })
-    expect(replay).toEqual(first)
-    expect(request).toHaveBeenCalledTimes(1)
-    expect(request).toHaveBeenCalledWith("message.react", {
-      session_id: "live-private",
-      row_id: 41,
-      emoji: "👍",
-      author: "user",
-    })
-  })
-
-  it("rejects reaction scope substitution and redacts uncertain toggle failures", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValue(new Error("token=x https://private.invalid/tmp/key"))
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "hold" },
-    })
-    interactions.authorizeReactionTargets(scope, ["hermes-row-41"])
-    const input = {
-      operationId: "reaction-op-1",
-      messageId: "hermes-row-41",
-      emoji: "👍",
-    }
-
-    await expect(
-      interactions.react({ ...scope, sessionId: "other" }, input)
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
-    await expect(interactions.react(scope, input)).resolves.toEqual({
-      status: "uncertain",
-      messageId: "hermes-row-41",
-    })
-    await expect(interactions.react(scope, input)).resolves.toEqual({
-      status: "uncertain",
-      messageId: "hermes-row-41",
-    })
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
   it("reports operation-specific interaction capabilities with choices, scopes, limits, and limitations", () => {
     const interactions = new HermesInteractions({ request: vi.fn() })
 
@@ -567,30 +613,18 @@ describe("HermesInteractions", () => {
         maxStringBytes: 4096,
       },
       reactions: {
-        status: "available",
-        scope: "persisted-message",
-        semantics: "one-per-author-toggle",
-        author: "user",
-        choices: ["❤️", "👍", "👎", "😂", "‼️", "❓"],
-        custom: true,
-        maxEmojiBytes: 64,
-        maxAuthorizedTargets: 4096,
-        targetAuthorization: "trusted-history-projection",
-        idempotency: {
-          status: "limited",
-          scope: "proxy-process",
-          reason: "native-toggle-has-no-idempotency-key",
-        },
-        liveMessage: {
-          status: "unavailable",
-          reason: "stable-message-id-required",
-        },
+        status: "unavailable",
+        reason: "native-reaction-operation-unavailable",
       },
     })
+    expect(
+      (interactions as unknown as { react?: unknown }).react
+    ).toBeUndefined()
   })
 
-  it("redacts native credentials, URLs, and filesystem paths from interrupt presentation", () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
+  it("redacts native credentials, URLs, and filesystem paths while mapping a selected display choice back exactly", async () => {
+    const request = vi.fn().mockResolvedValue({ resolved: true })
+    const interactions = new HermesInteractions({ request })
 
     const outcome = interactions.acceptNative(scope, "live-private", {
       type: "clarify.request",
@@ -610,6 +644,25 @@ describe("HermesInteractions", () => {
     expect(serialized).toContain("[credential redacted]")
     expect(serialized).toContain("[provider path redacted]")
     expect(serialized).toContain("[provider location redacted]")
+    const properties =
+      outcome && "interrupts" in outcome
+        ? (outcome.interrupts[0]?.responseSchema?.properties as {
+            answers: {
+              prefixItems: Array<{ items: { enum: string[] } }>
+            }
+          })
+        : undefined
+    const displayedChoice = properties?.answers.prefixItems[0]?.items.enum[0]
+    await interactions.respond(scope, {
+      interruptId: "clarify-safe",
+      status: "resolved",
+      payload: { answers: [[displayedChoice]] },
+    })
+    expect(request).toHaveBeenCalledWith("clarify.respond", {
+      session_id: "live-private",
+      request_id: "clarify-safe",
+      answer: "/srv/private/a",
+    })
   })
 
   it("prevents a concurrent response and rejects changed payloads on replay", async () => {
@@ -695,6 +748,45 @@ describe("HermesInteractions", () => {
       interactions.acceptNative(scope, "live-private", event)
     ).toBeUndefined()
     expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("authoritatively restores an id-only pending approval after completion", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-private-2",
+          running: true,
+          pending_approval: { id: "approval-1", command: "deploy again" },
+        }
+      return { resolved: true }
+    })
+    const interactions = new HermesInteractions({ request })
+    interactions.acceptNative(scope, "live-private", {
+      type: "approval.request",
+      session_id: "live-private",
+      payload: { id: "approval-1", command: "deploy" },
+    })
+    await interactions.respond(scope, {
+      interruptId: "approval-1",
+      status: "resolved",
+      payload: "once",
+    })
+
+    const resumed = await interactions.resume(scope)
+
+    expect(resumed.outcome).toMatchObject({
+      interrupts: [{ id: "approval-1", message: "deploy again" }],
+    })
+    await expect(
+      interactions.respond(scope, {
+        interruptId: "approval-1",
+        status: "resolved",
+        payload: "once",
+      })
+    ).resolves.toEqual({ status: "resolved" })
+    expect(
+      request.mock.calls.filter(([method]) => method === "approval.respond")
+    ).toHaveLength(2)
   })
 
   it("restores already locked batch answers as safe ordered schema defaults", async () => {
@@ -834,55 +926,6 @@ describe("HermesInteractions", () => {
     })
   })
 
-  it("requires a reaction target authorized by the trusted history projection", async () => {
-    const request = vi.fn().mockResolvedValue({ row_id: 41, reactions: [] })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "hold" },
-    })
-    const reaction = {
-      operationId: "reaction-op-1",
-      messageId: "hermes-row-41",
-      emoji: "👍",
-    }
-
-    await expect(interactions.react(scope, reaction)).rejects.toMatchObject({
-      code: "AOS_INTERACTION_NOT_FOUND",
-    })
-    interactions.authorizeReactionTargets(scope, ["hermes-row-41"])
-    await expect(interactions.react(scope, reaction)).resolves.toMatchObject({
-      status: "resolved",
-    })
-  })
-
-  it("requires fresh reaction-target authorization after a native Session rebind", async () => {
-    const request = vi.fn().mockResolvedValue({
-      session_id: "live-new",
-      running: false,
-      status: "idle",
-    })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-old", {
-      type: "approval.request",
-      session_id: "live-old",
-      payload: { request_id: "approval-1", command: "hold" },
-    })
-    interactions.authorizeReactionTargets(scope, ["hermes-row-41"])
-
-    await interactions.resume(scope)
-
-    await expect(
-      interactions.react(scope, {
-        operationId: "reaction-op-new",
-        messageId: "hermes-row-41",
-        emoji: "👍",
-      })
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
   it("treats an oversized native response as uncertain and never replays it", async () => {
     const request = vi.fn().mockResolvedValue({
       status: "ok",
@@ -907,41 +950,6 @@ describe("HermesInteractions", () => {
       status: "uncertain",
     })
     expect(request).toHaveBeenCalledTimes(1)
-  })
-
-  it("rolls back reaction authorization when a rebound resume snapshot is malformed", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        session_id: "live-new",
-        running: true,
-        pending_clarify: { request_id: "bad", question: { path: "/secret" } },
-      })
-      .mockResolvedValueOnce({ row_id: 41, reactions: [] })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-old", {
-      type: "approval.request",
-      session_id: "live-old",
-      payload: { request_id: "approval-1", command: "hold" },
-    })
-    interactions.authorizeReactionTargets(scope, ["hermes-row-41"])
-
-    await expect(interactions.resume(scope)).rejects.toMatchObject({
-      code: "AOS_PROVIDER_INVALID_RESPONSE",
-    })
-    await expect(
-      interactions.react(scope, {
-        operationId: "reaction-after-failed-resume",
-        messageId: "hermes-row-41",
-        emoji: "👍",
-      })
-    ).resolves.toMatchObject({ status: "resolved" })
-    expect(request).toHaveBeenLastCalledWith("message.react", {
-      session_id: "live-old",
-      row_id: 41,
-      emoji: "👍",
-      author: "user",
-    })
   })
 
   it("rejects duplicate native batch question ids and locked multi-select values", async () => {
