@@ -3,11 +3,19 @@ import {
   RunAgentInputSchema,
   type AGUIEvent,
   type RunAgentInput,
+  type TokenUsage,
 } from "@ag-ui/core"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_RECOVERY_EVENTS = 4_096
+const MAX_QUEUED_EVENTS = 4_096
+const MAX_PREACTIVE_EVENTS = 4_096
+const MAX_PREACTIVE_BYTES = 4_194_304
+const MAX_TOOL_DEPTH = 6
+const MAX_TOOL_ENTRIES = 64
+const MAX_TOOL_STRING_BYTES = 16_384
+const MAX_TOOL_PAYLOAD_BYTES = 65_536
 const RUN_INPUT_FIELDS = new Set([
   "threadId",
   "runId",
@@ -79,10 +87,26 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
   #closed = false
 
   push(value: AGUIEvent) {
-    if (this.#closed) return
+    if (this.#closed) return false
     const waiter = this.#waiters.shift()
     if (waiter) waiter.resolve({ done: false, value })
-    else this.#values.push(value)
+    else {
+      if (this.#values.length >= MAX_QUEUED_EVENTS) return false
+      this.#values.push(value)
+    }
+    return true
+  }
+
+  terminal(value: AGUIEvent) {
+    if (this.#closed) return
+    const started =
+      this.#values[0]?.type === EventType.RUN_STARTED
+        ? this.#values[0]
+        : undefined
+    this.#values.splice(0, this.#values.length)
+    if (started) this.#values.push(started)
+    this.#values.push(value)
+    this.close()
   }
 
   close() {
@@ -122,6 +146,77 @@ type ActiveRun = {
   uncertain: boolean
   detached: boolean
   terminal: boolean
+  overflowed: boolean
+  usage?: TokenUsage[]
+}
+
+type BufferedNativeEvents = {
+  events: unknown[]
+  bytes: number
+  overflow: boolean
+}
+
+export class HermesRunPublicError extends Error {
+  readonly code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN"
+
+  constructor(
+    code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN",
+    message: string
+  ) {
+    super(message)
+    this.name = "HermesRunPublicError"
+    this.code = code
+  }
+}
+
+function providerUnavailable() {
+  return new HermesRunPublicError(
+    "AOS_PROVIDER_UNAVAILABLE",
+    "Hermes is temporarily unavailable."
+  )
+}
+
+function stopUncertain() {
+  return new HermesRunPublicError(
+    "AOS_STOP_UNCERTAIN",
+    "Hermes could not confirm Stop; reconcile before sending again."
+  )
+}
+
+function bufferNativeEvent(buffer: BufferedNativeEvents, value: unknown) {
+  if (buffer.overflow) return
+  let bytes: number
+  try {
+    bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength
+  } catch {
+    buffer.overflow = true
+    return
+  }
+  if (
+    buffer.events.length >= MAX_PREACTIVE_EVENTS ||
+    bytes > MAX_PREACTIVE_BYTES - buffer.bytes
+  ) {
+    buffer.overflow = true
+    buffer.events.splice(0, buffer.events.length)
+    buffer.bytes = 0
+    return
+  }
+  buffer.events.push(value)
+  buffer.bytes += bytes
+}
+
+function drainBufferedEvents(buffer: BufferedNativeEvents) {
+  const events = buffer.events.splice(0, buffer.events.length)
+  buffer.bytes = 0
+  return events
+}
+
+function safelyUnsubscribe(unsubscribe: (() => void) | undefined) {
+  try {
+    unsubscribe?.()
+  } catch {
+    // Native cleanup errors are intentionally not exposed across the proxy.
+  }
 }
 
 function scopeKey(scope: HermesRunScope) {
@@ -157,6 +252,42 @@ function nativeEvent(value: unknown): HermesNativeEvent | undefined {
     session_id: event.session_id,
     ...(typeof event.seq === "number" ? { seq: event.seq } : {}),
     ...(event.payload !== undefined ? { payload: event.payload } : {}),
+  }
+}
+
+function validatedRecovery(
+  recovery: HermesRecovery,
+  liveSessionId: string,
+  after?: number
+) {
+  if (
+    !stableNativeId(recovery.epoch) ||
+    !Number.isSafeInteger(recovery.lastSeen) ||
+    recovery.lastSeen < (after ?? 0) ||
+    !Array.isArray(recovery.events) ||
+    recovery.events.length > MAX_RECOVERY_EVENTS
+  )
+    return undefined
+  const events: HermesNativeEvent[] = []
+  let previous = after
+  for (const raw of recovery.events) {
+    const event = nativeEvent(raw)
+    if (
+      !event ||
+      event.session_id !== liveSessionId ||
+      event.seq === undefined ||
+      (previous !== undefined && event.seq <= previous) ||
+      event.seq > recovery.lastSeen
+    )
+      return undefined
+    events.push(event)
+    previous = event.seq
+  }
+  return {
+    events,
+    initialLastSeen:
+      after ??
+      (events[0]?.seq !== undefined ? events[0].seq - 1 : recovery.lastSeen),
   }
 }
 
@@ -226,13 +357,222 @@ function normalizedTool(name: string, value: unknown) {
   }
 }
 
-function resultContent(value: unknown) {
-  if (typeof value === "string") return value
-  try {
-    return JSON.stringify(value ?? null)
-  } catch {
-    return "null"
+const TOOL_ARG_FIELDS = new Map<string, ReadonlySet<string>>([
+  ["delegate_subagent", new Set(["description", "goal", "task", "name"])],
+  [
+    "question",
+    new Set([
+      "question",
+      "questions",
+      "options",
+      "choices",
+      "multiple",
+      "allowFreeform",
+    ]),
+  ],
+  ["todo", new Set(["todos", "items", "id", "content", "status"])],
+  ["search", new Set(["query", "pattern", "path", "offset", "limit"])],
+  ["read_file", new Set(["path", "offset", "limit", "line", "start", "end"])],
+])
+const DEFAULT_TOOL_ARG_FIELDS = new Set([
+  "command",
+  "content",
+  "description",
+  "end",
+  "filename",
+  "id",
+  "language",
+  "limit",
+  "line",
+  "message",
+  "name",
+  "offset",
+  "pattern",
+  "query",
+  "start",
+  "status",
+  "summary",
+  "text",
+  "title",
+])
+const TOOL_RESULT_FIELDS = new Map<string, ReadonlySet<string>>([
+  [
+    "search",
+    new Set(["ok", "status", "summary", "matches", "results", "count"]),
+  ],
+  [
+    "read_file",
+    new Set([
+      "ok",
+      "status",
+      "summary",
+      "content",
+      "text",
+      "filename",
+      "line",
+      "start",
+      "end",
+      "language",
+    ]),
+  ],
+  [
+    "delegate_subagent",
+    new Set(["ok", "status", "summary", "message", "result", "output"]),
+  ],
+  ["question", new Set(["ok", "status", "answer", "answers", "response"])],
+  ["todo", new Set(["ok", "status", "todos", "items", "summary"])],
+])
+const DEFAULT_TOOL_RESULT_FIELDS = new Set([
+  "answer",
+  "answers",
+  "content",
+  "count",
+  "end",
+  "exitCode",
+  "filename",
+  "items",
+  "language",
+  "line",
+  "matches",
+  "message",
+  "name",
+  "ok",
+  "output",
+  "response",
+  "result",
+  "results",
+  "start",
+  "status",
+  "stderr",
+  "stdout",
+  "summary",
+  "text",
+  "title",
+  "todos",
+  "value",
+])
+
+function sensitiveToolKey(key: string) {
+  const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase()
+  return (
+    normalized.includes("token") ||
+    normalized.includes("secret") ||
+    normalized.includes("password") ||
+    normalized.includes("cookie") ||
+    normalized.includes("authorization") ||
+    normalized.includes("credential") ||
+    normalized.includes("privatekey") ||
+    normalized.includes("sessionid") ||
+    normalized.includes("liveid") ||
+    normalized.includes("metadata") ||
+    normalized.includes("url") ||
+    normalized.includes("uri") ||
+    normalized === "origin" ||
+    normalized === "host" ||
+    normalized === "cwd" ||
+    normalized.includes("directory") ||
+    normalized.includes("filesystem") ||
+    normalized.endsWith("path")
+  )
+}
+
+function safeToolText(value: string) {
+  const redacted = value
+    .replace(/https?:\/\/[^\s]+/giu, "[redacted-url]")
+    .replace(/file:\/\/[^\s]+/giu, "[redacted-path]")
+    .replace(/\b[a-z]:\\[^\s]+/giu, "[redacted-path]")
+    .replace(
+      /(^|\s)\/(?:[^\s/]+\/)*[^\s]*/gu,
+      (_match, prefix: string) => `${prefix}[redacted-path]`
+    )
+    .replace(
+      /\b(?:bearer|token|api[_-]?key)\s*(?::|=|\s)\s*[^\s,;]+/giu,
+      "[redacted-secret]"
+    )
+  const encoder = new TextEncoder()
+  if (encoder.encode(redacted).byteLength <= MAX_TOOL_STRING_BYTES)
+    return redacted
+  let bytes = 0
+  let truncated = ""
+  for (const character of redacted) {
+    const size = encoder.encode(character).byteLength
+    if (bytes + size > MAX_TOOL_STRING_BYTES - 3) break
+    bytes += size
+    truncated += character
   }
+  return `${truncated}…`
+}
+
+function filenameOf(value: string) {
+  return value.replaceAll("\\", "/").split("/").filter(Boolean).at(-1)
+}
+
+function safeToolValue(value: unknown, depth = 0): unknown {
+  if (depth > MAX_TOOL_DEPTH) return "[truncated]"
+  if (typeof value === "string") return safeToolText(value)
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value === "boolean" || value === null) return value
+  if (Array.isArray(value))
+    return value
+      .slice(0, MAX_TOOL_ENTRIES)
+      .map((item) => safeToolValue(item, depth + 1))
+  if (typeof value !== "object") return undefined
+  const projected: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value).slice(0, MAX_TOOL_ENTRIES)) {
+    if (sensitiveToolKey(key)) continue
+    const safe = safeToolValue(item, depth + 1)
+    if (safe !== undefined) projected[key] = safe
+  }
+  return projected
+}
+
+function safeToolArgs(name: string, value: Record<string, unknown>) {
+  const allowed = TOOL_ARG_FIELDS.get(name) ?? DEFAULT_TOOL_ARG_FIELDS
+  const projected: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!allowed.has(key)) continue
+    if (key === "path" && typeof item === "string") {
+      const filename = filenameOf(item)
+      if (filename) projected.filename = safeToolText(filename)
+      continue
+    }
+    if (sensitiveToolKey(key)) continue
+    const safe = safeToolValue(item)
+    if (safe !== undefined) projected[key] = safe
+  }
+  const serialized = JSON.stringify(projected)
+  return new TextEncoder().encode(serialized).byteLength <=
+    MAX_TOOL_PAYLOAD_BYTES
+    ? serialized
+    : '{"truncated":true}'
+}
+
+function resultContent(name: string, value: unknown) {
+  const projected =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value)
+            .filter(([key]) =>
+              (TOOL_RESULT_FIELDS.get(name) ?? DEFAULT_TOOL_RESULT_FIELDS).has(
+                key
+              )
+            )
+            .slice(0, MAX_TOOL_ENTRIES)
+            .flatMap(([key, item]) => {
+              if (sensitiveToolKey(key)) return []
+              const safe = safeToolValue(item, 1)
+              return safe === undefined ? [] : [[key, safe]]
+            })
+        )
+      : safeToolValue(value)
+  const serialized =
+    typeof projected === "string"
+      ? projected
+      : JSON.stringify(projected ?? null)
+  return new TextEncoder().encode(serialized).byteLength <=
+    MAX_TOOL_PAYLOAD_BYTES
+    ? serialized
+    : '{"truncated":true}'
 }
 
 function boundedText(value: unknown) {
@@ -240,6 +580,36 @@ function boundedText(value: unknown) {
     new TextEncoder().encode(value).byteLength <= MAX_NATIVE_TEXT_DELTA_BYTES
     ? value
     : undefined
+}
+
+function tokenUsage(value: unknown): TokenUsage[] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const native = value as Record<string, unknown>
+  const numeric = ["input", "output", "reasoning", "total"] as const
+  if (
+    (native.model !== undefined && !stableNativeId(native.model)) ||
+    numeric.some(
+      (key) =>
+        native[key] !== undefined &&
+        (typeof native[key] !== "number" ||
+          !Number.isSafeInteger(native[key]) ||
+          native[key] < 0)
+    )
+  )
+    return undefined
+  const model = stableNativeId(native.model)
+  const usage: TokenUsage = {
+    ...(model ? { model } : {}),
+    ...(typeof native.input === "number" ? { inputTokens: native.input } : {}),
+    ...(typeof native.output === "number"
+      ? { outputTokens: native.output }
+      : {}),
+    ...(typeof native.reasoning === "number"
+      ? { reasoningTokens: native.reasoning }
+      : {}),
+    ...(typeof native.total === "number" ? { totalTokens: native.total } : {}),
+  }
+  return Object.keys(usage).length > 0 ? [usage] : undefined
 }
 
 function isEmptyAuthority(value: unknown) {
@@ -311,7 +681,11 @@ export class HermesRunEngine {
       threadId: input.threadId,
       runId: input.runId,
     })
-    const buffered: unknown[] = []
+    const buffered: BufferedNativeEvents = {
+      events: [],
+      bytes: 0,
+      overflow: false,
+    }
     let accepting = false
     let connectionInterrupted = false
     let unsubscribe: (() => void) | undefined
@@ -323,7 +697,7 @@ export class HermesRunEngine {
       unsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
-          if (!accepting) buffered.push(event)
+          if (!accepting) bufferNativeEvent(buffered, event)
           else if (active) this.#accept(active, event)
         },
         () => {
@@ -339,7 +713,7 @@ export class HermesRunEngine {
         queue,
         unsubscribe,
         epoch: baseline.epoch,
-        lastSeen: baseline.lastSeen,
+        lastSeen: 0,
         textStarted: false,
         reasoningStarted: false,
         reasoningEnded: false,
@@ -348,18 +722,19 @@ export class HermesRunEngine {
         uncertain: false,
         detached: false,
         terminal: false,
+        overflowed: false,
       }
       this.#active.set(key, active)
-    } catch (reason) {
-      unsubscribe?.()
-      throw reason
+    } catch {
+      safelyUnsubscribe(unsubscribe)
+      queue.close()
+      throw providerUnavailable()
     } finally {
       this.#admissions.delete(key)
     }
-    if (
-      baseline.truncated === true ||
-      baseline.events.length > MAX_RECOVERY_EVENTS
-    ) {
+    const replay = validatedRecovery(baseline, liveSessionId)
+    if (baseline.truncated === true || !replay || buffered.overflow) {
+      drainBufferedEvents(buffered)
       this.#fail(
         active,
         "AOS_RESET_REQUIRED",
@@ -368,15 +743,23 @@ export class HermesRunEngine {
       return this.#handle(active)
     }
     if (connectionInterrupted) {
+      drainBufferedEvents(buffered)
       this.#markInterrupted(active)
       return this.#handle(active)
     }
+    active.lastSeen = replay.initialLastSeen
+    for (const event of replay.events) this.#accept(active, event)
+    active.lastSeen = Math.max(active.lastSeen, baseline.lastSeen)
+    accepting = true
+    for (const event of drainBufferedEvents(buffered))
+      this.#accept(active, event)
+    if (active.terminal) return this.#handle(active)
     let status: "running" | "waiting" | "idle"
     try {
       status = await this.#native.status(liveSessionId)
-    } catch (reason) {
+    } catch {
       this.#settle(active)
-      throw reason
+      throw providerUnavailable()
     }
     if (status !== "idle") {
       this.#fail(
@@ -395,8 +778,6 @@ export class HermesRunEngine {
     } catch {
       acknowledgement = "uncertain"
     }
-    accepting = true
-    for (const event of buffered) this.#accept(active, event)
     if (
       acknowledgement === "uncertain" &&
       !active.terminal &&
@@ -435,7 +816,11 @@ export class HermesRunEngine {
       threadId: request.threadId,
       runId: request.runId,
     })
-    const buffered: unknown[] = []
+    const buffered: BufferedNativeEvents = {
+      events: [],
+      bytes: 0,
+      overflow: false,
+    }
     let accepting = false
     let connectionInterrupted = false
     let unsubscribe: (() => void) | undefined
@@ -447,7 +832,7 @@ export class HermesRunEngine {
       unsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
-          if (!accepting) buffered.push(event)
+          if (!accepting) bufferNativeEvent(buffered, event)
           else if (active) this.#accept(active, event)
         },
         () => {
@@ -475,19 +860,28 @@ export class HermesRunEngine {
         uncertain: false,
         detached: false,
         terminal: false,
+        overflowed: false,
       }
       this.#active.set(key, active)
-    } catch (reason) {
-      unsubscribe?.()
-      throw reason
+    } catch {
+      safelyUnsubscribe(unsubscribe)
+      queue.close()
+      throw providerUnavailable()
     } finally {
       this.#admissions.delete(key)
     }
+    const replay = validatedRecovery(
+      recovery,
+      liveSessionId,
+      request.position.lastSeen
+    )
     if (
       recovery.truncated === true ||
-      recovery.events.length > MAX_RECOVERY_EVENTS ||
+      !replay ||
+      buffered.overflow ||
       recovery.epoch !== request.position.epoch
     ) {
+      drainBufferedEvents(buffered)
       this.#fail(
         active,
         "AOS_RESET_REQUIRED",
@@ -496,13 +890,15 @@ export class HermesRunEngine {
       return this.#handle(active)
     }
     if (connectionInterrupted) {
+      drainBufferedEvents(buffered)
       this.#markInterrupted(active)
       return this.#handle(active)
     }
-    for (const event of recovery.events) this.#accept(active, event)
+    for (const event of replay.events) this.#accept(active, event)
     active.lastSeen = Math.max(active.lastSeen, recovery.lastSeen)
     accepting = true
-    for (const event of buffered) this.#accept(active, event)
+    for (const event of drainBufferedEvents(buffered))
+      this.#accept(active, event)
     return this.#handle(active)
   }
 
@@ -516,12 +912,17 @@ export class HermesRunEngine {
       threadId: request.threadId,
       runId: request.runId,
     })
-    active.unsubscribe()
+    safelyUnsubscribe(active.unsubscribe)
     active.queue = queue
     active.uncertain = false
     active.detached = false
+    active.overflowed = false
     active.lastSeen = request.position.lastSeen
-    const buffered: unknown[] = []
+    const buffered: BufferedNativeEvents = {
+      events: [],
+      bytes: 0,
+      overflow: false,
+    }
     let accepting = false
     let connectionInterrupted = false
     let nextUnsubscribe: (() => void) | undefined
@@ -532,7 +933,7 @@ export class HermesRunEngine {
       nextUnsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
-          if (!accepting) buffered.push(event)
+          if (!accepting) bufferNativeEvent(buffered, event)
           else this.#accept(active, event)
         },
         () => {
@@ -545,19 +946,26 @@ export class HermesRunEngine {
         request.position.lastSeen
       )
       active.unsubscribe = nextUnsubscribe
-    } catch (reason) {
-      nextUnsubscribe?.()
+    } catch {
+      safelyUnsubscribe(nextUnsubscribe)
       active.uncertain = true
       active.detached = true
       queue.close()
-      throw reason
+      throw providerUnavailable()
     }
     active.epoch = recovery.epoch
+    const replay = validatedRecovery(
+      recovery,
+      active.liveSessionId,
+      request.position.lastSeen
+    )
     if (
       recovery.truncated === true ||
-      recovery.events.length > MAX_RECOVERY_EVENTS ||
+      !replay ||
+      buffered.overflow ||
       recovery.epoch !== request.position.epoch
     ) {
+      drainBufferedEvents(buffered)
       this.#fail(
         active,
         "AOS_RESET_REQUIRED",
@@ -566,13 +974,15 @@ export class HermesRunEngine {
       return this.#handle(active)
     }
     if (connectionInterrupted) {
+      drainBufferedEvents(buffered)
       this.#markInterrupted(active)
       return this.#handle(active)
     }
-    for (const event of recovery.events) this.#accept(active, event)
+    for (const event of replay.events) this.#accept(active, event)
     active.lastSeen = Math.max(active.lastSeen, recovery.lastSeen)
     accepting = true
-    for (const event of buffered) this.#accept(active, event)
+    for (const event of drainBufferedEvents(buffered))
+      this.#accept(active, event)
     return this.#handle(active)
   }
 
@@ -601,13 +1011,26 @@ export class HermesRunEngine {
       active.lastSeen = event.seq
     }
     const payload = payloadOf(event)
+    if (active.overflowed) {
+      if (
+        event.type === "message.complete" ||
+        event.type === "error" ||
+        (event.type === "session.info" && payload.running === false)
+      )
+        this.#settle(active)
+      return
+    }
+    if (event.type === "session.info" || event.type === "session.usage") {
+      const usage = tokenUsage(payload.usage)
+      if (usage) active.usage = usage
+    }
     if (event.type === "message.start") {
       if (!active.textStarted) {
         active.messageId =
           stableNativeId(payload.message_id ?? payload.id) ??
           `${active.runId}:assistant`
         active.textStarted = true
-        active.queue.push({
+        this.#emit(active, {
           type: EventType.TEXT_MESSAGE_START,
           messageId: active.messageId,
           role: "assistant",
@@ -619,7 +1042,7 @@ export class HermesRunEngine {
     if (event.type === "message.delta" && textDelta !== undefined) {
       if (!active.textStarted || !active.messageId) return
       this.#endReasoning(active)
-      active.queue.push({
+      this.#emit(active, {
         type: EventType.TEXT_MESSAGE_CONTENT,
         messageId: active.messageId,
         delta: textDelta,
@@ -634,13 +1057,13 @@ export class HermesRunEngine {
       const reasoningId = `${active.messageId}:reasoning`
       if (!active.reasoningStarted) {
         active.reasoningStarted = true
-        active.queue.push({
+        this.#emit(active, {
           type: EventType.REASONING_MESSAGE_START,
           messageId: reasoningId,
           role: "reasoning",
         })
       }
-      active.queue.push({
+      this.#emit(active, {
         type: EventType.REASONING_MESSAGE_CONTENT,
         messageId: reasoningId,
         delta: textDelta,
@@ -657,12 +1080,12 @@ export class HermesRunEngine {
       tool.ended = true
       const toolCallId = stableNativeId(payload.tool_id)
       if (!toolCallId || !active.messageId) return
-      active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
-      active.queue.push({
+      this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
+      this.#emit(active, {
         type: EventType.TOOL_CALL_RESULT,
         messageId: `${active.messageId}:tool:${toolCallId}`,
         toolCallId,
-        content: resultContent(payload.result),
+        content: resultContent(tool.name, payload.result),
         role: "tool",
       })
       return
@@ -685,6 +1108,8 @@ export class HermesRunEngine {
       return
     }
     if (event.type === "message.complete") {
+      const usage = tokenUsage(payload.usage)
+      if (usage) active.usage = usage
       if (payload.status === "error")
         this.#fail(
           active,
@@ -705,16 +1130,16 @@ export class HermesRunEngine {
     const normalized = normalizedTool(nativeName, payload.args)
     const tool = { name: canonicalToolName(normalized.name), ended: false }
     active.tools.set(toolCallId, tool)
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.TOOL_CALL_START,
       toolCallId,
       toolCallName: tool.name,
       parentMessageId: active.messageId,
     })
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.TOOL_CALL_ARGS,
       toolCallId,
-      delta: JSON.stringify(normalized.args),
+      delta: safeToolArgs(tool.name, normalized.args),
     })
     return tool
   }
@@ -723,7 +1148,7 @@ export class HermesRunEngine {
     if (!active.reasoningStarted || active.reasoningEnded || !active.messageId)
       return
     active.reasoningEnded = true
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.REASONING_MESSAGE_END,
       messageId: `${active.messageId}:reasoning`,
     })
@@ -732,27 +1157,33 @@ export class HermesRunEngine {
   async #stop(active: ActiveRun): Promise<"stopping" | "idle"> {
     if (active.terminal) return "idle"
     active.stopping = true
-    await this.#native.interrupt(active.liveSessionId)
-    if ((await this.#native.status(active.liveSessionId)) === "idle") {
-      this.#finish(active, { stopped: true })
-      return "idle"
+    try {
+      await this.#native.interrupt(active.liveSessionId)
+      if ((await this.#native.status(active.liveSessionId)) === "idle") {
+        this.#finish(active, { stopped: true })
+        return "idle"
+      }
+      return "stopping"
+    } catch {
+      active.uncertain = true
+      throw stopUncertain()
     }
-    return "stopping"
   }
 
   #finish(active: ActiveRun, result?: unknown) {
     if (active.terminal) return
     this.#endReasoning(active)
     if (active.textStarted && active.messageId)
-      active.queue.push({
+      this.#emit(active, {
         type: EventType.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.RUN_FINISHED,
       threadId: active.scope.threadId,
       runId: active.runId,
       ...(result === undefined ? {} : { result }),
+      ...(active.usage ? { usage: active.usage } : {}),
       outcome: { type: "success" },
     })
     this.#settle(active)
@@ -762,17 +1193,17 @@ export class HermesRunEngine {
     if (active.terminal) return
     this.#endReasoning(active)
     if (active.textStarted && active.messageId)
-      active.queue.push({
+      this.#emit(active, {
         type: EventType.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
-    active.queue.push({ type: EventType.RUN_ERROR, message, code })
+    this.#emit(active, { type: EventType.RUN_ERROR, message, code })
     this.#settle(active)
   }
 
   #markUncertain(active: ActiveRun) {
     active.uncertain = true
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.RUN_ERROR,
       message:
         "Hermes may have accepted this turn; reconcile before sending again.",
@@ -784,7 +1215,7 @@ export class HermesRunEngine {
   #markInterrupted(active: ActiveRun) {
     if (active.terminal || active.uncertain) return
     active.uncertain = true
-    active.queue.push({
+    this.#emit(active, {
       type: EventType.RUN_ERROR,
       message:
         "The Hermes connection was interrupted; reconnect to reconcile this run.",
@@ -793,10 +1224,25 @@ export class HermesRunEngine {
     active.queue.close()
   }
 
+  #emit(active: ActiveRun, event: AGUIEvent) {
+    if (active.terminal || active.overflowed) return false
+    if (active.queue.push(event)) return true
+    active.queue.terminal({
+      type: EventType.RUN_ERROR,
+      message: "Hermes produced more events than AOS can safely buffer.",
+      code: "AOS_STREAM_OVERFLOW",
+    })
+    active.uncertain = true
+    active.detached = true
+    active.overflowed = true
+    safelyUnsubscribe(active.unsubscribe)
+    return false
+  }
+
   #settle(active: ActiveRun) {
     if (active.terminal) return
     active.terminal = true
-    active.unsubscribe()
+    safelyUnsubscribe(active.unsubscribe)
     active.queue.close()
     this.#active.delete(scopeKey(active.scope))
   }
