@@ -70,7 +70,7 @@ describe("AosAuthGate", () => {
   it("offers same-origin AOS sign-in with the encoded current return route", async () => {
     window.history.replaceState({}, "", "/he/agent?tab=work#latest")
     renderGate({
-      operatorAuth: vi.fn(async () => ({ status: "authentication-required" })),
+      operatorAuth: vi.fn(async () => ({ status: "authentication-required" } as const)),
     })
 
     const signIn = await screen.findByRole("link", { name: "Sign in to AOS" })
@@ -182,7 +182,7 @@ describe("AosAuthGate", () => {
   it("uses Hebrew copy and RTL direction", async () => {
     renderGate({
       locale: "he",
-      operatorAuth: vi.fn(async () => ({ status: "authentication-required" })),
+      operatorAuth: vi.fn(async () => ({ status: "authentication-required" } as const)),
     })
 
     expect(await screen.findByRole("link", { name: "כניסה ל-AOS" })).toBeVisible()
