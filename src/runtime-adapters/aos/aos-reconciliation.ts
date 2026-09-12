@@ -88,6 +88,7 @@ function parseFrame(event: unknown): ServerFrame | undefined {
 export class AosReconciler {
   readonly #socketFactory: () => AosEventSocket
   readonly #streams = new Map<string, Stream>()
+  readonly #listeners = new Map<string, Set<() => void>>()
   #socket?: AosEventSocket
   #opening?: Promise<AosEventSocket>
   #nextStreamId = 0
@@ -141,6 +142,18 @@ export class AosReconciler {
       }
     }
     throw new AosReconciliationError("connection-interrupted")
+  }
+
+  /** Invalidations contain no provider data; consumers must perform their own read. */
+  subscribe(scope: AosEventScope, listener: () => void) {
+    const key = scopeKey(scope)
+    const listeners = this.#listeners.get(key) ?? new Set<() => void>()
+    listeners.add(listener)
+    this.#listeners.set(key, listeners)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.#listeners.delete(key)
+    }
   }
 
   close() {
@@ -318,6 +331,9 @@ export class AosReconciler {
       frame.generation > 0
     ) {
       stream.generation += 1
+      this.#listeners
+        .get(scopeKey(stream.scope))
+        ?.forEach((listener) => listener())
       return
     }
     if (frame.type === "aos.error" && frame.code === "authorization_expired") {

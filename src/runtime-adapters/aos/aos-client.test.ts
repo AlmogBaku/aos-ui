@@ -93,6 +93,7 @@ describe("provider-neutral AOS browser client", () => {
           expect(init?.method).toBe("POST")
           expect(init?.body).toBe(
             JSON.stringify({
+              runId: "run-1",
               requestId: "request-1",
               response: { kind: "question", answers: [["yes"]] },
             })
@@ -174,7 +175,7 @@ describe("provider-neutral AOS browser client", () => {
       state: "waiting-for-input",
     })
     await expect(
-      client.respondToInteraction(session.id, "request-1", {
+      client.respondToInteraction(session.id, "run-1", "request-1", {
         kind: "question",
         answers: [["yes"]],
       })
@@ -204,6 +205,71 @@ describe("provider-neutral AOS browser client", () => {
     ).resolves.toBe("Hello")
     await expect(client.speak(session.id, "Hello")).resolves.toBeInstanceOf(
       Blob
+    )
+  })
+
+  it("loads only the normalized pending interaction snapshot for an observed Session", async () => {
+    const session = {
+      id: "session-1",
+      agentId: "researcher",
+      title: "Research",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "waiting-for-input" as const,
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+        return Response.json({
+          sessions: [session],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      if (path.endsWith("/interactions/pending"))
+        return Response.json({
+          runId: "run-1",
+          running: true,
+          status: "waiting-for-input",
+          outcome: {
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "question-1",
+                reason: "question",
+                message: "Choose",
+                responseSchema: {
+                  type: "object",
+                  properties: {
+                    answers: {
+                      type: "array",
+                      prefixItems: [
+                        {
+                          type: "array",
+                          title: "Choose",
+                          items: { type: "string", enum: ["Yes", "No"] },
+                          minItems: 0,
+                          maxItems: 1,
+                        },
+                      ],
+                    },
+                  },
+                  required: ["answers"],
+                  additionalProperties: false,
+                },
+                metadata: { "aos.kind": "questions" },
+              },
+            ],
+          },
+        })
+      throw new Error(`Unexpected normalized request: ${path}`)
+    })
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+    await expect(client.pendingInteraction("session-1")).resolves.toMatchObject(
+      {
+        outcome: { type: "interrupt" },
+      }
     )
   })
 

@@ -24,6 +24,7 @@ import type {
 import type {
   AgentCatalogEntry,
   AgentVisibility,
+  TodoItem,
   WorkspaceAdapter,
 } from "../contracts"
 import type { AosEventScope } from "./aos-reconciliation"
@@ -152,6 +153,28 @@ const AudioAvailabilitySchema = z.strictObject({
 const TranscriptionResponseSchema = z.strictObject({
   transcript: z.string().max(100_000),
 })
+const PendingInteractionSchema = z.strictObject({
+  runId: z.string().min(1).max(512),
+  running: z.boolean(),
+  status: z.enum(["waiting-for-input", "running", "idle", "unknown"]),
+  outcome: z
+    .strictObject({
+      type: z.literal("interrupt"),
+      interrupts: z
+        .array(
+          z.strictObject({
+            id: z.string().min(1).max(512),
+            reason: z.enum(["question", "approval"]),
+            message: z.string().min(1).max(4_096),
+            responseSchema: z.unknown(),
+            metadata: z.record(z.string(), z.json()),
+          })
+        )
+        .min(1)
+        .max(32),
+    })
+    .optional(),
+})
 
 export type AosWorkspaceCapabilities = z.infer<
   typeof WorkspaceCapabilitiesSchema
@@ -164,6 +187,7 @@ export type AosArtifact = z.infer<
   typeof ArtifactCatalogSchema
 >["artifacts"][number]
 export type AosAudioAvailability = z.infer<typeof AudioAvailabilitySchema>
+export type AosPendingInteraction = z.infer<typeof PendingInteractionSchema>
 
 async function dataUrl(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -190,6 +214,7 @@ export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
   reconciler?: {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
+    subscribe?(scope: AosEventScope, listener: () => void): () => void
   }
 }
 
@@ -616,12 +641,48 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
   }
 
+  subscribeTodos(
+    threadId: string,
+    listener: (todos: TodoItem[]) => void,
+    onError?: (error: Error) => void
+  ) {
+    const { scope } = this.#sessionPath(threadId, "")
+    let active = true
+    const refresh = () => {
+      void this.todos(threadId).then(
+        (todos) => active && listener(todos),
+        (reason) =>
+          active &&
+          onError?.(
+            reason instanceof Error ? reason : new Error(String(reason))
+          )
+      )
+    }
+    refresh()
+    const unsubscribe = this.#reconciler?.subscribe?.(scope, refresh)
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }
+
+  subscribeSessionInvalidation(threadId: string, listener: () => void) {
+    const { scope } = this.#sessionPath(threadId, "")
+    return this.#reconciler?.subscribe?.(scope, listener) ?? (() => {})
+  }
+
   async respondToInteraction(
     threadId: string,
+    runId: string,
     requestId: string,
     response: { kind: "question"; answers: string[][] } | { kind: "reject" }
   ) {
-    if (!requestId.trim() || requestId.length > 512)
+    if (
+      !runId.trim() ||
+      runId.length > 512 ||
+      !requestId.trim() ||
+      requestId.length > 512
+    )
       throw new AosClientError("proxy-failure", "Invalid interaction request")
     const result = await this.#sessionRead(
       threadId,
@@ -630,7 +691,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ requestId, response }),
+        body: JSON.stringify({ runId, requestId, response }),
       }
     )
     if (result.status === "expired" || result.status === "already-resolved")
@@ -638,6 +699,18 @@ export class AosRemoteClient implements WorkspaceAdapter {
         "proxy-failure",
         "Interaction is no longer pending"
       )
+  }
+
+  pendingInteraction(threadId: string, runId?: string) {
+    if (runId !== undefined && (!runId.trim() || runId.length > 512))
+      throw new AosClientError("proxy-failure", "Invalid interaction run")
+    return this.#sessionRead(
+      threadId,
+      `/interactions/pending${
+        runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`
+      }`,
+      PendingInteractionSchema
+    )
   }
 
   async stageAttachments(

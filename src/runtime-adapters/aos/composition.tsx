@@ -20,6 +20,7 @@ import { AosAuthGate, AuthGateFailure } from "./aos-auth-gate"
 import { AosAttachmentAdapter } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { useAosComposerFeatures } from "./aos-composer-features"
+import { createAosInteractions } from "./aos-interactions"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
@@ -42,6 +43,7 @@ function ReadyAosRuntimeProvider({
   const threadList = useMemo(() => new AosThreadListAdapter(client), [client])
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
+  const interactions = useMemo(() => createAosInteractions(client), [client])
   const media = useMemo(() => new VoiceMediaController(), [])
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {
@@ -138,6 +140,7 @@ function ReadyAosRuntimeProvider({
     artifacts: { resolver: artifacts },
     composer,
     media,
+    interactions,
     activityCoverage: "workspace",
   })
 }
