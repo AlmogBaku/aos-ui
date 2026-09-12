@@ -119,6 +119,14 @@ function safeArtifactId(value: unknown) {
   return id && !id.includes("\0") && !/[\\/\r\n]/u.test(id) ? id : undefined
 }
 
+function safeMimeType(value: unknown) {
+  return typeof value === "string" && value.length > 0 && value.length <= 256
+    ? SAFE_MIME.test(value)
+      ? value
+      : undefined
+    : undefined
+}
+
 function decodedLength(encoded: string) {
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
   return (encoded.length / 4) * 3 - padding
@@ -132,7 +140,7 @@ function parseDataUrl(value: unknown, maxBytes: number) {
   const encoded = value.slice(separator + 8)
   const maxEncoded = Math.ceil(maxBytes / 3) * 4
   if (
-    !SAFE_MIME.test(mimeType) ||
+    !safeMimeType(mimeType) ||
     encoded.length === 0 ||
     encoded.length > maxEncoded ||
     encoded.length % 4 !== 0 ||
@@ -230,21 +238,30 @@ export function createHermesContentOperations(input: {
   transport: HermesContentTransport
 }) {
   const requireScope = async (agentId: string, sessionId: string) => {
-    let scope: HermesContentSession
+    let scope: unknown
     try {
       scope = await input.authority.requireSession(agentId, sessionId)
     } catch {
       throw new HermesContentScopeError()
     }
+    const liveSessionId = isRecord(scope)
+      ? boundedText(scope.liveSessionId, 4_096)
+      : undefined
     if (
+      !isRecord(scope) ||
       scope.agentId !== agentId ||
       scope.sessionId !== sessionId ||
-      !boundedText(scope.liveSessionId, 4_096) ||
+      !liveSessionId ||
       typeof scope.attached !== "boolean"
     )
       throw new HermesContentScopeError()
     if (!scope.attached) throw new HermesContentUnavailableError()
-    return scope
+    return {
+      agentId,
+      sessionId,
+      liveSessionId,
+      attached: scope.attached,
+    }
   }
   const nativeRequest = async (
     method: string,
@@ -413,10 +430,11 @@ export function createHermesContentOperations(input: {
       } catch {
         throw new HermesContentScopeError()
       }
-      const filename = safeFilename(artifact?.filename)
-      const reference = privateNativePath(artifact?.reference)
+      if (!isRecord(artifact)) throw new HermesContentScopeError()
+      const filename = safeFilename(artifact.filename)
+      const reference = privateNativePath(artifact.reference)
       if (!filename || !reference) throw new HermesContentScopeError()
-      let result: { bytes: Uint8Array; mimeType?: string }
+      let result: unknown
       try {
         result = await input.transport.readArtifact(
           scope,
@@ -427,15 +445,17 @@ export function createHermesContentOperations(input: {
         throw new HermesContentUnavailableError()
       }
       if (
+        !isRecord(result) ||
         !(result.bytes instanceof Uint8Array) ||
         result.bytes.length === 0 ||
         result.bytes.length > MAX_ARTIFACT_BYTES ||
-        (result.mimeType !== undefined && !SAFE_MIME.test(result.mimeType))
+        (result.mimeType !== undefined && !safeMimeType(result.mimeType))
       )
         throw new HermesContentUnavailableError()
+      const mimeType = safeMimeType(result.mimeType)
       return {
         bytes: result.bytes,
-        ...(result.mimeType ? { mimeType: result.mimeType } : {}),
+        ...(mimeType ? { mimeType } : {}),
         filename,
       }
     },

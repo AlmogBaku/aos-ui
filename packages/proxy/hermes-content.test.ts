@@ -18,17 +18,22 @@ const text = "data:text/plain;base64,bm90ZXM="
 
 function harness(overrides?: {
   scope?: Partial<typeof scope>
+  authoritySession?: unknown
   request?: (
     method: string,
     params: Readonly<Record<string, unknown>>
   ) => unknown
   artifact?: (id: string) => unknown
-  artifactBytes?: Uint8Array
+  artifactReaderResult?: unknown
   audioConfig?: (kind: "stt" | "tts") => unknown
   transcribe?: unknown
   speak?: unknown
 }) {
-  const requireSession = vi.fn(async () => ({ ...scope, ...overrides?.scope }))
+  const requireSession = vi.fn(async () =>
+    overrides && Object.hasOwn(overrides, "authoritySession")
+      ? overrides.authoritySession
+      : { ...scope, ...overrides?.scope }
+  )
   const requireArtifact = vi.fn(async (_scope: typeof scope, id: string) =>
     overrides?.artifact
       ? overrides.artifact(id)
@@ -38,10 +43,14 @@ function harness(overrides?: {
     async (method: string, params: Readonly<Record<string, unknown>>) =>
       overrides?.request?.(method, params)
   )
-  const readArtifact = vi.fn(async () => ({
-    bytes: overrides?.artifactBytes ?? Uint8Array.of(1, 2, 3),
-    mimeType: "application/pdf",
-  }))
+  const readArtifact = vi.fn(async () =>
+    overrides && Object.hasOwn(overrides, "artifactReaderResult")
+      ? overrides.artifactReaderResult
+      : {
+          bytes: Uint8Array.of(1, 2, 3),
+          mimeType: "application/pdf",
+        }
+  )
   const audioConfig = vi.fn(
     async (_scope: typeof scope, kind: "stt" | "tts") =>
       overrides?.audioConfig?.(kind) ?? {
@@ -77,8 +86,14 @@ function harness(overrides?: {
     transcribe,
     speak,
     operations: createHermesContentOperations({
-      authority: { requireSession, requireArtifact },
-      transport: { request, readArtifact, audioConfig, transcribe, speak },
+      authority: { requireSession, requireArtifact } as never,
+      transport: {
+        request,
+        readArtifact,
+        audioConfig,
+        transcribe,
+        speak,
+      } as never,
     }),
   }
 }
@@ -189,6 +204,22 @@ describe("Hermes content operations", () => {
     expect(h.request).not.toHaveBeenCalled()
   })
 
+  it("fails closed when the Session authority returns malformed runtime data", async () => {
+    for (const authoritySession of [
+      undefined,
+      null,
+      "private session",
+      { ...scope, attached: "true" },
+      { ...scope, liveSessionId: "x".repeat(4_097) },
+    ]) {
+      const h = harness({ authoritySession })
+      await expect(
+        h.operations.stage("research", "session-public-1", [])
+      ).rejects.toBeInstanceOf(HermesContentScopeError)
+      expect(h.request).not.toHaveBeenCalled()
+    }
+  })
+
   it("reads only an authority-bound opaque artifact and strips its native reference", async () => {
     const h = harness()
     await expect(
@@ -213,7 +244,9 @@ describe("Hermes content operations", () => {
     ).rejects.toBeInstanceOf(HermesContentScopeError)
     expect(unknown.readArtifact).not.toHaveBeenCalled()
 
-    const oversized = harness({ artifactBytes: new Uint8Array(26_214_401) })
+    const oversized = harness({
+      artifactReaderResult: { bytes: new Uint8Array(26_214_401) },
+    })
     await expect(
       oversized.operations.artifact(
         "research",
@@ -221,6 +254,22 @@ describe("Hermes content operations", () => {
         "artifact-1"
       )
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+  })
+
+  it("fails closed when the native artifact reader returns malformed runtime data", async () => {
+    for (const artifactReaderResult of [
+      undefined,
+      null,
+      "native error body",
+      {},
+      { bytes: "not bytes" },
+      { bytes: Uint8Array.of(1), mimeType: "x".repeat(257) },
+    ]) {
+      const h = harness({ artifactReaderResult })
+      await expect(
+        h.operations.artifact("research", "session-public-1", "artifact-1")
+      ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    }
   })
 
   it("reports per-profile native audio readiness without treating setup metadata as disabled", async () => {
