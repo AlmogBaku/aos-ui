@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   ChevronDownIcon,
+  CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
   FileIcon,
@@ -488,6 +489,46 @@ function isTextPreview(kind: ArtifactPreviewKind) {
   return ["markdown", "text", "code", "json", "csv", "html"].includes(kind)
 }
 
+function ArtifactCopyButton({
+  labels,
+  text,
+}: {
+  labels: Dictionary["artifacts"]
+  text: string
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle"
+  )
+
+  const copyText = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable")
+      }
+      await navigator.clipboard.writeText(text)
+      setCopyState("copied")
+    } catch {
+      setCopyState("failed")
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      onClick={() => void copyText()}
+      className="[@media(pointer:coarse)]:min-h-11"
+    >
+      <CopyIcon data-icon="inline-start" />
+      {copyState === "copied"
+        ? labels.copied
+        : copyState === "failed"
+          ? labels.copyFailed
+          : labels.copy}
+    </Button>
+  )
+}
+
 export function useArtifactPreviewController() {
   const { adapter, agentId, selectedArtifact, threadId } =
     useArtifactWorkspace()
@@ -655,6 +696,9 @@ export function ArtifactViewerContent({
             {selectedArtifact.mimeType ?? labels.unsupported}
           </p>
         </div>
+        {state.status === "ready" && isTextPreview(state.kind) && (
+          <ArtifactCopyButton labels={labels} text={state.text ?? ""} />
+        )}
         <Button
           type="button"
           variant="ghost"

@@ -12,6 +12,9 @@
   commitments.
 - `docs/design/agent-workspace-design-lock.md` is the visual design authority.
   Preserve its direction unless the task explicitly changes it.
+- `DESIGN.md` defines reusable component rules. Read **Conversation and
+  Execution** before changing tool timelines, reasoning, rich tool placement,
+  conversation search, or their responsive presentation.
 - `src/runtime-adapters/contracts.ts` is the shared provider boundary. Keep
   provider-specific details behind the corresponding adapter.
 
@@ -94,6 +97,9 @@ public multi-user authentication. Nginx serves static assets and restricted inte
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
   charts, maps, Plans, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser.
+- Preserve the separation between compact, inspectable execution history and
+  first-class assistant outcomes. Final prose and meaningful rich UI remain
+  visible message content; follow `DESIGN.md` for the governing principles.
 
 ## Where changes belong
 
@@ -105,6 +111,9 @@ public multi-user authentication. Nginx serves static assets and restricted inte
 - `src/runtime-adapters/{opencode,hermes,ag-ui,fixture}` contain provider behavior.
   Extend `contracts.ts` only for genuinely shared concepts.
 - `src/components/tool-ui` owns rich tool lifecycles and safe fallbacks.
+- `src/components/assistant-ui/elements` owns Thread/Message composition,
+  execution timelines, ordinary tool-call presentation, reasoning disclosure,
+  and conversation search. Do not recreate these flows in runtime adapters.
 - `src/lib/i18n` owns shared locale behavior. Some feature-local copy lives beside
   its component; search for both English and Hebrew variants before editing.
 - `shared/presentation` and `shared/agent-creator` define portable assets. `integrations/opencode` and `integrations/hermes` package native tools, safe writers, and creator support. Agent worktrees, profiles, secrets, and state remain external. Never import native implementations into browser code.
@@ -119,12 +128,19 @@ Preserve unrelated working-tree changes and avoid overwriting existing
 
 Assistant UI packages are version-pinned and unpatched. Compose exported APIs;
 keep queue, runtime-switching, ownership, and reconnect regressions passing.
+Prefer Assistant UI's established concepts, primitives, and components over
+parallel local implementations. Customize through supported composition seams;
+when a product requirement truly needs a replacement, document the unsupported
+case and keep the custom surface as narrow as possible.
 Native runtimes own the catalog, visibility, creator role, and persistence.
 Hermes uses native HTTP/WebSocket APIs; no AOS server, registry, or SQLite.
 
 ## Conventions
 
 - Follow the existing strict TypeScript, ESM, Prettier, and ESLint configuration.
+- Prefer standard Tailwind spacing, typography, and size utilities. Use an
+  arbitrary value only when a documented visual, responsive, or accessibility
+  constraint cannot be expressed by the standard scale.
 - Prefer focused modules and pure functions at provider/configuration
   boundaries. Validate external HTTP payloads before adapting them.
 - Add or update focused tests with behavior changes. Fixtures must stay

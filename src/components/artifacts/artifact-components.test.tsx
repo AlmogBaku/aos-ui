@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { ArtifactAdapter } from "@/runtime-adapters/contracts"
@@ -230,6 +231,50 @@ describe("artifact workspace", () => {
     expect(
       document.querySelector('[data-syntax-language="typescript"]')
     ).toBeInTheDocument()
+  })
+
+  it("copies the source of a text-based Artifact", async () => {
+    const user = userEvent.setup()
+    const source = "# Report\n\n```mermaid\ngraph TD\n  A --> B\n```"
+    const clipboard = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue()
+    const markdownMessages = [
+      {
+        id: "markdown-message",
+        role: "assistant",
+        content: [
+          {
+            type: "data",
+            name: "aos.artifact",
+            data: {
+              id: "markdown",
+              filename: "report.md",
+              mimeType: "text/markdown",
+              source: { type: "inline", encoding: "utf8", data: source },
+            },
+          },
+        ],
+      },
+    ]
+
+    render(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve: async () => new Blob([source]) }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={markdownMessages}
+      >
+        <ArtifactTestSurface />
+      </ArtifactWorkspaceProvider>
+    )
+
+    await user.click(screen.getByRole("button", { name: "Open" }))
+    await user.click(await screen.findByRole("button", { name: "Copy" }))
+
+    await waitFor(() => expect(clipboard).toHaveBeenCalledWith(source))
+    expect(screen.getByRole("button", { name: "Copied" })).toBeVisible()
   })
 
   it("highlights standalone code artifacts using their filename", async () => {

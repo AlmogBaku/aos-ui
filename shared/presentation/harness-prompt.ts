@@ -58,7 +58,7 @@ export function buildAosUiHarnessPrompt(
   if (capabilities.artifactPublicationTool) {
     const artifactTool = assertToolName(capabilities.artifactPublicationTool)
     sections.push(
-      `- Use \`${artifactTool}\` only to publish a completed user-facing deliverable. Ordinary file creation or editing never publishes an Artifact; call the tool again only when the edited file should be republished.`
+      `- Artifact delivery: Use \`${artifactTool}\` when a concrete file is part of the answer delivered to the user—whether as its source, subject, or output. A file qualifies only after it is selected for the final response; inspecting a candidate does not qualify. Publish each selected file after its final edit and before the final response.`
     )
   }
 

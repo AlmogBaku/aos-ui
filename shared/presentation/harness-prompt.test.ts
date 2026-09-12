@@ -55,14 +55,6 @@ describe("buildAosUiHarnessPrompt", () => {
     expect(prompt).toMatch(/Todos?.*session-scoped.*provider-owned/i)
   })
 
-  it("defines artifact publication as explicit and separate from editing", () => {
-    const prompt = buildAosUiHarnessPrompt(fullCapabilities)
-
-    expect(prompt).toContain("`present_artifact`")
-    expect(prompt).toMatch(/completed user-facing deliverable/i)
-    expect(prompt).toMatch(/ordinary file creation or editing never publishes/i)
-  })
-
   it("maps native interactions without inventing unavailable controls", () => {
     const prompt = buildAosUiHarnessPrompt(fullCapabilities)
 

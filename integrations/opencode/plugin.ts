@@ -125,7 +125,7 @@ export async function createAosUiPlugin(
     ...presentationTools(),
     present_artifact: tool({
       description:
-        "Explicitly publish one existing worktree file as an AOS artifact. Use only when the file should appear in the artifact panel.",
+        "Publish one existing worktree file as an AOS artifact and return its presentation receipt.",
       args: {
         path: tool.schema.string().min(1).max(4_096),
         title: tool.schema.string().min(1).max(160).optional(),
