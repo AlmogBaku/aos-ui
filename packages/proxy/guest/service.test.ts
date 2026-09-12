@@ -823,7 +823,7 @@ describe("Hermes guest listener", () => {
     expect(exchange.status).toBe(204)
     const setCookie = exchange.headers.get("set-cookie")
     expect(setCookie).toMatch(
-      /^__Host-aos-guest-events=[^;]+; Path=\/api\/guest\/v1\/events; Max-Age=60; Secure; HttpOnly; SameSite=Strict$/u
+      /^__Host-aos-guest-events=[^;]+; Path=\/; Max-Age=60; Secure; HttpOnly; SameSite=Strict$/u
     )
     expect(setCookie).toContain(issued.token)
     const cookie = setCookie!.split(";", 1)[0]

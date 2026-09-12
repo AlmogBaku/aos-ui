@@ -56,20 +56,22 @@ const PublicOriginSchema = HttpUrlSchema.refine((value) => {
   )
 })
 
+const ListenerSchema = z.union([
+  z.strictObject({
+    host: z.enum(["127.0.0.1", "::1"]),
+    port: z.number().int().min(1).max(65535),
+  }),
+  z.strictObject({
+    host: z.enum(["0.0.0.0", "::"]),
+    port: z.number().int().min(1).max(65535),
+    exposure: z.literal("private-container"),
+  }),
+])
+
 const ProxyConfigSchema = z
   .strictObject({
     version: z.literal(1),
-    listen: z.union([
-      z.strictObject({
-        host: z.enum(["127.0.0.1", "::1"]),
-        port: z.number().int().min(1).max(65535),
-      }),
-      z.strictObject({
-        host: z.enum(["0.0.0.0", "::"]),
-        port: z.number().int().min(1).max(65535),
-        exposure: z.literal("private-container"),
-      }),
-    ]),
+    listen: ListenerSchema,
     publicOrigin: PublicOriginSchema,
     operator: z.strictObject({
       issuer: HttpsOriginSchema,
@@ -111,6 +113,21 @@ const ProxyConfigSchema = z
       activeKeyId: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
       keys: UniqueSecretKeysSchema,
     }),
+    guest: z
+      .strictObject({
+        listen: ListenerSchema,
+        publicOrigin: HttpsOriginSchema,
+        hermes: z.strictObject({
+          baseUrl: HttpUrlSchema,
+          tokenFile: AbsoluteSecretFileSchema,
+        }),
+        invitations: z.strictObject({
+          keys: UniqueSecretKeysSchema,
+          ttlSeconds: z.number().int().min(60).max(3_600).default(300),
+          clockSkewSeconds: z.number().int().min(0).max(60).default(0),
+        }),
+      })
+      .optional(),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
@@ -136,6 +153,17 @@ const ProxyConfigSchema = z
         code: "custom",
         path: ["events", "activeKeyId"],
         message: "Unknown active key",
+      })
+    if (
+      config.guest &&
+      (config.guest.publicOrigin === config.publicOrigin ||
+        (config.guest.listen.host === config.listen.host &&
+          config.guest.listen.port === config.listen.port))
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["guest"],
+        message: "Guest lane must use a separate origin and listener",
       })
   })
 

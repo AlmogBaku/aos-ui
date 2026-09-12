@@ -34,6 +34,53 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("allows only an authenticated operator to create a scoped guest invitation", async () => {
+    const issue = vi.fn(async (grant) => ({ token: "guest.jwt", grant }))
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async (request) =>
+          request.headers.get("cookie") === "aos_operator=valid"
+            ? { subject: "operator@example.test" }
+            : undefined
+        ),
+      }),
+      guestInvitations: { issue, verify: vi.fn() },
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const invitation = {
+      principalId: "guest_recipient",
+      invitationId: "invite_public",
+      agentId: "researcher",
+      sessionId: "hermes:researcher:stored",
+      operations: ["messages:create", "messages:read"],
+      capabilities: ["message-text"],
+    }
+    const create = (cookie?: string) =>
+      app.request(
+        new Request("http://proxy.test/api/aos/v1/guest-invitations", {
+          method: "POST",
+          headers: {
+            origin,
+            "content-type": "application/json",
+            ...(cookie ? { cookie } : {}),
+          },
+          body: JSON.stringify(invitation),
+        })
+      )
+
+    expect((await create()).status).toBe(401)
+    const response = await create("aos_operator=valid")
+    expect(response.status).toBe(201)
+    expect(await response.json()).toEqual({
+      token: "guest.jwt",
+      grant: invitation,
+    })
+    expect(issue).toHaveBeenCalledWith(invitation)
+  })
+
   it("serves the normalized owned Hermes workspace, content, and audio routes", async () => {
     const hermes = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(hermes, "getSession").mockResolvedValue({

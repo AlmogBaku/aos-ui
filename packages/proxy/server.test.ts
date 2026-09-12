@@ -5,12 +5,14 @@ import { startProxyServer } from "./server"
 describe("Bun proxy server lifecycle", () => {
   it("stops accepting work and lets active requests drain", async () => {
     const stop = vi.fn(async () => undefined)
+    const close = vi.fn(async () => undefined)
     const serve = vi.fn(() => ({ stop }))
     const server = startProxyServer({
       app: { fetch: vi.fn() },
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,
+      close,
       serve,
       installSignalHandlers: false,
     })
@@ -19,6 +21,41 @@ describe("Bun proxy server lifecycle", () => {
       expect.objectContaining({ hostname: "127.0.0.1", port: 4100 })
     )
     expect(stop).toHaveBeenCalledWith(false)
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  it("upgrades a separately configured guest event path with its scoped query", async () => {
+    const authorizeUpgrade = vi.fn(async () => ({ invitationId: "invite" }))
+    let served: Record<string, unknown> | undefined
+    const upgrade = vi.fn(() => true)
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      events: {
+        authorizeUpgrade,
+        open: vi.fn(() => ({ receive: vi.fn(), close: vi.fn() })),
+      },
+      eventsPath: "/api/guest/v1/events",
+      host: "127.0.0.1",
+      port: 4101,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: { upgrade: typeof upgrade }
+    ) => Promise<Response | undefined>
+    const request = new Request(
+      "https://guest.example.test/api/guest/v1/events?agentId=researcher&sessionId=session",
+      { headers: { origin: "https://guest.example.test" } }
+    )
+
+    expect(await fetch(request, { upgrade })).toBeUndefined()
+    expect(authorizeUpgrade).toHaveBeenCalledWith(request)
+    expect(upgrade).toHaveBeenCalledOnce()
   })
 
   it("authorizes event upgrades before opening a bounded event socket", async () => {

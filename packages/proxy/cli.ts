@@ -6,12 +6,41 @@ import {
   type ConfiguredProxyDependencies,
 } from "./composition"
 import { redactForLog } from "./redaction"
-import { startProxyServer, type StartProxyServerOptions } from "./server"
-
-type ProxyLifecycle = ReturnType<typeof startProxyServer>
+import { startProxyServer } from "./server"
+import { createStaticHandler, type StaticHandler } from "./static"
 
 type ProxyCliDependencies = ConfiguredProxyDependencies & {
-  start?: (options: StartProxyServerOptions) => ProxyLifecycle
+  start?: typeof startProxyServer
+  staticHandler?: StaticHandler
+}
+
+function listenerApp(
+  api: {
+    fetch(request: Request, server?: unknown): Response | Promise<Response>
+  },
+  apiPrefix: string,
+  staticHandler?: StaticHandler,
+  runtimeConfig?: unknown
+) {
+  return {
+    async fetch(request: Request, server?: unknown) {
+      const pathname = new URL(request.url).pathname
+      if (pathname.startsWith(apiPrefix)) return api.fetch(request, server)
+      if (runtimeConfig && pathname === "/runtime-config.json")
+        return new Response(JSON.stringify(runtimeConfig), {
+          headers: {
+            "cache-control": "no-store",
+            "content-type": "application/json; charset=UTF-8",
+          },
+        })
+      if (pathname.startsWith("/api/") && pathname !== "/api/health")
+        return new Response(null, { status: 404 })
+      return (
+        (await staticHandler?.(request, server)) ??
+        new Response(null, { status: 404 })
+      )
+    },
+  }
 }
 
 function parseOptions(argv: string[]) {
@@ -42,19 +71,63 @@ export async function runProxyCli(
   const { config: configFile } = options
   const input = JSON.parse(await readFile(configFile, "utf8")) as unknown
   const configured = await createConfiguredProxy(input, dependencies)
-  const lifecycle = (dependencies.start ?? startProxyServer)({
-    app: configured.app,
+  const start = dependencies.start ?? startProxyServer
+  const lifecycle = start({
+    app: listenerApp(configured.app, "/api/aos/v1", dependencies.staticHandler),
     events: configured.eventService,
     host: configured.config.listen.host,
     port: configured.config.listen.port,
     shutdownGraceMs: configured.config.shutdownGraceMs,
+    close: () => configured.hermes.close(),
   })
+  const guestLifecycle = configured.guest
+    ? start({
+        app: listenerApp(
+          configured.guest.service.app,
+          "/api/guest/v1",
+          dependencies.staticHandler,
+          {
+            surface: "guest",
+            basePath: "/api/guest/v1",
+            lane: "guest",
+          }
+        ),
+        events: {
+          authorizeUpgrade: (request) =>
+            configured.guest!.service.authorizeEventUpgrade(request),
+          open: (authorization, peer) =>
+            configured.guest!.service.openEvents(authorization, peer),
+        },
+        eventsPath: "/api/guest/v1/events",
+        host: configured.config.guest!.listen.host,
+        port: configured.config.guest!.listen.port,
+        shutdownGraceMs: configured.config.shutdownGraceMs,
+        close: () => configured.guest!.hermes.close(),
+      })
+    : undefined
   dependencies.logger.info({
     event: "proxy.started",
     host: configured.config.listen.host,
     port: configured.config.listen.port,
+    ...(configured.config.guest
+      ? {
+          guestHost: configured.config.guest.listen.host,
+          guestPort: configured.config.guest.listen.port,
+        }
+      : {}),
   })
-  return lifecycle
+  let shutdownPromise: Promise<void> | undefined
+  return {
+    server: lifecycle.server,
+    ...(guestLifecycle ? { guestServer: guestLifecycle.server } : {}),
+    shutdown() {
+      shutdownPromise ??= Promise.all([
+        lifecycle.shutdown(),
+        ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
+      ]).then(() => undefined)
+      return shutdownPromise
+    },
+  }
 }
 
 const logger = {
@@ -67,8 +140,15 @@ const logger = {
 }
 
 if (import.meta.main) {
+  const staticHandler = createStaticHandler({
+    root: process.env.AOS_UI_STATIC_ROOT ?? "/app/dist",
+    runtimeConfig:
+      process.env.AOS_UI_RUNTIME_CONFIG_FILE ??
+      "/run/aos-ui/runtime-config.json",
+  })
   void runProxyCli(process.argv, {
     logger,
+    staticHandler,
   }).catch((error: unknown) => {
     logger.error({ event: "proxy.start_failed", error })
     process.exitCode = 1

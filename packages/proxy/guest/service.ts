@@ -696,7 +696,7 @@ export function createGuestListenerService(
       return new Response(null, {
         status: 204,
         headers: {
-          "set-cookie": `${GUEST_EVENTS_COOKIE}=${token}; Path=/api/guest/v1/events; Max-Age=${remainingSeconds}; Secure; HttpOnly; SameSite=Strict`,
+          "set-cookie": `${GUEST_EVENTS_COOKIE}=${token}; Path=/; Max-Age=${remainingSeconds}; Secure; HttpOnly; SameSite=Strict`,
         },
       })
     } catch {

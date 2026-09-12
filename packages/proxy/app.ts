@@ -44,6 +44,11 @@ import {
   type HermesRunScope,
 } from "./hermes-run"
 import { OidcAuthenticationError, type OidcCore } from "./auth/oidc"
+import {
+  GuestInvitationError,
+  type GuestInvitationRequest,
+  type GuestInvitationService,
+} from "./auth/guest-invitation"
 import type { OperatorSession } from "./auth/session-cookie"
 import { HermesBrowserAuthenticationError } from "./hermes-auth-broker"
 import { HermesAuthenticationError } from "./hermes-transport"
@@ -69,6 +74,7 @@ export type ProxyAppOptions = {
     session?(request: Request): Promise<OperatorSession | undefined>
   }
   operatorOidc?: OidcCore<OperatorSession>
+  guestInvitations?: GuestInvitationService
   runtimeAuth?: {
     state(scope: {
       principalId: string
@@ -390,6 +396,25 @@ export function createProxyApp(options: ProxyAppOptions) {
       )
     )
   )
+
+  app.post("/api/aos/v1/guest-invitations", async (context) => {
+    if (!options.guestInvitations) return errorResponse("not_found", 404)
+    await requireOperator(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const request = await boundedJson(context.req.raw, 16_384)
+    if (request === undefined) return errorResponse("invalid_request", 400)
+    try {
+      return context.json(
+        await options.guestInvitations.issue(request as GuestInvitationRequest),
+        201
+      )
+    } catch (error) {
+      if (error instanceof GuestInvitationError)
+        return errorResponse("invalid_request", 400)
+      throw error
+    }
+  })
 
   app.get("/api/aos/v1/auth/operator/start", async (context) => {
     if (!options.operatorOidc) return errorResponse("not_found", 404)

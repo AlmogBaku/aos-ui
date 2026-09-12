@@ -79,6 +79,93 @@ const provider: OidcProvider = {
 }
 
 describe("configured proxy composition", () => {
+  it("constructs an isolated guest listener and Hermes transport from separate secrets", async () => {
+    const files = await secrets()
+    const operatorTokenFile = await secretFile(
+      "hermes-operator",
+      "operator-token"
+    )
+    const guestTokenFile = await secretFile("hermes-guest", "guest-token")
+    const guestKeyFile = await secretFile(
+      "guest-invitation",
+      Buffer.alloc(32, 8).toString("base64url")
+    )
+    const transportFactory = vi.fn(
+      (options: HermesWebSocketRpcTransportOptions) =>
+        ({
+          request: vi.fn(),
+          credentials: options.credentials,
+        }) as HermesRpcTransport & { credentials: typeof options.credentials }
+    )
+    const input = {
+      ...config(files, { mode: "static-token", tokenFile: operatorTokenFile }),
+      guest: {
+        listen: { host: "127.0.0.1", port: 4101 },
+        publicOrigin: "https://guest.example.test",
+        hermes: {
+          baseUrl: "http://127.0.0.1:9120",
+          tokenFile: guestTokenFile,
+        },
+        invitations: {
+          keys: [{ id: "guest-current", secretFile: guestKeyFile }],
+          ttlSeconds: 300,
+          clockSkewSeconds: 0,
+        },
+      },
+    }
+
+    const configured = await createConfiguredProxy(input, {
+      oidcProvider: provider,
+      transportFactory,
+      logger: { info: vi.fn(), error: vi.fn() },
+      clock: () => 1_700_000_000_000,
+    })
+
+    expect(transportFactory).toHaveBeenCalledTimes(2)
+    expect(transportFactory.mock.calls[1]?.[0]).toMatchObject({
+      baseUrl: "http://127.0.0.1:9120",
+    })
+    await expect(
+      transportFactory.mock.results[1]?.value.credentials()
+    ).resolves.toEqual({ "X-Hermes-Session-Token": "guest-token" })
+    expect(configured.guest?.hermes).not.toBe(configured.hermes)
+    expect(
+      (
+        await configured.guest!.service.app.request(
+          "https://guest.example.test/api/aos/v1/runtime"
+        )
+      ).status
+    ).toBe(404)
+
+    const session = await configured.operatorSessions.issue({
+      principalId: "aos_principal_test",
+    })
+    const invitation = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/guest-invitations",
+      {
+        method: "POST",
+        headers: {
+          cookie: session.cookie,
+          origin: "https://aos.example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          principalId: "guest_recipient",
+          invitationId: "invite_public",
+          agentId: "researcher",
+          sessionId: "hermes:researcher:stored",
+          operations: ["messages:create", "messages:read"],
+          capabilities: ["message-text"],
+        }),
+      }
+    )
+    expect(invitation.status).toBe(201)
+    expect(await invitation.json()).toMatchObject({
+      token: expect.any(String),
+      grant: { agentId: "researcher", sessionId: "hermes:researcher:stored" },
+    })
+  })
+
   it("loads sealed-session keys and completes real OIDC PKCE before allowing operator requests", async () => {
     const files = await secrets()
     const tokenFile = await secretFile("hermes", "hermes-secret")

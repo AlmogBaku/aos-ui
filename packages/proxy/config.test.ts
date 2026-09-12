@@ -168,6 +168,31 @@ describe("proxy configuration and secret boundary", () => {
     ).toThrow("Invalid proxy configuration")
   })
 
+  it("accepts a separately addressed Hermes guest lane with file-backed invitation and runtime keys", () => {
+    const configured = parseProxyConfig({
+      ...validConfig(),
+      guest: {
+        listen: { host: "127.0.0.1", port: 4101 },
+        publicOrigin: "https://guest.example.test",
+        hermes: {
+          baseUrl: "http://127.0.0.1:9120",
+          tokenFile: "/run/secrets/hermes-guest-token",
+        },
+        invitations: {
+          keys: [{ id: "guest-current", secretFile: "/run/secrets/guest-key" }],
+          ttlSeconds: 300,
+          clockSkewSeconds: 0,
+        },
+      },
+    })
+
+    expect(configured.guest).toMatchObject({
+      listen: { host: "127.0.0.1", port: 4101 },
+      publicOrigin: "https://guest.example.test",
+      invitations: { ttlSeconds: 300, clockSkewSeconds: 0 },
+    })
+  })
+
   it("reads a bounded owner-only secret and trims its single trailing newline", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aos-secret-"))
     temporaryDirectories.push(directory)

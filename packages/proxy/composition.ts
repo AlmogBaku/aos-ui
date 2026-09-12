@@ -5,6 +5,7 @@ import { createProxyApp } from "./app"
 import { createOidcCore, type OidcFetch, type OidcProvider } from "./auth/oidc"
 import { createOperatorSessionAuthenticator } from "./auth/operator-session-auth"
 import { createOperatorSessionCookie } from "./auth/session-cookie"
+import { createGuestInvitationService } from "./auth/guest-invitation"
 import { parseProxyConfig } from "./config"
 import { createReconnectCursorCodec } from "./events/cursor"
 import { createOperatorEventService } from "./events/service"
@@ -19,6 +20,7 @@ import {
   type HermesWebSocketRpcTransportOptions,
 } from "./hermes-transport"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
+import { createGuestListenerService } from "./guest/service"
 
 type BrowserAuthBroker = ReturnType<typeof createHermesBrowserAuthBroker>
 
@@ -97,6 +99,18 @@ export async function createConfiguredProxy(
     dependencies.transportFactory ??
     ((options: HermesWebSocketRpcTransportOptions) =>
       new HermesWebSocketRpcTransport(options))
+
+  const guestSecrets = config.guest
+    ? await Promise.all([
+        readSecretFile(config.guest.hermes.tokenFile),
+        Promise.all(
+          config.guest.invitations.keys.map(async ({ id, secretFile }) => ({
+            id,
+            secret: await readSecretKeyFile(secretFile),
+          }))
+        ),
+      ])
+    : undefined
   let transport: HermesRpcTransport
   let runtimeAuth: NonNullable<
     Parameters<typeof createProxyApp>[0]["runtimeAuth"]
@@ -180,6 +194,44 @@ export async function createConfiguredProxy(
   }
 
   const hermes = new HermesServerAdapter(transport)
+  const guest = config.guest
+    ? (() => {
+        const [token, keys] = guestSecrets!
+        const guestTransport = transportFactory({
+          baseUrl: config.guest.hermes.baseUrl,
+          credentials: async () => ({ "X-Hermes-Session-Token": token }),
+        })
+        const guestHermes = new HermesServerAdapter(guestTransport)
+        const invitations = createGuestInvitationService({
+          issuer: config.guest.publicOrigin,
+          audience: "aos-guest-listener",
+          deploymentId: config.operator.session.deploymentId,
+          keys,
+          ttlSeconds: config.guest.invitations.ttlSeconds,
+          clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
+          ...(dependencies.clock === undefined
+            ? {}
+            : { now: dependencies.clock }),
+        })
+        return {
+          transport: guestTransport,
+          hermes: guestHermes,
+          invitations,
+          service: createGuestListenerService({
+            publicOrigin: config.guest.publicOrigin,
+            deploymentId: config.operator.session.deploymentId,
+            bootEpoch: randomUUID(),
+            invitations,
+            cursor,
+            hermes: guestHermes,
+            content: guestHermes,
+            ...(dependencies.clock === undefined
+              ? {}
+              : { now: dependencies.clock }),
+          }),
+        }
+      })()
+    : undefined
   const eventService = createOperatorEventService({
     publicOrigin: config.publicOrigin,
     deploymentId: config.operator.session.deploymentId,
@@ -197,6 +249,7 @@ export async function createConfiguredProxy(
     operatorOidc,
     runtimeAuth,
     hermes,
+    ...(guest === undefined ? {} : { guestInvitations: guest.invitations }),
     ...(hermesForOperator === undefined ? {} : { hermesForOperator }),
     ...(config.hermes.auth.mode === "browser-broker"
       ? { readiness: async () => "ready" as const }
@@ -212,5 +265,6 @@ export async function createConfiguredProxy(
     cursor,
     eventService,
     browserAuthBroker,
+    guest,
   }
 }

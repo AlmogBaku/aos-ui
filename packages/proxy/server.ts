@@ -1,7 +1,4 @@
-import type {
-  OperatorEventService,
-  OperatorEventUpgrade,
-} from "./events/service"
+import type { OperatorEventUpgrade } from "./events/service"
 import type { EventsSocket } from "./events/socket"
 
 type FetchHandler = (
@@ -9,37 +6,53 @@ type FetchHandler = (
   server?: unknown
 ) => Response | undefined | Promise<Response | undefined>
 type Server = { stop(closeActiveConnections?: boolean): Promise<void> | void }
-type EventSocketData = {
-  authorization: OperatorEventUpgrade
+type EventSocketData<Authorization> = {
+  authorization: Authorization
   socket?: EventsSocket
   failed?: boolean
 }
-type EventPeer = {
-  data: EventSocketData
+type EventPeer<Authorization> = {
+  data: EventSocketData<Authorization>
   send(raw: string): void
   close(code?: number, reason?: string): void
 }
 type UpgradeServer = {
-  upgrade(request: Request, options: { data: EventSocketData }): boolean
+  upgrade<Authorization>(
+    request: Request,
+    options: { data: EventSocketData<Authorization> }
+  ): boolean
 }
-type ServeOptions = {
+type ServeOptions<Authorization> = {
   hostname: string
   port: number
   fetch: FetchHandler
   websocket?: {
-    open(peer: EventPeer): void
-    message(peer: EventPeer, raw: string | Uint8Array | ArrayBuffer): void
-    close(peer: EventPeer): void
+    open(peer: EventPeer<Authorization>): void
+    message(
+      peer: EventPeer<Authorization>,
+      raw: string | Uint8Array | ArrayBuffer
+    ): void
+    close(peer: EventPeer<Authorization>): void
   }
 }
-type Serve = (options: ServeOptions) => Server
+type Serve = <Authorization>(options: ServeOptions<Authorization>) => Server
 
-export type StartProxyServerOptions = {
+type EventService<Authorization> = {
+  authorizeUpgrade(request: Request): Promise<Authorization | undefined>
+  open(
+    authorization: Authorization,
+    peer: { send(raw: string): void; close(code: number, reason: string): void }
+  ): EventsSocket
+}
+
+export type StartProxyServerOptions<Authorization = OperatorEventUpgrade> = {
   app: { fetch: FetchHandler }
-  events?: OperatorEventService
+  events?: EventService<Authorization>
+  eventsPath?: string
   host: string
   port: number
   shutdownGraceMs: number
+  close?: () => Promise<void> | void
   serve?: Serve
   installSignalHandlers?: boolean
 }
@@ -50,9 +63,11 @@ function bunServe(): Serve {
   return bun.serve.bind(bun)
 }
 
-export function startProxyServer(options: StartProxyServerOptions) {
-  const activeEventPeers = new Set<EventPeer>()
-  const failEventPeer = (peer: EventPeer) => {
+export function startProxyServer<Authorization = OperatorEventUpgrade>(
+  options: StartProxyServerOptions<Authorization>
+) {
+  const activeEventPeers = new Set<EventPeer<Authorization>>()
+  const failEventPeer = (peer: EventPeer<Authorization>) => {
     if (peer.data.failed) return
     peer.data.failed = true
     try {
@@ -69,7 +84,7 @@ export function startProxyServer(options: StartProxyServerOptions) {
   }
   const websocket = options.events
     ? {
-        open(peer: EventPeer) {
+        open(peer: EventPeer<Authorization>) {
           try {
             peer.data.socket = options.events!.open(peer.data.authorization, {
               send: (raw) => peer.send(raw),
@@ -80,13 +95,16 @@ export function startProxyServer(options: StartProxyServerOptions) {
             failEventPeer(peer)
           }
         },
-        message(peer: EventPeer, raw: string | Uint8Array | ArrayBuffer) {
+        message(
+          peer: EventPeer<Authorization>,
+          raw: string | Uint8Array | ArrayBuffer
+        ) {
           const frame = raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw
           void Promise.resolve()
             .then(() => peer.data.socket?.receive(frame))
             .catch(() => failEventPeer(peer))
         },
-        close(peer: EventPeer) {
+        close(peer: EventPeer<Authorization>) {
           activeEventPeers.delete(peer)
           try {
             peer.data.socket?.close()
@@ -101,8 +119,7 @@ export function startProxyServer(options: StartProxyServerOptions) {
     const url = new URL(request.url)
     if (
       options.events &&
-      url.pathname === "/api/aos/v1/events" &&
-      url.search === ""
+      url.pathname === (options.eventsPath ?? "/api/aos/v1/events")
     ) {
       if (request.method !== "GET") return new Response(null, { status: 405 })
       const authorization = await options.events.authorizeUpgrade(request)
@@ -148,7 +165,10 @@ export function startProxyServer(options: StartProxyServerOptions) {
       const forceTimer = setTimeout(() => {
         void Promise.resolve(server.stop(true)).then(finish, finish)
       }, options.shutdownGraceMs)
-      void Promise.resolve(server.stop(false)).then(finish, finish)
+      void Promise.all([
+        Promise.resolve(server.stop(false)),
+        Promise.resolve(options.close?.()),
+      ]).then(finish, finish)
     })
     return shutdownPromise
   }
