@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
 
+import type { AosSessionIssuer } from "./oidc"
+
 const COOKIE_NAME = "__Host-aos-session"
 const COOKIE_VERSION = "v1"
 const MAX_COOKIE_HEADER_BYTES = 8_192
@@ -25,19 +27,16 @@ export type OperatorSessionCookieOptions = {
   deploymentId: string
   keys: readonly OperatorSessionCookieKey[]
   now?: () => number
-  randomBytes?: (size: number) => Uint8Array
   ttlSeconds?: number
   clockSkewSeconds?: number
 }
 
-export type OperatorSessionCookie = {
-  issue(input: { principalId: string }): {
-    session: OperatorSession
-    cookie: string
-  }
+export type OperatorSessionCookie = AosSessionIssuer<OperatorSession> & {
   verify(cookieHeader: string | null): OperatorSession | undefined
   clear(): string
 }
+
+type EntropySource = (size: number) => Uint8Array
 
 type Claims = {
   v: 1
@@ -164,10 +163,7 @@ function canonicalClaims(value: unknown): Claims | undefined {
   return claims
 }
 
-function secureRandom(
-  source: (size: number) => Uint8Array,
-  size: number
-): Uint8Array {
+function secureRandom(source: EntropySource, size: number): Uint8Array {
   try {
     const value = source(size)
     if (!(value instanceof Uint8Array) || value.byteLength !== size)
@@ -208,7 +204,6 @@ function parseOptions(options: OperatorSessionCookieOptions) {
     ttlSeconds,
     clockSkewSeconds,
     now: options.now ?? Date.now,
-    randomBytes: options.randomBytes ?? ((size) => randomBytes(size)),
   }
 }
 
@@ -254,13 +249,14 @@ function decrypt(
   }
 }
 
-export function createOperatorSessionCookie(
-  options: OperatorSessionCookieOptions
+function createOperatorSessionCookieWithEntropy(
+  options: OperatorSessionCookieOptions,
+  entropy: EntropySource
 ): OperatorSessionCookie {
   const configuration = parseOptions(options)
 
   return {
-    issue({ principalId }) {
+    async issue({ principalId }) {
       if (!validPrincipalId(principalId)) throw new OperatorSessionCookieError()
       const issuedAt = nowSeconds(configuration.now)
       const expiresAt = issuedAt + configuration.ttlSeconds
@@ -274,10 +270,10 @@ export function createOperatorSessionCookie(
         i: issuedAt,
         n: issuedAt,
         e: expiresAt,
-        j: base64url(secureRandom(configuration.randomBytes, SESSION_ID_BYTES)),
+        j: base64url(secureRandom(entropy, SESSION_ID_BYTES)),
       }
       const plaintext = JSON.stringify(claims)
-      const nonce = secureRandom(configuration.randomBytes, NONCE_BYTES)
+      const nonce = secureRandom(entropy, NONCE_BYTES)
       try {
         const cipher = createCipheriv("aes-256-gcm", key.secret, nonce)
         cipher.setAAD(Buffer.from(associatedData(key.id), "utf8"))
@@ -332,4 +328,24 @@ export function createOperatorSessionCookie(
       return cookieAttributes("", 0)
     },
   }
+}
+
+export function createOperatorSessionCookie(
+  options: OperatorSessionCookieOptions
+): OperatorSessionCookie {
+  return createOperatorSessionCookieWithEntropy(
+    options,
+    (size) => new Uint8Array(randomBytes(size))
+  )
+}
+
+/**
+ * Test-only deterministic entropy seam. Production construction always uses
+ * Node's cryptographically secure random source.
+ */
+export function createOperatorSessionCookieForTest(
+  options: OperatorSessionCookieOptions,
+  entropy: EntropySource
+): OperatorSessionCookie {
+  return createOperatorSessionCookieWithEntropy(options, entropy)
 }

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest"
 
 import {
   OperatorSessionCookieError,
+  type OperatorSession,
   createOperatorSessionCookie,
+  createOperatorSessionCookieForTest,
 } from "./session-cookie"
+import type { AosSessionIssuer } from "./oidc"
 
 const currentKey = new Uint8Array(32).fill(7)
 const previousKey = new Uint8Array(32).fill(8)
@@ -16,17 +19,19 @@ function harness(overrides?: {
   clockSkewSeconds?: number
 }) {
   let sequence = 0
-  return createOperatorSessionCookie({
-    deploymentId: overrides?.deploymentId ?? "aos-prod-il1",
-    keys: overrides?.keys ?? [{ id: "2026-09", secret: currentKey }],
-    now: overrides?.now ?? (() => 1_700_000_000_000),
-    ttlSeconds: overrides?.ttlSeconds ?? 900,
-    clockSkewSeconds: overrides?.clockSkewSeconds ?? 10,
-    randomBytes(size) {
+  return createOperatorSessionCookieForTest(
+    {
+      deploymentId: overrides?.deploymentId ?? "aos-prod-il1",
+      keys: overrides?.keys ?? [{ id: "2026-09", secret: currentKey }],
+      now: overrides?.now ?? (() => 1_700_000_000_000),
+      ttlSeconds: overrides?.ttlSeconds ?? 900,
+      clockSkewSeconds: overrides?.clockSkewSeconds ?? 10,
+    },
+    (size) => {
       sequence += 1
       return new Uint8Array(size).fill(sequence)
-    },
-  })
+    }
+  )
 }
 
 function cookieHeader(cookie: string) {
@@ -34,10 +39,12 @@ function cookieHeader(cookie: string) {
 }
 
 describe("operator session cookie", () => {
-  it("issues an opaque authenticated __Host- cookie and returns its normalized session", () => {
+  it("issues an opaque authenticated __Host- cookie and returns its normalized session", async () => {
     const cookies = harness()
 
-    const issued = cookies.issue({ principalId: "aos_principal_4Ez4k6W5" })
+    const issued = await cookies.issue({
+      principalId: "aos_principal_4Ez4k6W5",
+    })
 
     expect(issued.cookie).toMatch(
       /^__Host-aos-session=v1\.2026-09\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{22}; Path=\/; Max-Age=900; Secure; HttpOnly; SameSite=Lax$/u
@@ -52,9 +59,11 @@ describe("operator session cookie", () => {
     expect(cookies.verify(cookieHeader(issued.cookie))).toEqual(issued.session)
   })
 
-  it("rejects tampering, malformed values, truncation, and duplicate session cookies", () => {
+  it("rejects tampering, malformed values, truncation, and duplicate session cookies", async () => {
     const cookies = harness()
-    const issued = cookies.issue({ principalId: "aos_principal_4Ez4k6W5" })
+    const issued = await cookies.issue({
+      principalId: "aos_principal_4Ez4k6W5",
+    })
     const header = cookieHeader(issued.cookie)
     const tampered = `${header.slice(0, -1)}${header.endsWith("A") ? "B" : "A"}`
 
@@ -69,8 +78,10 @@ describe("operator session cookie", () => {
     ).toBeUndefined()
   })
 
-  it("rejects cookies issued for another deployment, key, or version", () => {
-    const issued = harness().issue({ principalId: "aos_principal_4Ez4k6W5" })
+  it("rejects cookies issued for another deployment, key, or version", async () => {
+    const issued = await harness().issue({
+      principalId: "aos_principal_4Ez4k6W5",
+    })
     const header = cookieHeader(issued.cookie)
 
     expect(
@@ -82,8 +93,8 @@ describe("operator session cookie", () => {
     expect(harness().verify(header.replace("v1.", "v2."))).toBeUndefined()
   })
 
-  it("enforces expiry and future issue time with only its configured skew", () => {
-    const issued = harness({ now: () => 1_700_000_000_000 }).issue({
+  it("enforces expiry and future issue time with only its configured skew", async () => {
+    const issued = await harness({ now: () => 1_700_000_000_000 }).issue({
       principalId: "aos_principal_4Ez4k6W5",
     })
     const header = cookieHeader(issued.cookie)
@@ -99,8 +110,8 @@ describe("operator session cookie", () => {
     )
   })
 
-  it("accepts the previous key during an explicit key rotation", () => {
-    const old = harness({
+  it("accepts the previous key during an explicit key rotation", async () => {
+    const old = await harness({
       keys: [{ id: "2026-08", secret: previousKey }],
     }).issue({ principalId: "aos_principal_4Ez4k6W5" })
     const rotated = harness({
@@ -111,9 +122,9 @@ describe("operator session cookie", () => {
     })
 
     expect(rotated.verify(cookieHeader(old.cookie))).toEqual(old.session)
-    expect(rotated.issue({ principalId: "aos_principal_new" }).cookie).toMatch(
-      /^__Host-aos-session=v1\.2026-09\./u
-    )
+    expect(
+      (await rotated.issue({ principalId: "aos_principal_new" })).cookie
+    ).toMatch(/^__Host-aos-session=v1\.2026-09\./u)
   })
 
   it("returns a strict deletion cookie with the same __Host- attributes", () => {
@@ -131,11 +142,38 @@ describe("operator session cookie", () => {
     )
   })
 
-  it("does not issue a cookie from an invalid future clock", () => {
+  it("does not issue a cookie from an invalid future clock", async () => {
     const cookies = harness({ now: () => 4_102_444_801_000 })
 
-    expect(() =>
+    await expect(
       cookies.issue({ principalId: "aos_principal_4Ez4k6W5" })
-    ).toThrow(OperatorSessionCookieError)
+    ).rejects.toBeInstanceOf(OperatorSessionCookieError)
+  })
+
+  it("directly satisfies OIDC's asynchronous session issuer contract", async () => {
+    const issuer: AosSessionIssuer<OperatorSession> = harness()
+
+    await expect(
+      issuer.issue({ principalId: "aos_principal_4Ez4k6W5" })
+    ).resolves.toMatchObject({
+      session: { principalId: "aos_principal_4Ez4k6W5" },
+      cookie: expect.stringMatching(/^__Host-aos-session=/u),
+    })
+  })
+
+  it("uses production CSPRNG entropy without accepting caller supplied entropy", async () => {
+    const cookies = createOperatorSessionCookie({
+      deploymentId: "aos-prod-il1",
+      keys: [{ id: "2026-09", secret: currentKey }],
+      now: () => 1_700_000_000_000,
+    })
+
+    const [first, second] = await Promise.all([
+      cookies.issue({ principalId: "aos_principal_4Ez4k6W5" }),
+      cookies.issue({ principalId: "aos_principal_4Ez4k6W5" }),
+    ])
+
+    expect(first.session.sessionId).not.toBe(second.session.sessionId)
+    expect(first.cookie).not.toBe(second.cookie)
   })
 })
