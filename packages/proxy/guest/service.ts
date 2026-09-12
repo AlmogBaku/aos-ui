@@ -36,6 +36,9 @@ const securityHeaders = {
   "x-frame-options": "DENY",
 } as const
 
+const GUEST_EVENTS_COOKIE = "__Host-aos-guest-events"
+const GUEST_EVENTS_CREDENTIAL_SECONDS = 60
+
 type GuestHermesAdapter = HermesRunNative & {
   getSession(agentId: string, storedSessionId: string): Promise<Session>
   history(
@@ -95,6 +98,24 @@ function bearerToken(request: Request) {
   const value = request.headers.get("authorization")
   const match = value === null ? null : /^Bearer ([^\s]{1,4096})$/u.exec(value)
   return match?.[1]
+}
+
+function eventTarget(request: Request, pathname: string) {
+  const url = new URL(request.url)
+  if (
+    url.pathname !== pathname ||
+    url.search.length > 2_048 ||
+    [...url.searchParams.keys()].some(
+      (key) => key !== "agentId" && key !== "sessionId"
+    ) ||
+    url.searchParams.getAll("agentId").length !== 1 ||
+    url.searchParams.getAll("sessionId").length !== 1
+  )
+    return undefined
+  const agentId = url.searchParams.get("agentId") ?? ""
+  const sessionId = url.searchParams.get("sessionId") ?? ""
+  const storedId = storedSessionId(agentId, sessionId)
+  return storedId ? { agentId, sessionId, storedId } : undefined
 }
 
 function storedSessionId(agentId: string, sessionId: string) {
@@ -168,14 +189,41 @@ async function boundedJson(request: Request, maxBytes = 1_100_000) {
 async function authorize(
   invitations: GuestInvitationService,
   request: Request,
-  target: { agentId: string; sessionId: string; operation: GuestOperation }
+  target: { agentId: string; sessionId: string; operation: GuestOperation },
+  now: () => number
 ) {
   const token = bearerToken(request)
   if (!token) return undefined
+  return verifyAuthorization(invitations, token, target, now)
+}
+
+async function verifyAuthorization(
+  invitations: GuestInvitationService,
+  token: string,
+  target: { agentId: string; sessionId: string; operation: GuestOperation },
+  now: () => number
+) {
   const authorization = await invitations.verify(token, target)
-  return authorization?.sessionId === target.sessionId
+  return authorization?.sessionId === target.sessionId &&
+    authorizationActive(authorization, now)
     ? authorization
     : undefined
+}
+
+function authorizationActive(
+  authorization: { authorizationExpiresAt: number },
+  now: () => number
+) {
+  let current: number
+  try {
+    current = now()
+  } catch {
+    return undefined
+  }
+  return (
+    Number.isSafeInteger(current) &&
+    authorization.authorizationExpiresAt * 1_000 > current
+  )
 }
 
 function projectHistory(
@@ -230,6 +278,7 @@ function emptyError(status: number) {
 
 async function projectedErrorResponse(
   options: GuestListenerServiceOptions,
+  now: () => number,
   request: Request,
   agentId: string,
   sessionId: string,
@@ -237,11 +286,16 @@ async function projectedErrorResponse(
   retryable: boolean,
   status: number
 ) {
-  const authorization = await authorize(options.invitations, request, {
-    agentId,
-    sessionId,
-    operation: "errors:read",
-  })
+  const authorization = await authorize(
+    options.invitations,
+    request,
+    {
+      agentId,
+      sessionId,
+      operation: "errors:read",
+    },
+    now
+  )
   if (!authorization) return emptyError(status)
   const projected = projectGuestOutbound(
     {
@@ -271,6 +325,25 @@ function runKey(scope: Pick<HermesRunScope, "agentId" | "sessionId">) {
   return `${scope.agentId.length}:${scope.agentId}${scope.sessionId}`
 }
 
+type GuestRunBinding = Pick<
+  GuestAuthorization,
+  "lane" | "principalId" | "invitationId" | "tokenId" | "agentId" | "sessionId"
+>
+
+function sameRunBinding(
+  binding: GuestRunBinding,
+  authorization: GuestAuthorization
+) {
+  return (
+    binding.lane === authorization.lane &&
+    binding.principalId === authorization.principalId &&
+    binding.invitationId === authorization.invitationId &&
+    binding.tokenId === authorization.tokenId &&
+    binding.agentId === authorization.agentId &&
+    binding.sessionId === authorization.sessionId
+  )
+}
+
 function canonicalEventScope(scope: {
   workspaceId: string
   agentId: string
@@ -279,6 +352,21 @@ function canonicalEventScope(scope: {
   const encode = (value: string) =>
     Buffer.from(value, "utf8").toString("base64url")
   return `ws1.${encode(scope.workspaceId)}.${encode(scope.agentId)}.${encode(scope.sessionId)}`
+}
+
+function cookieValue(request: Request, name: string) {
+  const header = request.headers.get("cookie")
+  if (header === null || header.length > 8_192) return undefined
+  const values = header
+    .split(";")
+    .map((item) => item.trim())
+    .flatMap((item) => {
+      const separator = item.indexOf("=")
+      return separator > 0 && item.slice(0, separator) === name
+        ? [item.slice(separator + 1)]
+        : []
+    })
+  return values.length === 1 ? values[0] : undefined
 }
 
 function projectEventFrame(raw: string, upgrade: GuestEventUpgrade) {
@@ -526,6 +614,7 @@ export function createGuestListenerService(
     {
       runId: string
       handle: HermesRunHandle
+      binding: GuestRunBinding
       expiresAt: number
       expiryTimer?: unknown
     }
@@ -543,6 +632,7 @@ export function createGuestListenerService(
     key: string,
     runId: string,
     handle: HermesRunHandle,
+    binding: GuestRunBinding,
     expiresAt: number
   ) {
     const remaining = expiresAt - now()
@@ -555,9 +645,10 @@ export function createGuestListenerService(
     const active: {
       runId: string
       handle: HermesRunHandle
+      binding: GuestRunBinding
       expiresAt: number
       expiryTimer?: unknown
-    } = { runId, handle, expiresAt }
+    } = { runId, handle, binding, expiresAt }
     activeRuns.set(key, active)
     active.expiryTimer = schedule(remaining, () => {
       if (activeRuns.get(key) !== active) return
@@ -573,6 +664,46 @@ export function createGuestListenerService(
       context.header(name, value)
   })
 
+  app.post("/api/guest/v1/events/authorize", async (context) => {
+    if (context.req.header("origin") !== options.publicOrigin)
+      return emptyError(403)
+    const target = eventTarget(
+      context.req.raw,
+      "/api/guest/v1/events/authorize"
+    )
+    if (!target) return emptyError(404)
+    const authorization = await authorize(
+      options.invitations,
+      context.req.raw,
+      {
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        operation: "messages:read",
+      },
+      now
+    )
+    if (!authorization) return emptyError(401)
+    try {
+      await options.hermes.getSession(target.agentId, target.storedId)
+      const token = bearerToken(context.req.raw)
+      const remainingSeconds = Math.min(
+        GUEST_EVENTS_CREDENTIAL_SECONDS,
+        Math.floor(
+          (authorization.authorizationExpiresAt * 1_000 - now()) / 1_000
+        )
+      )
+      if (!token || remainingSeconds <= 0) return emptyError(401)
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "set-cookie": `${GUEST_EVENTS_COOKIE}=${token}; Path=/api/guest/v1/events; Max-Age=${remainingSeconds}; Secure; HttpOnly; SameSite=Strict`,
+        },
+      })
+    } catch {
+      return emptyError(503)
+    }
+  })
+
   app.get(
     "/api/guest/v1/agents/:agentId/sessions/:sessionId/history",
     async (context) => {
@@ -581,7 +712,8 @@ export function createGuestListenerService(
       const authorization = await authorize(
         options.invitations,
         context.req.raw,
-        { agentId, sessionId, operation: "messages:read" }
+        { agentId, sessionId, operation: "messages:read" },
+        now
       )
       if (!authorization) return emptyError(401)
       const storedId = storedSessionId(agentId, sessionId)
@@ -600,6 +732,7 @@ export function createGuestListenerService(
       } catch {
         return projectedErrorResponse(
           options,
+          now,
           context.req.raw,
           agentId,
           sessionId,
@@ -619,7 +752,8 @@ export function createGuestListenerService(
       const authorization = await authorize(
         options.invitations,
         context.req.raw,
-        { agentId, sessionId, operation: "artifacts:read" }
+        { agentId, sessionId, operation: "artifacts:read" },
+        now
       )
       if (!authorization) return emptyError(401)
       if (!storedSessionId(agentId, sessionId) || !options.content)
@@ -647,6 +781,7 @@ export function createGuestListenerService(
         if (projected?.payload.type !== "artifact")
           return projectedErrorResponse(
             options,
+            now,
             context.req.raw,
             agentId,
             sessionId,
@@ -664,6 +799,7 @@ export function createGuestListenerService(
       } catch {
         return projectedErrorResponse(
           options,
+          now,
           context.req.raw,
           agentId,
           sessionId,
@@ -683,23 +819,45 @@ export function createGuestListenerService(
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
       const target = { agentId, sessionId: threadId }
-      const create = await authorize(options.invitations, context.req.raw, {
-        ...target,
-        operation: "messages:create",
-      })
+      const create = await authorize(
+        options.invitations,
+        context.req.raw,
+        {
+          ...target,
+          operation: "messages:create",
+        },
+        now
+      )
       const read = create
-        ? await authorize(options.invitations, context.req.raw, {
-            ...target,
-            operation: "messages:read",
-          })
+        ? await authorize(
+            options.invitations,
+            context.req.raw,
+            {
+              ...target,
+              operation: "messages:read",
+            },
+            now
+          )
         : undefined
       const errors = read
-        ? await authorize(options.invitations, context.req.raw, {
-            ...target,
-            operation: "errors:read",
-          })
+        ? await authorize(
+            options.invitations,
+            context.req.raw,
+            {
+              ...target,
+              operation: "errors:read",
+            },
+            now
+          )
         : undefined
-      if (!create || !read || !errors) return emptyError(401)
+      if (
+        !create ||
+        !read ||
+        !errors ||
+        !sameRunBinding(create, read) ||
+        !sameRunBinding(create, errors)
+      )
+        return emptyError(401)
       const sessionId = storedSessionId(agentId, threadId)
       if (!sessionId) return emptyError(404)
       const input = await boundedJson(context.req.raw)
@@ -712,6 +870,7 @@ export function createGuestListenerService(
       admissions.add(key)
       try {
         await options.hermes.getSession(agentId, sessionId)
+        if (!authorizationActive(create, now)) return emptyError(401)
         const handle = await runs.start(scope, input)
         const runId =
           typeof input === "object" &&
@@ -719,7 +878,15 @@ export function createGuestListenerService(
           typeof (input as { runId?: unknown }).runId === "string"
             ? (input as { runId: string }).runId
             : ""
-        if (!activate(key, runId, handle, create.expiresAt * 1_000))
+        if (
+          !activate(
+            key,
+            runId,
+            handle,
+            create,
+            create.authorizationExpiresAt * 1_000
+          )
+        )
           return emptyError(401)
         return projectRunStream({
           handle,
@@ -747,15 +914,25 @@ export function createGuestListenerService(
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
       const target = { agentId, sessionId: threadId }
-      const read = await authorize(options.invitations, context.req.raw, {
-        ...target,
-        operation: "messages:read",
-      })
+      const read = await authorize(
+        options.invitations,
+        context.req.raw,
+        {
+          ...target,
+          operation: "messages:read",
+        },
+        now
+      )
       const errors = read
-        ? await authorize(options.invitations, context.req.raw, {
-            ...target,
-            operation: "errors:read",
-          })
+        ? await authorize(
+            options.invitations,
+            context.req.raw,
+            {
+              ...target,
+              operation: "errors:read",
+            },
+            now
+          )
         : undefined
       if (!read || !errors) return emptyError(401)
       const sessionId = storedSessionId(agentId, threadId)
@@ -776,8 +953,14 @@ export function createGuestListenerService(
       const scope = { agentId, sessionId, threadId }
       const key = runKey(scope)
       const active = activeRuns.get(key)
-      if (!active || active.runId !== runId) return emptyError(404)
+      if (
+        !active ||
+        active.runId !== runId ||
+        !sameRunBinding(active.binding, read)
+      )
+        return emptyError(404)
       try {
+        if (!authorizationActive(read, now)) return emptyError(401)
         const position = active.handle.recoveryPosition()
         active.handle.disconnect()
         const handle = await runs.reconnect(scope, {
@@ -785,7 +968,15 @@ export function createGuestListenerService(
           runId,
           position,
         })
-        if (!activate(key, runId, handle, read.expiresAt * 1_000))
+        if (
+          !activate(
+            key,
+            runId,
+            handle,
+            read,
+            read.authorizationExpiresAt * 1_000
+          )
+        )
           return emptyError(401)
         return projectRunStream({
           handle,
@@ -810,18 +1001,25 @@ export function createGuestListenerService(
         return emptyError(403)
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
-      const create = await authorize(options.invitations, context.req.raw, {
-        agentId,
-        sessionId: threadId,
-        operation: "messages:create",
-      })
+      const create = await authorize(
+        options.invitations,
+        context.req.raw,
+        {
+          agentId,
+          sessionId: threadId,
+          operation: "messages:create",
+        },
+        now
+      )
       if (!create) return emptyError(401)
       const sessionId = storedSessionId(agentId, threadId)
       if (!sessionId) return emptyError(404)
       const key = runKey({ agentId, sessionId })
       const active = activeRuns.get(key)
-      if (!active) return emptyError(404)
+      if (!active || !sameRunBinding(active.binding, create))
+        return emptyError(404)
       try {
+        if (!authorizationActive(create, now)) return emptyError(401)
         const status = await active.handle.stop()
         if (status === "idle") removeActive(key, active.handle)
         return context.json({ status }, status === "stopping" ? 202 : 200)
@@ -842,41 +1040,34 @@ export function createGuestListenerService(
       request.headers.get("origin") !== options.publicOrigin
     )
       return undefined
-    const url = new URL(request.url)
-    if (
-      url.pathname !== "/api/guest/v1/events" ||
-      url.search.length > 2_048 ||
-      [...url.searchParams.keys()].some(
-        (key) => key !== "agentId" && key !== "sessionId"
-      ) ||
-      url.searchParams.getAll("agentId").length !== 1 ||
-      url.searchParams.getAll("sessionId").length !== 1
+    const target = eventTarget(request, "/api/guest/v1/events")
+    if (!target) return undefined
+    const token =
+      bearerToken(request) ?? cookieValue(request, GUEST_EVENTS_COOKIE)
+    if (!token) return undefined
+    const authorization = await verifyAuthorization(
+      options.invitations,
+      token,
+      {
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        operation: "messages:read",
+      },
+      now
     )
-      return undefined
-    const agentId = url.searchParams.get("agentId") ?? ""
-    const sessionId = url.searchParams.get("sessionId") ?? ""
-    const storedId = storedSessionId(agentId, sessionId)
-    if (!storedId) return undefined
-    const authorization = await authorize(options.invitations, request, {
-      agentId,
-      sessionId,
-      operation: "messages:read",
-    })
     if (!authorization) return undefined
-    const expiresAt = authorization.expiresAt * 1_000
-    if (!Number.isSafeInteger(expiresAt) || expiresAt <= now()) return undefined
     try {
-      await options.hermes.getSession(agentId, storedId)
+      await options.hermes.getSession(target.agentId, target.storedId)
     } catch {
       return undefined
     }
     return {
       invitationId: authorization.invitationId,
       authorizationRevision: authorization.tokenId,
-      agentId,
-      sessionId,
-      storedSessionId: storedId,
-      expiresAt,
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      storedSessionId: target.storedId,
+      expiresAt: authorization.authorizationExpiresAt * 1_000,
     }
   }
 

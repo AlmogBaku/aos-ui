@@ -83,6 +83,11 @@ export type GuestAuthorization = GuestIdentity & {
   operation: GuestOperation
 }
 
+export type VerifiedGuestAuthorization = GuestAuthorization & {
+  /** Effective authorization boundary after applying the configured tolerance. */
+  authorizationExpiresAt: number
+}
+
 export type GuestInvitationService = {
   issue(request: GuestInvitationRequest): Promise<{
     token: string
@@ -91,7 +96,7 @@ export type GuestInvitationService = {
   verify(
     token: string,
     target: GuestInvitationTarget
-  ): Promise<GuestAuthorization | undefined>
+  ): Promise<VerifiedGuestAuthorization | undefined>
 }
 
 type EntropySource = (size: number) => Uint8Array
@@ -414,9 +419,14 @@ function grant(claims: InvitationClaims): GuestInvitationGrant {
 
 function authorization(
   claims: InvitationClaims,
-  operation: GuestOperation
-): GuestAuthorization {
-  return { ...identity(claims), operation }
+  operation: GuestOperation,
+  clockSkewSeconds: number
+): VerifiedGuestAuthorization {
+  return {
+    ...identity(claims),
+    operation,
+    authorizationExpiresAt: claims.exp + clockSkewSeconds,
+  }
 }
 
 function makeService(
@@ -522,7 +532,7 @@ function makeService(
           current > claims.exp + options.clockSkewSeconds
         )
           return undefined
-        return authorization(claims, target.operation)
+        return authorization(claims, target.operation, options.clockSkewSeconds)
       } catch {
         return undefined
       }

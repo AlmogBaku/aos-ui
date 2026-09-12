@@ -130,6 +130,7 @@ describe("guest invitation", () => {
       issuedAt: 1_700_000_000,
       notBefore: 1_700_000_000,
       expiresAt: 1_700_000_300,
+      authorizationExpiresAt: 1_700_000_310,
     })
   })
 

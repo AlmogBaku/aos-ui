@@ -3,7 +3,10 @@
 import { EventType, type AGUIEvent } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
-import { createGuestInvitationServiceForTest } from "../auth/guest-invitation"
+import {
+  createGuestInvitationServiceForTest,
+  type GuestInvitationService,
+} from "../auth/guest-invitation"
 import { createReconnectCursorCodec } from "../events/cursor"
 import {
   createGuestListenerService,
@@ -16,7 +19,8 @@ const agentId = "researcher"
 const storedSessionId = "stored-session"
 const sessionId = "hermes:researcher:stored-session"
 
-function invitations(now = () => NOW) {
+function invitations(now = () => NOW, clockSkewSeconds = 0) {
+  let sequence = 0
   return createGuestInvitationServiceForTest(
     {
       issuer: ORIGIN,
@@ -25,9 +29,9 @@ function invitations(now = () => NOW) {
       keys: [{ id: "invite-key", secret: new Uint8Array(32).fill(7) }],
       now,
       ttlSeconds: 300,
-      clockSkewSeconds: 0,
+      clockSkewSeconds,
     },
-    (size) => new Uint8Array(size).fill(9)
+    (size) => new Uint8Array(size).fill(++sequence)
   )
 }
 
@@ -51,9 +55,10 @@ async function invitation(
     agentId?: string
     sessionId?: string | undefined
     invitationId?: string
+    service?: GuestInvitationService
   } = {}
 ) {
-  return invitations().issue({
+  return (overrides.service ?? invitations()).issue({
     principalId: "guest_recipient",
     invitationId: overrides.invitationId ?? "invite_public",
     agentId: overrides.agentId ?? agentId,
@@ -114,6 +119,8 @@ function harness(
     content?: NonNullable<GuestListenerServiceOptions["content"]>
     schedule?: (delayMs: number, task: () => void) => unknown
     cancel?: (timer: unknown) => void
+    invitationService?: GuestInvitationService
+    now?: () => number
   } = {}
 ) {
   const getSession = vi.fn(async () => ({
@@ -180,7 +187,7 @@ function harness(
     publicOrigin: ORIGIN,
     deploymentId: "deployment-a",
     bootEpoch: "boot-a",
-    invitations: invitations(),
+    invitations: overrides.invitationService ?? invitations(),
     cursor: cursor(),
     hermes,
     ...(overrides.runs === undefined ? {} : { runs: overrides.runs }),
@@ -189,12 +196,57 @@ function harness(
       ? {}
       : { schedule: overrides.schedule }),
     ...(overrides.cancel === undefined ? {} : { cancel: overrides.cancel }),
-    now: () => NOW,
+    now: overrides.now ?? (() => NOW),
   })
   return { service, hermes }
 }
 
 describe("Hermes guest listener", () => {
+  it("uses the invitation service's configured clock-skew expiry", async () => {
+    const issuer = invitations(() => NOW, 10)
+    const verifier = invitations(() => NOW + 305_000, 10)
+    const issued = await invitation(
+      ["errors:read", "messages:create", "messages:read"],
+      { service: issuer }
+    )
+    const runs = {
+      start: vi.fn(async () => runHandle(pendingEventStream())),
+      reconnect: vi.fn(),
+    }
+    const { service, hermes } = harness({
+      runs,
+      invitationService: verifier,
+      now: () => NOW + 305_000,
+    })
+    const base = `/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}`
+
+    const history = await service.app.request(`${base}/history`, {
+      headers: requestHeaders(issued.token),
+    })
+    const run = await service.app.request(`${base}/runs`, {
+      method: "POST",
+      headers: {
+        ...requestHeaders(issued.token, true),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        threadId: sessionId,
+        runId: "run-expired",
+        state: {},
+        messages: [{ id: "guest-message", role: "user", content: "Hello" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      }),
+    })
+
+    expect(history.status).toBe(200)
+    expect(run.status).toBe(200)
+    expect(hermes.history).toHaveBeenCalledOnce()
+    expect(hermes.getSession).toHaveBeenCalledOnce()
+    expect(runs.start).toHaveBeenCalledOnce()
+  })
+
   it("serves only projected history for the invitation's exact Agent and Session", async () => {
     const { service, hermes } = harness()
     const issued = await invitation()
@@ -538,6 +590,69 @@ describe("Hermes guest listener", () => {
     expect(active.stop).not.toHaveBeenCalled()
   })
 
+  it("does not let a second same-Session invitation reconnect or Stop an active run", async () => {
+    const invitationService = invitations()
+    const first = await invitation(
+      ["errors:read", "messages:create", "messages:read"],
+      { service: invitationService }
+    )
+    const second = await invitation(
+      ["errors:read", "messages:create", "messages:read"],
+      { service: invitationService }
+    )
+    const active = runHandle(pendingEventStream())
+    const runs = {
+      start: vi.fn(async () => active),
+      reconnect: vi.fn(async () => runHandle(eventStream())),
+    }
+    const { service } = harness({ runs, invitationService })
+    const route = `/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}/runs`
+    const start = await service.app.request(route, {
+      method: "POST",
+      headers: {
+        ...requestHeaders(first.token, true),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        threadId: sessionId,
+        runId: "run-bound",
+        state: {},
+        messages: [{ id: "guest-message", role: "user", content: "Hello" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      }),
+    })
+    expect(start.status).toBe(200)
+
+    const foreignReconnect = await service.app.request(`${route}/reconnect`, {
+      method: "POST",
+      headers: {
+        ...requestHeaders(second.token, true),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ threadId: sessionId, runId: "run-bound" }),
+    })
+    const foreignStop = await service.app.request(`${route}/stop`, {
+      method: "POST",
+      headers: requestHeaders(second.token, true),
+    })
+
+    expect(foreignReconnect.status).toBe(404)
+    expect(foreignStop.status).toBe(404)
+    expect(active.disconnect).not.toHaveBeenCalled()
+    expect(active.recoveryPosition).not.toHaveBeenCalled()
+    expect(active.stop).not.toHaveBeenCalled()
+    expect(runs.reconnect).not.toHaveBeenCalled()
+
+    const ownerStop = await service.app.request(`${route}/stop`, {
+      method: "POST",
+      headers: requestHeaders(first.token, true),
+    })
+    expect(ownerStop.status).toBe(200)
+    expect(active.stop).toHaveBeenCalledOnce()
+  })
+
   it("serves authorized artifacts and projects provider failures to code-only errors", async () => {
     const artifact = vi.fn(async () => ({
       bytes: new TextEncoder().encode("public artifact"),
@@ -690,6 +805,41 @@ describe("Hermes guest listener", () => {
         )
       )
     ).resolves.toBeUndefined()
+  })
+
+  it("exchanges bearer authorization for a browser-safe guest WebSocket cookie", async () => {
+    const { service } = harness()
+    const issued = await invitation(["messages:read"])
+    const query = new URLSearchParams({ agentId, sessionId })
+
+    const exchange = await service.app.request(
+      `/api/guest/v1/events/authorize?${query}`,
+      {
+        method: "POST",
+        headers: requestHeaders(issued.token, true),
+      }
+    )
+
+    expect(exchange.status).toBe(204)
+    const setCookie = exchange.headers.get("set-cookie")
+    expect(setCookie).toMatch(
+      /^__Host-aos-guest-events=[^;]+; Path=\/api\/guest\/v1\/events; Max-Age=60; Secure; HttpOnly; SameSite=Strict$/u
+    )
+    expect(setCookie).toContain(issued.token)
+    const cookie = setCookie!.split(";", 1)[0]
+    const upgrade = await service.authorizeEventUpgrade(
+      new Request(`${ORIGIN}/api/guest/v1/events?${query}`, {
+        headers: { origin: ORIGIN, cookie },
+      })
+    )
+
+    expect(upgrade).toMatchObject({
+      invitationId: "invite_public",
+      agentId,
+      sessionId,
+      expiresAt: NOW + 300_000,
+    })
+    expect(JSON.stringify(upgrade)).not.toContain(issued.token)
   })
 
   it("forces authoritative reconciliation for a cursor from another invitation", async () => {
