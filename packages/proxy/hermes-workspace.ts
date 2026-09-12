@@ -64,12 +64,14 @@ export type HermesWorkspaceCapabilities = {
         source: "latest-completed-todo-tool-result"
       }
     | { status: "unavailable"; reason: "history-unavailable" }
-  activity: {
-    status: "available"
-    scope: "attached-active-session"
-    coverage: "active-session-only"
-    source: "session.info"
-  }
+  activity:
+    | {
+        status: "available"
+        scope: "attached-active-session"
+        coverage: "active-session-only"
+        source: "session.info"
+      }
+    | { status: "unavailable"; reason: "session-info-unavailable" }
 }
 
 export type HermesModelChoice = {
@@ -102,7 +104,11 @@ export type HermesTodo = {
 }
 
 export type HermesActivity =
-  | { status: "unavailable"; reason: "session-not-attached" | "session-idle" }
+  | {
+      status: "unavailable"
+      reason:
+        "session-not-attached" | "session-idle" | "session-info-unavailable"
+    }
   | {
       status: "available"
       scope: "attached-active-session"
@@ -407,12 +413,14 @@ export function createHermesWorkspaceOperations(input: {
               source: "latest-completed-todo-tool-result",
             }
           : { status: "unavailable", reason: "history-unavailable" },
-        activity: {
-          status: "available",
-          scope: "attached-active-session",
-          coverage: "active-session-only",
-          source: "session.info",
-        },
+        activity: input.transport.sessionInfo
+          ? {
+              status: "available",
+              scope: "attached-active-session",
+              coverage: "active-session-only",
+              source: "session.info",
+            }
+          : { status: "unavailable", reason: "session-info-unavailable" },
       }
     },
     models,
@@ -474,11 +482,11 @@ export function createHermesWorkspaceOperations(input: {
         return { status: "unavailable", reason: "session-not-attached" }
       if (!session.active)
         return { status: "unavailable", reason: "session-idle" }
-      const info = input.transport.sessionInfo
-        ? await input.transport.sessionInfo(session).catch(() => {
-            throw new HermesWorkspaceUnavailableError()
-          })
-        : await request("session.info", { session_id: session.liveSessionId })
+      if (!input.transport.sessionInfo)
+        return { status: "unavailable", reason: "session-info-unavailable" }
+      const info = await input.transport.sessionInfo(session).catch(() => {
+        throw new HermesWorkspaceUnavailableError()
+      })
       return {
         status: "available",
         scope: "attached-active-session",

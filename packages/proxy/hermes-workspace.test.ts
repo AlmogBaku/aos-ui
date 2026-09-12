@@ -22,6 +22,7 @@ function harness(overrides?: {
   ) => unknown
   history?: readonly unknown[]
   historyAvailable?: boolean
+  sessionInfo?: unknown
 }) {
   const request = vi.fn(
     async (method: string, params: Readonly<Record<string, unknown>>) =>
@@ -29,6 +30,7 @@ function harness(overrides?: {
   )
   const requireSession = vi.fn(async () => ({ ...scope, ...overrides?.scope }))
   const history = vi.fn(async () => overrides?.history ?? [])
+  const sessionInfo = vi.fn(async () => overrides?.sessionInfo)
   return {
     request,
     requireSession,
@@ -38,6 +40,7 @@ function harness(overrides?: {
       transport: {
         request,
         ...(overrides?.historyAvailable === false ? {} : { history }),
+        ...(overrides?.sessionInfo === undefined ? {} : { sessionInfo }),
       },
     }),
   }
@@ -45,7 +48,7 @@ function harness(overrides?: {
 
 describe("Hermes workspace operations", () => {
   it("describes each workspace operation with its actual scope and mode", () => {
-    const { operations } = harness()
+    const { operations } = harness({ sessionInfo: { running: false } })
 
     expect(operations.capabilities()).toEqual({
       models: {
@@ -82,6 +85,22 @@ describe("Hermes workspace operations", () => {
       status: "unavailable",
       reason: "history-unavailable",
     })
+  })
+
+  it("does not advertise activity without an authoritative Session-info reader", async () => {
+    const { operations, request } = harness()
+
+    expect(operations.capabilities().activity).toEqual({
+      status: "unavailable",
+      reason: "session-info-unavailable",
+    })
+    await expect(
+      operations.activity("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      status: "unavailable",
+      reason: "session-info-unavailable",
+    })
+    expect(request).not.toHaveBeenCalled()
   })
 
   it("authorizes an attached Session before projecting provider model choices", async () => {
@@ -400,13 +419,10 @@ describe("Hermes workspace operations", () => {
 
   it("projects attached active Session status without exposing native identities", async () => {
     const { operations } = harness({
-      request(method) {
-        if (method === "session.info")
-          return {
-            running: true,
-            native_session_id: "live-private-1",
-            filesystem_root: "/srv/private",
-          }
+      sessionInfo: {
+        running: true,
+        native_session_id: "live-private-1",
+        filesystem_root: "/srv/private",
       },
     })
 
