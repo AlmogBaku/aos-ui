@@ -9,6 +9,7 @@ const MAX_KEY_ID_LENGTH = 64
 const MAX_IDENTIFIER_LENGTH = 256
 const MAX_SCOPE_LENGTH = 512
 const MAX_CURSOR_LIFETIME_SECONDS = 3_600
+const SCOPE_VERSION = "ws1"
 const CURSOR_AAD = Buffer.from(
   "aos-ui reconnect cursor|/api/aos/v1/events|aos-events-v1",
   "utf8"
@@ -263,12 +264,13 @@ function validBinding(value: ReconnectCursorBinding): boolean {
   if (
     !isBoundedString(value.deploymentId, MAX_IDENTIFIER_LENGTH) ||
     !isBoundedString(value.authorizationRevision, MAX_IDENTIFIER_LENGTH) ||
-    !isBoundedString(value.scope, MAX_SCOPE_LENGTH) ||
     !isBoundedString(value.agentId, MAX_IDENTIFIER_LENGTH) ||
     !isBoundedString(value.sessionId, MAX_IDENTIFIER_LENGTH) ||
     !isBoundedString(value.bootEpoch, MAX_IDENTIFIER_LENGTH) ||
     !isBoundedString(value.streamId, MAX_IDENTIFIER_LENGTH)
   )
+    return false
+  if (!isCanonicalScope(value.scope, value.agentId, value.sessionId))
     return false
 
   if (value.lane === "operator")
@@ -281,6 +283,47 @@ function validBinding(value: ReconnectCursorBinding): boolean {
     value.principalId === undefined &&
     isBoundedString(value.invitationId, MAX_IDENTIFIER_LENGTH)
   )
+}
+
+/**
+ * The canonical workspace/session scope is `ws1.<workspace>.<agent>.<session>`
+ * where every component is canonical UTF-8 base64url. It removes delimiter and
+ * percent-encoding aliases while binding the scope to the exact Session owner.
+ */
+function isCanonicalScope(
+  scope: unknown,
+  agentId: string,
+  sessionId: string
+): boolean {
+  if (!isBoundedString(scope, MAX_SCOPE_LENGTH)) return false
+  const [version, workspace, agent, session, ...remainder] = scope.split(".")
+  if (
+    version !== SCOPE_VERSION ||
+    workspace === undefined ||
+    agent === undefined ||
+    session === undefined ||
+    remainder.length > 0
+  )
+    return false
+
+  const workspaceId = decodeCanonicalScopeComponent(workspace)
+  const scopedAgentId = decodeCanonicalScopeComponent(agent)
+  const scopedSessionId = decodeCanonicalScopeComponent(session)
+  return (
+    workspaceId !== null &&
+    scopedAgentId === agentId &&
+    scopedSessionId === sessionId
+  )
+}
+
+function decodeCanonicalScopeComponent(value: string): string | null {
+  const bytes = decodeCanonicalBase64Url(value)
+  if (bytes === null) return null
+  const decoded = bytes.toString("utf8")
+  return isBoundedString(decoded, MAX_IDENTIFIER_LENGTH) &&
+    Buffer.from(decoded, "utf8").equals(bytes)
+    ? decoded
+    : null
 }
 
 function sameBinding(

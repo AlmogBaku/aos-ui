@@ -15,7 +15,7 @@ function binding(
     lane: "operator",
     principalId: "operator-42",
     authorizationRevision: "grant-9",
-    scope: "workspace-1/session-7",
+    scope: "ws1.d29ya3NwYWNlLTE.cmVzZWFyY2hlcg.c2Vzc2lvbi03",
     agentId: "researcher",
     sessionId: "session-7",
     bootEpoch: "boot-3",
@@ -89,13 +89,28 @@ describe("reconnect cursor codec", () => {
       }),
       binding({ principalId: "operator-43" }),
       binding({ authorizationRevision: "grant-10" }),
-      binding({ scope: "workspace-1/session-8" }),
+      binding({ scope: "ws1.d29ya3NwYWNlLTE.cmVzZWFyY2hlcg.c2Vzc2lvbi04" }),
       binding({ agentId: "writer" }),
       binding({ sessionId: "session-8" }),
       binding({ bootEpoch: "boot-4" }),
       binding({ streamId: "stream-12" }),
     ]) {
       expect(codec().open(cursor, changedBinding)).toBeNull()
+    }
+  })
+
+  it("rejects equivalent or non-matching workspace/session scope representations", () => {
+    const claims = { ...binding(), iat: 1_700_000_000, exp: 1_700_000_060 }
+
+    for (const scope of [
+      "workspace-1/session-7",
+      "ws1.d29ya3NwYWNlLTE=.cmVzZWFyY2hlcg.c2Vzc2lvbi03",
+      "ws1.d29ya3NwYWNlLTE.d3JpdGVy.c2Vzc2lvbi03",
+      "ws1.d29ya3NwYWNlLTE.cmVzZWFyY2hlcg.c2Vzc2lvbi04",
+    ]) {
+      expect(() => codec().seal({ ...claims, scope })).toThrow(
+        "Invalid reconnect cursor"
+      )
     }
   })
 
