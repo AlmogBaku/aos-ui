@@ -14,7 +14,7 @@ const MAX_QUEUED_EVENTS = 4_096
 const MAX_QUEUED_BYTES = 4_194_304
 const MAX_PREACTIVE_EVENTS = 4_096
 const MAX_PREACTIVE_BYTES = 4_194_304
-const MAX_NATIVE_EVENT_BYTES = 1_114_112
+const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_GRAPH_ENTRIES = 1_024
 const MAX_GRAPH_DEPTH = 12
 const MAX_TOOL_DEPTH = 6
@@ -122,7 +122,9 @@ function jsonStringBytesWithin(value: string, maximum: number) {
             character === "\t"
             ? 2
             : 6
-          : utf8CodePointBytes(codePoint)
+          : codePoint >= 0xd800 && codePoint <= 0xdfff
+            ? 6
+            : utf8CodePointBytes(codePoint)
     if (bytes > maximum) return undefined
   }
   return bytes
@@ -374,6 +376,15 @@ function nativeEvent(value: unknown): HermesNativeEvent | undefined {
   }
 }
 
+function nativeEventSessionId(value: unknown) {
+  if (typeof value !== "object" || value === null) return undefined
+  try {
+    return stableNativeId((value as Record<string, unknown>).session_id)
+  } catch {
+    return undefined
+  }
+}
+
 function validatedRecovery(
   recovery: HermesRecovery,
   liveSessionId: string,
@@ -421,15 +432,13 @@ function payloadOf(event: HermesNativeEvent) {
 }
 
 function stableNativeId(value: unknown) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 512 &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0)
-      return code < 32 || code === 127
-    })
-    ? value
-    : undefined
+  if (typeof value !== "string" || value.length === 0 || value.length > 512)
+    return undefined
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 32 || code === 127) return undefined
+  }
+  return value
 }
 
 function canonicalToolName(name: string) {
@@ -571,23 +580,37 @@ const DEFAULT_TOOL_RESULT_FIELDS = new Set([
 
 function sensitiveToolKey(key: string) {
   const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase()
+  const credential =
+    normalized === "auth" ||
+    (normalized.endsWith("auth") && !normalized.endsWith("oauth")) ||
+    normalized.endsWith("token") ||
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("accesskey") ||
+    normalized.endsWith("accesskeyid") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("secretkey") ||
+    normalized.endsWith("password") ||
+    normalized.endsWith("passwd") ||
+    normalized.endsWith("cookie") ||
+    normalized.endsWith("cookiejar") ||
+    normalized.endsWith("authorization") ||
+    normalized === "authorizationheader" ||
+    normalized.endsWith("credential") ||
+    normalized.endsWith("credentials") ||
+    normalized.endsWith("privatekey") ||
+    normalized === "npmconfiguserconfig"
   return (
-    normalized.includes("token") ||
-    normalized.includes("secret") ||
-    normalized.includes("password") ||
-    normalized.includes("cookie") ||
-    normalized.includes("authorization") ||
-    normalized.includes("credential") ||
-    normalized.includes("privatekey") ||
-    normalized.includes("sessionid") ||
-    normalized.includes("liveid") ||
-    normalized.includes("metadata") ||
-    normalized.includes("url") ||
-    normalized.includes("uri") ||
+    credential ||
+    normalized.endsWith("sessionid") ||
+    normalized.endsWith("liveid") ||
+    normalized.endsWith("metadata") ||
+    normalized.endsWith("url") ||
+    normalized.endsWith("uri") ||
     normalized === "origin" ||
     normalized === "host" ||
     normalized === "cwd" ||
-    normalized.includes("directory") ||
+    normalized.endsWith("directory") ||
+    normalized.endsWith("directories") ||
     normalized.includes("filesystem") ||
     normalized.endsWith("path")
   )
@@ -609,6 +632,7 @@ function safeToolText(value: string) {
 
 function unsafeToolText(value: string) {
   if (value.includes("/") || value.includes("\\")) return true
+  if (/(?:^|[\s,;=([{'"`])[a-z]:[^\s,;)}\]]+/iu.test(value)) return true
   if (
     /\b(?:bearer\s+|sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_-]+|AKIA[A-Z0-9]{16})/iu.test(
       value
@@ -900,6 +924,7 @@ export class HermesRunEngine {
       unsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
+          if (nativeEventSessionId(event) !== liveSessionId) return
           if (!accepting) bufferNativeEvent(buffered, event)
           else if (active) this.#accept(active, event)
         },
@@ -1038,6 +1063,7 @@ export class HermesRunEngine {
       unsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
+          if (nativeEventSessionId(event) !== liveSessionId) return
           if (!accepting) bufferNativeEvent(buffered, event)
           else if (active) this.#accept(active, event)
         },
@@ -1139,6 +1165,7 @@ export class HermesRunEngine {
       nextUnsubscribe = await this.#native.observe(
         liveSessionId,
         (event) => {
+          if (nativeEventSessionId(event) !== liveSessionId) return
           if (!accepting) bufferNativeEvent(buffered, event)
           else this.#accept(active, event)
         },
@@ -1210,6 +1237,7 @@ export class HermesRunEngine {
 
   #accept(active: ActiveRun, value: unknown) {
     if (active.terminal) return
+    if (nativeEventSessionId(value) !== active.liveSessionId) return
     if (boundedGraphBytes(value, MAX_NATIVE_EVENT_BYTES) === undefined) {
       this.#overflow(active)
       return
