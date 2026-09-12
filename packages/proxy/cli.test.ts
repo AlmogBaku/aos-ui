@@ -22,7 +22,6 @@ describe("proxy executable", () => {
 
     await expect(
       runProxyCli(["bun", "proxy", "--help"], {
-        operatorVerifierFactory: () => async () => undefined,
         logger,
         start,
       })
@@ -35,9 +34,16 @@ describe("proxy executable", () => {
     const directory = await mkdtemp(join(tmpdir(), "aos-proxy-cli-"))
     temporaryDirectories.push(directory)
     const operatorSecret = join(directory, "operator-secret")
+    const principalKey = join(directory, "principal-key")
+    const sessionKey = join(directory, "session-key")
+    const cursorKey = join(directory, "cursor-key")
     const hermesToken = join(directory, "hermes-token")
     const configFile = join(directory, "proxy.json")
     await writeFile(operatorSecret, "operator-secret", { mode: 0o600 })
+    const encodedKey = Buffer.alloc(32, 7).toString("base64url")
+    await writeFile(principalKey, encodedKey, { mode: 0o600 })
+    await writeFile(sessionKey, encodedKey, { mode: 0o600 })
+    await writeFile(cursorKey, encodedKey, { mode: 0o600 })
     await writeFile(hermesToken, "hermes-token", { mode: 0o600 })
     await writeFile(
       configFile,
@@ -48,18 +54,28 @@ describe("proxy executable", () => {
           port: 4100,
           exposure: "private-container",
         },
-        publicOrigin: "http://127.0.0.1:3000",
+        publicOrigin: "https://aos.example.test",
         operator: {
           issuer: "https://identity.example.test",
           clientId: "aos-ui",
           clientSecretFile: operatorSecret,
+          principalHmacKeyFile: principalKey,
           redirectUri:
-            "http://127.0.0.1:3000/api/aos/v1/auth/operator/callback",
+            "https://aos.example.test/api/aos/v1/auth/operator/callback",
           allowedSubjects: ["operator@example.test"],
+          session: {
+            deploymentId: "test-deployment",
+            keys: [{ id: "current", secretFile: sessionKey }],
+            ttlSeconds: 900,
+          },
         },
         hermes: {
           baseUrl: "http://host.docker.internal:9119",
           auth: { mode: "static-token", tokenFile: hermesToken },
+        },
+        events: {
+          activeKeyId: "current",
+          keys: [{ id: "current", secretFile: cursorKey }],
         },
         shutdownGraceMs: 5_000,
       })
@@ -70,7 +86,6 @@ describe("proxy executable", () => {
     }))
 
     await runProxyCli(["bun", "proxy", "--config", configFile], {
-      operatorVerifierFactory: () => async () => undefined,
       transportFactory: () => ({
         request: vi.fn(),
         authState: vi.fn(async () => ({ status: "authenticated" as const })),

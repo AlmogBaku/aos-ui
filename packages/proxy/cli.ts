@@ -5,7 +5,6 @@ import {
   createConfiguredProxy,
   type ConfiguredProxyDependencies,
 } from "./composition"
-import { createOidcUserInfoVerifier } from "./oidc-userinfo"
 import { redactForLog } from "./redaction"
 import { startProxyServer, type StartProxyServerOptions } from "./server"
 
@@ -45,6 +44,7 @@ export async function runProxyCli(
   const configured = await createConfiguredProxy(input, dependencies)
   const lifecycle = (dependencies.start ?? startProxyServer)({
     app: configured.app,
+    events: configured.eventService,
     host: configured.config.listen.host,
     port: configured.config.listen.port,
     shutdownGraceMs: configured.config.shutdownGraceMs,
@@ -68,7 +68,6 @@ const logger = {
 
 if (import.meta.main) {
   void runProxyCli(process.argv, {
-    operatorVerifierFactory: createOidcUserInfoVerifier,
     logger,
   }).catch((error: unknown) => {
     logger.error({ event: "proxy.start_failed", error })

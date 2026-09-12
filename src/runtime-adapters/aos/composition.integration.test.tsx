@@ -16,6 +16,41 @@ afterEach(() => {
 
 describe("AOS normalized Session browser integration", () => {
   it("opens normalized history, sends one turn, and issues separate deliberate Stop", async () => {
+    class ReadySocket extends EventTarget {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => {
+          this.readyState = 1
+          this.dispatchEvent(new Event("open"))
+        })
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw) as {
+          streamId: string
+          scope: unknown
+        }
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                type: "aos.ready",
+                version: 1,
+                streamId: request.streamId,
+                scope: request.scope,
+                generation: 0,
+                read: "authoritative",
+              }),
+            })
+          )
+        )
+      }
+      close() {
+        this.readyState = 3
+        this.dispatchEvent(new Event("close"))
+      }
+    }
+    vi.stubGlobal("WebSocket", ReadySocket)
     let finishObservation: (() => void) | undefined
     const observationFinished = new Promise<void>((resolve) => {
       finishObservation = resolve
@@ -161,7 +196,7 @@ describe("AOS normalized Session browser integration", () => {
         }}
       </Provider>
     )
-    expect(screen.getByRole("main")).toHaveTextContent("Mounted")
+    expect(await screen.findByRole("main")).toHaveTextContent("Mounted")
 
     await supplied!.assistantRuntime.threads.getLoadThreadsPromise()
     expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([

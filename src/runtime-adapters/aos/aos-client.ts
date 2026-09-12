@@ -8,6 +8,7 @@ import {
 import {
   AgentCatalogResponseSchema,
   OperatorAuthStateSchema,
+  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
   SessionCatalogResponseSchema,
@@ -25,11 +26,28 @@ import type {
   AgentVisibility,
   WorkspaceAdapter,
 } from "../contracts"
+import type { AosEventScope } from "./aos-reconciliation"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
+export type AosClientFailure =
+  "connection-interrupted" | "provider-unavailable" | "proxy-failure"
+
+export class AosClientError extends Error {
+  constructor(
+    readonly kind: AosClientFailure,
+    message = "AOS proxy request failed"
+  ) {
+    super(message)
+    this.name = "AosClientError"
+  }
+}
+
 export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
+  reconciler?: {
+    read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
+  }
 }
 
 export function createAosRunAgent({
@@ -80,15 +98,29 @@ export function createAosRunAgent({
 
 export class AosRemoteClient implements WorkspaceAdapter {
   readonly #fetch: typeof fetch
+  readonly #reconciler?: AosRemoteClientOptions["reconciler"]
   readonly #revisions = new Map<string, string>()
   readonly #sessions = new Map<string, Session>()
   readonly #sessionOwners = new Map<string, string>()
 
   constructor(options: AosRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
+    this.#reconciler = options.reconciler
   }
 
   async #read<T>(
+    path: string,
+    schema: Schema<T>,
+    init?: RequestInit,
+    scope?: AosEventScope
+  ): Promise<T> {
+    const operation = () => this.#readDirect(path, schema, init)
+    return scope && this.#reconciler
+      ? this.#reconciler.read(scope, operation)
+      : operation()
+  }
+
+  async #readDirect<T>(
     path: string,
     schema: Schema<T>,
     init?: RequestInit
@@ -101,31 +133,40 @@ export class AosRemoteClient implements WorkspaceAdapter {
         headers: { accept: "application/json", ...init?.headers },
       })
     } catch {
-      throw new Error("AOS proxy request failed")
+      throw new AosClientError("connection-interrupted")
     }
     if (!response.ok)
-      throw new Error(`AOS proxy request failed (${response.status})`)
+      throw new AosClientError(
+        response.status === 503 ? "provider-unavailable" : "proxy-failure"
+      )
     let payload: unknown
     try {
       payload = await response.json()
     } catch {
-      throw new Error("Invalid AOS proxy response")
+      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
     }
     const parsed = schema.safeParse(payload)
-    if (!parsed.success) throw new Error("Invalid AOS proxy response")
+    if (!parsed.success)
+      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
     return parsed.data
   }
 
-  operatorAuth() {
-    return this.#read("/auth/operator", OperatorAuthStateSchema)
+  operatorAuth(signal?: AbortSignal) {
+    return this.#read("/auth/operator", OperatorAuthStateSchema, { signal })
   }
 
-  runtimeInfo() {
-    return this.#read("/runtime", RuntimeInfoSchema)
+  runtimeAuth(signal?: AbortSignal) {
+    return this.#read("/auth/runtime", RuntimeAuthStateSchema, { signal })
   }
 
-  async #catalog() {
-    const catalog = await this.#read("/agents", AgentCatalogResponseSchema)
+  runtimeInfo(signal?: AbortSignal) {
+    return this.#read("/runtime", RuntimeInfoSchema, { signal })
+  }
+
+  async #catalog(signal?: AbortSignal) {
+    const catalog = await this.#read("/agents", AgentCatalogResponseSchema, {
+      signal,
+    })
     this.#revisions.clear()
     for (const entry of catalog.agents)
       this.#revisions.set(entry.summary.id, entry.revision)
@@ -142,8 +183,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.listAgents()
   }
 
-  async listAgentCatalog(): Promise<AgentCatalogEntry[]> {
-    return (await this.#catalog()).agents.map(
+  async listAgentCatalog(signal?: AbortSignal): Promise<AgentCatalogEntry[]> {
+    return (await this.#catalog(signal)).agents.map(
       ({ summary, visibility, selectable, editable }) =>
         structuredClone({ summary, visibility, selectable, editable })
     )
@@ -168,7 +209,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
   async listSessions(agentId: string, limit = 50, offset = 0) {
     const page = await this.#read(
       `/agents/${encodeURIComponent(agentId)}/sessions?limit=${limit}&offset=${offset}`,
-      SessionCatalogResponseSchema
+      SessionCatalogResponseSchema,
+      undefined
     )
     if (page.sessions.some((session) => session.agentId !== agentId))
       throw new Error("Invalid AOS proxy response")
@@ -176,10 +218,11 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return page
   }
 
-  async listSessionCatalog(limit = 50, offset = 0) {
+  async listSessionCatalog(limit = 50, offset = 0, signal?: AbortSignal) {
     const page = await this.#read(
       `/sessions?limit=${limit}&offset=${offset}`,
-      SessionCatalogResponseSchema
+      SessionCatalogResponseSchema,
+      { signal }
     )
     for (const session of page.sessions) this.#rememberSession(session)
     return page
@@ -189,7 +232,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
     const agentId = this.#owner(threadId)
     const session = await this.#read(
       `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}`,
-      SessionSchema
+      SessionSchema,
+      undefined,
+      { workspaceId: "operator", agentId, sessionId: threadId }
     )
     if (session.id !== threadId || session.agentId !== agentId)
       throw new Error("Invalid AOS proxy response")
@@ -249,7 +294,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
     do {
       const page = await this.#read(
         `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/history?limit=200&offset=${offset}`,
-        SessionHistoryResponseSchema
+        SessionHistoryResponseSchema,
+        undefined,
+        { workspaceId: "operator", agentId, sessionId: threadId }
       )
       if (
         page.sessionId !== threadId ||

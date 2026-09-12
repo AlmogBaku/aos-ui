@@ -30,42 +30,44 @@ describe("provider-neutral AOS browser client", () => {
             status: "authenticated",
             operator: { id: "operator@example.test" },
           }
-        : path.endsWith("/runtime")
-          ? {
-              runtime: { id: "hermes", name: "Hermes" },
-              status: "ready",
-              capabilities: {
-                agentCatalog: { status: "available" },
-                agentVisibility: {
-                  status: "available",
-                  concurrency: "revision",
+        : path.endsWith("/auth/runtime")
+          ? { status: "authenticated" }
+          : path.endsWith("/runtime")
+            ? {
+                runtime: { id: "hermes", name: "Hermes" },
+                status: "ready",
+                capabilities: {
+                  agentCatalog: { status: "available" },
+                  agentVisibility: {
+                    status: "available",
+                    concurrency: "revision",
+                  },
+                  sessionCatalog: {
+                    status: "available",
+                    scope: "workspace",
+                    order: "recent",
+                    defaultPageSize: 50,
+                    maxPageSize: 100,
+                    maxWindow: 1_000,
+                  },
+                  sessionHistory: {
+                    status: "available",
+                    order: "chronological",
+                    compacted: true,
+                    loading: "on-open",
+                    defaultPageSize: 200,
+                    maxPageSize: 500,
+                  },
+                  sessionDetail: { status: "available" },
+                  sessionCreation: { status: "available" },
+                  sessionTitle: { status: "available" },
+                  sessionArchival: { status: "available" },
+                  sessionDeletion: { status: "available" },
+                  sessionRun: { status: "available" },
+                  sessionStop: { status: "available" },
                 },
-                sessionCatalog: {
-                  status: "available",
-                  scope: "workspace",
-                  order: "recent",
-                  defaultPageSize: 50,
-                  maxPageSize: 100,
-                  maxWindow: 1_000,
-                },
-                sessionHistory: {
-                  status: "available",
-                  order: "chronological",
-                  compacted: true,
-                  loading: "on-open",
-                  defaultPageSize: 200,
-                  maxPageSize: 500,
-                },
-                sessionDetail: { status: "available" },
-                sessionCreation: { status: "available" },
-                sessionTitle: { status: "available" },
-                sessionArchival: { status: "available" },
-                sessionDeletion: { status: "available" },
-                sessionRun: { status: "available" },
-                sessionStop: { status: "available" },
-              },
-            }
-          : catalog
+              }
+            : catalog
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -74,6 +76,9 @@ describe("provider-neutral AOS browser client", () => {
     const client = new AosRemoteClient({ fetcher })
 
     await expect(client.operatorAuth()).resolves.toMatchObject({
+      status: "authenticated",
+    })
+    await expect(client.runtimeAuth()).resolves.toEqual({
       status: "authenticated",
     })
     await expect(client.runtimeInfo()).resolves.toMatchObject({
@@ -90,8 +95,110 @@ describe("provider-neutral AOS browser client", () => {
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       "/api/aos/v1/auth/operator",
+      "/api/aos/v1/auth/runtime",
       "/api/aos/v1/runtime",
       "/api/aos/v1/agents",
+    ])
+  })
+
+  it("reconciles only real opened Session reads and keeps control/catalog reads direct", async () => {
+    const scopes: unknown[] = []
+    const reconciler = {
+      async read<T>(scope: unknown, operation: () => Promise<T>) {
+        scopes.push(scope)
+        return operation()
+      },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/auth/operator"))
+        return Response.json({ status: "unauthenticated" })
+      if (path.endsWith("/auth/runtime"))
+        return Response.json({ status: "authentication-required" })
+      if (path.endsWith("/agents")) return Response.json(catalog)
+      if (path.endsWith("/runtime"))
+        return Response.json({
+          runtime: { id: "hermes", name: "Hermes" },
+          status: "unavailable",
+          capabilities: {
+            agentCatalog: { status: "unavailable", reason: "offline" },
+            agentVisibility: { status: "unavailable", reason: "offline" },
+            sessionCatalog: { status: "unavailable", reason: "offline" },
+            sessionHistory: { status: "unavailable", reason: "offline" },
+            sessionDetail: { status: "unavailable", reason: "offline" },
+            sessionCreation: { status: "unavailable", reason: "offline" },
+            sessionTitle: { status: "unavailable", reason: "offline" },
+            sessionArchival: { status: "unavailable", reason: "offline" },
+            sessionDeletion: { status: "unavailable", reason: "offline" },
+            sessionRun: { status: "unavailable", reason: "offline" },
+            sessionStop: { status: "unavailable", reason: "offline" },
+          },
+        })
+      if (path.endsWith("/sessions?limit=50&offset=0"))
+        return Response.json({
+          sessions: [
+            {
+              id: "hermes:researcher:stored",
+              agentId: "researcher",
+              title: "Research",
+              archived: false,
+              updatedAt: "2026-01-02T00:00:00.000Z",
+              status: "idle",
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      if (path.endsWith("/sessions/hermes%3Aresearcher%3Astored"))
+        return Response.json({
+          id: "hermes:researcher:stored",
+          agentId: "researcher",
+          title: "Research",
+          archived: false,
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          status: "idle",
+        })
+      if (path.includes("/sessions/hermes%3Aresearcher%3Astored/history?"))
+        return Response.json({
+          sessionId: "hermes:researcher:stored",
+          messages: [],
+          total: 0,
+          limit: 200,
+          offset: 0,
+          nextOffset: 0,
+        })
+      if (path.endsWith("/sessions?limit=50&offset=0"))
+        return Response.json({
+          sessions: [],
+          total: 0,
+          limit: 50,
+          offset: 0,
+        })
+      throw new Error(`Unexpected path: ${path}`)
+    })
+    const client = new AosRemoteClient({ fetcher, reconciler })
+
+    await client.operatorAuth()
+    await client.runtimeAuth()
+    await client.runtimeInfo()
+    await client.listAgentCatalog()
+    await client.listSessions("researcher")
+    await client.listSessionCatalog()
+    await client.getSession("hermes:researcher:stored")
+    await client.loadHistory("hermes:researcher:stored")
+
+    expect(scopes).toEqual([
+      {
+        workspaceId: "operator",
+        agentId: "researcher",
+        sessionId: "hermes:researcher:stored",
+      },
+      {
+        workspaceId: "operator",
+        agentId: "researcher",
+        sessionId: "hermes:researcher:stored",
+      },
     ])
   })
 

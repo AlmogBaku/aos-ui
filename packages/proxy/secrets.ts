@@ -21,3 +21,17 @@ export async function readSecretFile(path: string): Promise<string> {
     throw new Error("Invalid secret file")
   return normalized
 }
+
+export async function readSecretKeyFile(path: string): Promise<Uint8Array> {
+  const encoded = await readSecretFile(path)
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(encoded))
+    throw new Error("Invalid secret key file")
+  try {
+    const decoded = Buffer.from(encoded, "base64url")
+    if (decoded.byteLength !== 32 || decoded.toString("base64url") !== encoded)
+      throw new Error()
+    return new Uint8Array(decoded)
+  } catch {
+    throw new Error("Invalid secret key file")
+  }
+}

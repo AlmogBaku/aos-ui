@@ -472,12 +472,99 @@ describe("Hermes server adapter", () => {
       }),
     })
     await expect(unauthenticated.authState()).resolves.toEqual({
-      status: "unauthenticated",
+      status: "authentication-required",
     })
+    await expect(unauthenticated.listAgents()).rejects.toBeInstanceOf(
+      HermesAuthenticationError
+    )
     await expect(unavailable.authState()).resolves.toEqual({
       status: "unavailable",
       reason: "temporarily-unavailable",
     })
+  })
+
+  it("observes only bounded events for the exact resumed native Session", async () => {
+    let nativeListener: ((event: unknown) => void) | undefined
+    const stop = vi.fn()
+    const listener = vi.fn()
+    const disconnected = vi.fn()
+    const observeEvents = vi.fn(async (next: (event: unknown) => void) => {
+      nativeListener = next
+      return stop
+    })
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      observeEvents,
+    })
+
+    await adapter.observe("live-session", listener, disconnected)
+    nativeListener!({ type: "message", session_id: "other-session" })
+    nativeListener!({
+      type: "message",
+      session_id: "live-session",
+      payload: "x".repeat(4_194_305),
+    })
+    expect(disconnected).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it("ignores oversized foreign Session events before accepting an exact event", async () => {
+    let nativeListener: ((event: unknown) => void) | undefined
+    const listener = vi.fn()
+    const disconnected = vi.fn()
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      observeEvents: vi.fn(async (next) => {
+        nativeListener = next
+        return vi.fn()
+      }),
+    })
+    await adapter.observe("live-session", listener, disconnected)
+    nativeListener!({
+      type: "message",
+      session_id: "other-session",
+      payload: "x".repeat(4_194_305),
+    })
+    const expected = {
+      type: "message",
+      session_id: "live-session",
+      payload: { text: "changed" },
+    }
+    nativeListener!(expected)
+
+    expect(listener).toHaveBeenCalledOnce()
+    expect(listener).toHaveBeenCalledWith(expected)
+    expect(disconnected).not.toHaveBeenCalled()
+  })
+
+  it("disconnects once on a deeply nested active Session event and rejects oversized live identities", async () => {
+    let nativeListener: ((event: unknown) => void) | undefined
+    const disconnected = vi.fn()
+    const stop = vi.fn()
+    const request = vi.fn(async () => ({ session_id: "x".repeat(257) }))
+    const adapter = new HermesServerAdapter({
+      request,
+      observeEvents: vi.fn(async (next) => {
+        nativeListener = next
+        return stop
+      }),
+    })
+    await adapter.observe("live-session", vi.fn(), disconnected)
+    let payload: unknown = "leaf"
+    for (let index = 0; index < 20; index += 1) payload = { nested: payload }
+    nativeListener!({ type: "message", session_id: "live-session", payload })
+    nativeListener!({ type: "message", session_id: "live-session", payload })
+
+    expect(disconnected).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+    await expect(
+      adapter.resume({
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "hermes:researcher:stored",
+      })
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
   it("reports a missing Agent separately from a Hermes outage", async () => {

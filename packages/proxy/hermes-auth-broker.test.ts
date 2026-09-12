@@ -187,6 +187,17 @@ async function beginAndComplete(
 }
 
 describe("Hermes external-browser authentication broker", () => {
+  it("allows the fixed provider-neutral callback on a literal loopback HTTP origin", () => {
+    const native = nativeFixture()
+    expect(() =>
+      broker(native.fetcher as typeof fetch, {
+        publicOrigin: "http://127.0.0.1:3000",
+        callbackUrl:
+          "http://127.0.0.1:3000/api/aos/v1/auth/runtime/upstream/auth/callback",
+      })
+    ).not.toThrow()
+  })
+
   it("proxies the real native PKCE flow and retains native credentials server-side", async () => {
     const native = nativeFixture()
     const instance = broker(native.fetcher as typeof fetch)

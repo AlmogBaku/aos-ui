@@ -90,6 +90,18 @@ function constructionOptions(
 }
 
 describe("OIDC core", () => {
+  it("allows an exact loopback HTTP public origin for local operation", () => {
+    expect(() =>
+      createOidcCore(
+        constructionOptions({
+          publicOrigin: "http://127.0.0.1:3000",
+          redirectUri:
+            "http://127.0.0.1:3000/api/aos/v1/auth/operator/callback",
+        })
+      )
+    ).not.toThrow()
+  })
+
   it.each([
     ["insecure issuer", { issuer: "http://idp.example.test" }],
     ["issuer userinfo", { issuer: "https://user@idp.example.test" }],

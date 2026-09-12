@@ -1,6 +1,6 @@
 import {
   AgentCatalogResponseSchema,
-  HermesAuthStateSchema,
+  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
@@ -10,7 +10,7 @@ import {
   VisibilityUpdateResponseSchema,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
-  type HermesAuthState,
+  type RuntimeAuthState,
   type RuntimeInfo,
   type VisibilityUpdateResponse,
 } from "../protocol"
@@ -27,7 +27,7 @@ export interface HermesRpcTransport {
     path: string,
     init?: { method?: string; body?: unknown }
   ): Promise<unknown>
-  authState?(): Promise<HermesAuthState>
+  authState?(): Promise<RuntimeAuthState>
   observeEvents?(
     listener: (event: unknown) => void,
     disconnected: (error?: Error) => void
@@ -78,6 +78,68 @@ function isRecord(value: unknown): value is NativeRecord {
 
 function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+const MAX_OBSERVED_EVENT_BYTES = 4_194_304
+const MAX_OBSERVED_EVENT_DEPTH = 12
+const MAX_OBSERVED_EVENT_NODES = 4_096
+
+function observedEventDisposition(
+  value: unknown,
+  liveSessionId: string
+): "foreign" | "invalid" | "valid" {
+  if (!isRecord(value) || value.session_id !== liveSessionId) return "foreign"
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }]
+  const seen = new WeakSet<object>()
+  let bytes = 0
+  let nodes = 0
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    nodes += 1
+    if (
+      nodes > MAX_OBSERVED_EVENT_NODES ||
+      current.depth > MAX_OBSERVED_EVENT_DEPTH
+    )
+      return "invalid"
+    if (typeof current.value === "string")
+      bytes += Buffer.byteLength(current.value, "utf8")
+    else if (
+      typeof current.value === "number" ||
+      typeof current.value === "boolean" ||
+      current.value === null
+    )
+      bytes += 16
+    else if (typeof current.value === "object") {
+      if (seen.has(current.value)) return "invalid"
+      seen.add(current.value)
+      const entries = Array.isArray(current.value)
+        ? current.value.map((entry) => ["", entry] as const)
+        : Object.entries(current.value)
+      for (const [key, entry] of entries) {
+        bytes += Buffer.byteLength(key, "utf8")
+        stack.push({ value: entry, depth: current.depth + 1 })
+      }
+    } else return "invalid"
+    if (bytes > MAX_OBSERVED_EVENT_BYTES) return "invalid"
+  }
+  return "valid"
+}
+
+function validLiveSessionId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 256 &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+  )
+}
+
+function throwUnavailable(error: unknown): never {
+  if (error instanceof HermesAuthenticationError) throw error
+  throw new HermesUnavailableError()
 }
 
 function nativeRevision(profile: NativeRecord) {
@@ -158,15 +220,15 @@ function timestamp(value: unknown) {
 export class HermesServerAdapter implements HermesRunNative {
   constructor(private readonly transport: HermesRpcTransport) {}
 
-  async authState(): Promise<HermesAuthState> {
+  async authState(): Promise<RuntimeAuthState> {
     if (this.transport.authState)
-      return HermesAuthStateSchema.parse(await this.transport.authState())
+      return RuntimeAuthStateSchema.parse(await this.transport.authState())
     try {
       await this.transport.request("profiles.list", { include_sessions: false })
-      return { status: "authenticated", method: "static-token" }
+      return { status: "authenticated" }
     } catch (error) {
       if (error instanceof HermesAuthenticationError)
-        return { status: "unauthenticated" }
+        return { status: "authentication-required" }
       return { status: "unavailable", reason: "temporarily-unavailable" }
     }
   }
@@ -187,6 +249,7 @@ export class HermesServerAdapter implements HermesRunNative {
         agents,
       })
     } catch (error) {
+      if (error instanceof HermesAuthenticationError) throw error
       if (error instanceof HermesUnavailableError) throw error
       throw new HermesUnavailableError()
     }
@@ -200,7 +263,8 @@ export class HermesServerAdapter implements HermesRunNative {
         ({ summary, revision }) =>
           summary.role === "creator" || revision !== "unavailable"
       )
-    } catch {
+    } catch (error) {
+      if (error instanceof HermesAuthenticationError) throw error
       return RuntimeInfoSchema.parse({
         runtime: { id: "hermes", name: "Hermes" },
         status: "unavailable",
@@ -306,8 +370,8 @@ export class HermesServerAdapter implements HermesRunNative {
       described = await this.transport.request("profiles.describe", {
         name: agentId,
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     if (!isRecord(described) || nonEmptyString(described.name) !== agentId)
       throw new HermesUnavailableError()
@@ -326,8 +390,8 @@ export class HermesServerAdapter implements HermesRunNative {
         },
         ui_meta_expected_revisions: { "hermes-bots": expected },
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     const applied =
       isRecord(configured) && isRecord(configured.applied)
@@ -361,29 +425,53 @@ export class HermesServerAdapter implements HermesRunNative {
         profile: scope.agentId,
         omit_messages: true,
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
-    const liveSessionId = isRecord(payload)
-      ? nonEmptyString(payload.session_id)
-      : undefined
+    const liveSessionId =
+      isRecord(payload) && validLiveSessionId(payload.session_id)
+        ? payload.session_id
+        : undefined
     if (!liveSessionId) throw new HermesUnavailableError()
     return { liveSessionId }
   }
 
   async observe(
-    _liveSessionId: string,
+    liveSessionId: string,
     listener: (event: unknown) => void,
     disconnected?: (error?: Error) => void
   ) {
     if (!this.transport.observeEvents) throw new HermesUnavailableError()
     try {
-      return await this.transport.observeEvents(
-        listener,
-        disconnected ?? (() => undefined)
+      let failed = false
+      let stopped = false
+      const observation: { stop?: () => void } = {}
+      const fail = () => {
+        if (failed) return
+        failed = true
+        disconnected?.(new Error("Hermes observation failed"))
+        if (observation.stop && !stopped) {
+          stopped = true
+          observation.stop()
+        }
+      }
+      const nativeStop = await this.transport.observeEvents(
+        (event) => {
+          if (failed) return
+          const disposition = observedEventDisposition(event, liveSessionId)
+          if (disposition === "valid") listener(event)
+          else if (disposition === "invalid") fail()
+        },
+        () => fail()
       )
-    } catch {
-      throw new HermesUnavailableError()
+      observation.stop = nativeStop
+      if (failed && !stopped) {
+        stopped = true
+        nativeStop()
+      }
+      return nativeStop
+    } catch (error) {
+      throwUnavailable(error)
     }
   }
 
@@ -394,8 +482,8 @@ export class HermesServerAdapter implements HermesRunNative {
         session_id: liveSessionId,
         ...(lastSeen === undefined ? {} : { last_seen: lastSeen }),
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     if (!isRecord(payload) || !Array.isArray(payload.events))
       throw new HermesUnavailableError()
@@ -424,8 +512,8 @@ export class HermesServerAdapter implements HermesRunNative {
         session_id: liveSessionId,
         text: prompt.text,
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     return { acknowledgement: "accepted" as const }
   }
@@ -435,8 +523,8 @@ export class HermesServerAdapter implements HermesRunNative {
       await this.transport.request("session.interrupt", {
         session_id: liveSessionId,
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
   }
 
@@ -444,8 +532,8 @@ export class HermesServerAdapter implements HermesRunNative {
     let payload: unknown
     try {
       payload = await this.transport.request("session.active_list", {})
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     if (!isRecord(payload) || !Array.isArray(payload.sessions))
       throw new HermesUnavailableError()
@@ -474,8 +562,8 @@ export class HermesServerAdapter implements HermesRunNative {
     let payload: unknown
     try {
       payload = await this.transport.http(`/api/sessions?${query}`)
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     if (!isRecord(payload) || !Array.isArray(payload.sessions))
       throw new HermesUnavailableError()
@@ -592,7 +680,7 @@ export class HermesServerAdapter implements HermesRunNative {
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
         throw new HermesSessionNotFoundError()
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
     if (
       !isRecord(payload) ||
@@ -633,7 +721,7 @@ export class HermesServerAdapter implements HermesRunNative {
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
         throw new HermesSessionNotFoundError()
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
     if (
       !isRecord(payload) ||
@@ -664,8 +752,8 @@ export class HermesServerAdapter implements HermesRunNative {
         close_on_disconnect: false,
         ...(title ? { title } : {}),
       })
-    } catch {
-      throw new HermesUnavailableError()
+    } catch (error) {
+      throwUnavailable(error)
     }
     if (
       !isRecord(payload) ||

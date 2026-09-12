@@ -5,8 +5,8 @@ import { Hono } from "hono"
 
 import {
   ErrorResponseSchema,
-  HermesAuthStateSchema,
   OperatorAuthStateSchema,
+  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
   VisibilityUpdateRequestSchema,
@@ -30,6 +30,10 @@ import {
   type HermesRunHandle,
   type HermesRunScope,
 } from "./hermes-run"
+import { OidcAuthenticationError, type OidcCore } from "./auth/oidc"
+import type { OperatorSession } from "./auth/session-cookie"
+import { HermesBrowserAuthenticationError } from "./hermes-auth-broker"
+import { HermesAuthenticationError } from "./hermes-transport"
 
 type Logger = {
   info(value: unknown): void
@@ -38,8 +42,36 @@ type Logger = {
 
 export type ProxyAppOptions = {
   publicOrigin: string
-  operatorAuth: OperatorAuthenticator
+  operatorAuth: OperatorAuthenticator & {
+    session?(request: Request): Promise<OperatorSession | undefined>
+  }
+  operatorOidc?: OidcCore<OperatorSession>
+  runtimeAuth?: {
+    state(scope: {
+      principalId: string
+      lane: "operator"
+    }): Promise<unknown> | unknown
+    begin?(binding: {
+      principalId: string
+      lane: "operator"
+      browserSessionId: string
+      callbackUrl: string
+      returnPath: string
+    }): Promise<
+      | { status: "redirect"; response: Response }
+      | { status: "unavailable"; reason: string }
+    >
+    complete?(binding: {
+      principalId: string
+      lane: "operator"
+      browserSessionId: string
+      callbackUrl: string
+      returnPath: string
+    }): Promise<{ status: "authenticated"; returnPath: string }>
+  }
   hermes: HermesServerAdapter
+  hermesForOperator?: (principalId: string) => HermesServerAdapter
+  readiness?: () => Promise<"ready" | "not-ready">
   runEngine?: HermesRunEngine
   maxActiveRuns?: number
   logger: Logger
@@ -62,6 +94,7 @@ type ErrorCode =
   | "revision_conflict"
   | "run_conflict"
   | "run_capacity_exceeded"
+  | "runtime_authentication_required"
   | "temporarily_unavailable"
   | "internal_error"
 
@@ -165,10 +198,16 @@ async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   }
 }
 
+class RuntimeAuthenticationError extends Error {
+  constructor() {
+    super("Runtime authentication required")
+    this.name = "RuntimeAuthenticationError"
+  }
+}
+
 export function createProxyApp(options: ProxyAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
-  const runEngine = options.runEngine ?? new HermesRunEngine(options.hermes)
   const activeRuns = new Map<string, HermesRunHandle>()
   const runAdmissions = new Set<string>()
   const maxActiveRuns = options.maxActiveRuns ?? 256
@@ -205,11 +244,52 @@ export function createProxyApp(options: ProxyAppOptions) {
     return options.operatorAuth.require(request)
   }
 
+  async function requireRuntime(request: Request) {
+    const operator = await requireOperator(request)
+    if (options.runtimeAuth) {
+      const state = RuntimeAuthStateSchema.parse(
+        await options.runtimeAuth.state({
+          principalId: operator.operator.id,
+          lane: "operator",
+        })
+      )
+      if (state.status === "authentication-required")
+        throw new RuntimeAuthenticationError()
+      if (state.status === "unavailable") throw new HermesUnavailableError()
+    }
+    return options.hermesForOperator?.(operator.operator.id) ?? options.hermes
+  }
+
+  async function operatorSession(request: Request) {
+    const session = await options.operatorAuth.session?.(request)
+    if (!session) throw new OperatorAuthError()
+    return session
+  }
+
+  function callbackUrl(requestUrl: string, path: string) {
+    const incoming = new URL(requestUrl)
+    return new URL(`${path}${incoming.search}`, options.publicOrigin)
+  }
+
+  function requestedReturnPath(requestUrl: string) {
+    const url = new URL(requestUrl)
+    const values = url.searchParams.getAll("return")
+    if (values.length > 1) return undefined
+    return values[0] ?? "/"
+  }
+
   app.get("/api/aos/v1/healthz", (context) =>
     context.json({ status: "live", timestamp: clock() })
   )
 
   app.get("/api/aos/v1/readyz", async (context) => {
+    if (options.readiness) {
+      const status = await options.readiness()
+      return context.json(
+        { status, timestamp: clock(), runtime: status },
+        status === "ready" ? 200 : 503
+      )
+    }
     const info = await options.hermes.runtimeInfo()
     return context.json(
       {
@@ -229,27 +309,96 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   )
 
-  app.get("/api/aos/v1/auth/hermes", async (context) => {
-    await requireOperator(context.req.raw)
-    return context.json(
-      HermesAuthStateSchema.parse(await options.hermes.authState())
-    )
+  app.get("/api/aos/v1/auth/operator/start", async (context) => {
+    if (!options.operatorOidc) return errorResponse("not_found", 404)
+    const returnPath = requestedReturnPath(context.req.url)
+    if (returnPath === undefined) return errorResponse("invalid_request", 400)
+    const started = await options.operatorOidc.begin(returnPath)
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: started.authorizationUrl.href,
+        "set-cookie": started.flowCookie,
+      },
+    })
   })
 
-  app.get("/api/aos/v1/runtime", async (context) => {
-    await requireOperator(context.req.raw)
-    return context.json(
-      RuntimeInfoSchema.parse(await options.hermes.runtimeInfo())
+  app.get("/api/aos/v1/auth/operator/callback", async (context) => {
+    if (!options.operatorOidc) return errorResponse("not_found", 404)
+    const completed = await options.operatorOidc.complete(
+      callbackUrl(context.req.url, "/api/aos/v1/auth/operator/callback"),
+      context.req.header("cookie") ?? null
     )
+    const headers = new Headers({ "set-cookie": completed.flowCookie })
+    if (completed.status === "rejected")
+      return new Response(null, { status: 401, headers })
+    headers.append("set-cookie", completed.sessionCookie)
+    headers.set("location", completed.returnPath)
+    return new Response(null, { status: 302, headers })
+  })
+
+  app.get("/api/aos/v1/auth/runtime", async (context) => {
+    const operator = await requireOperator(context.req.raw)
+    const state = options.runtimeAuth
+      ? await options.runtimeAuth.state({
+          principalId: operator.operator.id,
+          lane: "operator",
+        })
+      : await options.hermes.authState()
+    return context.json(RuntimeAuthStateSchema.parse(state))
+  })
+
+  app.get("/api/aos/v1/auth/runtime/start", async (context) => {
+    if (!options.runtimeAuth?.begin) return errorResponse("not_found", 404)
+    const returnPath = requestedReturnPath(context.req.url)
+    if (returnPath === undefined) return errorResponse("invalid_request", 400)
+    const session = await operatorSession(context.req.raw)
+    const started = await options.runtimeAuth.begin({
+      principalId: session.principalId,
+      lane: "operator",
+      browserSessionId: session.sessionId,
+      callbackUrl: `${options.publicOrigin}/api/aos/v1/auth/runtime/upstream/auth/callback`,
+      returnPath,
+    })
+    return started.status === "redirect"
+      ? started.response
+      : errorResponse("temporarily_unavailable", 503)
+  })
+
+  app.get(
+    "/api/aos/v1/auth/runtime/upstream/auth/callback",
+    async (context) => {
+      if (!options.runtimeAuth?.complete) return errorResponse("not_found", 404)
+      const session = await operatorSession(context.req.raw)
+      const completed = await options.runtimeAuth.complete({
+        principalId: session.principalId,
+        lane: "operator",
+        browserSessionId: session.sessionId,
+        callbackUrl: callbackUrl(
+          context.req.url,
+          "/api/aos/v1/auth/runtime/upstream/auth/callback"
+        ).href,
+        returnPath: "/",
+      })
+      return new Response(null, {
+        status: 302,
+        headers: { location: completed.returnPath },
+      })
+    }
+  )
+
+  app.get("/api/aos/v1/runtime", async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    return context.json(RuntimeInfoSchema.parse(await hermes.runtimeInfo()))
   })
 
   app.get("/api/aos/v1/agents", async (context) => {
-    await requireOperator(context.req.raw)
-    return context.json(await options.hermes.listAgents())
+    const hermes = await requireRuntime(context.req.raw)
+    return context.json(await hermes.listAgents())
   })
 
   app.patch("/api/aos/v1/agents/:agentId/visibility", async (context) => {
-    await requireOperator(context.req.raw)
+    const hermes = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const contentType = context.req.header("content-type")?.split(";", 1)[0]
@@ -269,7 +418,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     const parsed = VisibilityUpdateRequestSchema.safeParse(payload)
     if (!parsed.success) return errorResponse("invalid_request", 400)
     return context.json(
-      await options.hermes.updateAgentVisibility(
+      await hermes.updateAgentVisibility(
         context.req.param("agentId"),
         parsed.data.visibility,
         parsed.data.revision
@@ -278,7 +427,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   })
 
   app.get("/api/aos/v1/sessions", async (context) => {
-    await requireOperator(context.req.raw)
+    const hermes = await requireRuntime(context.req.raw)
     const page = pageQuery(
       context.req.url,
       { limit: 50, offset: 0 },
@@ -286,13 +435,11 @@ export function createProxyApp(options: ProxyAppOptions) {
       SESSION_CATALOG_MAX_WINDOW
     )
     if (!page) return errorResponse("invalid_request", 400)
-    return context.json(
-      await options.hermes.listAllSessions(page.limit, page.offset)
-    )
+    return context.json(await hermes.listAllSessions(page.limit, page.offset))
   })
 
   app.get("/api/aos/v1/agents/:agentId/sessions", async (context) => {
-    await requireOperator(context.req.raw)
+    const hermes = await requireRuntime(context.req.raw)
     const page = pageQuery(
       context.req.url,
       { limit: 50, offset: 0 },
@@ -301,7 +448,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
     if (!page) return errorResponse("invalid_request", 400)
     return context.json(
-      await options.hermes.listSessions(
+      await hermes.listSessions(
         context.req.param("agentId"),
         page.limit,
         page.offset
@@ -312,7 +459,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.get(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/history",
     async (context) => {
-      await requireOperator(context.req.raw)
+      const hermes = await requireRuntime(context.req.raw)
       const storedId = storedSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
@@ -321,7 +468,7 @@ export function createProxyApp(options: ProxyAppOptions) {
       const page = pageQuery(context.req.url, { limit: 200, offset: 0 }, 500)
       if (!page) return errorResponse("invalid_request", 400)
       return context.json(
-        await options.hermes.history(
+        await hermes.history(
           context.req.param("agentId"),
           storedId,
           page.limit,
@@ -333,19 +480,19 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.get(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId",
     async (context) => {
-      await requireOperator(context.req.raw)
+      const hermes = await requireRuntime(context.req.raw)
       const id = storedSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
       )
       if (!id) return errorResponse("not_found", 404)
       return context.json(
-        await options.hermes.getSession(context.req.param("agentId"), id)
+        await hermes.getSession(context.req.param("agentId"), id)
       )
     }
   )
   app.post("/api/aos/v1/agents/:agentId/sessions", async (context) => {
-    await requireOperator(context.req.raw)
+    const hermes = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const parsed = SessionCreateRequestSchema.safeParse(
@@ -353,7 +500,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
     if (!parsed.success) return errorResponse("invalid_request", 400)
     return context.json(
-      await options.hermes.createSession(
+      await hermes.createSession(
         context.req.param("agentId"),
         parsed.data.title
       ),
@@ -363,7 +510,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.patch(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId",
     async (context) => {
-      await requireOperator(context.req.raw)
+      const hermes = await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
       const id = storedSessionId(
@@ -375,7 +522,7 @@ export function createProxyApp(options: ProxyAppOptions) {
         await boundedJson(context.req.raw)
       )
       if (!parsed.success) return errorResponse("invalid_request", 400)
-      await options.hermes.mutateSession(
+      await hermes.mutateSession(
         context.req.param("agentId"),
         id,
         "PATCH",
@@ -387,7 +534,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.delete(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId",
     async (context) => {
-      await requireOperator(context.req.raw)
+      const hermes = await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
       const id = storedSessionId(
@@ -395,11 +542,7 @@ export function createProxyApp(options: ProxyAppOptions) {
         context.req.param("sessionId")
       )
       if (!id) return errorResponse("not_found", 404)
-      await options.hermes.mutateSession(
-        context.req.param("agentId"),
-        id,
-        "DELETE"
-      )
+      await hermes.mutateSession(context.req.param("agentId"), id, "DELETE")
       return new Response(null, { status: 204 })
     }
   )
@@ -407,7 +550,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.post(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs",
     async (context) => {
-      await requireOperator(context.req.raw)
+      const hermes = await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
       const agentId = context.req.param("agentId")
@@ -424,13 +567,14 @@ export function createProxyApp(options: ProxyAppOptions) {
         return errorResponse("run_capacity_exceeded", 503)
       runAdmissions.add(key)
       try {
-        await options.hermes.getSession(agentId, sessionId)
+        await hermes.getSession(agentId, sessionId)
       } catch (cause) {
         runAdmissions.delete(key)
         throw cause
       }
       let handle: HermesRunHandle
       try {
+        const runEngine = options.runEngine ?? new HermesRunEngine(hermes)
         handle = await runEngine.start(scope, input)
       } catch (cause) {
         options.logger.error(
@@ -536,7 +680,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.post(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs/stop",
     async (context) => {
-      await requireOperator(context.req.raw)
+      await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
       const agentId = context.req.param("agentId")
@@ -567,17 +711,31 @@ export function createProxyApp(options: ProxyAppOptions) {
     const [code, status]: [ErrorCode, number] =
       cause instanceof OperatorAuthError
         ? ["unauthenticated", 401]
-        : cause instanceof HermesAgentNotFoundError
-          ? ["not_found", 404]
-          : cause instanceof HermesRevisionConflictError
-            ? ["revision_conflict", 409]
-            : cause instanceof HermesSessionNotFoundError
-              ? ["not_found", 404]
-              : cause instanceof HermesSessionConflictError
-                ? ["revision_conflict", 409]
-                : cause instanceof HermesUnavailableError
-                  ? ["temporarily_unavailable", 503]
-                  : ["internal_error", 500]
+        : cause instanceof OidcAuthenticationError
+          ? cause.code === "temporarily-unavailable"
+            ? ["temporarily_unavailable", 503]
+            : ["invalid_request", 400]
+          : cause instanceof HermesBrowserAuthenticationError
+            ? cause.code === "provider-temporarily-unavailable"
+              ? ["temporarily_unavailable", 503]
+              : cause.code === "invalid-request"
+                ? ["invalid_request", 400]
+                : ["runtime_authentication_required", 401]
+            : cause instanceof HermesAuthenticationError
+              ? ["runtime_authentication_required", 401]
+              : cause instanceof RuntimeAuthenticationError
+                ? ["runtime_authentication_required", 401]
+                : cause instanceof HermesAgentNotFoundError
+                  ? ["not_found", 404]
+                  : cause instanceof HermesRevisionConflictError
+                    ? ["revision_conflict", 409]
+                    : cause instanceof HermesSessionNotFoundError
+                      ? ["not_found", 404]
+                      : cause instanceof HermesSessionConflictError
+                        ? ["revision_conflict", 409]
+                        : cause instanceof HermesUnavailableError
+                          ? ["temporarily_unavailable", 503]
+                          : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest"
 import {
   AgentCatalogResponseSchema,
   ErrorResponseSchema,
-  HermesAuthStateSchema,
   OperatorAuthStateSchema,
+  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
   SessionCatalogResponseSchema,
@@ -44,18 +44,19 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
-  it("keeps native Hermes authentication material outside browser state", () => {
+  it("keeps runtime authentication provider-neutral and server-only", () => {
     expect(
-      HermesAuthStateSchema.parse({
+      RuntimeAuthStateSchema.parse({
         status: "authenticated",
-        method: "static-token",
       })
-    ).toEqual({ status: "authenticated", method: "static-token" })
+    ).toEqual({ status: "authenticated" })
+    expect(
+      RuntimeAuthStateSchema.parse({ status: "authentication-required" })
+    ).toEqual({ status: "authentication-required" })
     expect(() =>
-      HermesAuthStateSchema.parse({
+      RuntimeAuthStateSchema.parse({
         status: "authenticated",
         method: "static-token",
-        token: "secret",
       })
     ).toThrow()
   })
@@ -115,6 +116,11 @@ describe("AOS v1 normalized protocol", () => {
         error: { code: "run_capacity_exceeded" },
       })
     ).toEqual({ error: { code: "run_capacity_exceeded" } })
+    expect(
+      ErrorResponseSchema.parse({
+        error: { code: "runtime_authentication_required" },
+      })
+    ).toEqual({ error: { code: "runtime_authentication_required" } })
   })
 
   it("validates normalized Agent entries and rejects native profile metadata", () => {

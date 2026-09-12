@@ -159,7 +159,10 @@ function isTrustedAuthorizationUrl(url: URL, issuer: string): boolean {
 }
 
 export class OidcAuthenticationError extends Error {
-  constructor() {
+  constructor(
+    readonly code:
+      "invalid-request" | "temporarily-unavailable" = "invalid-request"
+  ) {
     super("OIDC authentication failed")
     this.name = "OidcAuthenticationError"
   }
@@ -238,10 +241,51 @@ function exactHttpsUrl(value: unknown): URL | undefined {
   }
 }
 
+function exactPublicOrigin(value: unknown): URL | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048)
+    return undefined
+  try {
+    const url = new URL(value)
+    const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
+    if (
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash ||
+      value !== url.origin ||
+      (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    )
+      return undefined
+    return url
+  } catch {
+    return undefined
+  }
+}
+
+function exactCallback(value: unknown, publicOrigin: URL | undefined) {
+  if (!publicOrigin || typeof value !== "string" || value.length > 2_048)
+    return undefined
+  try {
+    const url = new URL(value)
+    return !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.origin === publicOrigin.origin &&
+      url.pathname === callbackPath &&
+      value === url.href
+      ? url
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function validateOptions<Session>(options: OidcCoreOptions<Session>): void {
   const issuer = exactHttpsUrl(options.issuer)
-  const publicOrigin = exactHttpsUrl(options.publicOrigin)
-  const redirectUri = exactHttpsUrl(options.redirectUri)
+  const publicOrigin = exactPublicOrigin(options.publicOrigin)
+  const redirectUri = exactCallback(options.redirectUri, publicOrigin)
   if (
     !issuer ||
     !publicOrigin ||
@@ -447,7 +491,7 @@ export function createOidcCore<Session>(
           }
         }
         if (activeFlows >= 256) {
-          throw new OidcAuthenticationError()
+          throw new OidcAuthenticationError("temporarily-unavailable")
         }
         activeFlows += 1
         admissionHeld = true
@@ -481,9 +525,10 @@ export function createOidcCore<Session>(
           authorizationUrl,
           flowCookie: `${flowCookieName}=${flowId}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax`,
         }
-      } catch {
+      } catch (error) {
         if (admissionHeld) activeFlows -= 1
-        throw new OidcAuthenticationError()
+        if (error instanceof OidcAuthenticationError) throw error
+        throw new OidcAuthenticationError("temporarily-unavailable")
       }
     },
     async complete(callbackUrl: URL, cookieHeader: string | null) {

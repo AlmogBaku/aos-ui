@@ -176,7 +176,11 @@ function normalizePublicOrigin(value: string) {
   try {
     const url = new URL(value)
     if (
-      !["http:", "https:"].includes(url.protocol) ||
+      (url.protocol !== "https:" &&
+        !(
+          url.protocol === "http:" &&
+          ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
+        )) ||
       url.username ||
       url.password ||
       url.pathname !== "/" ||
@@ -195,8 +199,8 @@ function normalizeCallback(value: string, publicOrigin: string) {
     if (value.length > MAX_URL_LENGTH) throw new Error()
     const url = new URL(value)
     if (
-      url.protocol !== "https:" ||
       url.origin !== publicOrigin ||
+      url.protocol !== new URL(publicOrigin).protocol ||
       url.username ||
       url.password ||
       !url.pathname.endsWith("/auth/callback") ||

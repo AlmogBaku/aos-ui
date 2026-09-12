@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { createProxyApp } from "./app"
+import { OidcAuthenticationError } from "./auth/oidc"
 import { HermesServerAdapter } from "./hermes-adapter"
+import { HermesBrowserAuthenticationError } from "./hermes-auth-broker"
 import {
+  HermesAuthenticationError,
   HermesHttpError,
   HermesWebSocketRpcTransport,
 } from "./hermes-transport"
@@ -31,6 +34,273 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("uses provider-neutral OIDC and runtime authentication routes", async () => {
+    const operatorOidc = {
+      begin: vi.fn(async () => ({
+        authorizationUrl: new URL("https://identity.example.test/authorize"),
+        flowCookie:
+          "__Host-aos-oidc-flow=opaque; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax",
+      })),
+      complete: vi.fn(async () => ({
+        status: "authenticated" as const,
+        returnPath: "/researcher/session",
+        session: {
+          principalId: "aos_principal_opaque",
+          sessionId: "browser-session",
+          issuedAt: 1,
+          expiresAt: 901,
+        },
+        sessionCookie:
+          "__Host-aos-session=sealed; Path=/; Max-Age=900; Secure; HttpOnly; SameSite=Lax",
+        flowCookie:
+          "__Host-aos-oidc-flow=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+      })),
+    }
+    const runtimeAuth = {
+      state: vi.fn(async () => ({ status: "authenticated" as const })),
+    }
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      operatorOidc,
+      runtimeAuth,
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const start = await app.request(
+      request("/api/aos/v1/auth/operator/start?return=%2Fresearcher%2Fsession")
+    )
+    expect(start.status).toBe(302)
+    expect(start.headers.get("location")).toBe(
+      "https://identity.example.test/authorize"
+    )
+    expect(start.headers.get("set-cookie")).toContain(
+      "__Host-aos-oidc-flow=opaque"
+    )
+    expect(operatorOidc.begin).toHaveBeenCalledWith("/researcher/session")
+
+    const callback = await app.request(
+      request(
+        "/api/aos/v1/auth/operator/callback?code=provider-code&state=provider-state"
+      )
+    )
+    expect(callback.status).toBe(302)
+    expect(callback.headers.get("location")).toBe("/researcher/session")
+    expect(
+      (
+        callback.headers as Headers & { getSetCookie(): string[] }
+      ).getSetCookie()
+    ).toEqual([
+      expect.stringContaining("__Host-aos-oidc-flow=;"),
+      expect.stringContaining("__Host-aos-session=sealed;"),
+    ])
+
+    const normalized = await app.request(request("/api/aos/v1/auth/runtime"))
+    expect(await normalized.json()).toEqual({ status: "authenticated" })
+    expect((await app.request(request("/api/aos/v1/auth/hermes"))).status).toBe(
+      404
+    )
+  })
+
+  it("binds runtime browser login to the verified principal and browser session", async () => {
+    const begin = vi.fn(async () => ({
+      status: "redirect" as const,
+      response: new Response(null, {
+        status: 302,
+        headers: { location: "https://identity.example.test/runtime" },
+      }),
+    }))
+    const complete = vi.fn(async () => ({
+      status: "authenticated" as const,
+      returnPath: "/researcher/session",
+    }))
+    const operatorAuth = {
+      state: vi.fn(async () => ({
+        status: "authenticated" as const,
+        operator: { id: "aos_principal_opaque" },
+      })),
+      require: vi.fn(async () => ({
+        status: "authenticated" as const,
+        operator: { id: "aos_principal_opaque" },
+      })),
+      session: vi.fn(async () => ({
+        principalId: "aos_principal_opaque",
+        sessionId: "browser-session",
+        issuedAt: 1,
+        expiresAt: 901,
+      })),
+    }
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      runtimeAuth: {
+        state: vi.fn(async () => ({ status: "authentication-required" })),
+        begin,
+        complete,
+      },
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const start = await app.request(
+      request("/api/aos/v1/auth/runtime/start?return=%2Fresearcher%2Fsession")
+    )
+    expect(start.status).toBe(302)
+    expect(begin).toHaveBeenCalledWith({
+      principalId: "aos_principal_opaque",
+      lane: "operator",
+      browserSessionId: "browser-session",
+      callbackUrl: `${origin}/api/aos/v1/auth/runtime/upstream/auth/callback`,
+      returnPath: "/researcher/session",
+    })
+
+    const callback = await app.request(
+      request(
+        "/api/aos/v1/auth/runtime/upstream/auth/callback?code=code&state=state"
+      )
+    )
+    expect(callback.status).toBe(302)
+    expect(callback.headers.get("location")).toBe("/researcher/session")
+    expect(complete).toHaveBeenCalledWith({
+      principalId: "aos_principal_opaque",
+      lane: "operator",
+      browserSessionId: "browser-session",
+      callbackUrl: `${origin}/api/aos/v1/auth/runtime/upstream/auth/callback?code=code&state=state`,
+      returnPath: "/",
+    })
+  })
+
+  it("maps typed auth failures without logging callback codes or state", async () => {
+    const logger = { info: vi.fn(), error: vi.fn() }
+    const operatorAuth = {
+      state: vi.fn(async () => ({
+        status: "authenticated" as const,
+        operator: { id: "principal" },
+      })),
+      require: vi.fn(async () => ({
+        status: "authenticated" as const,
+        operator: { id: "principal" },
+      })),
+      session: vi.fn(async () => ({
+        principalId: "principal",
+        sessionId: "browser-session",
+        issuedAt: 1,
+        expiresAt: 901,
+      })),
+    }
+    const operatorOidc = {
+      begin: vi.fn(async () => {
+        throw new OidcAuthenticationError("temporarily-unavailable")
+      }),
+      complete: vi.fn(),
+    }
+    const complete = vi.fn(async () => {
+      throw new HermesBrowserAuthenticationError("invalid-flow")
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      operatorOidc,
+      runtimeAuth: {
+        state: vi.fn(() => ({ status: "authentication-required" })),
+        complete,
+      },
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger,
+    })
+
+    const unavailable = await app.request(
+      request("/api/aos/v1/auth/operator/start?return=%2F")
+    )
+    expect(unavailable.status).toBe(503)
+    expect(await unavailable.json()).toEqual({
+      error: { code: "temporarily_unavailable" },
+    })
+
+    const callback = await app.request(
+      request(
+        "/api/aos/v1/auth/runtime/upstream/auth/callback?code=provider-secret&state=state-secret"
+      )
+    )
+    expect(callback.status).toBe(401)
+    expect(await callback.json()).toEqual({
+      error: { code: "runtime_authentication_required" },
+    })
+    const logs = JSON.stringify([
+      ...logger.info.mock.calls,
+      ...logger.error.mock.calls,
+    ])
+    expect(logs).not.toContain("provider-secret")
+    expect(logs).not.toContain("state-secret")
+  })
+
+  it("requires normalized runtime auth and selects a principal-bound adapter", async () => {
+    const operatorAuth = createOperatorAuthenticator({
+      allowedSubjects: ["operator@example.test"],
+      verifySession: vi.fn(async () => ({ subject: "operator@example.test" })),
+    })
+    const hermesForOperator = vi.fn(
+      () =>
+        new HermesServerAdapter({
+          request: vi.fn(async () => ({ profiles: [] })),
+        })
+    )
+    const blocked = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      runtimeAuth: {
+        state: vi.fn(() => ({ status: "authentication-required" })),
+      },
+      hermesForOperator,
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const denied = await blocked.request(request("/api/aos/v1/agents"))
+    expect(denied.status).toBe(401)
+    expect(await denied.json()).toEqual({
+      error: { code: "runtime_authentication_required" },
+    })
+    expect(hermesForOperator).not.toHaveBeenCalled()
+
+    const allowed = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      runtimeAuth: { state: vi.fn(() => ({ status: "authenticated" })) },
+      hermesForOperator,
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    expect((await allowed.request(request("/api/aos/v1/agents"))).status).toBe(
+      200
+    )
+    expect(hermesForOperator).toHaveBeenCalledWith("operator@example.test")
+
+    const expired = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      runtimeAuth: { state: vi.fn(() => ({ status: "authenticated" })) },
+      hermesForOperator: () =>
+        new HermesServerAdapter({
+          request: vi.fn(async () => {
+            throw new HermesAuthenticationError()
+          }),
+        }),
+      hermes: new HermesServerAdapter({ request: vi.fn() }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const rejected = await expired.request(request("/api/aos/v1/agents"))
+    expect(rejected.status).toBe(401)
+    expect(await rejected.json()).toEqual({
+      error: { code: "runtime_authentication_required" },
+    })
+  })
+
   it("streams an owned Session run and rejects cross-Agent scope before run I/O", async () => {
     const start = vi.fn(async () => ({
       events: (async function* () {
@@ -201,7 +471,7 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(stream).toContain('"type":"REASONING_MESSAGE_CONTENT"')
     expect(stream).toContain('"type":"TOOL_CALL_START"')
     expect(stream).toContain('"toolCallName":"terminal"')
-    expect(stream).toContain('"delta":"{\\"command\\":\\"pwd\\"}"')
+    expect(stream).toContain('"delta":"{}"')
     expect(stream).toContain('"type":"RUN_FINISHED"')
     for (const leak of [
       "live-secret",
@@ -1239,11 +1509,8 @@ describe("AOS v1 proxy walking skeleton", () => {
       operator: { id: "operator@example.test", displayName: "Operator" },
     })
 
-    const hermesAuth = await app.request(request("/api/aos/v1/auth/hermes"))
-    expect(await hermesAuth.json()).toEqual({
-      status: "authenticated",
-      method: "static-token",
-    })
+    const runtimeAuth = await app.request(request("/api/aos/v1/auth/runtime"))
+    expect(await runtimeAuth.json()).toEqual({ status: "authenticated" })
 
     const runtime = await app.request(request("/api/aos/v1/runtime"))
     expect(await runtime.json()).toMatchObject({

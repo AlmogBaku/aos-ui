@@ -14,7 +14,57 @@ describe("provider-neutral AOS runtime composition", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) !== "/api/aos/v1/agents")
+        const path = String(input)
+        if (path === "/api/aos/v1/auth/operator")
+          return Response.json({
+            status: "authenticated",
+            operator: { id: "principal" },
+          })
+        if (path === "/api/aos/v1/auth/runtime")
+          return Response.json({ status: "authenticated" })
+        if (path === "/api/aos/v1/runtime")
+          return Response.json({
+            runtime: { id: "hermes", name: "Hermes" },
+            status: "ready",
+            capabilities: {
+              agentCatalog: { status: "available" },
+              agentVisibility: {
+                status: "available",
+                concurrency: "revision",
+              },
+              sessionCatalog: {
+                status: "available",
+                scope: "workspace",
+                order: "recent",
+                defaultPageSize: 50,
+                maxPageSize: 100,
+                maxWindow: 1_000,
+              },
+              sessionHistory: {
+                status: "available",
+                order: "chronological",
+                compacted: true,
+                loading: "on-open",
+                defaultPageSize: 200,
+                maxPageSize: 500,
+              },
+              sessionDetail: { status: "available" },
+              sessionCreation: { status: "available" },
+              sessionTitle: { status: "available" },
+              sessionArchival: { status: "available" },
+              sessionDeletion: { status: "available" },
+              sessionRun: { status: "available" },
+              sessionStop: { status: "available" },
+            },
+          })
+        if (path === "/api/aos/v1/sessions?limit=50&offset=0")
+          return Response.json({
+            sessions: [],
+            total: 0,
+            limit: 50,
+            offset: 0,
+          })
+        if (path !== "/api/aos/v1/agents")
           throw new Error(`Unexpected request: ${String(input)}`)
         return Response.json({
           revision: "profiles:researcher@hermes-bots:7",
@@ -57,7 +107,9 @@ describe("provider-neutral AOS runtime composition", () => {
       </Provider>
     )
 
-    expect(screen.getByRole("main")).toHaveTextContent("Workspace mounted")
+    expect(await screen.findByRole("main")).toHaveTextContent(
+      "Workspace mounted"
+    )
     expect(await supplied!.workspace.listAgents()).toMatchObject([
       { id: "researcher", name: "Researcher" },
     ])

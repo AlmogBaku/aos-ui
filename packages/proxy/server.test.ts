@@ -20,4 +20,138 @@ describe("Bun proxy server lifecycle", () => {
     )
     expect(stop).toHaveBeenCalledWith(false)
   })
+
+  it("authorizes event upgrades before opening a bounded event socket", async () => {
+    const eventSocket = { receive: vi.fn(), close: vi.fn() }
+    const eventService = {
+      authorizeUpgrade: vi.fn(async (request: Request) =>
+        request.headers.get("cookie") === "allowed"
+          ? {
+              principalId: "principal",
+              browserSessionId: "session",
+              authorizationExpiresAt: 10_000,
+            }
+          : undefined
+      ),
+      open: vi.fn(() => eventSocket),
+    }
+    let served: Record<string, unknown> | undefined
+    const upgrade = vi.fn(() => true)
+    const serve = vi.fn((options: Record<string, unknown>) => {
+      served = options
+      return { stop: vi.fn() }
+    })
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      events: eventService,
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve,
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: { upgrade: typeof upgrade }
+    ) => Promise<Response | undefined>
+    const denied = await fetch(
+      new Request("https://aos.example.test/api/aos/v1/events", {
+        headers: { origin: "https://aos.example.test" },
+      }),
+      { upgrade }
+    )
+    expect(denied?.status).toBe(401)
+    expect(upgrade).not.toHaveBeenCalled()
+    expect(eventService.open).not.toHaveBeenCalled()
+
+    const accepted = await fetch(
+      new Request("https://aos.example.test/api/aos/v1/events", {
+        headers: {
+          origin: "https://aos.example.test",
+          cookie: "allowed",
+        },
+      }),
+      { upgrade }
+    )
+    expect(accepted).toBeUndefined()
+    expect(eventService.open).not.toHaveBeenCalled()
+    expect(upgrade).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          authorization: expect.objectContaining({
+            principalId: "principal",
+          }),
+        }),
+      })
+    )
+
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      message(peer: unknown, raw: string): void
+      close(peer: unknown): void
+    }
+    const data = upgrade.mock.calls[0]![1].data
+    const peer = { data, send: vi.fn(), close: vi.fn() }
+    websocket.open(peer)
+    expect(eventService.open).toHaveBeenCalledTimes(1)
+    websocket.message(peer, "subscribe")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(eventSocket.receive).toHaveBeenCalledWith("subscribe")
+    websocket.close(peer)
+    expect(eventSocket.close).toHaveBeenCalledTimes(1)
+  })
+
+  it("contains event handler failures and closes the peer only once", async () => {
+    const eventSocket = {
+      receive: vi.fn(async () => {
+        throw new Error("private receive failure")
+      }),
+      close: vi.fn(),
+    }
+    let served: Record<string, unknown> | undefined
+    let data: unknown
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      events: {
+        authorizeUpgrade: vi.fn(async () => ({
+          principalId: "principal",
+          browserSessionId: "session",
+          authorizationExpiresAt: 10_000,
+        })),
+        open: vi.fn(() => eventSocket),
+      },
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: { upgrade(request: Request, options: { data: unknown }): boolean }
+    ) => Promise<Response | undefined>
+    await fetch(new Request("https://aos.example.test/api/aos/v1/events"), {
+      upgrade(_request, options) {
+        data = options.data
+        return true
+      },
+    })
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      message(peer: unknown, raw: string): void
+    }
+    const peer = { data, send: vi.fn(), close: vi.fn() }
+    websocket.open(peer)
+    websocket.message(peer, "first")
+    websocket.message(peer, "second")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(peer.close).toHaveBeenCalledOnce()
+    expect(peer.close).toHaveBeenCalledWith(1011, "Event connection failed")
+    expect(eventSocket.close).toHaveBeenCalledOnce()
+  })
 })

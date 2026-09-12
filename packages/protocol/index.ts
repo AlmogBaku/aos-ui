@@ -28,19 +28,15 @@ export const OperatorAuthStateSchema = z.discriminatedUnion("status", [
 ])
 export type OperatorAuthState = z.infer<typeof OperatorAuthStateSchema>
 
-export const HermesAuthStateSchema = z.discriminatedUnion("status", [
-  z.strictObject({
-    status: z.literal("authenticated"),
-    method: z.enum(["static-token", "browser"]),
-  }),
-  z.strictObject({ status: z.literal("unauthenticated") }),
-  z.strictObject({ status: z.literal("pending") }),
+export const RuntimeAuthStateSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("authenticated") }),
+  z.strictObject({ status: z.literal("authentication-required") }),
   z.strictObject({
     status: z.literal("unavailable"),
-    reason: z.enum(["not-configured", "temporarily-unavailable"]),
+    reason: z.literal("temporarily-unavailable"),
   }),
 ])
-export type HermesAuthState = z.infer<typeof HermesAuthStateSchema>
+export type RuntimeAuthState = z.infer<typeof RuntimeAuthStateSchema>
 
 const AvailableCapabilitySchema = z.strictObject({
   status: z.literal("available"),
@@ -248,6 +244,7 @@ export const ErrorResponseSchema = z.strictObject({
       "revision_conflict",
       "run_conflict",
       "run_capacity_exceeded",
+      "runtime_authentication_required",
       "temporarily_unavailable",
       "internal_error",
     ]),
