@@ -274,7 +274,7 @@ describe("HermesRunEngine", () => {
       {
         type: EventType.TOOL_CALL_ARGS,
         toolCallId: "call-7",
-        delta: '{"goal":"Inspect","description":"Inspect"}',
+        delta: "{}",
       },
       { type: EventType.TOOL_CALL_END, toolCallId: "call-7" },
       {
@@ -957,7 +957,7 @@ describe("HermesRunEngine", () => {
       type: EventType.TOOL_CALL_RESULT,
       messageId: "message-42:tool:call-7",
       toolCallId: "call-7",
-      content: "contents",
+      content: '{"status":"completed"}',
       role: "tool",
     })
   })
@@ -1010,14 +1010,13 @@ describe("HermesRunEngine", () => {
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_ARGS,
       toolCallId: "call-7",
-      delta:
-        '{"query":"[redacted]","pattern":"[redacted]","filename":"workspace"}',
+      delta: "{}",
     })
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_RESULT,
       messageId: "message-42:tool:call-7",
       toolCallId: "call-7",
-      content: '{"status":"ok","summary":"[redacted]"}',
+      content: '{"status":"ok"}',
       role: "tool",
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
@@ -1041,10 +1040,13 @@ describe("HermesRunEngine", () => {
       "SESSION_TOKEN=ordinary-value",
       "NPM_CONFIG_USERCONFIG=ordinary-value",
       "NPM_CONFIG__AUTH=ordinary-value",
+      "MYSQL_PWD=ordinary-value",
+      "PASSWORD_HASH=ordinary-value",
+      "SSH_PRIVATE_KEY_B64=ordinary-value",
       "C:drive-relative-secret",
     ]
     const safe =
-      "TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
+      "type x:string; variant A:control; ratio x:y; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
       native({
@@ -1093,10 +1095,7 @@ describe("HermesRunEngine", () => {
         : []
     )
 
-    expect(argumentDeltas.slice(0, credentials.length)).toEqual(
-      credentials.map(() => '{"query":"[redacted]"}')
-    )
-    expect(argumentDeltas.at(-1)).toBe(JSON.stringify({ query: safe }))
+    expect(argumentDeltas).toEqual([...credentials, safe].map(() => "{}"))
     for (const credential of credentials)
       expect(JSON.stringify(events)).not.toContain(credential)
   })
@@ -1150,11 +1149,9 @@ describe("HermesRunEngine", () => {
 
     expect(args?.type).toBe(EventType.TOOL_CALL_ARGS)
     if (args?.type !== EventType.TOOL_CALL_ARGS) throw new Error("missing args")
-    expect(new TextEncoder().encode(args.delta).byteLength).toBeLessThanOrEqual(
-      16_410
-    )
+    expect(args.delta).toBe("{}")
     expect(result).toMatchObject({
-      content: expect.stringContaining("[truncated]"),
+      content: '{"status":"completed"}',
     })
   })
 
@@ -1378,7 +1375,7 @@ describe("HermesRunEngine", () => {
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_ARGS,
       toolCallId: "call-7",
-      delta: '{"filename":"report.txt"}',
+      delta: "{}",
     })
   })
 

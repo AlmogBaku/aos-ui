@@ -17,9 +17,6 @@ const MAX_PREACTIVE_BYTES = 4_194_304
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_GRAPH_ENTRIES = 1_024
 const MAX_GRAPH_DEPTH = 12
-const MAX_TOOL_DEPTH = 6
-const MAX_TOOL_ENTRIES = 64
-const MAX_TOOL_STRING_BYTES = 16_384
 const MAX_TOOL_PAYLOAD_BYTES = 65_536
 const RUN_INPUT_FIELDS = new Set([
   "threadId",
@@ -484,123 +481,110 @@ function normalizedTool(name: string, value: unknown) {
 }
 
 const TOOL_ARG_FIELDS = new Map<string, ReadonlySet<string>>([
-  ["delegate_subagent", new Set(["description", "goal", "task", "name"])],
-  [
-    "question",
-    new Set([
-      "question",
-      "questions",
-      "options",
-      "choices",
-      "multiple",
-      "allowFreeform",
-    ]),
-  ],
-  ["todo", new Set(["todos", "items", "id", "content", "status"])],
-  ["search", new Set(["query", "pattern", "path", "offset", "limit"])],
-  ["read_file", new Set(["path", "offset", "limit", "line", "start", "end"])],
+  ["delegate_subagent", new Set()],
+  ["question", new Set(["multiple", "allowFreeform"])],
+  ["todo", new Set(["status"])],
+  ["search", new Set(["offset", "limit"])],
+  ["read_file", new Set(["offset", "limit", "line", "start", "end"])],
 ])
 const DEFAULT_TOOL_ARG_FIELDS = new Set([
-  "command",
-  "content",
-  "description",
   "end",
-  "filename",
-  "id",
-  "language",
   "limit",
   "line",
-  "message",
-  "name",
+  "multiple",
   "offset",
-  "pattern",
-  "query",
   "start",
   "status",
-  "summary",
-  "text",
-  "title",
-])
-const TOOL_RESULT_FIELDS = new Map<string, ReadonlySet<string>>([
-  [
-    "search",
-    new Set(["ok", "status", "summary", "matches", "results", "count"]),
-  ],
-  [
-    "read_file",
-    new Set([
-      "ok",
-      "status",
-      "summary",
-      "content",
-      "text",
-      "filename",
-      "line",
-      "start",
-      "end",
-      "language",
-    ]),
-  ],
-  [
-    "delegate_subagent",
-    new Set(["ok", "status", "summary", "message", "result", "output"]),
-  ],
-  ["question", new Set(["ok", "status", "answer", "answers", "response"])],
-  ["todo", new Set(["ok", "status", "todos", "items", "summary"])],
 ])
 const DEFAULT_TOOL_RESULT_FIELDS = new Set([
-  "answer",
-  "answers",
-  "content",
   "count",
   "end",
   "exitCode",
-  "filename",
-  "items",
   "language",
   "line",
-  "matches",
-  "message",
-  "name",
   "ok",
-  "output",
-  "response",
-  "result",
-  "results",
   "start",
   "status",
-  "stderr",
-  "stdout",
-  "summary",
-  "text",
-  "title",
-  "todos",
+])
+
+const SAFE_CREDENTIAL_LIKE_KEYS = new Set([
+  "accesskeyrotation",
+  "authmode",
+  "authorizationmode",
+  "oauth",
+  "oauthmode",
+  "secretary",
+  "tokencount",
+  "tokenlimit",
+  "tokenusage",
+])
+const CREDENTIAL_WRAPPERS = new Set([
+  "b64",
+  "base64",
+  "ciphertext",
+  "digest",
+  "encoded",
+  "encrypted",
+  "file",
+  "hash",
+  "hashed",
+  "path",
+  "salt",
+  "sha256",
   "value",
 ])
 
+function credentialToolKey(key: string) {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/gu)
+    .filter(Boolean)
+  const normalized = words.join("")
+  if (SAFE_CREDENTIAL_LIKE_KEYS.has(normalized)) return false
+  while (words.length > 1 && CREDENTIAL_WRAPPERS.has(words.at(-1) ?? ""))
+    words.pop()
+  const core = words.join("")
+  const credentialTerms = [
+    "pwd",
+    "pass",
+    "passcode",
+    "password",
+    "passwd",
+    "passphrase",
+    "privatekey",
+    "secret",
+    "secretkey",
+    "token",
+    "apikey",
+    "accesskey",
+    "accesskeyid",
+    "auth",
+    "authorization",
+    "cookie",
+    "cookiejar",
+    "credential",
+    "credentials",
+  ]
+  const prefix = words.slice(0, 2).join("")
+  const suffix = words.slice(-2).join("")
+  return (
+    core === "npmconfiguserconfig" ||
+    credentialTerms.some(
+      (term) =>
+        core === term ||
+        core.endsWith(term) ||
+        words[0] === term ||
+        prefix === term ||
+        suffix === term
+    )
+  )
+}
+
 function sensitiveToolKey(key: string) {
   const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase()
-  const credential =
-    normalized === "auth" ||
-    (normalized.endsWith("auth") && !normalized.endsWith("oauth")) ||
-    normalized.endsWith("token") ||
-    normalized.endsWith("apikey") ||
-    normalized.endsWith("accesskey") ||
-    normalized.endsWith("accesskeyid") ||
-    normalized.endsWith("secret") ||
-    normalized.endsWith("secretkey") ||
-    normalized.endsWith("password") ||
-    normalized.endsWith("passwd") ||
-    normalized.endsWith("cookie") ||
-    normalized.endsWith("cookiejar") ||
-    normalized.endsWith("authorization") ||
-    normalized === "authorizationheader" ||
-    normalized.endsWith("credential") ||
-    normalized.endsWith("credentials") ||
-    normalized.endsWith("privatekey") ||
-    normalized === "npmconfiguserconfig"
   return (
-    credential ||
+    credentialToolKey(key) ||
     normalized.endsWith("sessionid") ||
     normalized.endsWith("liveid") ||
     normalized.endsWith("metadata") ||
@@ -616,190 +600,91 @@ function sensitiveToolKey(key: string) {
   )
 }
 
-function safeToolText(value: string) {
-  if (unsafeToolText(value)) return "[redacted]"
-  if (utf8BytesWithin(value, MAX_TOOL_STRING_BYTES) !== undefined) return value
-  let bytes = 0
-  let truncated = ""
-  for (const character of value) {
-    const size = utf8BytesWithin(character, 4) ?? 4
-    if (bytes + size > MAX_TOOL_STRING_BYTES - 3) break
-    bytes += size
-    truncated += character
-  }
-  return `${truncated}…`
-}
+const SAFE_TOOL_STATUSES = new Set([
+  "cancelled",
+  "canceled",
+  "complete",
+  "completed",
+  "done",
+  "error",
+  "failed",
+  "ok",
+  "pending",
+  "running",
+  "stopped",
+  "success",
+])
 
-function unsafeToolText(value: string) {
-  if (value.includes("/") || value.includes("\\")) return true
-  if (/(?:^|[\s,;=([{'"`])[a-z]:[^\s,;)}\]]+/iu.test(value)) return true
+function safeToolMetadata(key: string, value: unknown) {
+  if (key === "ok" || key === "multiple" || key === "allowFreeform")
+    return typeof value === "boolean" ? value : undefined
   if (
-    /\b(?:bearer\s+|sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_-]+|AKIA[A-Z0-9]{16})/iu.test(
-      value
-    ) ||
-    /\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+\b/iu.test(value)
+    key === "count" ||
+    key === "end" ||
+    key === "exitCode" ||
+    key === "limit" ||
+    key === "line" ||
+    key === "offset" ||
+    key === "start"
   )
-    return true
-  const assignments = /(?:^|[\s,;:([{'"`])([a-z_][a-z0-9_.-]{0,127})\s*[:=]/giu
-  for (const match of value.matchAll(assignments))
-    if (match[1] && sensitiveToolKey(match[1])) return true
-  return false
-}
-
-function filenameOf(value: string) {
-  return value.replaceAll("\\", "/").split("/").filter(Boolean).at(-1)
-}
-
-type ToolProjectionBudget = { entries: number; bytes: number }
-
-function spendToolBytes(budget: ToolProjectionBudget, value: string) {
-  const bytes = utf8BytesWithin(value, budget.bytes)
-  if (bytes === undefined) return false
-  budget.bytes -= bytes
-  return true
-}
-
-function safeToolValue(
-  value: unknown,
-  budget: ToolProjectionBudget,
-  depth = 0
-): unknown {
-  if (depth > MAX_TOOL_DEPTH || budget.entries <= 0 || budget.bytes <= 0)
-    return "[truncated]"
-  budget.entries -= 1
-  if (typeof value === "string") {
-    const safe = safeToolText(value)
-    return spendToolBytes(budget, safe) ? safe : "[truncated]"
-  }
-  if (typeof value === "number") return Number.isFinite(value) ? value : null
-  if (typeof value === "boolean" || value === null) return value
-  if (Array.isArray(value)) {
-    const projected: unknown[] = []
-    const limit = Math.min(value.length, MAX_TOOL_ENTRIES)
-    for (let index = 0; index < limit && budget.entries > 0; index += 1) {
-      let item: unknown
-      try {
-        item = value[index]
-      } catch {
-        break
-      }
-      projected.push(safeToolValue(item, budget, depth + 1))
-    }
-    if (value.length > limit && budget.entries > 0)
-      projected.push("[truncated]")
-    return projected
-  }
-  if (typeof value !== "object") return undefined
-  const projected: Record<string, unknown> = {}
-  let accepted = 0
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) continue
-    if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
-    if (sensitiveToolKey(key)) continue
-    if (!spendToolBytes(budget, key)) break
-    let item: unknown
-    try {
-      item = (value as Record<string, unknown>)[key]
-    } catch {
-      continue
-    }
-    const safe = safeToolValue(item, budget, depth + 1)
-    if (safe !== undefined) projected[key] = safe
-    accepted += 1
-  }
-  return projected
+    return typeof value === "number" && Number.isSafeInteger(value)
+      ? value
+      : undefined
+  if (key === "status")
+    return typeof value === "string" && SAFE_TOOL_STATUSES.has(value)
+      ? value
+      : undefined
+  if (key === "language")
+    return typeof value === "string" &&
+      /^[a-z0-9][a-z0-9+_.-]{0,31}$/u.test(value)
+      ? value
+      : undefined
+  return undefined
 }
 
 function safeToolArgs(name: string, value: Record<string, unknown>) {
   const allowed = TOOL_ARG_FIELDS.get(name) ?? DEFAULT_TOOL_ARG_FIELDS
   const projected: Record<string, unknown> = {}
-  const budget: ToolProjectionBudget = {
-    entries: MAX_GRAPH_ENTRIES,
-    bytes: MAX_TOOL_PAYLOAD_BYTES,
-  }
-  let hasDescription = false
-  if (name === "delegate_subagent" && Object.hasOwn(value, "description")) {
-    try {
-      hasDescription = typeof value.description === "string"
-    } catch {
-      hasDescription = false
-    }
-  }
-  let accepted = 0
+  let inspected = 0
   for (const key in value) {
     if (!Object.hasOwn(value, key)) continue
-    if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
-    if (!allowed.has(key)) continue
+    inspected += 1
+    if (inspected > MAX_GRAPH_ENTRIES) break
+    if (!allowed.has(key) || sensitiveToolKey(key)) continue
     let item: unknown
     try {
       item = value[key]
     } catch {
       continue
     }
-    if (key === "path" && typeof item === "string") {
-      const filename = filenameOf(item)
-      if (filename) {
-        const safe = safeToolText(filename)
-        if (spendToolBytes(budget, safe)) projected.filename = safe
-      }
-      accepted += 1
-      continue
-    }
-    if (sensitiveToolKey(key)) continue
-    if (!spendToolBytes(budget, key)) break
-    const safe = safeToolValue(item, budget)
-    if (safe !== undefined) {
-      projected[key] = safe
-      if (
-        name === "delegate_subagent" &&
-        key === "goal" &&
-        !hasDescription &&
-        spendToolBytes(budget, "description")
-      )
-        projected.description = safe
-    }
-    accepted += 1
+    const safe = safeToolMetadata(key, item)
+    if (safe !== undefined) projected[key] = safe
   }
-  const serialized = JSON.stringify(projected)
-  return utf8BytesWithin(serialized, MAX_TOOL_PAYLOAD_BYTES) !== undefined
-    ? serialized
-    : '{"truncated":true}'
+  return JSON.stringify(projected)
 }
 
-function resultContent(name: string, value: unknown) {
-  const budget: ToolProjectionBudget = {
-    entries: MAX_GRAPH_ENTRIES,
-    bytes: MAX_TOOL_PAYLOAD_BYTES,
-  }
-  let projected: unknown
+function resultContent(_name: string, value: unknown) {
+  const projected: Record<string, unknown> = {}
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const allowed = TOOL_RESULT_FIELDS.get(name) ?? DEFAULT_TOOL_RESULT_FIELDS
-    const record: Record<string, unknown> = {}
-    let accepted = 0
+    let inspected = 0
     for (const key in value) {
       if (!Object.hasOwn(value, key)) continue
-      if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
-      if (!allowed.has(key) || sensitiveToolKey(key)) continue
-      if (!spendToolBytes(budget, key)) break
+      inspected += 1
+      if (inspected > MAX_GRAPH_ENTRIES) break
+      if (!DEFAULT_TOOL_RESULT_FIELDS.has(key) || sensitiveToolKey(key))
+        continue
       let item: unknown
       try {
         item = (value as Record<string, unknown>)[key]
       } catch {
         continue
       }
-      const safe = safeToolValue(item, budget, 1)
-      if (safe !== undefined) record[key] = safe
-      accepted += 1
+      const safe = safeToolMetadata(key, item)
+      if (safe !== undefined) projected[key] = safe
     }
-    projected = record
-  } else projected = safeToolValue(value, budget)
-  const serialized =
-    typeof projected === "string"
-      ? projected
-      : JSON.stringify(projected ?? null)
-  return utf8BytesWithin(serialized, MAX_TOOL_PAYLOAD_BYTES) !== undefined
-    ? serialized
-    : '{"truncated":true}'
+  }
+  if (Object.keys(projected).length === 0) projected.status = "completed"
+  return JSON.stringify(projected)
 }
 
 function boundedText(value: unknown) {
