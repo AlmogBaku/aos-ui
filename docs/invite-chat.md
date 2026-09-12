@@ -1,7 +1,8 @@
 # Share an invited chat
 
-`aos-gateway` is an optional Go helper that serves an isolated guest surface for
-one selected Hermes, OpenCode, or OpenClaw runtime:
+The Hermes Compose deployment serves an isolated guest surface from the Bun
+proxy's separate listener. The legacy `aos-gateway` Go helper remains available
+for other runtimes and parity testing:
 
 - a guest listener with restricted chat reached through a signed, expiring invitation.
 
@@ -13,6 +14,14 @@ Do not publish the gateway's legacy operator listener or use it as a second
 browser-to-Hermes path. Keep the guest listener on its own origin and reverse
 proxy so invitation credentials and guest authorization cannot reach the
 operator surface.
+
+For Compose Hermes deployments, set `AOS_UI_GUEST_HERMES_TOKEN_FILE` and
+`AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE` to owner-only files, then set the guest
+`publicOrigin` and separate `listen` host/port in the private
+`deploy/proxy-config.hermes.json`. The guest listener is published separately
+on loopback port `3001` by default (`AOS_UI_GUEST_PUBLISHED_PORT`); external
+HTTPS ingress must target only that port. It serves the same built static UI,
+but only `/api/guest/v1` and guest event upgrades.
 
 ## Build the gateway
 
@@ -71,9 +80,9 @@ and set, for example,
 The gateway creates the identity file with mode `0600`, signs the native
 challenge with its stable Ed25519 key, and atomically persists the issued device
 token. Do not place the file on ephemeral container storage; bind-mount that
-directory if you package the guest gateway in a container. The supplied
-Compose OpenClaw overlay contains only the web proxy and therefore has no guest
-gateway volume to configure.
+directory if you package the guest gateway in a container. The supplied Compose
+OpenClaw overlay is unavailable and therefore has no guest gateway volume to
+configure.
 
 The client uses OpenClaw's ordinary `cli` identity and pairing policy. It does
 not claim the reserved `gateway-client`/`backend` loopback exemption, because

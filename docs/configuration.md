@@ -4,7 +4,7 @@ AOS loads runtime selection from browser-readable JSON or, during local Vite dev
 
 ## Configuration precedence
 
-When `AOS_UI_RUNTIME_CONFIG_FILE` is set, Vite serves that file as `/runtime-config.json`. Otherwise it derives the same public shape from local environment variables. Production Nginx always reads the mounted `/runtime-config.json` file.
+When `AOS_UI_RUNTIME_CONFIG_FILE` is set, Vite serves that file as `/runtime-config.json`. Otherwise it derives the same public shape from local environment variables. The production Bun listener reads the mounted `/runtime-config.json` file.
 
 The browser fetches the file without caching. Invalid or missing configuration renders an unavailable state; AOS never falls back to fixture data.
 
@@ -137,18 +137,22 @@ The optional OpenCode launcher and its credential-forwarding variables are descr
 
 ## Compose environment
 
-| Variable                              | Default                        | Use                                        |
-| ------------------------------------- | ------------------------------ | ------------------------------------------ |
-| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json` | Public JSON mounted read-only.             |
-| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                    | Published-service bind address.            |
-| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                         | Web port on the host.                      |
-| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                         | OpenCode port on the host.                 |
-| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay   | External worktree mounted at `/workspace`. |
-| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                         | Non-root OpenCode container identity.      |
-| `AOS_UI_PROXY_CONFIG_FILE`            | required by Hermes overlay     | Private proxy JSON mounted read-only.      |
-| `AOS_UI_OIDC_CLIENT_SECRET_FILE`      | required by Hermes overlay     | Owner-only OIDC client secret file.        |
-| `AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE`  | required by Hermes overlay     | Owner-only 32-byte principal key file.     |
-| `AOS_UI_OPERATOR_SESSION_KEY_FILE`    | required by Hermes overlay     | Owner-only 32-byte session key file.       |
-| `AOS_UI_RECONNECT_CURSOR_KEY_FILE`    | required by Hermes overlay     | Owner-only 32-byte reconnect key file.     |
+| Variable                               | Default                        | Use                                                |
+| -------------------------------------- | ------------------------------ | -------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`           | `./deploy/runtime-config.json` | Public JSON mounted read-only.                     |
+| `AOS_UI_BIND_ADDRESS`                  | `127.0.0.1`                    | Published-service bind address.                    |
+| `AOS_UI_WEB_PUBLISHED_PORT`            | `3000`                         | Web port on the host.                              |
+| `AOS_UI_OPENCODE_PUBLISHED_PORT`       | `4096`                         | OpenCode port on the host.                         |
+| `AOS_UI_OPENCODE_WORKTREE`             | required by OpenCode overlay   | External worktree mounted at `/workspace`.         |
+| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID`  | `1000`                         | Non-root OpenCode container identity.              |
+| `AOS_UI_PROXY_CONFIG_FILE`             | required by Hermes overlay     | Private proxy JSON mounted read-only.              |
+| `AOS_UI_OIDC_CLIENT_SECRET_FILE`       | required by Hermes overlay     | Owner-only OIDC client secret file.                |
+| `AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE`   | required by Hermes overlay     | Owner-only 32-byte principal key file.             |
+| `AOS_UI_OPERATOR_SESSION_KEY_FILE`     | required by Hermes overlay     | Owner-only 32-byte session key file.               |
+| `AOS_UI_RECONNECT_CURSOR_KEY_FILE`     | required by Hermes overlay     | Owner-only 32-byte reconnect key file.             |
+| `AOS_UI_GUEST_HERMES_TOKEN_FILE`       | required by Hermes guest lane  | Owner-only Hermes Desktop Session token.           |
+| `AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE` | required by Hermes guest lane  | Owner-only 32-byte invitation signing key.         |
+| `AOS_UI_GUEST_BIND_ADDRESS`            | `127.0.0.1`                    | Host bind address for the separate guest listener. |
+| `AOS_UI_GUEST_PUBLISHED_PORT`          | `3001`                         | Host port forwarded to the guest listener.         |
 
 Copy [`.env.compose.example`](../.env.compose.example) to `.env` for local overrides. See [Deployment](deployment.md) for complete commands.

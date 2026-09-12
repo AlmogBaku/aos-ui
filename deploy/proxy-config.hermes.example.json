@@ -41,5 +41,27 @@
       }
     ]
   },
+  "guest": {
+    "listen": {
+      "host": "0.0.0.0",
+      "port": 3001,
+      "exposure": "private-container"
+    },
+    "publicOrigin": "https://guest.example.test",
+    "hermes": {
+      "baseUrl": "http://host.docker.internal:9119",
+      "tokenFile": "/run/secrets/guest-hermes-token"
+    },
+    "invitations": {
+      "keys": [
+        {
+          "id": "current",
+          "secretFile": "/run/secrets/guest-invite-signing-key"
+        }
+      ],
+      "ttlSeconds": 300,
+      "clockSkewSeconds": 0
+    }
+  },
   "shutdownGraceMs": 5000
 }

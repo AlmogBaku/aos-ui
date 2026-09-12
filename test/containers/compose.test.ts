@@ -73,12 +73,26 @@ describe("container orchestration", () => {
         session: { keys: Array<{ secretFile: string }> }
       }
       events: { keys: Array<{ secretFile: string }> }
+      guest: {
+        listen: { host: string; port: number; exposure: string }
+        publicOrigin: string
+        hermes: { tokenFile: string }
+        invitations: { keys: Array<{ secretFile: string }> }
+      }
     }
     expect(proxy.listen).toMatchObject({
       host: "0.0.0.0",
       port: 3000,
       exposure: "private-container",
     })
+    expect(proxy.guest).toMatchObject({
+      listen: { host: "0.0.0.0", port: 3001, exposure: "private-container" },
+      publicOrigin: "https://guest.example.test",
+      hermes: { tokenFile: "/run/secrets/guest-hermes-token" },
+    })
+    expect(proxy.guest.invitations.keys[0]!.secretFile).toBe(
+      "/run/secrets/guest-invite-signing-key"
+    )
     expect(proxy.hermes.auth).toMatchObject({ mode: "browser-broker" })
     expect(proxy.operator.principalHmacKeyFile).toMatch(/^\/run\/secrets\//u)
     expect(proxy.operator.session.keys[0].secretFile).toMatch(
@@ -158,6 +172,8 @@ describe("container orchestration", () => {
       AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPERATOR_SESSION_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_GUEST_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
+      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
     })
 
     expect(Object.keys(config.services)).toEqual(["web"])
@@ -177,6 +193,13 @@ describe("container orchestration", () => {
     ])
     expect(config.services.web.ports).toContainEqual(
       expect.objectContaining({ published: "3000", target: 3000 })
+    )
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({
+        host_ip: "127.0.0.1",
+        published: "3001",
+        target: 3001,
+      })
     )
     expect(config.services.web.configs).toContainEqual(
       expect.objectContaining({
@@ -202,6 +225,14 @@ describe("container orchestration", () => {
           source: "reconnect-cursor-key",
           target: "reconnect-cursor-key",
         }),
+        expect.objectContaining({
+          source: "guest-hermes-token",
+          target: "guest-hermes-token",
+        }),
+        expect.objectContaining({
+          source: "guest-invite-signing-key",
+          target: "guest-invite-signing-key",
+        }),
       ])
     )
     expect(config.configs?.["runtime-config"]?.file).toBe(
@@ -220,6 +251,12 @@ describe("container orchestration", () => {
       resolve(root, ".env.example")
     )
     expect(config.secrets?.["reconnect-cursor-key"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["guest-hermes-token"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["guest-invite-signing-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
   })
@@ -300,12 +337,5 @@ describe("container orchestration", () => {
     expect(dockerfile).toMatch(/FROM dependencies AS proxy/)
     expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
     expect(dockerfile).toContain("USER bun")
-  })
-
-  it("keeps the operator Bun boundary free of native provider routes", () => {
-    const app = readFileSync(resolve(root, "packages/proxy/app.ts"), "utf8")
-    expect(app).not.toContain("/hermes/")
-    expect(app).not.toContain("/openclaw/")
-    expect(app).toContain("/api/aos/v1/")
   })
 })

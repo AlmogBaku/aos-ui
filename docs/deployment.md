@@ -1,6 +1,6 @@
 # Deploy AOS
 
-AOS is a Vite application that builds to static assets. The supplied production image serves those assets with Nginx and loads runtime selection from a read-only configuration file.
+AOS is a Vite application that builds to static assets. The supplied production image serves those assets with the Bun proxy and loads runtime selection from a read-only configuration file.
 
 ## Build static assets
 
@@ -19,7 +19,7 @@ The output is written to `dist/`. Serve it through a static host that:
   preserving HTTP streaming and WebSocket upgrades without turning proxy
   failures into SPA responses.
 
-The supplied Nginx configuration implements these behaviors.
+The Bun listener implements these behaviors alongside the normalized runtime API.
 
 ## Run fixture mode with Compose
 
@@ -76,14 +76,17 @@ AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
 AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE=/absolute/private/path/operator-principal-hmac \
 AOS_UI_OPERATOR_SESSION_KEY_FILE=/absolute/private/path/operator-session-key \
 AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_HERMES_TOKEN_FILE=/absolute/private/path/guest-hermes-token \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
 
-Hermes remains independently operated. The overlay runs the private TypeScript
-proxy beside Nginx; only Nginx is published. The browser uses the normalized
+Hermes remains independently operated. The overlay runs one Bun process that
+serves static assets and the private TypeScript proxy on separate operator and
+guest listeners. External ingress owns TLS; the browser uses the normalized
 `/api/aos/v1` API for operator OIDC, Hermes authentication brokerage, catalogs,
-history, AG-UI/SSE runs, Stop, and reconnect. Nginx has no browser route to
-Hermes, native `/auth`, or another provider path.
+history, AG-UI/SSE runs, Stop, and reconnect. The operator listener has no
+guest API route, and the guest listener has no operator API route.
 
 Start from [`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json)
 and customize its public origin, OIDC issuer/allowlist, and Hermes address.
@@ -142,10 +145,12 @@ For a host-managed deployment, use the provider-neutral templates in
   through the guest host.
 - `aos-gateway.service.template` runs the optional invited-chat gateway. Both
   of its listeners are loopback-bound: the operator listener remains private,
-  while an external reverse proxy may reach only the guest listener.
-- `aos-guest-nginx.conf.template` is an example guest-only virtual host. It
-  sends the guest UI and `/api/guest/*` to the guest listener and has no route
-  to native Hermes/OpenCode endpoints.
+  while an external reverse proxy may reach only the guest listener. The Compose
+  Hermes overlay publishes that listener separately on loopback port `3001` by
+  default.
+- `aos-guest-nginx.conf.template` is an example external guest-only virtual
+  host. It sends the guest UI and `/api/guest/*` to the guest listener and has
+  no route to native Hermes/OpenCode endpoints.
 
 Copy and substitute the templates outside the checkout; they are not an
 installer and intentionally contain no domain, proxy provider, tunnel, or
@@ -170,10 +175,11 @@ systemctl daemon-reload
 Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
 target the loopback guest listener exclusively; it must not expose the private
 operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
-Then verify the guest root, unauthenticated `GET /api/guest/bootstrap` (`401`),
-and that `/hermes/`, `/auth/`, and non-guest `/api/` routes cannot reach the
-native runtime. The guest origin remains a separate virtual host and listener;
-it is never routed through the operator Nginx `/api/aos/v1` boundary.
+Then verify the guest root and an unauthenticated `/api/guest/v1` request
+(`401`/`404` as appropriate), and that `/hermes/`, `/auth/`, and non-guest
+`/api/` routes cannot reach the native runtime. The guest origin remains a
+separate host and listener; it is never routed through the operator
+`/api/aos/v1` boundary.
 
 ## Persistence and shutdown
 
@@ -220,9 +226,8 @@ proven and are not part of the Hermes operator deployment:
 
 - the local Vite Hermes forwarding shortcut and its direct runtime configuration
   example; OpenClaw's runtime example is already fail-closed;
-- the optional Go `aos-gateway` guest listener, which still owns the public
-  `/api/guest/*` HTTP surface while the TypeScript proxy's guest listener
-  wiring is completed; and
+- the optional legacy Go `aos-gateway` guest listener and its acceptance
+  coverage, retained until the TypeScript dual-listener path has proven parity;
 - the planned OpenClaw deployment overlay and live acceptance coverage.
 
 Delete those artifacts only after an approved Hermes operator and guest
