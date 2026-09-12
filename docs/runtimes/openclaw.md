@@ -1,12 +1,14 @@
-# OpenClaw (planned/unavailable)
+# OpenClaw server adapter status
 
 AOS does not currently attach a browser to OpenClaw. The Hermes-first
 normalized deployment returns `404` for `/openclaw`; the retained Compose
 overlay and runtime-config example are explicitly fail-closed. OpenClaw does
 not install, manage, or expose model credentials through AOS.
 
-There is no supported browser connection command until the normalized proxy,
-runtime configuration, and live acceptance coverage are restored together.
+There is no supported browser connection command. The browser uses only the
+normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`) or explicit fixture mode.
+OpenClaw remains a future server-side adapter until the normalized proxy and
+live acceptance coverage are implemented.
 
 ## Optional native tools
 

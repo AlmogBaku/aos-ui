@@ -31,40 +31,26 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 
 Open <http://localhost:3000>. The web health endpoint is <http://localhost:3000/api/health>.
 
-## Attach existing OpenCode
+## OpenCode server-adapter development
 
-Start OpenCode independently, then create a public configuration using its browser-reachable URL and the absolute directory understood by that server:
+OpenCode is not a browser runtime. Its retained overlay is for native
+server-adapter development only; the browser uses the normalized AOS proxy.
 
-```json
-{
-  "mode": "opencode",
-  "baseUrl": "https://opencode.example.test",
-  "directory": "/srv/agents"
-}
-```
+There is no public OpenCode runtime configuration or direct browser route.
 
-Run the web-only composition with that file:
-
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=/absolute/path/to/runtime-config.opencode.json \
-  docker compose -f compose.yaml up --build
-```
-
-AOS does not start or mount this runtime. Configure OpenCode to allow the public AOS browser origin.
-
-## Optionally add bundled OpenCode
+## Optionally run the native OpenCode composition
 
 The supplied overlay is a local all-in-one convenience for operators who explicitly want Compose to start an OpenCode container:
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
 The overlay builds and starts OpenCode, mounts the external worktree at `/workspace`, and publishes native port `4096` on loopback by default. Its health endpoint is `/global/health`. This optional composition does not change the general attachment model.
 
-Read [Run with OpenCode](runtimes/opencode.md) before adding model credentials or changing host identity settings.
+Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
 ## Deploy the Hermes operator surface
 
@@ -109,7 +95,7 @@ provide a browser Gateway route or accept OpenClaw host, port, or credentials.
 Add `compose.dev.yaml` to the selected composition. For example:
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose \
     -f compose.yaml \

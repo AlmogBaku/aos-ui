@@ -14,14 +14,14 @@ Voice support is implemented for evaluation but still requires live acceptance w
 3. Open a Session owned by that profile. AOS checks non-secret native configuration hints independently for STT and TTS; Hermes makes the final provider selection when speech is requested.
 4. Use HTTPS or `localhost` and grant microphone permission only when you start recording.
 
-For local development, Vite provides the required same-origin forwarding:
+For local development, run the normalized AOS proxy:
 
 ```bash
-AOS_UI_RUNTIME_MODE=hermes \
-AOS_UI_HERMES_BASE_URL=/hermes \
-AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
-  bun run dev
+AOS_UI_RUNTIME_MODE=aos bun run dev
 ```
+
+The proxy privately selects and authenticates Hermes; there is no direct
+browser Hermes runtime mode.
 
 Selecting a microphone mode does not request permission. The choice is a local view preference, not a Hermes profile setting.
 

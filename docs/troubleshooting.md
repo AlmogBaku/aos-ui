@@ -7,25 +7,17 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 1. Open `/runtime-config.json` in the same browser origin.
 2. Confirm it is valid JSON and uses exactly one shape from the [configuration reference](configuration.md).
 3. Remove unknown fields and credentials.
-4. For OpenCode, confirm `directory` is an absolute path understood by the server.
-5. For generic AG-UI, confirm both `runUrl` and `workspaceUrl` are present absolute HTTP(S) URLs.
+4. Provider-specific server adapters are not browser runtime modes; confirm the
+   normalized AOS proxy is configured and reachable.
 6. OpenClaw is unavailable on the current normalized deployment path; its retained runtime example intentionally renders unavailable.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
-## AOS cannot reach OpenCode
+## OpenCode or AG-UI adapter is unavailable
 
-- Confirm the independently operated OpenCode server is running and that `/global/health` responds at its configured origin.
-- Confirm `AOS_UI_OPENCODE_BASE_URL` is reachable by the browser and matches the server's host and port.
-- Configure OpenCode CORS for the exact AOS browser origin.
-- Confirm `AOS_UI_OPENCODE_WORKTREE` exists and is the absolute directory understood by that server.
-- Set both `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID`, or leave both unset.
-
-If you deliberately use the optional AOS launcher, run `bun run integrations:build` before `bun run opencode:serve`, check whether `127.0.0.1:4096` is already occupied, and set all three `AOS_UI_OPENAI_COMPATIBLE_*` values together when using that convenience provider. For the optional bundled Compose overlay, also verify host UID/GID access to the worktree and credential files.
-
-## A new OpenCode Agent is not ready
-
-OpenCode `1.18.29` caches Agent definitions. Wait for active runs to finish, restart the native harness, then refresh the catalog. AOS does not automatically dispose a shared OpenCode instance because doing so can abort unrelated runs.
+OpenCode and generic AG-UI are future server-side adapters and do not expose a
+browser route in this deployment. Use `AOS_UI_RUNTIME_MODE=aos` with the
+configured proxy, or explicit `fixture` mode for a backend-free preview.
 
 ## Hermes asks you to sign in
 

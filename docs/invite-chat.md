@@ -2,7 +2,8 @@
 
 The Hermes Compose deployment serves an isolated guest surface from the Bun
 proxy's separate listener. The legacy `aos-gateway` Go helper remains available
-for other runtimes and parity testing:
+for migration and parity testing, but is not an AOS browser runtime or the
+operator path:
 
 - a guest listener with restricted chat reached through a signed, expiring invitation.
 
@@ -49,7 +50,7 @@ export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 
 | Variable                           | Required value or default                                           |
 | ---------------------------------- | ------------------------------------------------------------------- |
-| `AOS_GATEWAY_RUNTIME`              | Required: `hermes`, `opencode`, or `openclaw`                       |
+| `AOS_GATEWAY_RUNTIME`              | Required: `hermes` (legacy helper only)                             |
 | `AOS_GATEWAY_UPSTREAM`             | Required fixed native HTTP origin                                   |
 | `AOS_GATEWAY_DIST`                 | `dist`                                                              |
 | `AOS_GATEWAY_OPERATOR_ADDR`        | `127.0.0.1:8080`                                                    |
@@ -57,11 +58,6 @@ export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
 | `AOS_GATEWAY_INVITE_SIGNING_KEY`   | Required: 32 random base64url-encoded bytes                         |
 | `AOS_GATEWAY_GUEST_ORIGIN`         | Required public HTTPS guest origin                                  |
 | `AOS_GATEWAY_HERMES_TOKEN`         | Required Hermes Desktop Session token for Hermes                    |
-| `AOS_GATEWAY_OPENCODE_DIRECTORY`   | Required fixed native directory for OpenCode                        |
-| `AOS_GATEWAY_OPENCODE_USERNAME`    | Optional OpenCode Basic-auth username                               |
-| `AOS_GATEWAY_OPENCODE_PASSWORD`    | Optional OpenCode Basic-auth password                               |
-| `AOS_GATEWAY_OPENCLAW_TOKEN`       | Initial OpenClaw operator bootstrap token; removable after pairing  |
-| `AOS_GATEWAY_OPENCLAW_DEVICE_FILE` | Required absolute persistent private device-state path for OpenClaw |
 
 Example Hermes server:
 
@@ -74,35 +70,6 @@ AOS_GATEWAY_HERMES_TOKEN="$HERMES_SESSION_TOKEN" \
 
 The operator listener forwards only the selected native prefix. The guest listener exposes neither native forwarding nor operator APIs.
 
-For OpenClaw, create a private writable directory owned by the gateway service
-and set, for example,
-`AOS_GATEWAY_OPENCLAW_DEVICE_FILE=/var/lib/aos-gateway/openclaw-device.json`.
-The gateway creates the identity file with mode `0600`, signs the native
-challenge with its stable Ed25519 key, and atomically persists the issued device
-token. Do not place the file on ephemeral container storage; bind-mount that
-directory if you package the guest gateway in a container. The supplied Compose
-OpenClaw overlay is unavailable and therefore has no guest gateway volume to
-configure.
-
-The client uses OpenClaw's ordinary `cli` identity and pairing policy. It does
-not claim the reserved `gateway-client`/`backend` loopback exemption, because
-that internal helper path does not create a pairing record or reusable device
-token.
-
-On its first connection, start the gateway once to create a pending device
-request. On the OpenClaw host, inspect and approve that exact request:
-
-```bash
-openclaw devices list
-openclaw devices approve <requestId>
-```
-
-Then restart the guest gateway. It fails closed when the file is missing its
-approved scopes, malformed, a symlink, or more permissive than `0600`. Grant
-exactly `operator.read`, `operator.write`, and `operator.questions`; the guest
-gateway does not request administrative or Talk scopes. Once the issued device
-token is persisted, remove `AOS_GATEWAY_OPENCLAW_TOKEN` if the shared bootstrap
-secret is not otherwise required; reconnect uses the scoped device token.
 
 > [!IMPORTANT]
 > The helper binds to loopback and does not provision TLS. Terminate public HTTPS at an operator-managed reverse proxy and forward only the intended guest origin to the guest listener.

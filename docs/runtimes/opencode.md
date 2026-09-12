@@ -1,6 +1,8 @@
-# Run AOS with OpenCode
+# OpenCode server adapter status
 
-Use this guide to attach AOS to an independently installed OpenCode server. OpenCode keeps ownership of its process, Agent definitions, model credentials, worktree, and durable Sessions.
+AOS does not currently expose an OpenCode browser runtime. OpenCode remains a
+future server-side adapter. The browser connects only to the normalized AOS
+proxy (`AOS_UI_RUNTIME_MODE=aos`) or explicit fixture mode.
 
 ## Prerequisites
 
@@ -10,36 +12,19 @@ Use this guide to attach AOS to an independently installed OpenCode server. Open
 
 The external worktree is native runtime state. Do not point OpenCode at the AOS frontend checkout unless that is intentionally the Agent's working directory. AOS does not install or manage the OpenCode binary.
 
-## Start OpenCode independently
+## Native integration development
 
-From the worktree OpenCode should own, start its native server and allow the browser origin that will serve AOS:
+OpenCode integration packaging and tests remain available for server-adapter
+development. Operate the native server independently of the browser:
 
 ```bash
 cd /absolute/path/to/external-worktree
-opencode serve --hostname 127.0.0.1 --port 4096 \
-  --cors http://localhost:3000 \
-  --cors http://127.0.0.1:3000
+opencode serve --hostname 127.0.0.1 --port 4096
 ```
 
 Configure models and credentials through OpenCode itself. Keep this process running independently of AOS.
 
-## Attach AOS
-
-In the AOS checkout, install frontend dependencies and point the adapter at the existing server and its native directory:
-
-```bash
-bun install
-AOS_UI_RUNTIME_MODE=opencode \
-AOS_UI_OPENCODE_BASE_URL=http://127.0.0.1:4096 \
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
-  bun run dev
-```
-
-Open <http://localhost:3000>. `AOS_UI_OPENCODE_WORKTREE` is sent to OpenCode as the request directory, so it must be the absolute directory understood by the native server. AOS refuses ownership data from another directory.
-
-Stopping AOS leaves OpenCode and its Sessions running. Stop or restart OpenCode through your normal runtime operations.
-
-## Optionally load the AOS native integration
+## Optional native integration tooling
 
 Basic attachment uses OpenCode's native APIs. The AOS integration adds presentation tools, Session handoff, the guarded creator workflow, and the `aos-invite-link` skill.
 
@@ -51,24 +36,19 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   bun run opencode:serve
 ```
 
-Then attach the frontend in a second terminal using the command from the previous section. The launcher is optional convenience tooling: it does not install OpenCode, own its credentials, or turn AOS into the runtime. It refuses to overwrite conflicting Agent or skill definitions.
+The launcher is optional convenience tooling: it does not provide a browser
+attachment path, install OpenCode, own its credentials, or turn AOS into the
+runtime. It refuses to overwrite conflicting Agent or skill definitions.
 
-## Choose a model
+## Native model configuration
 
-The independently operated OpenCode instance owns model providers and credentials. AOS does not choose a model by default. Leave selection native, or set both identifiers on the frontend to select one model already available from that server:
+The independently operated OpenCode instance owns model providers and
+credentials. Configure them through OpenCode itself; there are no OpenCode
+browser environment variables or runtime mode.
 
-```bash
-AOS_UI_RUNTIME_MODE=opencode \
-AOS_UI_OPENCODE_BASE_URL=http://127.0.0.1:4096 \
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
-AOS_UI_OPENCODE_PROVIDER_ID=amazon-bedrock \
-AOS_UI_OPENCODE_MODEL_ID=your-model-id \
-  bun run dev
-```
-
-Setting only one identifier makes the frontend configuration unavailable.
-
-Configure an independently started server using OpenCode's native provider settings. When using the optional AOS launcher, it passes existing AWS and Google provider variables through. Its OpenAI-compatible convenience requires all three native-process variables together:
+When using the optional AOS launcher, it passes existing AWS and Google
+provider variables through. Its OpenAI-compatible convenience requires all
+three native-process variables together:
 
 ```text
 AOS_UI_OPENAI_COMPATIBLE_BASE_URL
@@ -78,44 +58,19 @@ AOS_UI_OPENAI_COMPATIBLE_MODEL_ID
 
 Keep provider credentials out of the AOS process, `/runtime-config.json`, and `VITE_*` variables unless the optional launcher explicitly needs to forward them to OpenCode.
 
-## Attach containerized AOS to existing OpenCode
+## Optional bundled server composition
 
-Create public runtime JSON whose `baseUrl` is reachable by the operator's browser and whose `directory` is the absolute path understood by OpenCode:
-
-```json
-{
-  "mode": "opencode",
-  "baseUrl": "https://opencode.example.test",
-  "directory": "/srv/agents"
-}
-```
-
-Mount that file into the web-only composition:
+For native server-adapter evaluation, the repository supplies an overlay that
+starts OpenCode beside AOS. It does not add an OpenCode browser runtime.
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=/absolute/path/to/runtime-config.opencode.json \
-  docker compose -f compose.yaml up --build
-```
-
-The browser connects to the existing OpenCode server; the AOS container does not start or mount it. Configure OpenCode CORS for the public AOS origin.
-
-## Optionally run the bundled OpenCode composition
-
-For local evaluation, the repository also supplies an overlay that starts OpenCode beside AOS:
-
-```bash
-cp .env.compose.example .env
-```
-
-Edit `.env`, then run:
-
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
-This optional composition is an all-in-one convenience, not the attachment architecture. The native container sees the worktree as `/workspace`, matching the supplied public configuration. On Linux, set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` to the owning numeric IDs when the defaults do not match the host files.
+The native container sees the worktree as `/workspace`. On Linux, set
+`AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` when the defaults do not match host
+files.
 
 The image includes `aos-gateway`. To let an Agent create guest invitations, set
 `AOS_GATEWAY_INVITE_SIGNING_KEY` in `.env`; the skill asks for the deployed

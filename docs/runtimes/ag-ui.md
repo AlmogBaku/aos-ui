@@ -1,6 +1,9 @@
-# Connect a generic AG-UI runtime
+# Generic AG-UI server adapter status
 
-Generic AG-UI mode connects an AG-UI run endpoint to a separate workspace service. Use it when your backend can supply provider-neutral Agent ownership and durable Session history without an OpenCode or Hermes adapter.
+Generic AG-UI is a server-side adapter seam, not a browser runtime mode. The
+browser connects only to the normalized AOS proxy (`aos`) or explicit fixture
+mode. A future proxy deployment may use AG-UI when its workspace contract is
+implemented.
 
 ## Required services
 
@@ -17,28 +20,9 @@ The workspace service must implement:
 
 Session creation must return the same `agentId` requested by AOS. Ownership mismatches are rejected.
 
-## Start AOS
-
-```bash
-AOS_UI_RUNTIME_MODE=ag-ui \
-AOS_UI_AG_UI_URL=http://127.0.0.1:8000/agent \
-AOS_UI_AG_UI_WORKSPACE_URL=http://127.0.0.1:8001 \
-  bun run dev
-```
-
-Open <http://localhost:3000>.
-
-For static deployment, create a public configuration based on:
-
-```json
-{
-  "mode": "ag-ui",
-  "runUrl": "https://runtime.example.com/agent",
-  "workspaceUrl": "https://workspace.example.com",
-  "composerModelSelectorEnabled": true,
-  "composerContextEnabled": true
-}
-```
+There is no supported `AOS_UI_RUNTIME_MODE=ag-ui` command or public
+`mode: "ag-ui"` configuration. The following describes the contract a future
+server adapter must implement internally.
 
 Both services must allow the browser origin or be placed behind an operator-managed same-origin proxy.
 

@@ -46,7 +46,8 @@ cd aos-ui
 bun install
 ```
 
-For local proxy development:
+For local proxy development (the browser supports only `aos` and explicit
+`fixture` mode):
 
 ```bash
 AOS_UI_RUNTIME_MODE=aos \
@@ -56,7 +57,8 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
 
 Open <http://localhost:3000>. The browser sends only normalized AOS requests;
 the proxy owns Hermes authentication and all native communication. See [Run
-AOS with Hermes](docs/runtimes/hermes.md) for private proxy configuration.
+AOS with Hermes](docs/runtimes/hermes.md) for private proxy configuration;
+Hermes is selected by the server-side proxy, not by a browser runtime mode.
 
 ### Preview without a harness
 

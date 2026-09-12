@@ -1,6 +1,10 @@
 # Run AOS with Hermes
 
-AOS attaches directly to an independently installed `hermes serve` HTTP/WebSocket API. Hermes remains responsible for its process, profiles, authentication, Sessions, runs, credentials, tools, and persistence; AOS neither installs Hermes nor adds a bridge database or profile registry.
+AOS connects to an independently installed `hermes serve` HTTP/WebSocket API
+through the normalized TypeScript proxy. Hermes remains responsible for its
+process, profiles, authentication, Sessions, runs, credentials, tools, and
+persistence; AOS neither installs Hermes nor adds a bridge database or profile
+registry.
 
 ## Prerequisites
 
@@ -20,22 +24,12 @@ hermes serve
 
 The examples below expect Hermes at `http://127.0.0.1:9119`. Keep its authentication enabled and its profile state and credentials outside AOS.
 
-## Local development shortcut
+## Local proxy development
 
-In the AOS checkout, install frontend dependencies and attach through the development proxy:
-
-```bash
-bun install
-AOS_UI_RUNTIME_MODE=hermes \
-AOS_UI_HERMES_BASE_URL=/hermes \
-AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
-  bun run dev
-```
-
-This is a legacy development shortcut: Vite forwards `/hermes`, native
-authentication routes, and WebSockets directly to the target. It is retained
-only while the normalized proxy path is being validated and must not be used
-as the production deployment boundary.
+Run the AOS proxy and configure its private Hermes target using the proxy
+configuration described below. The browser always uses
+`AOS_UI_RUNTIME_MODE=aos`; Hermes is never exposed as a browser runtime mode or
+direct browser route.
 
 ## Deploy the normalized Hermes proxy
 
@@ -54,7 +48,7 @@ AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
 
 The browser talks only to same-origin `/api/aos/v1`. The proxy brokers Hermes
 authentication, then owns normalized Agent/Session reads, history, AG-UI/SSE,
-Stop, and reconnect. Nginx does not expose Hermes' native `/auth`, `/api`, or
+Stop, and reconnect. The proxy does not expose Hermes' native `/auth`, `/api`, or
 WebSocket routes. Use the browser-broker example in
 [`deploy/proxy-config.hermes.example.json`](../../deploy/proxy-config.hermes.example.json)
 for auth-gated Hermes; keep the public `runtime-config.hermes.json`
@@ -95,7 +89,7 @@ reinstall from an immutable ref instead.
 ## Run with Compose
 
 Hermes remains outside the Compose stack. The overlay runs the private AOS
-translation proxy beside Nginx; only Nginx is published to the host. Copy and
+translation proxy. Copy and
 customize the example proxy config outside the checkout, then provide owner-only
 secret files:
 
