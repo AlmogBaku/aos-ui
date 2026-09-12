@@ -17,6 +17,17 @@ import {
 import { HermesAuthenticationError, HermesHttpError } from "./hermes-transport"
 import { projectHermesHistory } from "./hermes-history"
 import type { HermesRunNative, HermesRunScope } from "./hermes-run"
+import {
+  createHermesWorkspaceOperations,
+  type HermesWorkspaceOperations,
+  type HermesWorkspaceSession,
+} from "./hermes-workspace"
+import {
+  createHermesContentOperations,
+  type HermesContentAttachment,
+} from "./hermes-content"
+import { HermesInteractions } from "./hermes-interactions"
+import type { ResumeEntry } from "@ag-ui/core"
 
 export interface HermesRpcTransport {
   request(
@@ -208,6 +219,68 @@ function sessionId(profile: string, storedId: string) {
   return `hermes:${encodeURIComponent(profile)}:${encodeURIComponent(storedId)}`
 }
 
+function storedSessionIdentity(profile: string, publicId: string) {
+  const match = /^hermes:([^:]+):(.+)$/u.exec(publicId)
+  if (!match) return undefined
+  try {
+    return decodeURIComponent(match[1]) === profile
+      ? decodeURIComponent(match[2])
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function parsedJson(value: unknown) {
+  if (typeof value !== "string") return value
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function publishedArtifact(rows: readonly unknown[], artifactId: string) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (!isRecord(row)) continue
+    const value = parsedJson(row.content ?? row.result)
+    if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
+      continue
+    const artifact = isRecord(value.artifact) ? value.artifact : undefined
+    const id = nonEmptyString(artifact?.id)
+    const reference = nonEmptyString(artifact?.path)
+    const filename = nonEmptyString(artifact?.filename)
+    if (
+      id !== artifactId ||
+      !reference ||
+      !filename ||
+      reference.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/u.test(reference) ||
+      reference.split(/[\\/]/u).includes("..")
+    )
+      continue
+    return { reference, filename }
+  }
+  return undefined
+}
+
+function dataUrlBytes(value: unknown) {
+  if (!isRecord(value) || typeof value.dataUrl !== "string") return undefined
+  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/u.exec(
+    value.dataUrl
+  )
+  if (!match || match[2].length % 4 !== 0) return undefined
+  try {
+    const bytes = Uint8Array.from(atob(match[2]), (character) =>
+      character.charCodeAt(0)
+    )
+    return { bytes, mimeType: match[1] }
+  } catch {
+    return undefined
+  }
+}
+
 function timestamp(value: unknown) {
   const numeric = typeof value === "number" ? value : Number(value)
   return Number.isFinite(numeric) && numeric > 0
@@ -218,7 +291,215 @@ function timestamp(value: unknown) {
 }
 
 export class HermesServerAdapter implements HermesRunNative {
-  constructor(private readonly transport: HermesRpcTransport) {}
+  readonly #workspace: HermesWorkspaceOperations
+  readonly #content: ReturnType<typeof createHermesContentOperations>
+  readonly interactions: HermesInteractions
+
+  constructor(private readonly transport: HermesRpcTransport) {
+    const requireSession = (agentId: string, publicSessionId: string) =>
+      this.#requireAttachedSession(agentId, publicSessionId)
+    this.#workspace = createHermesWorkspaceOperations({
+      authority: { requireSession },
+      transport: {
+        request: (method, params) => this.transport.request(method, params),
+        history: (scope) => this.#rawHistory(scope),
+        sessionInfo: async (scope) =>
+          (scope as HermesWorkspaceSession & { info?: unknown }).info,
+      },
+    })
+    this.#content = createHermesContentOperations({
+      authority: {
+        requireSession,
+        requireArtifact: async (scope, artifactId) =>
+          publishedArtifact(await this.#rawHistory(scope), artifactId),
+      },
+      transport: {
+        request: (method, params) => this.transport.request(method, params),
+        readArtifact: async (scope, reference) => {
+          if (!this.transport.http) throw new HermesUnavailableError()
+          const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+          if (!storedId) throw new HermesUnavailableError()
+          const query = new URLSearchParams({
+            path: reference,
+            profile: scope.agentId,
+            session_id: storedId,
+          })
+          return dataUrlBytes(
+            await this.transport.http(`/api/fs/read-data-url?${query}`)
+          ) as { bytes: Uint8Array; mimeType?: string }
+        },
+        audioConfig: async (scope, kind) => {
+          if (!this.transport.http) throw new HermesUnavailableError()
+          const query = new URLSearchParams({ profile: scope.agentId })
+          return this.transport.http(
+            `/api/tools/toolsets/${kind}/config?${query}`
+          )
+        },
+        transcribe: async (scope, request) => {
+          if (!this.transport.http) throw new HermesUnavailableError()
+          const query = new URLSearchParams({ profile: scope.agentId })
+          return this.transport.http(`/api/audio/transcribe?${query}`, {
+            method: "POST",
+            body: request,
+          })
+        },
+        speak: async (scope, text) => {
+          if (!this.transport.http) throw new HermesUnavailableError()
+          const query = new URLSearchParams({ profile: scope.agentId })
+          return this.transport.http(`/api/audio/speak?${query}`, {
+            method: "POST",
+            body: { text },
+          })
+        },
+      },
+    })
+    this.interactions = new HermesInteractions({
+      request: (method, params) => this.transport.request(method, params),
+    })
+  }
+
+  async #requireAttachedSession(agentId: string, publicSessionId: string) {
+    const storedId = storedSessionIdentity(agentId, publicSessionId)
+    if (!storedId) throw new HermesSessionNotFoundError()
+    await this.getSession(agentId, storedId)
+    let resumed: unknown
+    try {
+      resumed = await this.transport.request("session.resume", {
+        session_id: storedId,
+        profile: agentId,
+        omit_messages: true,
+      })
+    } catch (error) {
+      throwUnavailable(error)
+    }
+    if (!isRecord(resumed)) throw new HermesUnavailableError()
+    const liveSessionId = validLiveSessionId(resumed.session_id)
+      ? resumed.session_id
+      : undefined
+    if (!liveSessionId) throw new HermesUnavailableError()
+    const info = isRecord(resumed.info) ? resumed.info : undefined
+    return {
+      agentId,
+      sessionId: publicSessionId,
+      liveSessionId,
+      attached: true,
+      active:
+        resumed.running === true ||
+        resumed.status === "working" ||
+        resumed.status === "waiting" ||
+        resumed.status === "starting",
+      usage: info?.usage,
+      info: info ?? resumed,
+    }
+  }
+
+  async #rawHistory(
+    scope: Pick<HermesWorkspaceSession, "agentId" | "sessionId">
+  ) {
+    if (!this.transport.http) throw new HermesUnavailableError()
+    const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+    if (!storedId) throw new HermesSessionNotFoundError()
+    const query = new URLSearchParams({
+      profile: scope.agentId,
+      limit: "500",
+      offset: "0",
+      order: "oldest",
+      include_compacted: "true",
+    })
+    const value = await this.transport.http(
+      `/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`
+    )
+    if (
+      !isRecord(value) ||
+      value.session_id !== storedId ||
+      !Array.isArray(value.messages)
+    )
+      throw new HermesUnavailableError()
+    return value.messages
+  }
+
+  workspaceCapabilities() {
+    return {
+      workspace: this.#workspace.capabilities(),
+      interactions: this.interactions.capabilities(),
+      content: this.#content.capabilities(),
+    }
+  }
+
+  models(agentId: string, sessionId: string) {
+    return this.#workspace.models(agentId, sessionId)
+  }
+
+  selectModel(agentId: string, sessionId: string, selectedId: string) {
+    return this.#workspace.selectModel(agentId, sessionId, selectedId)
+  }
+
+  context(agentId: string, sessionId: string) {
+    return this.#workspace.context(agentId, sessionId)
+  }
+
+  todos(agentId: string, sessionId: string) {
+    return this.#workspace.todos(agentId, sessionId)
+  }
+
+  activity(agentId: string, sessionId: string) {
+    return this.#workspace.activity(agentId, sessionId)
+  }
+
+  async pendingInteractions(
+    agentId: string,
+    publicSessionId: string,
+    requestedRunId?: string
+  ) {
+    const storedId = storedSessionIdentity(agentId, publicSessionId)
+    if (!storedId) throw new HermesSessionNotFoundError()
+    await this.getSession(agentId, storedId)
+    const runId = requestedRunId ?? "aos-hermes-restored-interaction"
+    return {
+      runId,
+      ...(await this.interactions.resume({
+        agentId,
+        sessionId: storedId,
+        threadId: publicSessionId,
+        runId,
+      })),
+    }
+  }
+
+  stageAttachments(
+    agentId: string,
+    sessionId: string,
+    attachments: readonly HermesContentAttachment[]
+  ) {
+    return this.#content.stage(agentId, sessionId, attachments)
+  }
+
+  artifact(agentId: string, sessionId: string, artifactId: string) {
+    return this.#content.artifact(agentId, sessionId, artifactId)
+  }
+
+  audio(agentId: string, sessionId: string) {
+    return this.#content.audio(agentId, sessionId)
+  }
+
+  transcribe(
+    agentId: string,
+    sessionId: string,
+    bytes: Uint8Array,
+    mimeType: string,
+    signal?: AbortSignal
+  ) {
+    return this.#content.transcribe(agentId, sessionId, bytes, mimeType, signal)
+  }
+
+  speak(
+    agentId: string,
+    sessionId: string,
+    text: string,
+    signal?: AbortSignal
+  ) {
+    return this.#content.speak(agentId, sessionId, text, signal)
+  }
 
   async authState(): Promise<RuntimeAuthState> {
     if (this.transport.authState)
@@ -415,6 +696,24 @@ export class HermesServerAdapter implements HermesRunNative {
 
   async close() {
     await this.transport.close?.()
+  }
+
+  acceptInteraction(
+    scope: HermesRunScope & { runId: string },
+    liveSessionId: string,
+    event: unknown
+  ) {
+    return this.interactions.acceptNative(scope, liveSessionId, event)
+  }
+
+  async respondInteractions(
+    scope: HermesRunScope & { runId: string },
+    resume: readonly ResumeEntry[]
+  ) {
+    await this.interactions.resume(scope)
+    return Promise.all(
+      resume.map((entry) => this.interactions.respond(scope, entry))
+    )
   }
 
   async resume(scope: HermesRunScope) {

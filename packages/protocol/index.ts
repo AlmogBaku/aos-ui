@@ -234,6 +234,292 @@ export const RunStopResponseSchema = z.strictObject({
 })
 export type RunStopResponse = z.infer<typeof RunStopResponseSchema>
 
+const CapabilityUnavailableSchema = z.strictObject({
+  status: z.literal("unavailable"),
+  reason: z.string().min(1).max(256),
+})
+export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
+  workspace: z.strictObject({
+    models: z.strictObject({
+      status: z.literal("available"),
+      scope: z.literal("attached-session"),
+      selection: z.literal("native-session"),
+      choices: z.literal("provider-reported"),
+    }),
+    context: z.strictObject({
+      status: z.literal("available"),
+      scope: z.literal("attached-session"),
+      source: z.literal("provider-usage-or-estimate"),
+      breakdown: z.literal("provider-categories"),
+    }),
+    todos: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("session"),
+        mode: z.literal("read-only-projection"),
+        source: z.literal("latest-completed-todo-tool-result"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    activity: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-active-session"),
+        coverage: z.literal("active-session-only"),
+        source: z.literal("session.info"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+  }),
+  interactions: z.strictObject({
+    approvals: z.strictObject({
+      status: z.literal("available"),
+      protocol: z.literal("ag-ui-interrupt"),
+      scope: z.literal("run"),
+      choices: z.tuple([
+        z.strictObject({
+          value: z.literal("once"),
+          scope: z.literal("request"),
+        }),
+        z.strictObject({
+          value: z.literal("session"),
+          scope: z.literal("session"),
+        }),
+        z.strictObject({
+          value: z.literal("always"),
+          scope: z.literal("agent"),
+        }),
+        z.strictObject({
+          value: z.literal("deny"),
+          scope: z.literal("request"),
+        }),
+      ]),
+      maxPending: z.number().int().min(1).max(1_000),
+    }),
+    questions: z.strictObject({
+      status: z.literal("available"),
+      protocol: z.literal("ag-ui-interrupt"),
+      scope: z.literal("run"),
+      answerModes: z.tuple([
+        z.literal("single"),
+        z.literal("multiple"),
+        z.literal("free-text"),
+      ]),
+      cancellation: z.literal("native-empty-answer"),
+      maxQuestions: z.number().int().min(1).max(1_000),
+      maxChoicesPerQuestion: z.number().int().min(1).max(1_000),
+      maxAnswerValuesPerQuestion: z.number().int().min(1).max(1_000),
+      maxStringBytes: z.number().int().min(1).max(1_000_000),
+    }),
+    reactions: CapabilityUnavailableSchema,
+  }),
+  content: z.strictObject({
+    attachments: z.strictObject({
+      status: z.literal("available"),
+      scope: z.literal("attached-session"),
+      inputs: z.tuple([z.literal("image"), z.literal("file")]),
+      imageMimeTypes: z.array(z.string().min(1).max(256)).max(32),
+      fileMimeTypes: z.literal("valid-type/subtype"),
+      maxMimeTypeBytes: z.number().int().positive(),
+      maxFilenameBytes: z.number().int().positive(),
+      maxCount: z.number().int().positive(),
+      maxImageBytes: z.number().int().positive(),
+      maxFileBytes: z.number().int().positive(),
+      maxTotalBytes: z.number().int().positive(),
+    }),
+    artifacts: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("session"),
+        maxBytes: z.number().int().positive(),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    transcription: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-session"),
+        acceptedMimeTypes: z.array(z.string().min(1).max(256)).max(32),
+        mimeParameter: z.literal("codecs"),
+        codecValues: z.array(z.string().min(1).max(64)).max(32),
+        maxRecordingBytes: z.number().int().positive(),
+        maxTranscriptBytes: z.number().int().positive(),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    speech: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-session"),
+        acceptedMimeTypes: z.array(z.string().min(1).max(256)).max(32),
+        maxTextBytes: z.number().int().positive(),
+        maxAudioBytes: z.number().int().positive(),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+  }),
+})
+
+export const SessionModelsResponseSchema = z.strictObject({
+  selectedId: IdentifierSchema,
+  options: z
+    .array(
+      z.strictObject({
+        id: IdentifierSchema,
+        label: z.string().min(1).max(256),
+        group: z.string().min(1).max(256),
+      })
+    )
+    .max(4_096),
+})
+export type SessionModelsResponse = z.infer<typeof SessionModelsResponseSchema>
+
+export const SessionModelSelectRequestSchema = z.strictObject({
+  selectedId: IdentifierSchema,
+})
+
+export const SessionContextResponseSchema = z.strictObject({
+  usedTokens: z.number().int().min(0),
+  maxTokens: z.number().int().positive(),
+  estimated: z.literal(true).optional(),
+  source: z.enum([
+    "provider-usage",
+    "provider-usage-plus-estimate",
+    "local-estimate",
+  ]),
+  breakdown: z
+    .strictObject({
+      systemTokens: z.number().int().min(0),
+      toolTokens: z.number().int().min(0),
+      messageTokens: z.number().int().min(0),
+    })
+    .optional(),
+})
+export type SessionContextResponse = z.infer<
+  typeof SessionContextResponseSchema
+>
+
+const TodoSchema = z.strictObject({
+  id: IdentifierSchema,
+  label: z.string().min(1).max(4096),
+  status: z.enum(["pending", "active", "completed", "failed"]),
+})
+export const SessionTodosResponseSchema = z.strictObject({
+  todos: z.array(TodoSchema).max(10_000),
+})
+export type SessionTodosResponse = z.infer<typeof SessionTodosResponseSchema>
+
+export const SessionActivityResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("unavailable"),
+    reason: z.enum([
+      "session-not-attached",
+      "session-idle",
+      "session-info-unavailable",
+    ]),
+  }),
+  z.strictObject({
+    status: z.literal("available"),
+    scope: z.literal("attached-active-session"),
+    coverage: z.literal("active-session-only"),
+    state: z.enum(["running", "waiting-for-input", "idle", "unknown"]),
+  }),
+])
+export type SessionActivityResponse = z.infer<
+  typeof SessionActivityResponseSchema
+>
+
+export const SessionInteractionSnapshotResponseSchema = z.strictObject({
+  runId: IdentifierSchema,
+  running: z.boolean(),
+  status: z.enum(["waiting-for-input", "running", "idle", "unknown"]),
+  outcome: z
+    .strictObject({
+      type: z.literal("interrupt"),
+      interrupts: z
+        .array(
+          z.strictObject({
+            id: IdentifierSchema,
+            reason: z.string().min(1).max(256),
+            message: z.string().max(65_536).optional(),
+            toolCallId: IdentifierSchema.optional(),
+            responseSchema: z.record(z.string(), z.unknown()).optional(),
+            expiresAt: z.string().max(256).optional(),
+            metadata: z.record(z.string(), z.unknown()).optional(),
+            subagentRunId: IdentifierSchema.optional(),
+          })
+        )
+        .min(1)
+        .max(64),
+    })
+    .optional(),
+})
+export type SessionInteractionSnapshotResponse = z.infer<
+  typeof SessionInteractionSnapshotResponseSchema
+>
+
+const SessionAttachmentSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("image"),
+    dataUrl: z.string().min(1).max(35_000_000),
+    filename: z.string().min(1).max(255).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("file"),
+    dataUrl: z.string().min(1).max(35_000_000),
+    filename: z.string().min(1).max(255).optional(),
+    mimeType: z.string().min(1).max(256).optional(),
+  }),
+])
+export const SessionAttachmentStageRequestSchema = z.strictObject({
+  attachments: z.array(SessionAttachmentSchema).max(16),
+})
+const PublicSessionAttachmentSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("image"),
+    dataUrl: z.string().min(1).max(35_000_000),
+    filename: z.string().min(1).max(255).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("file"),
+    filename: z.string().min(1).max(255).optional(),
+    mimeType: z.string().min(1).max(256),
+  }),
+])
+export const SessionAttachmentStageResponseSchema = z.strictObject({
+  stageId: IdentifierSchema,
+  attachments: z.array(PublicSessionAttachmentSchema).max(16),
+})
+export type SessionAttachmentStageResponse = z.infer<
+  typeof SessionAttachmentStageResponseSchema
+>
+
+const AudioReadinessSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("ready") }),
+  z.strictObject({
+    status: z.literal("unavailable"),
+    reason: z.string().min(1).max(256),
+  }),
+  z.strictObject({
+    status: z.literal("unverified"),
+    reason: z.string().min(1).max(256),
+  }),
+])
+export const SessionAudioResponseSchema = z.strictObject({
+  transcription: AudioReadinessSchema,
+  speech: AudioReadinessSchema,
+})
+export const SessionTranscriptionRequestSchema = z.strictObject({
+  dataUrl: z.string().min(1).max(7_500_000),
+  mimeType: z.string().min(1).max(128),
+})
+export const SessionTranscriptionResponseSchema = z.strictObject({
+  transcript: z.string().max(1_000_000),
+})
+export const SessionSpeechRequestSchema = z.strictObject({
+  text: z.string().min(1).max(32_000),
+})
+
 export const ErrorResponseSchema = z.strictObject({
   error: z.strictObject({
     code: z.enum([

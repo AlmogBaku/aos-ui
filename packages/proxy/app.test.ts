@@ -34,6 +34,348 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("serves the normalized owned Hermes workspace, content, and audio routes", async () => {
+    const hermes = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(hermes, "getSession").mockResolvedValue({
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Owned",
+      archived: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      status: "idle",
+    })
+    vi.spyOn(hermes, "models").mockResolvedValue({
+      selectedId: '["native","small"]',
+      options: [{ id: '["native","small"]', label: "small", group: "Native" }],
+    })
+    vi.spyOn(hermes, "todos").mockResolvedValue([
+      { id: "todo-1", label: "Inspect", status: "active" },
+    ])
+    vi.spyOn(hermes, "audio").mockResolvedValue({
+      transcription: { status: "ready" },
+      speech: { status: "unavailable", reason: "not-configured" },
+    })
+    vi.spyOn(hermes, "speak").mockResolvedValue({
+      bytes: Uint8Array.of(1, 2, 3),
+      mimeType: "audio/mpeg",
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const base =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored"
+
+    expect(
+      await (await app.request(request(`${base}/workspace/models`))).json()
+    ).toEqual({
+      selectedId: '["native","small"]',
+      options: [{ id: '["native","small"]', label: "small", group: "Native" }],
+    })
+    expect(
+      await (await app.request(request(`${base}/workspace/todos`))).json()
+    ).toEqual({
+      todos: [{ id: "todo-1", label: "Inspect", status: "active" }],
+    })
+    expect(await (await app.request(request(`${base}/audio`))).json()).toEqual({
+      transcription: { status: "ready" },
+      speech: { status: "unavailable", reason: "not-configured" },
+    })
+    const speech = await app.request(
+      request(`${base}/audio/speak`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ text: "Hello" }),
+      })
+    )
+    expect(speech.status).toBe(200)
+    expect(speech.headers.get("content-type")).toBe("audio/mpeg")
+    expect(new Uint8Array(await speech.arrayBuffer())).toEqual(
+      Uint8Array.of(1, 2, 3)
+    )
+
+    const crossScope = await app.request(
+      request(
+        "/api/aos/v1/agents/other/sessions/hermes%3Aresearcher%3Astored/workspace/models"
+      )
+    )
+    expect(crossScope.status).toBe(404)
+  })
+
+  it("binds one opaque attachment stage to the next same-Session AG-UI run", async () => {
+    const cleanup = vi.fn(async () => undefined)
+    const hermes = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(hermes, "getSession").mockResolvedValue({
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Owned",
+      archived: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      status: "idle",
+    })
+    vi.spyOn(hermes, "stageAttachments").mockResolvedValue({
+      public: [{ type: "file", filename: "notes.txt", mimeType: "text/plain" }],
+      appendTo: (text: string) => `${text}\n@file:private-reference`,
+      cleanup,
+    })
+    const start = vi.fn(async () => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: async () => "idle" as const,
+      disconnect: vi.fn(),
+      recoveryPosition: () => ({ epoch: "epoch", lastSeen: 0 }),
+    }))
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes,
+      runEngine: { start } as unknown as HermesRunEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const base =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored"
+    const staged = await app.request(
+      request(`${base}/attachments/stage`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          attachments: [
+            {
+              type: "file",
+              dataUrl: "data:text/plain;base64,YQ==",
+              filename: "notes.txt",
+              mimeType: "text/plain",
+            },
+          ],
+        }),
+      })
+    )
+    expect(staged.status).toBe(201)
+    const stage = (await staged.json()) as { stageId: string }
+    expect(stage).toMatchObject({
+      stageId: expect.any(String),
+      attachments: [
+        { type: "file", filename: "notes.txt", mimeType: "text/plain" },
+      ],
+    })
+    expect(JSON.stringify(stage)).not.toContain("private-reference")
+
+    const run = await app.request(
+      request(`${base}/runs`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+          state: {},
+          messages: [{ id: "user-1", role: "user", content: "Inspect" }],
+          tools: [],
+          context: [],
+          forwardedProps: { aosAttachmentStageId: stage.stageId },
+        }),
+      })
+    )
+    expect(run.status).toBe(200)
+    expect(start).toHaveBeenCalledWith(
+      {
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "hermes:researcher:stored",
+      },
+      expect.objectContaining({
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Inspect\n@file:private-reference",
+          },
+        ],
+        forwardedProps: {},
+      })
+    )
+    expect(cleanup).not.toHaveBeenCalled()
+
+    const replay = await app.request(
+      request(`${base}/runs`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-2",
+          state: {},
+          messages: [{ id: "user-2", role: "user", content: "Again" }],
+          tools: [],
+          context: [],
+          forwardedProps: { aosAttachmentStageId: stage.stageId },
+        }),
+      })
+    )
+    expect(replay.status).toBe(400)
+  })
+
+  it("keeps the interaction response alias limited to bound AG-UI resume input", async () => {
+    const start = vi.fn(async () => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-2",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: async () => "idle" as const,
+      disconnect: vi.fn(),
+      recoveryPosition: () => ({ epoch: "epoch", lastSeen: 0 }),
+    }))
+    const hermes = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(hermes, "getSession").mockResolvedValue({
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Owned",
+      archived: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      status: "waiting-for-input",
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes,
+      runEngine: { start } as unknown as HermesRunEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const route =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/interactions/respond"
+    const plain = await app.request(
+      request(route, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+          state: {},
+          messages: [{ id: "user-1", role: "user", content: "not resume" }],
+          tools: [],
+          context: [],
+          forwardedProps: {},
+        }),
+      })
+    )
+    expect(plain.status).toBe(400)
+    expect(start).not.toHaveBeenCalled()
+
+    const resumed = await app.request(
+      request(route, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-2",
+          state: {},
+          messages: [],
+          tools: [],
+          context: [],
+          forwardedProps: {},
+          resume: [
+            { interruptId: "approval-1", status: "resolved", payload: "once" },
+          ],
+        }),
+      })
+    )
+    expect(resumed.status).toBe(200)
+    expect(start).toHaveBeenCalledOnce()
+  })
+
+  it("restores authoritative pending interactions without a client-held run ID", async () => {
+    const hermes = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(hermes, "getSession").mockResolvedValue({
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Owned",
+      archived: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      status: "waiting-for-input",
+    })
+    vi.spyOn(hermes, "pendingInteractions").mockResolvedValue({
+      runId: "aos-hermes-restored-interaction",
+      running: true,
+      status: "waiting-for-input",
+      outcome: {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: "approval-1",
+            reason: "approval",
+            message: "Allow this action?",
+            responseSchema: { type: "string", enum: ["once", "deny"] },
+          },
+        ],
+      },
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const base =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored"
+
+    const response = await app.request(request(`${base}/interactions/pending`))
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body).toMatchObject({
+      runId: "aos-hermes-restored-interaction",
+      running: true,
+      status: "waiting-for-input",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-1", reason: "approval" }],
+      },
+    })
+    expect(JSON.stringify(body)).not.toContain("live-secret")
+    expect(hermes.pendingInteractions).toHaveBeenCalledWith(
+      "researcher",
+      "hermes:researcher:stored",
+      undefined
+    )
+
+    expect(
+      (
+        await app.request(
+          request(`${base}/interactions/pending?runId=one&runId=two`)
+        )
+      ).status
+    ).toBe(400)
+  })
+
   it("uses provider-neutral OIDC and runtime authentication routes", async () => {
     const operatorOidc = {
       begin: vi.fn(async () => ({

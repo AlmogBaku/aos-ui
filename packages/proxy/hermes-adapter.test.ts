@@ -26,6 +26,174 @@ function profile(hidden = false, revision: number | null = 7) {
 }
 
 describe("Hermes server adapter", () => {
+  it("binds workspace models, context, Todos, and activity to the owned stored Session", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-secret",
+          running: true,
+          status: "working",
+          info: {
+            running: true,
+            usage: {
+              context_source: "provider_usage",
+              context_estimated: false,
+              context_used: 20,
+              context_max: 100,
+            },
+          },
+        }
+      if (method === "model.options")
+        return {
+          provider: "native",
+          model: "small",
+          providers: [{ slug: "native", name: "Native", models: ["small"] }],
+        }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      if (path.includes("/messages?"))
+        return {
+          session_id: "stored",
+          messages: [
+            {
+              role: "assistant",
+              tool_calls: [{ id: "todo-call", function: { name: "todo" } }],
+            },
+            {
+              role: "tool",
+              tool_call_id: "todo-call",
+              content: JSON.stringify({
+                todos: [{ id: "one", content: "Inspect", status: "active" }],
+              }),
+            },
+          ],
+        }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const threadId = "hermes:researcher:stored"
+
+    await expect(adapter.models("researcher", threadId)).resolves.toEqual({
+      selectedId: '["native","small"]',
+      options: [{ id: '["native","small"]', label: "small", group: "Native" }],
+    })
+    await expect(adapter.context("researcher", threadId)).resolves.toEqual({
+      usedTokens: 20,
+      maxTokens: 100,
+      source: "provider-usage",
+    })
+    await expect(adapter.todos("researcher", threadId)).resolves.toEqual([
+      { id: "one", label: "Inspect", status: "active" },
+    ])
+    await expect(adapter.activity("researcher", threadId)).resolves.toEqual({
+      status: "available",
+      scope: "attached-active-session",
+      coverage: "active-session-only",
+      state: "running",
+    })
+    expect(JSON.stringify(await adapter.workspaceCapabilities())).not.toContain(
+      "live-secret"
+    )
+  })
+
+  it("stages owned attachments and reads only a published same-Session artifact", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return { session_id: "live-secret", running: false, status: "idle" }
+      if (method === "image.attach_bytes")
+        return { attached: true, path: "/private/image.png" }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      if (path.includes("/messages?"))
+        return {
+          session_id: "stored",
+          messages: [
+            {
+              role: "tool",
+              content: JSON.stringify({
+                ok: true,
+                type: "aos.artifact",
+                artifact: {
+                  id: "artifact-1",
+                  path: "reports/result.txt",
+                  filename: "result.txt",
+                },
+              }),
+            },
+          ],
+        }
+      if (path.startsWith("/api/fs/read-data-url?"))
+        return { dataUrl: "data:text/plain;base64,aGVsbG8=" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const threadId = "hermes:researcher:stored"
+
+    const staged = await adapter.stageAttachments("researcher", threadId, [
+      { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
+    ])
+    expect(staged.public).toEqual([
+      { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
+    ])
+    expect(JSON.stringify(staged.public)).not.toContain("/private")
+
+    await expect(
+      adapter.artifact("researcher", threadId, "artifact-1")
+    ).resolves.toEqual({
+      bytes: Uint8Array.from([104, 101, 108, 108, 111]),
+      filename: "result.txt",
+      mimeType: "text/plain",
+    })
+    expect(http.mock.calls.at(-1)?.[0]).toContain(
+      "path=reports%2Fresult.txt&profile=researcher&session_id=stored"
+    )
+  })
+
+  it("restores pending interactions from authoritative owned Session state", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-secret",
+          running: true,
+          pending_approval: {
+            request_id: "approval-1",
+            message: "Allow this action?",
+            choices: ["once", "deny"],
+          },
+        }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+
+    await expect(
+      adapter.pendingInteractions("researcher", "hermes:researcher:stored")
+    ).resolves.toMatchObject({
+      runId: "aos-hermes-restored-interaction",
+      running: true,
+      status: "waiting-for-input",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-1", reason: "approval" }],
+      },
+    })
+    expect(request).toHaveBeenCalledWith("session.resume", {
+      session_id: "stored",
+      profile: "researcher",
+      omit_messages: true,
+    })
+  })
+
   it("implements the server-only native run boundary over exact Hermes operations", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "session.resume")

@@ -10,10 +10,189 @@ import {
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
+  SessionInteractionSnapshotResponseSchema,
+  SessionActivityResponseSchema,
+  SessionAudioResponseSchema,
+  SessionAttachmentStageRequestSchema,
+  SessionAttachmentStageResponseSchema,
+  SessionContextResponseSchema,
+  SessionModelSelectRequestSchema,
+  SessionModelsResponseSchema,
+  SessionTodosResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "./index"
 
 describe("AOS v1 normalized protocol", () => {
+  it("validates the normalized Hermes Session workspace and content envelopes", () => {
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.parse({
+        workspace: {
+          models: {
+            status: "available",
+            scope: "attached-session",
+            selection: "native-session",
+            choices: "provider-reported",
+          },
+          context: {
+            status: "available",
+            scope: "attached-session",
+            source: "provider-usage-or-estimate",
+            breakdown: "provider-categories",
+          },
+          todos: { status: "unavailable", reason: "history-unavailable" },
+          activity: {
+            status: "unavailable",
+            reason: "session-info-unavailable",
+          },
+        },
+        interactions: {
+          approvals: {
+            status: "available",
+            protocol: "ag-ui-interrupt",
+            scope: "run",
+            choices: [
+              { value: "once", scope: "request" },
+              { value: "session", scope: "session" },
+              { value: "always", scope: "agent" },
+              { value: "deny", scope: "request" },
+            ],
+            maxPending: 64,
+          },
+          questions: {
+            status: "available",
+            protocol: "ag-ui-interrupt",
+            scope: "run",
+            answerModes: ["single", "multiple", "free-text"],
+            cancellation: "native-empty-answer",
+            maxQuestions: 32,
+            maxChoicesPerQuestion: 64,
+            maxAnswerValuesPerQuestion: 64,
+            maxStringBytes: 4096,
+          },
+          reactions: {
+            status: "unavailable",
+            reason: "native-reaction-operation-unavailable",
+          },
+        },
+        content: {
+          attachments: {
+            status: "available",
+            scope: "attached-session",
+            inputs: ["image", "file"],
+            imageMimeTypes: ["image/png"],
+            fileMimeTypes: "valid-type/subtype",
+            maxMimeTypeBytes: 256,
+            maxFilenameBytes: 255,
+            maxCount: 16,
+            maxImageBytes: 26214400,
+            maxFileBytes: 26214400,
+            maxTotalBytes: 26214400,
+          },
+          artifacts: {
+            status: "available",
+            scope: "session",
+            maxBytes: 26214400,
+          },
+          transcription: {
+            status: "unavailable",
+            reason: "native-transcription-unavailable",
+          },
+          speech: {
+            status: "unavailable",
+            reason: "native-speech-unavailable",
+          },
+        },
+      })
+    ).toMatchObject({ interactions: { reactions: { status: "unavailable" } } })
+    expect(
+      SessionModelsResponseSchema.parse({
+        selectedId: '["native","small"]',
+        options: [
+          {
+            id: '["native","small"]',
+            label: "small",
+            group: "Native",
+          },
+        ],
+      })
+    ).toMatchObject({ selectedId: '["native","small"]' })
+    expect(
+      SessionModelSelectRequestSchema.parse({
+        selectedId: '["native","small"]',
+      })
+    ).toEqual({ selectedId: '["native","small"]' })
+    expect(
+      SessionContextResponseSchema.parse({
+        usedTokens: 12,
+        maxTokens: 100,
+        source: "provider-usage",
+      })
+    ).toMatchObject({ usedTokens: 12 })
+    expect(
+      SessionTodosResponseSchema.parse({
+        todos: [{ id: "todo-1", label: "Inspect", status: "active" }],
+      })
+    ).toMatchObject({ todos: [{ id: "todo-1" }] })
+    expect(
+      SessionActivityResponseSchema.parse({
+        status: "available",
+        scope: "attached-active-session",
+        coverage: "active-session-only",
+        state: "waiting-for-input",
+      })
+    ).toMatchObject({ state: "waiting-for-input" })
+    expect(
+      SessionInteractionSnapshotResponseSchema.parse({
+        runId: "aos-hermes-restored-interaction",
+        running: true,
+        status: "waiting-for-input",
+        outcome: {
+          type: "interrupt",
+          interrupts: [
+            {
+              id: "approval-1",
+              reason: "approval",
+              message: "Allow this action?",
+              responseSchema: { type: "string", enum: ["once", "deny"] },
+            },
+          ],
+        },
+      })
+    ).toMatchObject({
+      status: "waiting-for-input",
+      outcome: { type: "interrupt" },
+    })
+    expect(
+      SessionAudioResponseSchema.parse({
+        transcription: { status: "ready" },
+        speech: { status: "unavailable", reason: "not-configured" },
+      })
+    ).toMatchObject({ transcription: { status: "ready" } })
+    const staged = SessionAttachmentStageResponseSchema.parse({
+      stageId: "stage-1",
+      attachments: [
+        {
+          type: "file",
+          filename: "notes.txt",
+          mimeType: "text/plain",
+        },
+      ],
+    })
+    expect(staged.stageId).toBe("stage-1")
+    expect(() =>
+      SessionAttachmentStageRequestSchema.parse({
+        attachments: [
+          {
+            type: "file",
+            dataUrl: "data:text/plain;base64,YQ==",
+            mimeType: "text/plain",
+            nativePath: "/private/notes.txt",
+          },
+        ],
+      })
+    ).toThrow()
+  })
   it("exposes only the normalized Stop settlement state", () => {
     expect(RunStopResponseSchema.parse({ status: "stopping" })).toEqual({
       status: "stopping",

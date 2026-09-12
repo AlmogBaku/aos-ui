@@ -137,7 +137,7 @@ describe("HermesRunEngine", () => {
     ).rejects.toThrow("browser context")
   })
 
-  it("rejects forwarded properties and interrupt resumes on a new turn", async () => {
+  it("rejects browser-owned forwarded properties", async () => {
     const engine = new HermesRunEngine(native())
 
     await expect(
@@ -146,20 +146,133 @@ describe("HermesRunEngine", () => {
     await expect(
       engine.start(scope, input({ forwardedProps: "native override" }))
     ).rejects.toThrow("forwarded properties")
-    await expect(
-      engine.start(
-        scope,
-        input({
-          resume: [
+  })
+
+  it("finishes with a native AG-UI interrupt and resumes it without submitting a prompt", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    let submits = 0
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          submits += 1
+          publish?.({
+            type: "approval.request",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { request_id: "approval-1" },
+          })
+          return { acknowledgement: "accepted" }
+        },
+        acceptInteraction: (_scope, _liveSessionId, event) =>
+          (event as { type?: string }).type === "approval.request"
+            ? {
+                type: "interrupt",
+                interrupts: [
+                  {
+                    id: "approval-1",
+                    reason: "approval",
+                    message: "Continue?",
+                    responseSchema: {
+                      type: "string",
+                      enum: ["once", "deny"],
+                    },
+                  },
+                ],
+              }
+            : undefined,
+        respondInteractions: async (_scope, resume) => {
+          expect(resume).toEqual([
             {
               interruptId: "approval-1",
               status: "resolved",
-              payload: { choice: "always" },
+              payload: "once",
+            },
+          ])
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { message_id: "continued" },
+          })
+          publish?.({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq: 3,
+            payload: { text: "Done" },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 4,
+            payload: {},
+          })
+          return [{ status: "resolved" }]
+        },
+      })
+    )
+
+    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-1",
+        outcome: {
+          type: "interrupt",
+          interrupts: [
+            {
+              id: "approval-1",
+              reason: "approval",
+              message: "Continue?",
+              responseSchema: { type: "string", enum: ["once", "deny"] },
             },
           ],
-        })
+        },
+      },
+    ])
+
+    await expect(
+      collect(
+        await engine.start(
+          scope,
+          input({
+            runId: "run-2",
+            messages: [],
+            resume: [
+              {
+                interruptId: "approval-1",
+                status: "resolved",
+                payload: "once",
+              },
+            ],
+          })
+        )
       )
-    ).rejects.toThrow("interrupt response")
+    ).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-2" },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "continued",
+        role: "assistant",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "continued",
+        delta: "Done",
+      },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "continued" },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-2",
+        outcome: { type: "success" },
+      },
+    ])
+    expect(submits).toBe(1)
   })
 
   it("rejects non-standard top-level run fields instead of accepting provider payloads", async () => {

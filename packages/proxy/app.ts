@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { AGUIEvent } from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 
 import {
   ErrorResponseSchema,
@@ -12,6 +12,19 @@ import {
   VisibilityUpdateRequestSchema,
   SessionCreateRequestSchema,
   SessionPatchRequestSchema,
+  SessionActivityResponseSchema,
+  SessionAttachmentStageRequestSchema,
+  SessionAttachmentStageResponseSchema,
+  SessionAudioResponseSchema,
+  SessionContextResponseSchema,
+  SessionInteractionSnapshotResponseSchema,
+  SessionModelsResponseSchema,
+  SessionModelSelectRequestSchema,
+  SessionSpeechRequestSchema,
+  SessionTodosResponseSchema,
+  SessionTranscriptionRequestSchema,
+  SessionTranscriptionResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
   SESSION_CATALOG_MAX_WINDOW,
 } from "../protocol"
 import {
@@ -34,6 +47,16 @@ import { OidcAuthenticationError, type OidcCore } from "./auth/oidc"
 import type { OperatorSession } from "./auth/session-cookie"
 import { HermesBrowserAuthenticationError } from "./hermes-auth-broker"
 import { HermesAuthenticationError } from "./hermes-transport"
+import {
+  HermesContentScopeError,
+  HermesContentUnavailableError,
+} from "./hermes-content"
+import {
+  HermesWorkspaceScopeError,
+  HermesWorkspaceUnavailableError,
+} from "./hermes-workspace"
+import { HermesInteractionPublicError } from "./hermes-interactions"
+import { HermesAttachmentStageRegistry } from "./hermes-stage-registry"
 
 type Logger = {
   info(value: unknown): void
@@ -132,6 +155,53 @@ function validIdentifier(value: string) {
   )
 }
 
+function recordingBytes(dataUrl: string, mimeType: string) {
+  const prefix = `data:${mimeType};base64,`
+  if (!dataUrl.startsWith(prefix)) return undefined
+  const encoded = dataUrl.slice(prefix.length)
+  if (
+    encoded.length === 0 ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)
+  )
+    return undefined
+  try {
+    return Uint8Array.from(atob(encoded), (character) =>
+      character.charCodeAt(0)
+    )
+  } catch {
+    return undefined
+  }
+}
+
+function runText(candidate: unknown) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return undefined
+  const messages = (candidate as { messages?: unknown }).messages
+  if (!Array.isArray(messages) || messages.length !== 1) return undefined
+  const message = messages[0]
+  if (
+    !message ||
+    typeof message !== "object" ||
+    (message as { role?: unknown }).role !== "user"
+  )
+    return undefined
+  const content = (message as { content?: unknown }).content
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return undefined
+  if (
+    content.some(
+      (part) =>
+        !part ||
+        typeof part !== "object" ||
+        (part as { type?: unknown }).type !== "text" ||
+        typeof (part as { text?: unknown }).text !== "string"
+    )
+  )
+    return undefined
+  return content.map((part) => (part as { text: string }).text).join("\n")
+}
+
 function isRunConflict(error: unknown) {
   return (
     error instanceof Error &&
@@ -210,6 +280,7 @@ export function createProxyApp(options: ProxyAppOptions) {
   const clock = options.clock ?? Date.now
   const activeRuns = new Map<string, HermesRunHandle>()
   const runAdmissions = new Set<string>()
+  const attachmentStages = new HermesAttachmentStageRegistry()
   const maxActiveRuns = options.maxActiveRuns ?? 256
   if (
     !Number.isSafeInteger(maxActiveRuns) ||
@@ -276,6 +347,17 @@ export function createProxyApp(options: ProxyAppOptions) {
     const values = url.searchParams.getAll("return")
     if (values.length > 1) return undefined
     return values[0] ?? "/"
+  }
+
+  async function requireScopedSession(
+    hermes: HermesServerAdapter,
+    agentId: string,
+    publicSessionId: string
+  ) {
+    const id = storedSessionId(agentId, publicSessionId)
+    if (!id) throw new HermesSessionNotFoundError()
+    await hermes.getSession(agentId, id)
+    return id
   }
 
   app.get("/api/aos/v1/healthz", (context) =>
@@ -547,134 +629,434 @@ export function createProxyApp(options: ProxyAppOptions) {
     }
   )
 
-  app.post(
-    "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs",
-    async (context) => {
-      const hermes = await requireRuntime(context.req.raw)
-      if (context.req.header("origin") !== options.publicOrigin)
-        return errorResponse("forbidden", 403)
-      const agentId = context.req.param("agentId")
-      const threadId = context.req.param("sessionId")
-      const sessionId = storedSessionId(agentId, threadId)
-      if (!sessionId) return errorResponse("not_found", 404)
-      const input = await boundedJson(context.req.raw, 1_100_000)
-      if (input === undefined) return errorResponse("invalid_request", 400)
-      const scope = { agentId, sessionId, threadId }
-      const key = runKey(scope)
-      if (activeRuns.has(key) || runAdmissions.has(key))
-        return errorResponse("run_conflict", 409)
-      if (activeRuns.size + runAdmissions.size >= maxActiveRuns)
-        return errorResponse("run_capacity_exceeded", 503)
-      runAdmissions.add(key)
-      try {
-        await hermes.getSession(agentId, sessionId)
-      } catch (cause) {
-        runAdmissions.delete(key)
-        throw cause
-      }
-      let handle: HermesRunHandle
-      try {
-        const runEngine = options.runEngine ?? new HermesRunEngine(hermes)
-        handle = await runEngine.start(scope, input)
-      } catch (cause) {
-        options.logger.error(
-          redactForLog({
-            event: "run.start.failed",
-            requestId: context.get("requestId"),
-            error: cause,
-          })
+  const sessionWorkspacePath =
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/workspace"
+
+  app.get(`${sessionWorkspacePath}/capabilities`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    const agentId = context.req.param("agentId")
+    const sessionId = context.req.param("sessionId")
+    await requireScopedSession(hermes, agentId, sessionId)
+    return context.json(
+      SessionWorkspaceCapabilitiesResponseSchema.parse(
+        hermes.workspaceCapabilities()
+      )
+    )
+  })
+
+  app.get(`${sessionWorkspacePath}/models`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    const agentId = context.req.param("agentId")
+    const sessionId = context.req.param("sessionId")
+    await requireScopedSession(hermes, agentId, sessionId)
+    return context.json(
+      SessionModelsResponseSchema.parse(await hermes.models(agentId, sessionId))
+    )
+  })
+
+  app.post(`${sessionWorkspacePath}/models/select`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const body = SessionModelSelectRequestSchema.safeParse(
+      await boundedJson(context.req.raw)
+    )
+    if (!body.success) return errorResponse("invalid_request", 400)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionModelSelectRequestSchema.parse(
+        await hermes.selectModel(
+          context.req.param("agentId"),
+          context.req.param("sessionId"),
+          body.data.selectedId
         )
-        return isRunConflict(cause)
-          ? errorResponse("run_conflict", 409)
-          : cause instanceof HermesRunPublicError
-            ? errorResponse("temporarily_unavailable", 503)
-            : errorResponse("invalid_request", 400)
-      } finally {
-        runAdmissions.delete(key)
-      }
-      activeRuns.set(key, handle)
-      const encoder = new EventEncoder({ accept: "text/event-stream" })
-      const textEncoder = new TextEncoder()
-      let detached = false
-      let state: "open" | "terminal" | "closed" | "cancelled" = "open"
-      let readInFlight: Promise<IteratorResult<AGUIEvent>> | undefined
-      let iteratorClose: Promise<void> | undefined
-      const iterator = handle.events[Symbol.asyncIterator]()
-      const disconnect = () => {
-        if (detached) return
-        detached = true
-        handle.disconnect()
-      }
-      const removeAbortListener = () =>
-        context.req.raw.signal.removeEventListener("abort", disconnect)
-      const closeIterator = () => {
-        if (iteratorClose) return iteratorClose
-        iteratorClose = Promise.resolve(iterator.return?.()).then(
-          () => undefined,
-          () => undefined
+      )
+    )
+  })
+
+  app.get(`${sessionWorkspacePath}/context`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionContextResponseSchema.parse(
+        await hermes.context(
+          context.req.param("agentId"),
+          context.req.param("sessionId")
         )
-        return iteratorClose
-      }
-      context.req.raw.signal.addEventListener("abort", disconnect, {
-        once: true,
+      )
+    )
+  })
+
+  app.get(`${sessionWorkspacePath}/todos`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionTodosResponseSchema.parse({
+        todos: await hermes.todos(
+          context.req.param("agentId"),
+          context.req.param("sessionId")
+        ),
       })
-      const stream = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          if (state !== "open" || readInFlight) return
-          readInFlight = Promise.resolve(iterator.next())
-          try {
-            const result = await readInFlight
-            if (state !== "open") return
-            if (result.done) {
-              state = "closed"
-              removeAbortListener()
-              controller.close()
-              return
-            }
-            const event = result.value
-            const terminal =
-              event.type === "RUN_FINISHED" ||
-              (event.type === "RUN_ERROR" &&
-                event.code !== "AOS_SEND_UNCERTAIN" &&
-                event.code !== "AOS_CONNECTION_INTERRUPTED")
-            controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
-            if (terminal) {
-              state = "terminal"
-              removeAbortListener()
-              if (activeRuns.get(key) === handle) activeRuns.delete(key)
-              await closeIterator()
-              if (state === "terminal") {
-                state = "closed"
-                controller.close()
-              }
-            }
-          } catch {
-            if (state === "open") {
-              state = "closed"
-              removeAbortListener()
-              await closeIterator()
-              controller.error(new Error("AOS run stream failed"))
-            }
-          } finally {
-            readInFlight = undefined
-          }
-        },
-        async cancel() {
-          if (state === "closed" || state === "cancelled") return
-          state = "cancelled"
-          removeAbortListener()
-          disconnect()
-          const pendingRead = readInFlight
-          await Promise.allSettled([
-            closeIterator(),
-            ...(pendingRead ? [pendingRead] : []),
-          ])
-        },
-      })
-      return new Response(stream, {
-        headers: { "content-type": encoder.getContentType() },
-      })
+    )
+  })
+
+  app.get(`${sessionWorkspacePath}/activity`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionActivityResponseSchema.parse(
+        await hermes.activity(
+          context.req.param("agentId"),
+          context.req.param("sessionId")
+        )
+      )
+    )
+  })
+
+  const sessionContentPath = "/api/aos/v1/agents/:agentId/sessions/:sessionId"
+
+  app.get(`${sessionContentPath}/interactions/pending`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    const runIds = new URL(context.req.url).searchParams.getAll("runId")
+    if (
+      runIds.length > 1 ||
+      (runIds[0] !== undefined && !validIdentifier(runIds[0]))
+    )
+      return errorResponse("invalid_request", 400)
+    const agentId = context.req.param("agentId")
+    const sessionId = context.req.param("sessionId")
+    await requireScopedSession(hermes, agentId, sessionId)
+    return context.json(
+      SessionInteractionSnapshotResponseSchema.parse(
+        await hermes.pendingInteractions(agentId, sessionId, runIds[0])
+      )
+    )
+  })
+
+  app.post(`${sessionContentPath}/attachments/stage`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const body = SessionAttachmentStageRequestSchema.safeParse(
+      await boundedJson(context.req.raw, 35_500_000)
+    )
+    if (!body.success) return errorResponse("invalid_request", 400)
+    const agentId = context.req.param("agentId")
+    const sessionId = context.req.param("sessionId")
+    await requireScopedSession(hermes, agentId, sessionId)
+    const stage = await hermes.stageAttachments(
+      agentId,
+      sessionId,
+      body.data.attachments
+    )
+    const stageId = attachmentStages.create(agentId, sessionId, stage)
+    if (!stageId) {
+      await stage.cleanup().catch(() => undefined)
+      return errorResponse("run_capacity_exceeded", 503)
     }
+    return context.json(
+      SessionAttachmentStageResponseSchema.parse({
+        stageId,
+        attachments: stage.public,
+      }),
+      201
+    )
+  })
+
+  app.get(`${sessionContentPath}/artifacts/:artifactId`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    const artifact = await hermes.artifact(
+      context.req.param("agentId"),
+      context.req.param("sessionId"),
+      context.req.param("artifactId")
+    )
+    return new Response(Uint8Array.from(artifact.bytes).buffer, {
+      headers: {
+        "content-type": artifact.mimeType ?? "application/octet-stream",
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(artifact.filename)}`,
+      },
+    })
+  })
+
+  app.get(`${sessionContentPath}/audio`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionAudioResponseSchema.parse(
+        await hermes.audio(
+          context.req.param("agentId"),
+          context.req.param("sessionId")
+        )
+      )
+    )
+  })
+
+  app.post(`${sessionContentPath}/audio/transcribe`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const body = SessionTranscriptionRequestSchema.safeParse(
+      await boundedJson(context.req.raw, 7_500_000)
+    )
+    if (!body.success) return errorResponse("invalid_request", 400)
+    const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
+    if (!bytes) return errorResponse("invalid_request", 400)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    return context.json(
+      SessionTranscriptionResponseSchema.parse({
+        transcript: await hermes.transcribe(
+          context.req.param("agentId"),
+          context.req.param("sessionId"),
+          bytes,
+          body.data.mimeType,
+          context.req.raw.signal
+        ),
+      })
+    )
+  })
+
+  app.post(`${sessionContentPath}/audio/speak`, async (context) => {
+    const hermes = await requireRuntime(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const body = SessionSpeechRequestSchema.safeParse(
+      await boundedJson(context.req.raw, 40_000)
+    )
+    if (!body.success) return errorResponse("invalid_request", 400)
+    await requireScopedSession(
+      hermes,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    )
+    const speech = await hermes.speak(
+      context.req.param("agentId"),
+      context.req.param("sessionId"),
+      body.data.text,
+      context.req.raw.signal
+    )
+    return new Response(Uint8Array.from(speech.bytes).buffer, {
+      headers: { "content-type": speech.mimeType },
+    })
+  })
+
+  const runHandler = async (
+    context: Context<{ Variables: { requestId: string } }>
+  ) => {
+    const hermes = await requireRuntime(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const agentId = context.req.param("agentId")
+    const threadId = context.req.param("sessionId")
+    if (!agentId || !threadId) return errorResponse("not_found", 404)
+    const sessionId = storedSessionId(agentId, threadId)
+    if (!sessionId) return errorResponse("not_found", 404)
+    const input = await boundedJson(context.req.raw, 1_100_000)
+    if (input === undefined) return errorResponse("invalid_request", 400)
+    const inputRecord =
+      input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : undefined
+    if (
+      new URL(context.req.url).pathname.endsWith("/interactions/respond") &&
+      (!inputRecord ||
+        !Array.isArray(inputRecord.resume) ||
+        inputRecord.resume.length === 0 ||
+        !Array.isArray(inputRecord.messages) ||
+        inputRecord.messages.length !== 0)
+    )
+      return errorResponse("invalid_request", 400)
+    const forwarded = inputRecord?.forwardedProps
+    const stageId =
+      forwarded && typeof forwarded === "object" && !Array.isArray(forwarded)
+        ? (forwarded as Record<string, unknown>).aosAttachmentStageId
+        : undefined
+    if (
+      stageId !== undefined &&
+      (typeof stageId !== "string" ||
+        !validIdentifier(stageId) ||
+        !forwarded ||
+        Object.keys(forwarded).length !== 1)
+    )
+      return errorResponse("invalid_request", 400)
+    const scope = { agentId, sessionId, threadId }
+    const key = runKey(scope)
+    if (activeRuns.has(key) || runAdmissions.has(key))
+      return errorResponse("run_conflict", 409)
+    if (activeRuns.size + runAdmissions.size >= maxActiveRuns)
+      return errorResponse("run_capacity_exceeded", 503)
+    runAdmissions.add(key)
+    try {
+      await hermes.getSession(agentId, sessionId)
+    } catch (cause) {
+      runAdmissions.delete(key)
+      throw cause
+    }
+    const stage =
+      typeof stageId === "string"
+        ? attachmentStages.take(agentId, threadId, stageId)
+        : undefined
+    if (typeof stageId === "string" && !stage) {
+      runAdmissions.delete(key)
+      return errorResponse("invalid_request", 400)
+    }
+    let runInput = input
+    if (stage && inputRecord) {
+      const text = runText(input)
+      const messages = inputRecord.messages
+      if (text === undefined || !Array.isArray(messages)) {
+        runAdmissions.delete(key)
+        await stage.cleanup().catch(() => undefined)
+        return errorResponse("invalid_request", 400)
+      }
+      runInput = {
+        ...inputRecord,
+        messages: [
+          {
+            ...(messages[0] as Record<string, unknown>),
+            content: stage.appendTo(text),
+          },
+        ],
+        forwardedProps: {},
+      }
+    }
+    let handle: HermesRunHandle
+    try {
+      const runEngine = options.runEngine ?? new HermesRunEngine(hermes)
+      handle = await runEngine.start(scope, runInput)
+    } catch (cause) {
+      await stage?.cleanup().catch(() => undefined)
+      options.logger.error(
+        redactForLog({
+          event: "run.start.failed",
+          requestId: context.get("requestId"),
+          error: cause,
+        })
+      )
+      return isRunConflict(cause)
+        ? errorResponse("run_conflict", 409)
+        : cause instanceof HermesRunPublicError
+          ? errorResponse("temporarily_unavailable", 503)
+          : errorResponse("invalid_request", 400)
+    } finally {
+      runAdmissions.delete(key)
+    }
+    activeRuns.set(key, handle)
+    const encoder = new EventEncoder({ accept: "text/event-stream" })
+    const textEncoder = new TextEncoder()
+    let detached = false
+    let state: "open" | "terminal" | "closed" | "cancelled" = "open"
+    let readInFlight: Promise<IteratorResult<AGUIEvent>> | undefined
+    let iteratorClose: Promise<void> | undefined
+    const iterator = handle.events[Symbol.asyncIterator]()
+    const disconnect = () => {
+      if (detached) return
+      detached = true
+      handle.disconnect()
+    }
+    const removeAbortListener = () =>
+      context.req.raw.signal.removeEventListener("abort", disconnect)
+    const closeIterator = () => {
+      if (iteratorClose) return iteratorClose
+      iteratorClose = Promise.resolve(iterator.return?.()).then(
+        () => undefined,
+        () => undefined
+      )
+      return iteratorClose
+    }
+    context.req.raw.signal.addEventListener("abort", disconnect, {
+      once: true,
+    })
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (state !== "open" || readInFlight) return
+        readInFlight = Promise.resolve(iterator.next())
+        try {
+          const result = await readInFlight
+          if (state !== "open") return
+          if (result.done) {
+            state = "closed"
+            removeAbortListener()
+            controller.close()
+            return
+          }
+          const event = result.value
+          const terminal =
+            event.type === "RUN_FINISHED" ||
+            (event.type === "RUN_ERROR" &&
+              event.code !== "AOS_SEND_UNCERTAIN" &&
+              event.code !== "AOS_CONNECTION_INTERRUPTED")
+          controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
+          if (terminal) {
+            state = "terminal"
+            removeAbortListener()
+            if (activeRuns.get(key) === handle) activeRuns.delete(key)
+            await closeIterator()
+            if (state === "terminal") {
+              state = "closed"
+              controller.close()
+            }
+          }
+        } catch {
+          if (state === "open") {
+            state = "closed"
+            removeAbortListener()
+            await closeIterator()
+            controller.error(new Error("AOS run stream failed"))
+          }
+        } finally {
+          readInFlight = undefined
+        }
+      },
+      async cancel() {
+        if (state === "closed" || state === "cancelled") return
+        state = "cancelled"
+        removeAbortListener()
+        disconnect()
+        const pendingRead = readInFlight
+        await Promise.allSettled([
+          closeIterator(),
+          ...(pendingRead ? [pendingRead] : []),
+        ])
+      },
+    })
+    return new Response(stream, {
+      headers: { "content-type": encoder.getContentType() },
+    })
+  }
+
+  app.post("/api/aos/v1/agents/:agentId/sessions/:sessionId/runs", runHandler)
+  app.post(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/interactions/respond",
+    runHandler
   )
 
   app.post(
@@ -733,9 +1115,21 @@ export function createProxyApp(options: ProxyAppOptions) {
                       ? ["not_found", 404]
                       : cause instanceof HermesSessionConflictError
                         ? ["revision_conflict", 409]
-                        : cause instanceof HermesUnavailableError
-                          ? ["temporarily_unavailable", 503]
-                          : ["internal_error", 500]
+                        : cause instanceof HermesWorkspaceScopeError ||
+                            cause instanceof HermesContentScopeError
+                          ? ["not_found", 404]
+                          : cause instanceof HermesWorkspaceUnavailableError ||
+                              cause instanceof HermesContentUnavailableError ||
+                              (cause instanceof HermesInteractionPublicError &&
+                                (cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
+                                  cause.code === "AOS_RECONCILIATION_STALE")) ||
+                              cause instanceof HermesUnavailableError
+                            ? ["temporarily_unavailable", 503]
+                            : cause instanceof HermesInteractionPublicError
+                              ? cause.code === "AOS_INTERACTION_NOT_FOUND"
+                                ? ["not_found", 404]
+                                : ["invalid_request", 400]
+                              : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

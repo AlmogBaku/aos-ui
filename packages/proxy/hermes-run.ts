@@ -2,6 +2,8 @@ import {
   EventType,
   RunAgentInputSchema,
   type AGUIEvent,
+  type ResumeEntry,
+  type RunFinishedInterruptOutcome,
   type RunAgentInput,
   type TokenUsage,
 } from "@ag-ui/core"
@@ -64,6 +66,15 @@ export type HermesRunNative = {
   ): Promise<{ acknowledgement: "accepted" | "uncertain" }>
   interrupt(liveSessionId: string): Promise<void>
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
+  acceptInteraction?(
+    scope: HermesRunScope & { runId: string },
+    liveSessionId: string,
+    event: unknown
+  ): RunFinishedInterruptOutcome | { status: string } | undefined
+  respondInteractions?(
+    scope: HermesRunScope & { runId: string },
+    resume: readonly ResumeEntry[]
+  ): Promise<readonly { status: string }[]>
 }
 
 export type HermesRunHandle = {
@@ -761,8 +772,8 @@ export class HermesRunEngine {
       throw new Error(
         "AOS does not accept browser forwarded properties as Hermes input"
       )
-    if (input.resume && input.resume.length > 0)
-      throw new Error("AOS new turns cannot contain a bound interrupt response")
+    const interactionResume =
+      input.resume && input.resume.length > 0 ? input.resume : undefined
     const newMessage = input.messages[0]
     if (
       newMessage?.role === "user" &&
@@ -773,13 +784,19 @@ export class HermesRunEngine {
         "AOS multimodal content must be staged through an authorized workspace operation"
       )
     const text = userText(input)
+    if (input.threadId !== scope.threadId)
+      throw new Error("AOS run scope does not match this Session")
     if (
-      input.threadId !== scope.threadId ||
-      input.messages.length !== 1 ||
-      !text
+      interactionResume
+        ? input.messages.length !== 0 || !this.#native.respondInteractions
+        : input.messages.length !== 1 || !text
     )
-      throw new Error("AOS runs require exactly one authorized user turn")
-    if (new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
+      throw new Error(
+        interactionResume
+          ? "AOS interrupt responses require one bound native interaction"
+          : "AOS runs require exactly one authorized user turn"
+      )
+    if (text && new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
     const key = scopeKey(scope)
@@ -867,6 +884,33 @@ export class HermesRunEngine {
     for (const event of drainBufferedEvents(buffered))
       this.#accept(active, event)
     if (active.terminal) return this.#handle(active)
+    if (interactionResume) {
+      let results: readonly { status: string }[]
+      try {
+        results = await this.#native.respondInteractions!(
+          { ...scope, runId: input.runId },
+          interactionResume
+        )
+      } catch {
+        this.#fail(
+          active,
+          "AOS_INTERACTION_FAILED",
+          "Hermes could not apply this interaction response."
+        )
+        return this.#handle(active)
+      }
+      if (active.terminal) return this.#handle(active)
+      if (results.some(({ status }) => status === "uncertain")) {
+        this.#markUncertainInteraction(active)
+      } else if (results.some(({ status }) => status === "expired")) {
+        this.#fail(
+          active,
+          "AOS_INTERACTION_EXPIRED",
+          "This Hermes interaction is no longer pending."
+        )
+      }
+      return this.#handle(active)
+    }
     let status: "running" | "waiting" | "idle"
     try {
       status = await this.#native.status(liveSessionId)
@@ -888,7 +932,7 @@ export class HermesRunEngine {
     let acknowledgement: "accepted" | "uncertain"
     try {
       ;({ acknowledgement } = await this.#native.submit(liveSessionId, {
-        text,
+        text: text!,
         runId: input.runId,
       }))
     } catch {
@@ -1134,6 +1178,28 @@ export class HermesRunEngine {
       active.lastSeen = event.seq
     }
     const payload = payloadOf(event)
+    if (this.#native.acceptInteraction) {
+      let interaction:
+        RunFinishedInterruptOutcome | { status: string } | undefined
+      try {
+        interaction = this.#native.acceptInteraction(
+          { ...active.scope, runId: active.runId },
+          active.liveSessionId,
+          value
+        )
+      } catch {
+        this.#fail(
+          active,
+          "AOS_PROVIDER_RUN_FAILED",
+          "Hermes returned invalid interaction data."
+        )
+        return
+      }
+      if (interaction && "interrupts" in interaction) {
+        this.#finishInterrupt(active, interaction)
+        return
+      }
+    }
     if (active.overflowed) {
       if (
         event.type === "message.complete" ||
@@ -1312,6 +1378,23 @@ export class HermesRunEngine {
     this.#settle(active)
   }
 
+  #finishInterrupt(active: ActiveRun, outcome: RunFinishedInterruptOutcome) {
+    if (active.terminal) return
+    this.#endReasoning(active)
+    if (active.textStarted && active.messageId)
+      this.#emit(active, {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: active.messageId,
+      })
+    this.#emit(active, {
+      type: EventType.RUN_FINISHED,
+      threadId: active.scope.threadId,
+      runId: active.runId,
+      outcome,
+    })
+    this.#settle(active)
+  }
+
   #fail(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     this.#endReasoning(active)
@@ -1331,6 +1414,17 @@ export class HermesRunEngine {
       message:
         "Hermes may have accepted this turn; reconcile before sending again.",
       code: "AOS_SEND_UNCERTAIN",
+    })
+    active.queue.close()
+  }
+
+  #markUncertainInteraction(active: ActiveRun) {
+    active.uncertain = true
+    this.#emit(active, {
+      type: EventType.RUN_ERROR,
+      message:
+        "Hermes may have applied this interaction response; reconcile before responding again.",
+      code: "AOS_INTERACTION_UNCERTAIN",
     })
     active.queue.close()
   }
