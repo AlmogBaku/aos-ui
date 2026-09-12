@@ -9,9 +9,14 @@ import {
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_RECOVERY_EVENTS = 4_096
+const MAX_RECOVERY_BYTES = 4_194_304
 const MAX_QUEUED_EVENTS = 4_096
+const MAX_QUEUED_BYTES = 4_194_304
 const MAX_PREACTIVE_EVENTS = 4_096
 const MAX_PREACTIVE_BYTES = 4_194_304
+const MAX_NATIVE_EVENT_BYTES = 1_114_112
+const MAX_GRAPH_ENTRIES = 1_024
+const MAX_GRAPH_DEPTH = 12
 const MAX_TOOL_DEPTH = 6
 const MAX_TOOL_ENTRIES = 64
 const MAX_TOOL_STRING_BYTES = 16_384
@@ -81,9 +86,113 @@ type QueueWaiter = {
   resolve(result: IteratorResult<AGUIEvent>): void
 }
 
+function utf8CodePointBytes(codePoint: number) {
+  return codePoint <= 0x7f
+    ? 1
+    : codePoint <= 0x7ff
+      ? 2
+      : codePoint <= 0xffff
+        ? 3
+        : 4
+}
+
+function utf8BytesWithin(value: string, maximum: number) {
+  let bytes = 0
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0
+    bytes += utf8CodePointBytes(codePoint)
+    if (bytes > maximum) return undefined
+  }
+  return bytes
+}
+
+function jsonStringBytesWithin(value: string, maximum: number) {
+  let bytes = 2
+  if (bytes > maximum) return undefined
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0
+    bytes +=
+      character === '"' || character === "\\"
+        ? 2
+        : codePoint < 0x20
+          ? character === "\b" ||
+            character === "\f" ||
+            character === "\n" ||
+            character === "\r" ||
+            character === "\t"
+            ? 2
+            : 6
+          : utf8CodePointBytes(codePoint)
+    if (bytes > maximum) return undefined
+  }
+  return bytes
+}
+
+function boundedGraphBytes(value: unknown, maximum: number) {
+  const seen = new WeakSet<object>()
+  let bytes = 0
+  let entries = 0
+
+  const addBytes = (amount: number) => {
+    bytes += amount
+    return bytes <= maximum
+  }
+  const visit = (current: unknown, depth: number): boolean => {
+    if (depth > MAX_GRAPH_DEPTH || entries > MAX_GRAPH_ENTRIES) return false
+    if (typeof current === "string") {
+      const size = jsonStringBytesWithin(current, maximum - bytes)
+      return size !== undefined && addBytes(size)
+    }
+    if (
+      current === null ||
+      typeof current === "boolean" ||
+      typeof current === "number"
+    )
+      return addBytes(32)
+    if (typeof current !== "object") return false
+    if (seen.has(current)) return false
+    seen.add(current)
+    if (!addBytes(2)) return false
+
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        entries += 1
+        if (entries > MAX_GRAPH_ENTRIES || !addBytes(1)) return false
+        let item: unknown
+        try {
+          item = current[index]
+        } catch {
+          return false
+        }
+        if (!visit(item, depth + 1)) return false
+      }
+      return true
+    }
+
+    for (const key in current) {
+      if (!Object.hasOwn(current, key)) continue
+      entries += 1
+      if (entries > MAX_GRAPH_ENTRIES) return false
+      const keyBytes = jsonStringBytesWithin(key, maximum - bytes)
+      if (keyBytes === undefined || !addBytes(keyBytes + 2)) return false
+      let item: unknown
+      try {
+        item = (current as Record<string, unknown>)[key]
+      } catch {
+        return false
+      }
+      if (!visit(item, depth + 1)) return false
+    }
+    return true
+  }
+
+  return visit(value, 0) ? bytes : undefined
+}
+
 class EventQueue implements AsyncIterable<AGUIEvent> {
-  readonly #values: AGUIEvent[] = []
+  readonly #values: { event: AGUIEvent; bytes: number }[] = []
   readonly #waiters: QueueWaiter[] = []
+  #bytes = 0
   #closed = false
 
   push(value: AGUIEvent) {
@@ -92,7 +201,10 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     if (waiter) waiter.resolve({ done: false, value })
     else {
       if (this.#values.length >= MAX_QUEUED_EVENTS) return false
-      this.#values.push(value)
+      const bytes = boundedGraphBytes(value, MAX_QUEUED_BYTES - this.#bytes)
+      if (bytes === undefined) return false
+      this.#values.push({ event: value, bytes })
+      this.#bytes += bytes
     }
     return true
   }
@@ -100,12 +212,21 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
   terminal(value: AGUIEvent) {
     if (this.#closed) return
     const started =
-      this.#values[0]?.type === EventType.RUN_STARTED
+      this.#values[0]?.event.type === EventType.RUN_STARTED
         ? this.#values[0]
         : undefined
     this.#values.splice(0, this.#values.length)
+    this.#bytes = 0
     if (started) this.#values.push(started)
-    this.#values.push(value)
+    if (started) this.#bytes += started.bytes
+    const terminalBytes = boundedGraphBytes(
+      value,
+      MAX_QUEUED_BYTES - this.#bytes
+    )
+    if (terminalBytes !== undefined) {
+      this.#values.push({ event: value, bytes: terminalBytes })
+      this.#bytes += terminalBytes
+    }
     this.close()
   }
 
@@ -120,7 +241,10 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     return {
       next: () => {
         const value = this.#values.shift()
-        if (value) return Promise.resolve({ done: false, value })
+        if (value) {
+          this.#bytes -= value.bytes
+          return Promise.resolve({ done: false, value: value.event })
+        }
         if (this.#closed)
           return Promise.resolve({ done: true, value: undefined })
         return new Promise((resolve) => this.#waiters.push({ resolve }))
@@ -185,14 +309,9 @@ function stopUncertain() {
 
 function bufferNativeEvent(buffer: BufferedNativeEvents, value: unknown) {
   if (buffer.overflow) return
-  let bytes: number
-  try {
-    bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength
-  } catch {
-    buffer.overflow = true
-    return
-  }
+  const bytes = boundedGraphBytes(value, MAX_PREACTIVE_BYTES - buffer.bytes)
   if (
+    bytes === undefined ||
     buffer.events.length >= MAX_PREACTIVE_EVENTS ||
     bytes > MAX_PREACTIVE_BYTES - buffer.bytes
   ) {
@@ -270,9 +389,12 @@ function validatedRecovery(
     return undefined
   const events: HermesNativeEvent[] = []
   let previous = after
+  let recoveryBytes = 0
   for (const raw of recovery.events) {
+    const bytes = boundedGraphBytes(raw, MAX_RECOVERY_BYTES - recoveryBytes)
     const event = nativeEvent(raw)
     if (
+      bytes === undefined ||
       !event ||
       event.session_id !== liveSessionId ||
       event.seq === undefined ||
@@ -281,6 +403,7 @@ function validatedRecovery(
     )
       return undefined
     events.push(event)
+    recoveryBytes += bytes
     previous = event.seq
   }
   return {
@@ -326,13 +449,6 @@ function toolArgs(name: string, value: unknown) {
     typeof value === "object" && value !== null
       ? (value as Record<string, unknown>)
       : {}
-  if (
-    name === "delegate_task" &&
-    typeof args.description !== "string" &&
-    typeof args.goal === "string" &&
-    args.goal.trim()
-  )
-    return { ...args, description: args.goal.trim() }
   return args
 }
 
@@ -341,7 +457,8 @@ function normalizedTool(name: string, value: unknown) {
   if (
     name !== "tool_call" ||
     typeof args.name !== "string" ||
-    typeof args.arguments !== "string"
+    typeof args.arguments !== "string" ||
+    utf8BytesWithin(args.arguments, MAX_TOOL_PAYLOAD_BYTES) === undefined
   )
     return { name, args }
   try {
@@ -477,25 +594,12 @@ function sensitiveToolKey(key: string) {
 }
 
 function safeToolText(value: string) {
-  const redacted = value
-    .replace(/https?:\/\/[^\s]+/giu, "[redacted-url]")
-    .replace(/file:\/\/[^\s]+/giu, "[redacted-path]")
-    .replace(/\b[a-z]:\\[^\s]+/giu, "[redacted-path]")
-    .replace(
-      /(^|\s)\/(?:[^\s/]+\/)*[^\s]*/gu,
-      (_match, prefix: string) => `${prefix}[redacted-path]`
-    )
-    .replace(
-      /\b(?:bearer|token|api[_-]?key)\s*(?::|=|\s)\s*[^\s,;]+/giu,
-      "[redacted-secret]"
-    )
-  const encoder = new TextEncoder()
-  if (encoder.encode(redacted).byteLength <= MAX_TOOL_STRING_BYTES)
-    return redacted
+  if (unsafeToolText(value)) return "[redacted]"
+  if (utf8BytesWithin(value, MAX_TOOL_STRING_BYTES) !== undefined) return value
   let bytes = 0
   let truncated = ""
-  for (const character of redacted) {
-    const size = encoder.encode(character).byteLength
+  for (const character of value) {
+    const size = utf8BytesWithin(character, 4) ?? 4
     if (bytes + size > MAX_TOOL_STRING_BYTES - 3) break
     bytes += size
     truncated += character
@@ -503,25 +607,81 @@ function safeToolText(value: string) {
   return `${truncated}…`
 }
 
+function unsafeToolText(value: string) {
+  if (value.includes("/") || value.includes("\\")) return true
+  if (
+    /\b(?:bearer\s+|sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_-]+|AKIA[A-Z0-9]{16})/iu.test(
+      value
+    ) ||
+    /\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+\b/iu.test(value)
+  )
+    return true
+  const assignments = /(?:^|[\s,;:([{'"`])([a-z_][a-z0-9_.-]{0,127})\s*[:=]/giu
+  for (const match of value.matchAll(assignments))
+    if (match[1] && sensitiveToolKey(match[1])) return true
+  return false
+}
+
 function filenameOf(value: string) {
   return value.replaceAll("\\", "/").split("/").filter(Boolean).at(-1)
 }
 
-function safeToolValue(value: unknown, depth = 0): unknown {
-  if (depth > MAX_TOOL_DEPTH) return "[truncated]"
-  if (typeof value === "string") return safeToolText(value)
+type ToolProjectionBudget = { entries: number; bytes: number }
+
+function spendToolBytes(budget: ToolProjectionBudget, value: string) {
+  const bytes = utf8BytesWithin(value, budget.bytes)
+  if (bytes === undefined) return false
+  budget.bytes -= bytes
+  return true
+}
+
+function safeToolValue(
+  value: unknown,
+  budget: ToolProjectionBudget,
+  depth = 0
+): unknown {
+  if (depth > MAX_TOOL_DEPTH || budget.entries <= 0 || budget.bytes <= 0)
+    return "[truncated]"
+  budget.entries -= 1
+  if (typeof value === "string") {
+    const safe = safeToolText(value)
+    return spendToolBytes(budget, safe) ? safe : "[truncated]"
+  }
   if (typeof value === "number") return Number.isFinite(value) ? value : null
   if (typeof value === "boolean" || value === null) return value
-  if (Array.isArray(value))
-    return value
-      .slice(0, MAX_TOOL_ENTRIES)
-      .map((item) => safeToolValue(item, depth + 1))
+  if (Array.isArray(value)) {
+    const projected: unknown[] = []
+    const limit = Math.min(value.length, MAX_TOOL_ENTRIES)
+    for (let index = 0; index < limit && budget.entries > 0; index += 1) {
+      let item: unknown
+      try {
+        item = value[index]
+      } catch {
+        break
+      }
+      projected.push(safeToolValue(item, budget, depth + 1))
+    }
+    if (value.length > limit && budget.entries > 0)
+      projected.push("[truncated]")
+    return projected
+  }
   if (typeof value !== "object") return undefined
   const projected: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value).slice(0, MAX_TOOL_ENTRIES)) {
+  let accepted = 0
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue
+    if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
     if (sensitiveToolKey(key)) continue
-    const safe = safeToolValue(item, depth + 1)
+    if (!spendToolBytes(budget, key)) break
+    let item: unknown
+    try {
+      item = (value as Record<string, unknown>)[key]
+    } catch {
+      continue
+    }
+    const safe = safeToolValue(item, budget, depth + 1)
     if (safe !== undefined) projected[key] = safe
+    accepted += 1
   }
   return projected
 }
@@ -529,55 +689,98 @@ function safeToolValue(value: unknown, depth = 0): unknown {
 function safeToolArgs(name: string, value: Record<string, unknown>) {
   const allowed = TOOL_ARG_FIELDS.get(name) ?? DEFAULT_TOOL_ARG_FIELDS
   const projected: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value)) {
+  const budget: ToolProjectionBudget = {
+    entries: MAX_GRAPH_ENTRIES,
+    bytes: MAX_TOOL_PAYLOAD_BYTES,
+  }
+  let hasDescription = false
+  if (name === "delegate_subagent" && Object.hasOwn(value, "description")) {
+    try {
+      hasDescription = typeof value.description === "string"
+    } catch {
+      hasDescription = false
+    }
+  }
+  let accepted = 0
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue
+    if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
     if (!allowed.has(key)) continue
+    let item: unknown
+    try {
+      item = value[key]
+    } catch {
+      continue
+    }
     if (key === "path" && typeof item === "string") {
       const filename = filenameOf(item)
-      if (filename) projected.filename = safeToolText(filename)
+      if (filename) {
+        const safe = safeToolText(filename)
+        if (spendToolBytes(budget, safe)) projected.filename = safe
+      }
+      accepted += 1
       continue
     }
     if (sensitiveToolKey(key)) continue
-    const safe = safeToolValue(item)
-    if (safe !== undefined) projected[key] = safe
+    if (!spendToolBytes(budget, key)) break
+    const safe = safeToolValue(item, budget)
+    if (safe !== undefined) {
+      projected[key] = safe
+      if (
+        name === "delegate_subagent" &&
+        key === "goal" &&
+        !hasDescription &&
+        spendToolBytes(budget, "description")
+      )
+        projected.description = safe
+    }
+    accepted += 1
   }
   const serialized = JSON.stringify(projected)
-  return new TextEncoder().encode(serialized).byteLength <=
-    MAX_TOOL_PAYLOAD_BYTES
+  return utf8BytesWithin(serialized, MAX_TOOL_PAYLOAD_BYTES) !== undefined
     ? serialized
     : '{"truncated":true}'
 }
 
 function resultContent(name: string, value: unknown) {
-  const projected =
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? Object.fromEntries(
-          Object.entries(value)
-            .filter(([key]) =>
-              (TOOL_RESULT_FIELDS.get(name) ?? DEFAULT_TOOL_RESULT_FIELDS).has(
-                key
-              )
-            )
-            .slice(0, MAX_TOOL_ENTRIES)
-            .flatMap(([key, item]) => {
-              if (sensitiveToolKey(key)) return []
-              const safe = safeToolValue(item, 1)
-              return safe === undefined ? [] : [[key, safe]]
-            })
-        )
-      : safeToolValue(value)
+  const budget: ToolProjectionBudget = {
+    entries: MAX_GRAPH_ENTRIES,
+    bytes: MAX_TOOL_PAYLOAD_BYTES,
+  }
+  let projected: unknown
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const allowed = TOOL_RESULT_FIELDS.get(name) ?? DEFAULT_TOOL_RESULT_FIELDS
+    const record: Record<string, unknown> = {}
+    let accepted = 0
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue
+      if (accepted >= MAX_TOOL_ENTRIES || budget.entries <= 0) break
+      if (!allowed.has(key) || sensitiveToolKey(key)) continue
+      if (!spendToolBytes(budget, key)) break
+      let item: unknown
+      try {
+        item = (value as Record<string, unknown>)[key]
+      } catch {
+        continue
+      }
+      const safe = safeToolValue(item, budget, 1)
+      if (safe !== undefined) record[key] = safe
+      accepted += 1
+    }
+    projected = record
+  } else projected = safeToolValue(value, budget)
   const serialized =
     typeof projected === "string"
       ? projected
       : JSON.stringify(projected ?? null)
-  return new TextEncoder().encode(serialized).byteLength <=
-    MAX_TOOL_PAYLOAD_BYTES
+  return utf8BytesWithin(serialized, MAX_TOOL_PAYLOAD_BYTES) !== undefined
     ? serialized
     : '{"truncated":true}'
 }
 
 function boundedText(value: unknown) {
   return typeof value === "string" &&
-    new TextEncoder().encode(value).byteLength <= MAX_NATIVE_TEXT_DELTA_BYTES
+    utf8BytesWithin(value, MAX_NATIVE_TEXT_DELTA_BYTES) !== undefined
     ? value
     : undefined
 }
@@ -758,9 +961,11 @@ export class HermesRunEngine {
     try {
       status = await this.#native.status(liveSessionId)
     } catch {
+      if (!this.#isSubmitEligible(active)) return this.#handle(active)
       this.#settle(active)
       throw providerUnavailable()
     }
+    if (!this.#isSubmitEligible(active)) return this.#handle(active)
     if (status !== "idle") {
       this.#fail(
         active,
@@ -769,6 +974,7 @@ export class HermesRunEngine {
       )
       return this.#handle(active)
     }
+    if (!this.#isSubmitEligible(active)) return this.#handle(active)
     let acknowledgement: "accepted" | "uncertain"
     try {
       ;({ acknowledgement } = await this.#native.submit(liveSessionId, {
@@ -1004,6 +1210,10 @@ export class HermesRunEngine {
 
   #accept(active: ActiveRun, value: unknown) {
     if (active.terminal) return
+    if (boundedGraphBytes(value, MAX_NATIVE_EVENT_BYTES) === undefined) {
+      this.#overflow(active)
+      return
+    }
     const event = nativeEvent(value)
     if (!event || event.session_id !== active.liveSessionId) return
     if (event.seq !== undefined) {
@@ -1227,6 +1437,12 @@ export class HermesRunEngine {
   #emit(active: ActiveRun, event: AGUIEvent) {
     if (active.terminal || active.overflowed) return false
     if (active.queue.push(event)) return true
+    this.#overflow(active)
+    return false
+  }
+
+  #overflow(active: ActiveRun) {
+    if (active.terminal || active.overflowed) return
     active.queue.terminal({
       type: EventType.RUN_ERROR,
       message: "Hermes produced more events than AOS can safely buffer.",
@@ -1236,7 +1452,17 @@ export class HermesRunEngine {
     active.detached = true
     active.overflowed = true
     safelyUnsubscribe(active.unsubscribe)
-    return false
+  }
+
+  #isSubmitEligible(active: ActiveRun) {
+    return (
+      this.#active.get(scopeKey(active.scope)) === active &&
+      !active.terminal &&
+      !active.uncertain &&
+      !active.detached &&
+      !active.overflowed &&
+      !active.stopping
+    )
   }
 
   #settle(active: ActiveRun) {
@@ -1244,6 +1470,7 @@ export class HermesRunEngine {
     active.terminal = true
     safelyUnsubscribe(active.unsubscribe)
     active.queue.close()
-    this.#active.delete(scopeKey(active.scope))
+    const key = scopeKey(active.scope)
+    if (this.#active.get(key) === active) this.#active.delete(key)
   }
 }

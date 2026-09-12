@@ -980,7 +980,9 @@ describe("HermesRunEngine", () => {
                 tool_id: "call-7",
                 name: "search",
                 args: {
-                  query: "status",
+                  query: "OPENAI_API_KEY=sk-query-secret",
+                  pattern:
+                    "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
                   path: "/srv/private/workspace",
                   apiToken: "secret-token",
                   native_metadata: { live_session_id: "live-secret" },
@@ -991,7 +993,7 @@ describe("HermesRunEngine", () => {
                   filesystem_path: "/srv/private/result.txt",
                   access_token: "bearer-secret",
                   summary:
-                    "See https://provider.invalid and /srv/private/result.txt",
+                    "TOKEN=summary-secret; see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
                 },
               },
             ],
@@ -1008,20 +1010,26 @@ describe("HermesRunEngine", () => {
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_ARGS,
       toolCallId: "call-7",
-      delta: '{"query":"status","filename":"workspace"}',
+      delta:
+        '{"query":"[redacted]","pattern":"[redacted]","filename":"workspace"}',
     })
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_RESULT,
       messageId: "message-42:tool:call-7",
       toolCallId: "call-7",
-      content:
-        '{"status":"ok","summary":"See [redacted-url] and [redacted-path]"}',
+      content: '{"status":"ok","summary":"[redacted]"}',
       role: "tool",
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
     expect(JSON.stringify(events)).not.toContain("bearer-secret")
     expect(JSON.stringify(events)).not.toContain("provider.invalid")
     expect(JSON.stringify(events)).not.toContain("/srv/private")
+    expect(JSON.stringify(events)).not.toContain("sk-query-secret")
+    expect(JSON.stringify(events)).not.toContain("summary-secret")
+    expect(JSON.stringify(events)).not.toContain("../relative")
+    expect(JSON.stringify(events)).not.toContain("~/home")
+    expect(JSON.stringify(events)).not.toContain("C:\\")
+    expect(JSON.stringify(events)).not.toContain("\\\\server")
   })
 
   it("bounds multibyte and deeply nested tool output", async () => {
@@ -1601,6 +1609,251 @@ describe("HermesRunEngine", () => {
     await expect(
       engine.start(scope, input({ runId: "run-2" }))
     ).rejects.toThrow("already active")
+  })
+
+  it("never submits a stale first start after its terminal event admits a second run", async () => {
+    const listeners = new Map<string, (event: unknown) => void>()
+    const submitted: string[] = []
+    let resumes = 0
+    let releaseFirstStatus: (() => void) | undefined
+    let markFirstStatusEntered: (() => void) | undefined
+    const firstStatusEntered = new Promise<void>((resolve) => {
+      markFirstStatusEntered = resolve
+    })
+    const engine = new HermesRunEngine(
+      native({
+        resume: async () => ({ liveSessionId: `live-${++resumes}` }),
+        observe: async (liveSessionId, listener) => {
+          listeners.set(liveSessionId, listener)
+          return () => listeners.delete(liveSessionId)
+        },
+        recover: async () => ({ epoch: "epoch-1", lastSeen: 0, events: [] }),
+        status: async (liveSessionId) => {
+          if (liveSessionId !== "live-1") return "idle"
+          markFirstStatusEntered?.()
+          await new Promise<void>((resolve) => {
+            releaseFirstStatus = resolve
+          })
+          return "idle"
+        },
+        submit: async (liveSessionId) => {
+          submitted.push(liveSessionId)
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const firstStart = engine.start(scope, input())
+    await firstStatusEntered
+    listeners.get("live-1")?.({
+      type: "message.complete",
+      session_id: "live-1",
+      seq: 1,
+      payload: {},
+    })
+    const second = await engine.start(scope, input({ runId: "run-2" }))
+    releaseFirstStatus?.()
+    const first = await firstStart
+
+    expect(submitted).toEqual(["live-2"])
+    await expect(collect(first)).resolves.toContainEqual({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    listeners.get("live-2")?.({
+      type: "message.complete",
+      session_id: "live-2",
+      seq: 1,
+      payload: {},
+    })
+    await collect(second)
+  })
+
+  it.each(["interrupted", "overflow"] as const)(
+    "does not submit when the active run becomes %s during the status read",
+    async (mode) => {
+      let publish: ((event: unknown) => void) | undefined
+      let disconnect: (() => void) | undefined
+      let submissions = 0
+      let releaseStatus: (() => void) | undefined
+      let markStatusEntered: (() => void) | undefined
+      const statusEntered = new Promise<void>((resolve) => {
+        markStatusEntered = resolve
+      })
+      const engine = new HermesRunEngine(
+        native({
+          observe: async (_liveSessionId, listener, onDisconnected) => {
+            publish = listener
+            disconnect = onDisconnected
+            return () => undefined
+          },
+          status: async () => {
+            markStatusEntered?.()
+            await new Promise<void>((resolve) => {
+              releaseStatus = resolve
+            })
+            return "idle"
+          },
+          submit: async () => {
+            submissions += 1
+            return { acknowledgement: "accepted" }
+          },
+        })
+      )
+
+      const started = engine.start(scope, input())
+      await statusEntered
+      if (mode === "interrupted") disconnect?.()
+      else {
+        publish?.({
+          type: "message.start",
+          session_id: "live-secret",
+          seq: 1,
+          payload: { message_id: "message-42" },
+        })
+        for (let seq = 2; seq <= 4_100; seq += 1)
+          publish?.({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq,
+            payload: { text: "x" },
+          })
+      }
+      releaseStatus?.()
+      await started
+
+      expect(submissions).toBe(0)
+    }
+  )
+
+  it("enforces cumulative byte budgets for recovery and unread AG-UI events", async () => {
+    const chunk = "🙂".repeat(250_000)
+    const recovery = new HermesRunEngine(
+      native({
+        recover: async () => ({
+          epoch: "epoch-1",
+          lastSeen: 6,
+          events: [
+            {
+              type: "message.start",
+              session_id: "live-secret",
+              seq: 1,
+              payload: { message_id: "message-42" },
+            },
+            ...Array.from({ length: 5 }, (_, index) => ({
+              type: "message.delta",
+              session_id: "live-secret",
+              seq: index + 2,
+              payload: { text: chunk },
+            })),
+          ],
+        }),
+      })
+    )
+    const recovered = await collect(await recovery.start(scope, input()))
+    expect(recovered).toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_ERROR,
+        message:
+          "Hermes history must be reconciled before this run can continue.",
+        code: "AOS_RESET_REQUIRED",
+      },
+    ])
+
+    let publish: ((event: unknown) => void) | undefined
+    const live = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "message-42" },
+          })
+          for (let seq = 2; seq <= 6; seq += 1)
+            publish?.({
+              type: "message.delta",
+              session_id: "live-secret",
+              seq,
+              payload: { text: chunk },
+            })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 7,
+            payload: {},
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+    const streamed = await collect(await live.start(scope, input()))
+    expect(streamed).toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Hermes produced more events than AOS can safely buffer.",
+        code: "AOS_STREAM_OVERFLOW",
+      },
+    ])
+  })
+
+  it("stops walking provider tool graphs when the traversal budget is exhausted", async () => {
+    let reads = 0
+    const wide: Record<string, string> = {}
+    for (let index = 0; index < 10_000; index += 1)
+      Object.defineProperty(wide, `field${index}`, {
+        enumerable: true,
+        get() {
+          reads += 1
+          return "safe"
+        },
+      })
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "message-42" },
+          })
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 2,
+            payload: {
+              tool_id: "call-7",
+              name: "search",
+              result: { results: [wide] },
+            },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 3,
+            payload: {},
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    await collect(await engine.start(scope, input()))
+
+    expect(reads).toBeLessThanOrEqual(1_024)
   })
 
   it("projects validated Hermes usage onto the standard terminal event", async () => {
