@@ -1,12 +1,8 @@
-# Hermes itself remains operator-managed. This overlay adds the private AOS
-# translation boundary; only Nginx is published to the host. The browser talks
-# to `/api/aos/v1` on Nginx; only the proxy container talks to Hermes.
+# Hermes itself remains operator-managed. This overlay turns the Bun service
+# into the private AOS translation boundary and static web server. External
+# ingress owns TLS; only this listener is published by the Compose example.
 services:
-  proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: proxy
+  web:
     command:
       - bun
       - run
@@ -16,8 +12,6 @@ services:
       - /run/aos-ui/proxy-config.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    expose:
-      - "4100"
     configs:
       - source: proxy-config
         target: /run/aos-ui/proxy-config.json
@@ -40,20 +34,12 @@ services:
         - CMD
         - bun
         - -e
-        - fetch('http://127.0.0.1:4100/api/aos/v1/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:3000/api/aos/v1/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
       interval: 5s
       timeout: 3s
       retries: 20
       start_period: 10s
     init: true
-
-  web:
-    depends_on:
-      proxy:
-        condition: service_healthy
-    environment:
-      AOS_UI_PROXY_HOST: proxy
-      AOS_UI_PROXY_PORT: 4100
 
 configs:
   runtime-config:

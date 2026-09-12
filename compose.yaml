@@ -5,15 +5,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runner
+      target: proxy
     environment:
-      AOS_UI_PROXY_HOST: ${AOS_UI_PROXY_HOST:-127.0.0.1}
-      AOS_UI_PROXY_PORT: ${AOS_UI_PROXY_PORT:-4100}
+      AOS_UI_STATIC_ROOT: /app/dist
+      AOS_UI_RUNTIME_CONFIG_FILE: /run/aos-ui/runtime-config.json
+      AOS_UI_WEB_HOST: 0.0.0.0
+      AOS_UI_WEB_PORT: "3000"
+    command:
+      - bun
+      - run
+      - static:serve
     ports:
       - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_WEB_PUBLISHED_PORT:-3000}:3000
     configs:
       - source: runtime-config
-        target: /usr/share/nginx/html/runtime-config.json
+        target: /run/aos-ui/runtime-config.json
         mode: 0444
     healthcheck:
       test:

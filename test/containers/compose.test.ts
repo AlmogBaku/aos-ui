@@ -76,7 +76,7 @@ describe("container orchestration", () => {
     }
     expect(proxy.listen).toMatchObject({
       host: "0.0.0.0",
-      port: 4100,
+      port: 3000,
       exposure: "private-container",
     })
     expect(proxy.hermes.auth).toMatchObject({ mode: "browser-broker" })
@@ -144,7 +144,7 @@ describe("container orchestration", () => {
     )
   })
 
-  it("runs the private AOS proxy beside the web service for Hermes", () => {
+  it("runs the private AOS proxy as the web service for Hermes", () => {
     const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
       AOS_UI_RUNTIME_CONFIG_FILE: resolve(
         root,
@@ -160,16 +160,14 @@ describe("container orchestration", () => {
       AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
     })
 
-    expect(Object.keys(config.services).sort()).toEqual(["proxy", "web"])
-    expect(config.services.web.depends_on?.proxy.condition).toBe(
-      "service_healthy"
-    )
+    expect(Object.keys(config.services)).toEqual(["web"])
     expect(config.services.web.environment).toMatchObject({
-      AOS_UI_PROXY_HOST: "proxy",
-      AOS_UI_PROXY_PORT: "4100",
+      AOS_UI_STATIC_ROOT: "/app/dist",
+      AOS_UI_RUNTIME_CONFIG_FILE: "/run/aos-ui/runtime-config.json",
+      AOS_UI_WEB_PORT: "3000",
     })
-    expect(config.services.proxy.build?.target).toBe("proxy")
-    expect(config.services.proxy.command).toEqual([
+    expect(config.services.web.build?.target).toBe("proxy")
+    expect(config.services.web.command).toEqual([
       "bun",
       "run",
       "proxy:serve",
@@ -177,15 +175,16 @@ describe("container orchestration", () => {
       "--config",
       "/run/aos-ui/proxy-config.json",
     ])
-    expect(config.services.proxy.ports).toBeUndefined()
-    expect(config.services.proxy.expose).toEqual(["4100"])
-    expect(config.services.proxy.configs).toContainEqual(
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({ published: "3000", target: 3000 })
+    )
+    expect(config.services.web.configs).toContainEqual(
       expect.objectContaining({
         source: "proxy-config",
         target: "/run/aos-ui/proxy-config.json",
       })
     )
-    expect(config.services.proxy.secrets).toEqual(
+    expect(config.services.web.secrets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           source: "operator-oidc-client-secret",
@@ -282,56 +281,31 @@ describe("container orchestration", () => {
     })
   })
 
-  it("builds static assets into a non-root Nginx image", () => {
+  it("builds static assets into the Bun proxy image", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
-    const nginx = readFileSync(
-      resolve(root, "deploy/nginx/default.conf.template"),
-      "utf8"
-    )
 
-    expect(dockerfile).toContain("nginxinc/nginx-unprivileged")
-    expect(dockerfile).toContain("USER nginx")
+    expect(dockerfile).toContain("FROM dependencies AS proxy")
+    expect(dockerfile).toContain("COPY --from=builder")
+    expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
+    expect(dockerfile).toContain("USER bun")
     expect(dockerfile).toContain("/app/dist")
-    expect(nginx).toContain("location = /api/health")
-    expect(nginx).toContain("location = /runtime-config.json")
-    expect(nginx).toContain("location = /api/aos/v1")
-    expect(nginx).toContain("location /api/aos/v1/")
-    expect(nginx).not.toContain("location ^~ /api/aos/v1/")
-    expect(nginx).toContain("client_max_body_size 1100000;")
-    expect(nginx).toContain("client_max_body_size 35500000;")
-    expect(nginx).toContain("client_max_body_size 7500000;")
-    expect(nginx).toContain("client_max_body_size 40000;")
-    expect(nginx).toContain("proxy_set_header Upgrade $http_upgrade;")
-    expect(nginx).toContain("proxy_set_header Connection $connection_upgrade;")
-    expect(nginx).toContain("proxy_set_header Origin $http_origin;")
-    expect(nginx).not.toContain("proxy_set_header Origin $scheme://$http_host;")
-    expect(nginx).not.toContain("proxy_pass $hermes_upstream")
-    expect(nginx).not.toContain("proxy_pass $openclaw_upstream")
-    expect(nginx).toContain("location ^~ /hermes/ { return 404; }")
-    expect(nginx).toContain("location ^~ /auth/ { return 404; }")
-    expect(nginx).toContain("location ^~ /openclaw/ { return 404; }")
-    expect(nginx).toContain("proxy_buffering off")
-    expect(nginx).toContain("max-age=31536000, immutable")
+    expect(
+      readFileSync(resolve(root, "packages/proxy/static.ts"), "utf8")
+    ).toContain("/runtime-config.json")
   })
 
   it("packages the Bun proxy as a dedicated non-root image target", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
 
     expect(dockerfile).toMatch(/FROM dependencies AS proxy/)
-    expect(dockerfile).toContain('CMD ["bun", "run", "proxy:serve"')
+    expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
     expect(dockerfile).toContain("USER bun")
   })
 
-  it("keeps the operator Nginx boundary free of native Hermes routes", () => {
-    const nginx = readFileSync(
-      resolve(root, "deploy/nginx/default.conf.template"),
-      "utf8"
-    )
-    expect(nginx).not.toContain("AOS_UI_HERMES_HOST")
-    expect(nginx).not.toContain("AOS_UI_OPENCLAW_HOST")
-    expect(nginx).not.toContain("/hermes/api/audio/transcribe")
-    expect(nginx.match(/proxy_pass/g)).toHaveLength(5)
-    expect(nginx.match(/proxy_pass \$aos_upstream/g)).toHaveLength(5)
-    expect(nginx).toContain("private TypeScript proxy")
+  it("keeps the operator Bun boundary free of native provider routes", () => {
+    const app = readFileSync(resolve(root, "packages/proxy/app.ts"), "utf8")
+    expect(app).not.toContain("/hermes/")
+    expect(app).not.toContain("/openclaw/")
+    expect(app).toContain("/api/aos/v1/")
   })
 })
