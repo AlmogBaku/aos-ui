@@ -18,7 +18,14 @@ it("does not load a default provider for an unknown mode", () => {
 })
 
 it("resolves every configured provider to its own adapter", () => {
-  for (const mode of ["fixture", "opencode", "hermes", "ag-ui", "openclaw"]) {
+  for (const mode of [
+    "fixture",
+    "opencode",
+    "hermes",
+    "ag-ui",
+    "openclaw",
+    "aos",
+  ]) {
     expect(getRuntimeAdapter(mode)?.mode).toBe(mode)
   }
 })
@@ -29,6 +36,7 @@ it.each([
   ["hermes", () => import("./hermes")],
   ["ag-ui", () => import("./ag-ui")],
   ["openclaw", () => import("./openclaw")],
+  ["aos", () => import("./aos")],
 ] as const)(
   "exposes only the unified runtime adapter from the %s package",
   async (mode, load) => {

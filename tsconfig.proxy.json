@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["bun", "node"]
+  },
+  "include": ["packages/protocol/**/*.ts", "packages/proxy/**/*.ts"],
+  "exclude": ["packages/**/*.test.ts"]
+}

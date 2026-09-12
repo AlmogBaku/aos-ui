@@ -38,6 +38,7 @@ type ReadyRuntimeConfiguration = ArtifactHtmlConfiguration & {
 
 export type RuntimeConfiguration =
   | (ReadyRuntimeConfiguration & { mode: "fixture" })
+  | (ReadyRuntimeConfiguration & { mode: "aos" })
   | (ReadyRuntimeConfiguration & { mode: "hermes"; baseUrl: string })
   | (ReadyRuntimeConfiguration & {
       mode: "opencode"
@@ -60,6 +61,11 @@ export type RuntimeConfiguration =
 export type PublicRuntimeConfiguration =
   | ({
       mode: "fixture"
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
+    } & ArtifactHtmlConfiguration)
+  | ({
+      mode: "aos"
       composerModelSelectorEnabled?: boolean
       composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
@@ -181,6 +187,9 @@ export function resolveRuntimeConfiguration(
   if (mode === "fixture") {
     return { status: "ready", mode: "fixture", composerFeatures }
   }
+  if (mode === "aos") {
+    return { status: "ready", mode: "aos", composerFeatures }
+  }
   if (mode === "hermes") {
     const baseUrl = environment.AOS_UI_HERMES_BASE_URL
     if (!baseUrl)
@@ -299,7 +308,8 @@ export function serializePublicRuntimeConfiguration(
       ? { artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins }
       : {}),
   }
-  if (config.mode === "fixture") return { mode: config.mode, ...featureFields }
+  if (config.mode === "fixture" || config.mode === "aos")
+    return { mode: config.mode, ...featureFields }
   if (config.mode === "hermes")
     return { mode: config.mode, baseUrl: config.baseUrl, ...featureFields }
   if (config.mode === "opencode") {
@@ -354,6 +364,14 @@ const artifactHtmlAssetOriginsSchema = z
   .optional()
 
 const publicConfigurationSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("aos"),
+      status: z.literal("ready").optional(),
+      ...publicComposerFeatureFields,
+      artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
+    })
+    .strict(),
   z
     .object({
       mode: z.literal("fixture"),
@@ -428,10 +446,10 @@ export function parsePublicRuntimeConfiguration(
           artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins,
         }
       : resolved
-  if (config.mode === "fixture")
+  if (config.mode === "fixture" || config.mode === "aos")
     return withArtifactOrigins(
       resolveRuntimeConfiguration({
-        AOS_UI_RUNTIME_MODE: "fixture",
+        AOS_UI_RUNTIME_MODE: config.mode,
         ...composerEnvironment,
       })
     )

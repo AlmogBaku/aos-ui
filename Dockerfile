@@ -18,7 +18,9 @@ RUN bun run build
 FROM nginxinc/nginx-unprivileged:1.29.3-alpine AS runner
 ENV AOS_UI_WEB_PORT=3000 \
     AOS_UI_HERMES_HOST=127.0.0.1 \
-    AOS_UI_HERMES_PORT=9119
+    AOS_UI_HERMES_PORT=9119 \
+    AOS_UI_PROXY_HOST=127.0.0.1 \
+    AOS_UI_PROXY_PORT=4100
 
 COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html

@@ -35,6 +35,7 @@ const runtimeAdapters = {
   hermes: defineLazyAdapter("hermes", () => import("./hermes")),
   "ag-ui": defineLazyAdapter("ag-ui", () => import("./ag-ui")),
   openclaw: defineLazyAdapter("openclaw", () => import("./openclaw")),
+  aos: defineLazyAdapter("aos", () => import("./aos")),
 } satisfies { [M in RuntimeMode]: RuntimeAdapterDefinition<M> }
 
 export function getRuntimeAdapter<M extends RuntimeMode>(
@@ -75,6 +76,11 @@ export function HarnessRuntimeProvider({
       })
     case "openclaw":
       return createElement(runtimeAdapters.openclaw.Provider, {
+        ...props,
+        config,
+      })
+    case "aos":
+      return createElement(runtimeAdapters.aos.Provider, {
         ...props,
         config,
       })

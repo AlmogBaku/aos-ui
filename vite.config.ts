@@ -158,6 +158,13 @@ export default defineConfig(({ mode }) => {
       rewrite: (pathname: string) => pathname.replace(/^\/openclaw/, ""),
     },
   }
+  const aosProxy = {
+    "/api/aos/v1": {
+      target: environment.AOS_UI_PROXY_TARGET ?? "http://127.0.0.1:4100",
+      changeOrigin: false,
+      ws: true,
+    },
+  }
 
   return {
     cacheDir: path.resolve(
@@ -183,11 +190,11 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: 3000,
       allowedHosts,
-      proxy: { ...hermesProxy, ...openClawProxy },
+      proxy: { ...aosProxy, ...hermesProxy, ...openClawProxy },
     },
     preview: {
       allowedHosts,
-      proxy: { ...hermesProxy, ...openClawProxy },
+      proxy: { ...aosProxy, ...hermesProxy, ...openClawProxy },
       // Playwright starts a fresh preview for every runtime matrix. Avoid a
       // browser retaining an obsolete hashed chunk between those servers.
       headers: {

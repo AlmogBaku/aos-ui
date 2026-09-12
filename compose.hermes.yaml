@@ -6,3 +6,4 @@ services:
     environment:
       AOS_UI_HERMES_HOST: ${AOS_UI_HERMES_HOST:-host.docker.internal}
       AOS_UI_HERMES_PORT: ${AOS_UI_HERMES_PORT:-9119}
+      AOS_UI_PROXY_HOST: ${AOS_UI_PROXY_HOST:-host.docker.internal}
