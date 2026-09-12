@@ -68,6 +68,17 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     this.#timeoutMs = options.timeoutMs ?? 15_000
   }
 
+  async http(path: string, init: { method?: string; body?: unknown } = {}) {
+    let response: Response
+    try {
+      response = await this.#fetch(`${this.#baseUrl}${path}`, { method: init.method, headers: { accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...(await this.#credentials()) }, ...(init.body ? { body: JSON.stringify(init.body) } : {}) })
+    } catch { throw new Error("Hermes connection failed") }
+    if (response.status === 401 || response.status === 403) throw new HermesAuthenticationError()
+    if (!response.ok) throw new Error("Hermes request failed")
+    if (init.method === "DELETE") return undefined
+    try { return await response.json() } catch { throw new Error("Hermes request failed") }
+  }
+
   async request(
     method: string,
     params: Readonly<Record<string, unknown>>

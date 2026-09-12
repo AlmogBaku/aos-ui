@@ -26,6 +26,14 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("bounds Session catalog/history reads and rejects cross-Agent identities before native dispatch", async () => {
+    const http = vi.fn(async () => ({ sessions: [], total: 0 }))
+    const app = createProxyApp({ publicOrigin: origin, operatorAuth: createOperatorAuthenticator({ allowedSubjects: ["operator@example.test"], verifySession: vi.fn(async () => ({ subject: "operator@example.test" })) }), hermes: new HermesServerAdapter({ request: vi.fn(), http }), logger: { info: vi.fn(), error: vi.fn() } })
+    expect((await app.request(request("/api/aos/v1/agents/researcher/sessions"))).status).toBe(200)
+    expect((await app.request(request("/api/aos/v1/agents/researcher/sessions?limit=101"))).status).toBe(400)
+    expect((await app.request(request("/api/aos/v1/agents/researcher/sessions/hermes:other:stored/history"))).status).toBe(404)
+    expect(http).toHaveBeenCalledTimes(1)
+  })
   it("requires an allowlisted OIDC operator on every runtime control-plane read", async () => {
     const operatorAuth = createOperatorAuthenticator({
       allowedSubjects: ["operator@example.test"],

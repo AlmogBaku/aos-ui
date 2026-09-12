@@ -7,6 +7,8 @@ import {
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
   VisibilityUpdateRequestSchema,
+  SessionCreateRequestSchema,
+  SessionPatchRequestSchema,
 } from "../protocol"
 import {
   HermesAgentNotFoundError,
@@ -55,6 +57,14 @@ function errorResponse(code: ErrorCode, status: number) {
       headers: { "content-type": "application/json; charset=UTF-8" },
     }
   )
+}
+
+function storedSessionId(agentId: string, sessionId: string) {
+  const match = /^hermes:([^:]+):(.+)$/u.exec(sessionId)
+  if (!match) return undefined
+  try {
+    return decodeURIComponent(match[1]) === agentId ? decodeURIComponent(match[2]) : undefined
+  } catch { return undefined }
 }
 
 export function createProxyApp(options: ProxyAppOptions) {
@@ -154,6 +164,44 @@ export function createProxyApp(options: ProxyAppOptions) {
         parsed.data.revision
       )
     )
+  })
+
+  app.get("/api/aos/v1/agents/:agentId/sessions", async (context) => {
+    await requireOperator(context.req.raw)
+    const limit = Number(context.req.query("limit") ?? "50")
+    const offset = Number(context.req.query("offset") ?? "0")
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0) return errorResponse("invalid_request", 400)
+    return context.json(await options.hermes.listSessions(context.req.param("agentId"), limit, offset))
+  })
+
+  app.get("/api/aos/v1/agents/:agentId/sessions/:sessionId/history", async (context) => {
+    await requireOperator(context.req.raw)
+    const storedId = storedSessionId(context.req.param("agentId"), context.req.param("sessionId"))
+    if (!storedId) return errorResponse("not_found", 404)
+    const limit = Number(context.req.query("limit") ?? "200")
+    const offset = Number(context.req.query("offset") ?? "0")
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500 || !Number.isInteger(offset) || offset < 0) return errorResponse("invalid_request", 400)
+    return context.json(await options.hermes.history(context.req.param("agentId"), storedId, limit, offset))
+  })
+  app.get("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
+    await requireOperator(context.req.raw); const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
+    return context.json(await options.hermes.getSession(context.req.param("agentId"), id))
+  })
+  app.post("/api/aos/v1/agents/:agentId/sessions", async (context) => {
+    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
+    const parsed = SessionCreateRequestSchema.safeParse(await context.req.json().catch(() => undefined)); if (!parsed.success) return errorResponse("invalid_request", 400)
+    return context.json(await options.hermes.createSession(context.req.param("agentId"), parsed.data.title), 201)
+  })
+  app.patch("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
+    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
+    const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
+    const parsed = SessionPatchRequestSchema.safeParse(await context.req.json().catch(() => undefined)); if (!parsed.success) return errorResponse("invalid_request", 400)
+    await options.hermes.mutateSession(context.req.param("agentId"), id, "PATCH", parsed.data); return new Response(null, { status: 204 })
+  })
+  app.delete("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
+    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
+    const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
+    await options.hermes.mutateSession(context.req.param("agentId"), id, "DELETE"); return new Response(null, { status: 204 })
   })
 
   app.onError((cause, context) => {

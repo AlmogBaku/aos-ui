@@ -16,7 +16,7 @@ export interface HermesRpcTransport {
     method: string,
     params: Readonly<Record<string, unknown>>
   ): Promise<unknown>
-  http?(path: string): Promise<unknown>
+  http?(path: string, init?: { method?: string; body?: unknown }): Promise<unknown>
   authState?(): Promise<HermesAuthState>
   close?(): Promise<void>
 }
@@ -290,5 +290,24 @@ export class HermesServerAdapter {
     try { payload = await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`) } catch { throw new HermesUnavailableError() }
     if (!isRecord(payload) || nonEmptyString(payload.session_id) !== storedId || !Array.isArray(payload.messages)) throw new HermesUnavailableError()
     return { sessionId: sessionId(profile, storedId), messages: payload.messages, total: isRecord(payload.pagination) && typeof payload.pagination.total === "number" ? payload.pagination.total : payload.messages.length, limit, offset }
+  }
+
+  async getSession(profile: string, storedId: string) {
+    if (!this.transport.http) throw new HermesUnavailableError()
+    const payload = await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`)
+    if (!isRecord(payload) || nonEmptyString(payload.id) !== storedId || nonEmptyString(payload.profile) !== profile) throw new HermesUnavailableError()
+    return { id: sessionId(profile, storedId), agentId: profile, title: nonEmptyString(payload.title) ?? storedId, archived: payload.archived === true, updatedAt: timestamp(payload.last_active ?? payload.started_at), status: "unknown" as const }
+  }
+
+  async createSession(profile: string, title?: string) {
+    const payload = await this.transport.request("session.create", { profile, close_on_disconnect: false, ...(title ? { title } : {}) })
+    if (!isRecord(payload) || !nonEmptyString(payload.stored_session_id) || !nonEmptyString(payload.session_id)) throw new HermesUnavailableError()
+    return { id: sessionId(profile, nonEmptyString(payload.stored_session_id)!), agentId: profile }
+  }
+
+  async mutateSession(profile: string, storedId: string, method: "PATCH" | "DELETE", body?: unknown) {
+    await this.getSession(profile, storedId)
+    if (!this.transport.http) throw new HermesUnavailableError()
+    await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`, { method, body })
   }
 }

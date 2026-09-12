@@ -50,6 +50,12 @@ class FakeSocket implements HermesSocket {
 }
 
 describe("Hermes WebSocket RPC transport", () => {
+  it("keeps static credentials server-side for native REST Session reads", async () => {
+    const fetcher = vi.fn(async () => Response.json({ sessions: [] }))
+    const transport = new HermesWebSocketRpcTransport({ baseUrl: "http://hermes.test", credentials: async () => ({ "X-Hermes-Session-Token": "secret" }), fetcher })
+    await expect(transport.http("/api/sessions?profile=researcher")).resolves.toEqual({ sessions: [] })
+    expect(fetcher).toHaveBeenCalledWith("http://hermes.test/api/sessions?profile=researcher", expect.objectContaining({ headers: expect.objectContaining({ "X-Hermes-Session-Token": "secret" }) }))
+  })
   it("uses the configured static token only for native ws-ticket brokerage", async () => {
     const fetcher = vi.fn(
       async () =>
