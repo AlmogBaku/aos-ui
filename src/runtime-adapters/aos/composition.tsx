@@ -1,20 +1,33 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { useAuiState, useRemoteThreadListRuntime } from "@assistant-ui/react"
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
+import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
+import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 
 import type {
   RuntimeAdapterDefinition,
   RuntimeAdapterProps,
 } from "../definition"
 import { AosAuthGate, AuthGateFailure } from "./aos-auth-gate"
+import { AosAttachmentAdapter } from "./aos-attachment-adapter"
+import { AosArtifactAdapter } from "./aos-artifacts"
+import { useAosComposerFeatures } from "./aos-composer-features"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
 function ReadyAosRuntimeProvider({
   children,
+  config,
+  locale,
   onReconnect,
 }: RuntimeAdapterProps<"aos"> & { onReconnect(): Promise<void> }) {
   const reconciler = useMemo(
@@ -27,6 +40,9 @@ function ReadyAosRuntimeProvider({
     [reconciler]
   )
   const threadList = useMemo(() => new AosThreadListAdapter(client), [client])
+  const attachments = useMemo(() => new AosAttachmentAdapter(), [])
+  const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
+  const media = useMemo(() => new VoiceMediaController(), [])
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {
       const remoteId = useAuiState((state) => state.threadListItem.remoteId)
@@ -39,32 +55,89 @@ function ReadyAosRuntimeProvider({
           createAosRunAgent({
             agentId: agentId ?? "",
             threadId: remoteId ?? "",
+            stageAttachments: client.stageAttachments.bind(client),
           }),
-        [agentId, remoteId]
+        [agentId, client, remoteId]
       )
       const history = useMemo(
         () => (remoteId ? threadList.historyFor(remoteId) : undefined),
         [remoteId]
       )
+      const mediaAdapters = useMemo(
+        () =>
+          remoteId
+            ? media.createAdapters(remoteId, {
+                transcribe: (recording, signal) =>
+                  client.transcribe(remoteId, recording, signal),
+                synthesize: (text, signal) =>
+                  client.speak(remoteId, text, signal),
+                projectText: (text) => projectSpeechText(text, locale),
+              })
+            : undefined,
+        [client, media, remoteId]
+      )
       return useAgUiRuntime({
         agent,
         isDisabled: !remoteId || !agentId,
-        adapters: { history },
+        adapters: { history, attachments, ...mediaAdapters },
         onCancel: () => {
           if (remoteId) void client.stopRun(remoteId).catch(() => undefined)
         },
       })
     },
-    [client, threadList]
+    [attachments, client, locale, media, threadList]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadList,
     runtimeHook,
   })
+  const selectedThreadId = useSyncExternalStore(
+    assistantRuntime.threads.subscribe,
+    () => {
+      const state = assistantRuntime.threads.getState()
+      const item = state.threadItems[state.mainThreadId]
+      return item?.remoteId ?? item?.externalId
+    },
+    () => undefined
+  )
+  const composer = useAosComposerFeatures(
+    client,
+    config.composerFeatures,
+    selectedThreadId
+  )
+  useEffect(() => {
+    media.setScope(selectedThreadId)
+    media.setSafelyIdle(false)
+    if (!selectedThreadId) return
+    const operation = new AbortController()
+    void Promise.all([
+      client.audioAvailability(selectedThreadId),
+      client.activity(selectedThreadId),
+    ]).then(
+      ([availability, activity]) => {
+        if (operation.signal.aborted) return
+        media.setAvailability(selectedThreadId, availability)
+        media.setSafelyIdle(
+          activity.status === "available" && activity.state === "idle"
+        )
+      },
+      () => {
+        if (!operation.signal.aborted)
+          media.setAvailability(selectedThreadId, {
+            transcription: "unavailable",
+            speech: "unavailable",
+          })
+      }
+    )
+    return () => operation.abort()
+  }, [client, media, selectedThreadId])
 
   return children({
     assistantRuntime,
     workspace: client,
+    artifacts: { resolver: artifacts },
+    composer,
+    media,
     activityCoverage: "workspace",
   })
 }

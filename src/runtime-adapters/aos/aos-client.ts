@@ -1,4 +1,4 @@
-import type { z } from "zod"
+import { z } from "zod"
 import {
   HttpAgent,
   RunAgentInputSchema,
@@ -30,6 +30,149 @@ import type { AosEventScope } from "./aos-reconciliation"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
+/**
+ * These schemas deliberately live at the browser boundary until the normalized
+ * proxy protocol publishes the workspace/content extension. They expose only
+ * projection data consumed by AOS; no provider identity, native path, or
+ * transport detail is permitted through this client.
+ */
+const OperationAvailabilitySchema = z.strictObject({
+  status: z.enum(["available", "unavailable"]),
+  reason: z.string().min(1).max(256).optional(),
+})
+const WorkspaceCapabilitiesSchema = z.strictObject({
+  workspace: z.strictObject({
+    models: OperationAvailabilitySchema,
+    context: OperationAvailabilitySchema,
+    todos: OperationAvailabilitySchema,
+    activity: OperationAvailabilitySchema,
+  }),
+  interactions: OperationAvailabilitySchema,
+  content: z.strictObject({
+    attachments: OperationAvailabilitySchema,
+    artifacts: OperationAvailabilitySchema,
+    audio: OperationAvailabilitySchema,
+  }),
+})
+const ModelChoicesSchema = z.strictObject({
+  selectedId: z.string().min(1).max(512),
+  options: z
+    .array(
+      z.strictObject({
+        id: z.string().min(1).max(512),
+        label: z.string().min(1).max(512),
+        group: z.string().min(1).max(512).optional(),
+      })
+    )
+    .max(1_000),
+})
+const ModelSelectResponseSchema = z.strictObject({
+  selectedId: z.string().min(1).max(512),
+})
+const ContextSchema = z.strictObject({
+  usedTokens: z.number().int().min(0),
+  maxTokens: z.number().int().positive(),
+  estimated: z.boolean().optional(),
+  source: z
+    .enum(["provider-usage", "provider-usage-plus-estimate", "local-estimate"])
+    .optional(),
+  breakdown: z
+    .strictObject({
+      systemTokens: z.number().int().min(0),
+      toolTokens: z.number().int().min(0),
+      messageTokens: z.number().int().min(0),
+    })
+    .optional(),
+})
+const TodosResponseSchema = z.strictObject({
+  todos: z
+    .array(
+      z.strictObject({
+        id: z.string().min(1).max(512),
+        label: z.string().min(1).max(4_096),
+        status: z.enum(["pending", "active", "completed", "failed"]),
+      })
+    )
+    .max(1_000),
+})
+const ActivityResponseSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("available"),
+    state: z.enum(["idle", "running", "waiting-for-input", "unknown"]),
+  }),
+  z.strictObject({
+    status: z.literal("unavailable"),
+    reason: z.string().min(1).max(256),
+  }),
+])
+const InteractionResponseSchema = z.strictObject({
+  status: z.enum(["resolved", "expired", "already-resolved"]),
+})
+const StageAttachmentsRequestSchema = z.strictObject({
+  attachments: z
+    .array(
+      z.strictObject({
+        type: z.enum(["image", "file"]),
+        filename: z.string().min(1).max(4_096).optional(),
+        mimeType: z.string().min(1).max(256),
+        dataUrl: z.string().min(1).max(25_000_000),
+      })
+    )
+    .min(1)
+    .max(32),
+})
+const StageAttachmentsResponseSchema = z.strictObject({
+  stageId: z.string().min(1).max(512),
+  attachments: z
+    .array(
+      z.strictObject({
+        type: z.enum(["image", "file"]).optional(),
+        filename: z.string().min(1).max(4_096).optional(),
+        mimeType: z.string().min(1).max(256),
+      })
+    )
+    .max(32),
+})
+const ArtifactCatalogSchema = z.strictObject({
+  artifacts: z
+    .array(
+      z.strictObject({
+        id: z.string().min(1).max(512),
+        filename: z.string().min(1).max(4_096),
+        mimeType: z.string().min(1).max(256).optional(),
+        sizeBytes: z.number().int().min(0).optional(),
+      })
+    )
+    .max(1_000),
+})
+const AudioAvailabilitySchema = z.strictObject({
+  transcription: z.enum(["ready", "unverified", "unavailable"]),
+  speech: z.enum(["ready", "unverified", "unavailable"]),
+})
+const TranscriptionResponseSchema = z.strictObject({
+  transcript: z.string().max(100_000),
+})
+
+export type AosWorkspaceCapabilities = z.infer<
+  typeof WorkspaceCapabilitiesSchema
+>
+export type AosModelChoices = z.infer<typeof ModelChoicesSchema>
+export type AosContext = z.infer<typeof ContextSchema>
+export type AosSessionActivity = z.infer<typeof ActivityResponseSchema>
+export type AosStagedAttachment = z.infer<typeof StageAttachmentsResponseSchema>
+export type AosArtifact = z.infer<
+  typeof ArtifactCatalogSchema
+>["artifacts"][number]
+export type AosAudioAvailability = z.infer<typeof AudioAvailabilitySchema>
+
+async function dataUrl(blob: Blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ""
+  for (let offset = 0; offset < bytes.length; offset += 32_768)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  return `data:${blob.type};base64,${btoa(binary)}`
+}
+
 export type AosClientFailure =
   "connection-interrupted" | "provider-unavailable" | "proxy-failure"
 
@@ -50,14 +193,70 @@ export type AosRemoteClientOptions = {
   }
 }
 
+type StagedRunAttachment = {
+  type: "image" | "file"
+  dataUrl: string
+  filename?: string
+  mimeType: string
+}
+
+function attachmentsForStage(value: unknown): StagedRunAttachment[] {
+  if (!value || typeof value !== "object" || !("attachments" in value))
+    return []
+  const attachments = (value as { attachments?: unknown }).attachments
+  if (!Array.isArray(attachments)) return []
+  const staged: StagedRunAttachment[] = []
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== "object")
+      throw new Error("Invalid AOS attachment")
+    const row = attachment as Record<string, unknown>
+    if (!Array.isArray(row.content)) throw new Error("Invalid AOS attachment")
+    const part = row.content.find(
+      (candidate): candidate is Record<string, unknown> =>
+        Boolean(candidate) &&
+        typeof candidate === "object" &&
+        ((candidate as { type?: unknown }).type === "image" ||
+          (candidate as { type?: unknown }).type === "file")
+    )
+    if (!part) throw new Error("Invalid AOS attachment")
+    const type = part.type
+    const dataUrl = type === "image" ? part.image : part.data
+    const filename =
+      typeof part.filename === "string"
+        ? part.filename
+        : typeof row.name === "string"
+          ? row.name
+          : undefined
+    const mimeType =
+      type === "file" && typeof part.mimeType === "string"
+        ? part.mimeType
+        : typeof row.contentType === "string"
+          ? row.contentType
+          : undefined
+    if (
+      (type !== "image" && type !== "file") ||
+      typeof dataUrl !== "string" ||
+      !mimeType
+    )
+      throw new Error("Invalid AOS attachment")
+    staged.push({ type, dataUrl, ...(filename ? { filename } : {}), mimeType })
+  }
+  return staged
+}
+
 export function createAosRunAgent({
   agentId,
   threadId,
   fetcher = globalThis.fetch.bind(globalThis),
+  stageAttachments,
 }: {
   agentId: string
   threadId: string
   fetcher?: typeof fetch
+  stageAttachments?: (
+    threadId: string,
+    attachments: readonly StagedRunAttachment[]
+  ) => Promise<{ stageId: string }>
 }) {
   const url = `/api/aos/v1/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
   const runFetch: HttpAgentFetchFn = async (requestUrl, init) => {
@@ -73,6 +272,23 @@ export function createAosRunAgent({
     const message = input.messages.at(-1)
     if (!message || message.role !== "user")
       throw new Error("AOS runs require a trailing user turn")
+    const rawMessages =
+      candidate && typeof candidate === "object" && "messages" in candidate
+        ? (candidate as { messages?: unknown }).messages
+        : undefined
+    const rawMessage = Array.isArray(rawMessages)
+      ? rawMessages.at(-1)
+      : undefined
+    const staged = attachmentsForStage(rawMessage)
+    const stage = staged.length
+      ? await stageAttachments?.(threadId, staged)
+      : undefined
+    if (staged.length && !stage)
+      throw new Error("AOS attachment staging is unavailable")
+    const messageWithoutAttachments = {
+      ...(message as Record<string, unknown>),
+    }
+    delete messageWithoutAttachments.attachments
     return fetcher(url, {
       ...init,
       credentials: "same-origin",
@@ -81,10 +297,10 @@ export function createAosRunAgent({
         runId: input.runId,
         ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
         state: {},
-        messages: [message],
+        messages: [messageWithoutAttachments],
         tools: [],
         context: [],
-        forwardedProps: {},
+        forwardedProps: stage ? { aosAttachmentStageId: stage.stageId } : {},
       }),
     })
   }
@@ -354,6 +570,163 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
   }
 
+  workspaceCapabilities(threadId: string) {
+    return this.#sessionRead(
+      threadId,
+      "/workspace/capabilities",
+      WorkspaceCapabilitiesSchema
+    )
+  }
+
+  models(threadId: string) {
+    return this.#sessionRead(threadId, "/workspace/models", ModelChoicesSchema)
+  }
+
+  async selectModel(threadId: string, selectedId: string) {
+    const result = await this.#sessionRead(
+      threadId,
+      "/workspace/models/select",
+      ModelSelectResponseSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ selectedId }),
+      }
+    )
+    if (result.selectedId !== selectedId)
+      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+    return result
+  }
+
+  context(threadId: string) {
+    return this.#sessionRead(threadId, "/workspace/context", ContextSchema)
+  }
+
+  async todos(threadId: string) {
+    return (
+      await this.#sessionRead(threadId, "/workspace/todos", TodosResponseSchema)
+    ).todos
+  }
+
+  activity(threadId: string) {
+    return this.#sessionRead(
+      threadId,
+      "/workspace/activity",
+      ActivityResponseSchema
+    )
+  }
+
+  async respondToInteraction(
+    threadId: string,
+    requestId: string,
+    response: { kind: "question"; answers: string[][] } | { kind: "reject" }
+  ) {
+    if (!requestId.trim() || requestId.length > 512)
+      throw new AosClientError("proxy-failure", "Invalid interaction request")
+    const result = await this.#sessionRead(
+      threadId,
+      "/interactions/respond",
+      InteractionResponseSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId, response }),
+      }
+    )
+    if (result.status === "expired" || result.status === "already-resolved")
+      throw new AosClientError(
+        "proxy-failure",
+        "Interaction is no longer pending"
+      )
+  }
+
+  async stageAttachments(
+    threadId: string,
+    attachments: readonly z.input<
+      typeof StageAttachmentsRequestSchema
+    >["attachments"][number][]
+  ) {
+    const request = StageAttachmentsRequestSchema.safeParse({
+      attachments: [...attachments],
+    })
+    if (!request.success)
+      throw new AosClientError(
+        "proxy-failure",
+        "Invalid attachment staging request"
+      )
+    return this.#sessionRead(
+      threadId,
+      "/attachments/stage",
+      StageAttachmentsResponseSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request.data),
+      }
+    )
+  }
+
+  async listArtifacts(threadId: string) {
+    return (
+      await this.#sessionRead(threadId, "/artifacts", ArtifactCatalogSchema)
+    ).artifacts
+  }
+
+  async readArtifact(
+    threadId: string,
+    artifactId: string,
+    signal?: AbortSignal
+  ) {
+    if (!artifactId.trim() || artifactId.length > 512)
+      throw new AosClientError("proxy-failure", "Invalid artifact reference")
+    const { path, scope } = this.#sessionPath(
+      threadId,
+      `/artifacts/${encodeURIComponent(artifactId)}`
+    )
+    return this.#readBlob(path, { signal }, scope)
+  }
+
+  audioAvailability(threadId: string) {
+    return this.#sessionRead(threadId, "/audio", AudioAvailabilitySchema)
+  }
+
+  async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
+    if (!audio.size || audio.size > 5 * 1024 * 1024 || !audio.type)
+      throw new AosClientError("proxy-failure", "Invalid audio recording")
+    const { path, scope } = this.#sessionPath(threadId, "/audio/transcribe")
+    const response = await this.#read(
+      path,
+      TranscriptionResponseSchema,
+      {
+        method: "POST",
+        signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          dataUrl: await dataUrl(audio),
+          mimeType: audio.type,
+        }),
+      },
+      scope
+    )
+    return response.transcript
+  }
+
+  async speak(threadId: string, text: string, signal?: AbortSignal) {
+    if (!text.trim() || text.length > 100_000)
+      throw new AosClientError("proxy-failure", "Invalid speech input")
+    const { path, scope } = this.#sessionPath(threadId, "/audio/speak")
+    return this.#readBlob(
+      path,
+      {
+        method: "POST",
+        signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      },
+      scope
+    )
+  }
+
   async #patchSession(
     threadId: string,
     patch: { title: string } | { archived: boolean }
@@ -384,6 +757,54 @@ export class AosRemoteClient implements WorkspaceAdapter {
     }
     if (!response.ok)
       throw new Error(`AOS proxy request failed (${response.status})`)
+  }
+
+  #sessionPath(threadId: string, suffix: string) {
+    const agentId = this.#owner(threadId)
+    return {
+      path: `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}${suffix}`,
+      scope: { workspaceId: "operator", agentId, sessionId: threadId },
+    }
+  }
+
+  #sessionRead<T>(
+    threadId: string,
+    suffix: string,
+    schema: Schema<T>,
+    init?: RequestInit
+  ) {
+    const { path, scope } = this.#sessionPath(threadId, suffix)
+    return this.#read(path, schema, init, scope)
+  }
+
+  async #readBlob(path: string, init?: RequestInit, scope?: AosEventScope) {
+    const operation = async () => {
+      let response: Response
+      try {
+        response = await this.#fetch(`/api/aos/v1${path}`, {
+          ...init,
+          credentials: "same-origin",
+          headers: { accept: "application/octet-stream", ...init?.headers },
+        })
+      } catch {
+        throw new AosClientError("connection-interrupted")
+      }
+      if (!response.ok)
+        throw new AosClientError(
+          response.status === 503 ? "provider-unavailable" : "proxy-failure"
+        )
+      const contentType = response.headers.get("content-type")
+      if (!contentType || /[\r\n]/u.test(contentType))
+        throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      try {
+        return await response.blob()
+      } catch {
+        throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      }
+    }
+    return scope && this.#reconciler
+      ? this.#reconciler.read(scope, operation)
+      : operation()
   }
 
   #rememberSession(session: Session) {

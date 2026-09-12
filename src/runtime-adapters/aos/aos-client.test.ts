@@ -22,6 +22,191 @@ const catalog = {
 }
 
 describe("provider-neutral AOS browser client", () => {
+  it("maps a selected Session's normalized workspace, content, interaction, and audio operations", async () => {
+    const session = {
+      id: "opaque-session-1",
+      agentId: "researcher",
+      title: "Research",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "waiting-for-input" as const,
+    }
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+          return Response.json({
+            sessions: [session],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          })
+        if (path.endsWith("/workspace/capabilities"))
+          return Response.json({
+            workspace: {
+              models: { status: "available" },
+              context: { status: "available" },
+              todos: { status: "available" },
+              activity: { status: "available" },
+            },
+            interactions: { status: "available" },
+            content: {
+              attachments: { status: "available" },
+              artifacts: { status: "available" },
+              audio: { status: "available" },
+            },
+          })
+        if (path.endsWith("/workspace/models"))
+          return Response.json({
+            selectedId: "native/small",
+            options: [{ id: "native/small", label: "Small", group: "Native" }],
+          })
+        if (path.endsWith("/workspace/models/select")) {
+          expect(init?.method).toBe("POST")
+          expect(init?.body).toBe(
+            JSON.stringify({ selectedId: "native/small" })
+          )
+          return Response.json({ selectedId: "native/small" })
+        }
+        if (path.endsWith("/workspace/context"))
+          return Response.json({
+            usedTokens: 1200,
+            maxTokens: 8000,
+            estimated: true,
+            source: "provider-usage-plus-estimate",
+            breakdown: {
+              systemTokens: 100,
+              toolTokens: 200,
+              messageTokens: 900,
+            },
+          })
+        if (path.endsWith("/workspace/todos"))
+          return Response.json({
+            todos: [{ id: "todo-1", label: "Ship", status: "active" }],
+          })
+        if (path.endsWith("/workspace/activity"))
+          return Response.json({
+            status: "available",
+            state: "waiting-for-input",
+          })
+        if (path.endsWith("/interactions/respond")) {
+          expect(init?.method).toBe("POST")
+          expect(init?.body).toBe(
+            JSON.stringify({
+              requestId: "request-1",
+              response: { kind: "question", answers: [["yes"]] },
+            })
+          )
+          return Response.json({ status: "resolved" })
+        }
+        if (path.endsWith("/attachments/stage")) {
+          expect(init?.method).toBe("POST")
+          expect(init?.body).toBe(
+            JSON.stringify({
+              attachments: [
+                {
+                  type: "file",
+                  filename: "brief.pdf",
+                  mimeType: "application/pdf",
+                  dataUrl: "data:application/pdf;base64,AQ==",
+                },
+              ],
+            })
+          )
+          return Response.json({
+            stageId: "stage-1",
+            attachments: [
+              { filename: "brief.pdf", mimeType: "application/pdf" },
+            ],
+          })
+        }
+        if (path.endsWith("/artifacts"))
+          return Response.json({
+            artifacts: [
+              {
+                id: "artifact-1",
+                filename: "brief.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 3,
+              },
+            ],
+          })
+        if (path.endsWith("/artifacts/artifact-1"))
+          return new Response(Uint8Array.from([1, 2, 3]), {
+            headers: { "content-type": "application/pdf" },
+          })
+        if (path.endsWith("/audio"))
+          return Response.json({
+            transcription: "ready",
+            speech: "unavailable",
+          })
+        if (path.endsWith("/audio/transcribe")) {
+          expect(init?.method).toBe("POST")
+          return Response.json({ transcript: "Hello" })
+        }
+        if (path.endsWith("/audio/speak"))
+          return new Response(Uint8Array.from([1, 2]), {
+            headers: { "content-type": "audio/mpeg" },
+          })
+        throw new Error(`Unexpected normalized request: ${path}`)
+      }
+    )
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+
+    await expect(
+      client.workspaceCapabilities(session.id)
+    ).resolves.toMatchObject({ workspace: { models: { status: "available" } } })
+    await expect(client.models(session.id)).resolves.toMatchObject({
+      selectedId: "native/small",
+    })
+    await expect(
+      client.selectModel(session.id, "native/small")
+    ).resolves.toEqual({ selectedId: "native/small" })
+    await expect(client.context(session.id)).resolves.toMatchObject({
+      usedTokens: 1200,
+    })
+    await expect(client.todos(session.id)).resolves.toEqual([
+      { id: "todo-1", label: "Ship", status: "active" },
+    ])
+    await expect(client.activity(session.id)).resolves.toEqual({
+      status: "available",
+      state: "waiting-for-input",
+    })
+    await expect(
+      client.respondToInteraction(session.id, "request-1", {
+        kind: "question",
+        answers: [["yes"]],
+      })
+    ).resolves.toBeUndefined()
+    await expect(
+      client.stageAttachments(session.id, [
+        {
+          type: "file",
+          filename: "brief.pdf",
+          mimeType: "application/pdf",
+          dataUrl: "data:application/pdf;base64,AQ==",
+        },
+      ])
+    ).resolves.toMatchObject({ stageId: "stage-1" })
+    await expect(client.listArtifacts(session.id)).resolves.toMatchObject([
+      { id: "artifact-1", filename: "brief.pdf" },
+    ])
+    await expect(
+      client.readArtifact(session.id, "artifact-1")
+    ).resolves.toBeInstanceOf(Blob)
+    await expect(client.audioAvailability(session.id)).resolves.toEqual({
+      transcription: "ready",
+      speech: "unavailable",
+    })
+    await expect(
+      client.transcribe(session.id, new Blob(["audio"], { type: "audio/webm" }))
+    ).resolves.toBe("Hello")
+    await expect(client.speak(session.id, "Hello")).resolves.toBeInstanceOf(
+      Blob
+    )
+  })
+
   it("reads only normalized same-origin auth/runtime/catalog endpoints", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)

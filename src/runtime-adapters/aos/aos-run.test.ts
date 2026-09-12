@@ -18,6 +18,74 @@ function collect(
 }
 
 describe("AOS normalized HttpAgent transport", () => {
+  it("stages browser attachments and forwards only the opaque stage id to the normalized run", async () => {
+    const stageAttachments = vi.fn(async () => ({
+      stageId: "stage-1",
+      attachments: [],
+    }))
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          'data: {"type":"RUN_FINISHED","threadId":"opaque-session-1","runId":"run-1","outcome":{"type":"success"}}\n\n',
+          { headers: { "content-type": "text/event-stream" } }
+        )
+    )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: "opaque-session-1",
+      fetcher,
+      stageAttachments,
+    })
+
+    await collect(agent, {
+      threadId: "opaque-session-1",
+      runId: "run-1",
+      state: {},
+      messages: [
+        {
+          id: "new-user",
+          role: "user",
+          content: "Please read this",
+          attachments: [
+            {
+              id: "draft",
+              type: "file",
+              name: "brief.txt",
+              contentType: "text/plain",
+              content: [
+                {
+                  type: "file",
+                  data: "data:text/plain;base64,SGk=",
+                  filename: "brief.txt",
+                  mimeType: "text/plain",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(stageAttachments).toHaveBeenCalledWith("opaque-session-1", [
+      {
+        type: "file",
+        dataUrl: "data:text/plain;base64,SGk=",
+        filename: "brief.txt",
+        mimeType: "text/plain",
+      },
+    ])
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [{ id: "new-user", role: "user", content: "Please read this" }],
+      forwardedProps: { aosAttachmentStageId: "stage-1" },
+    })
+    expect(JSON.stringify(fetcher.mock.calls[0]?.[1]?.body)).not.toContain(
+      "SGk="
+    )
+  })
+
   it("posts only the trailing user turn with empty browser authority", async () => {
     const fetcher = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) => {
