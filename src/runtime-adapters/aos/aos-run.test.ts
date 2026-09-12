@@ -3,9 +3,17 @@ import { describe, expect, it, vi } from "vitest"
 
 import { createAosRunAgent } from "./aos-client"
 
+type AosRunInput = RunAgentInput & {
+  messages: Array<
+    RunAgentInput["messages"][number] & {
+      attachments?: unknown
+    }
+  >
+}
+
 function collect(
   agent: ReturnType<typeof createAosRunAgent>,
-  input: RunAgentInput
+  input: AosRunInput
 ) {
   return new Promise<unknown[]>((resolve, reject) => {
     const events: unknown[] = []
@@ -24,11 +32,14 @@ describe("AOS normalized HttpAgent transport", () => {
       attachments: [],
     }))
     const fetcher = vi.fn(
-      async () =>
-        new Response(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        void _input
+        void _init
+        return new Response(
           'data: {"type":"RUN_FINISHED","threadId":"opaque-session-1","runId":"run-1","outcome":{"type":"success"}}\n\n',
           { headers: { "content-type": "text/event-stream" } }
         )
+      }
     )
     const agent = createAosRunAgent({
       agentId: "researcher",

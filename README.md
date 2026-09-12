@@ -14,7 +14,7 @@
 
 Most agent harnesses present a coding-agent interface. AOS UI gives your personal harness a workspace for business use cases: an accountant, executive assistant, marketing agent, ghostwriter, product partner, hiring agent, or any other role you configure. It keeps their Agents and Sessions in one place without losing ownership, execution state, or pending work.
 
-AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. OpenCode and Hermes keep control of execution, credentials, Agent definitions, and durable history; AOS UI provides the operator workspace around them. OpenClaw remains a code-level integration but is unavailable on the current normalized deployment path.
+AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. The browser uses the normalized AOS proxy; Hermes keeps control of execution, credentials, Agent definitions, and durable history.
 
 ## What AOS provides
 
@@ -26,18 +26,15 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
 - Optional Hermes voice controls and restricted guest invitations
 
-One runtime is selected for each deployment. See the [runtime capability matrix](docs/runtime-capabilities.md) before choosing OpenCode, Hermes, or generic AG-UI. OpenClaw is planned but unavailable for this cutover.
+The browser has one real runtime: the normalized AOS proxy. Future OpenCode and OpenClaw integrations remain server-side until they implement that proxy contract.
 
 ## Quick start
 
-AOS UI is not an agent harness. It attaches to a harness that you install, authenticate, and run separately.
+AOS UI is not an agent harness. Run the AOS proxy against an authenticated harness separately.
 
 ### Prerequisites
 
-- One supported harness:
-  - [OpenCode](docs/runtimes/opencode.md), installed and running as a server; or
-  - [Hermes](docs/runtimes/hermes.md), installed, authenticated, and running as a server; or
-  - compatible [AG-UI run and workspace services](docs/runtimes/ag-ui.md)
+- The AOS proxy and an authenticated Hermes server
 - [Bun](https://bun.sh/)
 - A current desktop browser
 
@@ -49,56 +46,21 @@ cd aos-ui
 bun install
 ```
 
-Then choose **one** of the following runtime connections. Do not run both configurations.
-
-### OpenCode
-
-Start OpenCode in the worktree it should own and allow the AOS browser origin:
+For local proxy development:
 
 ```bash
-cd /absolute/path/to/opencode-worktree
-opencode serve --hostname 127.0.0.1 --port 4096 \
-  --cors http://localhost:3000
-```
-
-In the AOS checkout:
-
-```bash
-AOS_UI_RUNTIME_MODE=opencode \
-AOS_UI_OPENCODE_BASE_URL=http://127.0.0.1:4096 \
-AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/opencode-worktree \
+AOS_UI_RUNTIME_MODE=aos \
+AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
-See [Run AOS with OpenCode](docs/runtimes/opencode.md) for native ownership, optional AOS integration tools, models, and containers.
-
-### Hermes
-
-Start your authenticated `hermes serve` installation independently. For local
-development, the legacy Vite shortcut remains available:
-
-```bash
-AOS_UI_RUNTIME_MODE=hermes \
-AOS_UI_HERMES_BASE_URL=/hermes \
-AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
-  bun run dev
-```
-
-See [Run AOS with Hermes](docs/runtimes/hermes.md) for authentication, profiles, the optional native plugin, and containers.
-
-### OpenClaw (planned/unavailable)
-
-OpenClaw is not exposed by the Hermes-first deployment. The retained
-`compose.openclaw.yaml` and `deploy/runtime-config.openclaw.json` are an
-explicit fail-closed marker, not a runnable attachment command.
-
-Generic providers use separate [AG-UI run and workspace services](docs/runtimes/ag-ui.md).
-
-Open <http://localhost:3000> after starting AOS. Stopping AOS does not stop or remove the harness or its data.
+Open <http://localhost:3000>. The browser sends only normalized AOS requests;
+the proxy owns Hermes authentication and all native communication. See [Run
+AOS with Hermes](docs/runtimes/hermes.md) for private proxy configuration.
 
 ### Preview without a harness
 
-Fixture mode is an optional, backend-free preview of the interface. It is not a substitute for OpenCode, Hermes, or another compatible harness:
+Fixture mode is an optional, backend-free preview of the interface. It is not a substitute for the AOS proxy:
 
 ```bash
 AOS_UI_RUNTIME_MODE=fixture bun run dev
@@ -108,7 +70,7 @@ The fixture is deterministic and cannot create or modify native Agents. Continue
 
 ## Deployment
 
-AOS builds to static assets and ships with an Nginx container. Runtime selection comes from `/runtime-config.json`, so operators can change the selected runtime without rebuilding the frontend.
+AOS is served by the Bun proxy. Runtime selection comes from `/runtime-config.json`, so operators can switch between the proxy and explicit fixture mode without rebuilding the frontend.
 
 For a containerized fixture preview:
 

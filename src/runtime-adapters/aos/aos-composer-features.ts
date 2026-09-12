@@ -35,9 +35,6 @@ export function useAosComposerFeatures(
 
   useEffect(() => {
     let active = true
-    setModels(undefined)
-    setContext(undefined)
-    setSelection({ status: "idle" })
     if (!threadId)
       return () => {
         active = false

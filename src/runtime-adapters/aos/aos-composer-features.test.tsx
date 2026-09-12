@@ -12,6 +12,7 @@ describe("AOS composer features", () => {
     const context = vi.fn(async () => ({
       usedTokens: 1_200,
       maxTokens: 8_000,
+      source: "provider-usage" as const,
       breakdown: { systemTokens: 100, toolTokens: 200, messageTokens: 900 },
     }))
     const client = { models, context, selectModel: vi.fn() }

@@ -49,7 +49,9 @@ function questions(
     const items = question && record(question.items)
     const options = choices(items) ?? []
     const prompt =
-      typeof question?.title === "string" ? question.title : interrupt.message
+      typeof question?.title === "string"
+        ? question.title
+        : (interrupt.message ?? "Question")
     return [
       {
         id: String(index),
@@ -67,7 +69,7 @@ function questions(
         {
           id: "0",
           header: "Question",
-          prompt: interrupt.message,
+          prompt: interrupt.message ?? "Question",
           options: [],
           custom: true,
         },
@@ -90,7 +92,7 @@ function project(
         {
           id: "0",
           header: "Permission",
-          prompt: interrupt.message,
+          prompt: interrupt.message ?? "Permission",
           options,
           custom: false,
         },

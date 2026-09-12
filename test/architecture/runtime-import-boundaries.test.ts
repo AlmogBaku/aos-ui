@@ -16,14 +16,14 @@ describe("runtime package import boundaries", () => {
   }, 15_000)
 
   it.each([
-    'import { runtimeAdapter } from "@/runtime-adapters/hermes/composition"',
-    'export { HermesNativeClient } from "../runtime-adapters/hermes/hermes-native-client"',
-    'export * from "@/runtime-adapters/hermes/hermes-native-client"',
-    'const adapter = import("@/runtime-adapters/hermes/composition")',
-    'type Client = import("@/runtime-adapters/hermes/hermes-native-client").HermesNativeClient',
-    'const adapter = import("../runtime-adapters/hermes/../hermes/composition")',
-    "const adapter = import(`@/runtime-adapters/hermes/composition`)",
-    'const adapter = require("@/runtime-adapters/hermes/composition")',
+    'import { runtimeAdapter } from "@/runtime-adapters/aos/composition"',
+    'export { AosRemoteClient } from "../runtime-adapters/aos/aos-client"',
+    'export * from "@/runtime-adapters/aos/aos-client"',
+    'const adapter = import("@/runtime-adapters/aos/composition")',
+    'type Client = import("@/runtime-adapters/aos/aos-client").AosRemoteClient',
+    'const adapter = import("../runtime-adapters/aos/../aos/composition")',
+    "const adapter = import(`@/runtime-adapters/aos/composition`)",
+    'const adapter = require("@/runtime-adapters/aos/composition")',
   ])("rejects production access to provider internals: %s", async (code) => {
     expect(
       await boundaryErrors("src/components/example.tsx", code)
@@ -31,20 +31,20 @@ describe("runtime package import boundaries", () => {
   })
 
   it.each([
-    'import { runtimeAdapter } from "../hermes"',
-    'import { runtimeAdapter } from "@/runtime-adapters/hermes"',
-    'const adapter = import("../hermes/index.ts")',
-    'import type { HermesSession } from "../hermes/hermes-native-client"',
+    'import { runtimeAdapter } from "../aos"',
+    'import { runtimeAdapter } from "@/runtime-adapters/aos"',
+    'const adapter = import("../aos/index.ts")',
+    'import type { AosRemoteClient } from "../aos/aos-client"',
   ])("rejects imports between provider packages: %s", async (code) => {
     expect(
-      await boundaryErrors("src/runtime-adapters/opencode/example.ts", code)
+      await boundaryErrors("src/runtime-adapters/fixture/example.ts", code)
     ).toHaveLength(1)
   })
 
   it.each([
-    'import { runtimeAdapter } from "@/runtime-adapters/hermes"',
-    'import { runtimeAdapter } from "../runtime-adapters/hermes/index"',
-    'const adapter = import("../runtime-adapters/hermes/index.ts")',
+    'import { runtimeAdapter } from "@/runtime-adapters/aos"',
+    'import { runtimeAdapter } from "../runtime-adapters/aos/index"',
+    'const adapter = import("../runtime-adapters/aos/index.ts")',
   ])("allows consumers to use public package indexes: %s", async (code) => {
     expect(await boundaryErrors("src/components/example.tsx", code)).toEqual([])
   })
@@ -52,8 +52,8 @@ describe("runtime package import boundaries", () => {
   it("allows internal imports inside the owning package", async () => {
     expect(
       await boundaryErrors(
-        "src/runtime-adapters/hermes/example.ts",
-        'import { HermesNativeClient } from "./hermes-native-client"'
+        "src/runtime-adapters/aos/example.ts",
+        'import { AosRemoteClient } from "./aos-client"'
       )
     ).toEqual([])
   })
@@ -64,7 +64,7 @@ describe("runtime package import boundaries", () => {
       expect(
         await boundaryErrors(
           filePath,
-          'const adapter = import("@/runtime-adapters/hermes/composition")'
+          'const adapter = import("@/runtime-adapters/aos/composition")'
         )
       ).toHaveLength(1)
     }
@@ -86,7 +86,7 @@ describe("runtime package import boundaries", () => {
     expect(
       await boundaryErrors(
         "src/components/aos-ui-workspace.test.tsx",
-        'import { HermesNativeClient } from "@/runtime-adapters/hermes/hermes-native-client"'
+        'import { AosRemoteClient } from "@/runtime-adapters/aos/aos-client"'
       )
     ).toHaveLength(1)
   })

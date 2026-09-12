@@ -22,6 +22,12 @@ const catalog = {
 }
 
 describe("provider-neutral AOS browser client", () => {
+  it("does not subscribe before a Session owner has been restored", () => {
+    const client = new AosRemoteClient({ fetcher: vi.fn() })
+
+    expect(() => client.subscribeSessionInvalidation("unknown", vi.fn())).not.toThrow()
+  })
+
   it("maps a selected Session's normalized workspace, content, interaction, and audio operations", async () => {
     const session = {
       id: "opaque-session-1",
@@ -44,16 +50,77 @@ describe("provider-neutral AOS browser client", () => {
         if (path.endsWith("/workspace/capabilities"))
           return Response.json({
             workspace: {
-              models: { status: "available" },
-              context: { status: "available" },
-              todos: { status: "available" },
-              activity: { status: "available" },
+              models: {
+                status: "available",
+                scope: "attached-session",
+                selection: "native-session",
+                choices: "provider-reported",
+              },
+              context: {
+                status: "available",
+                scope: "attached-session",
+                source: "provider-usage-or-estimate",
+                breakdown: "provider-categories",
+              },
+              todos: {
+                status: "available",
+                scope: "session",
+                mode: "read-only-projection",
+                source: "latest-completed-todo-tool-result",
+              },
+              activity: {
+                status: "available",
+                scope: "attached-active-session",
+                coverage: "active-session-only",
+                source: "session.info",
+              },
             },
-            interactions: { status: "available" },
+            interactions: {
+              approvals: {
+                status: "available",
+                protocol: "ag-ui-interrupt",
+                scope: "run",
+                choices: [
+                  { value: "once", scope: "request" },
+                  { value: "session", scope: "session" },
+                  { value: "always", scope: "agent" },
+                  { value: "deny", scope: "request" },
+                ],
+                maxPending: 1,
+              },
+              questions: {
+                status: "available",
+                protocol: "ag-ui-interrupt",
+                scope: "run",
+                answerModes: ["single", "multiple", "free-text"],
+                cancellation: "native-empty-answer",
+                maxQuestions: 1,
+                maxChoicesPerQuestion: 1,
+                maxAnswerValuesPerQuestion: 1,
+                maxStringBytes: 1,
+              },
+              reactions: { status: "unavailable", reason: "not-supported" },
+            },
             content: {
-              attachments: { status: "available" },
-              artifacts: { status: "available" },
-              audio: { status: "available" },
+              attachments: {
+                status: "available",
+                scope: "attached-session",
+                inputs: ["image", "file"],
+                imageMimeTypes: ["image/png"],
+                fileMimeTypes: "valid-type/subtype",
+                maxMimeTypeBytes: 1,
+                maxFilenameBytes: 1,
+                maxCount: 1,
+                maxImageBytes: 1,
+                maxFileBytes: 1,
+                maxTotalBytes: 1,
+              },
+              artifacts: { status: "unavailable", reason: "not-supported" },
+              transcription: {
+                status: "unavailable",
+                reason: "not-supported",
+              },
+              speech: { status: "unavailable", reason: "not-supported" },
             },
           })
         if (path.endsWith("/workspace/models"))
@@ -87,6 +154,8 @@ describe("provider-neutral AOS browser client", () => {
         if (path.endsWith("/workspace/activity"))
           return Response.json({
             status: "available",
+            scope: "attached-active-session",
+            coverage: "active-session-only",
             state: "waiting-for-input",
           })
         if (path.endsWith("/interactions/respond")) {
@@ -102,22 +171,24 @@ describe("provider-neutral AOS browser client", () => {
         }
         if (path.endsWith("/attachments/stage")) {
           expect(init?.method).toBe("POST")
-          expect(init?.body).toBe(
-            JSON.stringify({
-              attachments: [
-                {
-                  type: "file",
-                  filename: "brief.pdf",
-                  mimeType: "application/pdf",
-                  dataUrl: "data:application/pdf;base64,AQ==",
-                },
-              ],
-            })
-          )
+          expect(JSON.parse(String(init?.body))).toEqual({
+            attachments: [
+              {
+                type: "file",
+                filename: "brief.pdf",
+                mimeType: "application/pdf",
+                dataUrl: "data:application/pdf;base64,AQ==",
+              },
+            ],
+          })
           return Response.json({
             stageId: "stage-1",
             attachments: [
-              { filename: "brief.pdf", mimeType: "application/pdf" },
+              {
+                type: "file",
+                filename: "brief.pdf",
+                mimeType: "application/pdf",
+              },
             ],
           })
         }
@@ -138,8 +209,8 @@ describe("provider-neutral AOS browser client", () => {
           })
         if (path.endsWith("/audio"))
           return Response.json({
-            transcription: "ready",
-            speech: "unavailable",
+            transcription: { status: "ready" },
+            speech: { status: "unavailable", reason: "not-supported" },
           })
         if (path.endsWith("/audio/transcribe")) {
           expect(init?.method).toBe("POST")
@@ -170,7 +241,7 @@ describe("provider-neutral AOS browser client", () => {
     await expect(client.todos(session.id)).resolves.toEqual([
       { id: "todo-1", label: "Ship", status: "active" },
     ])
-    await expect(client.activity(session.id)).resolves.toEqual({
+    await expect(client.activity(session.id)).resolves.toMatchObject({
       status: "available",
       state: "waiting-for-input",
     })

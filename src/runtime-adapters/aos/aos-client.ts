@@ -11,16 +11,29 @@ import {
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
+  SessionActivityResponseSchema,
+  SessionAttachmentStageRequestSchema,
+  SessionAttachmentStageResponseSchema,
+  SessionAudioResponseSchema,
   SessionCatalogResponseSchema,
+  SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
+  SessionInteractionSnapshotResponseSchema,
+  SessionModelSelectRequestSchema,
+  SessionModelsResponseSchema,
   SessionSchema,
+  SessionSpeechRequestSchema,
+  SessionTodosResponseSchema,
+  SessionTranscriptionRequestSchema,
+  SessionTranscriptionResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateResponseSchema,
-} from "../../../packages/protocol"
+} from "@aos/protocol"
 import type {
   Session,
   SessionHistoryResponse,
-} from "../../../packages/protocol"
+} from "@aos/protocol"
 import type {
   AgentCatalogEntry,
   AgentVisibility,
@@ -31,108 +44,8 @@ import type { AosEventScope } from "./aos-reconciliation"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
-/**
- * These schemas deliberately live at the browser boundary until the normalized
- * proxy protocol publishes the workspace/content extension. They expose only
- * projection data consumed by AOS; no provider identity, native path, or
- * transport detail is permitted through this client.
- */
-const OperationAvailabilitySchema = z.strictObject({
-  status: z.enum(["available", "unavailable"]),
-  reason: z.string().min(1).max(256).optional(),
-})
-const WorkspaceCapabilitiesSchema = z.strictObject({
-  workspace: z.strictObject({
-    models: OperationAvailabilitySchema,
-    context: OperationAvailabilitySchema,
-    todos: OperationAvailabilitySchema,
-    activity: OperationAvailabilitySchema,
-  }),
-  interactions: OperationAvailabilitySchema,
-  content: z.strictObject({
-    attachments: OperationAvailabilitySchema,
-    artifacts: OperationAvailabilitySchema,
-    audio: OperationAvailabilitySchema,
-  }),
-})
-const ModelChoicesSchema = z.strictObject({
-  selectedId: z.string().min(1).max(512),
-  options: z
-    .array(
-      z.strictObject({
-        id: z.string().min(1).max(512),
-        label: z.string().min(1).max(512),
-        group: z.string().min(1).max(512).optional(),
-      })
-    )
-    .max(1_000),
-})
-const ModelSelectResponseSchema = z.strictObject({
-  selectedId: z.string().min(1).max(512),
-})
-const ContextSchema = z.strictObject({
-  usedTokens: z.number().int().min(0),
-  maxTokens: z.number().int().positive(),
-  estimated: z.boolean().optional(),
-  source: z
-    .enum(["provider-usage", "provider-usage-plus-estimate", "local-estimate"])
-    .optional(),
-  breakdown: z
-    .strictObject({
-      systemTokens: z.number().int().min(0),
-      toolTokens: z.number().int().min(0),
-      messageTokens: z.number().int().min(0),
-    })
-    .optional(),
-})
-const TodosResponseSchema = z.strictObject({
-  todos: z
-    .array(
-      z.strictObject({
-        id: z.string().min(1).max(512),
-        label: z.string().min(1).max(4_096),
-        status: z.enum(["pending", "active", "completed", "failed"]),
-      })
-    )
-    .max(1_000),
-})
-const ActivityResponseSchema = z.discriminatedUnion("status", [
-  z.strictObject({
-    status: z.literal("available"),
-    state: z.enum(["idle", "running", "waiting-for-input", "unknown"]),
-  }),
-  z.strictObject({
-    status: z.literal("unavailable"),
-    reason: z.string().min(1).max(256),
-  }),
-])
 const InteractionResponseSchema = z.strictObject({
   status: z.enum(["resolved", "expired", "already-resolved"]),
-})
-const StageAttachmentsRequestSchema = z.strictObject({
-  attachments: z
-    .array(
-      z.strictObject({
-        type: z.enum(["image", "file"]),
-        filename: z.string().min(1).max(4_096).optional(),
-        mimeType: z.string().min(1).max(256),
-        dataUrl: z.string().min(1).max(25_000_000),
-      })
-    )
-    .min(1)
-    .max(32),
-})
-const StageAttachmentsResponseSchema = z.strictObject({
-  stageId: z.string().min(1).max(512),
-  attachments: z
-    .array(
-      z.strictObject({
-        type: z.enum(["image", "file"]).optional(),
-        filename: z.string().min(1).max(4_096).optional(),
-        mimeType: z.string().min(1).max(256),
-      })
-    )
-    .max(32),
 })
 const ArtifactCatalogSchema = z.strictObject({
   artifacts: z
@@ -146,48 +59,21 @@ const ArtifactCatalogSchema = z.strictObject({
     )
     .max(1_000),
 })
-const AudioAvailabilitySchema = z.strictObject({
-  transcription: z.enum(["ready", "unverified", "unavailable"]),
-  speech: z.enum(["ready", "unverified", "unavailable"]),
-})
-const TranscriptionResponseSchema = z.strictObject({
-  transcript: z.string().max(100_000),
-})
-const PendingInteractionSchema = z.strictObject({
-  runId: z.string().min(1).max(512),
-  running: z.boolean(),
-  status: z.enum(["waiting-for-input", "running", "idle", "unknown"]),
-  outcome: z
-    .strictObject({
-      type: z.literal("interrupt"),
-      interrupts: z
-        .array(
-          z.strictObject({
-            id: z.string().min(1).max(512),
-            reason: z.enum(["question", "approval"]),
-            message: z.string().min(1).max(4_096),
-            responseSchema: z.unknown(),
-            metadata: z.record(z.string(), z.json()),
-          })
-        )
-        .min(1)
-        .max(32),
-    })
-    .optional(),
-})
-
 export type AosWorkspaceCapabilities = z.infer<
-  typeof WorkspaceCapabilitiesSchema
+  typeof SessionWorkspaceCapabilitiesResponseSchema
 >
-export type AosModelChoices = z.infer<typeof ModelChoicesSchema>
-export type AosContext = z.infer<typeof ContextSchema>
-export type AosSessionActivity = z.infer<typeof ActivityResponseSchema>
-export type AosStagedAttachment = z.infer<typeof StageAttachmentsResponseSchema>
+export type AosModelChoices = z.infer<typeof SessionModelsResponseSchema>
+export type AosContext = z.infer<typeof SessionContextResponseSchema>
+export type AosSessionActivity = z.infer<typeof SessionActivityResponseSchema>
+export type AosStagedAttachment = z.infer<
+  typeof SessionAttachmentStageResponseSchema
+>
 export type AosArtifact = z.infer<
   typeof ArtifactCatalogSchema
 >["artifacts"][number]
-export type AosAudioAvailability = z.infer<typeof AudioAvailabilitySchema>
-export type AosPendingInteraction = z.infer<typeof PendingInteractionSchema>
+export type AosPendingInteraction = z.infer<
+  typeof SessionInteractionSnapshotResponseSchema
+>
 
 async function dataUrl(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -620,19 +506,23 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.#sessionRead(
       threadId,
       "/workspace/capabilities",
-      WorkspaceCapabilitiesSchema
+      SessionWorkspaceCapabilitiesResponseSchema
     )
   }
 
   models(threadId: string) {
-    return this.#sessionRead(threadId, "/workspace/models", ModelChoicesSchema)
+    return this.#sessionRead(
+      threadId,
+      "/workspace/models",
+      SessionModelsResponseSchema
+    )
   }
 
   async selectModel(threadId: string, selectedId: string) {
     const result = await this.#sessionRead(
       threadId,
       "/workspace/models/select",
-      ModelSelectResponseSchema,
+      SessionModelSelectRequestSchema,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -645,12 +535,20 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   context(threadId: string) {
-    return this.#sessionRead(threadId, "/workspace/context", ContextSchema)
+    return this.#sessionRead(
+      threadId,
+      "/workspace/context",
+      SessionContextResponseSchema
+    )
   }
 
   async todos(threadId: string) {
     return (
-      await this.#sessionRead(threadId, "/workspace/todos", TodosResponseSchema)
+      await this.#sessionRead(
+        threadId,
+        "/workspace/todos",
+        SessionTodosResponseSchema
+      )
     ).todos
   }
 
@@ -658,7 +556,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.#sessionRead(
       threadId,
       "/workspace/activity",
-      ActivityResponseSchema
+      SessionActivityResponseSchema
     )
   }
 
@@ -667,6 +565,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     listener: (todos: TodoItem[]) => void,
     onError?: (error: Error) => void
   ) {
+    if (!this.#sessionOwners.has(threadId)) return () => {}
     const { scope } = this.#sessionPath(threadId, "")
     let active = true
     const refresh = () => {
@@ -688,6 +587,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   subscribeSessionInvalidation(threadId: string, listener: () => void) {
+    if (!this.#sessionOwners.has(threadId)) return () => {}
     const { scope } = this.#sessionPath(threadId, "")
     return this.#reconciler?.subscribe?.(scope, listener) ?? (() => {})
   }
@@ -730,18 +630,25 @@ export class AosRemoteClient implements WorkspaceAdapter {
       `/interactions/pending${
         runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`
       }`,
-      PendingInteractionSchema
+      SessionInteractionSnapshotResponseSchema
     )
   }
 
   async stageAttachments(
     threadId: string,
-    attachments: readonly z.input<
-      typeof StageAttachmentsRequestSchema
-    >["attachments"][number][]
+    attachments: readonly StagedRunAttachment[]
   ) {
-    const request = StageAttachmentsRequestSchema.safeParse({
-      attachments: [...attachments],
+    const request = SessionAttachmentStageRequestSchema.safeParse({
+      attachments: attachments.map(({ dataUrl, filename, mimeType, type }) =>
+        type === "image"
+          ? { type, dataUrl, ...(filename ? { filename } : {}) }
+          : {
+              type,
+              dataUrl,
+              ...(filename ? { filename } : {}),
+              ...(mimeType ? { mimeType } : {}),
+            }
+      ),
     })
     if (!request.success)
       throw new AosClientError(
@@ -751,7 +658,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.#sessionRead(
       threadId,
       "/attachments/stage",
-      StageAttachmentsResponseSchema,
+      SessionAttachmentStageResponseSchema,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -781,24 +688,32 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   audioAvailability(threadId: string) {
-    return this.#sessionRead(threadId, "/audio", AudioAvailabilitySchema)
+    return this.#sessionRead(threadId, "/audio", SessionAudioResponseSchema).then(
+      ({ speech, transcription }) => ({
+        transcription: transcription.status,
+        speech: speech.status,
+      })
+    )
   }
 
   async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
-    if (!audio.size || audio.size > 5 * 1024 * 1024 || !audio.type)
+    if (!audio.size || !audio.type)
+      throw new AosClientError("proxy-failure", "Invalid audio recording")
+    const request = SessionTranscriptionRequestSchema.safeParse({
+      dataUrl: await dataUrl(audio),
+      mimeType: audio.type,
+    })
+    if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
     const { path, scope } = this.#sessionPath(threadId, "/audio/transcribe")
     const response = await this.#read(
       path,
-      TranscriptionResponseSchema,
+      SessionTranscriptionResponseSchema,
       {
         method: "POST",
         signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          dataUrl: await dataUrl(audio),
-          mimeType: audio.type,
-        }),
+        body: JSON.stringify(request.data),
       },
       scope
     )
@@ -806,7 +721,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   async speak(threadId: string, text: string, signal?: AbortSignal) {
-    if (!text.trim() || text.length > 100_000)
+    const request = SessionSpeechRequestSchema.safeParse({ text })
+    if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid speech input")
     const { path, scope } = this.#sessionPath(threadId, "/audio/speak")
     return this.#readBlob(
@@ -815,7 +731,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
         method: "POST",
         signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(request.data),
       },
       scope
     )

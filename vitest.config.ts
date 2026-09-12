@@ -8,6 +8,10 @@ export default defineConfig({
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
+      "@aos/protocol": path.resolve(
+        import.meta.dirname,
+        "packages/protocol/index.ts"
+      ),
     },
   },
   test: {

@@ -7,6 +7,13 @@ import {
 } from "./runtime-config"
 
 describe("provider-neutral AOS runtime configuration", () => {
+  it("defaults to the normalized AOS proxy", () => {
+    expect(resolveRuntimeConfiguration({})).toMatchObject({
+      status: "ready",
+      mode: "aos",
+    })
+  })
+
   it("selects the same-origin proxy without exposing a provider URL", () => {
     const resolved = resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: "aos" })
     expect(resolved).toEqual({
@@ -28,4 +35,17 @@ describe("provider-neutral AOS runtime configuration", () => {
       })
     ).toEqual({ status: "unavailable", reason: "invalid-public-config" })
   })
+
+  it.each(["opencode", "hermes", "ag-ui", "openclaw"])(
+    "rejects retired direct browser runtime mode %s",
+    (mode) => {
+      expect(resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: mode })).toEqual(
+        { status: "unavailable", reason: "invalid-runtime-mode" }
+      )
+      expect(parsePublicRuntimeConfiguration({ mode })).toEqual({
+        status: "unavailable",
+        reason: "invalid-public-config",
+      })
+    }
+  )
 })

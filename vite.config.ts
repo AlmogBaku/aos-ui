@@ -21,16 +21,6 @@ import {
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
     AOS_UI_RUNTIME_MODE: environment.AOS_UI_RUNTIME_MODE,
-    AOS_UI_HERMES_BASE_URL: environment.AOS_UI_HERMES_BASE_URL,
-    AOS_UI_OPENCODE_BASE_URL: environment.AOS_UI_OPENCODE_BASE_URL,
-    AOS_UI_OPENCODE_PROVIDER_ID: environment.AOS_UI_OPENCODE_PROVIDER_ID,
-    AOS_UI_OPENCODE_MODEL_ID: environment.AOS_UI_OPENCODE_MODEL_ID,
-    AOS_UI_OPENCODE_WORKTREE: environment.AOS_UI_OPENCODE_WORKTREE,
-    AOS_UI_AG_UI_URL: environment.AOS_UI_AG_UI_URL,
-    AOS_UI_AG_UI_WORKSPACE_URL: environment.AOS_UI_AG_UI_WORKSPACE_URL,
-    AOS_UI_OPENCLAW_BASE_URL: environment.AOS_UI_OPENCLAW_BASE_URL,
-    AOS_UI_OPENCLAW_CREATOR_AGENT_ID:
-      environment.AOS_UI_OPENCLAW_CREATOR_AGENT_ID,
     AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
       environment.AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED,
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
@@ -136,28 +126,6 @@ export default defineConfig(({ mode }) => {
     ?.split(",")
     .map((host) => host.trim())
     .filter(Boolean)
-  const hermesProxy = {
-    "/auth": {
-      target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-      changeOrigin: true,
-      headers: { "X-Forwarded-Prefix": "/hermes" },
-    },
-    "/hermes": {
-      target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-      changeOrigin: true,
-      ws: true,
-      headers: { "X-Forwarded-Prefix": "/hermes" },
-      rewrite: (pathname: string) => pathname.replace(/^\/hermes/, ""),
-    },
-  }
-  const openClawProxy = {
-    "/openclaw": {
-      target: environment.AOS_UI_OPENCLAW_TARGET ?? "ws://127.0.0.1:18789",
-      changeOrigin: false,
-      ws: true,
-      rewrite: (pathname: string) => pathname.replace(/^\/openclaw/, ""),
-    },
-  }
   const aosProxy = {
     "/api/aos/v1": {
       target: environment.AOS_UI_PROXY_TARGET ?? "http://127.0.0.1:4100",
@@ -180,6 +148,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve(import.meta.dirname, "src"),
         "@shared": path.resolve(import.meta.dirname, "shared"),
+        "@aos/protocol": path.resolve(
+          import.meta.dirname,
+          "packages/protocol/index.ts"
+        ),
       },
     },
     optimizeDeps: {
@@ -190,11 +162,11 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: 3000,
       allowedHosts,
-      proxy: { ...aosProxy, ...hermesProxy, ...openClawProxy },
+      proxy: aosProxy,
     },
     preview: {
       allowedHosts,
-      proxy: { ...aosProxy, ...hermesProxy, ...openClawProxy },
+      proxy: aosProxy,
       // Playwright starts a fresh preview for every runtime matrix. Avoid a
       // browser retaining an obsolete hashed chunk between those servers.
       headers: {
