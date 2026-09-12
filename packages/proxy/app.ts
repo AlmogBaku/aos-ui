@@ -9,11 +9,14 @@ import {
   VisibilityUpdateRequestSchema,
   SessionCreateRequestSchema,
   SessionPatchRequestSchema,
+  SESSION_CATALOG_MAX_WINDOW,
 } from "../protocol"
 import {
   HermesAgentNotFoundError,
   HermesRevisionConflictError,
   HermesServerAdapter,
+  HermesSessionConflictError,
+  HermesSessionNotFoundError,
   HermesUnavailableError,
 } from "./hermes-adapter"
 import { OperatorAuthError, type OperatorAuthenticator } from "./operator-auth"
@@ -60,11 +63,85 @@ function errorResponse(code: ErrorCode, status: number) {
 }
 
 function storedSessionId(agentId: string, sessionId: string) {
+  if (!validIdentifier(agentId) || sessionId.length > 1_024) return undefined
   const match = /^hermes:([^:]+):(.+)$/u.exec(sessionId)
   if (!match) return undefined
   try {
-    return decodeURIComponent(match[1]) === agentId ? decodeURIComponent(match[2]) : undefined
-  } catch { return undefined }
+    const owner = decodeURIComponent(match[1])
+    const storedId = decodeURIComponent(match[2])
+    return owner === agentId && validIdentifier(storedId) ? storedId : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function validIdentifier(value: string) {
+  return (
+    value.length >= 1 &&
+    value.length <= 256 &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+  )
+}
+
+function pageQuery(
+  requestUrl: string,
+  defaults: { limit: number; offset: number },
+  maxLimit: number,
+  maxWindow?: number
+) {
+  const url = new URL(requestUrl)
+  if (url.search.length > 2_048) return undefined
+  if (
+    [...url.searchParams.keys()].some(
+      (key) => key !== "limit" && key !== "offset"
+    )
+  )
+    return undefined
+  const limitValues = url.searchParams.getAll("limit")
+  const offsetValues = url.searchParams.getAll("offset")
+  if (limitValues.length > 1 || offsetValues.length > 1) return undefined
+  const integer = (value: string | undefined, fallback: number) => {
+    if (value === undefined) return fallback
+    if (!/^(?:0|[1-9]\d*)$/u.test(value)) return undefined
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) ? parsed : undefined
+  }
+  const limit = integer(limitValues[0], defaults.limit)
+  const offset = integer(offsetValues[0], defaults.offset)
+  if (
+    limit === undefined ||
+    offset === undefined ||
+    limit < 1 ||
+    limit > maxLimit ||
+    offset < 0 ||
+    (maxWindow !== undefined && offset + limit > maxWindow)
+  )
+    return undefined
+  return { limit, offset }
+}
+
+async function boundedJson(request: Request) {
+  if (
+    request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"
+  )
+    return undefined
+  const rawLength = request.headers.get("content-length")
+  if (rawLength !== null) {
+    if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) return undefined
+    const contentLength = Number(rawLength)
+    if (!Number.isSafeInteger(contentLength) || contentLength > 16 * 1024)
+      return undefined
+  }
+  try {
+    const text = await request.text()
+    if (!text || text.length > 16 * 1024) return undefined
+    return JSON.parse(text) as unknown
+  } catch {
+    return undefined
+  }
 }
 
 export function createProxyApp(options: ProxyAppOptions) {
@@ -166,43 +243,132 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   })
 
-  app.get("/api/aos/v1/agents/:agentId/sessions", async (context) => {
+  app.get("/api/aos/v1/sessions", async (context) => {
     await requireOperator(context.req.raw)
-    const limit = Number(context.req.query("limit") ?? "50")
-    const offset = Number(context.req.query("offset") ?? "0")
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0) return errorResponse("invalid_request", 400)
-    return context.json(await options.hermes.listSessions(context.req.param("agentId"), limit, offset))
+    const page = pageQuery(
+      context.req.url,
+      { limit: 50, offset: 0 },
+      100,
+      SESSION_CATALOG_MAX_WINDOW
+    )
+    if (!page) return errorResponse("invalid_request", 400)
+    return context.json(
+      await options.hermes.listAllSessions(page.limit, page.offset)
+    )
   })
 
-  app.get("/api/aos/v1/agents/:agentId/sessions/:sessionId/history", async (context) => {
+  app.get("/api/aos/v1/agents/:agentId/sessions", async (context) => {
     await requireOperator(context.req.raw)
-    const storedId = storedSessionId(context.req.param("agentId"), context.req.param("sessionId"))
-    if (!storedId) return errorResponse("not_found", 404)
-    const limit = Number(context.req.query("limit") ?? "200")
-    const offset = Number(context.req.query("offset") ?? "0")
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500 || !Number.isInteger(offset) || offset < 0) return errorResponse("invalid_request", 400)
-    return context.json(await options.hermes.history(context.req.param("agentId"), storedId, limit, offset))
+    const page = pageQuery(
+      context.req.url,
+      { limit: 50, offset: 0 },
+      100,
+      SESSION_CATALOG_MAX_WINDOW
+    )
+    if (!page) return errorResponse("invalid_request", 400)
+    return context.json(
+      await options.hermes.listSessions(
+        context.req.param("agentId"),
+        page.limit,
+        page.offset
+      )
+    )
   })
-  app.get("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
-    await requireOperator(context.req.raw); const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
-    return context.json(await options.hermes.getSession(context.req.param("agentId"), id))
-  })
+
+  app.get(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/history",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      const storedId = storedSessionId(
+        context.req.param("agentId"),
+        context.req.param("sessionId")
+      )
+      if (!storedId) return errorResponse("not_found", 404)
+      const page = pageQuery(context.req.url, { limit: 200, offset: 0 }, 500)
+      if (!page) return errorResponse("invalid_request", 400)
+      return context.json(
+        await options.hermes.history(
+          context.req.param("agentId"),
+          storedId,
+          page.limit,
+          page.offset
+        )
+      )
+    }
+  )
+  app.get(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      const id = storedSessionId(
+        context.req.param("agentId"),
+        context.req.param("sessionId")
+      )
+      if (!id) return errorResponse("not_found", 404)
+      return context.json(
+        await options.hermes.getSession(context.req.param("agentId"), id)
+      )
+    }
+  )
   app.post("/api/aos/v1/agents/:agentId/sessions", async (context) => {
-    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
-    const parsed = SessionCreateRequestSchema.safeParse(await context.req.json().catch(() => undefined)); if (!parsed.success) return errorResponse("invalid_request", 400)
-    return context.json(await options.hermes.createSession(context.req.param("agentId"), parsed.data.title), 201)
+    await requireOperator(context.req.raw)
+    if (context.req.header("origin") !== options.publicOrigin)
+      return errorResponse("forbidden", 403)
+    const parsed = SessionCreateRequestSchema.safeParse(
+      await boundedJson(context.req.raw)
+    )
+    if (!parsed.success) return errorResponse("invalid_request", 400)
+    return context.json(
+      await options.hermes.createSession(
+        context.req.param("agentId"),
+        parsed.data.title
+      ),
+      201
+    )
   })
-  app.patch("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
-    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
-    const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
-    const parsed = SessionPatchRequestSchema.safeParse(await context.req.json().catch(() => undefined)); if (!parsed.success) return errorResponse("invalid_request", 400)
-    await options.hermes.mutateSession(context.req.param("agentId"), id, "PATCH", parsed.data); return new Response(null, { status: 204 })
-  })
-  app.delete("/api/aos/v1/agents/:agentId/sessions/:sessionId", async (context) => {
-    await requireOperator(context.req.raw); if (context.req.header("origin") !== options.publicOrigin) return errorResponse("forbidden", 403)
-    const id = storedSessionId(context.req.param("agentId"), context.req.param("sessionId")); if (!id) return errorResponse("not_found", 404)
-    await options.hermes.mutateSession(context.req.param("agentId"), id, "DELETE"); return new Response(null, { status: 204 })
-  })
+  app.patch(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      if (context.req.header("origin") !== options.publicOrigin)
+        return errorResponse("forbidden", 403)
+      const id = storedSessionId(
+        context.req.param("agentId"),
+        context.req.param("sessionId")
+      )
+      if (!id) return errorResponse("not_found", 404)
+      const parsed = SessionPatchRequestSchema.safeParse(
+        await boundedJson(context.req.raw)
+      )
+      if (!parsed.success) return errorResponse("invalid_request", 400)
+      await options.hermes.mutateSession(
+        context.req.param("agentId"),
+        id,
+        "PATCH",
+        parsed.data
+      )
+      return new Response(null, { status: 204 })
+    }
+  )
+  app.delete(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId",
+    async (context) => {
+      await requireOperator(context.req.raw)
+      if (context.req.header("origin") !== options.publicOrigin)
+        return errorResponse("forbidden", 403)
+      const id = storedSessionId(
+        context.req.param("agentId"),
+        context.req.param("sessionId")
+      )
+      if (!id) return errorResponse("not_found", 404)
+      await options.hermes.mutateSession(
+        context.req.param("agentId"),
+        id,
+        "DELETE"
+      )
+      return new Response(null, { status: 204 })
+    }
+  )
 
   app.onError((cause, context) => {
     const [code, status]: [ErrorCode, number] =
@@ -212,9 +378,13 @@ export function createProxyApp(options: ProxyAppOptions) {
           ? ["not_found", 404]
           : cause instanceof HermesRevisionConflictError
             ? ["revision_conflict", 409]
-            : cause instanceof HermesUnavailableError
-              ? ["temporarily_unavailable", 503]
-              : ["internal_error", 500]
+            : cause instanceof HermesSessionNotFoundError
+              ? ["not_found", 404]
+              : cause instanceof HermesSessionConflictError
+                ? ["revision_conflict", 409]
+                : cause instanceof HermesUnavailableError
+                  ? ["temporarily_unavailable", 503]
+                  : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

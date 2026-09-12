@@ -3,11 +3,14 @@ import { describe, expect, it, vi } from "vitest"
 import {
   HermesAgentNotFoundError,
   HermesRevisionConflictError,
+  HermesSessionConflictError,
+  HermesSessionNotFoundError,
   HermesUnavailableError,
   HermesServerAdapter,
   type HermesRpcTransport,
 } from "./hermes-adapter"
 import { HermesAuthenticationError } from "./hermes-transport"
+import { HermesHttpError } from "./hermes-transport"
 
 function profile(hidden = false, revision: number | null = 7) {
   return {
@@ -23,19 +26,245 @@ function profile(hidden = false, revision: number | null = 7) {
 }
 
 describe("Hermes server adapter", () => {
-  it("uses the bounded native recent catalog and exposes only stable stored identities", async () => {
+  it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
+    const rows = (profileName: string, newest: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `${profileName}-${newest - index}`,
+        profile: profileName,
+        title: `${profileName} ${newest - index}`,
+        last_active: newest - index,
+      }))
+    const alpha = rows("alpha", 120, 60)
+    const beta = rows("beta", 60, 60)
+    const request = vi.fn(async () => ({
+      profiles: [
+        { name: "alpha", ui_meta: {}, ui_meta_revisions: {} },
+        { name: "beta", ui_meta: {}, ui_meta_revisions: {} },
+      ],
+    }))
     const http = vi.fn(async (path: string) => {
-      expect(path).toBe("/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban")
-      return { sessions: [{ id: "stored/1", profile: "researcher", title: "One", last_active: 1, session_id: "live-secret" }], total: 1 }
+      const url = new URL(path, "http://native.test")
+      const profileName = url.searchParams.get("profile")!
+      const limit = Number(url.searchParams.get("limit"))
+      const offset = Number(url.searchParams.get("offset"))
+      const source = profileName === "alpha" ? alpha : beta
+      return {
+        sessions: source.slice(offset, offset + limit),
+        total: source.length,
+      }
     })
-    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
-    await expect(adapter.listSessions("researcher", 50, 0)).resolves.toEqual({ sessions: [{ id: "hermes:researcher:stored%2F1", agentId: "researcher", title: "One", archived: false, updatedAt: "1970-01-01T00:00:01.000Z", status: "unknown" }], total: 1, limit: 50, offset: 0 })
+    const adapter = new HermesServerAdapter({ request, http })
+
+    const first = await adapter.listAllSessions(50, 0)
+    const second = await adapter.listAllSessions(50, 50)
+
+    expect(first.sessions).toHaveLength(50)
+    expect(first.sessions[0]?.id).toBe("hermes:alpha:alpha-120")
+    expect(first.sessions.at(-1)?.id).toBe("hermes:alpha:alpha-71")
+    expect(second.sessions).toHaveLength(50)
+    expect(second.sessions.slice(0, 10).map(({ id }) => id)).toEqual(
+      Array.from(
+        { length: 10 },
+        (_, index) => `hermes:alpha:alpha-${70 - index}`
+      )
+    )
+    expect(second.sessions[10]?.id).toBe("hermes:beta:beta-60")
+    expect(
+      new Set([...first.sessions, ...second.sessions].map(({ id }) => id)).size
+    ).toBe(100)
+    expect(first.total).toBe(120)
+    expect(second.total).toBe(120)
   })
 
-  it("rejects duplicate or cross-owner stored Session IDs and keeps compacted chronological history paged", async () => {
-    const adapter = new HermesServerAdapter({ request: vi.fn(), http: vi.fn(async (path: string) => path.startsWith("/api/sessions?profile=researcher") ? { sessions: [{ id: "same", profile: "researcher" }, { id: "same", profile: "researcher" }] } : { session_id: "stored", messages: [{ role: "user", content: "first" }, { role: "assistant", content: "second" }], pagination: { total: 2 } }) })
-    await expect(adapter.listSessions("researcher", 50, 0)).rejects.toBeInstanceOf(HermesUnavailableError)
-    await expect(adapter.history("researcher", "stored", 200, 0)).resolves.toMatchObject({ sessionId: "hermes:researcher:stored", total: 2, limit: 200 })
+  it("creates only Agent-owned Sessions and returns a stable stored identity", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "profiles.list") return { profiles: [profile()] }
+      if (method === "session.create")
+        return { session_id: "live-private", stored_session_id: "stored/1" }
+      throw new Error("unexpected native request")
+    })
+    const adapter = new HermesServerAdapter({ request })
+
+    await expect(
+      adapter.createSession("researcher", "New Session")
+    ).resolves.toEqual({
+      session: {
+        id: "hermes:researcher:stored%2F1",
+        agentId: "researcher",
+      },
+    })
+    expect(request.mock.calls).toEqual([
+      ["profiles.list", { include_sessions: false }],
+      [
+        "session.create",
+        {
+          profile: "researcher",
+          close_on_disconnect: false,
+          title: "New Session",
+        },
+      ],
+    ])
+
+    request.mockClear()
+    await expect(adapter.createSession("other")).rejects.toBeInstanceOf(
+      HermesAgentNotFoundError
+    )
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("distinguishes missing and conflicting stored Session operations from outages", async () => {
+    const missing = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+    await expect(
+      missing.getSession("researcher", "missing")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+
+    const conflict = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })
+        .mockRejectedValueOnce(new HermesHttpError(409)),
+    })
+    await expect(
+      conflict.mutateSession("researcher", "stored", "PATCH", {
+        archived: true,
+      })
+    ).rejects.toBeInstanceOf(HermesSessionConflictError)
+  })
+
+  it("maps malformed native Session pages to temporary unavailability", async () => {
+    const malformedCatalog = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [{ id: "stored", profile: "researcher" }],
+        total: 1.5,
+      })),
+    })
+    await expect(
+      malformedCatalog.listSessions("researcher", 50, 0)
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+
+    const removedDuringHistory = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })
+        .mockRejectedValueOnce(new HermesHttpError(404)),
+    })
+    await expect(
+      removedDuringHistory.history("researcher", "stored", 200, 0)
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+  })
+
+  it("uses the bounded native recent catalog and exposes only stable stored identities", async () => {
+    const http = vi.fn(async (path: string) => {
+      expect(path).toBe(
+        "/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban"
+      )
+      return {
+        sessions: [
+          {
+            id: "stored/1",
+            profile: "researcher",
+            title: "One",
+            last_active: 1,
+            session_id: "live-secret",
+          },
+        ],
+        total: 1,
+      }
+    })
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+    await expect(adapter.listSessions("researcher", 50, 0)).resolves.toEqual({
+      sessions: [
+        {
+          id: "hermes:researcher:stored%2F1",
+          agentId: "researcher",
+          title: "One",
+          archived: false,
+          updatedAt: "1970-01-01T00:00:01.000Z",
+          status: "unknown",
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+  })
+
+  it("rejects duplicate stored Session IDs and projects owned compacted chronological history", async () => {
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions?profile=researcher"))
+        return {
+          sessions: [
+            { id: "same", profile: "researcher" },
+            { id: "same", profile: "researcher" },
+          ],
+        }
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      return {
+        session_id: "stored",
+        messages: [
+          { id: "user-1", role: "user", content: "first", timestamp: 1 },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            reasoning: "thinking",
+            content: "second",
+            timestamp: 2,
+          },
+        ],
+        pagination: { total: 2 },
+      }
+    })
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+    await expect(
+      adapter.listSessions("researcher", 50, 0)
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    await expect(
+      adapter.history("researcher", "stored", 200, 0)
+    ).resolves.toEqual({
+      sessionId: "hermes:researcher:stored",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: [{ type: "text", text: "first" }],
+          createdAt: "1970-01-01T00:00:01.000Z",
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "thinking" },
+            { type: "text", text: "second" },
+          ],
+          createdAt: "1970-01-01T00:00:02.000Z",
+        },
+      ],
+      total: 2,
+      limit: 200,
+      offset: 0,
+      nextOffset: 2,
+    })
+    expect(http.mock.calls.slice(1).map(([path]) => path)).toEqual([
+      "/api/sessions/stored?profile=researcher",
+      "/api/sessions/stored/messages?profile=researcher&limit=200&offset=0&order=oldest&include_compacted=true",
+    ])
   })
   it("projects profile names as Agent IDs without leaking native metadata", async () => {
     const request = vi.fn(async () => ({ profiles: [profile()] }))

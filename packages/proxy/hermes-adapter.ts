@@ -2,6 +2,11 @@ import {
   AgentCatalogResponseSchema,
   HermesAuthStateSchema,
   RuntimeInfoSchema,
+  SessionCatalogResponseSchema,
+  SessionCreateResponseSchema,
+  SessionHistoryResponseSchema,
+  SessionSchema,
+  SESSION_CATALOG_MAX_WINDOW,
   VisibilityUpdateResponseSchema,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
@@ -9,14 +14,18 @@ import {
   type RuntimeInfo,
   type VisibilityUpdateResponse,
 } from "../protocol"
-import { HermesAuthenticationError } from "./hermes-transport"
+import { HermesAuthenticationError, HermesHttpError } from "./hermes-transport"
+import { projectHermesHistory } from "./hermes-history"
 
 export interface HermesRpcTransport {
   request(
     method: string,
     params: Readonly<Record<string, unknown>>
   ): Promise<unknown>
-  http?(path: string, init?: { method?: string; body?: unknown }): Promise<unknown>
+  http?(
+    path: string,
+    init?: { method?: string; body?: unknown }
+  ): Promise<unknown>
   authState?(): Promise<HermesAuthState>
   close?(): Promise<void>
 }
@@ -39,6 +48,20 @@ export class HermesAgentNotFoundError extends Error {
   constructor() {
     super("Agent not found")
     this.name = "HermesAgentNotFoundError"
+  }
+}
+
+export class HermesSessionNotFoundError extends Error {
+  constructor() {
+    super("Session not found")
+    this.name = "HermesSessionNotFoundError"
+  }
+}
+
+export class HermesSessionConflictError extends Error {
+  constructor() {
+    super("Session mutation conflict")
+    this.name = "HermesSessionConflictError"
   }
 }
 
@@ -121,7 +144,9 @@ function sessionId(profile: string, storedId: string) {
 function timestamp(value: unknown) {
   const numeric = typeof value === "number" ? value : Number(value)
   return Number.isFinite(numeric) && numeric > 0
-    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric).toISOString()
+    ? new Date(
+        numeric < 10_000_000_000 ? numeric * 1000 : numeric
+      ).toISOString()
     : new Date(0).toISOString()
 }
 
@@ -183,7 +208,34 @@ export class HermesServerAdapter {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
-          sessionCreation: { status: "unavailable", reason: "not-implemented" },
+          sessionCatalog: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionHistory: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionDetail: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionCreation: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionTitle: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionArchival: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
+          sessionDeletion: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
         },
       })
     }
@@ -195,7 +247,27 @@ export class HermesServerAdapter {
         agentVisibility: visibilityAvailable
           ? { status: "available", concurrency: "revision" }
           : { status: "unavailable", reason: "native-revision-unavailable" },
-        sessionCreation: { status: "unavailable", reason: "not-implemented" },
+        sessionCatalog: {
+          status: "available",
+          scope: "workspace",
+          order: "recent",
+          defaultPageSize: 50,
+          maxPageSize: 100,
+          maxWindow: SESSION_CATALOG_MAX_WINDOW,
+        },
+        sessionHistory: {
+          status: "available",
+          order: "chronological",
+          compacted: true,
+          loading: "on-open",
+          defaultPageSize: 200,
+          maxPageSize: 500,
+        },
+        sessionDetail: { status: "available" },
+        sessionCreation: { status: "available" },
+        sessionTitle: { status: "available" },
+        sessionArchival: { status: "available" },
+        sessionDeletion: { status: "available" },
       },
     })
   }
@@ -268,46 +340,243 @@ export class HermesServerAdapter {
 
   async listSessions(profile: string, limit: number, offset: number) {
     if (!this.transport.http) throw new HermesUnavailableError()
-    const query = new URLSearchParams({ profile, limit: String(limit), offset: String(offset), order: "recent", archived: "include", exclude_sources: "cron,tool,kanban" })
+    const query = new URLSearchParams({
+      profile,
+      limit: String(limit),
+      offset: String(offset),
+      order: "recent",
+      archived: "include",
+      exclude_sources: "cron,tool,kanban",
+    })
     let payload: unknown
-    try { payload = await this.transport.http(`/api/sessions?${query}`) } catch { throw new HermesUnavailableError() }
-    if (!isRecord(payload) || !Array.isArray(payload.sessions)) throw new HermesUnavailableError()
+    try {
+      payload = await this.transport.http(`/api/sessions?${query}`)
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.sessions))
+      throw new HermesUnavailableError()
     const seen = new Set<string>()
     const sessions = payload.sessions.map((row) => {
       if (!isRecord(row)) throw new HermesUnavailableError()
       const storedId = nonEmptyString(row.id)
-      if (!storedId || nonEmptyString(row.profile) !== profile || seen.has(storedId)) throw new HermesUnavailableError()
+      if (
+        !storedId ||
+        nonEmptyString(row.profile) !== profile ||
+        seen.has(storedId)
+      )
+        throw new HermesUnavailableError()
       seen.add(storedId)
-      return { id: sessionId(profile, storedId), agentId: profile, title: nonEmptyString(row.title) ?? storedId, archived: row.archived === true, updatedAt: timestamp(row.last_active ?? row.started_at), status: "unknown" as const }
+      return {
+        id: sessionId(profile, storedId),
+        agentId: profile,
+        title: nonEmptyString(row.title) ?? storedId,
+        archived: row.archived === true,
+        updatedAt: timestamp(row.last_active ?? row.started_at),
+        status: "unknown" as const,
+      }
     })
-    return { sessions, total: typeof payload.total === "number" && payload.total >= 0 ? payload.total : sessions.length, limit, offset }
+    const result = SessionCatalogResponseSchema.safeParse({
+      sessions,
+      total:
+        typeof payload.total === "number" && payload.total >= 0
+          ? payload.total
+          : sessions.length,
+      limit,
+      offset,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
   }
 
-  async history(profile: string, storedId: string, limit: number, offset: number) {
+  async listAllSessions(limit: number, offset: number) {
+    if (offset + limit > SESSION_CATALOG_MAX_WINDOW)
+      throw new HermesUnavailableError()
+    const profiles = (await this.listAgents()).agents.map(
+      ({ summary }) => summary.id
+    )
+    const prefixLength = offset + limit
+    if (!Number.isSafeInteger(prefixLength)) throw new HermesUnavailableError()
+    const profilePages: Array<{
+      sessions: Awaited<
+        ReturnType<HermesServerAdapter["listSessions"]>
+      >["sessions"]
+      total: number
+    }> = []
+    const fanout = 4
+    for (let start = 0; start < profiles.length; start += fanout) {
+      profilePages.push(
+        ...(await Promise.all(
+          profiles.slice(start, start + fanout).map(async (profile) => {
+            const sessions: Awaited<
+              ReturnType<HermesServerAdapter["listSessions"]>
+            >["sessions"] = []
+            let profileOffset = 0
+            let total = 0
+            while (sessions.length < prefixLength) {
+              const page = await this.listSessions(
+                profile,
+                Math.min(100, prefixLength - sessions.length),
+                profileOffset
+              )
+              sessions.push(...page.sessions)
+              total = page.total
+              profileOffset += page.sessions.length
+              if (page.sessions.length === 0 || profileOffset >= total) break
+            }
+            return { sessions, total }
+          })
+        ))
+      )
+    }
+    const merged = profilePages
+      .flatMap(({ sessions }) => sessions)
+      .sort(
+        (left, right) =>
+          Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+          left.id.localeCompare(right.id)
+      )
+    const result = SessionCatalogResponseSchema.safeParse({
+      sessions: merged.slice(offset, prefixLength),
+      total: profilePages.reduce((sum, page) => sum + page.total, 0),
+      limit,
+      offset,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
+  }
+
+  async history(
+    profile: string,
+    storedId: string,
+    limit: number,
+    offset: number
+  ) {
     if (!this.transport.http) throw new HermesUnavailableError()
-    const query = new URLSearchParams({ profile, limit: String(limit), offset: String(offset), order: "oldest", include_compacted: "true" })
+    await this.getSession(profile, storedId)
+    const query = new URLSearchParams({
+      profile,
+      limit: String(limit),
+      offset: String(offset),
+      order: "oldest",
+      include_compacted: "true",
+    })
     let payload: unknown
-    try { payload = await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`) } catch { throw new HermesUnavailableError() }
-    if (!isRecord(payload) || nonEmptyString(payload.session_id) !== storedId || !Array.isArray(payload.messages)) throw new HermesUnavailableError()
-    return { sessionId: sessionId(profile, storedId), messages: payload.messages, total: isRecord(payload.pagination) && typeof payload.pagination.total === "number" ? payload.pagination.total : payload.messages.length, limit, offset }
+    try {
+      payload = await this.transport.http(
+        `/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`
+      )
+    } catch (error) {
+      if (error instanceof HermesHttpError && error.status === 404)
+        throw new HermesSessionNotFoundError()
+      throw new HermesUnavailableError()
+    }
+    if (
+      !isRecord(payload) ||
+      nonEmptyString(payload.session_id) !== storedId ||
+      !Array.isArray(payload.messages)
+    )
+      throw new HermesUnavailableError()
+    const result = SessionHistoryResponseSchema.safeParse({
+      sessionId: sessionId(profile, storedId),
+      messages: projectHermesHistory(payload.messages),
+      total:
+        isRecord(payload.pagination) &&
+        typeof payload.pagination.total === "number"
+          ? payload.pagination.total
+          : payload.messages.length,
+      limit,
+      offset,
+      nextOffset:
+        offset +
+        (isRecord(payload.pagination) &&
+        typeof payload.pagination.returned === "number" &&
+        Number.isSafeInteger(payload.pagination.returned) &&
+        payload.pagination.returned >= 0
+          ? payload.pagination.returned
+          : payload.messages.length),
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
   }
 
   async getSession(profile: string, storedId: string) {
     if (!this.transport.http) throw new HermesUnavailableError()
-    const payload = await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`)
-    if (!isRecord(payload) || nonEmptyString(payload.id) !== storedId || nonEmptyString(payload.profile) !== profile) throw new HermesUnavailableError()
-    return { id: sessionId(profile, storedId), agentId: profile, title: nonEmptyString(payload.title) ?? storedId, archived: payload.archived === true, updatedAt: timestamp(payload.last_active ?? payload.started_at), status: "unknown" as const }
+    let payload: unknown
+    try {
+      payload = await this.transport.http(
+        `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`
+      )
+    } catch (error) {
+      if (error instanceof HermesHttpError && error.status === 404)
+        throw new HermesSessionNotFoundError()
+      throw new HermesUnavailableError()
+    }
+    if (
+      !isRecord(payload) ||
+      nonEmptyString(payload.id) !== storedId ||
+      nonEmptyString(payload.profile) !== profile
+    )
+      throw new HermesUnavailableError()
+    const result = SessionSchema.safeParse({
+      id: sessionId(profile, storedId),
+      agentId: profile,
+      title: nonEmptyString(payload.title) ?? storedId,
+      archived: payload.archived === true,
+      updatedAt: timestamp(payload.last_active ?? payload.started_at),
+      status: "unknown" as const,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
   }
 
   async createSession(profile: string, title?: string) {
-    const payload = await this.transport.request("session.create", { profile, close_on_disconnect: false, ...(title ? { title } : {}) })
-    if (!isRecord(payload) || !nonEmptyString(payload.stored_session_id) || !nonEmptyString(payload.session_id)) throw new HermesUnavailableError()
-    return { id: sessionId(profile, nonEmptyString(payload.stored_session_id)!), agentId: profile }
+    const catalog = await this.listAgents()
+    if (!catalog.agents.some(({ summary }) => summary.id === profile))
+      throw new HermesAgentNotFoundError()
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.create", {
+        profile,
+        close_on_disconnect: false,
+        ...(title ? { title } : {}),
+      })
+    } catch {
+      throw new HermesUnavailableError()
+    }
+    if (
+      !isRecord(payload) ||
+      !nonEmptyString(payload.stored_session_id) ||
+      !nonEmptyString(payload.session_id)
+    )
+      throw new HermesUnavailableError()
+    return SessionCreateResponseSchema.parse({
+      session: {
+        id: sessionId(profile, nonEmptyString(payload.stored_session_id)!),
+        agentId: profile,
+      },
+    })
   }
 
-  async mutateSession(profile: string, storedId: string, method: "PATCH" | "DELETE", body?: unknown) {
+  async mutateSession(
+    profile: string,
+    storedId: string,
+    method: "PATCH" | "DELETE",
+    body?: unknown
+  ) {
     await this.getSession(profile, storedId)
     if (!this.transport.http) throw new HermesUnavailableError()
-    await this.transport.http(`/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`, { method, body })
+    try {
+      await this.transport.http(
+        `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`,
+        { method, body }
+      )
+    } catch (error) {
+      if (error instanceof HermesHttpError && error.status === 404)
+        throw new HermesSessionNotFoundError()
+      if (error instanceof HermesHttpError && error.status === 409)
+        throw new HermesSessionConflictError()
+      throw new HermesUnavailableError()
+    }
   }
 }

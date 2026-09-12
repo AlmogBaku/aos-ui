@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import {
   HermesAuthenticationError,
+  HermesHttpError,
   HermesWebSocketRpcTransport,
   type HermesSocket,
 } from "./hermes-transport"
@@ -50,11 +51,44 @@ class FakeSocket implements HermesSocket {
 }
 
 describe("Hermes WebSocket RPC transport", () => {
+  it.each([404, 409])(
+    "preserves native REST status %i without exposing its response body",
+    async (status) => {
+      const transport = new HermesWebSocketRpcTransport({
+        baseUrl: "http://hermes.test",
+        credentials: async () => ({
+          "X-Hermes-Session-Token": "secret",
+        }),
+        fetcher: vi.fn(
+          async () => new Response("/private/path token=secret", { status })
+        ),
+      })
+
+      const request = transport.http("/api/sessions/missing?profile=researcher")
+      await expect(request).rejects.toMatchObject({ status })
+      await expect(request).rejects.toBeInstanceOf(HermesHttpError)
+      await expect(request).rejects.not.toThrow("private/path")
+    }
+  )
+
   it("keeps static credentials server-side for native REST Session reads", async () => {
     const fetcher = vi.fn(async () => Response.json({ sessions: [] }))
-    const transport = new HermesWebSocketRpcTransport({ baseUrl: "http://hermes.test", credentials: async () => ({ "X-Hermes-Session-Token": "secret" }), fetcher })
-    await expect(transport.http("/api/sessions?profile=researcher")).resolves.toEqual({ sessions: [] })
-    expect(fetcher).toHaveBeenCalledWith("http://hermes.test/api/sessions?profile=researcher", expect.objectContaining({ headers: expect.objectContaining({ "X-Hermes-Session-Token": "secret" }) }))
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
+      fetcher,
+    })
+    await expect(
+      transport.http("/api/sessions?profile=researcher")
+    ).resolves.toEqual({ sessions: [] })
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://hermes.test/api/sessions?profile=researcher",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Hermes-Session-Token": "secret",
+        }),
+      })
+    )
   })
   it("uses the configured static token only for native ws-ticket brokerage", async () => {
     const fetcher = vi.fn(

@@ -1,0 +1,210 @@
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { AssistantRuntimeProvider } from "@assistant-ui/react"
+
+import { createProxyApp } from "../../../packages/proxy/app"
+import { HermesServerAdapter } from "../../../packages/proxy/hermes-adapter"
+import { createOperatorAuthenticator } from "../../../packages/proxy/operator-auth"
+import type { HarnessRuntime } from "../contracts"
+import { runtimeAdapter } from "./composition"
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+describe("AOS normalized Session browser integration", () => {
+  it("lists owned Sessions newest-first and hydrates history only after an explicit switch", async () => {
+    const nativeRequest = vi.fn(async (method: string) => {
+      if (method === "profiles.list")
+        return {
+          profiles: [
+            {
+              name: "alpha",
+              display_name: "Alpha",
+              ui_meta: { "hermes-bots": {} },
+              ui_meta_revisions: { "hermes-bots": 1 },
+            },
+            {
+              name: "beta",
+              display_name: "Beta",
+              ui_meta: { "hermes-bots": {} },
+              ui_meta_revisions: { "hermes-bots": 1 },
+            },
+          ],
+        }
+      throw new Error(`Unexpected native RPC: ${method}`)
+    })
+    const nativeHttp = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions?profile=alpha"))
+        return {
+          sessions: [
+            {
+              id: "stored-alpha",
+              profile: "alpha",
+              title: "Older",
+              last_active: 1,
+              session_id: "live-alpha-secret",
+            },
+          ],
+          total: 1,
+        }
+      if (path.startsWith("/api/sessions?profile=beta"))
+        return {
+          sessions: [
+            {
+              id: "stored-beta",
+              profile: "beta",
+              title: "Newer",
+              last_active: 2,
+              session_id: "live-beta-secret",
+            },
+          ],
+          total: 1,
+        }
+      if (path === "/api/sessions/stored-alpha?profile=alpha")
+        return { id: "stored-alpha", profile: "alpha", title: "Older" }
+      if (path.startsWith("/api/sessions/stored-alpha/messages?"))
+        return {
+          session_id: "stored-alpha",
+          messages: [
+            {
+              id: "native-user-1",
+              role: "user",
+              content: "Open it",
+              timestamp: 1,
+              native_position: 99,
+              private_path: "/srv/hermes/private",
+            },
+            {
+              id: "native-assistant-1",
+              role: "assistant",
+              reasoning: "Checking",
+              content: "Ready",
+              timestamp: 2,
+            },
+          ],
+          pagination: { total: 2 },
+        }
+      throw new Error(`Unexpected native REST path: ${path}`)
+    })
+    const app = createProxyApp({
+      publicOrigin: "http://app.test",
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: nativeRequest,
+        http: nativeHttp,
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const browserFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      app.request(
+        new Request(new URL(String(input), "http://app.test"), {
+          ...init,
+          headers: { cookie: "aos_operator=valid", ...init?.headers },
+        })
+      )
+    )
+    vi.stubGlobal("fetch", browserFetch)
+
+    let supplied: HarnessRuntime | undefined
+    const Provider = runtimeAdapter.Provider
+    render(
+      <Provider
+        config={{
+          status: "ready",
+          mode: "aos",
+          composerFeatures: {
+            modelSelectorEnabled: true,
+            contextEnabled: true,
+          },
+        }}
+        locale="en"
+      >
+        {(runtime) => {
+          supplied = runtime
+          return (
+            <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
+              <main>Mounted</main>
+            </AssistantRuntimeProvider>
+          )
+        }}
+      </Provider>
+    )
+    expect(screen.getByRole("main")).toHaveTextContent("Mounted")
+
+    await supplied!.assistantRuntime.threads.getLoadThreadsPromise()
+    expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([
+      "hermes:beta:stored-beta",
+      "hermes:alpha:stored-alpha",
+    ])
+    expect(
+      nativeHttp.mock.calls.some(([path]) =>
+        String(path).includes("/messages?")
+      )
+    ).toBe(false)
+
+    const beforeCrossAgent = nativeHttp.mock.calls.length
+    const crossAgent = await browserFetch(
+      "/api/aos/v1/agents/alpha/sessions/hermes%3Abeta%3Astored-beta/history"
+    )
+    expect(crossAgent.status).toBe(404)
+    expect(nativeHttp).toHaveBeenCalledTimes(beforeCrossAgent)
+
+    await Promise.race([
+      supplied!.assistantRuntime.threads.switchToThread(
+        "hermes:alpha:stored-alpha"
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Session switch did not settle: ${JSON.stringify({
+                  browser: browserFetch.mock.calls.map(([input]) =>
+                    String(input)
+                  ),
+                  native: nativeHttp.mock.calls.map(([path]) => String(path)),
+                })}`
+              )
+            ),
+          1_000
+        )
+      ),
+    ])
+    await waitFor(() =>
+      expect(
+        supplied!.assistantRuntime.thread.getState().messages
+      ).toHaveLength(2)
+    )
+    expect(supplied!.assistantRuntime.thread.getState().messages).toMatchObject(
+      [
+        { id: "native-user-1", role: "user" },
+        {
+          id: "native-assistant-1",
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Checking" },
+            { type: "text", text: "Ready" },
+          ],
+        },
+      ]
+    )
+
+    const browserState = JSON.stringify({
+      threads: supplied!.assistantRuntime.threads.getState(),
+      messages: supplied!.assistantRuntime.thread.getState().messages,
+      requests: browserFetch.mock.calls.map(([input]) => String(input)),
+    })
+    expect(browserState).not.toContain("live-alpha-secret")
+    expect(browserState).not.toContain("native_position")
+    expect(browserState).not.toContain("private_path")
+    expect(browserState).not.toContain("/api/sessions")
+    expect(browserState).not.toContain("/srv/hermes")
+  })
+})

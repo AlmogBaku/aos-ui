@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 export const AOS_API_PREFIX = "/api/aos/v1" as const
+export const SESSION_CATALOG_MAX_WINDOW = 1_000 as const
 
 const IdentifierSchema = z
   .string()
@@ -54,6 +55,30 @@ export const OperationCapabilitySchema = z.discriminatedUnion("status", [
   UnavailableCapabilitySchema,
 ])
 
+const SessionCatalogCapabilitySchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("available"),
+    scope: z.literal("workspace"),
+    order: z.literal("recent"),
+    defaultPageSize: z.literal(50),
+    maxPageSize: z.literal(100),
+    maxWindow: z.literal(SESSION_CATALOG_MAX_WINDOW),
+  }),
+  UnavailableCapabilitySchema,
+])
+
+const SessionHistoryCapabilitySchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("available"),
+    order: z.literal("chronological"),
+    compacted: z.literal(true),
+    loading: z.literal("on-open"),
+    defaultPageSize: z.literal(200),
+    maxPageSize: z.literal(500),
+  }),
+  UnavailableCapabilitySchema,
+])
+
 export const RuntimeInfoSchema = z.strictObject({
   runtime: z.strictObject({
     id: IdentifierSchema,
@@ -63,7 +88,13 @@ export const RuntimeInfoSchema = z.strictObject({
   capabilities: z.strictObject({
     agentCatalog: OperationCapabilitySchema,
     agentVisibility: OperationCapabilitySchema,
+    sessionCatalog: SessionCatalogCapabilitySchema,
+    sessionHistory: SessionHistoryCapabilitySchema,
+    sessionDetail: OperationCapabilitySchema,
     sessionCreation: OperationCapabilitySchema,
+    sessionTitle: OperationCapabilitySchema,
+    sessionArchival: OperationCapabilitySchema,
+    sessionDeletion: OperationCapabilitySchema,
   }),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
@@ -134,21 +165,71 @@ export const SessionCatalogResponseSchema = z.strictObject({
   limit: z.number().int().min(1).max(100),
   offset: z.number().int().min(0),
 })
-export type SessionCatalogResponse = z.infer<typeof SessionCatalogResponseSchema>
+export type SessionCatalogResponse = z.infer<
+  typeof SessionCatalogResponseSchema
+>
+
+const JsonRecordSchema = z.record(z.string(), z.json())
+const SessionMessagePartSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("text"), text: z.string().max(1_000_000) }),
+  z.strictObject({
+    type: z.literal("reasoning"),
+    text: z.string().max(1_000_000),
+  }),
+  z.strictObject({
+    type: z.literal("image"),
+    image: z.string().min(1).max(25_000_000),
+    filename: z.string().min(1).max(4096).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("tool-call"),
+    toolCallId: IdentifierSchema,
+    toolName: IdentifierSchema,
+    args: JsonRecordSchema,
+    argsText: z.string().max(1_000_000),
+    result: z.json().optional(),
+    isError: z.boolean().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("data"),
+    name: IdentifierSchema,
+    data: z.json(),
+  }),
+])
+
+export const SessionMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.array(SessionMessagePartSchema).max(2_000),
+  createdAt: z.string().datetime(),
+})
+export type SessionMessage = z.infer<typeof SessionMessageSchema>
+
 export const SessionHistoryResponseSchema = z.strictObject({
   sessionId: IdentifierSchema,
-  messages: z.array(z.unknown()).max(500),
+  messages: z.array(SessionMessageSchema).max(500),
   total: z.number().int().min(0),
   limit: z.number().int().min(1).max(500),
   offset: z.number().int().min(0),
+  nextOffset: z.number().int().min(0),
 })
-export type SessionHistoryResponse = z.infer<typeof SessionHistoryResponseSchema>
+export type SessionHistoryResponse = z.infer<
+  typeof SessionHistoryResponseSchema
+>
 export const SessionCreateRequestSchema = z.strictObject({
   title: z.string().min(1).max(4096).optional(),
 })
+export const SessionCreateResponseSchema = z.strictObject({
+  session: z.strictObject({ id: IdentifierSchema, agentId: IdentifierSchema }),
+})
 export const SessionPatchRequestSchema = z
-  .strictObject({ title: z.string().min(1).max(4096).optional(), archived: z.boolean().optional() })
-  .refine((value) => (value.title !== undefined) !== (value.archived !== undefined))
+  .strictObject({
+    title: z.string().min(1).max(4096).optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine(
+    (value) => (value.title !== undefined) !== (value.archived !== undefined)
+  )
 
 export const ErrorResponseSchema = z.strictObject({
   error: z.strictObject({

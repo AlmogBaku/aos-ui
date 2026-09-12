@@ -5,8 +5,10 @@ import {
   HermesAuthStateSchema,
   OperatorAuthStateSchema,
   RuntimeInfoSchema,
-  VisibilityUpdateRequestSchema,
   SessionCatalogResponseSchema,
+  SessionCreateResponseSchema,
+  SessionHistoryResponseSchema,
+  VisibilityUpdateRequestSchema,
 } from "./index"
 
 describe("AOS v1 normalized protocol", () => {
@@ -55,10 +57,27 @@ describe("AOS v1 normalized protocol", () => {
             status: "available",
             concurrency: "revision",
           },
-          sessionCreation: {
-            status: "unavailable",
-            reason: "not-implemented",
+          sessionCatalog: {
+            status: "available",
+            scope: "workspace",
+            order: "recent",
+            defaultPageSize: 50,
+            maxPageSize: 100,
+            maxWindow: 1_000,
           },
+          sessionHistory: {
+            status: "available",
+            order: "chronological",
+            compacted: true,
+            loading: "on-open",
+            defaultPageSize: 200,
+            maxPageSize: 500,
+          },
+          sessionDetail: { status: "available" },
+          sessionCreation: { status: "available" },
+          sessionTitle: { status: "available" },
+          sessionArchival: { status: "available" },
+          sessionDeletion: { status: "available" },
         },
       }).status
     ).toBe("ready")
@@ -141,6 +160,78 @@ describe("AOS v1 normalized protocol", () => {
         total: 0,
         limit: 101,
         offset: 0,
+      })
+    ).toThrow()
+  })
+
+  it("accepts only normalized history parts and stable Session creation identities", () => {
+    const response = SessionHistoryResponseSchema.parse({
+      sessionId: "hermes:researcher:stored-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          content: [
+            { type: "text", text: "Inspect this" },
+            { type: "image", image: "data:image/png;base64,YQ==" },
+          ],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          content: [
+            { type: "reasoning", text: "Reading" },
+            {
+              type: "tool-call",
+              toolCallId: "read-1",
+              toolName: "read_file",
+              args: { path: "README.md" },
+              argsText: '{"path":"README.md"}',
+              result: { ok: true },
+            },
+            {
+              type: "data",
+              name: "aos.artifact",
+              data: { id: "artifact-1", filename: "report.md" },
+            },
+            { type: "text", text: "Done" },
+          ],
+        },
+      ],
+      total: 2,
+      limit: 200,
+      offset: 0,
+      nextOffset: 2,
+    })
+
+    expect(response.messages).toHaveLength(2)
+    expect(
+      SessionCreateResponseSchema.parse({
+        session: {
+          id: "hermes:researcher:stored-1",
+          agentId: "researcher",
+        },
+      })
+    ).toEqual({
+      session: {
+        id: "hermes:researcher:stored-1",
+        agentId: "researcher",
+      },
+    })
+    expect(() =>
+      SessionHistoryResponseSchema.parse({
+        ...response,
+        messages: [
+          {
+            id: "native-1",
+            role: "assistant",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            content: [{ type: "text", text: "No leak" }],
+            native_position: 41,
+          },
+        ],
       })
     ).toThrow()
   })
