@@ -86,7 +86,8 @@ function parseFrame(event: unknown): ServerFrame | undefined {
  * Cursors resume observation, never data: every reconnect still causes a read.
  */
 export class AosReconciler {
-  readonly #socketFactory: () => AosEventSocket
+  readonly #socketFactory: (scope: AosEventScope) => AosEventSocket
+  readonly #authorizeSocket?: (scope: AosEventScope) => Promise<void>
   readonly #streams = new Map<string, Stream>()
   readonly #listeners = new Map<string, Set<() => void>>()
   #socket?: AosEventSocket
@@ -102,13 +103,15 @@ export class AosReconciler {
 
   constructor(
     options: {
-      socketFactory?: () => AosEventSocket
+      socketFactory?: (scope: AosEventScope) => AosEventSocket
+      authorizeSocket?: (scope: AosEventScope) => Promise<void>
       onReconnect?: () => Promise<void>
       schedule?: (delayMs: number, task: () => void) => unknown
       cancel?: (timer: unknown) => void
     } = {}
   ) {
     this.#socketFactory = options.socketFactory ?? defaultSocketFactory
+    this.#authorizeSocket = options.authorizeSocket
     this.#onReconnect = options.onReconnect
     this.#schedule =
       options.schedule ?? ((delay, task) => setTimeout(task, delay))
@@ -187,7 +190,7 @@ export class AosReconciler {
 
   async #ready(stream: Stream) {
     if (stream.fatal) throw stream.fatal
-    const socket = await this.#connect()
+    const socket = await this.#connect(stream.scope)
     if (stream.readySocket === socket) return
     if (!stream.ready) {
       stream.ready = new Promise<void>((resolve, reject) => {
@@ -206,7 +209,7 @@ export class AosReconciler {
     await stream.ready
   }
 
-  #connect() {
+  #connect(scope: AosEventScope) {
     if (this.#closed)
       return Promise.reject(
         new AosReconciliationError("connection-interrupted")
@@ -214,9 +217,29 @@ export class AosReconciler {
     if (this.#socket?.readyState === 1) return Promise.resolve(this.#socket)
     if (this.#opening) return this.#opening
 
-    const socket = this.#socketFactory()
+    const operation = this.#authorizeSocket
+      ? this.#authorizeSocket(scope)
+          .catch(() => {
+            throw new AosReconciliationError("aos-auth-required")
+          })
+          .then(() => this.#openSocket(scope))
+      : this.#openSocket(scope)
+    const opening = operation.catch((error: unknown) => {
+      if (this.#opening === opening) this.#opening = undefined
+      throw error
+    })
+    this.#opening = opening
+    return opening
+  }
+
+  #openSocket(scope: AosEventScope) {
+    if (this.#closed)
+      return Promise.reject(
+        new AosReconciliationError("connection-interrupted")
+      )
+    const socket = this.#socketFactory(scope)
     this.#socket = socket
-    this.#opening = new Promise<AosEventSocket>((resolve, reject) => {
+    const opening = new Promise<AosEventSocket>((resolve, reject) => {
       const onOpen = () => {
         cleanupOpening()
         void (async () => {
@@ -277,7 +300,7 @@ export class AosReconciler {
     socket.addEventListener("message", onMessage)
     socket.addEventListener("close", onClose)
     socket.addEventListener("error", onClose)
-    return this.#opening
+    return opening
   }
 
   #scheduleReconnect() {
@@ -291,7 +314,9 @@ export class AosReconciler {
     this.#reconnectDelayMs = Math.min(this.#reconnectDelayMs * 2, 5_000)
     this.#reconnectTimer = this.#schedule(delay, () => {
       this.#reconnectTimer = undefined
-      void this.#connect()
+      const scope = this.#streams.values().next().value?.scope
+      if (!scope) return
+      void this.#connect(scope)
         .then(() =>
           Promise.all(
             [...this.#streams.values()].map((stream) => this.#ready(stream))

@@ -218,17 +218,39 @@ describe("public configuration", () => {
   })
   it("recognizes the isolated guest surface without treating it as a runtime", () => {
     expect(
-      config.parsePublicApplicationConfiguration({ surface: "guest" })
+      config.parsePublicApplicationConfiguration({
+        surface: "guest",
+        basePath: "/api/guest/v1/",
+        lane: "guest",
+      })
     ).toEqual({
       status: "ready",
       surface: "guest",
+      basePath: "/api/guest/v1",
+      lane: "guest",
     })
     expect(
       config.parsePublicApplicationConfiguration({
         surface: "guest",
+        basePath: "/api/guest/v1",
+        lane: "guest",
         mode: "hermes",
       })
     ).toEqual({ status: "unavailable", reason: "invalid-public-config" })
+    for (const invalid of [
+      { surface: "guest" },
+      {
+        surface: "guest",
+        basePath: "https://operator.example.test",
+        lane: "guest",
+      },
+      { surface: "guest", basePath: "/api/aos/v1", lane: "operator" },
+    ]) {
+      expect(config.parsePublicApplicationConfiguration(invalid)).toEqual({
+        status: "unavailable",
+        reason: "invalid-public-config",
+      })
+    }
   })
   it("rejects secret fields and missing deployment configuration", () => {
     for (const input of [

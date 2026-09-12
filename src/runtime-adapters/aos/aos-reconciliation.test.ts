@@ -65,6 +65,48 @@ function deferred<T>() {
 }
 
 describe("AOS authoritative browser reconciliation", () => {
+  it("authorizes the scoped guest socket before browser WebSocket construction", async () => {
+    let release!: () => void
+    const authorized = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket)
+    const authorizeSocket = vi.fn(() => authorized)
+    const reconciler = new AosReconciler({
+      socketFactory,
+      authorizeSocket,
+    })
+    const scope = {
+      workspaceId: "guest",
+      agentId: "researcher",
+      sessionId: "hermes:researcher:stored-session",
+    }
+
+    const read = reconciler.read(scope, async () => "history")
+    await Promise.resolve()
+
+    expect(authorizeSocket).toHaveBeenCalledWith(scope)
+    expect(socketFactory).not.toHaveBeenCalled()
+
+    release()
+    await tick()
+    expect(socketFactory).toHaveBeenCalledWith(scope)
+    socket.open()
+    await tick()
+    const streamId = JSON.parse(socket.sent[0]!).streamId as string
+    socket.message({
+      type: "aos.ready",
+      version: 1,
+      streamId,
+      scope,
+      generation: 0,
+      read: "authoritative",
+    })
+    await expect(read).resolves.toBe("history")
+    reconciler.close()
+  })
+
   it("subscribes and waits for ready before starting the authoritative read", async () => {
     const socket = new FakeSocket()
     const read = vi.fn(async () => "fresh")

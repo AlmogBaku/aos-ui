@@ -36,8 +36,10 @@ import {
   type RuntimeConfiguration,
 } from "@shared/runtime-config"
 
-const GuestApp = lazy(() =>
-  import("@/components/guest").then(({ GuestApp }) => ({ default: GuestApp }))
+const GuestAosSurface = lazy(() =>
+  import("@/runtime-adapters/aos").then(({ GuestAosSurface }) => ({
+    default: GuestAosSurface,
+  }))
 )
 
 const invalidConfig: RuntimeConfiguration = {
@@ -243,7 +245,11 @@ function Application() {
     return (
       <RuntimeErrorBoundary locale={locale}>
         <Suspense fallback={<LoadingWorkspace locale={locale} />}>
-          <GuestApp inviteToken={inviteToken} />
+          <GuestAosSurface
+            config={config}
+            inviteToken={inviteToken}
+            locale={locale}
+          />
         </Suspense>
       </RuntimeErrorBoundary>
     )

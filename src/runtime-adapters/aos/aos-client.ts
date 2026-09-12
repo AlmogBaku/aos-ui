@@ -212,6 +212,9 @@ export class AosClientError extends Error {
 
 export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
+  basePath?: string
+  authorization?: string
+  scope?: AosEventScope
   reconciler?: {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
     subscribe?(scope: AosEventScope, listener: () => void): () => void
@@ -274,6 +277,8 @@ export function createAosRunAgent({
   threadId,
   fetcher = globalThis.fetch.bind(globalThis),
   stageAttachments,
+  basePath = "/api/aos/v1",
+  authorization,
 }: {
   agentId: string
   threadId: string
@@ -282,8 +287,10 @@ export function createAosRunAgent({
     threadId: string,
     attachments: readonly StagedRunAttachment[]
   ) => Promise<{ stageId: string }>
+  basePath?: string
+  authorization?: string
 }) {
-  const url = `/api/aos/v1/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
+  const url = `${basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
   const runFetch: HttpAgentFetchFn = async (requestUrl, init) => {
     if (requestUrl !== url || typeof init.body !== "string")
       throw new Error("Invalid AOS run request")
@@ -314,9 +321,12 @@ export function createAosRunAgent({
       ...(message as Record<string, unknown>),
     }
     delete messageWithoutAttachments.attachments
+    const headers = new Headers(init.headers)
+    if (authorization) headers.set("authorization", authorization)
     return fetcher(url, {
       ...init,
       credentials: "same-origin",
+      headers,
       body: JSON.stringify({
         threadId: input.threadId,
         runId: input.runId,
@@ -339,6 +349,9 @@ export function createAosRunAgent({
 
 export class AosRemoteClient implements WorkspaceAdapter {
   readonly #fetch: typeof fetch
+  readonly #basePath: string
+  readonly #authorization?: string
+  readonly #scope?: AosEventScope
   readonly #reconciler?: AosRemoteClientOptions["reconciler"]
   readonly #revisions = new Map<string, string>()
   readonly #sessions = new Map<string, Session>()
@@ -346,7 +359,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
 
   constructor(options: AosRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
+    this.#basePath = options.basePath ?? "/api/aos/v1"
+    this.#authorization = options.authorization
+    this.#scope = options.scope
     this.#reconciler = options.reconciler
+    if (options.scope)
+      this.#sessionOwners.set(options.scope.sessionId, options.scope.agentId)
   }
 
   async #read<T>(
@@ -368,10 +386,13 @@ export class AosRemoteClient implements WorkspaceAdapter {
   ): Promise<T> {
     let response: Response
     try {
-      response = await this.#fetch(`/api/aos/v1${path}`, {
+      const headers = new Headers(init?.headers)
+      headers.set("accept", "application/json")
+      if (this.#authorization) headers.set("authorization", this.#authorization)
+      response = await this.#fetch(`${this.#basePath}${path}`, {
         ...init,
         credentials: "same-origin",
-        headers: { accept: "application/json", ...init?.headers },
+        headers,
       })
     } catch {
       throw new AosClientError("connection-interrupted")
@@ -475,7 +496,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
       `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}`,
       SessionSchema,
       undefined,
-      { workspaceId: "operator", agentId, sessionId: threadId }
+      this.#eventScope(agentId, threadId)
     )
     if (session.id !== threadId || session.agentId !== agentId)
       throw new Error("Invalid AOS proxy response")
@@ -537,7 +558,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
         `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/history?limit=200&offset=${offset}`,
         SessionHistoryResponseSchema,
         undefined,
-        { workspaceId: "operator", agentId, sessionId: threadId }
+        this.#eventScope(agentId, threadId)
       )
       if (
         page.sessionId !== threadId ||
@@ -820,10 +841,13 @@ export class AosRemoteClient implements WorkspaceAdapter {
   async #writeVoid(path: string, init: RequestInit) {
     let response: Response
     try {
-      response = await this.#fetch(`/api/aos/v1${path}`, {
+      const headers = new Headers(init.headers)
+      headers.set("accept", "application/json")
+      if (this.#authorization) headers.set("authorization", this.#authorization)
+      response = await this.#fetch(`${this.#basePath}${path}`, {
         ...init,
         credentials: "same-origin",
-        headers: { accept: "application/json", ...init.headers },
+        headers,
       })
     } catch {
       throw new Error("AOS proxy request failed")
@@ -836,7 +860,15 @@ export class AosRemoteClient implements WorkspaceAdapter {
     const agentId = this.#owner(threadId)
     return {
       path: `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}${suffix}`,
-      scope: { workspaceId: "operator", agentId, sessionId: threadId },
+      scope: this.#eventScope(agentId, threadId),
+    }
+  }
+
+  #eventScope(agentId: string, sessionId: string): AosEventScope {
+    return {
+      workspaceId: this.#scope?.workspaceId ?? "operator",
+      agentId,
+      sessionId,
     }
   }
 
@@ -854,10 +886,14 @@ export class AosRemoteClient implements WorkspaceAdapter {
     const operation = async () => {
       let response: Response
       try {
-        response = await this.#fetch(`/api/aos/v1${path}`, {
+        const headers = new Headers(init?.headers)
+        headers.set("accept", "application/octet-stream")
+        if (this.#authorization)
+          headers.set("authorization", this.#authorization)
+        response = await this.#fetch(`${this.#basePath}${path}`, {
           ...init,
           credentials: "same-origin",
-          headers: { accept: "application/octet-stream", ...init?.headers },
+          headers,
         })
       } catch {
         throw new AosClientError("connection-interrupted")
