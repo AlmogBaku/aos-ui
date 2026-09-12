@@ -4,6 +4,198 @@ type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 type JsonRecord = Record<string, JsonValue>
 
+const MAX_PUBLIC_DEPTH = 8
+const MAX_PUBLIC_ENTRIES = 100
+const MAX_PUBLIC_STRING_LENGTH = 4_000
+
+const privateToolKeys = new Set([
+  "apikey",
+  "authorization",
+  "baseurl",
+  "canonicalsession",
+  "cookie",
+  "credential",
+  "credentials",
+  "cwd",
+  "directory",
+  "endpoint",
+  "file",
+  "filepath",
+  "files",
+  "filepaths",
+  "href",
+  "livesessionid",
+  "meta",
+  "metadata",
+  "nativeposition",
+  "nativemetadata",
+  "password",
+  "passwd",
+  "path",
+  "paths",
+  "position",
+  "privatemetadata",
+  "privatekey",
+  "providermetadata",
+  "providerurl",
+  "reference",
+  "root",
+  "secret",
+  "sessionid",
+  "setcookie",
+  "source",
+  "storedsessionid",
+  "token",
+  "uri",
+  "url",
+  "websocketurl",
+  "workdir",
+  "workingdirectory",
+])
+
+const credentialValue =
+  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
+const privateLocationValue =
+  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
+
+type ToolProjection = {
+  args: readonly string[]
+  results: readonly string[]
+}
+
+const searchProjection: ToolProjection = {
+  args: ["query", "pattern", "glob", "include", "exclude", "filters", "limit"],
+  results: [
+    "ok",
+    "status",
+    "summary",
+    "message",
+    "count",
+    "matches",
+    "items",
+    "results",
+  ],
+}
+const activityProjection: ToolProjection = {
+  args: ["description", "goal", "goals", "prompt", "task", "name", "skill"],
+  results: ["name", "status", "summary", "message", "transcript"],
+}
+const receiptProjection: ToolProjection = {
+  args: [
+    "name",
+    "description",
+    "command",
+    "start",
+    "end",
+    "line",
+    "limit",
+    "offset",
+  ],
+  results: ["ok", "status", "summary", "message", "count", "exitCode"],
+}
+
+/** Public fields are explicit; every retained nested value is sanitized again. */
+const toolProjections: Readonly<Record<string, ToolProjection>> = {
+  render_chart: {
+    args: ["title", "type", "xKey", "series", "data"],
+    results: [
+      "ok",
+      "status",
+      "message",
+      "title",
+      "type",
+      "xKey",
+      "series",
+      "data",
+    ],
+  },
+  render_map: {
+    args: ["title", "locations"],
+    results: ["ok", "status", "message", "title", "locations"],
+  },
+  render_stats: {
+    args: ["title", "description", "stats"],
+    results: ["ok", "status", "message", "title", "description", "stats"],
+  },
+  present_plan: {
+    args: ["id", "title", "steps"],
+    results: ["ok", "status", "message", "id", "title", "steps"],
+  },
+  present_artifact: {
+    args: ["id", "title", "filename", "mimeType", "sizeBytes"],
+    results: ["ok", "status", "message"],
+  },
+  question: {
+    args: ["question", "options", "allowFreeform", "multiple"],
+    results: [
+      "answer",
+      "answers",
+      "selected",
+      "selectedOption",
+      "selectedOptions",
+      "text",
+      "status",
+    ],
+  },
+  ask_user_question: {
+    args: ["question", "options", "allowFreeform", "multiple"],
+    results: [
+      "answer",
+      "answers",
+      "selected",
+      "selectedOption",
+      "selectedOptions",
+      "text",
+      "status",
+    ],
+  },
+  request_permission: {
+    args: ["action", "question", "reason", "description"],
+    results: ["approved", "answer", "status", "message"],
+  },
+  request_approval: {
+    args: ["action", "question", "reason", "description"],
+    results: ["approved", "answer", "status", "message"],
+  },
+  delegate_subagent: activityProjection,
+  run_subagent: activityProjection,
+  task: activityProjection,
+  use_skill: {
+    args: ["skill", "name", "description"],
+    results: ["name", "status", "summary", "message"],
+  },
+  load_skill: {
+    args: ["skill", "name", "description"],
+    results: ["name", "status", "summary", "message"],
+  },
+  todo: {
+    args: ["action", "items", "todos", "title"],
+    results: ["ok", "status", "summary", "message", "items", "todos"],
+  },
+  monty_execute: {
+    args: ["code", "description"],
+    results: ["ok", "status", "summary", "message", "output"],
+  },
+  web_search: searchProjection,
+  search: searchProjection,
+  find: searchProjection,
+  grep: searchProjection,
+  glob: searchProjection,
+  read: receiptProjection,
+  read_file: receiptProjection,
+  write: receiptProjection,
+  write_file: receiptProjection,
+  edit: receiptProjection,
+  apply_patch: receiptProjection,
+  bash: receiptProjection,
+  terminal: receiptProjection,
+  execute_command: receiptProjection,
+  tool_describe: {
+    args: ["tool", "name", "description"],
+    results: ["ok", "status", "summary", "message", "name", "description"],
+  },
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -44,6 +236,90 @@ function parseJson(value: unknown): JsonValue | undefined {
 
 function jsonRecord(value: unknown): JsonRecord {
   return isRecord(value) ? value : {}
+}
+
+function normalizedKey(key: string) {
+  return key.replace(/[^a-z0-9]/giu, "").toLowerCase()
+}
+
+function isPrivateToolKey(key: string) {
+  const normalized = normalizedKey(key)
+  return (
+    privateToolKeys.has(normalized) ||
+    [
+      "credential",
+      "credentials",
+      "metadata",
+      "password",
+      "path",
+      "position",
+      "secret",
+      "sessionid",
+      "token",
+      "uri",
+      "url",
+    ].some((suffix) => normalized.endsWith(suffix))
+  )
+}
+
+function publicJsonValue(value: JsonValue, depth = 0): JsonValue | undefined {
+  if (depth > MAX_PUBLIC_DEPTH) return undefined
+  if (typeof value === "string") {
+    if (
+      value.length > MAX_PUBLIC_STRING_LENGTH ||
+      credentialValue.test(value) ||
+      privateLocationValue.test(value)
+    )
+      return undefined
+    return value
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "number")
+    return value
+  if (Array.isArray(value))
+    return value.slice(0, MAX_PUBLIC_ENTRIES).flatMap((item) => {
+      const projected = publicJsonValue(item, depth + 1)
+      return projected === undefined ? [] : [projected]
+    })
+  const result: JsonRecord = {}
+  for (const [key, item] of Object.entries(value).slice(
+    0,
+    MAX_PUBLIC_ENTRIES
+  )) {
+    if (isPrivateToolKey(key)) continue
+    const projected = publicJsonValue(item, depth + 1)
+    if (projected !== undefined) result[key] = projected
+  }
+  return result
+}
+
+function projectFields(value: unknown, fields: readonly string[]) {
+  const parsed = parseJson(value)
+  if (!isRecord(parsed)) return undefined
+  const projected: JsonRecord = {}
+  for (const field of fields) {
+    if (!(field in parsed)) continue
+    const item = publicJsonValue(parsed[field])
+    if (item !== undefined) projected[field] = item
+  }
+  return projected
+}
+
+function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
+  const projection = toolProjections[canonicalToolName(name)]
+  return projection ? (projectFields(args, projection.args) ?? {}) : {}
+}
+
+function publicToolResult(name: string, value: unknown, isError: boolean) {
+  const projection = toolProjections[canonicalToolName(name)]
+  if (!projection) return { status: isError ? "failed" : "completed" }
+  const projected = projectFields(value, projection.results)
+  if (projected && Object.keys(projected).length > 0) return projected
+  const parsed = parseJson(value)
+  if (typeof parsed === "string") {
+    const text = publicJsonValue(parsed)
+    if (typeof text === "string") return text
+  }
+  return { status: isError ? "failed" : "completed" }
 }
 
 function timestamp(value: unknown, index: number) {
@@ -111,6 +387,21 @@ function unwrapTool(name: string, args: JsonRecord) {
   return { name: selectedName, args: selectedArgs }
 }
 
+function safeArtifactToken(value: string, maxLength: number) {
+  return (
+    value.length <= maxLength &&
+    !/[\\/]/u.test(value) &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || code === 127
+    }) &&
+    value !== "." &&
+    value !== ".." &&
+    !credentialValue.test(value) &&
+    !privateLocationValue.test(value)
+  )
+}
+
 function artifactReceipt(raw: unknown) {
   const value = parseJson(raw)
   if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
@@ -124,6 +415,12 @@ function artifactReceipt(raw: unknown) {
   if (
     !id ||
     !filename ||
+    !safeArtifactToken(id, 256) ||
+    !safeArtifactToken(filename, 255) ||
+    (mimeType !== undefined &&
+      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
+        mimeType
+      )) ||
     (sizeBytes !== undefined &&
       (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
   )
@@ -191,7 +488,13 @@ export function projectHermesHistory(
       content[target.partIndex] = {
         ...part,
         ...(resultToolName ? { toolName } : {}),
-        result: artifact?.result ?? parseJson(value.content ?? value.result),
+        result:
+          artifact?.result ??
+          publicToolResult(
+            toolName,
+            value.content ?? value.result,
+            value.is_error === true
+          ),
         ...(value.is_error === true ? { isError: true } : {}),
       }
       if (artifact) content.push(artifact.part)
@@ -256,7 +559,10 @@ export function projectHermesHistory(
         if (!toolCallId || !nativeToolName) continue
         const parsedArgs = parseJson(String(fn?.arguments ?? "{}"))
         const unwrapped = unwrapTool(nativeToolName, jsonRecord(parsedArgs))
-        const args = canonicalToolArgs(unwrapped.name, unwrapped.args)
+        const args = publicToolArgs(
+          unwrapped.name,
+          canonicalToolArgs(unwrapped.name, unwrapped.args)
+        )
         const partIndex = content.length
         content.push({
           type: "tool-call",

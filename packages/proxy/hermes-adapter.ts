@@ -392,9 +392,9 @@ export class HermesServerAdapter {
   async listAllSessions(limit: number, offset: number) {
     if (offset + limit > SESSION_CATALOG_MAX_WINDOW)
       throw new HermesUnavailableError()
-    const profiles = (await this.listAgents()).agents.map(
-      ({ summary }) => summary.id
-    )
+    const profiles = (await this.listAgents()).agents
+      .filter(({ summary }) => summary.role !== "creator")
+      .map(({ summary }) => summary.id)
     const prefixLength = offset + limit
     if (!Number.isSafeInteger(prefixLength)) throw new HermesUnavailableError()
     const profilePages: Array<{

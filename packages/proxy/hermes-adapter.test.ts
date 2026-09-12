@@ -76,6 +76,48 @@ describe("Hermes server adapter", () => {
     expect(second.total).toBe(120)
   })
 
+  it("keeps the creator available to New Agent without cataloging creator Sessions", async () => {
+    const request = vi.fn(async () => ({
+      profiles: [
+        { name: "researcher", ui_meta: {}, ui_meta_revisions: {} },
+        {
+          name: "aos-creator",
+          ui_meta: { aos: { role: "creator" } },
+          ui_meta_revisions: {},
+        },
+      ],
+    }))
+    const http = vi.fn(async (path: string) => ({
+      sessions: [
+        {
+          id: "research-session",
+          profile: new URL(path, "http://native.test").searchParams.get(
+            "profile"
+          ),
+          last_active: 10,
+        },
+      ],
+      total: 1,
+    }))
+    const adapter = new HermesServerAdapter({ request, http })
+
+    const agents = await adapter.listAgents()
+    const catalog = await adapter.listAllSessions(50, 0)
+
+    expect(
+      agents.agents.find(({ summary }) => summary.id === "aos-creator")
+    ).toMatchObject({
+      summary: { role: "creator" },
+      selectable: false,
+    })
+    expect(catalog.sessions.map(({ agentId }) => agentId)).toEqual([
+      "researcher",
+    ])
+    expect(http.mock.calls.map(([path]) => path)).toEqual([
+      "/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban",
+    ])
+  })
+
   it("creates only Agent-owned Sessions and returns a stable stored identity", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "profiles.list") return { profiles: [profile()] }

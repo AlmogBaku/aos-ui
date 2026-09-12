@@ -104,8 +104,8 @@ describe("server-side Hermes history projection", () => {
             type: "tool-call",
             toolCallId: "artifact-1",
             toolName: "present_artifact",
-            args: { path: "private/report.md" },
-            argsText: '{"path":"private/report.md"}',
+            args: {},
+            argsText: "{}",
             result: {
               ok: true,
               type: "aos.artifact",
@@ -134,5 +134,163 @@ describe("server-side Hermes history projection", () => {
     ])
     expect(JSON.stringify(messages)).not.toContain("/srv/hermes")
     expect(JSON.stringify(messages)).not.toContain("native_position")
+  })
+
+  it("allowlists useful supported tool data and makes unsupported results opaque", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "search-1",
+            function: {
+              name: "web_search",
+              arguments: JSON.stringify({
+                query: "useful query",
+                filters: {
+                  language: "en",
+                  path: "/srv/hermes/private",
+                  privatePath: "workspace-relative/private.txt",
+                  provider_url: "http://127.0.0.1:9000/native",
+                  details: {
+                    language: "en",
+                    authorization: "Bearer nested-private-token",
+                    stored_session_id: "stored-session-secret",
+                  },
+                },
+                session_id: "live-session-secret",
+                credentials: { token: "secret-token" },
+              }),
+            },
+          },
+          {
+            id: "unknown-1",
+            function: {
+              name: "provider_private_tool",
+              arguments: JSON.stringify({
+                description: "native-only",
+                path: "/srv/private/input",
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "search-1",
+        tool_name: "web_search",
+        content: JSON.stringify({
+          ok: true,
+          matches: [
+            {
+              title: "Public title",
+              snippet: "Useful summary",
+              provider_url: "http://hermes.internal/result/1",
+              native_position: 17,
+              metadata: { authorization: "Bearer private-token" },
+            },
+          ],
+          credential: "private-password",
+        }),
+      },
+      {
+        role: "tool",
+        tool_call_id: "unknown-1",
+        tool_name: "provider_private_tool",
+        content: JSON.stringify({
+          answer: "native payload",
+          path: "/srv/private/output",
+          nested: { sessionId: "live-session-secret", token: "secret-token" },
+        }),
+      },
+    ])
+
+    expect(messages[0]?.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "search-1",
+        toolName: "web_search",
+        args: {
+          query: "useful query",
+          filters: { language: "en", details: { language: "en" } },
+        },
+        argsText: JSON.stringify({
+          query: "useful query",
+          filters: { language: "en", details: { language: "en" } },
+        }),
+        result: {
+          ok: true,
+          matches: [{ title: "Public title", snippet: "Useful summary" }],
+        },
+      },
+      {
+        type: "tool-call",
+        toolCallId: "unknown-1",
+        toolName: "provider_private_tool",
+        args: {},
+        argsText: "{}",
+        result: { status: "completed" },
+      },
+    ])
+    const serialized = JSON.stringify(messages)
+    for (const leak of [
+      "/srv/",
+      "hermes.internal",
+      "127.0.0.1",
+      "live-session-secret",
+      "private-token",
+      "stored-session-secret",
+      "private-password",
+      "workspace-relative",
+      "native_position",
+      "metadata",
+      "credentials",
+    ])
+      expect(serialized).not.toContain(leak)
+  })
+
+  it("does not turn path-shaped artifact identity into a public descriptor", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "artifact-unsafe",
+            function: {
+              name: "present_artifact",
+              arguments: '{"path":"/srv/private/report.md"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "artifact-unsafe",
+        tool_name: "present_artifact",
+        content: JSON.stringify({
+          ok: true,
+          type: "aos.artifact",
+          artifact: {
+            id: "/srv/private/report.md",
+            filename: "../report.md",
+            path: "/srv/private/report.md",
+          },
+        }),
+      },
+    ])
+
+    expect(messages[0]?.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "artifact-unsafe",
+        toolName: "present_artifact",
+        args: {},
+        argsText: "{}",
+        result: { ok: true },
+      },
+    ])
+    expect(JSON.stringify(messages)).not.toContain("/srv/private")
   })
 })
