@@ -3,11 +3,18 @@ type NativeRecord = Record<string, unknown>
 const MAX_ATTACHMENTS = 16
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 const MAX_FILE_BYTES = 25 * 1024 * 1024
+const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 const MAX_RECORDING_BYTES = 5 * 1024 * 1024
 const MAX_SPEECH_BYTES = 20 * 1024 * 1024
-const MAX_SPEECH_TEXT_LENGTH = 32_000
-const MAX_TRANSCRIPT_LENGTH = 1_000_000
+const MAX_SPEECH_TEXT_BYTES = 32_000
+const MAX_TRANSCRIPT_BYTES = 1_000_000
+const MAX_RPC_RESPONSE_BYTES = 64 * 1024
+const MAX_AUDIO_CONFIG_RESPONSE_BYTES = 64 * 1024
+const MAX_TRANSCRIPT_RESPONSE_BYTES = MAX_TRANSCRIPT_BYTES
+const MAX_SPEECH_RESPONSE_BYTES = Math.ceil(MAX_SPEECH_BYTES / 3) * 4 + 512
+const MAX_AUDIO_PROVIDERS = 32
+const MAX_DATA_URL_METADATA_BYTES = 512
 const SAFE_MIME =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
 const IMAGE_MIME = new Set([
@@ -20,8 +27,6 @@ const IMAGE_MIME = new Set([
 const RECORDING_MIME =
   /^(?:audio\/(?:aac|flac|m4a|mp3|mp4|mpeg|ogg|wav|wave|webm|x-m4a|x-wav)|video\/webm)(?:;[^,\r\n]+)*$/u
 const SPEECH_MIME = /^(?:audio\/(?:mpeg|ogg|wav|flac))$/u
-const BASE64 =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
 const FILE_REFERENCE = /^@file:(?:`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)$/u
 
 export type HermesContentSession = {
@@ -52,23 +57,33 @@ export interface HermesContentAuthority {
 export interface HermesContentTransport {
   request(
     method: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    maxResponseBytes: number
   ): Promise<unknown>
   /** Reads at most `maxBytes`; the native path is never returned to callers. */
   readArtifact?(
     scope: HermesContentSession,
     reference: string,
-    maxBytes: number
+    maxBytes: number,
+    maxResponseBytes: number
   ): Promise<{ bytes: Uint8Array; mimeType?: string }>
   audioConfig?(
     scope: HermesContentSession,
-    kind: "stt" | "tts"
+    kind: "stt" | "tts",
+    maxResponseBytes: number
   ): Promise<unknown>
   transcribe?(
     scope: HermesContentSession,
-    request: { data_url: string; mime_type: string }
+    request: { data_url: string; mime_type: string },
+    signal: AbortSignal | undefined,
+    maxResponseBytes: number
   ): Promise<unknown>
-  speak?(scope: HermesContentSession, text: string): Promise<unknown>
+  speak?(
+    scope: HermesContentSession,
+    text: string,
+    signal: AbortSignal | undefined,
+    maxResponseBytes: number
+  ): Promise<unknown>
 }
 
 export type HermesContentAttachment =
@@ -78,6 +93,14 @@ export type HermesContentAttachment =
 export type HermesPublicAttachment =
   | { type: "image"; dataUrl: string; filename?: string }
   | { type: "file"; filename?: string; mimeType: string }
+
+type PreparedAttachment = {
+  type: "image" | "file"
+  dataUrl: string
+  mimeType: string
+  filename?: string
+  bytes: number
+}
 
 export class HermesContentScopeError extends Error {
   constructor() {
@@ -93,6 +116,14 @@ export class HermesContentUnavailableError extends Error {
   }
 }
 
+/** Server-only retry handle; it intentionally exposes no native identifiers. */
+export class HermesContentCleanupRequiredError extends HermesContentUnavailableError {
+  constructor(readonly retry: () => Promise<void>) {
+    super()
+    this.name = "HermesContentCleanupRequiredError"
+  }
+}
+
 function isRecord(value: unknown): value is NativeRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -101,10 +132,23 @@ function hasOnlyKeys(value: NativeRecord, allowed: readonly string[]) {
   return Object.keys(value).every((key) => allowed.includes(key))
 }
 
+function utf8BytesAtMost(value: string, maxBytes: number) {
+  if (value.length === 0 || value.length > maxBytes) return undefined
+  let bytes = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const point = value.codePointAt(index)!
+    if (point > 0xffff) index += 1
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4
+    if (bytes > maxBytes) return undefined
+  }
+  return bytes
+}
+
 function boundedText(value: unknown, max: number) {
-  return typeof value === "string" && value.trim() && value.length <= max
-    ? value.trim()
-    : undefined
+  if (typeof value !== "string" || value.length === 0 || value.length > max)
+    return undefined
+  const text = value.trim()
+  return text && utf8BytesAtMost(text, max) !== undefined ? text : undefined
 }
 
 function safeFilename(value: unknown) {
@@ -120,7 +164,7 @@ function safeArtifactId(value: unknown) {
 }
 
 function safeMimeType(value: unknown) {
-  return typeof value === "string" && value.length > 0 && value.length <= 256
+  return typeof value === "string" && utf8BytesAtMost(value, 256) !== undefined
     ? SAFE_MIME.test(value)
       ? value
       : undefined
@@ -132,29 +176,49 @@ function decodedLength(encoded: string) {
   return (encoded.length / 4) * 3 - padding
 }
 
+function validBase64(encoded: string) {
+  if (encoded.length === 0 || encoded.length % 4 !== 0) return false
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
+  for (let index = 0; index < encoded.length - padding; index += 1) {
+    const code = encoded.charCodeAt(index)
+    if (!(
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b ||
+      code === 0x2f
+    ))
+      return false
+  }
+  return true
+}
+
 function parseDataUrl(value: unknown, maxBytes: number) {
-  if (typeof value !== "string" || value.length === 0) return undefined
+  const maxEncoded = Math.ceil(maxBytes / 3) * 4
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maxEncoded + MAX_DATA_URL_METADATA_BYTES
+  )
+    return undefined
   const separator = value.indexOf(";base64,")
   if (!value.startsWith("data:") || separator <= 5) return undefined
   const mimeType = value.slice(5, separator)
   const encoded = value.slice(separator + 8)
-  const maxEncoded = Math.ceil(maxBytes / 3) * 4
   if (
     !safeMimeType(mimeType) ||
     encoded.length === 0 ||
     encoded.length > maxEncoded ||
     encoded.length % 4 !== 0 ||
-    !BASE64.test(encoded) ||
-    decodedLength(encoded) > maxBytes
+    decodedLength(encoded) > maxBytes ||
+    !validBase64(encoded)
   )
     return undefined
-  return { dataUrl: value, mimeType, encoded }
+  return { dataUrl: value, mimeType, bytes: decodedLength(encoded) }
 }
 
 function privateNativePath(value: unknown) {
-  return typeof value === "string" && value.length > 0 && value.length <= 4_096
-    ? value
-    : undefined
+  return boundedText(value, 4_096)
 }
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -169,8 +233,8 @@ function decodeBase64(encoded: string, maxBytes: number) {
     encoded.length === 0 ||
     encoded.length > Math.ceil(maxBytes / 3) * 4 ||
     encoded.length % 4 !== 0 ||
-    !BASE64.test(encoded) ||
-    decodedLength(encoded) > maxBytes
+    decodedLength(encoded) > maxBytes ||
+    !validBase64(encoded)
   )
     return undefined
   try {
@@ -181,7 +245,16 @@ function decodeBase64(encoded: string, maxBytes: number) {
   }
 }
 
-function audioReadiness(value: unknown, kind: "stt" | "tts") {
+type AudioReadiness = {
+  status: "ready" | "unverified" | "unavailable"
+  reason?: string
+}
+
+function audioUnavailable(reason: string): AudioReadiness {
+  return { status: "unavailable", reason }
+}
+
+function audioReadiness(value: unknown, kind: "stt" | "tts"): AudioReadiness {
   if (
     !isRecord(value) ||
     value.name !== kind ||
@@ -192,11 +265,13 @@ function audioReadiness(value: unknown, kind: "stt" | "tts") {
       typeof value.active_provider === "string"
     )
   )
-    return "unavailable" as const
+    return audioUnavailable("native-audio-config-invalid")
+  if (value.providers.length > MAX_AUDIO_PROVIDERS)
+    return audioUnavailable("native-audio-config-invalid")
   const providers: Array<{
     name: string
     active: boolean
-    readiness: "ready" | "unverified" | "unavailable"
+    readiness: AudioReadiness
     edge: boolean
   }> = []
   for (const row of value.providers) {
@@ -205,15 +280,17 @@ function audioReadiness(value: unknown, kind: "stt" | "tts") {
       !boundedText(row.name, 256) ||
       typeof row.is_active !== "boolean"
     )
-      return "unavailable" as const
-    const readiness =
+      return audioUnavailable("native-audio-config-invalid")
+    const readiness: AudioReadiness =
       row.status === "ready"
-        ? "ready"
-        : row.status === "needs_keys" ||
-            row.status === "needs_auth" ||
-            row.status === "needs_setup"
-          ? "unverified"
-          : "unavailable"
+        ? { status: "ready" }
+        : row.status === "needs_keys"
+          ? { status: "unverified", reason: "native-needs-keys" }
+          : row.status === "needs_auth"
+            ? { status: "unverified", reason: "native-needs-auth" }
+            : row.status === "needs_setup"
+              ? { status: "unverified", reason: "native-needs-setup" }
+              : audioUnavailable("native-provider-unavailable")
     providers.push({
       name: String(row.name),
       active: row.is_active,
@@ -225,12 +302,18 @@ function audioReadiness(value: unknown, kind: "stt" | "tts") {
     const provider = providers.find(
       ({ name }) => name === value.active_provider
     )
-    return provider?.active ? provider.readiness : "unavailable"
+    return provider?.active
+      ? provider.readiness
+      : audioUnavailable("native-active-provider-unavailable")
   }
-  if (providers.some(({ active }) => active)) return "unavailable"
+  if (providers.some(({ active }) => active))
+    return audioUnavailable("native-active-provider-unavailable")
   if (kind === "tts")
-    return providers.find(({ edge }) => edge)?.readiness ?? "unavailable"
-  return "unverified" as const
+    return (
+      providers.find(({ edge }) => edge)?.readiness ??
+      audioUnavailable("native-speech-provider-unavailable")
+    )
+  return { status: "unverified", reason: "native-auto-selection" }
 }
 
 export function createHermesContentOperations(input: {
@@ -265,13 +348,78 @@ export function createHermesContentOperations(input: {
   }
   const nativeRequest = async (
     method: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    maxResponseBytes = MAX_RPC_RESPONSE_BYTES
   ) => {
     try {
-      return await input.transport.request(method, params)
+      return await input.transport.request(method, params, maxResponseBytes)
     } catch {
       throw new HermesContentUnavailableError()
     }
+  }
+  const pendingCleanups = new Map<string, Map<string, () => Promise<void>>>()
+  const pendingCleanup = (agentId: string, sessionId: string) =>
+    pendingCleanups.get(agentId)?.get(sessionId)
+  const rememberCleanup = (
+    agentId: string,
+    sessionId: string,
+    cleanup: () => Promise<void>
+  ) => {
+    const sessions = pendingCleanups.get(agentId) ?? new Map()
+    sessions.set(sessionId, cleanup)
+    pendingCleanups.set(agentId, sessions)
+  }
+  const clearCleanup = (agentId: string, sessionId: string) => {
+    const sessions = pendingCleanups.get(agentId)
+    if (!sessions) return
+    sessions.delete(sessionId)
+    if (sessions.size === 0) pendingCleanups.delete(agentId)
+  }
+  const prepareAttachments = (attachments: unknown): PreparedAttachment[] => {
+    if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS)
+      throw new HermesContentUnavailableError()
+    const prepared: PreparedAttachment[] = []
+    let totalBytes = 0
+    for (const attachment of attachments) {
+      if (!isRecord(attachment) || attachment.type === undefined)
+        throw new HermesContentUnavailableError()
+      const type = attachment.type === "image" ? "image" : "file"
+      if (
+        (type !== attachment.type && attachment.type !== "file") ||
+        !hasOnlyKeys(
+          attachment,
+          type === "image"
+            ? ["type", "dataUrl", "filename"]
+            : ["type", "dataUrl", "filename", "mimeType"]
+        )
+      )
+        throw new HermesContentUnavailableError()
+      const parsed = parseDataUrl(
+        attachment.dataUrl,
+        type === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES
+      )
+      const filename = safeFilename(attachment.filename)
+      if (
+        !parsed ||
+        (attachment.filename !== undefined && !filename) ||
+        (type === "image" && !IMAGE_MIME.has(parsed.mimeType)) ||
+        (type === "file" &&
+          attachment.mimeType !== undefined &&
+          attachment.mimeType !== parsed.mimeType)
+      )
+        throw new HermesContentUnavailableError()
+      totalBytes += parsed.bytes
+      if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES)
+        throw new HermesContentUnavailableError()
+      prepared.push({
+        type,
+        dataUrl: parsed.dataUrl,
+        mimeType: parsed.mimeType,
+        ...(filename ? { filename } : {}),
+        bytes: parsed.bytes,
+      })
+    }
+    return prepared
   }
 
   return {
@@ -281,10 +429,22 @@ export function createHermesContentOperations(input: {
           status: "available" as const,
           scope: "attached-session" as const,
           inputs: ["image", "file"] as const,
+          imageMimeTypes: [...IMAGE_MIME],
+          fileMimeTypes: "valid-type/subtype" as const,
+          maxMimeTypeBytes: 256,
+          maxFilenameBytes: 255,
+          maxCount: MAX_ATTACHMENTS,
+          maxImageBytes: MAX_IMAGE_BYTES,
+          maxFileBytes: MAX_FILE_BYTES,
+          maxTotalBytes: MAX_ATTACHMENT_TOTAL_BYTES,
         },
         artifacts:
           input.authority.requireArtifact && input.transport.readArtifact
-            ? { status: "available" as const, scope: "session" as const }
+            ? {
+                status: "available" as const,
+                scope: "session" as const,
+                maxBytes: MAX_ARTIFACT_BYTES,
+              }
             : {
                 status: "unavailable" as const,
                 reason: "artifact-reader-unavailable",
@@ -294,6 +454,24 @@ export function createHermesContentOperations(input: {
             ? {
                 status: "available" as const,
                 scope: "attached-session" as const,
+                acceptedMimeTypes: [
+                  "audio/aac",
+                  "audio/flac",
+                  "audio/m4a",
+                  "audio/mp3",
+                  "audio/mp4",
+                  "audio/mpeg",
+                  "audio/ogg",
+                  "audio/wav",
+                  "audio/wave",
+                  "audio/webm",
+                  "audio/x-m4a",
+                  "audio/x-wav",
+                  "video/webm",
+                ] as const,
+                allowsMimeParameters: true,
+                maxRecordingBytes: MAX_RECORDING_BYTES,
+                maxTranscriptBytes: MAX_TRANSCRIPT_BYTES,
               }
             : {
                 status: "unavailable" as const,
@@ -304,6 +482,14 @@ export function createHermesContentOperations(input: {
             ? {
                 status: "available" as const,
                 scope: "attached-session" as const,
+                acceptedMimeTypes: [
+                  "audio/mpeg",
+                  "audio/ogg",
+                  "audio/wav",
+                  "audio/flac",
+                ] as const,
+                maxTextBytes: MAX_SPEECH_TEXT_BYTES,
+                maxAudioBytes: MAX_SPEECH_BYTES,
               }
             : {
                 status: "unavailable" as const,
@@ -316,9 +502,11 @@ export function createHermesContentOperations(input: {
       sessionId: string,
       attachments: readonly HermesContentAttachment[]
     ) {
-      if (attachments.length > MAX_ATTACHMENTS)
-        throw new HermesContentUnavailableError()
+      const prepared = prepareAttachments(attachments)
       const scope = await requireScope(agentId, sessionId)
+      const queuedCleanup = pendingCleanup(agentId, sessionId)
+      if (queuedCleanup)
+        throw new HermesContentCleanupRequiredError(queuedCleanup)
       const images: string[] = []
       const references: string[] = []
       const publicAttachments: HermesPublicAttachment[] = []
@@ -331,37 +519,19 @@ export function createHermesContentOperations(input: {
             })
           )
         )
-        if (results.some((result) => result.status === "rejected"))
+        if (results.some((result) => result.status === "rejected")) {
+          rememberCleanup(agentId, sessionId, cleanup)
           throw new HermesContentUnavailableError()
+        }
+        clearCleanup(agentId, sessionId)
       }
       try {
-        for (const attachment of attachments) {
-          if (!isRecord(attachment) || attachment.type === undefined)
-            throw new HermesContentUnavailableError()
-          const isImage = attachment.type === "image"
-          if (
-            (!isImage && attachment.type !== "file") ||
-            !hasOnlyKeys(
-              attachment,
-              isImage
-                ? ["type", "dataUrl", "filename"]
-                : ["type", "dataUrl", "filename", "mimeType"]
-            )
-          )
-            throw new HermesContentUnavailableError()
-          const parsed = parseDataUrl(
-            attachment.dataUrl,
-            isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES
-          )
-          if (!parsed) throw new HermesContentUnavailableError()
-          const filename = safeFilename(attachment.filename)
-          if (isImage) {
-            if (!IMAGE_MIME.has(parsed.mimeType))
-              throw new HermesContentUnavailableError()
+        for (const attachment of prepared) {
+          if (attachment.type === "image") {
             const result = await nativeRequest("image.attach_bytes", {
               session_id: scope.liveSessionId,
-              content_base64: parsed.dataUrl,
-              filename: filename ?? "image.png",
+              content_base64: attachment.dataUrl,
+              filename: attachment.filename ?? "image.png",
             })
             if (
               !isRecord(result) ||
@@ -372,20 +542,15 @@ export function createHermesContentOperations(input: {
             images.push(String(result.path))
             publicAttachments.push({
               type: "image",
-              dataUrl: parsed.dataUrl,
-              ...(filename ? { filename } : {}),
+              dataUrl: attachment.dataUrl,
+              ...(attachment.filename ? { filename: attachment.filename } : {}),
             })
             continue
           }
-          if (
-            attachment.mimeType !== undefined &&
-            attachment.mimeType !== parsed.mimeType
-          )
-            throw new HermesContentUnavailableError()
           const result = await nativeRequest("file.attach", {
             session_id: scope.liveSessionId,
-            data_url: parsed.dataUrl,
-            name: filename ?? "attachment",
+            data_url: attachment.dataUrl,
+            name: attachment.filename ?? "attachment",
           })
           if (
             !isRecord(result) ||
@@ -397,13 +562,18 @@ export function createHermesContentOperations(input: {
           references.push(result.ref_text)
           publicAttachments.push({
             type: "file",
-            mimeType: parsed.mimeType,
-            ...(filename ? { filename } : {}),
+            mimeType: attachment.mimeType,
+            ...(attachment.filename ? { filename: attachment.filename } : {}),
           })
         }
       } catch (error) {
-        if (images.length) await cleanup().catch(() => undefined)
-        throw error instanceof HermesContentScopeError
+        if (images.length)
+          try {
+            await cleanup()
+          } catch {
+            throw new HermesContentCleanupRequiredError(cleanup)
+          }
+        throw error instanceof HermesContentCleanupRequiredError
           ? error
           : new HermesContentUnavailableError()
       }
@@ -439,6 +609,7 @@ export function createHermesContentOperations(input: {
         result = await input.transport.readArtifact(
           scope,
           reference,
+          MAX_ARTIFACT_BYTES,
           MAX_ARTIFACT_BYTES
         )
       } catch {
@@ -463,17 +634,25 @@ export function createHermesContentOperations(input: {
       const scope = await requireScope(agentId, sessionId)
       if (!input.transport.audioConfig)
         return {
-          transcription: "unavailable" as const,
-          speech: "unavailable" as const,
+          transcription: audioUnavailable("native-audio-config-unavailable"),
+          speech: audioUnavailable("native-audio-config-unavailable"),
         }
       const read = async (kind: "stt" | "tts") => {
+        if (kind === "stt" && !input.transport.transcribe)
+          return audioUnavailable("native-transcription-unavailable")
+        if (kind === "tts" && !input.transport.speak)
+          return audioUnavailable("native-speech-unavailable")
         try {
           return audioReadiness(
-            await input.transport.audioConfig!(scope, kind),
+            await input.transport.audioConfig!(
+              scope,
+              kind,
+              MAX_AUDIO_CONFIG_RESPONSE_BYTES
+            ),
             kind
           )
         } catch {
-          return "unavailable" as const
+          return audioUnavailable("native-audio-config-unavailable")
         }
       }
       const [transcription, speech] = await Promise.all([
@@ -486,9 +665,12 @@ export function createHermesContentOperations(input: {
       agentId: string,
       sessionId: string,
       bytes: Uint8Array,
-      mimeType: string
+      mimeType: string,
+      signal?: AbortSignal
     ) {
+      signal?.throwIfAborted()
       const scope = await requireScope(agentId, sessionId)
+      signal?.throwIfAborted()
       if (
         !input.transport.transcribe ||
         !(bytes instanceof Uint8Array) ||
@@ -499,32 +681,54 @@ export function createHermesContentOperations(input: {
         throw new HermesContentUnavailableError()
       let result: unknown
       try {
-        result = await input.transport.transcribe(scope, {
-          data_url: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
-          mime_type: mimeType,
-        })
+        result = await input.transport.transcribe(
+          scope,
+          {
+            data_url: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
+            mime_type: mimeType,
+          },
+          signal,
+          MAX_TRANSCRIPT_RESPONSE_BYTES
+        )
       } catch {
+        signal?.throwIfAborted()
         throw new HermesContentUnavailableError()
       }
+      signal?.throwIfAborted()
       if (
         !isRecord(result) ||
         result.ok !== true ||
         typeof result.transcript !== "string" ||
-        result.transcript.length > MAX_TRANSCRIPT_LENGTH
+        utf8BytesAtMost(result.transcript, MAX_TRANSCRIPT_BYTES) === undefined
       )
         throw new HermesContentUnavailableError()
       return result.transcript
     },
-    async speak(agentId: string, sessionId: string, text: string) {
+    async speak(
+      agentId: string,
+      sessionId: string,
+      text: string,
+      signal?: AbortSignal
+    ) {
+      signal?.throwIfAborted()
       const scope = await requireScope(agentId, sessionId)
-      if (!input.transport.speak || !boundedText(text, MAX_SPEECH_TEXT_LENGTH))
+      signal?.throwIfAborted()
+      const safeText = boundedText(text, MAX_SPEECH_TEXT_BYTES)
+      if (!input.transport.speak || !safeText)
         throw new HermesContentUnavailableError()
       let result: unknown
       try {
-        result = await input.transport.speak(scope, text)
+        result = await input.transport.speak(
+          scope,
+          safeText,
+          signal,
+          MAX_SPEECH_RESPONSE_BYTES
+        )
       } catch {
+        signal?.throwIfAborted()
         throw new HermesContentUnavailableError()
       }
+      signal?.throwIfAborted()
       if (
         !isRecord(result) ||
         result.ok !== true ||
@@ -534,7 +738,10 @@ export function createHermesContentOperations(input: {
       )
         throw new HermesContentUnavailableError()
       const prefix = `data:${result.mime_type};base64,`
-      if (!result.data_url.startsWith(prefix))
+      if (
+        result.data_url.length > prefix.length + MAX_SPEECH_RESPONSE_BYTES ||
+        !result.data_url.startsWith(prefix)
+      )
         throw new HermesContentUnavailableError()
       const bytes = decodeBase64(
         result.data_url.slice(prefix.length),

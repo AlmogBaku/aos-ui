@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  HermesContentCleanupRequiredError,
   HermesContentScopeError,
   HermesContentUnavailableError,
   createHermesContentOperations,
@@ -129,16 +130,26 @@ describe("Hermes content operations", () => {
     ])
     expect(staged.appendTo("Inspect")).toBe("Inspect\n@file:notes.txt")
     expect(JSON.stringify(staged.public)).not.toContain("/srv/private")
-    expect(h.request).toHaveBeenNthCalledWith(1, "image.attach_bytes", {
-      session_id: "live-private-1",
-      content_base64: png,
-      filename: "image.png",
-    })
-    expect(h.request).toHaveBeenNthCalledWith(2, "file.attach", {
-      session_id: "live-private-1",
-      data_url: text,
-      name: "notes.txt",
-    })
+    expect(h.request).toHaveBeenNthCalledWith(
+      1,
+      "image.attach_bytes",
+      {
+        session_id: "live-private-1",
+        content_base64: png,
+        filename: "image.png",
+      },
+      65_536
+    )
+    expect(h.request).toHaveBeenNthCalledWith(
+      2,
+      "file.attach",
+      {
+        session_id: "live-private-1",
+        data_url: text,
+        name: "notes.txt",
+      },
+      65_536
+    )
   })
 
   it("detaches already-staged native images when a later attachment is rejected", async () => {
@@ -157,9 +168,119 @@ describe("Hermes content operations", () => {
         { type: "file", dataUrl: text, mimeType: "text/plain" },
       ])
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
-    expect(h.request).toHaveBeenLastCalledWith("image.detach", {
-      session_id: "live-private-1",
-      path: "/private/a.png",
+    expect(h.request).toHaveBeenLastCalledWith(
+      "image.detach",
+      {
+        session_id: "live-private-1",
+        path: "/private/a.png",
+      },
+      65_536
+    )
+  })
+
+  it("retains only a retryable cleanup handle when image rollback fails", async () => {
+    let detachFails = true
+    const h = harness({
+      request(method) {
+        if (method === "image.attach_bytes")
+          return { attached: true, path: "/private/a.png" }
+        if (method === "file.attach") return { attached: false }
+        if (method === "image.detach") {
+          if (detachFails) throw new Error("native /private/a.png failure body")
+          return { detached: true }
+        }
+      },
+    })
+    let failure: unknown
+    try {
+      await h.operations.stage("research", "session-public-1", [
+        { type: "image", dataUrl: png },
+        { type: "file", dataUrl: text, mimeType: "text/plain" },
+      ])
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(HermesContentCleanupRequiredError)
+    expect(JSON.stringify(failure)).not.toContain("/private")
+    await expect(
+      h.operations.stage("research", "session-public-1", [])
+    ).rejects.toBeInstanceOf(HermesContentCleanupRequiredError)
+    detachFails = false
+    await (failure as HermesContentCleanupRequiredError).retry()
+    await expect(
+      h.operations.stage("research", "session-public-1", [])
+    ).resolves.toMatchObject({ public: [] })
+  })
+
+  it("reports exact per-operation capabilities and unavailable transport reasons", async () => {
+    const h = harness()
+    expect(h.operations.capabilities()).toMatchObject({
+      attachments: {
+        status: "available",
+        scope: "attached-session",
+        maxCount: 16,
+        maxImageBytes: 26_214_400,
+        maxFileBytes: 26_214_400,
+        maxTotalBytes: 26_214_400,
+        maxMimeTypeBytes: 256,
+        maxFilenameBytes: 255,
+        imageMimeTypes: [
+          "image/png",
+          "image/jpeg",
+          "image/gif",
+          "image/webp",
+          "image/bmp",
+        ],
+      },
+      artifacts: {
+        status: "available",
+        scope: "session",
+        maxBytes: 26_214_400,
+      },
+      transcription: {
+        maxRecordingBytes: 5_242_880,
+        maxTranscriptBytes: 1_000_000,
+        acceptedMimeTypes: [
+          "audio/aac",
+          "audio/flac",
+          "audio/m4a",
+          "audio/mp3",
+          "audio/mp4",
+          "audio/mpeg",
+          "audio/ogg",
+          "audio/wav",
+          "audio/wave",
+          "audio/webm",
+          "audio/x-m4a",
+          "audio/x-wav",
+          "video/webm",
+        ],
+        allowsMimeParameters: true,
+      },
+      speech: { maxTextBytes: 32_000, maxAudioBytes: 20_971_520 },
+    })
+    const operations = createHermesContentOperations({
+      authority: { requireSession: h.requireSession } as never,
+      transport: { request: h.request } as never,
+    })
+    expect(operations.capabilities()).toMatchObject({
+      transcription: {
+        status: "unavailable",
+        reason: "native-transcription-unavailable",
+      },
+      speech: { status: "unavailable", reason: "native-speech-unavailable" },
+    })
+    await expect(
+      operations.audio("research", "session-public-1")
+    ).resolves.toEqual({
+      transcription: {
+        status: "unavailable",
+        reason: "native-audio-config-unavailable",
+      },
+      speech: {
+        status: "unavailable",
+        reason: "native-audio-config-unavailable",
+      },
     })
   })
 
@@ -174,6 +295,35 @@ describe("Hermes content operations", () => {
         dataUrl: text,
         mimeType: "text/plain",
       })),
+    ])
+      await expect(
+        h.operations.stage("research", "session-public-1", attachments)
+      ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    expect(h.request).not.toHaveBeenCalled()
+  })
+
+  it("validates the complete attachment batch and aggregate budget before staging any file", async () => {
+    const h = harness()
+    const aggregate = `data:application/octet-stream;base64,${"A".repeat(
+      18_175_320
+    )}`
+    for (const attachments of [
+      [
+        { type: "file" as const, dataUrl: text, mimeType: "text/plain" },
+        { type: "image" as const, dataUrl: "data:image/png;base64,%%%" },
+      ],
+      [
+        {
+          type: "file" as const,
+          dataUrl: aggregate,
+          mimeType: "application/octet-stream",
+        },
+        {
+          type: "file" as const,
+          dataUrl: aggregate,
+          mimeType: "application/octet-stream",
+        },
+      ],
     ])
       await expect(
         h.operations.stage("research", "session-public-1", attachments)
@@ -233,6 +383,7 @@ describe("Hermes content operations", () => {
     expect(h.readArtifact).toHaveBeenCalledWith(
       scope,
       "reports/private.pdf",
+      26_214_400,
       26_214_400
     )
   })
@@ -293,8 +444,37 @@ describe("Hermes content operations", () => {
     await expect(
       h.operations.audio("research", "session-public-1")
     ).resolves.toEqual({
-      transcription: "unverified",
-      speech: "ready",
+      transcription: { status: "unverified", reason: "native-needs-setup" },
+      speech: { status: "ready" },
+    })
+    expect(h.audioConfig).toHaveBeenCalledWith(scope, "stt", 65_536)
+    expect(h.audioConfig).toHaveBeenCalledWith(scope, "tts", 65_536)
+  })
+
+  it("bounds native audio provider rows before adapting readiness", async () => {
+    const h = harness({
+      audioConfig: (kind) => ({
+        name: kind,
+        has_category: true,
+        active_provider: null,
+        providers: Array.from({ length: 33 }, () => ({
+          name: "native",
+          is_active: false,
+          status: "ready",
+        })),
+      }),
+    })
+    await expect(
+      h.operations.audio("research", "session-public-1")
+    ).resolves.toEqual({
+      transcription: {
+        status: "unavailable",
+        reason: "native-audio-config-invalid",
+      },
+      speech: {
+        status: "unavailable",
+        reason: "native-audio-config-invalid",
+      },
     })
   })
 
@@ -310,8 +490,14 @@ describe("Hermes content operations", () => {
     await expect(
       h.operations.audio("research", "session-public-1")
     ).resolves.toEqual({
-      transcription: "unavailable",
-      speech: "unavailable",
+      transcription: {
+        status: "unavailable",
+        reason: "native-audio-config-invalid",
+      },
+      speech: {
+        status: "unavailable",
+        reason: "native-audio-config-invalid",
+      },
     })
   })
 
@@ -325,10 +511,15 @@ describe("Hermes content operations", () => {
         "audio/webm;codecs=opus"
       )
     ).resolves.toBe("transcript")
-    expect(h.transcribe).toHaveBeenCalledWith(scope, {
-      data_url: "data:audio/webm;codecs=opus;base64,AQID",
-      mime_type: "audio/webm;codecs=opus",
-    })
+    expect(h.transcribe).toHaveBeenCalledWith(
+      scope,
+      {
+        data_url: "data:audio/webm;codecs=opus;base64,AQID",
+        mime_type: "audio/webm;codecs=opus",
+      },
+      undefined,
+      1_000_000
+    )
   })
 
   it("rejects unsupported and oversized recordings before forwarding", async () => {
@@ -352,6 +543,109 @@ describe("Hermes content operations", () => {
     expect(h.transcribe).not.toHaveBeenCalled()
   })
 
+  it("uses UTF-8 byte limits rather than character counts", async () => {
+    const h = harness()
+    await expect(
+      h.operations.stage("research", "session-public-1", [
+        { type: "image", dataUrl: png, filename: "🙂".repeat(100) },
+      ])
+    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    await expect(
+      h.operations.speak("research", "session-public-1", "🙂".repeat(8_001))
+    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    expect(h.request).not.toHaveBeenCalled()
+    expect(h.speak).not.toHaveBeenCalled()
+  })
+
+  it("rejects an oversized multibyte native transcript without exposing its body", async () => {
+    const h = harness({
+      transcribe: { ok: true, transcript: "🙂".repeat(250_001) },
+    })
+    await expect(
+      h.operations.transcribe(
+        "research",
+        "session-public-1",
+        Uint8Array.of(1),
+        "audio/webm"
+      )
+    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+  })
+
+  it("rejects pre-aborted audio without authority or transport I/O", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const h = harness()
+    await expect(
+      h.operations.transcribe(
+        "research",
+        "session-public-1",
+        Uint8Array.of(1),
+        "audio/webm",
+        controller.signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    await expect(
+      h.operations.speak(
+        "research",
+        "session-public-1",
+        "hello",
+        controller.signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(h.requireSession).not.toHaveBeenCalled()
+    expect(h.transcribe).not.toHaveBeenCalled()
+    expect(h.speak).not.toHaveBeenCalled()
+  })
+
+  it("ignores a late transcription response after cancellation", async () => {
+    let resolve: ((value: unknown) => void) | undefined
+    const h = harness()
+    h.transcribe.mockImplementationOnce(
+      async () =>
+        new Promise<unknown>((next) => {
+          resolve = next
+        })
+    )
+    const controller = new AbortController()
+    const pending = h.operations.transcribe(
+      "research",
+      "session-public-1",
+      Uint8Array.of(1),
+      "audio/webm",
+      controller.signal
+    )
+    await vi.waitFor(() => expect(h.transcribe).toHaveBeenCalledOnce())
+    controller.abort()
+    resolve?.({ ok: true, transcript: "late provider response" })
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+  })
+
+  it("ignores a late speech response after cancellation", async () => {
+    let resolve: ((value: unknown) => void) | undefined
+    const h = harness()
+    h.speak.mockImplementationOnce(
+      async () =>
+        new Promise<unknown>((next) => {
+          resolve = next
+        })
+    )
+    const controller = new AbortController()
+    const pending = h.operations.speak(
+      "research",
+      "session-public-1",
+      "hello",
+      controller.signal
+    )
+    await vi.waitFor(() => expect(h.speak).toHaveBeenCalledOnce())
+    controller.abort()
+    resolve?.({
+      ok: true,
+      data_url: "data:audio/mpeg;base64,AQID",
+      mime_type: "audio/mpeg",
+    })
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+  })
+
   it("accepts only bounded valid native speech and removes provider metadata", async () => {
     const h = harness()
     await expect(
@@ -368,5 +662,11 @@ describe("Hermes content operations", () => {
         await h.operations.speak("research", "session-public-1", "again")
       )
     ).not.toContain("private")
+    expect(h.speak).toHaveBeenLastCalledWith(
+      scope,
+      "again",
+      undefined,
+      27_962_540
+    )
   })
 })
