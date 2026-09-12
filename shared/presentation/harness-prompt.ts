@@ -58,7 +58,8 @@ export function buildAosUiHarnessPrompt(
   if (capabilities.artifactPublicationTool) {
     const artifactTool = assertToolName(capabilities.artifactPublicationTool)
     sections.push(
-      `- Artifact handoff: When the user's request concerns a file, call \`${artifactTool}\` on each existing worktree file that answers the request before the final response. This includes files you locate and files you create. If you change a published file, call the tool again. Leave unrelated working files unpublished.`
+      `- Artifact handoff: When you intend to show the user a file or file-based artifact, call \`${artifactTool}\` with only the final file or files selected for presentation before the final response. Resolve candidate uncertainty before calling the tool. If you revise a published file, publish the final version again.`,
+      "- Temporary artifacts: Create files used only for artifact presentation in a temporary subdirectory of the current Session workdir."
     )
   }
 
