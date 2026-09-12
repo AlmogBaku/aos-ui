@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,5 +75,40 @@ func TestOperatorAllowsWebSocketUpstreamOnlyForOpenClaw(t *testing.T) {
 	}
 	if _, err := server.NewOperator(server.OperatorConfig{Runtime: "opencode", Upstream: "wss://example.test", Directory: "/work"}); err == nil {
 		t.Fatal("OpenCode unexpectedly accepted a WebSocket-only upstream")
+	}
+}
+
+func TestOperatorServesTheLogoFromItsDeclaredBuild(t *testing.T) {
+	dist := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dist, "logo-adaptive.svg"), []byte("<svg/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := server.NewOperator(server.OperatorConfig{Runtime: "hermes", Upstream: "http://127.0.0.1:9119", Dist: dist})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://operator.example/logo-adaptive.svg", nil))
+	if w.Code != http.StatusOK || w.Body.String() != "<svg/>" {
+		t.Fatalf("logo response = %d %q", w.Code, w.Body.String())
+	}
+}
+
+func TestOperatorKeepsHermesLoginRedirectUnderNativePrefix(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			t.Errorf("upstream path = %q", r.URL.Path)
+		}
+		http.Redirect(w, r, "/login?next=%2F", http.StatusFound)
+	}))
+	defer upstream.Close()
+	h, err := server.NewOperator(server.OperatorConfig{Runtime: "hermes", Upstream: upstream.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://operator.example/hermes", nil))
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/hermes/login?next=%2F" {
+		t.Fatalf("redirect = %d %q", w.Code, w.Header().Get("Location"))
 	}
 }

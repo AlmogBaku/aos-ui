@@ -59,6 +59,12 @@ func NewOperator(c OperatorConfig) (http.Handler, error) {
 				p.Out.Header.Set("Origin", u.Scheme+"://"+u.Host)
 			}
 		},
+		ModifyResponse: func(response *http.Response) error {
+			if location := response.Header.Get("Location"); strings.HasPrefix(location, "/login") {
+				response.Header.Set("Location", prefix+location)
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) { failure(w, 502, "upstream-unavailable") },
 	}
 	files := staticFiles(c.Dist)
@@ -99,7 +105,7 @@ func NewOperator(c OperatorConfig) (http.Handler, error) {
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path != "/" && !strings.HasPrefix(r.URL.Path, "/assets/") {
+		if r.URL.Path != "/" && r.URL.Path != "/logo-adaptive.svg" && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			if len(strings.Split(strings.Trim(r.URL.Path, "/"), "/")) > 2 {
 				http.NotFound(w, r)
 				return
