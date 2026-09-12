@@ -104,7 +104,8 @@ describe("optional renderer loading", () => {
       </>
     )
     expect(screen.getByText("First step")).toBeInTheDocument()
-    expect(screen.getByText("Provider activity")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("tool_activity"))
+    expect(screen.getByText(/Provider activity/)).toBeVisible()
     fireEvent.click(screen.getByText("unknown_tool"))
     expect(screen.getByText(/Raw provider result/)).toBeVisible()
   })

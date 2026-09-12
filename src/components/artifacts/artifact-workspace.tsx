@@ -343,84 +343,98 @@ export function ArtifactCard({
     }
   }
 
+  const identity = (
+    <>
+      <div
+        className={
+          compact
+            ? "flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+            : "flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+        }
+      >
+        <FileIcon
+          className={compact ? "size-3.5" : "size-4"}
+          aria-hidden="true"
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p
+          className="truncate text-sm font-medium"
+          data-testid="artifact-filename"
+          dir="auto"
+        >
+          {artifact.filename}
+        </p>
+        {(artifact.mimeType || artifact.sizeBytes !== undefined) && (
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {[
+              artifact.mimeType,
+              artifact.sizeBytes === undefined
+                ? null
+                : formatSize(artifact.sizeBytes, locale),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
+      </div>
+    </>
+  )
+
   return (
     <article
       className={
         compact
           ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 border-b border-border/70 px-2 py-1.5 text-card-foreground last:border-b-0"
-          : "rounded-xl border border-border bg-card p-3 text-card-foreground"
+          : "grid w-fit max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground"
       }
     >
-      <div
-        className={
-          compact
-            ? "flex min-w-0 items-center gap-2"
-            : "flex min-w-0 items-start gap-3"
-        }
-      >
-        <div
-          className={
-            compact
-              ? "flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-              : "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
-          }
+      {compact ? (
+        <div className="flex min-w-0 items-center gap-2">{identity}</div>
+      ) : (
+        <button
+          type="button"
+          aria-label={`${labels.open}: ${artifact.filename}`}
+          className="flex min-w-0 items-center gap-2 rounded-lg text-start outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11"
+          onClick={(event) => openArtifact(artifact, event.currentTarget)}
         >
-          <FileIcon
-            className={compact ? "size-3.5" : "size-4"}
-            aria-hidden="true"
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p
-            className="truncate text-sm font-medium"
-            data-testid="artifact-filename"
-            dir="auto"
-          >
-            {artifact.filename}
-          </p>
-          {(artifact.mimeType || artifact.sizeBytes !== undefined) && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {[
-                artifact.mimeType,
-                artifact.sizeBytes === undefined
-                  ? null
-                  : formatSize(artifact.sizeBytes, locale),
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-          )}
-        </div>
-      </div>
+          {identity}
+        </button>
+      )}
       <div
         className={
           compact
             ? "col-start-2 row-start-1 flex items-center gap-0.5"
-            : "mt-3 flex flex-wrap justify-end gap-2"
+            : "col-start-2 row-start-1 flex items-center gap-1"
         }
       >
-        <Button
-          type="button"
-          variant="outline"
-          size={compact ? "icon-xs" : "default"}
-          aria-label={compact ? labels.open : undefined}
-          title={compact ? labels.open : undefined}
-          data-artifact-open-id={artifact.id}
-          onClick={(event) => openArtifact(artifact, event.currentTarget)}
-          className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
-        >
-          <ExternalLinkIcon data-icon="inline-start" />
-          {!compact && labels.open}
-        </Button>
+        {compact && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label={labels.open}
+            title={labels.open}
+            data-artifact-open-id={artifact.id}
+            onClick={(event) => openArtifact(artifact, event.currentTarget)}
+            className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
+          >
+            <ExternalLinkIcon data-icon="inline-start" />
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
-          size={compact ? "icon-xs" : "default"}
+          size={compact ? "icon-xs" : "sm"}
           aria-label={compact ? labels.download : undefined}
           title={compact ? labels.download : undefined}
           disabled={!adapter}
           onClick={() => void download()}
-          className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
+          className={
+            compact
+              ? "motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
+              : "motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+          }
         >
           <DownloadIcon data-icon="inline-start" />
           {!compact && labels.download}

@@ -74,7 +74,11 @@ function AgUiRuntimeProvider({
     () => createAgUiHttpWorkspaceTransport({ baseUrl: workspaceUrl }),
     [workspaceUrl]
   )
-  const bundle = useAgUiRuntimeBundle({ agent, workspaceTransport })
+  const bundle = useAgUiRuntimeBundle({
+    agent,
+    workspaceTransport,
+    artifactHtmlAssetOrigins,
+  })
   const artifactToolkit = useMemo(() => createAgUiArtifactToolkit(), [])
 
   return children({

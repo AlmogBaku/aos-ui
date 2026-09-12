@@ -129,15 +129,22 @@ export default defineConfig(({ mode }) => {
     environment.AOS_UI_RUNTIME_MODE ??
     DEFAULT_RUNTIME_MODE
   ).replace(/[^a-zA-Z0-9_-]/g, "-")
+  const allowedHosts = (
+    environment.AOS_UI_ALLOWED_HOSTS ??
+    environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+  )
+    ?.split(",")
+    .map((host) => host.trim())
+    .filter(Boolean)
   const hermesProxy = {
     "/auth": {
       target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-      changeOrigin: false,
+      changeOrigin: true,
       headers: { "X-Forwarded-Prefix": "/hermes" },
     },
     "/hermes": {
       target: environment.AOS_UI_HERMES_TARGET ?? "http://127.0.0.1:9119",
-      changeOrigin: false,
+      changeOrigin: true,
       ws: true,
       headers: { "X-Forwarded-Prefix": "/hermes" },
       rewrite: (pathname: string) => pathname.replace(/^\/hermes/, ""),
@@ -175,9 +182,11 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "127.0.0.1",
       port: 3000,
+      allowedHosts,
       proxy: { ...hermesProxy, ...openClawProxy },
     },
     preview: {
+      allowedHosts,
       proxy: { ...hermesProxy, ...openClawProxy },
       // Playwright starts a fresh preview for every runtime matrix. Avoid a
       // browser retaining an obsolete hashed chunk between those servers.

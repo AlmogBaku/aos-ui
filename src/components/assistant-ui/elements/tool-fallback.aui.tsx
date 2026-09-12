@@ -4,7 +4,6 @@ import { memo, useCallback, useRef, useState } from "react"
 import {
   AlertCircleIcon,
   CheckIcon,
-  ChevronDownIcon,
   LoaderIcon,
   XCircleIcon,
 } from "lucide-react"
@@ -24,6 +23,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
+import { DisclosureChevron } from "./disclosure-chevron"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -74,7 +74,7 @@ function ToolFallbackRoot({
       open={isOpen}
       onOpenChange={handleOpenChange}
       className={cn(
-        "aui-tool-fallback-root group/tool-fallback-root w-full",
+        "aui-tool-fallback-root group/tool-fallback-root w-full min-w-0",
         className
       )}
       style={
@@ -173,15 +173,9 @@ function ToolFallbackTrigger({
         {label}: <b>{toolName}</b>
       </span>
       <ToolFallbackDuration />
-      <ChevronDownIcon
+      <DisclosureChevron
         data-slot="tool-fallback-trigger-chevron"
-        className={cn(
-          "aui-tool-fallback-trigger-chevron size-4 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0"
-        )}
+        className="aui-tool-fallback-trigger-chevron ms-1"
       />
     </CollapsibleTrigger>
   )
@@ -209,7 +203,7 @@ function ToolFallbackContent({
     >
       <div
         className={cn(
-          "flex flex-col gap-2 ps-6 pt-1 pb-2 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
+          "flex min-w-0 flex-col gap-2 ps-6 pt-1 pb-2 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none",
           "group-data-open/collapsible-content:animate-in group-data-open/collapsible-content:fade-in-0 group-data-open/collapsible-content:blur-in-[2px] group-data-open/collapsible-content:slide-in-from-top-1",
           "group-data-closed/collapsible-content:animate-out group-data-closed/collapsible-content:fade-out-0 group-data-closed/collapsible-content:blur-out-[2px] group-data-closed/collapsible-content:slide-out-to-top-1",
           "group-data-open/collapsible-content:animation-duration-(--animation-duration) group-data-closed/collapsible-content:animation-duration-(--animation-duration)"
@@ -233,10 +227,10 @@ function ToolFallbackArgs({
   return (
     <div
       data-slot="tool-fallback-args"
-      className={cn("aui-tool-fallback-args", className)}
+      className={cn("aui-tool-fallback-args max-w-full min-w-0", className)}
       {...props}
     >
-      <pre className="aui-tool-fallback-args-value rounded-md bg-muted/50 p-2.5 text-xs whitespace-pre-wrap text-foreground/90">
+      <pre className="aui-tool-fallback-args-value max-w-full overflow-x-auto rounded-md bg-muted/50 p-2.5 text-xs [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/90">
         {argsText}
       </pre>
     </div>
@@ -255,13 +249,13 @@ function ToolFallbackResult({
   return (
     <div
       data-slot="tool-fallback-result"
-      className={cn("aui-tool-fallback-result", className)}
+      className={cn("aui-tool-fallback-result max-w-full min-w-0", className)}
       {...props}
     >
       <p className="aui-tool-fallback-result-header text-xs font-medium text-muted-foreground">
         Result:
       </p>
-      <pre className="aui-tool-fallback-result-content mt-1 rounded-md bg-muted/50 p-2.5 text-xs whitespace-pre-wrap text-foreground/90">
+      <pre className="aui-tool-fallback-result-content mt-1 max-w-full overflow-x-auto rounded-md bg-muted/50 p-2.5 text-xs [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/90">
         {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
       </pre>
     </div>

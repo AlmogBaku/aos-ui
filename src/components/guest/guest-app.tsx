@@ -28,7 +28,7 @@ import { threadLabels as sharedThreadLabels } from "@/components/assistant-ui/th
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { DocumentLocale } from "@/components/document-locale"
 import { ThemeProvider } from "@/components/theme-provider"
-import { RichToolRenderer, ToolUiLocaleProvider } from "@/components/tool-ui"
+import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -134,7 +134,7 @@ function GuestQuestionComposer({ fallback }: ThreadComposerOverrideProps) {
 }
 
 const threadComponents = {
-  ToolFallback: RichToolRenderer,
+  ToolFallback: AosToolPresentation,
   Composer: GuestQuestionComposer,
 }
 

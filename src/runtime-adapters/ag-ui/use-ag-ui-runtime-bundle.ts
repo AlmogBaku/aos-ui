@@ -36,6 +36,7 @@ export type UseAgUiRuntimeBundleOptions = Omit<
   agent: HttpAgent
   workspaceTransport: AgUiWorkspaceTransport
   workspace?: WorkspaceAdapter
+  artifactHtmlAssetOrigins?: readonly string[]
   activityClock?: () => Date
   activityIdFactory?: () => string
 }
@@ -43,6 +44,7 @@ export type UseAgUiRuntimeBundleOptions = Omit<
 export function useAgUiRuntimeBundle({
   workspaceTransport,
   workspace: suppliedWorkspace,
+  artifactHtmlAssetOrigins,
   activityClock,
   activityIdFactory,
   adapters,
@@ -187,7 +189,13 @@ export function useAgUiRuntimeBundle({
       }),
     [activityPublisher, bridge, suppliedWorkspace]
   )
-  const artifacts = useMemo(() => createBrowserArtifactAdapter(), [])
+  const artifacts = useMemo(
+    () =>
+      createBrowserArtifactAdapter({
+        allowedOrigins: artifactHtmlAssetOrigins,
+      }),
+    [artifactHtmlAssetOrigins]
+  )
   useEffect(() => {
     void bridge.initialize().catch((error: unknown) => {
       onError?.(error instanceof Error ? error : new Error(String(error)))

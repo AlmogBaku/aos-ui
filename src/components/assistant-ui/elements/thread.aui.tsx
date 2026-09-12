@@ -14,19 +14,13 @@ import { File } from "@/components/assistant-ui/elements/file"
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui"
 import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/assistant-ui/elements/reasoning.aui"
+import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
 import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/assistant-ui/elements/tool-group.aui"
+  isIntermediateExecutionText,
+  MessageToolExperience,
+} from "@/components/assistant-ui/elements/message-tool-experience"
+import { isAosRichTool } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import {
   ModelSelectorContent,
@@ -34,6 +28,11 @@ import {
   ModelSelectorTrigger,
 } from "@/components/assistant-ui/elements/model-selector"
 import { ComposerContext } from "@/components/assistant-ui/elements/composer-context"
+import {
+  ConversationSearch,
+  DEFAULT_CONVERSATION_SEARCH_LABELS,
+  type ConversationSearchLabels,
+} from "@/components/assistant-ui/elements/conversation-search"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -177,6 +176,9 @@ export type ThreadLabels = {
   contextTools: string
   contextMessages: string
   contextTotal: string
+  openSource: string
+  documentSource: string
+  conversationSearch?: Partial<ConversationSearchLabels> | undefined
   attachments?: Partial<AttachmentLabels> | undefined
 }
 
@@ -214,6 +216,9 @@ const DEFAULT_LABELS: ThreadLabels = {
   contextTools: "Tools",
   contextMessages: "Messages",
   contextTotal: "Total",
+  openSource: "Open source",
+  documentSource: "Source document",
+  conversationSearch: DEFAULT_CONVERSATION_SEARCH_LABELS,
   attachments: DEFAULT_ATTACHMENT_LABELS,
 }
 
@@ -326,6 +331,7 @@ const ThreadRoot: FC<{
   const aui = useAui()
   const viewportRef = useRef<HTMLDivElement>(null)
   const threadId = useAuiState((state) => state.threadListItem.id)
+  const messages = useAuiState((state) => state.thread.messages)
   const contentReady = useAuiState((state) => !state.thread.isLoading)
   useThreadReadingPosition({
     threadId,
@@ -335,7 +341,11 @@ const ThreadRoot: FC<{
 
   const handleThreadKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.key !== "Escape" || keyboardEventSafetyReason(event)) {
+      if (
+        event.defaultPrevented ||
+        event.key !== "Escape" ||
+        keyboardEventSafetyReason(event)
+      ) {
         return
       }
       if (!aui.thread.getState().isRunning) return
@@ -372,9 +382,17 @@ const ThreadRoot: FC<{
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}
       >
+        <ConversationSearch
+          messages={messages}
+          direction={direction}
+          labels={{
+            ...DEFAULT_CONVERSATION_SEARCH_LABELS,
+            ...labels.conversationSearch,
+          }}
+        />
         <div
           className={cn(
-            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-3 pt-4 @md:px-8 @md:pt-10",
+            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-3 pt-4 @md:px-8 @md:pt-6",
             isEmpty && "justify-center"
           )}
         >
@@ -390,7 +408,7 @@ const ThreadRoot: FC<{
 
           <div
             data-slot="aui_message-group"
-            className="mx-auto mb-8 flex w-full max-w-[45rem] flex-col gap-y-6 empty:hidden @md:mb-16 @md:gap-y-8"
+            className="mx-auto mb-8 flex w-full max-w-[45rem] flex-col gap-y-6 empty:hidden @md:mb-10"
           >
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
@@ -399,7 +417,7 @@ const ThreadRoot: FC<{
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col gap-2 overflow-visible bg-background pb-[max(0.5rem,env(safe-area-inset-bottom))] @md:gap-4 @md:pb-6",
+              "aui-thread-viewport-footer flex flex-col gap-2 overflow-visible bg-background pb-[max(0.5rem,env(safe-area-inset-bottom))] @md:gap-3 @md:pb-4",
               !isEmpty &&
                 "sticky bottom-0 mt-auto rounded-t-(--composer-radius)"
             )}
@@ -1045,9 +1063,22 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           models={features.model.options.map((option) => ({
             id: option.id,
             name: option.label,
+            description: option.description,
             group: option.group,
+            efforts:
+              option.efforts === true
+                ? true
+                : option.efforts?.map((effort) => ({
+                    id: effort.id,
+                    name: effort.label,
+                  })),
           }))}
           value={features.model.selectedId}
+          selection={
+            features.model.selection?.status === "error"
+              ? { ...features.model.selection, retry: features.model.retry }
+              : features.model.selection
+          }
           onValueChange={(value) => {
             void features.model?.select(value)
           }}
@@ -1056,7 +1087,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             aria-label={labels.modelSelector}
             className="max-w-36 @min-[64rem]/workspace:max-w-56"
           />
-          <ModelSelectorContent />
+          <ModelSelectorContent searchable />
         </ModelSelectorRoot>
       ) : (
         <span />
@@ -1145,11 +1176,11 @@ const MessageError: FC = () => {
 
 const AssistantMessage: FC = () => {
   const reading = useVoiceMessageReading()
+  const messageParts = useAuiState((state) => state.message.parts)
+  const labels = useContext(ThreadLabelsContext)
   const {
     AssistantIdentity,
     ToolFallback: ToolFallbackComponent = ToolFallback,
-    ToolGroup,
-    ReasoningGroup,
   } = useContext(ThreadComponentsContext)
 
   const ACTION_BAR_PT = "pt-1.5"
@@ -1168,47 +1199,47 @@ const AssistantMessage: FC = () => {
         className="px-2 leading-7 wrap-break-word text-foreground"
         dir="auto"
       >
-        <InlineReadAloud />
+        <div
+          className="contents"
+          data-searchable-message-text={reading ? "" : undefined}
+        >
+          <InlineReadAloud />
+        </div>
+        <MessageToolExperience renderTool={ToolFallbackComponent} />
         <MessagePrimitive.GroupedParts groupBy={ASSISTANT_MESSAGE_GROUPER}>
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
                 return <div data-slot="aui_chain-of-thought">{children}</div>
               case "group-tool":
-                if (ToolGroup) {
-                  return <ToolGroup group={part}>{children}</ToolGroup>
-                }
-                return (
-                  <ToolGroupRoot variant="ghost">
-                    <ToolGroupTrigger
-                      count={part.indices.length}
-                      active={part.status.type === "running"}
-                    />
-                    <ToolGroupContent>{children}</ToolGroupContent>
-                  </ToolGroupRoot>
-                )
+                return null
               case "group-reasoning": {
-                if (ReasoningGroup) {
-                  return (
-                    <ReasoningGroup group={part}>{children}</ReasoningGroup>
-                  )
+                return null
+              }
+              case "text": {
+                const partIndex = messageParts.indexOf(part)
+                if (
+                  partIndex >= 0 &&
+                  isIntermediateExecutionText(messageParts, partIndex)
+                ) {
+                  return null
                 }
-                const running = part.status.type === "running"
-                return (
-                  <ReasoningRoot streaming={running}>
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
+                return reading ? (
+                  <></>
+                ) : (
+                  <div className="contents" data-searchable-message-text>
+                    <MarkdownText />
+                  </div>
                 )
               }
-              case "text":
-                return reading ? <></> : <MarkdownText />
               case "reasoning":
-                return <Reasoning {...part} />
+                return null
               case "tool-call":
-                return part.toolUI ?? <ToolFallbackComponent {...part} />
+                return (part.toolUI ?? isAosRichTool(part)) ? (
+                  <div className="py-2">
+                    {part.toolUI ?? <ToolFallbackComponent {...part} />}
+                  </div>
+                ) : null
               case "data":
                 return part.dataRendererUI
               case "file":
@@ -1238,6 +1269,24 @@ const AssistantMessage: FC = () => {
             }
           }}
         </MessagePrimitive.GroupedParts>
+        <MessagePrimitive.Parts>
+          {({ part }) => {
+            // MessagePrimitive.Parts falls back to its default renderer for
+            // null. Return false so non-source parts are not rendered twice.
+            if (part.type !== "source") return false
+            return (
+              <div data-slot="aui_assistant-message-source" className="py-1">
+                <Source
+                  {...part}
+                  labels={{
+                    openSource: labels.openSource,
+                    documentSource: labels.documentSource,
+                  }}
+                />
+              </div>
+            )
+          }}
+        </MessagePrimitive.Parts>
         <MessageError />
       </div>
 
@@ -1341,6 +1390,7 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div
+          data-searchable-message-text
           className="aui-user-message-content peer max-w-[30rem] rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden"
           dir="auto"
         >

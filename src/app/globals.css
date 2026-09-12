@@ -13,6 +13,17 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
 
+::highlight(aos-conversation-search-match) {
+  background-color: color-mix(in oklab, var(--primary) 24%, transparent);
+}
+
+::highlight(aos-conversation-search-active) {
+  background-color: color-mix(in oklab, var(--primary) 48%, transparent);
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+  text-underline-offset: 0.14em;
+}
+
 @theme inline {
   --font-heading: var(--app-font-sans);
   --font-sans: var(--app-font-sans);
@@ -217,4 +228,9 @@ html[lang="he"] {
     min-block-size: 2.75rem;
   }
 
+  [data-slot="message-tool-experience"] button,
+  [data-slot="message-tool-experience"] [role="button"] {
+    min-inline-size: 0;
+    min-block-size: 1.5rem;
+  }
 }

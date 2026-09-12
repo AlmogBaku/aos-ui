@@ -4,6 +4,11 @@ import { lazy, Suspense, type ComponentType, type ReactNode } from "react"
 import type { z } from "zod"
 
 import {
+  presentationToolDefinitions,
+  type PresentationToolName,
+} from "../../../shared/presentation/tools"
+
+import {
   ActivityTool,
   activityPayloadSchema,
   type ActivityPayload,
@@ -193,54 +198,45 @@ function SubagentActivity(props: RegisteredRendererProps<ActivityPayload>) {
   return <ActivityTool {...props} kind="subagent" />
 }
 
-function SkillActivity(props: RegisteredRendererProps<ActivityPayload>) {
-  return <ActivityTool {...props} kind="skill" />
-}
-
-function ToolActivity(props: RegisteredRendererProps<ActivityPayload>) {
-  return <ActivityTool {...props} kind="tool" />
-}
-
 const subagentActivity = defineToolRenderer<ActivityPayload>({
   displayNameKey: "subagentActivity",
   schema: activityPayloadSchema,
   Renderer: SubagentActivity,
 })
 
-const skillActivity = defineToolRenderer<ActivityPayload>({
-  displayNameKey: "skillActivity",
-  schema: activityPayloadSchema,
-  Renderer: SkillActivity,
-})
+/**
+ * Presentation tools are registered from the same canonical name set exposed
+ * to runtimes. Adding or removing a server-facing presentation tool therefore
+ * requires its message renderer to change in the same type-checked edit.
+ */
+const presentationToolRenderers = {
+  render_chart: chart,
+  render_map: map,
+  render_stats: stats,
+  present_plan: plan,
+} satisfies Record<PresentationToolName, RichToolRegistration>
 
-const toolActivity = defineToolRenderer<ActivityPayload>({
-  displayNameKey: "toolActivity",
-  schema: activityPayloadSchema,
-  Renderer: ToolActivity,
-})
+const presentationRichToolRegistry = Object.fromEntries(
+  (Object.keys(presentationToolDefinitions) as PresentationToolName[]).map(
+    (toolName) => [toolName, presentationToolRenderers[toolName]]
+  )
+) as Readonly<Record<PresentationToolName, RichToolRegistration>>
 
 /**
- * The only rich-tool dispatch table. Provider adapters can add aliases at
- * their boundary, while the message surface has one deterministic registry.
+ * The rich-tool dispatch table combines canonical presentation tools with
+ * provider-native semantic controls. Ordinary execution, skill, and generic
+ * activity calls deliberately stay out so the native timeline groups them.
  */
 export const richToolRegistry: RichToolRegistry = Object.freeze({
+  ...presentationRichToolRegistry,
   ask_user_question: question,
   question,
   request_permission: permission,
   request_approval: permission,
-  present_plan: plan,
-  plan,
   delegate_subagent: subagentActivity,
   run_subagent: subagentActivity,
   task: subagentActivity,
-  use_skill: skillActivity,
-  load_skill: skillActivity,
-  tool_activity: toolActivity,
-  run_tool: toolActivity,
   monty_execute: monty,
-  render_chart: chart,
-  render_map: map,
-  render_stats: stats,
 })
 
 /** Direct `MessagePrimitive.Parts` tool-call renderer. */
@@ -248,11 +244,14 @@ export const RichToolRenderer: RichToolRendererComponent = (part) => {
   const { labels } = useToolUiLocale()
   const registration = richToolRegistry[part.toolName]
 
-  // OpenCode's reserved Question tool is rendered beside the composer by
-  // OpenCodeQuestionBridge. Rendering the same call in the transcript would
-  // duplicate the interaction, and its batched payload is intentionally not
-  // the single-question payload used by ask_user_question below.
-  if (part.toolName === "question") return null
+  // OpenCode's reserved batched Question tool is rendered beside the composer
+  // by OpenCodeQuestionBridge. A provider-neutral single question (including
+  // canonical Hermes history) remains a normal semantic message.
+  if (
+    part.toolName === "question" &&
+    richToolRegistry.question.validate(part).valid === false
+  )
+    return null
 
   // Provider-native approvals stay attached to the tool they guard (for
   // example `bash` or `edit`) rather than arriving as a permission tool.

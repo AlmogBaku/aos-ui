@@ -130,4 +130,21 @@ describe("workspace keyboard discovery", () => {
       screen.getAllByRole("button", { name: "Open Session: A" })
     ).toHaveLength(1)
   })
+
+  it("opens conversation search from Mod+F and Commands without taking composer history keys", async () => {
+    const user = userEvent.setup()
+    const openSearch = vi.fn()
+    window.addEventListener("aos:conversation-search", openSearch)
+    renderShell()
+
+    await user.keyboard("{Control>}f{/Control}")
+    expect(openSearch).toHaveBeenCalledOnce()
+
+    await user.click(screen.getByRole("button", { name: "Commands (❖+K)" }))
+    await user.click(
+      screen.getByRole("button", { name: "Search in conversation" })
+    )
+    expect(openSearch).toHaveBeenCalledTimes(2)
+    window.removeEventListener("aos:conversation-search", openSearch)
+  })
 })

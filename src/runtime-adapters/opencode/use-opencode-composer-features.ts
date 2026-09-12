@@ -5,7 +5,10 @@ import type {
   OpenCodeRuntimeExtras,
 } from "@assistant-ui/react-opencode"
 import { useEffect, useRef, useState } from "react"
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerFeatureViewModel,
+  ComposerModelSelectionState,
+} from "@/components/assistant-ui/composer-features"
 import {
   DEFAULT_COMPOSER_FEATURE_CONFIG,
   type ComposerFeatureConfig,
@@ -98,6 +101,10 @@ export function useOpenCodeComposerState(
   onError?: (error: Error, sessionId: string) => void
 ): ComposerFeatureViewModel {
   const selections = useRef(new Map<string, Promise<void>>())
+  const requests = useRef(new Map<string, symbol>())
+  const [selectionBySession, setSelectionBySession] = useState<
+    ReadonlyMap<string, ComposerModelSelectionState>
+  >(() => new Map())
   const [catalog, setCatalog] = useState<{
     client: OpencodeClient
     models: ModelOption[]
@@ -127,9 +134,60 @@ export function useOpenCodeComposerState(
       native.providerID === state.session.model.providerID
   )
   const sessionId = state.session?.id
+  const selection = sessionId
+    ? (selectionBySession.get(sessionId) ?? { status: "idle" })
+    : { status: "idle" as const }
   const context = selected?.maxTokens
     ? readOpenCodeComposerContext(state, selected.maxTokens)
     : undefined
+  const select = async (id: string) => {
+    if (!sessionId) return
+    const request = Symbol(id)
+    requests.current.set(sessionId, request)
+    setSelectionBySession((current) => {
+      const next = new Map(current)
+      next.set(sessionId, { status: "pending", targetId: id })
+      return next
+    })
+    const model = models.find((candidate) => candidate.id === id)
+    const previous = selections.current.get(sessionId) ?? Promise.resolve()
+    const pending = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (!model) throw new Error("OpenCode model is unavailable")
+        await client.v2.session.switchModel(
+          { sessionID: sessionId, model: model.native },
+          REQUEST_OPTIONS
+        )
+        await refresh()
+      })
+    selections.current.set(sessionId, pending)
+    try {
+      await pending
+      if (requests.current.get(sessionId) === request)
+        setSelectionBySession((current) => {
+          const next = new Map(current)
+          next.set(sessionId, { status: "idle" })
+          return next
+        })
+    } catch (reason) {
+      if (requests.current.get(sessionId) !== request) return
+      const error = modelChangeError(reason)
+      setSelectionBySession((current) => {
+        const next = new Map(current)
+        next.set(sessionId, {
+          status: "error",
+          targetId: id,
+          error: error.message,
+        })
+        return next
+      })
+      onError?.(error, sessionId)
+    } finally {
+      if (selections.current.get(sessionId) === pending)
+        selections.current.delete(sessionId)
+    }
+  }
   return {
     context: config.contextEnabled && sessionId ? context : undefined,
     model:
@@ -141,30 +199,12 @@ export function useOpenCodeComposerState(
               group,
             })),
             selectedId: selected.id,
-            select: async (id) => {
-              const model = models.find((model) => model.id === id)
-              const previous =
-                selections.current.get(sessionId) ?? Promise.resolve()
-              const selection = previous
-                .catch(() => undefined)
-                .then(async () => {
-                  if (!model) throw new Error("OpenCode model is unavailable")
-                  await client.v2.session.switchModel(
-                    { sessionID: sessionId, model: model.native },
-                    REQUEST_OPTIONS
-                  )
-                  await refresh()
-                })
-              selections.current.set(sessionId, selection)
-              try {
-                await selection
-              } catch (reason) {
-                onError?.(modelChangeError(reason), sessionId)
-              } finally {
-                if (selections.current.get(sessionId) === selection)
-                  selections.current.delete(sessionId)
-              }
-            },
+            selection,
+            select,
+            retry:
+              selection.status === "error"
+                ? () => select(selection.targetId)
+                : undefined,
           }
         : undefined,
   }

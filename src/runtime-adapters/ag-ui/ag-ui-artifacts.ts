@@ -7,7 +7,6 @@ import {
   type ArtifactMessage,
 } from "@/artifacts/artifacts"
 import type { ArtifactDescriptor } from "@/runtime-adapters/contracts"
-import { ArtifactToolResultCard } from "@/components/artifacts"
 
 const inlineSource = z.object({
   type: z.literal("inline"),
@@ -91,7 +90,9 @@ export function createAgUiArtifactToolkit(): Toolkit {
         "Publish a completed user-facing artifact. Do not call this for ordinary file edits or intermediate work.",
       parameters: agUiArtifactSchema,
       execute: async (input) => publishAgUiArtifact(input),
-      render: ArtifactToolResultCard,
+      // The artifact projection appends the canonical data part. Rendering a
+      // second tool-result card here duplicates the same artifact in a turn.
+      render: () => null,
       renderText: {
         running: "Publishing artifact",
         complete: "Published artifact",

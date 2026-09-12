@@ -23,11 +23,7 @@ function initialMessageCount(threadId: string) {
   return threadId === "thread-aster-interviews" ? 64 : 2
 }
 
-function contextFor(
-  threadId: string,
-  messageCount: number,
-  modelId: string
-) {
+function contextFor(threadId: string, messageCount: number, modelId: string) {
   const configured = FIXTURE_USED_TOKENS.get(threadId)
   const hash = [...threadId].reduce(
     (value, character) => (value * 31 + character.charCodeAt(0)) % 24_576,
@@ -42,9 +38,7 @@ function contextFor(
       system: 2,
       tools: 1,
       messages: Math.round(Math.max(0, messages - 3_000) / 1_000),
-      total: Math.round(
-        (FIXTURE_MAX_TOKENS.get(modelId) ?? 65_536) / 1_000
-      ),
+      total: Math.round((FIXTURE_MAX_TOKENS.get(modelId) ?? 65_536) / 1_000),
     },
   }
 }
@@ -101,6 +95,7 @@ export function useFixtureComposerFeatures({
             model: {
               options: FIXTURE_MODEL_OPTIONS,
               selectedId,
+              selection: { status: "idle" },
               select,
             },
           }

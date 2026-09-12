@@ -43,7 +43,10 @@ describe("createBrowserArtifactAdapter", () => {
           headers: { "content-type": "text/plain" },
         })
     )
-    const adapter = createBrowserArtifactAdapter({ fetcher })
+    const adapter = createBrowserArtifactAdapter({
+      fetcher,
+      allowedOrigins: ["https://files.example"],
+    })
 
     expect(
       await (
@@ -64,9 +67,53 @@ describe("createBrowserArtifactAdapter", () => {
     })
   })
 
+  it("admits only explicitly configured HTTPS artifact origins before fetching", async () => {
+    const fetcher = vi.fn(async () => new Response("report", { status: 200 }))
+    const adapter = createBrowserArtifactAdapter({
+      fetcher,
+      allowedOrigins: ["https://files.example"],
+    })
+
+    await expect(
+      adapter.resolve(
+        options({
+          id: "allowed",
+          filename: "report.txt",
+          source: { type: "url", url: "https://files.example/reports/today" },
+        })
+      )
+    ).resolves.toBeInstanceOf(Blob)
+
+    for (const url of [
+      "http://files.example/report.txt",
+      "https://other.example/report.txt",
+      "https://user:secret@files.example/report.txt",
+      "https://localhost/report.txt",
+      "https://127.0.0.1/report.txt",
+      "https://192.168.1.1/report.txt",
+      "https://169.254.169.254/report.txt",
+      "https://10.0.0.1/report.txt",
+      "https://[::1]/report.txt",
+      "https://[fe80::1]/report.txt",
+    ]) {
+      await expect(
+        adapter.resolve(
+          options({
+            id: url,
+            filename: "report.txt",
+            source: { type: "url", url },
+          })
+        )
+      ).rejects.toThrow("not allowed")
+    }
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it("rejects malformed base64, provider references, and failed URL responses", async () => {
     const adapter = createBrowserArtifactAdapter({
       fetcher: vi.fn(async () => new Response("missing", { status: 404 })),
+      allowedOrigins: ["https://files.example"],
     })
     await expect(
       adapter.resolve(

@@ -2742,6 +2742,49 @@ describe("Hermes native browser client", () => {
       client.stop()
     }
   })
+
+  it("preserves text segments around live tools and replaces only the final segment", async () => {
+    const { client, sockets } = harness()
+    const threadId = encodeHermesThreadId("research", "stored-1")
+    try {
+      await client.start()
+      await client.attach(threadId)
+      const event = (
+        type: string,
+        seq: number,
+        payload: Record<string, unknown>
+      ) =>
+        sockets[0].message({
+          jsonrpc: "2.0",
+          method: "event",
+          params: { type, session_id: "live-1", seq, payload },
+        })
+
+      event("message.start", 1, {})
+      event("message.delta", 2, { text: "I will inspect the file." })
+      event("tool.complete", 3, {
+        tool_id: "read-1",
+        name: "read_file",
+        args: { path: "thread.tsx" },
+        result: "contents",
+      })
+      event("message.delta", 4, { text: "Drafting the answer." })
+      event("message.complete", 5, { text: "The fix is ready." })
+
+      expect(client.session(threadId)?.messages.at(-1)?.content).toEqual([
+        { type: "text", text: "I will inspect the file." },
+        expect.objectContaining({
+          type: "tool-call",
+          toolCallId: "read-1",
+          toolName: "read_file",
+        }),
+        { type: "text", text: "The fix is ready." },
+      ])
+    } finally {
+      client.stop()
+    }
+  })
+
   it("responds to a scoped clarification request", async () => {
     const { client, sockets } = harness()
     await client.start()
@@ -3035,7 +3078,6 @@ describe("Hermes native browser client", () => {
     ])
     client.stop()
   })
-
 
   it("invalidates activity on catalog failure and restores it on recovery", async () => {
     const { client, fetcher } = harness()

@@ -87,6 +87,7 @@ export function useHermesComposerFeatures(
         model.options.some((option) => option.id === model.selectedId)
           ? {
               selectedId: model.selectedId,
+              selection: { status: "idle" },
               options: model.options.map(({ id, label, group }) => ({
                 id,
                 label,

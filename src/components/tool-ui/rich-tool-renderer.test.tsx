@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   RichToolRenderer,
+  AosToolFallback,
+  isAosRichTool,
   ToolChrome,
   ToolUiLocaleProvider,
   normalizeRichToolState,
@@ -84,6 +86,114 @@ describe("normalizeRichToolState", () => {
     expect(state.phase).toBe("expired")
     expect(state.canRespond).toBe(false)
   })
+})
+
+describe("rich tool classification", () => {
+  it("admits only registered payloads that can render semantically", () => {
+    expect(
+      isAosRichTool(
+        toolPart({
+          toolName: "render_chart",
+          args: { title: "Spend" },
+          result: {
+            type: "line",
+            xKey: "quarter",
+            series: [{ key: "value", label: "Spend" }],
+            data: [{ quarter: "Q1", value: 12 }],
+          },
+        })
+      )
+    ).toBe(true)
+    expect(
+      isAosRichTool(
+        toolPart({
+          toolName: "render_chart",
+          args: { title: "Spend" },
+          result: { type: "line", data: "invalid" },
+        })
+      )
+    ).toBe(false)
+  })
+
+  it("renders a provider-neutral question but leaves OpenCode's batched question to its bridge", () => {
+    expect(
+      isAosRichTool(
+        toolPart({
+          toolName: "question",
+          args: { question: "Proceed?", options: ["Yes", "No"] },
+        })
+      )
+    ).toBe(true)
+    expect(
+      isAosRichTool(
+        toolPart({
+          toolName: "question",
+          args: {
+            questions: [
+              { question: "Proceed?", options: [{ label: "Yes" }] },
+            ],
+          },
+        })
+      )
+    ).toBe(false)
+  })
+})
+
+describe("AosToolFallback", () => {
+  it.each([
+    ["an unknown call", "unknown_tool", { type: "complete" }],
+    ["an errored call", "read_file", { type: "incomplete", reason: "error" }],
+    [
+      "an interrupted question",
+      "question",
+      { type: "incomplete", reason: "cancelled" },
+    ],
+  ] as const)(
+    "keeps %s collapsed until its paired request and result are requested",
+    async (_description, toolName, status) => {
+      const user = userEvent.setup()
+      const { container } = render(
+        <AosToolFallback
+          {...toolPart({
+            toolName,
+            status,
+            args: { question: "Continue?", token: "secret=never-show" },
+            result: "Provider result",
+          })}
+        />
+      )
+
+      expect(
+        container.querySelector('[data-slot="generic-tool"]')
+      ).not.toBeInTheDocument()
+      const trigger = screen.getByRole("button")
+      expect(trigger).toHaveAttribute("aria-expanded", "false")
+      expect(
+        within(trigger).getByText(toolName === "read_file" ? "Read" : "Used")
+      ).toBeVisible()
+      expect(
+        within(trigger).getByText(
+          toolName === "read_file" ? "read_file" : "Continue?"
+        )
+      ).toBeVisible()
+      expect(screen.queryByText("[REDACTED]", { exact: false })).toBeNull()
+      expect(screen.queryByText(/Provider result/)).toBeNull()
+      expect(container.querySelector("[data-tool-state]")).toHaveAttribute(
+        "data-tool-state",
+        status.type === "complete"
+          ? "complete"
+          : status.reason === "cancelled"
+            ? "cancelled"
+            : "failed"
+      )
+
+      await user.click(trigger)
+      expect(trigger).toHaveAttribute("aria-expanded", "true")
+      expect(screen.getAllByText(/Continue?/).at(-1)).toBeVisible()
+      expect(screen.getByText("[REDACTED]", { exact: false })).toBeVisible()
+      expect(screen.getByText(/Provider result/)).toBeVisible()
+    }
+  )
 })
 
 describe("accessible rich-tool semantics", () => {
@@ -713,7 +823,7 @@ describe("informational renderers", () => {
     expect(screen.getByText("Write summary")).toBeVisible()
   })
 
-  it("keeps subagent activity collapsed by default", async () => {
+  it("keeps subagent activity visible as message content", async () => {
     await renderTool(
       <RichToolRenderer
         {...toolPart({
@@ -728,16 +838,16 @@ describe("informational renderers", () => {
       />
     )
 
-    const disclosure = screen.getByText("Data analyst").closest("details")
-    expect(disclosure).not.toHaveAttribute("open")
-    expect(screen.getByText("Validated three segments.")).toBeInTheDocument()
+    const activity = screen.getByText("Data analyst").closest("section")
+    expect(activity).toHaveAttribute("data-slot", "tool-activity")
+    expect(screen.getByText("Validated three segments.")).toBeVisible()
+    expect(screen.queryByText("Transcript")).toBeNull()
+    expect(screen.queryByText("Transcript unavailable.")).toBeNull()
   })
 
   it.each([
     ["running", "Running", "Transcript is loading…"],
     ["waiting", "Waiting", "Transcript is loading…"],
-    ["completed", "Completed", "Transcript unavailable."],
-    ["failed", "Failed", "Transcript unavailable."],
   ] as const)(
     "shows validated child status %s and its transcript state",
     async (status, statusLabel, transcriptLabel) => {
@@ -751,11 +861,33 @@ describe("informational renderers", () => {
         />
       )
 
-      const disclosure = screen.getByText("Child agent").closest("details")
-      expect(disclosure).not.toHaveAttribute("open")
+      const activity = screen.getByText("Child agent").closest("section")
+      expect(activity).toHaveAttribute("data-slot", "tool-activity")
       expect(screen.getByText(statusLabel)).toBeInTheDocument()
       expect(screen.getByText(transcriptLabel)).toBeInTheDocument()
       expect(screen.queryByRole("button")).toBeNull()
+    }
+  )
+
+  it.each([
+    ["completed", "Completed"],
+    ["failed", "Failed"],
+  ] as const)(
+    "omits a fake transcript section when child status is %s and none was supplied",
+    async (status, statusLabel) => {
+      await renderTool(
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "delegate_subagent",
+            args: { task: "Inspect child state" },
+            result: { name: "Child agent", status },
+          })}
+        />
+      )
+
+      expect(screen.getByText(statusLabel)).toBeInTheDocument()
+      expect(screen.queryByText("Transcript")).toBeNull()
+      expect(screen.queryByText("Transcript unavailable.")).toBeNull()
     }
   )
 
@@ -1185,7 +1317,7 @@ describe("safe result renderers", () => {
     ).toBeInTheDocument()
   })
 
-  it("renders native OpenCode task calls as collapsed subagent activity", async () => {
+  it("renders native OpenCode task calls as visible subagent activity", async () => {
     await renderTool(
       <RichToolRenderer
         {...toolPart({
@@ -1431,7 +1563,7 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
   })
 
-  it("localizes plan and collapsed activity chrome", async () => {
+  it("localizes plan and visible activity chrome", async () => {
     const { rerender } = await renderTool(
       <ToolUiLocaleProvider locale="he">
         <RichToolRenderer

@@ -8,7 +8,7 @@ import {
   type FC,
   type PropsWithChildren,
 } from "react"
-import { ChevronDownIcon, LoaderIcon } from "lucide-react"
+import { LoaderIcon } from "lucide-react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { useScrollLock } from "@assistant-ui/react"
 import {
@@ -17,6 +17,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
+import { DisclosureChevron } from "./disclosure-chevron"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 
 const ANIMATION_DURATION = 200
@@ -135,15 +136,9 @@ function ToolGroupTrigger({
       >
         {label}
       </span>
-      <ChevronDownIcon
+      <DisclosureChevron
         data-slot="tool-group-trigger-chevron"
-        className={cn(
-          "aui-tool-group-trigger-chevron size-3 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0"
-        )}
+        className="aui-tool-group-trigger-chevron ms-1"
       />
     </CollapsibleTrigger>
   )

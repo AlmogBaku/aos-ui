@@ -20,6 +20,15 @@ export type ToolUiToolName =
 export type ToolUiActivityKind = "subagent" | "skill" | "tool"
 export type ToolUiActivityStatus =
   "running" | "waiting" | "completed" | "failed"
+export type ToolUiActionKind =
+  | "skill"
+  | "read"
+  | "edit"
+  | "command"
+  | "search"
+  | "inspect"
+  | "subagent"
+  | "generic"
 
 export type ToolUiLocaleLabels = {
   states: Record<RichToolPhase, string>
@@ -32,6 +41,7 @@ export type ToolUiLocaleLabels = {
   }
   assistant: {
     toolCalls: (count: number) => string
+    toolActions: Record<ToolUiActionKind, { active: string; complete: string }>
     reasoning: string
     reasoningDuration: (seconds: number) => string
     copyCode: string
@@ -155,6 +165,16 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   },
   assistant: {
     toolCalls: (count) => `${count} tool ${count === 1 ? "call" : "calls"}`,
+    toolActions: {
+      skill: { active: "Loading", complete: "Loaded" },
+      read: { active: "Reading", complete: "Read" },
+      edit: { active: "Editing", complete: "Edited" },
+      command: { active: "Running", complete: "Ran" },
+      search: { active: "Searching", complete: "Searched" },
+      inspect: { active: "Inspecting", complete: "Inspected" },
+      subagent: { active: "Delegating", complete: "Delegated" },
+      generic: { active: "Using", complete: "Used" },
+    },
     reasoning: "Reasoning",
     reasoningDuration: (seconds) => `Reasoning (${seconds}s)`,
     copyCode: "Copy code",
@@ -309,6 +329,16 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   assistant: {
     toolCalls: (count) =>
       count === 1 ? "קריאה אחת לכלי" : `${count} קריאות לכלים`,
+    toolActions: {
+      skill: { active: "בטעינה", complete: "נטענה" },
+      read: { active: "בקריאה", complete: "נקרא" },
+      edit: { active: "בעריכה", complete: "נערך" },
+      command: { active: "בהרצה", complete: "הורץ" },
+      search: { active: "בחיפוש", complete: "בוצע חיפוש" },
+      inspect: { active: "בבדיקה", complete: "נבדק" },
+      subagent: { active: "בהאצלה", complete: "הואצל" },
+      generic: { active: "בשימוש", complete: "בוצע" },
+    },
     reasoning: "חשיבה",
     reasoningDuration: (seconds) => `חשיבה (${seconds} שנ׳)`,
     copyCode: "העתקת קוד",

@@ -110,6 +110,12 @@ describe("artifact workspace", () => {
     )
 
     expect(screen.getByText("ag-ui-output.txt")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Open: ag-ui-output.txt" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /^Open$/ })
+    ).not.toBeInTheDocument()
   })
 
   it("renders Artifacts collapsed by default and reveals them on request", () => {
@@ -162,9 +168,7 @@ describe("artifact workspace", () => {
     fireEvent.click(screen.getByText("Artifacts"))
 
     expect(
-      screen
-        .getAllByText(/\.txt$/)
-        .map(({ textContent }) => textContent)
+      screen.getAllByText(/\.txt$/).map(({ textContent }) => textContent)
     ).toEqual(["newer.txt", "older.txt"])
 
     fireEvent.click(screen.getAllByRole("button", { name: "Open" })[0]!)

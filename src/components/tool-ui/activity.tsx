@@ -1,16 +1,9 @@
-import {
-  Check,
-  ChevronRight,
-  CircleAlert,
-  Clock3,
-  LoaderCircle,
-} from "lucide-react"
+import { Check, CircleAlert, Clock3, LoaderCircle } from "lucide-react"
 import { MessagePartPrimitive, MessagePrimitive } from "@assistant-ui/react"
 import { z } from "zod"
 
 import { cn } from "@/lib/utils"
 
-import { safeJsonStringify } from "./common"
 import { normalizeRichToolState } from "./lifecycle"
 import {
   useToolUiLocale,
@@ -113,20 +106,18 @@ export function ActivityTool({
     !hasNestedMessages &&
     !transcript &&
     (childStatus === "running" || childStatus === "waiting")
+  const showTranscript =
+    hasNestedMessages || Boolean(transcript) || transcriptIsLoading
 
   return (
-    <details
-      className="group mt-3 w-full max-w-2xl rounded-xl border border-border bg-card/35 px-3"
+    <section
+      className="mt-3 w-full max-w-2xl rounded-xl border border-border bg-card/35 px-3"
       data-slot="tool-activity"
       data-state={childStatus}
       dir={direction}
       lang={locale}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-        <ChevronRight
-          aria-hidden="true"
-          className="size-4 text-muted-foreground transition-transform group-open:rotate-90 motion-reduce:transition-none"
-        />
+      <header className="flex items-center gap-2 py-2 text-sm">
         <span className="text-xs font-medium text-muted-foreground">
           {kindLabel}
         </span>
@@ -134,43 +125,39 @@ export function ActivityTool({
           {title}
         </bdi>
         <ActivityStatusLabel status={childStatus} />
-      </summary>
-      <div className="flex flex-col gap-2 ps-6 pb-3">
-        {summary ? (
-          <p className="text-sm text-pretty" dir="auto">
-            {summary}
-          </p>
-        ) : null}
-        <div className="flex flex-col gap-1">
-          <p className="text-xs font-medium text-muted-foreground">
-            {labels.activityTranscript.title}
-          </p>
-          {hasNestedMessages ? (
-            <NestedActivityMessages />
-          ) : transcript ? (
+      </header>
+      {summary || showTranscript ? (
+        <div className="flex flex-col gap-2 ps-6 pb-3">
+          {summary ? (
             <p className="text-sm text-pretty" dir="auto">
-              {transcript}
+              {summary}
             </p>
-          ) : (
-            <p
-              className="text-sm text-muted-foreground"
-              role={transcriptIsLoading ? "status" : undefined}
-              aria-live={transcriptIsLoading ? "polite" : undefined}
-            >
-              {transcriptIsLoading
-                ? labels.activityTranscript.loading
-                : labels.activityTranscript.unavailable}
-            </p>
-          )}
+          ) : null}
+          {showTranscript ? (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                {labels.activityTranscript.title}
+              </p>
+              {hasNestedMessages ? (
+                <NestedActivityMessages />
+              ) : transcript ? (
+                <p className="text-sm text-pretty" dir="auto">
+                  {transcript}
+                </p>
+              ) : (
+                <p
+                  className="text-sm text-muted-foreground"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {labels.activityTranscript.loading}
+                </p>
+              )}
+            </div>
+          ) : null}
         </div>
-        <pre
-          className="max-h-48 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground"
-          dir="ltr"
-        >
-          {safeJsonStringify({ args: payload.args, result: payload.result })}
-        </pre>
-      </div>
-    </details>
+      ) : null}
+    </section>
   )
 }
 

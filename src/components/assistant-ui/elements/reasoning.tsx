@@ -4,19 +4,19 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { BrainIcon, ChevronDownIcon } from "lucide-react"
+import { BrainIcon } from "lucide-react"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
+import { DisclosureChevron } from "./disclosure-chevron"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 
 export const ANIMATION_DURATION = 200
@@ -198,15 +198,9 @@ function ReasoningTrigger({
       >
         {label}
       </span>
-      <ChevronDownIcon
+      <DisclosureChevron
         data-slot="reasoning-trigger-chevron"
-        className={cn(
-          "aui-reasoning-trigger-chevron mt-0.5 size-4 shrink-0",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0"
-        )}
+        className="aui-reasoning-trigger-chevron ms-1 mt-0.5"
       />
     </CollapsibleTrigger>
   )
@@ -246,60 +240,11 @@ function ReasoningText({
   children,
   ...props
 }: React.ComponentProps<"div">) {
-  const isPreview = useContext(ReasoningPreviewContext)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!isPreview) return
-    const scrollEl = scrollRef.current
-    const contentEl = contentRef.current
-    if (!scrollEl || !contentEl) return
-
-    let pinned = true
-    let lastScrollTop = scrollEl.scrollTop
-    let lastScrollHeight = scrollEl.scrollHeight
-    const isAtBottom = () =>
-      Math.abs(
-        scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
-      ) <= 1 || scrollEl.scrollHeight <= scrollEl.clientHeight
-
-    const pin = () => {
-      if (!pinned) return
-      scrollEl.scrollTop = scrollEl.scrollHeight
-    }
-    // A pin's own scroll event can arrive after new content grew the scroll
-    // height and read as "not at bottom"; only an upward move at unchanged
-    // scroll height is user intent.
-    const onScroll = () => {
-      if (isAtBottom()) {
-        pinned = true
-      } else if (
-        scrollEl.scrollTop < lastScrollTop &&
-        scrollEl.scrollHeight === lastScrollHeight
-      ) {
-        pinned = false
-      }
-      lastScrollTop = scrollEl.scrollTop
-      lastScrollHeight = scrollEl.scrollHeight
-    }
-
-    pin()
-    scrollEl.addEventListener("scroll", onScroll)
-    const observer = new ResizeObserver(pin)
-    observer.observe(contentEl)
-    return () => {
-      scrollEl.removeEventListener("scroll", onScroll)
-      observer.disconnect()
-    }
-  }, [isPreview])
-
   return (
     <div
-      ref={scrollRef}
       data-slot="reasoning-text"
       className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-6 pt-2 pb-2 leading-relaxed text-pretty",
+        "aui-reasoning-text relative z-0 max-h-[min(24rem,50dvh)] min-w-0 touch-pan-y overflow-y-auto overscroll-contain ps-6 pt-2 pb-2 leading-relaxed text-pretty",
         "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:animate-none motion-reduce:transition-none",
         "group-data-open/collapsible-content:animate-in",
@@ -316,9 +261,7 @@ function ReasoningText({
       )}
       {...props}
     >
-      <div ref={contentRef} className="aui-reasoning-text-content space-y-4">
-        {children}
-      </div>
+      <div className="aui-reasoning-text-content space-y-4">{children}</div>
     </div>
   )
 }

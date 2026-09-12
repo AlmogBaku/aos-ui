@@ -13,6 +13,9 @@ export type RichToolPart = ToolCallMessagePartProps
 /** Drop-in component type for `MessagePrimitive.Parts` tool overrides. */
 export type RichToolRendererComponent = ToolCallMessagePartComponent
 
+/** The global safe fallback for calls without a provider rich display. */
+export type RichToolFallbackComponent = ToolCallMessagePartComponent
+
 export type RichToolPhase =
   | "pending"
   | "submitting"

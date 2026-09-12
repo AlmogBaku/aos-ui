@@ -24,6 +24,13 @@ export const WORKSPACE_KEYBOARD_ACTIONS = [
   action("workspace.newAgent", text("New Agent", "סוכן חדש")),
   action("workspace.newSession", text("New Session", "שיחה חדשה")),
   action(
+    "conversation.search",
+    text("Search in conversation", "חיפוש בשיחה"),
+    "workspace",
+    ["Meta+f", "Ctrl+f"],
+    true
+  ),
+  action(
     "keyboard.reference",
     text("Keyboard reference", "מקשי קיצור"),
     "settings",

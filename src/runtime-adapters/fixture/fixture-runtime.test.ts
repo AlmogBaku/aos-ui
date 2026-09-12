@@ -159,7 +159,7 @@ describe("fixture Assistant UI thread adapter", () => {
     )
   })
 
-  it("keeps the Plan in the launch Session instead of the chart showcase", async () => {
+  it("keeps a plan in both the launch Session and the market showcase", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const adapter = createFixtureThreadListAdapter(workspace)
 
@@ -181,7 +181,7 @@ describe("fixture Assistant UI thread adapter", () => {
             part.type === "tool-call" && part.toolName === "present_plan"
         )
       )
-    ).toBe(false)
+    ).toBe(true)
     expect(launch.messages).not.toEqual(market.messages)
   })
 
@@ -259,6 +259,53 @@ describe("fixture Assistant UI thread adapter", () => {
         expect(Number.isFinite(rowRecord[key])).toBe(true)
       }
     }
+  })
+
+  it("uses the market Session as the complete rich-output fixture", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const adapter = createFixtureThreadListAdapter(workspace)
+    const market = await adapter.historyFor("thread-aster-market").load()
+    const parts = market.messages.flatMap(({ message }) =>
+      Array.isArray(message.content) ? message.content : []
+    )
+
+    expect(
+      parts
+        .filter(
+          (
+            part
+          ): part is Extract<
+            ThreadAssistantMessagePart,
+            { type: "tool-call" }
+          > => part.type === "tool-call"
+        )
+        .map((part) => part.toolName)
+    ).toEqual([
+      "read_file",
+      "use_skill",
+      "web_search",
+      "terminal",
+      "apply_patch",
+      "delegate_subagent",
+      "render_chart",
+      "present_plan",
+    ])
+    expect(parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "reasoning",
+          text: expect.stringContaining("planning dataset"),
+        }),
+        expect.objectContaining({ type: "source", sourceType: "url" }),
+        expect.objectContaining({ type: "data", name: "aos.artifact" }),
+      ])
+    )
+    expect(parts.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("**Recommendation:**"),
+      })
+    )
   })
 
   it("includes a deterministic long-thread fixture for manual viewport traces", async () => {

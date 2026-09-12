@@ -62,6 +62,7 @@ const localCopy = {
     focusAgents: "Focus Agents",
     focusSessions: "Focus Sessions",
     focusConversation: "Focus conversation",
+    searchConversation: "Search in conversation",
     focusInspector: "Focus inspector",
     nextAgent: "Select next Agent",
     previousAgent: "Select previous Agent",
@@ -80,6 +81,7 @@ const localCopy = {
     focusAgents: "מיקוד בסוכנים",
     focusSessions: "מיקוד בשיחות",
     focusConversation: "מיקוד בשיחה",
+    searchConversation: "חיפוש בשיחה",
     focusInspector: "מיקוד במפקח",
     nextAgent: "בחירת הסוכן הבא",
     previousAgent: "בחירת הסוכן הקודם",
@@ -153,6 +155,9 @@ export function WorkspaceKeyboard({
         focusRegion(root, "sessions")
       else if (actionId === "workspace.focusConversation") {
         if (!focusRegion(root, "transcript")) focusRegion(root, "conversation")
+      } else if (actionId === "conversation.search") {
+        if (activeThreadId)
+          window.dispatchEvent(new Event("aos:conversation-search"))
       } else if (actionId === "workspace.focusInspector")
         focusRegion(root, "inspector")
       else if (actionId === "workspace.contextMenu") {
@@ -274,6 +279,15 @@ export function WorkspaceKeyboard({
       unavailable(
         "workspace.focusConversation",
         localCopy[locale].focusConversation
+      ),
+      unavailable(
+        "conversation.search",
+        localCopy[locale].searchConversation,
+        activeThreadId
+          ? undefined
+          : locale === "he"
+            ? "אין שיחה פעילה"
+            : "No active conversation"
       ),
       unavailable("workspace.focusInspector", localCopy[locale].focusInspector),
       unavailable(

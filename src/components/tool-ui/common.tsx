@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 import { useToolUiLocale } from "./locale"
+import { safeToolPresentation } from "./safe-presentation"
 import type { RichToolState } from "./types"
 
 const stateIcons = {
@@ -141,23 +142,5 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
 }
 
 export function safeJsonStringify(value: unknown) {
-  const seen = new WeakSet<object>()
-
-  try {
-    const serialized = JSON.stringify(
-      value,
-      (_key, item: unknown) => {
-        if (typeof item === "bigint") return `${item.toString()}n`
-        if (typeof item === "object" && item !== null) {
-          if (seen.has(item)) return "[Circular]"
-          seen.add(item)
-        }
-        return item
-      },
-      2
-    )
-    return serialized ?? String(value)
-  } catch {
-    return "[Unserializable value]"
-  }
+  return safeToolPresentation(value).text
 }

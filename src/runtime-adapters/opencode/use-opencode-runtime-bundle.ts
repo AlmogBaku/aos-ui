@@ -23,6 +23,7 @@ import {
 
 export type UseOpenCodeRuntimeBundleOptions = OpenCodeRuntimeOptions & {
   directory: string
+  artifactHtmlAssetOrigins?: readonly string[]
   onInteractionError?: (error: Error | undefined, threadId: string) => void
 }
 export type OpenCodeRuntimeBundle = Pick<
@@ -137,7 +138,13 @@ export function useOpenCodeRuntimeBundle(
       ),
     [scopedClient, assistantRuntime, eventHub, options.onInteractionError]
   )
-  const artifacts = useMemo(() => createBrowserArtifactAdapter(), [])
+  const artifacts = useMemo(
+    () =>
+      createBrowserArtifactAdapter({
+        allowedOrigins: options.artifactHtmlAssetOrigins,
+      }),
+    [options.artifactHtmlAssetOrigins]
+  )
 
   return useMemo(
     () => ({

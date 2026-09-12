@@ -7,11 +7,7 @@
 
 .searchField {
   display: flex;
-  min-block-size: 2.75rem;
   align-items: center;
-  gap: 0.625rem;
-  margin: 0.75rem;
-  padding-inline: 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--background);
@@ -35,7 +31,6 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 1rem;
 }
 
 .searchField input::placeholder {
@@ -52,15 +47,9 @@
   scrollbar-width: thin;
 }
 
-.section {
-  margin-block-start: 0.75rem;
-}
-
 .section h3 {
   margin: 0;
-  padding: 0.25rem 0.5rem 0.375rem;
   color: var(--muted-foreground);
-  font-size: 0.875rem;
   font-weight: 600;
 }
 
@@ -79,12 +68,8 @@
 .sessionNavigation {
   display: flex;
   min-inline-size: 0;
-  min-block-size: 3.5rem;
   flex: 1;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem;
-  padding-inline-end: 0.25rem;
   border: 0;
   border-radius: var(--radius-md);
   outline: 0;
@@ -108,12 +93,10 @@
   min-inline-size: 0;
   flex: 1;
   flex-direction: column;
-  gap: 0.125rem;
 }
 
 .rowText time {
   color: var(--muted-foreground);
-  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -121,13 +104,11 @@
   display: flex;
   min-inline-size: 0;
   align-items: center;
-  gap: 0.375rem;
 }
 
 .rowTitle {
   overflow: hidden;
   flex: 1;
-  font-size: 0.875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

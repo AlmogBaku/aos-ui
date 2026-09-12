@@ -144,6 +144,20 @@ describe("public configuration", () => {
     })
   })
 
+  it("omits default-enabled composer fields from the public fixture payload", () => {
+    const serialize = (
+      config as unknown as {
+        serializePublicRuntimeConfiguration: (
+          value: ReturnType<typeof resolveRuntimeConfiguration>
+        ) => unknown
+      }
+    ).serializePublicRuntimeConfiguration
+
+    expect(
+      serialize(resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: "fixture" }))
+    ).toEqual({ mode: "fixture" })
+  })
+
   it("resolves independent composer feature environment flags", () => {
     expect(
       resolveRuntimeConfiguration({

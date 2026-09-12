@@ -36,6 +36,16 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     contextTools: "Tools",
     contextMessages: "Messages",
     contextTotal: "Total",
+    conversationSearch: {
+      search: "Search in conversation",
+      placeholder: "Find in conversation…",
+      previous: "Previous result",
+      next: "Next result",
+      close: "Close search",
+      results: (index, count) => `${index} of ${count}`,
+    },
+    openSource: "Open source",
+    documentSource: "Source document",
     attachments: {
       add: "Add attachment",
       remove: "Remove attachment",
@@ -81,6 +91,16 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     contextTools: "כלים",
     contextMessages: "הודעות",
     contextTotal: "סה״כ",
+    conversationSearch: {
+      search: "חיפוש בשיחה",
+      placeholder: "חיפוש בשיחה…",
+      previous: "תוצאה קודמת",
+      next: "תוצאה הבאה",
+      close: "סגירת החיפוש",
+      results: (index, count) => `${index} מתוך ${count}`,
+    },
+    openSource: "פתיחת מקור",
+    documentSource: "מסמך מקור",
     attachments: {
       add: "הוספת קובץ מצורף",
       remove: "הסרת קובץ מצורף",

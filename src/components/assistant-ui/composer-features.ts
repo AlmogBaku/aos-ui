@@ -3,8 +3,22 @@ import type { ComposerUsage } from "./elements/composer-context"
 export type ComposerModelOption = {
   readonly id: string
   readonly label: string
+  readonly description?: string | undefined
   readonly group?: string | undefined
+  readonly efforts?:
+    | true
+    | readonly { readonly id: string; readonly label: string }[]
+    | undefined
 }
+
+export type ComposerModelSelectionState =
+  | { readonly status: "idle" }
+  | { readonly status: "pending"; readonly targetId: string }
+  | {
+      readonly status: "error"
+      readonly targetId: string
+      readonly error: string
+    }
 
 export function composerUsageFromTokens({
   systemTokens,
@@ -24,10 +38,7 @@ export function composerUsageFromTokens({
   const attributed = systemTokens + toolTokens + messageTokens
   if (attributed <= 0) return { system: 0, tools: 0, messages: used, total }
 
-  const system = Math.min(
-    used,
-    Math.round((systemTokens / attributed) * used)
-  )
+  const system = Math.min(used, Math.round((systemTokens / attributed) * used))
   const tools = Math.min(
     used - system,
     Math.round((toolTokens / attributed) * used)
@@ -40,15 +51,18 @@ export type ComposerFeatureViewModel = {
     | {
         readonly options: readonly ComposerModelOption[]
         readonly selectedId: string
+        /** The in-flight request is separate from the provider-authoritative id. */
+        readonly selection?: ComposerModelSelectionState | undefined
         readonly select: (id: string) => Promise<void>
+        /** Repeats only the current failed request; stale failures have no retry. */
+        readonly retry?: (() => Promise<void>) | undefined
       }
     | undefined
   readonly context?:
     | {
         readonly usage: ComposerUsage
         readonly segments?:
-          | readonly ("system" | "tools" | "messages")[]
-          | undefined
+          readonly ("system" | "tools" | "messages")[] | undefined
       }
     | undefined
 }

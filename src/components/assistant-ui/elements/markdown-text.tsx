@@ -54,7 +54,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, smooth }) => {
     <MarkdownTextPrimitive
       smooth={smooth}
       remarkPlugins={[remarkGfm]}
-      className="aui-md"
+      className="aui-md text-base leading-7 @min-[64rem]/workspace:text-sm @min-[64rem]/workspace:leading-6"
       components={markdownComponents}
       componentsByLanguage={componentsByLanguage}
       defer
@@ -163,7 +163,7 @@ const defaultComponents = memoizeMarkdownComponents({
   p: ({ className, ...props }) => (
     <p
       className={cn(
-        "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
+        "aui-md-p my-3 max-w-prose leading-7 first:mt-0 last:mb-0 @min-[64rem]/workspace:my-2 @min-[64rem]/workspace:leading-6",
         className
       )}
       {...props}
@@ -181,7 +181,7 @@ const defaultComponents = memoizeMarkdownComponents({
   blockquote: ({ className, ...props }) => (
     <blockquote
       className={cn(
-        "aui-md-blockquote my-3 border-s-2 border-muted-foreground/30 ps-4 text-muted-foreground",
+        "aui-md-blockquote my-3 max-w-prose border-s-2 border-muted-foreground/30 ps-4 text-muted-foreground @min-[64rem]/workspace:my-2",
         className
       )}
       {...props}
@@ -190,7 +190,7 @@ const defaultComponents = memoizeMarkdownComponents({
   ul: ({ className, ...props }) => (
     <ul
       className={cn(
-        "aui-md-ul my-3 ms-5 list-disc marker:text-muted-foreground [&>li]:mt-1",
+        "aui-md-ul my-3 ms-5 max-w-prose list-disc marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
         className
       )}
       {...props}
@@ -199,7 +199,7 @@ const defaultComponents = memoizeMarkdownComponents({
   ol: ({ className, ...props }) => (
     <ol
       className={cn(
-        "aui-md-ol my-3 ms-5 list-decimal marker:text-muted-foreground [&>li]:mt-1",
+        "aui-md-ol my-3 ms-5 max-w-prose list-decimal marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
         className
       )}
       {...props}
@@ -248,7 +248,13 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   li: ({ className, ...props }) => (
-    <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
+    <li
+      className={cn(
+        "aui-md-li leading-7 @min-[64rem]/workspace:leading-6",
+        className
+      )}
+      {...props}
+    />
   ),
   strong: ({ className, ...props }) => (
     <strong

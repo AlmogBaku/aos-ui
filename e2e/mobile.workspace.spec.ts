@@ -37,6 +37,36 @@ async function activeRegion(page: Page) {
   })
 }
 
+test("mobile keeps Markdown at its comfortable reading size", async ({
+  page,
+}) => {
+  await page.goto("/en")
+
+  const prose = page
+    .getByText(/^Applied AI is accelerating fastest in the planning dataset/)
+    .first()
+  const planStep = page.getByText("Confirm launch goals", { exact: true })
+
+  await expect(prose).toBeVisible()
+  await expect(planStep).toBeVisible()
+  await expect
+    .poll(() =>
+      prose.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { fontSize: style.fontSize, lineHeight: style.lineHeight }
+      })
+    )
+    .toEqual({ fontSize: "16px", lineHeight: "28px" })
+  await expect
+    .poll(() =>
+      planStep.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { fontSize: style.fontSize, lineHeight: style.lineHeight }
+      })
+    )
+    .toEqual({ fontSize: "14px", lineHeight: "24px" })
+})
+
 test("coarse-pointer workspace controls have 44px touch targets", async ({
   page,
 }) => {
@@ -46,6 +76,19 @@ test("coarse-pointer workspace controls have 44px touch targets", async ({
     .poll(() => page.evaluate(() => matchMedia("(pointer: coarse)").matches))
     .toBe(true)
 
+  const artifactCard = page
+    .getByText("enterprise-ai-brief.md", { exact: true })
+    .first()
+    .locator("xpath=ancestor::article")
+  await expectMinimumTouchTarget(
+    artifactCard.getByRole("button", {
+      name: "Open: enterprise-ai-brief.md",
+    })
+  )
+  await expectMinimumTouchTarget(
+    artifactCard.getByRole("button", { name: "Download" })
+  )
+
   await expectMinimumTouchTarget(
     page.getByRole("button", { name: "Open Agents" })
   )
@@ -53,6 +96,17 @@ test("coarse-pointer workspace controls have 44px touch targets", async ({
   const drawer = page.getByRole("dialog", { name: "Sessions" })
   await expectMinimumTouchTarget(
     drawer.getByRole("button", { name: "New session" })
+  )
+  await expectMinimumTouchTarget(
+    drawer.getByRole("button", {
+      name: /^Open session: Market brief/,
+    })
+  )
+  await drawer.getByRole("button", { name: "Back to Agents" }).click()
+  await expectMinimumTouchTarget(
+    page.getByRole("dialog", { name: "Agents" }).getByRole("button", {
+      name: /^Aster/,
+    })
   )
   await page.keyboard.press("Escape")
 })
@@ -114,11 +168,133 @@ test("the mobile composer keeps model and context in one Assistant UI rail", asy
   expect(desktopAddBox!.x).toBeLessThan(desktopSendBox!.x)
 })
 
+test("expanded reasoning remains independently scrollable", async ({
+  page,
+}) => {
+  await page.goto("/en")
+
+  const timeline = page.locator('[data-slot="tool-timeline"]').first()
+  await timeline.locator("button").first().click()
+
+  const reasoningTrigger = timeline
+    .locator('[data-slot="reasoning-trigger"]')
+    .first()
+  const reasoningBody = timeline.locator(".aui-reasoning-text-content").first()
+  await reasoningTrigger.click()
+  await reasoningBody.evaluate((element) => {
+    element.textContent = `${"Long reasoning must remain fully inspectable. ".repeat(80)}END`
+  })
+
+  const reasoning = timeline.locator('[data-slot="reasoning-text"]').first()
+  await expect(reasoning).toBeVisible()
+  await expect
+    .poll(() =>
+      reasoning.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return {
+          overflowY: style.overflowY,
+          scrollable: element.scrollHeight > element.clientHeight,
+        }
+      })
+    )
+    .toEqual({ overflowY: "auto", scrollable: true })
+
+  const threadViewport = page.locator('[data-slot="aui_thread-viewport"]')
+  const threadScrollTop = await threadViewport.evaluate(
+    (element) => element.scrollTop
+  )
+  await reasoning.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await expect
+    .poll(() => reasoning.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0)
+  await expect
+    .poll(() => threadViewport.evaluate((element) => element.scrollTop))
+    .toBe(threadScrollTop)
+  await expect
+    .poll(async () => {
+      const [timelineBox, reasoningBox] = await Promise.all([
+        timeline.boundingBox(),
+        reasoningBody.boundingBox(),
+      ])
+      if (!timelineBox || !reasoningBox) return Number.NEGATIVE_INFINITY
+      return (
+        timelineBox.y +
+        timelineBox.height -
+        (reasoningBox.y + reasoningBox.height)
+      )
+    })
+    .toBeGreaterThanOrEqual(-1)
+})
+
+test("expanded execution rows use a compact vertical rhythm", async ({
+  page,
+}) => {
+  await page.goto("/en")
+
+  const timeline = page.locator('[data-slot="tool-timeline"]').first()
+  await timeline.locator("button").first().click()
+
+  const firstReasoning = timeline
+    .getByText("Reasoning", { exact: true })
+    .first()
+  const nextToolLabel = timeline.getByText("Read", { exact: true }).first()
+  const firstToolChip = timeline.getByText("planning-dataset-q1.md", {
+    exact: true,
+  })
+  const reasoningTrigger = timeline
+    .locator('[data-slot="reasoning-trigger"]')
+    .first()
+  const firstToolTrigger = timeline
+    .locator('[data-slot="tool-call"] button')
+    .first()
+  const messageToolExperience = timeline.locator(
+    'xpath=ancestor::*[@data-slot="message-tool-experience"]'
+  )
+  await expect(firstReasoning).toBeVisible()
+  await expect(nextToolLabel).toBeVisible()
+  await expect(firstToolChip).toBeVisible()
+  await expect(reasoningTrigger).toBeVisible()
+  await expect(firstToolTrigger).toBeVisible()
+
+  const reasoningTop = await firstReasoning.evaluate(
+    (element) => element.getBoundingClientRect().top
+  )
+  const nextToolTop = await nextToolLabel.evaluate(
+    (element) => element.getBoundingClientRect().top
+  )
+
+  const firstToolChipHeight = await firstToolChip.evaluate(
+    (element) => element.getBoundingClientRect().height
+  )
+  const [reasoningTriggerHeight, firstToolTriggerHeight] = await Promise.all([
+    reasoningTrigger.evaluate(
+      (element) => element.getBoundingClientRect().height
+    ),
+    firstToolTrigger.evaluate(
+      (element) => element.getBoundingClientRect().height
+    ),
+  ])
+  const groupBottomMargin = await messageToolExperience.evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).marginBottom)
+  )
+
+  expect(nextToolTop - reasoningTop).toBeGreaterThanOrEqual(25)
+  expect(nextToolTop - reasoningTop).toBeLessThanOrEqual(30)
+  expect(firstToolChipHeight).toBeLessThanOrEqual(18)
+  expect(reasoningTriggerHeight).toBeLessThanOrEqual(30)
+  expect(firstToolTriggerHeight).toBeLessThanOrEqual(30)
+  expect(groupBottomMargin).toBeGreaterThanOrEqual(4)
+})
+
 test("a Hebrew artifact opens in the focus-managed full-screen viewer", async ({
   page,
 }) => {
   await page.goto("/he")
-  await page.getByRole("textbox", { name: "שדה הודעה" }).fill("Publish an artifact")
+  await page
+    .getByRole("textbox", { name: "שדה הודעה" })
+    .fill("Publish an artifact")
   await page.getByRole("button", { name: "שליחת הודעה" }).click()
   const open = page.getByRole("button", { name: "פתיחה" }).first()
   await expect(open).toBeVisible()

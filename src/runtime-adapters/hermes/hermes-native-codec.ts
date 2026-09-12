@@ -76,6 +76,24 @@ export function canonicalHermesToolName(name: string) {
 }
 
 export function canonicalHermesToolArgs(name: string, args: JsonRecord) {
+  if (name === "clarify") {
+    const { choices, multi_select, allow_freeform, ...rest } = args
+    const options = Array.isArray(choices)
+      ? choices.filter(
+          (choice): choice is string =>
+            typeof choice === "string" && choice.trim().length > 0
+        )
+      : []
+    return {
+      ...rest,
+      ...(options.length ? { options } : {}),
+      allowFreeform:
+        typeof allow_freeform === "boolean"
+          ? allow_freeform
+          : options.length === 0,
+      multiple: multi_select === true,
+    }
+  }
   if (canonicalHermesToolName(name) !== "delegate_subagent") return args
   if (typeof args.description === "string" && args.description.trim())
     return args
@@ -169,6 +187,13 @@ export function projectHermesHistory(rows: readonly unknown[]) {
             value.id > 0
           ? `hermes-row-${value.id}`
           : (stringValue(value.id) ?? `hermes-history-${index}`)
+    const previousAssistant =
+      role === "assistant" && messages.at(-1)?.role === "assistant"
+        ? messages.at(-1)
+        : undefined
+    const messageIndex = previousAssistant
+      ? messages.length - 1
+      : messages.length
     const rawContent = parseJson(value.content)
     const text = String(
       value.display_content ??
@@ -181,9 +206,16 @@ export function projectHermesHistory(rows: readonly unknown[]) {
           : rawContent) ??
         ""
     )
-    const content: Array<JsonRecord & { type: string }> = text
-      ? [{ type: "text", text }]
-      : []
+    const content: Array<JsonRecord & { type: string }> =
+      previousAssistant && Array.isArray(previousAssistant.content)
+        ? [...previousAssistant.content]
+        : []
+    const reasoning =
+      role === "assistant"
+        ? (stringValue(value.reasoning_content) ?? stringValue(value.reasoning))
+        : undefined
+    if (reasoning) content.push({ type: "reasoning", text: reasoning })
+    if (text) content.push({ type: "text", text })
     if (role === "user" && Array.isArray(rawContent)) {
       for (const part of rawContent) {
         if (!isRecord(part) || part.type !== "image_url") continue
@@ -219,15 +251,22 @@ export function projectHermesHistory(rows: readonly unknown[]) {
           args: canonicalHermesToolArgs(unwrapped.name, unwrapped.args),
           argsText: JSON.stringify(unwrapped.args),
         })
-        calls.set(toolCallId, { messageIndex: messages.length, partIndex })
+        calls.set(toolCallId, { messageIndex, partIndex })
       }
     }
-    messages.push({
-      id,
-      role,
-      content: content as never,
-      createdAt: messageDate(value, index),
-    })
+    if (previousAssistant) {
+      messages[messageIndex] = {
+        ...previousAssistant,
+        content: content as never,
+      }
+    } else {
+      messages.push({
+        id,
+        role,
+        content: content as never,
+        createdAt: messageDate(value, index),
+      })
+    }
   })
   return messages
 }

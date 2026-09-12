@@ -814,6 +814,50 @@ describe("AOS OpenCode runtime", () => {
     }
   )
 
+  it("keeps a failed selection retryable without replacing the authoritative Session model", async () => {
+    const { client, native } = nativeClient()
+    const hub = new AosOpenCodeEventHub(client)
+    let features!: ComposerFeatureViewModel
+    function Features() {
+      features = useOpenCodeComposerFeatures(client)
+      return null
+    }
+    function Harness() {
+      const runtime = useAosOpenCodeRuntime(
+        client,
+        { initialSessionId: "session-build" },
+        hub
+      )
+      return (
+        <AssistantRuntimeProvider runtime={runtime}>
+          <Features />
+        </AssistantRuntimeProvider>
+      )
+    }
+    render(<Harness />)
+    await waitFor(() => expect(features.model).toBeDefined())
+    const two = features.model!.options.find(
+      ({ label }) => label === "Model Two"
+    )!.id
+    const nativeSwitch = native.v2.session.switchModel.getMockImplementation()!
+    native.v2.session.switchModel.mockRejectedValueOnce(new Error("offline"))
+
+    await act(async () => features.model!.select(two))
+
+    expect(features.model!.selectedId).not.toBe(two)
+    expect(features.model!.selection).toEqual({
+      status: "error",
+      targetId: two,
+      error: "offline",
+    })
+    expect(features.model!.retry).toBeDefined()
+    native.v2.session.switchModel.mockImplementation(nativeSwitch)
+
+    await act(async () => features.model!.retry!())
+    await waitFor(() => expect(features.model!.selectedId).toBe(two))
+    expect(features.model!.selection).toEqual({ status: "idle" })
+  })
+
   it.each([
     {
       locale: "en",

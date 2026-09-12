@@ -457,7 +457,7 @@ function AgentsPanel({
       </div>
 
       <nav
-        className={styles.agentList}
+        className={cn(styles.agentList, "gap-1 py-3")}
         aria-label={dictionary.workspace.agents}
       >
         {agents.map((agent) => {
@@ -479,7 +479,7 @@ function AgentsPanel({
 
           return (
             <button
-              className={styles.agentButton}
+              className={cn(styles.agentButton, "gap-2 p-2")}
               type="button"
               key={agent.id}
               data-agent-id={agent.id}
@@ -490,14 +490,19 @@ function AgentsPanel({
                 onAfterSelectAgent?.()
               }}
             >
-              <AgentGlyph agent={agent} />
+              <AgentGlyph
+                agent={agent}
+                className="!size-9 !rounded-lg [&_svg]:!size-4"
+              />
               <span className={styles.agentText}>
-                <span className={styles.agentName}>
+                <span className={cn(styles.agentName, "text-sm leading-5")}>
                   <bdi>{agent.name}</bdi>
                   {indicator.marker}
                 </span>
                 {agent.description ? (
-                  <bdi className={styles.agentDescription}>
+                  <bdi
+                    className={cn(styles.agentDescription, "text-xs leading-4")}
+                  >
                     {agent.description}
                   </bdi>
                 ) : null}
@@ -853,7 +858,7 @@ function InspectorPanel({
 
   if (!agent) {
     return (
-      <div className={styles.inspectorPanel}>
+      <div className={cn(styles.inspectorPanel, "p-4")}>
         <p className={styles.emptyText}>{dictionary.empty.noAgentSelected}</p>
       </div>
     )
@@ -862,12 +867,17 @@ function InspectorPanel({
   const statusLabel = agentStatusLabel(agent.status, dictionary)
 
   return (
-    <div className={styles.inspectorPanel}>
-      <div className={styles.inspectorIdentity}>
-        <AgentGlyph agent={agent} />
+    <div className={cn(styles.inspectorPanel, "p-4")}>
+      <div className={cn(styles.inspectorIdentity, "gap-3")}>
+        <AgentGlyph
+          agent={agent}
+          className="!size-10 !rounded-xl [&_svg]:!size-5"
+        />
         <div className={styles.agentText}>
-          <bdi className={styles.inspectorName}>{agent.name}</bdi>
-          <div className={styles.statusLine}>
+          <bdi className={cn(styles.inspectorName, "text-lg leading-7")}>
+            {agent.name}
+          </bdi>
+          <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground">
             {agent.status && agent.status !== "idle" ? (
               <span
                 className={styles.statusDot}
@@ -881,11 +891,13 @@ function InspectorPanel({
       </div>
 
       {agent.description ? (
-        <bdi className={styles.inspectorDescription}>{agent.description}</bdi>
+        <bdi className="mt-2 block text-xs leading-4 text-muted-foreground">
+          {agent.description}
+        </bdi>
       ) : null}
 
       {navigation ? (
-        <div className={styles.recentSessions}>
+        <div className={cn(styles.recentSessions, "mt-4 gap-2 pt-4")}>
           <AgentSessionHistory
             navigation={navigation}
             activeThreadId={activeThreadId}

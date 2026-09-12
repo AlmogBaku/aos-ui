@@ -28,7 +28,7 @@ import {
   type ThreadComponents,
   type ThreadLabels,
 } from "./thread.aui"
-import { RichToolRenderer } from "@/components/tool-ui"
+import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
 
 afterEach(cleanup)
 
@@ -61,6 +61,164 @@ describe("composer history performance", () => {
   })
 })
 
+describe("assistant source parts", () => {
+  it("renders assistant-ui URL sources through the safe source element", () => {
+    render(
+      <LocalThread
+        labels={{ openSource: "פתיחת מקור" }}
+        initialMessages={[
+          {
+            id: "message-assistant-source",
+            role: "assistant",
+            content: [
+              {
+                type: "source",
+                sourceType: "url",
+                id: "source-1",
+                title: "מסמכי OpenAI",
+                url: "https://platform.openai.com/docs",
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(
+      screen.getByRole("link", { name: "פתיחת מקור: מסמכי OpenAI" })
+    ).toHaveAttribute("href", "https://platform.openai.com/docs")
+  })
+})
+
+describe("assistant tool timeline", () => {
+  it("renders one timeline while keeping completed tool UI visible", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        toolFallback={AosToolPresentation}
+        initialMessages={[
+          {
+            id: "tools-complete",
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                text: "I should inspect the project before changing it.",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "read",
+                toolName: "read_file",
+                args: { path: "README.md" },
+                result: "contents",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "search",
+                toolName: "search",
+                args: { query: "assistant-ui" },
+                result: "matches",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "skill",
+                toolName: "use_skill",
+                args: { skill: "kb" },
+                result: "private skill instructions must stay hidden",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "chart",
+                toolName: "render_chart",
+                args: { title: "Investment trend" },
+                result: {
+                  type: "line",
+                  xKey: "quarter",
+                  series: [{ key: "applied", label: "Applied AI" }],
+                  data: [
+                    { quarter: "Q4 ’24", applied: 103 },
+                    { quarter: "Q1 ’25", applied: 128 },
+                  ],
+                },
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(
+      document.querySelectorAll('[data-slot="tool-timeline"]')
+    ).toHaveLength(1)
+    const trigger = await screen.findByRole("button", {
+      name: "Reasoning · 3 tool calls",
+    })
+    expect(trigger).toHaveAttribute("aria-expanded", "false")
+    await user.click(trigger)
+    expect(trigger).toHaveAttribute("aria-expanded", "true")
+    const reasoning = screen.getByRole("button", {
+      name: /^Reasoning$/,
+    })
+    await user.click(reasoning)
+    expect(
+      screen.getByText("I should inspect the project before changing it.")
+    ).toBeVisible()
+    expect(document.querySelectorAll('[data-slot="tool-call"]')).toHaveLength(3)
+    expect(screen.getAllByText("Read")).toHaveLength(1)
+    expect(screen.getAllByText("Searched")).toHaveLength(1)
+    expect(screen.getAllByText("Loaded")).toHaveLength(1)
+    expect(screen.getByText("kb")).toBeVisible()
+    expect(
+      screen.queryByText("private skill instructions must stay hidden")
+    ).toBeNull()
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('[data-slot="tool-chrome"]')
+      ).toHaveLength(1)
+    )
+  })
+
+  it("keeps intermediate assistant prose inside the timeline and the final answer visible", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        toolFallback={AosToolPresentation}
+        initialMessages={[
+          {
+            id: "tool-loop-with-final",
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "I will inspect the project first.",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "read-project",
+                toolName: "read_file",
+                args: { path: "README.md" },
+                result: "contents",
+              },
+              {
+                type: "text",
+                text: "The final answer remains in the conversation.",
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(
+      screen.getByText("The final answer remains in the conversation.")
+    ).toBeVisible()
+    expect(screen.queryByText("I will inspect the project first.")).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "1 tool call" }))
+    expect(screen.getByText("I will inspect the project first.")).toBeVisible()
+  })
+})
+
 describe("thread scroll ownership", () => {
   it("leaves automatic scrolling to the reading-position controller", () => {
     expect(THREAD_VIEWPORT_SCROLL_BEHAVIOR).toEqual({
@@ -68,6 +226,89 @@ describe("thread scroll ownership", () => {
       scrollToBottomOnInitialize: false,
       scrollToBottomOnThreadSwitch: false,
     })
+  })
+})
+
+describe("conversation search", () => {
+  it("searches only the loaded branch and restores the triggering focus on Escape", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "branch-user",
+            role: "user",
+            content: [{ type: "text", text: "Find the launch brief" }],
+          },
+          {
+            id: "branch-assistant",
+            role: "assistant",
+            content: [{ type: "text", text: "The launch brief is ready." }],
+          },
+        ]}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    input.focus()
+
+    window.dispatchEvent(new Event("aos:conversation-search"))
+
+    const search = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(search, "launch")
+    expect(await screen.findByText("1 of 2")).toBeVisible()
+    await user.keyboard("{Enter}")
+    expect(screen.getByText("2 of 2")).toBeVisible()
+    await user.keyboard("{Shift>}{Enter}{/Shift}")
+    expect(screen.getByText("1 of 2")).toBeVisible()
+    fireEvent.keyDown(search, { key: "Escape", bubbles: true })
+
+    expect(search).not.toBeInTheDocument()
+    await waitFor(() => expect(input).toHaveFocus())
+  })
+
+  it("keeps the open query and selected occurrence when a message is appended", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+        initialMessages={[
+          {
+            id: "first-launch",
+            role: "user",
+            content: [{ type: "text", text: "First launch note" }],
+          },
+          {
+            id: "second-launch",
+            role: "assistant",
+            content: [{ type: "text", text: "Second launch note" }],
+          },
+        ]}
+      />
+    )
+    window.dispatchEvent(new Event("aos:conversation-search"))
+    const search = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(search, "launch")
+    expect(await screen.findByText("1 of 2")).toBeVisible()
+    await user.keyboard("{Enter}")
+    expect(screen.getByText("2 of 2")).toBeVisible()
+
+    await act(async () => {
+      runtime?.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Third launch note" }],
+      })
+    })
+
+    expect(search).toBeInTheDocument()
+    expect(search).toHaveValue("launch")
+    expect(await screen.findByText("2 of 3")).toBeVisible()
   })
 })
 
@@ -320,9 +561,7 @@ describe("Thread accessibility", () => {
     )
 
     await screen.findByText("Data analyst")
-    expect(screen.getByText("Validated the three segments.")).not.toBeVisible()
-
-    await userEvent.click(screen.getByText("Data analyst"))
+    expect(screen.getByText("Validated the three segments.")).toBeVisible()
 
     const transcript = document.querySelector<HTMLElement>(
       '[data-slot="nested-activity-transcript"]'
@@ -463,6 +702,42 @@ describe("Thread accessibility", () => {
       expect(stop).toHaveBeenCalledTimes(1)
     }
   )
+
+  it("does not cancel a running response when Escape closes conversation search", async () => {
+    const user = userEvent.setup()
+    const stop = vi.fn()
+    const model: ChatModelAdapter = {
+      async *run({ abortSignal }) {
+        yield { content: [{ type: "text", text: "Waiting on native run" }] }
+        await new Promise<void>((resolve) =>
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              stop()
+              resolve()
+            },
+            { once: true }
+          )
+        )
+      },
+    }
+    render(<LocalThread model={model} />)
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      "Run"
+    )
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    await screen.findByText("Waiting on native run")
+
+    window.dispatchEvent(new Event("aos:conversation-search"))
+    const search = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    fireEvent.keyDown(search, { key: "Escape", bubbles: true })
+
+    expect(search).not.toBeInTheDocument()
+    expect(stop).not.toHaveBeenCalled()
+  })
 
   it("localizes attachment controls and image descriptions through Thread labels", async () => {
     const user = userEvent.setup()

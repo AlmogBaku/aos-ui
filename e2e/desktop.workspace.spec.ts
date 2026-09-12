@@ -38,6 +38,106 @@ async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
   await expect(page.getByRole("tablist")).toBeVisible()
 }
 
+test("desktop keeps Markdown compact without shrinking rich output", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  const prose = page
+    .getByText(/^Applied AI is accelerating fastest in the planning dataset/)
+    .first()
+  const planStep = page.getByText("Confirm launch goals", { exact: true })
+
+  await expect(prose).toBeVisible()
+  await expect(planStep).toBeVisible()
+  await expect
+    .poll(() =>
+      prose.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { fontSize: style.fontSize, lineHeight: style.lineHeight }
+      })
+    )
+    .toEqual({ fontSize: "14px", lineHeight: "24px" })
+  await expect
+    .poll(() =>
+      planStep.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { fontSize: style.fontSize, lineHeight: style.lineHeight }
+      })
+    )
+    .toEqual({ fontSize: "14px", lineHeight: "24px" })
+})
+
+test("inline artifact cards use the compact workspace rhythm", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  const filename = page
+    .getByText("enterprise-ai-brief.md", { exact: true })
+    .first()
+  const card = filename.locator("xpath=ancestor::article")
+  const openButton = card.getByRole("button", {
+    name: "Open: enterprise-ai-brief.md",
+  })
+
+  await expect(card).toBeVisible()
+  await expect
+    .poll(() =>
+      card.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return {
+          paddingBlock: style.paddingBlock,
+          paddingInline: style.paddingInline,
+        }
+      })
+    )
+    .toEqual({ paddingBlock: "8px", paddingInline: "8px" })
+  await expect
+    .poll(() =>
+      openButton.evaluate((element) => element.getBoundingClientRect().height)
+    )
+    .toBeLessThanOrEqual(40)
+  await expect(
+    card.getByRole("button", { name: "Open", exact: true })
+  ).toHaveCount(0)
+  await expect
+    .poll(() =>
+      card.evaluate((element) => element.getBoundingClientRect().height)
+    )
+    .toBeLessThanOrEqual(56)
+  await expect
+    .poll(() =>
+      card.evaluate((element) => element.getBoundingClientRect().width)
+    )
+    .toBeLessThan(600)
+})
+
+test.describe("coarse-pointer artifact outputs", () => {
+  test.use({ hasTouch: true })
+
+  test("compact artifact actions remain full touch targets", async ({
+    page,
+  }) => {
+    await openWorkspace(page)
+
+    const outputs = page
+      .locator("details")
+      .filter({ has: page.getByText("Artifacts", { exact: true }) })
+    await outputs.locator("summary").click()
+    const compactArtifact = outputs.locator("article").first()
+
+    for (const name of ["Open", "Download"]) {
+      const box = await compactArtifact
+        .getByRole("button", { name })
+        .boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.width).toBeGreaterThanOrEqual(44)
+      expect(box!.height).toBeGreaterThanOrEqual(44)
+    }
+  })
+})
+
 function agentButton(page: Page, name: string) {
   return page.getByRole("button", {
     name: new RegExp(`^${name}(?:,|$)`),

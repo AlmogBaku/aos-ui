@@ -1758,10 +1758,13 @@ export class HermesNativeClient {
     this.#updateLastAssistant(threadId, (message) => {
       if (message.role !== "assistant") return message
       const content = Array.isArray(message.content) ? [...message.content] : []
-      const index = content.findLastIndex((part) => part.type === kind)
-      if (index >= 0) {
-        const part = content[index]
-        content[index] = { ...part, text: String(part.text ?? "") + delta }
+      const index = content.length - 1
+      const trailing = content[index]
+      if (trailing?.type === kind) {
+        content[index] = {
+          ...trailing,
+          text: String(trailing.text ?? "") + delta,
+        }
       } else content.push({ type: kind, text: delta })
       return { ...message, content }
     })
@@ -1832,9 +1835,13 @@ export class HermesNativeClient {
         const content = Array.isArray(message.content)
           ? [...message.content]
           : []
-        const index = content.findIndex((part) => part.type === "text")
-        if (index >= 0) content[index] = { type: "text", text: finalText }
-        else content.unshift({ type: "text", text: finalText })
+        const toolIndex = content.findLastIndex(
+          (part) => part.type === "tool-call"
+        )
+        const textIndex = content.findLastIndex((part) => part.type === "text")
+        if (textIndex > toolIndex)
+          content[textIndex] = { type: "text", text: finalText }
+        else content.push({ type: "text", text: finalText })
         return {
           ...message,
           content,

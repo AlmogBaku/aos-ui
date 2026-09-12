@@ -30,7 +30,7 @@ import {
 } from "@/components/assistant-ui/elements/thread.aui"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
-import { ToolUiLocaleProvider, RichToolRenderer } from "@/components/tool-ui"
+import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import { AgentGlyph, WorkspaceShell } from "@/components/workspace"
@@ -376,7 +376,7 @@ function SelectedAgentIdentity() {
 const threadComponents = {
   AssistantIdentity: SelectedAgentIdentity,
   BeforeComposer: SessionTodoDock,
-  ToolFallback: RichToolRenderer,
+  ToolFallback: AosToolPresentation,
 }
 
 function ConversationEmpty({

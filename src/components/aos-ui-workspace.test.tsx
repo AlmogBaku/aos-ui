@@ -1069,6 +1069,9 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-selected", "true")
     const conversation = screen.getByRole("main", { name: "Conversation" })
     expect(
+      within(conversation).queryByRole("button", { name: /tool call/i })
+    ).toBeNull()
+    expect(
       await within(conversation).findByRole("heading", {
         name: "Selected plan",
       })

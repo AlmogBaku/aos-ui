@@ -631,7 +631,6 @@ describe("real Assistant UI voice composer", () => {
           id: "answer-one",
           role: "assistant",
           content: [
-            { type: "text", text: "First answer" },
             { type: "reasoning", text: "Private reasoning" },
             {
               type: "tool-call",
@@ -640,6 +639,7 @@ describe("real Assistant UI voice composer", () => {
               args: {},
               result: "Inspectable result",
             },
+            { type: "text", text: "First answer" },
           ],
         },
         {
@@ -693,6 +693,13 @@ describe("real Assistant UI voice composer", () => {
     fireEvent.click(within(first).getByRole("button", { name: "Play" }))
     await waitFor(() => expect(h.audio.play).toHaveBeenCalledTimes(2))
     expect(h.synthesize).toHaveBeenCalledOnce()
+    window.dispatchEvent(new Event("aos:conversation-search"))
+    const search = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    fireEvent.change(search, { target: { value: "First answer" } })
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    fireEvent.keyDown(search, { key: "Escape" })
     fireEvent.click(within(first).getByRole("button", { name: "Stop reading" }))
     await waitFor(() =>
       expect(

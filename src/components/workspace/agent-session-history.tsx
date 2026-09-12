@@ -9,6 +9,7 @@ import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
+import { cn } from "@/lib/utils"
 
 import type { NavigationActivitySummary } from "./navigation-activity"
 import {
@@ -152,8 +153,8 @@ function SessionSection({
   })
 
   return (
-    <section className={styles.section} aria-label={heading}>
-      <h3>{heading}</h3>
+    <section className={cn(styles.section, "mt-2")} aria-label={heading}>
+      <h3 className="px-2 pt-1 pb-1.5 text-sm">{heading}</h3>
       <div className={styles.list}>
         {sessions.map((session) => {
           const activity = sessionActivity[session.threadId]
@@ -188,15 +189,18 @@ function SessionSection({
             >
               <SessionThreadListTrigger
                 type="button"
-                className={styles.sessionNavigation}
+                className={cn(
+                  styles.sessionNavigation,
+                  "min-h-12 gap-2 p-2 pe-1"
+                )}
                 aria-label={label}
                 aria-current={isActive ? "true" : undefined}
                 data-needs-attention={
                   activity?.needsAttention ? "true" : undefined
                 }
               >
-                <span className={styles.rowText}>
-                  <span className={styles.sessionTitleLine}>
+                <span className={cn(styles.rowText, "gap-0.5")}>
+                  <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
                     {session.status !== "idle" ? (
                       <span
                         className={styles.statusDot}
@@ -205,13 +209,13 @@ function SessionSection({
                         aria-hidden="true"
                       />
                     ) : null}
-                    <bdi className={styles.rowTitle}>
+                    <bdi className={cn(styles.rowTitle, "text-sm")}>
                       <SessionThreadListTitle fallback={session.title} />
                     </bdi>
                     <ActivityMarker activity={activity} copy={copy} />
                   </span>
                   {Number.isFinite(parsedDate.getTime()) ? (
-                    <time dateTime={session.updatedAt}>
+                    <time className="text-xs" dateTime={session.updatedAt}>
                       {dateFormatter.format(parsedDate)}
                     </time>
                   ) : null}
@@ -302,7 +306,9 @@ export function AgentSessionHistory({
 
   return (
     <div className={styles.history}>
-      <label className={styles.searchField}>
+      <label
+        className={cn(styles.searchField, "m-2 min-h-11 gap-2.5 px-3 text-sm")}
+      >
         <Search aria-hidden="true" />
         <span className={styles.srOnly}>{copy.searchSessions}</span>
         <input

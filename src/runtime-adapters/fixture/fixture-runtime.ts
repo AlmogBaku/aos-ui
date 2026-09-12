@@ -86,8 +86,53 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         role: "assistant",
         content: [
           {
-            type: "text",
-            text: "**Recommendation:** prioritize applied AI workflows, while funding platform and governance foundations together.\n\nApplied AI is accelerating fastest in the planning dataset. Governance is also becoming a material budget line instead of a later-stage add-on. Values are illustrative indices, not market estimates.",
+            type: "reasoning",
+            text: "I’ll inspect the planning dataset, load the market-analysis workflow, and validate the investment signals before making a recommendation.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-read-file",
+            toolName: "read_file",
+            args: { path: "planning-dataset-q1.md" },
+            argsText: '{"path":"planning-dataset-q1.md"}',
+            result: "Loaded the four-quarter planning dataset.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-skill",
+            toolName: "use_skill",
+            args: { skill: "market-analysis" },
+            argsText: '{"skill":"market-analysis"}',
+            result:
+              "Internal fixture instructions intentionally hidden from the message UI.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-search",
+            toolName: "web_search",
+            args: { query: "enterprise AI investment Q1" },
+            argsText: '{"query":"enterprise AI investment Q1"}',
+            result: "Found four relevant planning sections.",
+          },
+          {
+            type: "reasoning",
+            text: "The applied-AI series is accelerating faster than the platform baseline, while governance is rising steadily. I’ll run the comparison and capture the recommendation with its supporting visual.",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-terminal",
+            toolName: "terminal",
+            args: { command: "bun run analyze:market" },
+            argsText: '{"command":"bun run analyze:market"}',
+            result: { output: "Analysis complete", exitCode: 0 },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "fixture-initial-edit",
+            toolName: "apply_patch",
+            args: { path: "enterprise-ai-brief.md" },
+            argsText: '{"path":"enterprise-ai-brief.md"}',
+            result: { file: "enterprise-ai-brief.md", added: 18, removed: 3 },
           },
           {
             type: "tool-call",
@@ -111,9 +156,32 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
             result: marketInvestmentChart,
           },
           {
+            type: "tool-call",
+            toolCallId: "fixture-market-plan",
+            toolName: "present_plan",
+            args: { title: "Fund the next planning cycle" },
+            argsText: '{"title":"Fund the next planning cycle"}',
+            result: {
+              ...launchPlanResult,
+              id: "plan-market",
+              title: "Fund the next planning cycle",
+            },
+          },
+          {
+            type: "source",
+            sourceType: "url",
+            id: "fixture-market-source",
+            title: "Planning dataset methodology",
+            url: "https://example.com/planning-dataset-methodology",
+          },
+          {
             type: "data",
             name: "aos.artifact",
             data: FIXTURE_ARTIFACT_CATALOG.examples.markdown,
+          },
+          {
+            type: "text",
+            text: "**Recommendation:** prioritize applied AI workflows, while funding platform and governance foundations together.\n\nApplied AI is accelerating fastest in the planning dataset. Governance is also becoming a material budget line instead of a later-stage add-on. Values are illustrative indices, not market estimates.",
           },
         ],
         createdAt: new Date("2026-09-03T09:12:00.000Z"),

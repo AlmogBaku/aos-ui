@@ -60,36 +60,36 @@ export type RuntimeConfiguration =
 export type PublicRuntimeConfiguration =
   | ({
       mode: "fixture"
-      composerModelSelectorEnabled: boolean
-      composerContextEnabled: boolean
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
   | ({
       mode: "hermes"
       baseUrl: string
-      composerModelSelectorEnabled: boolean
-      composerContextEnabled: boolean
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
   | ({
       mode: "opencode"
       baseUrl: string
       directory: string
       defaultModel?: { providerID: string; modelID: string }
-      composerModelSelectorEnabled: boolean
-      composerContextEnabled: boolean
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
   | ({
       mode: "ag-ui"
       runUrl: string
       workspaceUrl: string
-      composerModelSelectorEnabled: boolean
-      composerContextEnabled: boolean
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
   | ({
       mode: "openclaw"
       baseUrl: string
       creatorAgentId?: string
-      composerModelSelectorEnabled: boolean
-      composerContextEnabled: boolean
+      composerModelSelectorEnabled?: boolean
+      composerContextEnabled?: boolean
     } & ArtifactHtmlConfiguration)
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
@@ -289,8 +289,12 @@ export function serializePublicRuntimeConfiguration(
   if (config.status === "unavailable") return config
 
   const featureFields = {
-    composerModelSelectorEnabled: config.composerFeatures.modelSelectorEnabled,
-    composerContextEnabled: config.composerFeatures.contextEnabled,
+    ...(config.composerFeatures.modelSelectorEnabled === false
+      ? { composerModelSelectorEnabled: false }
+      : {}),
+    ...(config.composerFeatures.contextEnabled === false
+      ? { composerContextEnabled: false }
+      : {}),
     ...(config.artifactHtmlAssetOrigins
       ? { artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins }
       : {}),
