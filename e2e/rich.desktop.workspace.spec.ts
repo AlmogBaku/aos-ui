@@ -130,6 +130,24 @@ test("message plans and session todos remain independent artifacts", async ({
   ).toBeVisible()
   await expect(todoDock).toContainText("0 of 1 session tasks complete")
   await expect(plans).toHaveCount(1)
+
+  const composer = page.locator('[data-slot="aui_composer-shell"]')
+  const [todoBounds, planBounds, composerBounds] = await Promise.all([
+    todoDock.boundingBox(),
+    plans.boundingBox(),
+    composer.boundingBox(),
+  ])
+
+  expect(todoBounds).not.toBeNull()
+  expect(planBounds).not.toBeNull()
+  expect(composerBounds).not.toBeNull()
+  expect(
+    Math.abs(todoBounds!.width - composerBounds!.width)
+  ).toBeLessThanOrEqual(1)
+  expect(
+    Math.abs(planBounds!.width - composerBounds!.width)
+  ).toBeLessThanOrEqual(1)
+  expect(composerBounds!.width).toBeGreaterThan(750)
 })
 
 test("published artifacts open from Outputs and close cleanly", async ({

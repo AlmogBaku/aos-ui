@@ -8,7 +8,11 @@
 
 [Get started](docs/getting-started.md) · [Choose a runtime](docs/runtime-capabilities.md) · [Deploy AOS](docs/deployment.md) · [Operator docs](docs/README.md)
 
-![AOS workspace showing a Q1 planning request, an executive-assistant recommendation, and an investment chart alongside personal business agents and Sessions](docs/assets/aos-workspace.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aos-workspace-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/aos-workspace-light.png">
+  <img alt="AOS workspace showing a Q1 planning request, an executive-assistant recommendation, and an investment chart alongside personal business agents and Sessions" src="docs/assets/aos-workspace-light.png">
+</picture>
 
 </div>
 

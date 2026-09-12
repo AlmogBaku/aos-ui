@@ -360,6 +360,7 @@ const ThreadRoot: FC<{
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background [--composer-padding:0.25rem] [--composer-radius:0.75rem] @md:[--composer-padding:0.5rem] @md:[--composer-radius:1.5rem]"
       style={{
         ["--thread-max-width" as string]: "56rem",
+        ["--thread-content-max-width" as string]: "52rem",
         ["--composer-bg" as string]: "var(--color-card)",
       }}
     >
@@ -408,7 +409,7 @@ const ThreadRoot: FC<{
 
           <div
             data-slot="aui_message-group"
-            className="mx-auto mb-8 flex w-full max-w-[45rem] flex-col gap-y-6 empty:hidden @md:mb-10"
+            className="mx-auto mb-8 flex w-full max-w-(--thread-content-max-width) flex-col gap-y-6 empty:hidden @md:mb-10"
           >
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
@@ -1000,7 +1001,7 @@ const Composer: FC<{
           <div
             data-slot="aui_composer-shell"
             className={cn(
-              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-[45rem] dark:bg-popover"
+              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
             )}
           />
         }
@@ -1236,12 +1237,12 @@ const AssistantMessage: FC = () => {
                 return null
               case "tool-call":
                 return (part.toolUI ?? isAosRichTool(part)) ? (
-                  <div className="py-2">
+                  <div className="-mx-2 py-2">
                     {part.toolUI ?? <ToolFallbackComponent {...part} />}
                   </div>
                 ) : null
               case "data":
-                return part.dataRendererUI
+                return <div className="-mx-2">{part.dataRendererUI}</div>
               case "file":
                 return (
                   <div data-slot="aui_assistant-message-file" className="py-1">
