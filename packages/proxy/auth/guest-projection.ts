@@ -1,8 +1,4 @@
-import type {
-  GuestAuthorization,
-  GuestCapability,
-  GuestOperation,
-} from "./guest-invitation"
+import type { GuestAuthorization, GuestCapability } from "./guest-invitation"
 import { guestCapabilities, guestOperations } from "./guest-invitation"
 
 const MAX_INPUT_BYTES = 65_536
@@ -70,6 +66,14 @@ const errorKeys = [
 
 type Transport = "rest" | "ag-ui" | "ws" | "artifact" | "error"
 
+const publicErrorCodes = [
+  "forbidden",
+  "not_found",
+  "rate_limited",
+  "request_failed",
+  "temporarily_unavailable",
+] as const
+
 export type GuestSafeMetadata = {
   name: string
   mediaType: string
@@ -100,8 +104,7 @@ export type GuestOutboundProjection = {
     | ({ type: "artifact" } & GuestSafeMetadata)
     | {
         type: "error"
-        code: string
-        message?: string
+        code: (typeof publicErrorCodes)[number]
         retryable: boolean
       }
 }
@@ -205,13 +208,6 @@ function validScope<T extends string>(
   )
 }
 
-function hasOperation(
-  authorization: GuestAuthorization,
-  operation: GuestOperation
-) {
-  return authorization.operations.includes(operation)
-}
-
 function hasCapability(
   authorization: GuestAuthorization,
   capability: GuestCapability
@@ -227,7 +223,7 @@ function validAuthorization(authorization: GuestAuthorization) {
     validIdentifier(authorization.agentId) &&
     (authorization.sessionId === undefined ||
       validIdentifier(authorization.sessionId)) &&
-    validScope(authorization.operations, guestOperations) &&
+    guestOperations.includes(authorization.operation) &&
     validScope(authorization.capabilities, guestCapabilities)
   )
 }
@@ -327,24 +323,33 @@ function projectMessage(
       ? undefined
       : projectMetadataList(value.artifacts, true)
   if (value.artifacts !== undefined && !artifacts) return undefined
-  if (!hasOperation(authorization, "messages:read")) return undefined
+  if (
+    authorization.operation !== "messages:read" &&
+    authorization.operation !== "attachments:read" &&
+    authorization.operation !== "artifacts:read"
+  )
+    return undefined
 
   const output = {
     type: "message" as const,
     role: value.role as "assistant" | "guest",
-    ...(value.text !== undefined && hasCapability(authorization, "message-text")
+    ...(value.text !== undefined &&
+    authorization.operation === "messages:read" &&
+    hasCapability(authorization, "message-text")
       ? { text: value.text }
       : {}),
-    ...(customUi && hasCapability(authorization, "custom-ui")
+    ...(customUi &&
+    authorization.operation === "messages:read" &&
+    hasCapability(authorization, "custom-ui")
       ? { customUi }
       : {}),
     ...(attachments &&
-    hasOperation(authorization, "attachments:read") &&
+    authorization.operation === "attachments:read" &&
     hasCapability(authorization, "attachment-metadata")
       ? { attachments }
       : {}),
     ...(artifacts &&
-    hasOperation(authorization, "artifacts:read") &&
+    authorization.operation === "artifacts:read" &&
     hasCapability(authorization, "artifact-metadata")
       ? { artifacts }
       : {}),
@@ -358,7 +363,7 @@ function projectArtifact(
 ): GuestOutboundProjection["payload"] | undefined {
   if (
     value.type !== "artifact" ||
-    !hasOperation(authorization, "artifacts:read") ||
+    authorization.operation !== "artifacts:read" ||
     !hasCapability(authorization, "artifact-metadata")
   )
     return undefined
@@ -374,19 +379,16 @@ function projectError(
   if (
     !exactKnownKeys(value, errorKeys) ||
     value.type !== "error" ||
-    !hasOperation(authorization, "errors:read") ||
+    authorization.operation !== "errors:read" ||
     !hasCapability(authorization, "safe-errors") ||
-    !validIdentifier(value.code) ||
+    !publicErrorCodes.includes(value.code as never) ||
     typeof value.retryable !== "boolean" ||
     (value.message !== undefined && !validText(value.message, 4_096))
   )
     return undefined
   return {
     type: "error",
-    code: value.code,
-    ...(value.message === undefined
-      ? {}
-      : { message: value.message as string }),
+    code: value.code as (typeof publicErrorCodes)[number],
     retryable: value.retryable,
   }
 }

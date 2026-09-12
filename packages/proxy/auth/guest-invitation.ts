@@ -55,9 +55,10 @@ export type GuestInvitationRequest = {
 export type GuestInvitationTarget = {
   agentId: string
   sessionId?: string
+  operation: GuestOperation
 }
 
-export type GuestAuthorization = {
+type GuestIdentity = {
   version: 1
   lane: "guest"
   issuer: string
@@ -67,7 +68,6 @@ export type GuestAuthorization = {
   invitationId: string
   agentId: string
   sessionId?: string
-  operations: readonly GuestOperation[]
   capabilities: readonly GuestCapability[]
   tokenId: string
   issuedAt: number
@@ -75,10 +75,18 @@ export type GuestAuthorization = {
   expiresAt: number
 }
 
+export type GuestInvitationGrant = GuestIdentity & {
+  operations: readonly GuestOperation[]
+}
+
+export type GuestAuthorization = GuestIdentity & {
+  operation: GuestOperation
+}
+
 export type GuestInvitationService = {
   issue(request: GuestInvitationRequest): Promise<{
     token: string
-    authorization: GuestAuthorization
+    grant: GuestInvitationGrant
   }>
   verify(
     token: string,
@@ -381,7 +389,7 @@ function parseClaims(
   }
 }
 
-function authorization(claims: InvitationClaims): GuestAuthorization {
+function identity(claims: InvitationClaims): GuestIdentity {
   return {
     version: 1,
     lane: "guest",
@@ -392,13 +400,23 @@ function authorization(claims: InvitationClaims): GuestAuthorization {
     invitationId: claims.inv,
     agentId: claims.agent,
     ...(claims.session === undefined ? {} : { sessionId: claims.session }),
-    operations: claims.ops,
     capabilities: claims.caps,
     tokenId: claims.jti,
     issuedAt: claims.iat,
     notBefore: claims.nbf,
     expiresAt: claims.exp,
   }
+}
+
+function grant(claims: InvitationClaims): GuestInvitationGrant {
+  return { ...identity(claims), operations: claims.ops }
+}
+
+function authorization(
+  claims: InvitationClaims,
+  operation: GuestOperation
+): GuestAuthorization {
+  return { ...identity(claims), operation }
 }
 
 function makeService(
@@ -438,7 +456,7 @@ function makeService(
         })
         .sign(options.keys[0].secret)
       if (utf8Bytes(token) > MAX_TOKEN_BYTES) throw new GuestInvitationError()
-      return { token, authorization: authorization(claims) }
+      return { token, grant: grant(claims) }
     },
 
     async verify(token, target) {
@@ -449,10 +467,11 @@ function makeService(
         target === null ||
         !exactKeys(
           target as unknown as Record<string, unknown>,
-          ["agentId"],
+          ["agentId", "operation"],
           ["sessionId"]
         ) ||
         !validIdentifier(target.agentId) ||
+        !guestOperations.includes(target.operation) ||
         (target.sessionId !== undefined && !validIdentifier(target.sessionId))
       )
         return undefined
@@ -496,13 +515,14 @@ function makeService(
           Buffer.from(JSON.stringify(claims), "utf8").toString("base64url") !==
             segments[1] ||
           claims.agent !== target.agentId ||
+          !claims.ops.includes(target.operation) ||
           (claims.session !== undefined &&
             claims.session !== target.sessionId) ||
           current < claims.nbf - options.clockSkewSeconds ||
           current > claims.exp + options.clockSkewSeconds
         )
           return undefined
-        return authorization(claims)
+        return authorization(claims, target.operation)
       } catch {
         return undefined
       }

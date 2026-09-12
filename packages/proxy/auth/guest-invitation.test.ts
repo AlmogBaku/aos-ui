@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest"
 import {
   GuestInvitationError,
   createGuestInvitationServiceForTest,
+  guestOperations,
+  type GuestOperation,
 } from "./guest-invitation"
 
 const currentKey = new Uint8Array(32).fill(7)
@@ -40,6 +42,14 @@ const invitation = {
   sessionId: "session_launch",
   operations: ["messages:create", "messages:read"] as const,
   capabilities: ["message-text", "custom-ui"] as const,
+}
+
+function target(operation: GuestOperation = "messages:read") {
+  return {
+    agentId: "agent_planner",
+    sessionId: "session_launch",
+    operation,
+  }
 }
 
 async function rogueToken(
@@ -87,7 +97,7 @@ describe("guest invitation", () => {
       sub: "guest_4Ez4k6W5",
       v: 1,
     })
-    expect(issued.authorization).toEqual({
+    expect(issued.grant).toEqual({
       version: 1,
       lane: "guest",
       issuer: "https://aos.example.test",
@@ -104,12 +114,23 @@ describe("guest invitation", () => {
       notBefore: 1_700_000_000,
       expiresAt: 1_700_000_300,
     })
-    await expect(
-      invitations.verify(issued.token, {
-        agentId: "agent_planner",
-        sessionId: "session_launch",
-      })
-    ).resolves.toEqual(issued.authorization)
+    await expect(invitations.verify(issued.token, target())).resolves.toEqual({
+      version: 1,
+      lane: "guest",
+      issuer: "https://aos.example.test",
+      audience: "aos-guest-listener",
+      deploymentId: "aos-prod-il1",
+      principalId: "guest_4Ez4k6W5",
+      invitationId: "invite_Q9mZ2",
+      agentId: "agent_planner",
+      sessionId: "session_launch",
+      operation: "messages:read",
+      capabilities: ["custom-ui", "message-text"],
+      tokenId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+      issuedAt: 1_700_000_000,
+      notBefore: 1_700_000_000,
+      expiresAt: 1_700_000_300,
+    })
   })
 
   it("rejects tampering, alg confusion, unknown keys, and the wrong token type", async () => {
@@ -126,26 +147,24 @@ describe("guest invitation", () => {
     ).toString("base64url")}.${payload}.`
 
     await expect(
-      invitations.verify(tampered, { agentId: "agent_planner" })
+      invitations.verify(tampered, target())
     ).resolves.toBeUndefined()
     await expect(
-      invitations.verify(unsecured, { agentId: "agent_planner" })
+      invitations.verify(unsecured, target())
     ).resolves.toBeUndefined()
     await expect(
       invitations.verify(
         await rogueToken(decodeJwt(issued.token), { kid: "retired" }),
-        { agentId: "agent_planner" }
+        target()
       )
     ).resolves.toBeUndefined()
     await expect(
-      invitations.verify(`${header}.${payload}.bad`, {
-        agentId: "agent_planner",
-      })
+      invitations.verify(`${header}.${payload}.bad`, target())
     ).resolves.toBeUndefined()
     await expect(
       invitations.verify(
         await rogueToken(decodeJwt(issued.token), { typ: "JWT" }),
-        { agentId: "agent_planner" }
+        target()
       )
     ).resolves.toBeUndefined()
   })
@@ -163,10 +182,7 @@ describe("guest invitation", () => {
 
     for (const mutated of mutations) {
       await expect(
-        service().verify(await rogueToken(mutated), {
-          agentId: "agent_planner",
-          sessionId: "session_launch",
-        })
+        service().verify(await rogueToken(mutated), target())
       ).resolves.toBeUndefined()
     }
   })
@@ -175,20 +191,16 @@ describe("guest invitation", () => {
     const issued = await service().issue(invitation)
 
     await expect(
-      service({ now: () => 1_699_999_989_000 }).verify(issued.token, {
-        agentId: "agent_planner",
-      })
+      service({ now: () => 1_699_999_989_000 }).verify(issued.token, target())
     ).resolves.toBeUndefined()
     await expect(
-      service({ now: () => 1_699_999_990_000 }).verify(issued.token, {
-        agentId: "agent_planner",
-        sessionId: "session_launch",
-      })
-    ).resolves.toEqual(issued.authorization)
+      service({ now: () => 1_699_999_990_000 }).verify(issued.token, target())
+    ).resolves.toMatchObject({
+      operation: "messages:read",
+      tokenId: issued.grant.tokenId,
+    })
     await expect(
-      service({ now: () => 1_700_000_311_000 }).verify(issued.token, {
-        agentId: "agent_planner",
-      })
+      service({ now: () => 1_700_000_311_000 }).verify(issued.token, target())
     ).resolves.toBeUndefined()
   })
 
@@ -220,10 +232,7 @@ describe("guest invitation", () => {
 
     for (const mutated of mutations) {
       await expect(
-        service().verify(await rogueToken(mutated), {
-          agentId: "agent_planner",
-          sessionId: "session_launch",
-        })
+        service().verify(await rogueToken(mutated), target())
       ).resolves.toBeUndefined()
     }
   })
@@ -240,7 +249,7 @@ describe("guest invitation", () => {
     await expect(
       service().verify(
         await rogueToken({ ...decodeJwt(issued.token), sub: "operator_root" }),
-        { agentId: "agent_planner", sessionId: "session_launch" }
+        target()
       )
     ).resolves.toBeUndefined()
   })
@@ -252,10 +261,7 @@ describe("guest invitation", () => {
     )
 
     await expect(
-      service().verify(await rogueToken(reversedClaims), {
-        agentId: "agent_planner",
-        sessionId: "session_launch",
-      })
+      service().verify(await rogueToken(reversedClaims), target())
     ).resolves.toBeUndefined()
   })
 
@@ -263,20 +269,54 @@ describe("guest invitation", () => {
     const issued = await service().issue(invitation)
 
     await expect(
-      service().verify(issued.token, { agentId: "agent_other" })
+      service().verify(issued.token, {
+        ...target(),
+        agentId: "agent_other",
+      })
     ).resolves.toBeUndefined()
     await expect(
       service().verify(issued.token, {
         agentId: "agent_planner",
         sessionId: "session_other",
+        operation: "messages:read",
       })
     ).resolves.toBeUndefined()
+    await expect(
+      service().verify(issued.token, target())
+    ).resolves.toMatchObject({ operation: "messages:read" })
+  })
+
+  it("requires one exact requested operation and returns only that bound operation", async () => {
+    const issued = await service().issue({
+      ...invitation,
+      operations: guestOperations,
+    })
+
+    for (const operation of guestOperations) {
+      const verified = await service().verify(issued.token, target(operation))
+      expect(verified?.operation).toBe(operation)
+      expect(verified).not.toHaveProperty("operations")
+    }
     await expect(
       service().verify(issued.token, {
         agentId: "agent_planner",
         sessionId: "session_launch",
-      })
-    ).resolves.toEqual(issued.authorization)
+      } as never)
+    ).resolves.toBeUndefined()
+    await expect(
+      service().verify(issued.token, {
+        ...target(),
+        operation: "operator:admin",
+      } as never)
+    ).resolves.toBeUndefined()
+  })
+
+  it("rejects an exact operation that the invitation did not grant", async () => {
+    const issued = await service().issue(invitation)
+
+    await expect(
+      service().verify(issued.token, target("artifacts:read"))
+    ).resolves.toBeUndefined()
   })
 
   it("supports explicit verification-only key rotation and issues with the first key", async () => {
@@ -290,12 +330,10 @@ describe("guest invitation", () => {
       ],
     })
 
-    await expect(
-      rotated.verify(old.token, {
-        agentId: "agent_planner",
-        sessionId: "session_launch",
-      })
-    ).resolves.toEqual(old.authorization)
+    await expect(rotated.verify(old.token, target())).resolves.toMatchObject({
+      operation: "messages:read",
+      tokenId: old.grant.tokenId,
+    })
     expect(
       decodeProtectedHeader((await rotated.issue(invitation)).token).kid
     ).toBe("2026-09")
@@ -304,34 +342,26 @@ describe("guest invitation", () => {
   it("returns the same token identity on stateless repeated verification", async () => {
     const issued = await service().issue(invitation)
 
-    const first = await service().verify(issued.token, {
-      agentId: "agent_planner",
-      sessionId: "session_launch",
-    })
-    const retry = await service().verify(issued.token, {
-      agentId: "agent_planner",
-      sessionId: "session_launch",
-    })
+    const first = await service().verify(issued.token, target())
+    const retry = await service().verify(issued.token, target())
 
     expect(first).toEqual(retry)
-    expect(first?.tokenId).toBe(issued.authorization.tokenId)
+    expect(first?.tokenId).toBe(issued.grant.tokenId)
   })
 
   it("rejects oversized tokens and malformed claim or target identifiers", async () => {
     await expect(
-      service().verify(`a.${"a".repeat(4_097)}.a`, {
-        agentId: "agent_planner",
-      })
+      service().verify(`a.${"a".repeat(4_097)}.a`, target())
     ).resolves.toBeUndefined()
     await expect(
-      service().verify("not-a-jwt", { agentId: "agent_planner" })
+      service().verify("not-a-jwt", target())
     ).resolves.toBeUndefined()
     await expect(
       service().issue({ ...invitation, agentId: `agent_${"é".repeat(200)}` })
     ).rejects.toBeInstanceOf(GuestInvitationError)
     const issued = await service().issue(invitation)
     await expect(
-      service().verify(issued.token, { agentId: "agent\nother" })
+      service().verify(issued.token, { ...target(), agentId: "agent\nother" })
     ).resolves.toBeUndefined()
   })
 

@@ -13,13 +13,7 @@ const authorization: GuestAuthorization = {
   invitationId: "invite_Q9mZ2",
   agentId: "agent_planner",
   sessionId: "session_launch",
-  operations: [
-    "artifacts:read",
-    "attachments:read",
-    "errors:read",
-    "messages:create",
-    "messages:read",
-  ],
+  operation: "messages:read",
   capabilities: [
     "artifact-metadata",
     "attachment-metadata",
@@ -102,21 +96,6 @@ describe("guest outbound projection", () => {
             text: "Ready",
             items: ["Review", "Publish"],
           },
-          attachments: [
-            {
-              name: "brief.pdf",
-              mediaType: "application/pdf",
-              sizeBytes: 412,
-            },
-          ],
-          artifacts: [
-            {
-              name: "plan.md",
-              mediaType: "text/markdown",
-              sizeBytes: 120,
-              digest: "sha256:abc123",
-            },
-          ],
         },
       })
     }
@@ -153,7 +132,7 @@ describe("guest outbound projection", () => {
   it("uses both operation and capability ceilings without implicit expansion", () => {
     const reduced: GuestAuthorization = {
       ...authorization,
-      operations: ["messages:read"],
+      operation: "messages:read",
       capabilities: ["message-text"],
     }
 
@@ -190,6 +169,62 @@ describe("guest outbound projection", () => {
     })
   })
 
+  it("projects only the outbound family bound by the verified operation", () => {
+    const payload = {
+      type: "message",
+      role: "assistant",
+      text: "Message text",
+      attachments: [
+        { name: "brief.pdf", mediaType: "application/pdf", sizeBytes: 412 },
+      ],
+      artifacts: [
+        {
+          name: "plan.md",
+          mediaType: "text/markdown",
+          sizeBytes: 120,
+          digest: "sha256:abc123",
+        },
+      ],
+    }
+    const envelope = {
+      transport: "ws",
+      agentId: "agent_planner",
+      sessionId: "session_launch",
+      payload,
+    }
+
+    expect(
+      projectGuestOutbound(envelope, {
+        ...authorization,
+        operation: "messages:read",
+      })
+    ).toMatchObject({ payload: { text: "Message text" } })
+    expect(
+      projectGuestOutbound(envelope, {
+        ...authorization,
+        operation: "attachments:read",
+      })
+    ).toMatchObject({ payload: { attachments: [{ name: "brief.pdf" }] } })
+    expect(
+      projectGuestOutbound(envelope, {
+        ...authorization,
+        operation: "artifacts:read",
+      })
+    ).toMatchObject({ payload: { artifacts: [{ name: "plan.md" }] } })
+    expect(
+      projectGuestOutbound(envelope, {
+        ...authorization,
+        operation: "messages:create",
+      })
+    ).toBeUndefined()
+    expect(
+      projectGuestOutbound(envelope, {
+        ...authorization,
+        operation: "errors:read",
+      })
+    ).toBeUndefined()
+  })
+
   it("projects artifact and safe error metadata only when explicitly scoped", () => {
     expect(
       projectGuestOutbound(
@@ -210,7 +245,7 @@ describe("guest outbound projection", () => {
             liveId: "live-artifact",
           },
         },
-        authorization
+        { ...authorization, operation: "artifacts:read" }
       )
     ).toEqual({
       transport: "artifact",
@@ -240,7 +275,7 @@ describe("guest outbound projection", () => {
             nativeMetadata: { provider: "hermes" },
           },
         },
-        authorization
+        { ...authorization, operation: "errors:read" }
       )
     ).toEqual({
       transport: "error",
@@ -249,10 +284,56 @@ describe("guest outbound projection", () => {
       payload: {
         type: "error",
         code: "temporarily_unavailable",
-        message: "Please retry.",
         retryable: true,
       },
     })
+  })
+
+  it("omits provider error text containing tokens, URLs, paths, UNC paths, and live IDs", () => {
+    const projected = projectGuestOutbound(
+      {
+        transport: "error",
+        agentId: "agent_planner",
+        sessionId: "session_launch",
+        payload: {
+          type: "error",
+          code: "request_failed",
+          message:
+            "Bearer hms_super_secret at https://hermes.internal/private /srv/hermes/private C:\\Users\\operator\\secret \\\\server\\share live-event-123",
+          retryable: false,
+          stack: "at /srv/hermes/server.ts:4",
+          details: {
+            token: "hms_super_secret",
+            url: "https://hermes.internal/private",
+            path: "/srv/hermes/private",
+            windowsPath: "C:\\Users\\operator\\secret",
+            uncPath: "\\\\server\\share",
+            liveId: "live-event-123",
+          },
+          nativeMetadata: { provider: "hermes" },
+        },
+      },
+      { ...authorization, operation: "errors:read" }
+    )
+
+    expect(JSON.stringify(projected)).toBe(
+      '{"transport":"error","agentId":"agent_planner","sessionId":"session_launch","payload":{"type":"error","code":"request_failed","retryable":false}}'
+    )
+    expect(
+      projectGuestOutbound(
+        {
+          transport: "error",
+          agentId: "agent_planner",
+          sessionId: "session_launch",
+          payload: {
+            type: "error",
+            code: "hms_super_secret",
+            retryable: false,
+          },
+        },
+        { ...authorization, operation: "errors:read" }
+      )
+    ).toBeUndefined()
   })
 
   it("rejects cross-Agent and cross-Session projection", () => {
