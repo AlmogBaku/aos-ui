@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 4100,
+    "exposure": "private-container"
+  },
+  "publicOrigin": "http://127.0.0.1:3000",
+  "operator": {
+    "issuer": "https://identity.example.test",
+    "clientId": "aos-ui",
+    "clientSecretFile": "/run/secrets/oidc-client-secret",
+    "redirectUri": "http://127.0.0.1:3000/api/aos/v1/auth/operator/callback",
+    "allowedSubjects": ["operator@example.test"]
+  },
+  "hermes": {
+    "baseUrl": "http://host.docker.internal:9119",
+    "auth": {
+      "mode": "static-token",
+      "tokenFile": "/run/secrets/hermes-token"
+    }
+  },
+  "shutdownGraceMs": 5000
+}

@@ -36,13 +36,13 @@ Strict objects reject unknown native fields. Profile paths, raw `ui_meta`, nativ
 
 There is intentionally no `/bootstrap` route. Runtime/control-plane routes require an allowlisted verified operator. The visibility mutation additionally requires the configured same-origin `Origin`, JSON content type, a bounded body, a normalized visibility value, and the last observed native revision.
 
-`operator-auth.ts` is the boundary around the OIDC session verifier: verifier failures, absent sessions, and subjects outside the configured allowlist all become `unauthenticated`. OIDC Authorization Code + PKCE mechanics remain owned by the injected verifier rather than being reimplemented in this proxy slice.
+`operator-auth.ts` is the boundary around the OIDC session verifier: verifier failures, absent sessions, and subjects outside the configured allowlist all become `unauthenticated`. The executable supplies a fail-closed OIDC UserInfo verifier for an already-issued access bearer. OIDC Authorization Code + PKCE cookie issuance remains for the dedicated authentication task rather than being partially reimplemented in this proxy slice.
 
 All responses carry no-store and security headers. Request logs omit paths and domain identifiers. Errors are reduced to public codes and recursively redacted before logging.
 
 ### Configuration and secrets
 
-`config.ts` uses a strict configuration schema. It accepts only loopback listeners, absolute secret-file paths, credential-free HTTP(S) URLs, a non-empty OIDC subject allowlist, and either static-token or browser-broker Hermes auth mode. Rejected parser details are not exposed.
+`config.ts` uses a strict configuration schema. It accepts loopback listeners or an explicitly marked `private-container` wildcard listener, absolute secret-file paths, credential-free HTTP(S) URLs, a non-empty OIDC subject allowlist, and either static-token or browser-broker Hermes auth mode. An unscoped wildcard remains invalid. Rejected parser details are not exposed.
 
 `secrets.ts` accepts only absolute, regular, non-symlink, owner-only files of at most 8 KiB. It strips one terminal newline and rejects empty, multiline, NUL-containing, or overly permissive secrets.
 
@@ -76,7 +76,7 @@ The new public runtime mode is `aos`. Its public configuration is only `{ "mode"
 
 ### Routing and shutdown
 
-Vite and Nginx forward only `/api/aos/v1` to the proxy and preserve WebSocket upgrade and browser Origin headers for later scoped invalidations. Existing native development routes remain unchanged. Compose/Docker defaults expose the proxy host/port to Nginx without placing a provider URL in browser runtime configuration.
+Vite and Nginx forward only `/api/aos/v1` to the proxy and preserve WebSocket upgrade and browser Origin headers for later scoped invalidations. Existing native development routes remain unchanged. The Hermes Compose overlay runs a non-root Bun proxy target on the private Compose network, publishes no proxy port, health-gates Nginx startup, mounts configuration through Compose configs, and mounts OIDC/Hermes credentials through Compose secrets. Browser runtime configuration remains credential- and provider-URL-free.
 
 `server.ts` starts a Bun listener and provides idempotent bounded shutdown: stop accepting new work, wait for active work through `stop(false)`, then force close only after the configured grace period.
 
@@ -90,12 +90,16 @@ Vite and Nginx forward only `/api/aos/v1` to the proxy and preserve WebSocket up
 - `packages/proxy/composition.test.ts`
 - `packages/proxy/config.ts`
 - `packages/proxy/config.test.ts`
+- `packages/proxy/cli.ts`
+- `packages/proxy/cli.test.ts`
 - `packages/proxy/hermes-adapter.ts`
 - `packages/proxy/hermes-adapter.test.ts`
 - `packages/proxy/hermes-transport.ts`
 - `packages/proxy/hermes-transport.test.ts`
 - `packages/proxy/index.ts`
 - `packages/proxy/operator-auth.ts`
+- `packages/proxy/oidc-userinfo.ts`
+- `packages/proxy/oidc-userinfo.test.ts`
 - `packages/proxy/redaction.ts`
 - `packages/proxy/secrets.ts`
 - `packages/proxy/server.ts`
@@ -113,9 +117,13 @@ Vite and Nginx forward only `/api/aos/v1` to the proxy and preserve WebSocket up
 - `vite.config.ts`
 - `test/vite-aos-proxy.test.ts`
 - `deploy/nginx/default.conf.template`
+- `deploy/runtime-config.hermes.json`
+- `deploy/proxy-config.hermes.example.json`
 - `Dockerfile`
 - `compose.yaml`
 - `compose.hermes.yaml`
+- `.env.compose.example`
+- `docs/runtimes/hermes.md`
 - `package.json`
 - `bun.lock`
 - `tsconfig.proxy.json`
@@ -216,3 +224,66 @@ Every behavior group was first run against the absent or incomplete production s
 - No Session/run behavior is invented in Task 1. The minimal Assistant Runtime is deliberately disabled and empty.
 - No aggregate bootstrap endpoint, generic runtime SPI, cache, replay mechanism, database, or live-provider access was added.
 - Remaining concern: the repository-wide Vitest command has a repeatable full-suite teardown race in the unchanged conversation-search test, although all 1,363 assertions and the isolated attributed test pass. This should be repaired separately rather than coupling unrelated UI scheduler cleanup to the proxy foundation.
+
+## Review round 1 fixes
+
+### Design changes
+
+- Added `HermesAuthenticationError` as a server-private transport classification. Native ws-ticket HTTP 401/403 now projects as Hermes `unauthenticated`; connection and other transport failures still project as `unavailable/temporarily-unavailable`. The native body is never exposed.
+- Added `HermesAgentNotFoundError`. An authoritative catalog read that does not contain the requested profile now becomes normalized HTTP 404 `{ "error": { "code": "not_found" } }`; transport outages remain HTTP 503.
+- Added a Commander-based `proxy:serve` executable. It reads and strictly parses the mounted JSON configuration, loads owner-only secret files before constructing transports/listeners, supplies the OIDC UserInfo authentication boundary, starts Bun, and logs only redacted startup/failure records.
+- Added a dedicated non-root `proxy` Docker target and Hermes Compose service. The service has only `expose: 4100`, no host `ports`, and Nginx reaches it by the `proxy` service name. Compose config and both credential files use Compose config/secret mounts. Wildcard listening is legal only with the explicit `private-container` marker.
+- Added credential-free `deploy/runtime-config.hermes.json`, a private proxy-config template, and operator documentation. The documentation explicitly limits the static Hermes token to `auth_required=false`; it does not claim gated-Hermes support.
+
+### Review TDD evidence
+
+1. Hermes auth and missing-Agent classifications
+   - RED: `bunx vitest run packages/proxy/hermes-transport.test.ts packages/proxy/hermes-adapter.test.ts packages/proxy/app.test.ts`
+   - Result: 3 files failed with 5 expected failures: 401/403 had no typed error, auth projected as unavailable, the not-found error type was absent, and HTTP returned 503 instead of 404.
+   - GREEN: same command.
+   - Result: 3 files passed, 14 tests passed.
+
+2. Container topology and listener safety
+   - RED: `bunx vitest run packages/proxy/config.test.ts test/containers/compose.test.ts`
+   - Result: 2 files failed with 3 expected failures: private-container listener rejected, proxy service/image target absent.
+   - GREEN: `bunx vitest run packages/proxy/config.test.ts packages/proxy/cli.test.ts test/containers/compose.test.ts`
+   - Result: 3 files passed, 16 tests passed.
+
+3. Runnable CLI
+   - RED: `bunx vitest run packages/proxy/cli.test.ts`
+   - Result: suite could not resolve the absent `./cli` executable.
+   - GREEN: same command after adding the executable.
+   - Result: 1 file passed, 1 test passed.
+
+4. Image CLI help behavior found during smoke verification
+   - RED smoke: `docker run --rm aos-ui-proxy-task1-review bun run proxy:serve -- --help`
+   - Result: help printed, then Commander's help signal was incorrectly reported as `proxy.start_failed` with exit 1.
+   - RED test: `bunx vitest run packages/proxy/cli.test.ts`
+   - Result: 1 expected failure because `commander.helpDisplayed` rejected.
+   - GREEN: same test command after handling the established CLI's help signal.
+   - Result: 1 file passed, 2 tests passed.
+
+### Review verification
+
+- `bunx vitest run packages/protocol packages/proxy src/runtime-adapters/aos shared/aos-runtime-config.test.ts test/vite-aos-proxy.test.ts src/runtime-adapters/registry.test.ts test/containers/compose.test.ts`
+  - PASS: 15 files, 58 tests.
+- `bun run typecheck`
+  - PASS.
+- `bun run lint`
+  - PASS with zero errors or warnings.
+- `bun run build`
+  - PASS; only the previously documented Vite/CSS/dynamic-import/chunk-size warnings remain.
+- `AOS_UI_RUNTIME_CONFIG_FILE="$PWD/deploy/runtime-config.hermes.json" AOS_UI_PROXY_CONFIG_FILE="$PWD/deploy/proxy-config.hermes.example.json" AOS_UI_OIDC_CLIENT_SECRET_FILE="$PWD/.env.example" AOS_UI_HERMES_TOKEN_FILE="$PWD/.env.example" docker compose -f compose.yaml -f compose.hermes.yaml config --quiet`
+  - PASS.
+- `docker compose -f compose.yaml -f compose.hermes.yaml config --quiet` without secret/config paths
+  - Expected refusal: Compose required the three private file variables, confirming that the overlay cannot silently use inline/default credentials.
+- `docker build --target proxy -t aos-ui-proxy-task1-review .`
+  - PASS: dedicated proxy image built successfully.
+
+### Review self-review
+
+- The deployed proxy is reachable only from the Compose network; only the existing loopback-default Nginx port is published.
+- No credential appears in Compose environment values, image layers, public runtime config, browser code, logs, or normalized responses.
+- Hermes authentication rejection, missing Agent, revision conflict, and temporary outage remain distinct server-side types with bounded public projections.
+- No aggregate endpoint, replacement ID, browser-native Hermes dependency, custom AG-UI implementation, cache, database, replay layer, or live Hermes access was introduced.
+- Live container health/readiness against Hermes was not attempted because that requires approved credentials and an approved disposable native target. The built image and parsed topology are covered without accessing live Hermes.

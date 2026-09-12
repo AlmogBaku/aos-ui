@@ -9,6 +9,7 @@ import {
   type RuntimeInfo,
   type VisibilityUpdateResponse,
 } from "../protocol"
+import { HermesAuthenticationError } from "./hermes-transport"
 
 export interface HermesRpcTransport {
   request(
@@ -30,6 +31,13 @@ export class HermesUnavailableError extends Error {
   constructor() {
     super("Hermes is temporarily unavailable")
     this.name = "HermesUnavailableError"
+  }
+}
+
+export class HermesAgentNotFoundError extends Error {
+  constructor() {
+    super("Agent not found")
+    this.name = "HermesAgentNotFoundError"
   }
 }
 
@@ -114,7 +122,9 @@ export class HermesServerAdapter {
     try {
       await this.transport.request("profiles.list", { include_sessions: false })
       return { status: "authenticated", method: "static-token" }
-    } catch {
+    } catch (error) {
+      if (error instanceof HermesAuthenticationError)
+        return { status: "unauthenticated" }
       return { status: "unavailable", reason: "temporarily-unavailable" }
     }
   }
@@ -185,7 +195,7 @@ export class HermesServerAdapter {
   ): Promise<VisibilityUpdateResponse> {
     const before = await this.listAgents()
     const current = before.agents.find(({ summary }) => summary.id === agentId)
-    if (!current) throw new HermesUnavailableError()
+    if (!current) throw new HermesAgentNotFoundError()
     if (!current.editable || current.revision === "unavailable")
       throw new HermesUnavailableError()
     if (current.revision !== observedRevision)

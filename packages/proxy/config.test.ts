@@ -57,6 +57,25 @@ describe("proxy configuration and secret boundary", () => {
     }
   })
 
+  it("accepts an explicitly private container listener without permitting an unscoped wildcard", () => {
+    const containerConfig = {
+      ...validConfig(),
+      listen: {
+        host: "0.0.0.0",
+        port: 4100,
+        exposure: "private-container",
+      },
+    }
+
+    expect(parseProxyConfig(containerConfig)).toEqual(containerConfig)
+    expect(() =>
+      parseProxyConfig({
+        ...containerConfig,
+        listen: { host: "0.0.0.0", port: 4100 },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
   it("reads a bounded owner-only secret and trims its single trailing newline", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aos-secret-"))
     temporaryDirectories.push(directory)

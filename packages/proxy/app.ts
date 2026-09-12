@@ -9,6 +9,7 @@ import {
   VisibilityUpdateRequestSchema,
 } from "../protocol"
 import {
+  HermesAgentNotFoundError,
   HermesRevisionConflictError,
   HermesServerAdapter,
   HermesUnavailableError,
@@ -159,11 +160,13 @@ export function createProxyApp(options: ProxyAppOptions) {
     const [code, status]: [ErrorCode, number] =
       cause instanceof OperatorAuthError
         ? ["unauthenticated", 401]
-        : cause instanceof HermesRevisionConflictError
-          ? ["revision_conflict", 409]
-          : cause instanceof HermesUnavailableError
-            ? ["temporarily_unavailable", 503]
-            : ["internal_error", 500]
+        : cause instanceof HermesAgentNotFoundError
+          ? ["not_found", 404]
+          : cause instanceof HermesRevisionConflictError
+            ? ["revision_conflict", 409]
+            : cause instanceof HermesUnavailableError
+              ? ["temporarily_unavailable", 503]
+              : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

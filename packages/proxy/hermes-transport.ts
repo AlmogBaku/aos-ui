@@ -18,6 +18,14 @@ export type HermesWebSocketRpcTransportOptions = {
   timeoutMs?: number
 }
 
+/** Private native-auth classification; never serialized across the AOS API. */
+export class HermesAuthenticationError extends Error {
+  constructor() {
+    super("Hermes authentication failed")
+    this.name = "HermesAuthenticationError"
+  }
+}
+
 function normalizeBaseUrl(value: string) {
   try {
     const url = new URL(value)
@@ -82,7 +90,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
       clearTimeout(timer)
     }
     if (response.status === 401 || response.status === 403)
-      throw new Error("Hermes authentication failed")
+      throw new HermesAuthenticationError()
     if (!response.ok) throw new Error("Hermes connection failed")
     let ticket: unknown
     try {

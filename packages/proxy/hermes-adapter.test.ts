@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  HermesAgentNotFoundError,
   HermesRevisionConflictError,
   HermesServerAdapter,
   type HermesRpcTransport,
 } from "./hermes-adapter"
+import { HermesAuthenticationError } from "./hermes-transport"
 
 function profile(hidden = false, revision: number | null = 7) {
   return {
@@ -114,5 +116,34 @@ describe("Hermes server adapter", () => {
       adapter.updateAgentVisibility("researcher", "hidden", "hermes-bots:6")
     ).rejects.toBeInstanceOf(HermesRevisionConflictError)
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("distinguishes rejected Hermes credentials from a temporary outage", async () => {
+    const unauthenticated = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesAuthenticationError()
+      }),
+    })
+    const unavailable = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new Error("connection refused")
+      }),
+    })
+    await expect(unauthenticated.authState()).resolves.toEqual({
+      status: "unauthenticated",
+    })
+    await expect(unavailable.authState()).resolves.toEqual({
+      status: "unavailable",
+      reason: "temporarily-unavailable",
+    })
+  })
+
+  it("reports a missing Agent separately from a Hermes outage", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async () => ({ profiles: [profile()] })),
+    })
+    await expect(
+      adapter.updateAgentVisibility("missing-agent", "hidden", "hermes-bots:7")
+    ).rejects.toBeInstanceOf(HermesAgentNotFoundError)
   })
 })

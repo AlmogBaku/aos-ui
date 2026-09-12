@@ -68,14 +68,26 @@ reinstall from an immutable ref instead.
 
 ## Run with Compose
 
-Hermes remains outside the Compose stack. The overlay lets the web container reach the operator-managed server:
+Hermes remains outside the Compose stack. The overlay runs the private AOS
+translation proxy beside Nginx; only Nginx is published to the host. Copy and
+customize the example proxy config outside the checkout, then provide owner-only
+secret files:
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
 
-By default the container reaches `host.docker.internal:9119`. Set `AOS_UI_HERMES_HOST` and `AOS_UI_HERMES_PORT` when Hermes is elsewhere. A server bound only to host loopback is not reachable through Docker's host gateway.
+Start from `deploy/proxy-config.hermes.example.json` and replace its example
+issuer, allowlist, origins, and Hermes address. Secret contents never enter the
+Compose environment or public runtime config. The static
+`X-Hermes-Session-Token` option works only when Hermes has
+`auth_required=false`; auth-gated Hermes requires the later browser broker and
+must be configured as unavailable until then. A Hermes server bound only to
+host loopback is not reachable through Docker's host gateway.
 
 ## Creator profile
 

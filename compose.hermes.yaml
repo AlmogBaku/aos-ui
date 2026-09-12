@@ -1,9 +1,65 @@
-# Hermes itself is operator-managed; this overlay only forwards native traffic.
+# Hermes itself remains operator-managed. This overlay adds the private AOS
+# translation boundary; only Nginx is published to the host.
 services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: proxy
+    command:
+      - bun
+      - run
+      - proxy:serve
+      - --
+      - --config
+      - /run/aos-ui/proxy-config.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "4100"
+    configs:
+      - source: proxy-config
+        target: /run/aos-ui/proxy-config.json
+        mode: 0444
+    secrets:
+      - source: operator-oidc-client-secret
+        target: oidc-client-secret
+        mode: 0400
+      - source: hermes-static-token
+        target: hermes-token
+        mode: 0400
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:4100/api/aos/v1/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    init: true
+
   web:
+    depends_on:
+      proxy:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       AOS_UI_HERMES_HOST: ${AOS_UI_HERMES_HOST:-host.docker.internal}
       AOS_UI_HERMES_PORT: ${AOS_UI_HERMES_PORT:-9119}
-      AOS_UI_PROXY_HOST: ${AOS_UI_PROXY_HOST:-host.docker.internal}
+      AOS_UI_PROXY_HOST: proxy
+      AOS_UI_PROXY_PORT: 4100
+
+configs:
+  runtime-config:
+    file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.hermes.json}
+  proxy-config:
+    file: ${AOS_UI_PROXY_CONFIG_FILE:?Set AOS_UI_PROXY_CONFIG_FILE to a private proxy configuration file}
+
+secrets:
+  operator-oidc-client-secret:
+    file: ${AOS_UI_OIDC_CLIENT_SECRET_FILE:?Set AOS_UI_OIDC_CLIENT_SECRET_FILE to an owner-only secret file}
+  hermes-static-token:
+    file: ${AOS_UI_HERMES_TOKEN_FILE:?Set AOS_UI_HERMES_TOKEN_FILE to an owner-only secret file}

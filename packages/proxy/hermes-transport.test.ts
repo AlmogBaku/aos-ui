@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  HermesAuthenticationError,
   HermesWebSocketRpcTransport,
   type HermesSocket,
 } from "./hermes-transport"
@@ -97,18 +98,21 @@ describe("Hermes WebSocket RPC transport", () => {
     ])
   })
 
-  it("returns a generic failure when Hermes rejects ticket credentials", async () => {
-    const transport = new HermesWebSocketRpcTransport({
-      baseUrl: "http://127.0.0.1:9119",
-      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
-      fetcher: vi.fn(
-        async () => new Response("native details", { status: 401 })
-      ),
-      socketFactory: vi.fn(),
-      timeoutMs: 1_000,
-    })
-    await expect(transport.request("profiles.list", {})).rejects.toThrow(
-      "Hermes authentication failed"
-    )
-  })
+  it.each([401, 403])(
+    "returns a typed private authentication failure for ticket status %i",
+    async (status) => {
+      const transport = new HermesWebSocketRpcTransport({
+        baseUrl: "http://127.0.0.1:9119",
+        credentials: async () => ({
+          "X-Hermes-Session-Token": "native-secret",
+        }),
+        fetcher: vi.fn(async () => new Response("native details", { status })),
+        socketFactory: vi.fn(),
+        timeoutMs: 1_000,
+      })
+      await expect(
+        transport.request("profiles.list", {})
+      ).rejects.toBeInstanceOf(HermesAuthenticationError)
+    }
+  )
 })

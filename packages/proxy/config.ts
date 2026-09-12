@@ -32,10 +32,17 @@ const HttpUrlSchema = z
 
 const ProxyConfigSchema = z.strictObject({
   version: z.literal(1),
-  listen: z.strictObject({
-    host: z.enum(["127.0.0.1", "::1"]),
-    port: z.number().int().min(1).max(65535),
-  }),
+  listen: z.union([
+    z.strictObject({
+      host: z.enum(["127.0.0.1", "::1"]),
+      port: z.number().int().min(1).max(65535),
+    }),
+    z.strictObject({
+      host: z.enum(["0.0.0.0", "::"]),
+      port: z.number().int().min(1).max(65535),
+      exposure: z.literal("private-container"),
+    }),
+  ]),
   publicOrigin: HttpUrlSchema,
   operator: z.strictObject({
     issuer: HttpUrlSchema.refine((value) => value.startsWith("https://")),

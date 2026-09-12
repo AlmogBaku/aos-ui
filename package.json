@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "opencode:serve": "bun run scripts/opencode-serve.ts",
+    "proxy:serve": "bun run packages/proxy/cli.ts",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 3000",
     "integrations:build": "bun run scripts/build-integrations.ts",
@@ -33,6 +34,7 @@
     "@shikijs/langs": "4.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "commander": "14.0.3",
     "hono": "4.13.5",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.40.0",

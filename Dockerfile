@@ -11,6 +11,12 @@ COPY . .
 EXPOSE 3000
 CMD ["bun", "run", "dev", "--host", "0.0.0.0"]
 
+FROM dependencies AS proxy
+COPY --chown=bun:bun packages ./packages
+USER bun
+EXPOSE 4100
+CMD ["bun", "run", "proxy:serve", "--", "--config", "/run/aos-ui/proxy-config.json"]
+
 FROM dependencies AS builder
 COPY . .
 RUN bun run build

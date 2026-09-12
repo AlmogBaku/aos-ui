@@ -180,6 +180,33 @@ describe("AOS v1 proxy walking skeleton", () => {
     })
   })
 
+  it("maps a missing Agent to 404 without confusing it with an outage", async () => {
+    const operatorAuth = createOperatorAuthenticator({
+      allowedSubjects: ["operator@example.test"],
+      verifySession: vi.fn(async () => ({ subject: "operator@example.test" })),
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth,
+      hermes: new HermesServerAdapter({
+        request: vi.fn(async () => ({ profiles: [nativeProfile()] })),
+      }),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const response = await app.request(
+      request("/api/aos/v1/agents/missing-agent/visibility", {
+        method: "PATCH",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          visibility: "hidden",
+          revision: "hermes-bots:7",
+        }),
+      })
+    )
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: { code: "not_found" } })
+  })
+
   it("keeps liveness independent and readiness tied to the Hermes adapter", async () => {
     const app = createProxyApp({
       publicOrigin: origin,

@@ -7,13 +7,18 @@ import { describe, expect, it } from "vitest"
 
 type ComposeConfig = {
   configs?: Record<string, { file?: string }>
+  secrets?: Record<string, { file?: string }>
   services: Record<
     string,
     {
+      build?: { target?: string }
       command?: string[]
       depends_on?: Record<string, { condition: string }>
       environment?: Record<string, string>
+      expose?: string[]
       ports?: Array<{ host_ip?: string; published?: string; target: number }>
+      configs?: Array<{ source: string; target: string }>
+      secrets?: Array<{ source: string; target: string }>
       volumes?: Array<{ source: string; target: string; type: string }>
     }
   >
@@ -98,21 +103,70 @@ describe("container orchestration", () => {
     )
   })
 
-  it("forwards to operator-managed Hermes without adding an AOS service", () => {
+  it("runs the private AOS proxy beside the web service for Hermes", () => {
     const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
       AOS_UI_RUNTIME_CONFIG_FILE: resolve(
         root,
-        "deploy/runtime-config.hermes-native.json"
+        "deploy/runtime-config.hermes.json"
       ),
+      AOS_UI_PROXY_CONFIG_FILE: resolve(
+        root,
+        "deploy/proxy-config.hermes.example.json"
+      ),
+      AOS_UI_OIDC_CLIENT_SECRET_FILE: resolve(root, ".env.example"),
+      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
     })
 
-    expect(Object.keys(config.services)).toEqual(["web"])
+    expect(Object.keys(config.services).sort()).toEqual(["proxy", "web"])
+    expect(config.services.web.depends_on?.proxy.condition).toBe(
+      "service_healthy"
+    )
     expect(config.services.web.environment).toMatchObject({
       AOS_UI_HERMES_HOST: "host.docker.internal",
       AOS_UI_HERMES_PORT: "9119",
+      AOS_UI_PROXY_HOST: "proxy",
+      AOS_UI_PROXY_PORT: "4100",
     })
+    expect(config.services.proxy.build?.target).toBe("proxy")
+    expect(config.services.proxy.command).toEqual([
+      "bun",
+      "run",
+      "proxy:serve",
+      "--",
+      "--config",
+      "/run/aos-ui/proxy-config.json",
+    ])
+    expect(config.services.proxy.ports).toBeUndefined()
+    expect(config.services.proxy.expose).toEqual(["4100"])
+    expect(config.services.proxy.configs).toContainEqual(
+      expect.objectContaining({
+        source: "proxy-config",
+        target: "/run/aos-ui/proxy-config.json",
+      })
+    )
+    expect(config.services.proxy.secrets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "operator-oidc-client-secret",
+          target: "oidc-client-secret",
+        }),
+        expect.objectContaining({
+          source: "hermes-static-token",
+          target: "hermes-token",
+        }),
+      ])
+    )
     expect(config.configs?.["runtime-config"]?.file).toBe(
-      resolve(root, "deploy/runtime-config.hermes-native.json")
+      resolve(root, "deploy/runtime-config.hermes.json")
+    )
+    expect(config.configs?.["proxy-config"]?.file).toBe(
+      resolve(root, "deploy/proxy-config.hermes.example.json")
+    )
+    expect(config.secrets?.["operator-oidc-client-secret"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["hermes-static-token"]?.file).toBe(
+      resolve(root, ".env.example")
     )
   })
 
@@ -186,6 +240,14 @@ describe("container orchestration", () => {
     expect(nginx).not.toContain("proxy_set_header Origin $scheme://$http_host;")
     expect(nginx).toContain("proxy_buffering off")
     expect(nginx).toContain("max-age=31536000, immutable")
+  })
+
+  it("packages the Bun proxy as a dedicated non-root image target", () => {
+    const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
+
+    expect(dockerfile).toMatch(/FROM dependencies AS proxy/)
+    expect(dockerfile).toContain('CMD ["bun", "run", "proxy:serve"')
+    expect(dockerfile).toContain("USER bun")
   })
 
   it("raises the upload limit only for exact native Hermes transcription", () => {
