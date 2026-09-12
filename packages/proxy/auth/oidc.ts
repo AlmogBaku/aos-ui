@@ -86,6 +86,11 @@ type PendingFlow = {
 
 const flowCookieName = "__Host-aos-oidc-flow"
 const callbackPath = "/api/aos/v1/auth/operator/callback"
+const maxAuthorizationUrlLength = 8_192
+const maxCallbackUrlLength = 8_192
+const maxAuthorizationCodeLength = 4_096
+const maxStateLength = 256
+const maxProviderResponseBodyBytes = 1_048_576
 
 function clearFlowCookie(): string {
   return `${flowCookieName}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`
@@ -117,10 +122,24 @@ function principalId(key: Uint8Array, issuer: string, subject: string): string {
 function isConfiguredCallback(callbackUrl: URL, redirectUri: string): boolean {
   try {
     const configured = new URL(redirectUri)
+    const codes = callbackUrl.searchParams.getAll("code")
+    const states = callbackUrl.searchParams.getAll("state")
     return (
+      callbackUrl.href.length <= maxCallbackUrlLength &&
       callbackUrl.origin === configured.origin &&
       callbackUrl.pathname === configured.pathname &&
-      callbackUrl.hash === ""
+      callbackUrl.hash === "" &&
+      codes.length <= 1 &&
+      states.length <= 1 &&
+      codes.every(
+        (code) =>
+          code.length <= maxAuthorizationCodeLength &&
+          !hasControlCharacters(code)
+      ) &&
+      states.every(
+        (state) =>
+          state.length <= maxStateLength && !hasControlCharacters(state)
+      )
     )
   } catch {
     return false
@@ -130,6 +149,7 @@ function isConfiguredCallback(callbackUrl: URL, redirectUri: string): boolean {
 function isTrustedAuthorizationUrl(url: URL, issuer: string): boolean {
   const issuerUrl = new URL(issuer)
   return (
+    url.href.length <= maxAuthorizationUrlLength &&
     url.protocol === "https:" &&
     url.origin === issuerUrl.origin &&
     !url.username &&
@@ -170,7 +190,15 @@ function applicationPath(value: string, publicOrigin: string): string {
     decodeURIComponent(value)
     const origin = new URL(publicOrigin)
     const route = new URL(value, origin)
-    if (route.origin !== origin.origin) throw new OidcAuthenticationError()
+    if (
+      route.origin !== origin.origin ||
+      !route.pathname.startsWith("/") ||
+      route.pathname.startsWith("//") ||
+      route.pathname.includes("\\") ||
+      hasControlCharacters(route.pathname)
+    ) {
+      throw new OidcAuthenticationError()
+    }
     return `${route.pathname}${route.search}${route.hash}`
   } catch {
     throw new OidcAuthenticationError()
@@ -246,13 +274,102 @@ function validateOptions<Session>(options: OidcCoreOptions<Session>): void {
   networkTimeout(options.networkTimeoutMs)
 }
 
+function withAbortSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  if (signal.aborted) {
+    void promise.catch(() => undefined)
+    return Promise.reject(signal.reason)
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort)
+        reject(error)
+      }
+    )
+  })
+}
+
+async function boundedResponse(
+  response: Response,
+  signal: AbortSignal
+): Promise<Response> {
+  const declaredLength = response.headers.get("content-length")
+  if (
+    declaredLength !== null &&
+    (!/^(?:0|[1-9][0-9]*)$/u.test(declaredLength) ||
+      Number(declaredLength) > maxProviderResponseBodyBytes)
+  ) {
+    try {
+      void response.body?.cancel().catch(() => undefined)
+    } catch {
+      // Cancellation is best-effort after refusing an untrusted response.
+    }
+    throw new OidcAuthenticationError()
+  }
+  if (!response.body) return response
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    while (true) {
+      const { done, value } = await withAbortSignal(reader.read(), signal)
+      if (done) break
+      received += value.byteLength
+      if (received > maxProviderResponseBodyBytes) {
+        throw new OidcAuthenticationError()
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    try {
+      void reader.cancel().catch(() => undefined)
+    } catch {
+      // Preserve the bounded-read failure, not a transport cancellation error.
+    }
+    throw error
+  }
+
+  const body = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  const headers = new Headers(response.headers)
+  headers.delete("content-encoding")
+  headers.set("content-length", String(received))
+  const bounded = new Response(received === 0 ? null : body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  })
+  if (response.url) {
+    Object.defineProperty(bounded, "url", { value: response.url })
+  }
+  return bounded
+}
+
 function deadlineFetch(fetcher: OidcFetch, timeoutMs: number): CustomFetch {
   return async (url, init) => {
     const deadline = AbortSignal.timeout(timeoutMs)
     const signal = init.signal
       ? AbortSignal.any([init.signal, deadline])
       : deadline
-    return fetcher(url, { ...init, signal } as RequestInit)
+    const response = await withAbortSignal(
+      fetcher(url, { ...init, signal } as RequestInit),
+      signal
+    )
+    return boundedResponse(response, signal)
   }
 }
 
@@ -285,7 +402,8 @@ async function discoverProvider<Session>(
         !claims ||
         typeof claims.iss !== "string" ||
         typeof claims.sub !== "string" ||
-        claims.sub.length === 0
+        claims.sub.length === 0 ||
+        (claims.azp !== undefined && claims.azp !== options.clientId)
       ) {
         throw new OidcAuthenticationError()
       }
@@ -302,7 +420,7 @@ export function createOidcCore<Session>(
   const allowedSubjects = new Set(options.allowedSubjects)
   const now = options.now ?? Date.now
   let discoveredProvider: Promise<OidcProvider> | undefined
-  let pendingStarts = 0
+  let activeFlows = 0
 
   function oidcProvider(): Promise<OidcProvider> {
     if (options.provider) return Promise.resolve(options.provider)
@@ -318,50 +436,53 @@ export function createOidcCore<Session>(
 
   return {
     async begin(returnPath: string) {
+      let admissionHeld = false
       try {
         returnPath = applicationPath(returnPath, options.publicOrigin)
-        const provider = await oidcProvider()
         const currentTime = now()
         for (const [flowId, flow] of pending) {
-          if (flow.expiresAt <= currentTime) pending.delete(flowId)
+          if (flow.expiresAt <= currentTime) {
+            pending.delete(flowId)
+            activeFlows -= 1
+          }
         }
-        if (pending.size + pendingStarts >= 256) {
+        if (activeFlows >= 256) {
           throw new OidcAuthenticationError()
         }
-        pendingStarts += 1
-        try {
-          const state = randomState()
-          const codeVerifier = randomPKCECodeVerifier()
-          const nonce = randomNonce()
-          const flowId = randomState()
-          const codeChallenge = await calculatePKCECodeChallenge(codeVerifier)
-          const authorizationUrl = provider.buildAuthorizationUrl({
-            redirect_uri: options.redirectUri,
-            scope: "openid",
-            response_type: "code",
-            code_challenge: codeChallenge,
-            code_challenge_method: "S256",
-            state,
-            nonce,
-          })
-          if (!isTrustedAuthorizationUrl(authorizationUrl, options.issuer)) {
-            throw new OidcAuthenticationError()
-          }
-          pending.set(flowId, {
-            codeVerifier,
-            expiresAt: currentTime + 300_000,
-            nonce,
-            returnPath,
-            state,
-          })
-          return {
-            authorizationUrl,
-            flowCookie: `${flowCookieName}=${flowId}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax`,
-          }
-        } finally {
-          pendingStarts -= 1
+        activeFlows += 1
+        admissionHeld = true
+        const provider = await oidcProvider()
+        const state = randomState()
+        const codeVerifier = randomPKCECodeVerifier()
+        const nonce = randomNonce()
+        const flowId = randomState()
+        const codeChallenge = await calculatePKCECodeChallenge(codeVerifier)
+        const authorizationUrl = provider.buildAuthorizationUrl({
+          redirect_uri: options.redirectUri,
+          scope: "openid",
+          response_type: "code",
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          state,
+          nonce,
+        })
+        if (!isTrustedAuthorizationUrl(authorizationUrl, options.issuer)) {
+          throw new OidcAuthenticationError()
+        }
+        pending.set(flowId, {
+          codeVerifier,
+          expiresAt: currentTime + 300_000,
+          nonce,
+          returnPath,
+          state,
+        })
+        admissionHeld = false
+        return {
+          authorizationUrl,
+          flowCookie: `${flowCookieName}=${flowId}; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax`,
         }
       } catch {
+        if (admissionHeld) activeFlows -= 1
         throw new OidcAuthenticationError()
       }
     },
@@ -375,13 +496,13 @@ export function createOidcCore<Session>(
         return { status: "rejected" as const, flowCookie: clearFlowCookie() }
       }
       pending.delete(flowId)
-      if (
-        flow.expiresAt <= now() ||
-        !isConfiguredCallback(callbackUrl, options.redirectUri)
-      ) {
-        return { status: "rejected" as const, flowCookie: clearFlowCookie() }
-      }
       try {
+        if (
+          flow.expiresAt <= now() ||
+          !isConfiguredCallback(callbackUrl, options.redirectUri)
+        ) {
+          return { status: "rejected" as const, flowCookie: clearFlowCookie() }
+        }
         const provider = await oidcProvider()
         const identity = await provider.authorizationCodeGrant(callbackUrl, {
           expectedNonce: flow.nonce,
@@ -410,6 +531,8 @@ export function createOidcCore<Session>(
         }
       } catch {
         return { status: "rejected" as const, flowCookie: clearFlowCookie() }
+      } finally {
+        activeFlows -= 1
       }
     },
   }

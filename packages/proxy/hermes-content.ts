@@ -185,13 +185,19 @@ function audioReadiness(value: unknown, kind: "stt" | "tts") {
     )
   )
     return "unavailable" as const
-  const providers = value.providers.flatMap((row) => {
+  const providers: Array<{
+    name: string
+    active: boolean
+    readiness: "ready" | "unverified" | "unavailable"
+    edge: boolean
+  }> = []
+  for (const row of value.providers) {
     if (
       !isRecord(row) ||
       !boundedText(row.name, 256) ||
       typeof row.is_active !== "boolean"
     )
-      return []
+      return "unavailable" as const
     const readiness =
       row.status === "ready"
         ? "ready"
@@ -200,15 +206,13 @@ function audioReadiness(value: unknown, kind: "stt" | "tts") {
             row.status === "needs_setup"
           ? "unverified"
           : "unavailable"
-    return [
-      {
-        name: String(row.name),
-        active: row.is_active,
-        readiness,
-        edge: row.tts_provider === "edge",
-      },
-    ]
-  })
+    providers.push({
+      name: String(row.name),
+      active: row.is_active,
+      readiness,
+      edge: row.tts_provider === "edge",
+    })
+  }
   if (value.active_provider !== null) {
     const provider = providers.find(
       ({ name }) => name === value.active_provider

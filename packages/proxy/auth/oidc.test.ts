@@ -13,6 +13,31 @@ import {
 const issuer = "https://idp.example.test"
 const redirectUri = "https://aos.example.test/api/aos/v1/auth/operator/callback"
 
+function discoveryMetadata() {
+  return {
+    issuer,
+    authorization_endpoint: `${issuer}/authorize`,
+    token_endpoint: `${issuer}/token`,
+    jwks_uri: `${issuer}/jwks`,
+    response_types_supported: ["code"],
+    subject_types_supported: ["public"],
+    id_token_signing_alg_values_supported: ["RS256"],
+    token_endpoint_auth_methods_supported: ["client_secret_post"],
+    code_challenge_methods_supported: ["S256"],
+  }
+}
+
+function neverEndingJsonResponse(onCancel: () => void): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      cancel() {
+        onCancel()
+      },
+    }),
+    { headers: { "content-type": "application/json" } }
+  )
+}
+
 function base64urlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url")
 }
@@ -180,6 +205,57 @@ describe("OIDC core", () => {
     }
   )
 
+  it("rejects an oversized authorization URL", async () => {
+    const core = createOidcCore(
+      constructionOptions({
+        provider: provider({
+          buildAuthorizationUrl() {
+            return new URL(`${issuer}/authorize?padding=${"x".repeat(8_192)}`)
+          },
+        }),
+      })
+    )
+
+    await expect(core.begin("/agents/alpha")).rejects.toThrow(
+      "OIDC authentication failed"
+    )
+  })
+
+  it.each([
+    [
+      "callback URL",
+      (url: URL) => url.searchParams.set("padding", "x".repeat(8_192)),
+    ],
+    [
+      "authorization code",
+      (url: URL) => url.searchParams.set("code", "x".repeat(4_097)),
+    ],
+    ["state", (url: URL) => url.searchParams.set("state", "x".repeat(257))],
+  ] as const)("rejects an oversized %s", async (_name, mutateCallback) => {
+    let exchangeCount = 0
+    const core = createOidcCore(
+      constructionOptions({
+        provider: provider({
+          async authorizationCodeGrant() {
+            exchangeCount += 1
+            return { issuer, subject: "operator-1" }
+          },
+        }),
+      })
+    )
+    const started = await core.begin("/agents/alpha")
+    const callbackUrl = new URL(`${redirectUri}?code=authorization-code`)
+    mutateCallback(callbackUrl)
+
+    const completed = await core.complete(
+      callbackUrl,
+      started.flowCookie.split(";", 1)[0]!
+    )
+
+    expect(completed.status).toBe("rejected")
+    expect(exchangeCount).toBe(0)
+  })
+
   it.each([
     "agents/alpha",
     "https://evil.example.test/agents/alpha",
@@ -188,6 +264,9 @@ describe("OIDC core", () => {
     "/agents/alpha\\redirect",
     "/%5cevil.example.test/agents/alpha",
     "/%2f%2fevil.example.test/agents/alpha",
+    "/.%2e//evil.example.test/agents/alpha",
+    "/%2e%2e//evil.example.test/agents/alpha",
+    "/a/%2e%2e//evil.example.test/agents/alpha",
     "/agents/%0d%0aLocation:%20https://evil.example.test",
     "/agents/%zz",
   ])(
@@ -515,6 +594,126 @@ describe("OIDC core", () => {
     ).toHaveLength(1)
   })
 
+  it("rejects the 257th start before a blocked discovery reaches upstream", async () => {
+    let releaseDiscovery!: (response: Response) => void
+    const blockedDiscovery = new Promise<Response>((resolve) => {
+      releaseDiscovery = resolve
+    })
+    let discoveryRequests = 0
+    const core = createOidcCore({
+      ...constructionOptions(),
+      provider: undefined,
+      fetcher: async () => {
+        discoveryRequests += 1
+        return blockedDiscovery
+      },
+    })
+
+    const starts = Array.from({ length: 257 }, (_, index) =>
+      core.begin(`/agents/${index}`)
+    )
+    let overflowBeforeDiscovery: "fulfilled" | "pending" | "rejected" =
+      "pending"
+    void starts[256]!.then(
+      () => {
+        overflowBeforeDiscovery = "fulfilled"
+      },
+      () => {
+        overflowBeforeDiscovery = "rejected"
+      }
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+
+    releaseDiscovery(
+      Response.json({
+        issuer,
+        authorization_endpoint: `${issuer}/authorize`,
+        token_endpoint: `${issuer}/token`,
+        jwks_uri: `${issuer}/jwks`,
+        response_types_supported: ["code"],
+        subject_types_supported: ["public"],
+        id_token_signing_alg_values_supported: ["RS256"],
+        token_endpoint_auth_methods_supported: ["client_secret_post"],
+        code_challenge_methods_supported: ["S256"],
+      })
+    )
+    const settled = await Promise.allSettled(starts)
+
+    expect(overflowBeforeDiscovery).toBe("rejected")
+    expect(discoveryRequests).toBe(1)
+    expect(
+      settled.filter((result) => result.status === "fulfilled")
+    ).toHaveLength(256)
+  })
+
+  it.each(["token exchange", "session issuance"] as const)(
+    "retains flow admission until %s finishes",
+    async (blockedPhase) => {
+      let releaseCompletion!: () => void
+      const completionBarrier = new Promise<void>((resolve) => {
+        releaseCompletion = resolve
+      })
+      let completionPhaseEntered = false
+      let authorizationRequests = 0
+      const oidc = provider({
+        buildAuthorizationUrl(parameters) {
+          authorizationRequests += 1
+          const url = new URL(`${issuer}/authorize`)
+          for (const [name, value] of Object.entries(parameters)) {
+            url.searchParams.set(name, value)
+          }
+          return url
+        },
+        async authorizationCodeGrant() {
+          if (blockedPhase === "token exchange") {
+            completionPhaseEntered = true
+            await completionBarrier
+          }
+          return { issuer, subject: "operator-1" }
+        },
+      })
+      const core = createOidcCore(
+        constructionOptions({
+          provider: oidc,
+          sessionIssuer: {
+            async issue() {
+              if (blockedPhase === "session issuance") {
+                completionPhaseEntered = true
+                await completionBarrier
+              }
+              return { session: { id: "aos-session-1" }, cookie: "aos=session" }
+            },
+          },
+        })
+      )
+      const starts = await Promise.all(
+        Array.from({ length: 256 }, (_, index) =>
+          core.begin(`/agents/${index}`)
+        )
+      )
+      const completing = core.complete(
+        new URL(`${redirectUri}?code=authorization-code`),
+        starts[0]!.flowCookie.split(";", 1)[0]!
+      )
+      for (let turn = 0; turn < 5 && !completionPhaseEntered; turn += 1) {
+        await Promise.resolve()
+      }
+
+      const overflow = await core.begin("/agents/overflow").then(
+        () => "fulfilled" as const,
+        () => "rejected" as const
+      )
+      const enteredBeforeRelease = completionPhaseEntered
+      releaseCompletion()
+      await completing
+
+      expect(enteredBeforeRelease).toBe(true)
+      expect(overflow).toBe("rejected")
+      expect(authorizationRequests).toBe(256)
+    }
+  )
+
   it("does not retain a pending flow when authorization URL creation fails", async () => {
     let attempts = 0
     const core = createOidcCore({
@@ -664,6 +863,170 @@ describe("OIDC core", () => {
     )
   })
 
+  it("rejects a discovery body whose declared length exceeds the bound", async () => {
+    let cancellationCount = 0
+    const body = JSON.stringify(discoveryMetadata())
+    const core = createOidcCore({
+      ...constructionOptions(),
+      provider: undefined,
+      fetcher: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(body))
+              controller.close()
+            },
+            cancel() {
+              cancellationCount += 1
+            },
+          }),
+          {
+            headers: {
+              "content-length": "1048577",
+              "content-type": "application/json",
+            },
+          }
+        ),
+    })
+
+    await expect(core.begin("/agents/alpha")).rejects.toThrow(
+      "OIDC authentication failed"
+    )
+    expect(cancellationCount).toBe(1)
+  })
+
+  it("rejects a chunked discovery body after it crosses the bound", async () => {
+    let cancellationCount = 0
+    const core = createOidcCore({
+      ...constructionOptions(),
+      provider: undefined,
+      fetcher: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(" ".repeat(1_048_577))
+              )
+              controller.enqueue(
+                new TextEncoder().encode(JSON.stringify(discoveryMetadata()))
+              )
+              controller.close()
+            },
+            cancel() {
+              cancellationCount += 1
+            },
+          }),
+          { headers: { "content-type": "application/json" } }
+        ),
+    })
+
+    await expect(core.begin("/agents/alpha")).rejects.toThrow(
+      "OIDC authentication failed"
+    )
+    expect(cancellationCount).toBe(1)
+  })
+
+  it("cancels a never-ending discovery body at the request deadline", async () => {
+    let cancellationCount = 0
+    const core = createOidcCore({
+      ...constructionOptions(),
+      provider: undefined,
+      networkTimeoutMs: 20,
+      fetcher: async () =>
+        neverEndingJsonResponse(() => {
+          cancellationCount += 1
+        }),
+    })
+
+    const outcome = await Promise.race([
+      core.begin("/agents/alpha").then(
+        () => "fulfilled" as const,
+        () => "rejected" as const
+      ),
+      new Promise<"hung">((resolve) => {
+        setTimeout(() => resolve("hung"), 150)
+      }),
+    ])
+
+    expect(outcome).toBe("rejected")
+    expect(cancellationCount).toBe(1)
+  })
+
+  it.each(["token", "jwks"] as const)(
+    "cancels a never-ending %s body at the request deadline",
+    async (blockedEndpoint) => {
+      const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+      })
+      const jwk = publicKey.export({ format: "jwk" })
+      let idToken = ""
+      let cancellationCount = 0
+      const fetcher: OidcFetch = async (input) => {
+        const url = String(input)
+        if (url.endsWith("/.well-known/openid-configuration")) {
+          return Response.json(discoveryMetadata())
+        }
+        if (url === `${issuer}/token`) {
+          if (blockedEndpoint === "token") {
+            return neverEndingJsonResponse(() => {
+              cancellationCount += 1
+            })
+          }
+          return Response.json({
+            access_token: "provider-access-token",
+            token_type: "Bearer",
+            expires_in: 300,
+            id_token: idToken,
+          })
+        }
+        if (url === `${issuer}/jwks`) {
+          if (blockedEndpoint === "jwks") {
+            return neverEndingJsonResponse(() => {
+              cancellationCount += 1
+            })
+          }
+          return Response.json({
+            keys: [{ ...jwk, kid: "test-key", use: "sig" }],
+          })
+        }
+        throw new Error(`Unexpected synthetic IdP URL: ${url}`)
+      }
+      const core = createOidcCore({
+        ...constructionOptions(),
+        provider: undefined,
+        networkTimeoutMs: 20,
+        fetcher,
+      })
+      const started = await core.begin("/agents/alpha")
+      const state = started.authorizationUrl.searchParams.get("state")!
+      const nonce = started.authorizationUrl.searchParams.get("nonce")!
+      const currentSeconds = Math.floor(Date.now() / 1_000)
+      idToken = signIdToken(privateKey, {
+        iss: issuer,
+        sub: "operator-1",
+        aud: "aos-ui",
+        iat: currentSeconds,
+        exp: currentSeconds + 300,
+        nonce,
+      })
+      const callbackUrl = new URL(redirectUri)
+      callbackUrl.searchParams.set("code", "authorization-code")
+      callbackUrl.searchParams.set("state", state)
+
+      const outcome = await Promise.race([
+        core
+          .complete(callbackUrl, started.flowCookie.split(";", 1)[0]!)
+          .then((completion) => completion.status),
+        new Promise<"hung">((resolve) => {
+          setTimeout(() => resolve("hung"), 150)
+        }),
+      ])
+
+      expect(outcome).toBe("rejected")
+      expect(cancellationCount).toBe(1)
+    }
+  )
+
   it("allows a later discovery attempt after a transient failure", async () => {
     let discoveryAttempts = 0
     const core = createOidcCore({
@@ -793,6 +1156,15 @@ describe("OIDC core", () => {
     const completed = await completeWithIdToken()
     const wrongNonce = await completeWithIdToken({ nonce: "wrong-nonce" })
     const wrongAudience = await completeWithIdToken({ aud: "other-client" })
+    const wrongAuthorizedParty = await completeWithIdToken({
+      azp: "other-client",
+    })
+    const matchingAuthorizedParty = await completeWithIdToken({ azp: "aos-ui" })
+    const matchingAuthorizedPartyForMultipleAudiences =
+      await completeWithIdToken({
+        aud: ["aos-ui", "other-client"],
+        azp: "aos-ui",
+      })
     const rogueKey = generateKeyPairSync("rsa", {
       modulusLength: 2048,
     }).privateKey
@@ -802,9 +1174,14 @@ describe("OIDC core", () => {
     expect(completed.status).toBe("authenticated")
     expect(wrongNonce.status).toBe("rejected")
     expect(wrongAudience.status).toBe("rejected")
+    expect(wrongAuthorizedParty.status).toBe("rejected")
+    expect(matchingAuthorizedParty.status).toBe("authenticated")
+    expect(matchingAuthorizedPartyForMultipleAudiences.status).toBe(
+      "authenticated"
+    )
     expect(wrongSignature.status).toBe("rejected")
     expect(wrongState.status).toBe("rejected")
-    expect(sessionIssueCount).toBe(1)
+    expect(sessionIssueCount).toBe(3)
     expect(issuedPrincipal).toBe(
       "aos_principal_RyvL4DQmMxNeS60eW0FuHwFt4pTL9a6cPolOHgzkJGA"
     )

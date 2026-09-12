@@ -249,6 +249,23 @@ describe("Hermes content operations", () => {
     })
   })
 
+  it("treats malformed native audio metadata as unavailable", async () => {
+    const h = harness({
+      audioConfig: () => ({
+        name: "stt",
+        has_category: true,
+        active_provider: null,
+        providers: [{ name: "native" }],
+      }),
+    })
+    await expect(
+      h.operations.audio("research", "session-public-1")
+    ).resolves.toEqual({
+      transcription: "unavailable",
+      speech: "unavailable",
+    })
+  })
+
   it("encodes a bounded recording only after authorization and never exposes provider output", async () => {
     const h = harness()
     await expect(
