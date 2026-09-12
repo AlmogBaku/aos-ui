@@ -20,7 +20,7 @@ hermes serve
 
 The examples below expect Hermes at `http://127.0.0.1:9119`. Keep its authentication enabled and its profile state and credentials outside AOS.
 
-## Attach AOS
+## Local development shortcut
 
 In the AOS checkout, install frontend dependencies and attach through the development proxy:
 
@@ -32,7 +32,33 @@ AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
   bun run dev
 ```
 
-Vite forwards `/hermes`, native authentication routes, and WebSockets to the target. Open <http://localhost:3000>, follow **Sign in to Hermes** when prompted, then reload the workspace.
+This is a legacy development shortcut: Vite forwards `/hermes`, native
+authentication routes, and WebSockets directly to the target. It is retained
+only while the normalized proxy path is being validated and must not be used
+as the production deployment boundary.
+
+## Deploy the normalized Hermes proxy
+
+For the supported operator deployment, use the private TypeScript proxy and
+the Hermes Compose overlay:
+
+```bash
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
+AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE=/absolute/private/path/operator-principal-hmac \
+AOS_UI_OPERATOR_SESSION_KEY_FILE=/absolute/private/path/operator-session-key \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+  docker compose -f compose.yaml -f compose.hermes.yaml up --build
+```
+
+The browser talks only to same-origin `/api/aos/v1`. The proxy brokers Hermes
+authentication, then owns normalized Agent/Session reads, history, AG-UI/SSE,
+Stop, and reconnect. Nginx does not expose Hermes' native `/auth`, `/api`, or
+WebSocket routes. Use the browser-broker example in
+[`deploy/proxy-config.hermes.example.json`](../../deploy/proxy-config.hermes.example.json)
+for auth-gated Hermes; keep the public `runtime-config.hermes.json`
+credential-free.
 
 Hermes owns recovery policy, including auto-continue. AOS reattaches without submitting a new prompt, so it does not require a particular auto-continue setting.
 
@@ -77,16 +103,15 @@ secret files:
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
 AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
 AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
-AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE=/absolute/private/path/operator-principal-hmac \
+AOS_UI_OPERATOR_SESSION_KEY_FILE=/absolute/private/path/operator-session-key \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
 
 Start from `deploy/proxy-config.hermes.example.json` and replace its example
 issuer, allowlist, origins, and Hermes address. Secret contents never enter the
-Compose environment or public runtime config. The static
-`X-Hermes-Session-Token` option works only when Hermes has
-`auth_required=false`; auth-gated Hermes requires the later browser broker and
-must be configured as unavailable until then. A Hermes server bound only to
+Compose environment or public runtime config. A Hermes server bound only to
 host loopback is not reachable through Docker's host gateway.
 
 ## Creator profile

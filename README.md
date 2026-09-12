@@ -75,7 +75,8 @@ See [Run AOS with OpenCode](docs/runtimes/opencode.md) for native ownership, opt
 
 ### Hermes
 
-Start your authenticated `hermes serve` installation independently. In the AOS checkout, attach through the development proxy:
+Start your authenticated `hermes serve` installation independently. For local
+development, the legacy Vite shortcut remains available:
 
 ```bash
 AOS_UI_RUNTIME_MODE=hermes \

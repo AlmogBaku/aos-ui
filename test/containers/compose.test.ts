@@ -49,6 +49,47 @@ function composeConfig(
 }
 
 describe("container orchestration", () => {
+  it("keeps the Hermes browser configuration credential-free", () => {
+    const runtime = JSON.parse(
+      readFileSync(resolve(root, "deploy/runtime-config.hermes.json"), "utf8")
+    ) as Record<string, unknown>
+    expect(runtime).toEqual({ mode: "aos" })
+    expect(JSON.stringify(runtime).toLowerCase()).not.toMatch(
+      /token|secret|password|authorization|hermes\.baseurl/u
+    )
+  })
+
+  it("ships a browser-broker proxy example with sealed key references", () => {
+    const proxy = JSON.parse(
+      readFileSync(
+        resolve(root, "deploy/proxy-config.hermes.example.json"),
+        "utf8"
+      )
+    ) as {
+      listen: { host: string; port: number; exposure: string }
+      hermes: { auth: { mode: string } }
+      operator: {
+        principalHmacKeyFile: string
+        session: { keys: Array<{ secretFile: string }> }
+      }
+      events: { keys: Array<{ secretFile: string }> }
+    }
+    expect(proxy.listen).toMatchObject({
+      host: "0.0.0.0",
+      port: 4100,
+      exposure: "private-container",
+    })
+    expect(proxy.hermes.auth).toMatchObject({ mode: "browser-broker" })
+    expect(proxy.operator.principalHmacKeyFile).toMatch(/^\/run\/secrets\//u)
+    expect(proxy.operator.session.keys[0].secretFile).toMatch(
+      /^\/run\/secrets\//u
+    )
+    expect(proxy.events.keys[0].secretFile).toMatch(/^\/run\/secrets\//u)
+    expect(JSON.stringify(proxy).toLowerCase()).not.toContain(
+      "hermes-session-token"
+    )
+  })
+
   it("keeps the base composition web-only and loopback-only", () => {
     const config = composeConfig(["compose.yaml"])
 
@@ -114,7 +155,9 @@ describe("container orchestration", () => {
         "deploy/proxy-config.hermes.example.json"
       ),
       AOS_UI_OIDC_CLIENT_SECRET_FILE: resolve(root, ".env.example"),
-      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
+      AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_OPERATOR_SESSION_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
     })
 
     expect(Object.keys(config.services).sort()).toEqual(["proxy", "web"])
@@ -122,8 +165,6 @@ describe("container orchestration", () => {
       "service_healthy"
     )
     expect(config.services.web.environment).toMatchObject({
-      AOS_UI_HERMES_HOST: "host.docker.internal",
-      AOS_UI_HERMES_PORT: "9119",
       AOS_UI_PROXY_HOST: "proxy",
       AOS_UI_PROXY_PORT: "4100",
     })
@@ -151,8 +192,16 @@ describe("container orchestration", () => {
           target: "oidc-client-secret",
         }),
         expect.objectContaining({
-          source: "hermes-static-token",
-          target: "hermes-token",
+          source: "operator-principal-hmac",
+          target: "operator-principal-hmac",
+        }),
+        expect.objectContaining({
+          source: "operator-session-key",
+          target: "operator-session-key",
+        }),
+        expect.objectContaining({
+          source: "reconnect-cursor-key",
+          target: "reconnect-cursor-key",
         }),
       ])
     )
@@ -165,7 +214,13 @@ describe("container orchestration", () => {
     expect(config.secrets?.["operator-oidc-client-secret"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    expect(config.secrets?.["hermes-static-token"]?.file).toBe(
+    expect(config.secrets?.["operator-principal-hmac"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["operator-session-key"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["reconnect-cursor-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
   })
@@ -229,15 +284,17 @@ describe("container orchestration", () => {
     expect(dockerfile).toContain("/app/dist")
     expect(nginx).toContain("location = /api/health")
     expect(nginx).toContain("location = /runtime-config.json")
-    expect(nginx).toContain("location ^~ /auth/")
-    expect(nginx).toContain("location ^~ /openclaw/")
-    expect(nginx).toContain(
-      "location = /openclaw { rewrite ^ /openclaw/ last; }"
-    )
-    expect(nginx).not.toContain("location = /openclaw { return 308")
-    expect(nginx).toContain("rewrite ^/openclaw/?(.*)$ /$1 break;")
+    expect(nginx).toContain("location = /api/aos/v1")
+    expect(nginx).toContain("location ^~ /api/aos/v1/")
+    expect(nginx).toContain("proxy_set_header Upgrade $http_upgrade;")
+    expect(nginx).toContain("proxy_set_header Connection $connection_upgrade;")
     expect(nginx).toContain("proxy_set_header Origin $http_origin;")
     expect(nginx).not.toContain("proxy_set_header Origin $scheme://$http_host;")
+    expect(nginx).not.toContain("proxy_pass $hermes_upstream")
+    expect(nginx).not.toContain("proxy_pass $openclaw_upstream")
+    expect(nginx).toContain("location ^~ /hermes/ { return 404; }")
+    expect(nginx).toContain("location ^~ /auth/ { return 404; }")
+    expect(nginx).toContain("location ^~ /openclaw/ { return 404; }")
     expect(nginx).toContain("proxy_buffering off")
     expect(nginx).toContain("max-age=31536000, immutable")
   })
@@ -250,35 +307,16 @@ describe("container orchestration", () => {
     expect(dockerfile).toContain("USER bun")
   })
 
-  it("raises the upload limit only for exact native Hermes transcription", () => {
+  it("keeps the operator Nginx boundary free of native Hermes routes", () => {
     const nginx = readFileSync(
       resolve(root, "deploy/nginx/default.conf.template"),
       "utf8"
     )
-    const transcription = nginx.match(
-      /location = \/hermes\/api\/audio\/transcribe \{([\s\S]*?)^ {2}\}/m
-    )?.[1]
-
-    expect(transcription).toBeDefined()
-    expect(transcription).toContain("client_max_body_size 8m;")
-    expect(nginx.match(/client_max_body_size/g)).toHaveLength(1)
-    expect(transcription).toContain("rewrite ^/hermes/?(.*)$ /$1 break;")
-    expect(transcription).toContain("proxy_pass $hermes_upstream;")
-    expect(transcription).toContain("proxy_http_version 1.1;")
-    expect(transcription).toContain("proxy_buffering off;")
-    expect(transcription).toContain("proxy_request_buffering off;")
-    expect(transcription).toContain("proxy_cache off;")
-    expect(transcription).toContain("proxy_read_timeout 1h;")
-    expect(transcription).toContain("proxy_send_timeout 1h;")
-    for (const header of [
-      "Upgrade $http_upgrade",
-      "Connection $connection_upgrade",
-      "Host $http_host",
-      "X-Forwarded-Prefix /hermes",
-      "X-Forwarded-For $proxy_add_x_forwarded_for",
-      "X-Forwarded-Proto $scheme",
-    ]) {
-      expect(transcription).toContain(`proxy_set_header ${header};`)
-    }
+    expect(nginx).not.toContain("AOS_UI_HERMES_HOST")
+    expect(nginx).not.toContain("AOS_UI_OPENCLAW_HOST")
+    expect(nginx).not.toContain("/hermes/api/audio/transcribe")
+    expect(nginx.match(/proxy_pass/g)).toHaveLength(2)
+    expect(nginx.match(/proxy_pass \$aos_upstream/g)).toHaveLength(2)
+    expect(nginx).toContain("private TypeScript proxy")
   })
 })

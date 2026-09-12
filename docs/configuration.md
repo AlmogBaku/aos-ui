@@ -61,14 +61,17 @@ Unknown fields are rejected. Ready configurations use one of these shapes.
 
 ```json
 {
-  "mode": "hermes",
-  "baseUrl": "/hermes",
+  "mode": "aos",
   "composerModelSelectorEnabled": true,
   "composerContextEnabled": true
 }
 ```
 
-Use the same-origin `/hermes` prefix with the supplied Vite or Nginx forwarding. Authentication remains native to Hermes.
+The Hermes Compose deployment uses this credential-free public shape. The
+private TypeScript proxy translates `/api/aos/v1` to Hermes and brokers
+operator/runtime authentication; the browser never receives a Hermes URL or
+token. The old `/hermes` shape is retained only for the local development
+shortcut documented in [Run AOS with Hermes](runtimes/hermes.md).
 
 ### Generic AG-UI
 
@@ -135,17 +138,20 @@ The optional OpenCode launcher and its credential-forwarding variables are descr
 
 ## Compose environment
 
-| Variable                              | Default                                    | Use                                             |
-| ------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json`             | Public JSON mounted read-only.                  |
-| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                                | Published-service bind address.                 |
-| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                                     | Web port on the host.                           |
-| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                                     | OpenCode port on the host.                      |
-| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay               | External worktree mounted at `/workspace`.      |
-| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                                     | Non-root OpenCode container identity.           |
-| `AOS_UI_HERMES_HOST`                  | `host.docker.internal` with Hermes overlay | Hermes host reachable from the web container.   |
-| `AOS_UI_HERMES_PORT`                  | `9119`                                     | Native Hermes port.                             |
-| `AOS_UI_OPENCLAW_HOST`                | `host.docker.internal` with overlay        | OpenClaw host reachable from the web container. |
-| `AOS_UI_OPENCLAW_PORT`                | `18789`                                    | Native OpenClaw Gateway port.                   |
+| Variable                              | Default                             | Use                                             |
+| ------------------------------------- | ----------------------------------- | ----------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json`      | Public JSON mounted read-only.                  |
+| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                         | Published-service bind address.                 |
+| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                              | Web port on the host.                           |
+| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                              | OpenCode port on the host.                      |
+| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay        | External worktree mounted at `/workspace`.      |
+| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                              | Non-root OpenCode container identity.           |
+| `AOS_UI_PROXY_CONFIG_FILE`            | required by Hermes overlay          | Private proxy JSON mounted read-only.           |
+| `AOS_UI_OIDC_CLIENT_SECRET_FILE`      | required by Hermes overlay          | Owner-only OIDC client secret file.             |
+| `AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE`  | required by Hermes overlay          | Owner-only 32-byte principal key file.          |
+| `AOS_UI_OPERATOR_SESSION_KEY_FILE`    | required by Hermes overlay          | Owner-only 32-byte session key file.            |
+| `AOS_UI_RECONNECT_CURSOR_KEY_FILE`    | required by Hermes overlay          | Owner-only 32-byte reconnect key file.          |
+| `AOS_UI_OPENCLAW_HOST`                | `host.docker.internal` with overlay | OpenClaw host reachable from the web container. |
+| `AOS_UI_OPENCLAW_PORT`                | `18789`                             | Native OpenClaw Gateway port.                   |
 
 Copy [`.env.compose.example`](../.env.compose.example) to `.env` for local overrides. See [Deployment](deployment.md) for complete commands.

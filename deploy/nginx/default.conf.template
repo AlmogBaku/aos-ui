@@ -24,18 +24,13 @@ server {
     try_files $uri =404;
   }
 
-  location = /hermes { return 308 /hermes/; }
-  # Internally rewrite the exact WebSocket endpoint; browser WebSocket clients
-  # do not consistently follow HTTP redirects during their handshake.
-  location = /openclaw { rewrite ^ /openclaw/ last; }
-
-  # The browser performs OpenClaw's official device/token handshake over this
-  # same-origin WebSocket. No Gateway credential is stored in runtime config.
-  location ^~ /openclaw/ {
+  # The operator surface has one browser-to-server boundary. Native Hermes,
+  # native auth, and provider WebSockets are never exposed as browser routes;
+  # the private TypeScript proxy owns their translation and credentials.
+  location = /api/aos/v1 {
     resolver 127.0.0.11 valid=10s ipv6=off;
-    set $openclaw_upstream http://${AOS_UI_OPENCLAW_HOST}:${AOS_UI_OPENCLAW_PORT};
-    rewrite ^/openclaw/?(.*)$ /$1 break;
-    proxy_pass $openclaw_upstream;
+    set $aos_upstream http://${AOS_UI_PROXY_HOST}:${AOS_UI_PROXY_PORT};
+    proxy_pass $aos_upstream;
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_request_buffering off;
@@ -45,67 +40,9 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $http_host;
-    # Preserve the browser's actual Origin so OpenClaw can enforce its native
-    # allowed-origin policy. Never synthesize a trusted same-origin value.
     proxy_set_header Origin $http_origin;
-    proxy_set_header X-Forwarded-Prefix /openclaw;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-
-  # Hermes' native login page currently submits to an absolute /auth path even
-  # when X-Forwarded-Prefix is set. Keep authentication native while routing
-  # that public callback through the same trusted upstream.
-  location ^~ /auth/ {
-    resolver 127.0.0.11 valid=10s ipv6=off;
-    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
-    proxy_pass $hermes_upstream;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_request_buffering off;
-    proxy_cache off;
-    proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-Prefix /hermes;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-
-  location = /hermes/api/audio/transcribe {
-    client_max_body_size 8m;
-    resolver 127.0.0.11 valid=10s ipv6=off;
-    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
-    rewrite ^/hermes/?(.*)$ /$1 break;
-    proxy_pass $hermes_upstream;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_request_buffering off;
-    proxy_cache off;
-    proxy_read_timeout 1h;
-    proxy_send_timeout 1h;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-Prefix /hermes;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-
-  location ^~ /hermes/ {
-    resolver 127.0.0.11 valid=10s ipv6=off;
-    set $hermes_upstream http://${AOS_UI_HERMES_HOST}:${AOS_UI_HERMES_PORT};
-    rewrite ^/hermes/?(.*)$ /$1 break;
-    proxy_pass $hermes_upstream;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_request_buffering off;
-    proxy_cache off;
-    proxy_read_timeout 1h;
-    proxy_send_timeout 1h;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_set_header Host $http_host;
-    proxy_set_header X-Forwarded-Prefix /hermes;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
@@ -124,8 +61,18 @@ server {
     proxy_set_header Host $http_host;
     proxy_set_header Origin $http_origin;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
   }
+
+  # Never let legacy native/provider paths fall through to the SPA. Guest
+  # traffic is served by its own origin and isolated listener.
+  location = /auth { return 404; }
+  location ^~ /auth/ { return 404; }
+  location = /hermes { return 404; }
+  location ^~ /hermes/ { return 404; }
+  location = /openclaw { return 404; }
+  location ^~ /openclaw/ { return 404; }
 
   location ^~ /api/ {
     default_type application/json;

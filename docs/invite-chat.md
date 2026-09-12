@@ -1,11 +1,18 @@
 # Share an invited chat
 
-`aos-gateway` is an optional Go helper that serves two isolated surfaces for one selected Hermes, OpenCode, or OpenClaw runtime:
+`aos-gateway` is an optional Go helper that serves an isolated guest surface for
+one selected Hermes, OpenCode, or OpenClaw runtime:
 
-- an operator listener with the regular AOS UI and same-origin native forwarding; and
 - a guest listener with restricted chat reached through a signed, expiring invitation.
 
 The gateway is not a runtime or conversation database. The selected native runtime still owns Agents, Sessions, messages, tools, credentials, and persistence.
+
+The Hermes operator deployment uses the private TypeScript runtime proxy and
+normalized `/api/aos/v1` boundary documented in [Deployment](deployment.md).
+Do not publish the gateway's legacy operator listener or use it as a second
+browser-to-Hermes path. Keep the guest listener on its own origin and reverse
+proxy so invitation credentials and guest authorization cannot reach the
+operator surface.
 
 ## Build the gateway
 

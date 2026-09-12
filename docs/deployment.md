@@ -15,7 +15,9 @@ The output is written to `dist/`. Serve it through a static host that:
 - serves `/runtime-config.json` without long-lived caching;
 - gives hashed assets immutable caching;
 - exposes `/api/health` for the web service; and
-- forwards the selected native integration paths without turning proxy failures into SPA responses.
+- forwards only `/api/aos/v1` to the private TypeScript runtime proxy,
+  preserving HTTP streaming and WebSocket upgrades without turning proxy
+  failures into SPA responses.
 
 The supplied Nginx configuration implements these behaviors.
 
@@ -64,14 +66,31 @@ The overlay builds and starts OpenCode, mounts the external worktree at `/worksp
 
 Read [Run with OpenCode](runtimes/opencode.md) before adding model credentials or changing host identity settings.
 
-## Attach existing Hermes
+## Deploy the Hermes operator surface
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
+cp .env.compose.example .env
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
+AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE=/absolute/private/path/operator-principal-hmac \
+AOS_UI_OPERATOR_SESSION_KEY_FILE=/absolute/private/path/operator-session-key \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
 
-The Hermes overlay does not start Hermes. It configures the web container to forward `/hermes` and native authentication traffic to `AOS_UI_HERMES_HOST:AOS_UI_HERMES_PORT`.
+Hermes remains independently operated. The overlay runs the private TypeScript
+proxy beside Nginx; only Nginx is published. The browser uses the normalized
+`/api/aos/v1` API for operator OIDC, Hermes authentication brokerage, catalogs,
+history, AG-UI/SSE runs, Stop, and reconnect. Nginx has no browser route to
+Hermes, native `/auth`, or another provider path.
+
+Start from [`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json)
+and customize its public origin, OIDC issuer/allowlist, and Hermes address.
+The browser-broker mode is the supported auth-gated Hermes path. Secret files
+must be owner-only and contain no public runtime configuration. The mounted
+[`runtime-config.hermes.json`](../deploy/runtime-config.hermes.json) contains
+only `{ "mode": "aos" }`.
 
 Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
 
@@ -155,7 +174,8 @@ target the loopback guest listener exclusively; it must not expose the private
 operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
 Then verify the guest root, unauthenticated `GET /api/guest/bootstrap` (`401`),
 and that `/hermes/`, `/auth/`, and non-guest `/api/` routes cannot reach the
-native runtime.
+native runtime. The guest origin remains a separate virtual host and listener;
+it is never routed through the operator Nginx `/api/aos/v1` boundary.
 
 ## Persistence and shutdown
 
@@ -192,4 +212,22 @@ docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
 docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
 ```
 
-When runtime container behavior changes, also build the affected image and smoke its health and streaming endpoints.
+When runtime container behavior changes, also build the affected image and
+smoke its health and streaming endpoints.
+
+## P1 cutover blockers retained for later deletion
+
+The old native forwarding artifacts remain in the checkout until parity is
+proven and are not part of the Hermes operator deployment:
+
+- the local Vite Hermes/OpenClaw forwarding shortcuts and their direct runtime
+  configuration examples;
+- the optional Go `aos-gateway` guest listener, which still owns the public
+  `/api/guest/*` HTTP surface while the TypeScript proxy's guest listener
+  wiring is completed; and
+- alternate OpenCode/OpenClaw Compose overlays and live acceptance coverage.
+
+Delete those artifacts only after an approved Hermes operator and guest
+acceptance run proves authentication, Agent/Session ownership, history,
+streaming, Stop, reconnect, invitation expiry/isolation, and deployment
+rollback on the normalized proxy path.

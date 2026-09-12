@@ -31,22 +31,28 @@ OpenCode `1.18.29` caches Agent definitions. Wait for active runs to finish, res
 
 Use the **Sign in to Hermes** action, complete native authentication in the new tab, then reload AOS. The browser relies on Hermes cookies and single-use WebSocket tickets; credentials never belong in public runtime configuration.
 
-When Hermes is mounted at `/hermes`, keep the supplied `/auth` forwarding enabled because the native login page submits to that absolute path.
+The production Hermes deployment does not mount Hermes at a browser path.
+Authentication must use the normalized proxy routes under
+`/api/aos/v1/auth`; `/hermes` and native `/auth` routes should return `404`.
 
 ## Hermes HTTP works but live updates fail
 
-- Confirm the reverse proxy forwards WebSocket upgrades on `/hermes`.
-- Confirm browser cookies apply to the mounted path and origin.
-- Verify the configured public base URL includes `/hermes`.
+- Confirm Nginx forwards WebSocket upgrades on `/api/aos/v1/events` and keeps
+  buffering disabled for `/api/aos/v1`.
+- Confirm operator session cookies apply to the public origin.
+- Verify the proxy config's Hermes base URL is reachable from the proxy
+  container; it is never a browser-facing URL.
 - Check that the server version exposes the native interfaces described in the [Hermes guide](runtimes/hermes.md).
 
 AOS reconnects to the native Session without submitting a prompt. Recovery and auto-continue policy remain Hermes settings.
 
-## The web container cannot reach Hermes
+## The proxy container cannot reach Hermes
 
-A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then set `AOS_UI_HERMES_HOST` and `AOS_UI_HERMES_PORT`.
+A host service bound only to `127.0.0.1` is not reachable through Docker's host gateway. Bind Hermes to an appropriate trusted interface or provide another container-reachable host, then update the private proxy config's `hermes.baseUrl`.
 
-From the web container, verify the configured host and port resolve and accept connections. Keep browser-facing configuration on the same-origin `/hermes` path.
+From the proxy container, verify the configured host and port resolve and
+accept connections. Keep the browser-facing configuration on the normalized
+same-origin `/api/aos/v1` path.
 
 ## Generic AG-UI Agents or Sessions do not load
 
