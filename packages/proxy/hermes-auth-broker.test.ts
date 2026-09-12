@@ -25,12 +25,22 @@ type NativeFixtureOptions = {
   password?: boolean
   tokenStatus?: number
   refreshStatus?: number
+  refreshToken?: string
+  expiresAt?: number
+  authorizeCookies?: readonly string[]
+  expectedCookieHeader?: string
+  nativeResultExtra?: Readonly<Record<string, string>>
+  tokenAccessTokens?: readonly string[]
+  tokenExpiresAt?: readonly number[]
+  refreshResponse?: () => Promise<Response>
+  authorizeGate?: Promise<void>
 }
 
 function nativeFixture(options: NativeFixtureOptions = {}) {
   const calls: Array<{ url: URL; init?: RequestInit }> = []
   let nativeRedirect = ""
   let clientState = ""
+  let tokenIndex = 0
   const fetcher = vi.fn(
     async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(
@@ -55,8 +65,14 @@ function nativeFixture(options: NativeFixtureOptions = {}) {
         })
       }
       if (url.pathname === "/auth/native/authorize") {
+        await options.authorizeGate
         nativeRedirect = url.searchParams.get("redirect_uri") ?? ""
         clientState = url.searchParams.get("state") ?? ""
+        const headers = new Headers(init?.headers)
+        const forwardedHost = headers.get("host") ?? url.host
+        const forwardedProto = headers.get("x-forwarded-proto") ?? url.protocol
+        const forwardedPrefix = headers.get("x-forwarded-prefix") ?? ""
+        const actualCallback = `${forwardedProto.replace(/:$/u, "")}://${forwardedHost}${forwardedPrefix}/auth/callback`
         const authorize = new URL(
           "/oauth/authorize",
           options.authorizeOrigin ?? identityOrigin
@@ -64,23 +80,27 @@ function nativeFixture(options: NativeFixtureOptions = {}) {
         authorize.searchParams.set("state", `provider-state-${calls.length}`)
         authorize.searchParams.set(
           "redirect_uri",
-          options.advertisedCallback ?? callbackUrl
+          options.advertisedCallback ?? actualCallback
         )
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: authorize.toString(),
-            "set-cookie":
-              "hermes_session_pkce=server-only; Path=/; Secure; HttpOnly",
-          },
-        })
+        const responseHeaders = new Headers({ location: authorize.toString() })
+        for (const cookie of options.authorizeCookies ?? [
+          "hermes_session_pkce=server-only; Path=/; Secure; HttpOnly",
+        ])
+          responseHeaders.append("set-cookie", cookie)
+        return new Response(null, { status: 302, headers: responseHeaders })
       }
       if (url.pathname === "/auth/callback") {
         const cookie = new Headers(init?.headers).get("cookie")
-        expect(cookie).toBe("hermes_session_pkce=server-only")
+        expect(cookie).toBe(
+          options.expectedCookieHeader ?? "hermes_session_pkce=server-only"
+        )
         const target = new URL(nativeRedirect)
         target.searchParams.set("code", "gateway-code")
         target.searchParams.set("state", clientState)
+        for (const [key, value] of Object.entries(
+          options.nativeResultExtra ?? {}
+        ))
+          target.searchParams.set(key, value)
         return new Response(null, {
           status: 302,
           headers: {
@@ -97,16 +117,22 @@ function nativeFixture(options: NativeFixtureOptions = {}) {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>
         expect(body.code).toBe("gateway-code")
         expect(typeof body.code_verifier).toBe("string")
+        const currentToken = tokenIndex++
         return Response.json({
-          access_token: "secret-access",
-          refresh_token: "secret-refresh",
+          access_token:
+            options.tokenAccessTokens?.[currentToken] ?? "secret-access",
+          refresh_token: options.refreshToken ?? "secret-refresh",
           token_type: "Bearer",
-          expires_at: 4_000_000_000,
+          expires_at:
+            options.tokenExpiresAt?.[currentToken] ??
+            options.expiresAt ??
+            4_000_000_000,
           provider: "nous",
           user_id: "native-user",
         })
       }
       if (url.pathname === "/auth/native/refresh") {
+        if (options.refreshResponse) return options.refreshResponse()
         if (options.refreshStatus)
           return new Response("refresh error must stay private", {
             status: options.refreshStatus,
@@ -143,11 +169,17 @@ function broker(
 
 async function beginAndComplete(
   instance: ReturnType<typeof createHermesBrowserAuthBroker>,
-  state = "provider-state-3"
+  expectedState?: string
 ) {
   const started = await instance.begin(binding)
   expect(started.status).toBe("redirect")
   if (started.status !== "redirect") throw new Error("expected redirect")
+  const state =
+    expectedState ??
+    new URL(started.response.headers.get("location") ?? "").searchParams.get(
+      "state"
+    )
+  if (!state) throw new Error("expected provider state")
   return instance.complete({
     ...binding,
     callbackUrl: `${callbackUrl}?code=idp-code&state=${state}`,
@@ -173,6 +205,12 @@ describe("Hermes external-browser authentication broker", () => {
       ({ url }) => url.pathname === "/auth/native/authorize"
     )
     expect(authorize?.init?.redirect).toBe("manual")
+    expect(new Headers(authorize?.init?.headers).get("host")).toBe(
+      "aos.example.test"
+    )
+    expect(
+      new Headers(authorize?.init?.headers).get("x-forwarded-prefix")
+    ).toBe("/api/aos/v1/auth/hermes/upstream")
     expect(authorize?.url.searchParams.get("code_challenge_method")).toBe(
       "S256"
     )
@@ -257,6 +295,41 @@ describe("Hermes external-browser authentication broker", () => {
     ).rejects.toMatchObject({ code: "invalid-flow" })
   })
 
+  it("admits at most the configured number of concurrent browser flows", async () => {
+    let releaseAuthorize: (() => void) | undefined
+    const authorizeGate = new Promise<void>((resolve) => {
+      releaseAuthorize = resolve
+    })
+    const native = nativeFixture({ authorizeGate })
+    const instance = broker(native.fetcher as typeof fetch, { maxFlows: 1 })
+
+    const first = instance.begin(binding)
+    await vi.waitFor(() =>
+      expect(
+        native.calls.filter(
+          ({ url }) => url.pathname === "/auth/native/authorize"
+        )
+      ).toHaveLength(1)
+    )
+    const second = instance.begin({
+      ...binding,
+      browserSessionId: "browser-session-2",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    releaseAuthorize?.()
+    const results = await Promise.all([first, second])
+
+    expect(
+      native.calls.filter(
+        ({ url }) => url.pathname === "/auth/native/authorize"
+      )
+    ).toHaveLength(1)
+    expect(results.map(({ status }) => status).sort()).toEqual([
+      "redirect",
+      "unavailable",
+    ])
+  })
+
   it.each([
     ["lane", { lane: "guest" }],
     ["browser session", { browserSessionId: "other-browser" }],
@@ -296,6 +369,49 @@ describe("Hermes external-browser authentication broker", () => {
     expect(native.fetcher).not.toHaveBeenCalled()
   })
 
+  it.each([
+    "/%2f%2fevil.example/steal",
+    "/%252f%252fevil.example/steal",
+    "/%5cevil",
+    "/%00control",
+    "/ok?next=%0dheader",
+    "/%ZZmalformed",
+  ])("rejects encoded or malformed return route %s", async (returnPath) => {
+    const native = nativeFixture()
+    await expect(
+      broker(native.fetcher as typeof fetch).begin({ ...binding, returnPath })
+    ).rejects.toMatchObject({
+      name: "HermesBrowserAuthenticationError",
+      code: "invalid-request",
+    })
+    expect(native.fetcher).not.toHaveBeenCalled()
+  })
+
+  it("does not admit guest lanes to operator browser authentication", async () => {
+    const native = nativeFixture()
+    await expect(
+      broker(native.fetcher as typeof fetch).begin({
+        ...binding,
+        lane: "guest",
+      })
+    ).rejects.toMatchObject({ code: "invalid-request" })
+    expect(native.fetcher).not.toHaveBeenCalled()
+  })
+
+  it("rejects return routes nested beyond the decoding bound", async () => {
+    let encoded = "//evil.example/steal"
+    for (let depth = 0; depth < 10; depth += 1)
+      encoded = encodeURIComponent(encoded)
+    const native = nativeFixture()
+    await expect(
+      broker(native.fetcher as typeof fetch).begin({
+        ...binding,
+        returnPath: `/${encoded}`,
+      })
+    ).rejects.toMatchObject({ code: "invalid-request" })
+    expect(native.fetcher).not.toHaveBeenCalled()
+  })
+
   it("does not reflect an unallowlisted identity redirect or mismatched callback", async () => {
     const unsafe = nativeFixture({
       authorizeOrigin: "https://evil.example.test",
@@ -315,6 +431,64 @@ describe("Hermes external-browser authentication broker", () => {
     ).resolves.toEqual({
       status: "unavailable",
       reason: "callback-mismatch",
+    })
+  })
+
+  it("applies browser cookie Domain, Path, Secure, expiry, and ordering rules", async () => {
+    const native = nativeFixture({
+      authorizeCookies: [
+        "root=root-value; Path=/; Secure; HttpOnly",
+        "specific=specific-value; Path=/api/aos/v1/auth/hermes/upstream; Secure; HttpOnly",
+        "expired=bad; Path=/; Max-Age=-1; Secure",
+        "wrong_path=bad; Path=/unrelated; Secure",
+      ],
+      expectedCookieHeader: "specific=specific-value; root=root-value",
+    })
+    await expect(
+      beginAndComplete(broker(native.fetcher as typeof fetch))
+    ).resolves.toEqual({
+      status: "authenticated",
+      returnPath: binding.returnPath,
+    })
+  })
+
+  it("rejects cross-domain, excessive-count, and excessive-size cookie jars", async () => {
+    const crossDomain = nativeFixture({
+      authorizeCookies: [
+        "hermes_session_pkce=bad; Domain=evil.example.test; Path=/; Secure",
+      ],
+    })
+    await expect(
+      broker(crossDomain.fetcher as typeof fetch).begin(binding)
+    ).resolves.toEqual({
+      status: "unavailable",
+      reason: "invalid-native-response",
+    })
+
+    const excessiveCount = nativeFixture({
+      authorizeCookies: Array.from(
+        { length: 33 },
+        (_, index) => `cookie_${index}=value; Path=/; Secure`
+      ),
+    })
+    await expect(
+      broker(excessiveCount.fetcher as typeof fetch).begin(binding)
+    ).resolves.toEqual({
+      status: "unavailable",
+      reason: "invalid-native-response",
+    })
+
+    const excessiveSize = nativeFixture({
+      authorizeCookies: Array.from(
+        { length: 10 },
+        (_, index) => `cookie_${index}=${"x".repeat(2_000)}; Path=/; Secure`
+      ),
+    })
+    await expect(
+      broker(excessiveSize.fetcher as typeof fetch).begin(binding)
+    ).resolves.toEqual({
+      status: "unavailable",
+      reason: "invalid-native-response",
     })
   })
 
@@ -376,6 +550,106 @@ describe("Hermes external-browser authentication broker", () => {
     })
   })
 
+  it("rejects native loopback results containing fields beyond code and state", async () => {
+    const native = nativeFixture({ nativeResultExtra: { unexpected: "value" } })
+    const instance = broker(native.fetcher as typeof fetch)
+    await expect(beginAndComplete(instance)).rejects.toMatchObject({
+      code: "invalid-flow",
+      message: "Hermes authentication failed",
+    })
+    expect(
+      native.calls.filter(({ url }) => url.pathname === "/auth/native/token")
+    ).toHaveLength(0)
+  })
+
+  it("cancels unread redirect and declared-oversized native bodies", async () => {
+    let redirectCancelled = false
+    const redirecting = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              redirectCancelled = true
+            },
+          }),
+          { status: 302, headers: { location: "https://evil.example/status" } }
+        )
+    )
+    await broker(redirecting as typeof fetch).begin(binding)
+    expect(redirectCancelled).toBe(true)
+
+    let oversizedCancelled = false
+    const oversized = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              oversizedCancelled = true
+            },
+          }),
+          { headers: { "content-length": "1025" } }
+        )
+    )
+    await broker(oversized as typeof fetch, { maxResponseBytes: 1024 }).begin(
+      binding
+    )
+    expect(oversizedCancelled).toBe(true)
+  })
+
+  it("does not let a stalled body cancellation extend the native timeout", async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            cancel: () => new Promise<void>(() => undefined),
+          }),
+          { status: 302, headers: { location: "https://evil.example/status" } }
+        )
+    )
+    const completion = broker(fetcher as typeof fetch, {
+      timeoutMs: 100,
+    }).begin(binding)
+    const marker = Symbol("still-pending")
+    const result = await Promise.race([
+      completion,
+      new Promise<typeof marker>((resolve) =>
+        setTimeout(() => resolve(marker), 250)
+      ),
+    ])
+    expect(result).not.toBe(marker)
+  })
+
+  it("keeps the native timeout active while a response body is read", async () => {
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined
+    const fetcher = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyController = controller
+              init?.signal?.addEventListener("abort", () =>
+                controller.error(new Error("aborted"))
+              )
+            },
+          })
+        )
+    )
+    const instance = broker(fetcher as typeof fetch, { timeoutMs: 100 })
+    const pending = instance.begin(binding)
+    const marker = Symbol("still-pending")
+    const result = await Promise.race([
+      pending,
+      new Promise<typeof marker>((resolve) =>
+        setTimeout(() => resolve(marker), 250)
+      ),
+    ])
+    if (result === marker) bodyController?.error(new Error("test cleanup"))
+    expect(result).toEqual({
+      status: "unavailable",
+      reason: "provider-temporarily-unavailable",
+    })
+  })
+
   it("clears server credentials when native refresh reports authentication loss", async () => {
     let now = 1_000_000
     const native = nativeFixture({ refreshStatus: 401 })
@@ -403,6 +677,30 @@ describe("Hermes external-browser authentication broker", () => {
     ).toEqual({ status: "authentication-required" })
   })
 
+  it("uses a non-refreshable access token until expiry, then requires login", async () => {
+    let now = 1_000_000
+    const native = nativeFixture({ refreshToken: "", expiresAt: 1_100 })
+    const instance = broker(native.fetcher as typeof fetch, {
+      clock: () => now,
+      credentialRefreshSkewMs: 120_000,
+    })
+    await beginAndComplete(instance)
+
+    await expect(
+      instance.credentials({ principalId: "operator:7", lane: "operator" })
+    ).resolves.toEqual({ authorization: "Bearer secret-access" })
+    now = 1_100_001
+    await expect(
+      instance.credentials({ principalId: "operator:7", lane: "operator" })
+    ).rejects.toMatchObject({ code: "session-expired" })
+    expect(
+      native.calls.filter(({ url }) => url.pathname === "/auth/native/refresh")
+    ).toHaveLength(0)
+    expect(
+      instance.authState({ principalId: "operator:7", lane: "operator" })
+    ).toEqual({ status: "authentication-required" })
+  })
+
   it("coalesces concurrent refreshes so a rotating refresh token is used once", async () => {
     let now = 1_000_000
     const native = nativeFixture()
@@ -425,5 +723,81 @@ describe("Hermes external-browser authentication broker", () => {
     expect(
       native.calls.filter(({ url }) => url.pathname === "/auth/native/refresh")
     ).toHaveLength(1)
+  })
+
+  it("lets the transport invalidate authentication and logout pending flows", async () => {
+    const native = nativeFixture()
+    const instance = broker(native.fetcher as typeof fetch)
+    await beginAndComplete(instance)
+    const scope = { principalId: "operator:7", lane: "operator" }
+
+    instance.invalidate(scope)
+    expect(instance.authState(scope)).toEqual({
+      status: "authentication-required",
+    })
+    await expect(instance.credentials(scope)).rejects.toMatchObject({
+      code: "session-expired",
+    })
+
+    const started = await instance.begin(binding)
+    expect(started.status).toBe("redirect")
+    if (started.status !== "redirect") throw new Error("expected redirect")
+    const state = new URL(
+      started.response.headers.get("location") ?? ""
+    ).searchParams.get("state")
+    instance.logout(scope)
+    await expect(
+      instance.complete({
+        ...binding,
+        callbackUrl: `${callbackUrl}?code=idp-code&state=${state}`,
+      })
+    ).rejects.toMatchObject({ code: "invalid-flow" })
+  })
+
+  it("does not let a stale refresh overwrite a newer browser login", async () => {
+    let now = 1_000_000
+    let resolveRefresh: ((response: Response) => void) | undefined
+    const refreshResponse = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const native = nativeFixture({
+      tokenAccessTokens: ["old-access", "fresh-access"],
+      tokenExpiresAt: [1_100, 4_000_000_000],
+      refreshResponse: () => refreshResponse,
+    })
+    const instance = broker(native.fetcher as typeof fetch, {
+      clock: () => now,
+      credentialRefreshSkewMs: 120_000,
+    })
+    const scope = { principalId: "operator:7", lane: "operator" }
+    await beginAndComplete(instance)
+
+    const staleRefresh = instance.credentials(scope)
+    await vi.waitFor(() =>
+      expect(
+        native.calls.filter(
+          ({ url }) => url.pathname === "/auth/native/refresh"
+        )
+      ).toHaveLength(1)
+    )
+    await beginAndComplete(instance)
+    resolveRefresh?.(
+      Response.json({
+        access_token: "stale-rotated-access",
+        refresh_token: "stale-rotated-refresh",
+        token_type: "Bearer",
+        expires_at: 4_000_000_000,
+        provider: "nous",
+        user_id: "native-user",
+      })
+    )
+
+    await expect(staleRefresh).resolves.toEqual({
+      authorization: "Bearer fresh-access",
+    })
+    now += 1
+    await expect(instance.credentials(scope)).resolves.toEqual({
+      authorization: "Bearer fresh-access",
+    })
   })
 })

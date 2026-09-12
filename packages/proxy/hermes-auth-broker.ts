@@ -1,4 +1,5 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
+import { CookieJar } from "tough-cookie"
 import { z } from "zod"
 
 const DEFAULT_FLOW_TTL_MS = 5 * 60_000
@@ -7,7 +8,9 @@ const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_REFRESH_SKEW_MS = 60_000
 const MAX_URL_LENGTH = 4096
-const MAX_COOKIE_BYTES = 16 * 1024
+const MAX_COOKIE_HEADER_BYTES = 16 * 1024
+const MAX_COOKIE_COUNT = 32
+const MAX_SET_COOKIE_BYTES = 4096
 
 const StatusSchema = z
   .object({
@@ -33,7 +36,7 @@ const ProvidersSchema = z.object({
 const NativeTokenSchema = z
   .object({
     access_token: z.string().min(1).max(16_384),
-    refresh_token: z.string().min(1).max(16_384),
+    refresh_token: z.string().max(16_384),
     token_type: z.literal("Bearer"),
     expires_at: z.number().int().positive().finite(),
     provider: z.string().min(1).max(128),
@@ -116,13 +119,16 @@ type PendingFlow = {
   clientState: string
   verifier: string
   nativeRedirect: string
-  cookies: CookieJar
+  cookies: BoundedCookieJar
   expiresAt: number
 }
 
 type NativeCredentials = z.infer<typeof NativeTokenSchema>
 
-type StoredCredentials = NativeCredentials & { browserSessionId: string }
+type StoredCredentials = NativeCredentials & {
+  browserSessionId: string
+  generation: number
+}
 
 class NativeResponseError extends Error {
   constructor(readonly kind: "authentication" | "invalid" | "temporary") {
@@ -235,6 +241,33 @@ function normalizeReturnPath(value: string, publicOrigin: string) {
       hasControlCharacters(value)
     )
       throw new Error()
+    if (/%(?![0-9a-f]{2})/iu.test(value)) throw new Error()
+    let decoded = value
+    let decodingSettled = false
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (
+        decoded.startsWith("//") ||
+        decoded.includes("\\") ||
+        hasControlCharacters(decoded) ||
+        /%(?:2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/iu.test(decoded)
+      )
+        throw new Error()
+      let next: string
+      try {
+        next = decodeURIComponent(decoded)
+      } catch {
+        // A literal percent may appear after decoding `%25`; the original
+        // encoding was already proven well formed above.
+        decodingSettled = true
+        break
+      }
+      if (next === decoded) {
+        decodingSettled = true
+        break
+      }
+      decoded = next
+    }
+    if (!decodingSettled) throw new Error()
     const url = new URL(value, publicOrigin)
     if (url.origin !== publicOrigin) throw new Error()
     return `${url.pathname}${url.search}${url.hash}`
@@ -262,32 +295,39 @@ function headerSetCookies(headers: Headers): readonly string[] {
   return combined ? [combined] : []
 }
 
-class CookieJar {
-  readonly #values = new Map<string, string>()
+class BoundedCookieJar {
+  readonly #jar = new CookieJar(undefined, {
+    // `.test` is used by deterministic deployments/tests; domain matching
+    // remains strict and cross-host Domain attributes are still rejected.
+    allowSpecialUseDomain: true,
+    looseMode: false,
+    prefixSecurity: "strict",
+    rejectPublicSuffixes: true,
+  })
 
-  absorb(headers: Headers) {
-    for (const raw of headerSetCookies(headers)) {
-      if (raw.length > MAX_COOKIE_BYTES)
-        throw new NativeResponseError("invalid")
-      const [pair, ...attributes] = raw.split(";")
-      const separator = pair.indexOf("=")
-      if (separator < 1) throw new NativeResponseError("invalid")
-      const name = pair.slice(0, separator).trim()
-      const value = pair.slice(separator + 1).trim()
-      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(name))
-        throw new NativeResponseError("invalid")
-      const expired = attributes.some((attribute) =>
-        /^\s*max-age\s*=\s*0\s*$/iu.test(attribute)
-      )
-      if (!value || expired) this.#values.delete(name)
-      else this.#values.set(name, value)
+  async absorb(headers: Headers, sourceUrl: string) {
+    const values = headerSetCookies(headers)
+    if (values.length > MAX_COOKIE_COUNT)
+      throw new NativeResponseError("invalid")
+    try {
+      for (const raw of values) {
+        if (Buffer.byteLength(raw) > MAX_SET_COOKIE_BYTES)
+          throw new NativeResponseError("invalid")
+        await this.#jar.setCookie(raw, sourceUrl, { ignoreError: false })
+      }
+    } catch (error) {
+      if (error instanceof NativeResponseError) throw error
+      throw new NativeResponseError("invalid")
     }
   }
 
-  header() {
-    const value = [...this.#values]
-      .map(([name, contents]) => `${name}=${contents}`)
-      .join("; ")
+  async header(destinationUrl: string) {
+    const cookies = await this.#jar.getCookies(destinationUrl)
+    if (cookies.length > MAX_COOKIE_COUNT)
+      throw new NativeResponseError("invalid")
+    const value = await this.#jar.getCookieString(destinationUrl)
+    if (Buffer.byteLength(value) > MAX_COOKIE_HEADER_BYTES)
+      throw new NativeResponseError("invalid")
     return value || undefined
   }
 }
@@ -392,7 +432,26 @@ export function createHermesBrowserAuthBroker(
 
   const pending = new Map<string, PendingFlow>()
   const credentialsByScope = new Map<string, StoredCredentials>()
+  const credentialGenerations = new Map<string, number>()
   const refreshes = new Map<string, Promise<StoredCredentials>>()
+  let activeFlowSlots = 0
+  const responseLifecycles = new WeakMap<
+    Response,
+    { controller: AbortController; timer: ReturnType<typeof setTimeout> }
+  >()
+
+  const releaseResponse = async (response: Response) => {
+    const lifecycle = responseLifecycles.get(response)
+    if (lifecycle) {
+      clearTimeout(lifecycle.timer)
+      responseLifecycles.delete(response)
+    }
+    if (response.body && !response.bodyUsed) {
+      void response.body.cancel().catch(() => {
+        // An aborted body may already be errored; there is nothing left to drain.
+      })
+    }
+  }
 
   const request = async (path: string, init: RequestInit = {}) => {
     if (!path.startsWith("/") || path.startsWith("//"))
@@ -405,22 +464,36 @@ export function createHermesBrowserAuthBroker(
         redirect: "manual",
         signal: controller.signal,
       })
-      if (response.status === 401 || response.status === 403)
+      responseLifecycles.set(response, { controller, timer })
+      if (response.status === 401 || response.status === 403) {
+        await releaseResponse(response)
         throw new NativeResponseError("authentication")
-      if (response.status >= 500) throw new NativeResponseError("temporary")
+      }
+      if (response.status >= 500) {
+        await releaseResponse(response)
+        throw new NativeResponseError("temporary")
+      }
       return response
     } catch (error) {
+      clearTimeout(timer)
       if (error instanceof NativeResponseError) throw error
       throw new NativeResponseError("temporary")
-    } finally {
-      clearTimeout(timer)
     }
   }
 
   const readJson = async (response: Response) => {
-    if (!response.ok || response.redirected || response.status >= 300)
-      throw new NativeResponseError("invalid")
-    return boundedJson(response, maxResponseBytes)
+    const lifecycle = responseLifecycles.get(response)
+    try {
+      if (!response.ok || response.redirected || response.status >= 300)
+        throw new NativeResponseError("invalid")
+      return await boundedJson(response, maxResponseBytes)
+    } catch (error) {
+      if (lifecycle?.controller.signal.aborted)
+        throw new NativeResponseError("temporary")
+      throw error
+    } finally {
+      await releaseResponse(response)
+    }
   }
 
   const normalizeBinding = (input: HermesBrowserAuthBinding) => {
@@ -434,9 +507,12 @@ export function createHermesBrowserAuthBroker(
     suppliedCallback.hash = ""
     if (suppliedCallback.href !== callbackUrl)
       throw new HermesBrowserAuthenticationError("invalid-request")
+    const lane = normalizeBoundedIdentifier(input.lane)
+    if (lane !== "operator")
+      throw new HermesBrowserAuthenticationError("invalid-request")
     return {
       principalId: normalizeBoundedIdentifier(input.principalId),
-      lane: normalizeBoundedIdentifier(input.lane),
+      lane,
       browserSessionId: normalizeBoundedIdentifier(input.browserSessionId),
       callbackUrl,
       returnPath: normalizeReturnPath(input.returnPath, publicOrigin),
@@ -448,16 +524,38 @@ export function createHermesBrowserAuthBroker(
     const suffix = "/auth/callback"
     const prefix = callback.pathname.slice(0, -suffix.length)
     return {
+      host: callback.host,
       "x-forwarded-host": callback.host,
       "x-forwarded-proto": callback.protocol.slice(0, -1),
       ...(prefix ? { "x-forwarded-prefix": prefix } : {}),
     }
   }
 
+  const publicNativeAuthorizeUrl = () => {
+    const url = new URL(callbackUrl)
+    url.pathname = `${url.pathname.slice(0, -"/auth/callback".length)}/auth/native/authorize`
+    return url.href
+  }
+
   const collectExpiredFlows = () => {
     const now = clock()
-    for (const [state, flow] of pending)
-      if (flow.expiresAt <= now) pending.delete(state)
+    for (const [state, flow] of pending) {
+      if (flow.expiresAt > now) continue
+      pending.delete(state)
+      activeFlowSlots -= 1
+    }
+  }
+
+  const nextCredentialGeneration = (key: string) => {
+    const generation = (credentialGenerations.get(key) ?? 0) + 1
+    credentialGenerations.set(key, generation)
+    return generation
+  }
+
+  const removeCredentials = (key: string) => {
+    nextCredentialGeneration(key)
+    credentialsByScope.delete(key)
+    refreshes.delete(key)
   }
 
   const chooseProvider = (
@@ -478,6 +576,8 @@ export function createHermesBrowserAuthBroker(
   ): Promise<HermesBrowserAuthStart> => {
     const binding = normalizeBinding(input)
     collectExpiredFlows()
+    let reservedSlot = false
+    let storedFlow = false
     try {
       const status = StatusSchema.safeParse(
         await readJson(
@@ -517,11 +617,13 @@ export function createHermesBrowserAuthBroker(
           reason: "provider-selection-required",
         }
 
-      if (pending.size >= maxFlows)
+      if (activeFlowSlots >= maxFlows)
         return {
           status: "unavailable",
           reason: "provider-temporarily-unavailable",
         }
+      activeFlowSlots += 1
+      reservedSlot = true
 
       const verifier = encodeRandom(randomBytes(64))
       const challenge = createHash("sha256")
@@ -540,11 +642,20 @@ export function createHermesBrowserAuthBroker(
         `${authorize.pathname}${authorize.search}`,
         { headers: forwardedHeaders() }
       )
-      if (![301, 302, 303, 307, 308].includes(response.status))
-        throw new NativeResponseError("invalid")
-      const location = response.headers.get("location")
-      if (!location || location.length > MAX_URL_LENGTH)
-        throw new NativeResponseError("invalid")
+      let location: string | null
+      const cookies = new BoundedCookieJar()
+      try {
+        if (![301, 302, 303, 307, 308].includes(response.status))
+          throw new NativeResponseError("invalid")
+        location = response.headers.get("location")
+        if (!location || location.length > MAX_URL_LENGTH)
+          throw new NativeResponseError("invalid")
+        await cookies.absorb(response.headers, publicNativeAuthorizeUrl())
+        if (!(await cookies.header(callbackUrl)))
+          throw new NativeResponseError("invalid")
+      } finally {
+        await releaseResponse(response)
+      }
       let identity: URL
       try {
         identity = new URL(location)
@@ -575,9 +686,6 @@ export function createHermesBrowserAuthBroker(
       )
         throw new NativeResponseError("invalid")
 
-      const cookies = new CookieJar()
-      cookies.absorb(response.headers)
-      if (!cookies.header()) throw new NativeResponseError("invalid")
       pending.set(providerState, {
         binding,
         provider,
@@ -588,6 +696,7 @@ export function createHermesBrowserAuthBroker(
         cookies,
         expiresAt: clock() + flowTtlMs,
       })
+      storedFlow = true
       return {
         status: "redirect",
         response: new Response(null, {
@@ -602,6 +711,8 @@ export function createHermesBrowserAuthBroker(
     } catch (error) {
       if (error instanceof HermesBrowserAuthenticationError) throw error
       return unavailable(error)
+    } finally {
+      if (reservedSlot && !storedFlow) activeFlowSlots -= 1
     }
   }
 
@@ -645,6 +756,7 @@ export function createHermesBrowserAuthBroker(
 
     const flow = pending.get(providerState)
     pending.delete(providerState)
+    if (flow) activeFlowSlots -= 1
     if (!flow || flow.expiresAt <= clock())
       throw new HermesBrowserAuthenticationError("invalid-flow")
     const expectedBinding = flow.binding
@@ -662,7 +774,7 @@ export function createHermesBrowserAuthBroker(
       const nativeCallback = new URL(`${baseUrl}/auth/callback`)
       nativeCallback.searchParams.set("code", code)
       nativeCallback.searchParams.set("state", providerState)
-      const cookie = flow.cookies.header()
+      const cookie = await flow.cookies.header(callbackUrl)
       if (!cookie) throw new NativeResponseError("invalid")
       const callbackResponse = await request(
         `${nativeCallback.pathname}${nativeCallback.search}`,
@@ -670,12 +782,17 @@ export function createHermesBrowserAuthBroker(
           headers: { ...forwardedHeaders(), cookie },
         }
       )
-      flow.cookies.absorb(callbackResponse.headers)
-      if (![301, 302, 303, 307, 308].includes(callbackResponse.status))
-        throw new NativeResponseError("invalid")
-      const redirect = callbackResponse.headers.get("location")
-      if (!redirect || redirect.length > MAX_URL_LENGTH)
-        throw new NativeResponseError("invalid")
+      let redirect: string | null
+      try {
+        await flow.cookies.absorb(callbackResponse.headers, callbackUrl)
+        if (![301, 302, 303, 307, 308].includes(callbackResponse.status))
+          throw new NativeResponseError("invalid")
+        redirect = callbackResponse.headers.get("location")
+        if (!redirect || redirect.length > MAX_URL_LENGTH)
+          throw new NativeResponseError("invalid")
+      } finally {
+        await releaseResponse(callbackResponse)
+      }
       let nativeResult: URL
       try {
         nativeResult = new URL(redirect)
@@ -683,12 +800,15 @@ export function createHermesBrowserAuthBroker(
         throw new NativeResponseError("invalid")
       }
       const expectedRedirect = new URL(flow.nativeRedirect)
+      const nativeResultKeys = [...nativeResult.searchParams.keys()]
       if (
         nativeResult.origin !== expectedRedirect.origin ||
         nativeResult.pathname !== expectedRedirect.pathname ||
         nativeResult.username ||
         nativeResult.password ||
         nativeResult.hash ||
+        nativeResultKeys.length !== 2 ||
+        nativeResultKeys.some((key) => key !== "code" && key !== "state") ||
         nativeResult.searchParams.getAll("code").length !== 1 ||
         nativeResult.searchParams.getAll("state").length !== 1 ||
         nativeResult.searchParams.get("state") !== flow.clientState
@@ -712,9 +832,11 @@ export function createHermesBrowserAuthBroker(
       const parsed = NativeTokenSchema.safeParse(await readJson(tokenResponse))
       if (!parsed.success || parsed.data.provider !== flow.provider)
         throw new NativeResponseError("invalid")
-      credentialsByScope.set(credentialKey(expectedBinding), {
+      const key = credentialKey(expectedBinding)
+      credentialsByScope.set(key, {
         ...parsed.data,
         browserSessionId: expectedBinding.browserSessionId,
+        generation: nextCredentialGeneration(key),
       })
       return {
         status: "authenticated",
@@ -753,9 +875,15 @@ export function createHermesBrowserAuthBroker(
         parsed.data.user_id !== stored.user_id
       )
         throw new NativeResponseError("invalid")
+      const current = credentialsByScope.get(key)
+      if (!current || current.generation !== stored.generation) {
+        if (current) return current
+        throw new HermesBrowserAuthenticationError("session-expired")
+      }
       const rotated = {
         ...parsed.data,
         browserSessionId: stored.browserSessionId,
+        generation: stored.generation,
       }
       credentialsByScope.set(key, rotated)
       return rotated
@@ -764,14 +892,16 @@ export function createHermesBrowserAuthBroker(
         error instanceof NativeResponseError &&
         error.kind === "authentication"
       ) {
-        credentialsByScope.delete(key)
+        if (credentialsByScope.get(key)?.generation === stored.generation)
+          removeCredentials(key)
         throw new HermesBrowserAuthenticationError("session-expired")
       }
       if (error instanceof NativeResponseError && error.kind === "temporary")
         throw new HermesBrowserAuthenticationError(
           "provider-temporarily-unavailable"
         )
-      credentialsByScope.delete(key)
+      if (credentialsByScope.get(key)?.generation === stored.generation)
+        removeCredentials(key)
       throw new HermesBrowserAuthenticationError("session-expired")
     }
   }
@@ -780,6 +910,12 @@ export function createHermesBrowserAuthBroker(
     const key = credentialKey(scope)
     let stored = credentialsByScope.get(key)
     if (!stored) throw new HermesBrowserAuthenticationError("session-expired")
+    if (!stored.refresh_token) {
+      if (stored.expires_at * 1000 > clock())
+        return { authorization: `Bearer ${stored.access_token}` } as const
+      removeCredentials(key)
+      throw new HermesBrowserAuthenticationError("session-expired")
+    }
     if (stored.expires_at * 1000 <= clock() + credentialRefreshSkewMs) {
       let operation = refreshes.get(key)
       if (!operation) {
@@ -802,5 +938,21 @@ export function createHermesBrowserAuthBroker(
       : ({ status: "authentication-required" } as const)
   }
 
-  return { authState, begin, complete, credentials }
+  /** Called by native transports as soon as a 401/403 invalidates the lane. */
+  const invalidate = (scope: HermesCredentialScope) => {
+    removeCredentials(credentialKey(scope))
+  }
+
+  /** Local logout: Hermes exposes no native bearer-revocation operation. */
+  const logout = (scope: HermesCredentialScope) => {
+    const key = credentialKey(scope)
+    removeCredentials(key)
+    for (const [state, flow] of pending)
+      if (credentialKey(flow.binding) === key) {
+        pending.delete(state)
+        activeFlowSlots -= 1
+      }
+  }
+
+  return { authState, begin, complete, credentials, invalidate, logout }
 }
