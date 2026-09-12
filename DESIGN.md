@@ -149,6 +149,11 @@ do not become a second decorative typographic layer.
 Do not use uppercase label noise, artificial display type, or undersized text
 to make the workspace feel denser.
 
+Use the shared type scale before introducing one-off sizes. A containing title
+must never appear subordinate to the items it introduces. Depart from the
+shared scale only when a specific visual or accessibility constraint requires
+it.
+
 ## Layout
 
 The workspace is a rounded inset shell with a spacious three-pane desktop
@@ -196,6 +201,12 @@ and must not be replaced by color-only hover feedback, a shadow, or an
 animation.
 
 ## Components
+
+**The Native-Primitives Rule.** Start with Assistant UI's established concepts,
+primitives, and component compositions. Adapt them through their intended
+composition and styling seams before introducing a parallel abstraction or
+replacement. A custom implementation must answer a product requirement the
+standard component cannot express and record that reason.
 
 ### Buttons
 
@@ -251,6 +262,28 @@ animation.
   lightweight, while deferred Markdown retains a localized raw-text fallback.
 - **Safety:** charts, maps, Mermaid, tool results, and generated content retain
   textual alternatives. Never execute generated browser code or arbitrary HTML.
+
+### Conversation and Execution
+
+The conversation is the product surface; execution history supports it. Keep
+internal work compact and inspectable without allowing it to compete with the
+assistant's answer.
+
+- **Separate trace from outcome:** reasoning, commands, and progress belong to
+  a cohesive execution trace. Final prose and meaningful interactive or visual
+  output remain first-class message content and are never hidden by execution
+  chrome.
+- **Preserve fidelity:** retain provider order and lifecycle, render each piece
+  of content once, and degrade to an honest inspectable fallback when richer
+  presentation is unavailable.
+- **Use a quiet operational grammar:** disclosures, icons, labels, and status
+  signals remain consistent across tools. Summary rows communicate what
+  happened; details remain available without turning the trace into a stack of
+  cards.
+- **Protect reading orientation:** search, expansion, live updates, and
+  responsive reflow preserve the user's place. The same information hierarchy
+  and interaction model holds across keyboard and pointer use, narrow and wide
+  layouts, LTR and RTL, and reduced-motion preferences.
 
 ### Motion
 
