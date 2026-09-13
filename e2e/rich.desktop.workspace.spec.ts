@@ -181,14 +181,12 @@ test("Monty stays inspect-only and malformed tools retain a safe JSON fallback",
 
   await sendPrompt(page, "Return a malformed tool")
 
-  const fallback = page.locator('details[data-slot="generic-tool"]').last()
+  await page.getByRole("button", { name: "1 tool call" }).last().click()
+  const fallback = page.locator('[data-slot="tool-call"]').last()
   await expect(fallback).toContainText("unknown_fixture_tool")
-  await fallback.locator("summary").focus()
-  await page.keyboard.press("Enter")
+  await fallback.getByRole("button").click()
   await expect(fallback).toContainText('"unexpected"')
-  await expect(
-    fallback.getByRole("button", { name: "Copy JSON" })
-  ).toBeVisible()
+  await expect(fallback).toContainText("not-an-object")
 
   await sendPrompt(page, "Make Monty fail")
 
@@ -265,7 +263,7 @@ test("malformed and oversized Mermaid keep safe source fallbacks", async ({
   ).toBeVisible()
 })
 
-test("delegated Subagent activity is nested, read-only, and collapsed", async ({
+test("delegated Subagent activity is visible and read-only", async ({
   page,
 }) => {
   await openWorkspace(page)
@@ -275,22 +273,17 @@ test("delegated Subagent activity is nested, read-only, and collapsed", async ({
   // last activity belongs to the response produced by this prompt.
   const activity = page.locator('[data-slot="tool-activity"]').last()
   await expect(activity).toHaveAttribute("data-state", "completed")
-  await expect(activity).not.toHaveAttribute("open", "")
   await expect(
     activity.getByText("Data analyst", { exact: true })
   ).toBeVisible()
   await expect(activity.getByRole("button")).toHaveCount(0)
-
-  await activity.locator("summary").focus()
-  await page.keyboard.press("Enter")
-  await expect(activity).toHaveAttribute("open", "")
   await expect(
     activity.getByText(
       "Validated three segments against the fixture dataset.",
       { exact: true }
     )
   ).toBeVisible()
-  await expect(activity).toContainText("Transcript unavailable.")
+  await expect(activity).not.toContainText("Transcript unavailable.")
 })
 
 test("a provider outage preserves partial content and a newly written draft", async ({
