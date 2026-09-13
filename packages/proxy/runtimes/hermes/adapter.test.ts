@@ -506,7 +506,7 @@ describe("Hermes server adapter", () => {
             timestamp: 2,
           },
         ],
-        pagination: { total: 2 },
+        pagination: { limit: 200, offset: 0, returned: 2, total: 2 },
       }
     })
     const adapter = new HermesServerAdapter({ request: vi.fn(), http })
@@ -544,6 +544,167 @@ describe("Hermes server adapter", () => {
       "/api/sessions/stored/messages?profile=researcher&limit=200&offset=0&order=oldest&include_compacted=true",
     ])
   })
+
+  describe("native history pagination", () => {
+    const messages = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `message-${index}`,
+        role: "user",
+        content: `message ${index}`,
+        timestamp: index + 1,
+      }))
+
+    const adapterFor = (page: Record<string, unknown>) =>
+      new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async (path: string) =>
+          path.startsWith("/api/sessions/stored?")
+            ? { id: "stored", profile: "researcher" }
+            : { session_id: "stored", ...page }
+        ),
+      })
+
+    it.each([
+      {
+        name: "preserves a known native total",
+        limit: 2,
+        offset: 2,
+        page: {
+          messages: messages(2),
+          pagination: { limit: 2, offset: 2, returned: 2, total: 10 },
+        },
+        total: 10,
+        nextOffset: 4,
+      },
+      {
+        name: "continues after a full page without a total",
+        limit: 2,
+        offset: 0,
+        page: {
+          messages: messages(2),
+          pagination: { limit: 2, offset: 0, returned: 2 },
+        },
+        total: 3,
+        nextOffset: 2,
+      },
+      {
+        name: "stops after a short page without a total",
+        limit: 2,
+        offset: 2,
+        page: {
+          messages: messages(1),
+          pagination: { limit: 2, offset: 2, returned: 1 },
+        },
+        total: 3,
+        nextOffset: 3,
+      },
+      {
+        name: "stops after an empty exact-boundary page",
+        limit: 2,
+        offset: 2,
+        page: {
+          messages: [],
+          pagination: { limit: 2, offset: 2, returned: 0 },
+        },
+        total: 2,
+        nextOffset: 2,
+      },
+      {
+        name: "supports a legacy page at a nonzero offset",
+        limit: 2,
+        offset: 5,
+        page: { messages: messages(1) },
+        total: 6,
+        nextOffset: 6,
+      },
+    ])("$name", async ({ limit, offset, page, total, nextOffset }) => {
+      await expect(
+        adapterFor(page).history("researcher", "stored", limit, offset)
+      ).resolves.toMatchObject({ total, nextOffset, limit, offset })
+    })
+
+    it.each([
+      ["zero limit", { limit: 0, offset: 0, returned: 0 }, 2, 0, 0],
+      ["fractional limit", { limit: 1.5, offset: 0, returned: 0 }, 2, 0, 0],
+      ["oversized limit", { limit: 3, offset: 0, returned: 0 }, 2, 0, 0],
+      ["mismatched offset", { limit: 2, offset: 1, returned: 0 }, 2, 0, 0],
+      ["negative returned", { limit: 2, offset: 0, returned: -1 }, 2, 0, 0],
+      ["fractional returned", { limit: 2, offset: 0, returned: 0.5 }, 2, 0, 0],
+      ["returned above limit", { limit: 2, offset: 0, returned: 3 }, 2, 0, 0],
+      [
+        "returned/message mismatch",
+        { limit: 2, offset: 0, returned: 1 },
+        2,
+        0,
+        0,
+      ],
+      [
+        "negative total",
+        { limit: 2, offset: 0, returned: 0, total: -1 },
+        2,
+        0,
+        0,
+      ],
+      [
+        "fractional total",
+        { limit: 2, offset: 0, returned: 0, total: 0.5 },
+        2,
+        0,
+        0,
+      ],
+      [
+        "unsafe total",
+        {
+          limit: 2,
+          offset: 0,
+          returned: 0,
+          total: Number.MAX_SAFE_INTEGER + 1,
+        },
+        2,
+        0,
+        0,
+      ],
+      [
+        "total behind page",
+        { limit: 2, offset: 2, returned: 1, total: 2 },
+        2,
+        2,
+        1,
+      ],
+      [
+        "unsafe next offset",
+        {
+          limit: 2,
+          offset: Number.MAX_SAFE_INTEGER,
+          returned: 1,
+        },
+        2,
+        Number.MAX_SAFE_INTEGER,
+        1,
+      ],
+      [
+        "unsafe continuation sentinel",
+        {
+          limit: 1,
+          offset: Number.MAX_SAFE_INTEGER - 1,
+          returned: 1,
+        },
+        1,
+        Number.MAX_SAFE_INTEGER - 1,
+        1,
+      ],
+    ])("rejects %s", async (_name, pagination, limit, offset, messageCount) => {
+      await expect(
+        adapterFor({ messages: messages(messageCount), pagination }).history(
+          "researcher",
+          "stored",
+          limit,
+          offset
+        )
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    })
+  })
+
   it("projects profile names as Agent IDs without leaking native metadata", async () => {
     const request = vi.fn(async () => ({ profiles: [profile()] }))
     const adapter = new HermesServerAdapter({ request } as HermesRpcTransport)

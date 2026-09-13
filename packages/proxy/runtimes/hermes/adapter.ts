@@ -40,6 +40,7 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesBrowserAuthenticationError } from "./auth-broker"
+import { HermesDashboardClient } from "./dashboard-client"
 import type { ServerRuntime } from "../../runtime"
 import type { ResumeEntry } from "@ag-ui/core"
 
@@ -104,6 +105,47 @@ function isRecord(value: unknown): value is NativeRecord {
 
 function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function historyPagination(
+  requestedLimit: number,
+  requestedOffset: number,
+  messageCount: number,
+  value: unknown
+) {
+  const nextOffset = requestedOffset + messageCount
+  if (!Number.isSafeInteger(nextOffset)) throw new HermesUnavailableError()
+  if (value === undefined) return { total: nextOffset, nextOffset }
+  if (!isRecord(value)) throw new HermesUnavailableError()
+
+  const { limit, offset, returned } = value
+  if (
+    !Number.isSafeInteger(limit) ||
+    (limit as number) <= 0 ||
+    (limit as number) > requestedLimit ||
+    !Number.isSafeInteger(offset) ||
+    offset !== requestedOffset ||
+    !Number.isSafeInteger(returned) ||
+    (returned as number) < 0 ||
+    (returned as number) > (limit as number) ||
+    returned !== messageCount
+  )
+    throw new HermesUnavailableError()
+
+  if (Object.prototype.hasOwnProperty.call(value, "total")) {
+    if (
+      !Number.isSafeInteger(value.total) ||
+      (value.total as number) < nextOffset
+    )
+      throw new HermesUnavailableError()
+    return { total: value.total as number, nextOffset }
+  }
+
+  if (returned !== limit) return { total: nextOffset, nextOffset }
+  const continuationTotal = nextOffset + 1
+  if (!Number.isSafeInteger(continuationTotal))
+    throw new HermesUnavailableError()
+  return { total: continuationTotal, nextOffset }
 }
 
 const MAX_OBSERVED_EVENT_BYTES = 4_194_304
@@ -306,12 +348,16 @@ function timestamp(value: unknown) {
 }
 
 export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
+  readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly interactions: HermesInteractions
   readonly runs: HermesRunEngine
 
   constructor(private readonly transport: HermesRpcTransport) {
+    this.#dashboard = transport.http
+      ? new HermesDashboardClient((path, init) => transport.http!(path, init))
+      : undefined
     const requireSession = (agentId: string, publicSessionId: string) =>
       this.#requireAttachedSession(agentId, publicSessionId)
     this.#workspace = createHermesWorkspaceOperations({
@@ -333,45 +379,37 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         request: (method, params, maxResponseBytes) =>
           this.transport.request(method, params, maxResponseBytes),
         readArtifact: async (scope, reference, _maxBytes, maxResponseBytes) => {
-          if (!this.transport.http) throw new HermesUnavailableError()
+          if (!this.#dashboard) throw new HermesUnavailableError()
           const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
           if (!storedId) throw new HermesUnavailableError()
-          const query = new URLSearchParams({
-            path: reference,
-            profile: scope.agentId,
-            session_id: storedId,
-          })
           return dataUrlBytes(
-            await this.transport.http(`/api/fs/read-data-url?${query}`, {
-              maxResponseBytes,
-            })
+            await this.#dashboard.readArtifactDataUrl(
+              scope.agentId,
+              storedId,
+              reference,
+              maxResponseBytes
+            )
           ) as { bytes: Uint8Array; mimeType?: string }
         },
         audioConfig: async (scope, kind, maxResponseBytes) => {
-          if (!this.transport.http) throw new HermesUnavailableError()
-          const query = new URLSearchParams({ profile: scope.agentId })
-          return this.transport.http(
-            `/api/tools/toolsets/${kind}/config?${query}`,
-            { maxResponseBytes }
+          if (!this.#dashboard) throw new HermesUnavailableError()
+          return this.#dashboard.getAudioConfig(
+            scope.agentId,
+            kind,
+            maxResponseBytes
           )
         },
         transcribe: async (scope, request, _signal, maxResponseBytes) => {
-          if (!this.transport.http) throw new HermesUnavailableError()
-          const query = new URLSearchParams({ profile: scope.agentId })
-          return this.transport.http(`/api/audio/transcribe?${query}`, {
-            method: "POST",
-            body: request,
-            maxResponseBytes,
-          })
+          if (!this.#dashboard) throw new HermesUnavailableError()
+          return this.#dashboard.transcribe(
+            scope.agentId,
+            request,
+            maxResponseBytes
+          )
         },
         speak: async (scope, text, _signal, maxResponseBytes) => {
-          if (!this.transport.http) throw new HermesUnavailableError()
-          const query = new URLSearchParams({ profile: scope.agentId })
-          return this.transport.http(`/api/audio/speak?${query}`, {
-            method: "POST",
-            body: { text },
-            maxResponseBytes,
-          })
+          if (!this.#dashboard) throw new HermesUnavailableError()
+          return this.#dashboard.speak(scope.agentId, text, maxResponseBytes)
         },
       },
     })
@@ -468,18 +506,14 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   async #rawHistory(
     scope: Pick<HermesWorkspaceSession, "agentId" | "sessionId">
   ) {
-    if (!this.transport.http) throw new HermesUnavailableError()
+    if (!this.#dashboard) throw new HermesUnavailableError()
     const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
     if (!storedId) throw new HermesSessionNotFoundError()
-    const query = new URLSearchParams({
-      profile: scope.agentId,
-      limit: "500",
-      offset: "0",
-      order: "oldest",
-      include_compacted: "true",
-    })
-    const value = await this.transport.http(
-      `/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`
+    const value = await this.#dashboard.getSessionMessages(
+      scope.agentId,
+      storedId,
+      500,
+      0
     )
     if (
       !isRecord(value) ||
@@ -921,18 +955,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   }
 
   async listSessions(profile: string, limit: number, offset: number) {
-    if (!this.transport.http) throw new HermesUnavailableError()
-    const query = new URLSearchParams({
-      profile,
-      limit: String(limit),
-      offset: String(offset),
-      order: "recent",
-      archived: "include",
-      exclude_sources: "cron,tool,kanban",
-    })
+    if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
-      payload = await this.transport.http(`/api/sessions?${query}`)
+      payload = await this.#dashboard.listSessions(profile, limit, offset)
     } catch (error) {
       throwUnavailable(error)
     }
@@ -1034,19 +1060,15 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     limit: number,
     offset: number
   ) {
-    if (!this.transport.http) throw new HermesUnavailableError()
+    if (!this.#dashboard) throw new HermesUnavailableError()
     await this.getSession(profile, storedId)
-    const query = new URLSearchParams({
-      profile,
-      limit: String(limit),
-      offset: String(offset),
-      order: "oldest",
-      include_compacted: "true",
-    })
     let payload: unknown
     try {
-      payload = await this.transport.http(
-        `/api/sessions/${encodeURIComponent(storedId)}/messages?${query}`
+      payload = await this.#dashboard.getSessionMessages(
+        profile,
+        storedId,
+        limit,
+        offset
       )
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
@@ -1059,36 +1081,29 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       !Array.isArray(payload.messages)
     )
       throw new HermesUnavailableError()
+    const pagination = historyPagination(
+      limit,
+      offset,
+      payload.messages.length,
+      payload.pagination
+    )
     const result = SessionHistoryResponseSchema.safeParse({
       sessionId: sessionId(profile, storedId),
       messages: projectHermesHistory(payload.messages),
-      total:
-        isRecord(payload.pagination) &&
-        typeof payload.pagination.total === "number"
-          ? payload.pagination.total
-          : payload.messages.length,
+      total: pagination.total,
       limit,
       offset,
-      nextOffset:
-        offset +
-        (isRecord(payload.pagination) &&
-        typeof payload.pagination.returned === "number" &&
-        Number.isSafeInteger(payload.pagination.returned) &&
-        payload.pagination.returned >= 0
-          ? payload.pagination.returned
-          : payload.messages.length),
+      nextOffset: pagination.nextOffset,
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
   }
 
   async getSession(profile: string, storedId: string) {
-    if (!this.transport.http) throw new HermesUnavailableError()
+    if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
-      payload = await this.transport.http(
-        `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`
-      )
+      payload = await this.#dashboard.getSession(profile, storedId)
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
         throw new HermesSessionNotFoundError()
@@ -1147,12 +1162,11 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     body?: unknown
   ) {
     await this.getSession(profile, storedId)
-    if (!this.transport.http) throw new HermesUnavailableError()
+    if (!this.#dashboard) throw new HermesUnavailableError()
     try {
-      await this.transport.http(
-        `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`,
-        { method, body }
-      )
+      await (method === "PATCH"
+        ? this.#dashboard.updateSession(profile, storedId, body)
+        : this.#dashboard.deleteSession(profile, storedId))
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
         throw new HermesSessionNotFoundError()

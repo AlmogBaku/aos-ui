@@ -139,7 +139,7 @@ describe("AOS normalized Session browser integration", () => {
               timestamp: 2,
             },
           ],
-          pagination: { total: 2 },
+          pagination: { limit: 200, offset: 0, returned: 2, total: 2 },
         }
       throw new Error(`Unexpected native REST path: ${path}`)
     })

@@ -1906,7 +1906,11 @@ describe("AOS v1 proxy walking skeleton", () => {
       http.mock.calls
         .filter(([, init]) => init?.method === "PATCH")
         .map(([, init]) => init?.body)
-    ).toEqual([{ title: "Renamed" }, { archived: true }, { archived: false }])
+    ).toEqual([
+      { title: "Renamed", profile: "researcher" },
+      { archived: true, profile: "researcher" },
+      { archived: false, profile: "researcher" },
+    ])
   })
 
   it("strictly validates Session queries and mutation bodies before native dispatch", async () => {
