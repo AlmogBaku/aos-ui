@@ -88,7 +88,7 @@ export type HermesRunHandle = {
 export type HermesReconnectRequest = {
   threadId: string
   runId: string
-  position: { epoch: string; lastSeen: number }
+  position?: { epoch: string; lastSeen: number }
 }
 
 type QueueWaiter = {
@@ -965,7 +965,13 @@ export class HermesRunEngine {
         (!existing.uncertain && !existing.detached)
       )
         throw new ServerRunConflictError()
-      return this.#reattach(existing, request)
+      return this.#reattach(existing, {
+        ...request,
+        position: request.position ?? {
+          epoch: existing.epoch,
+          lastSeen: existing.lastSeen,
+        },
+      })
     }
     if (this.#admissions.has(key)) throw new ServerRunConflictError()
     this.#admissions.add(key)
@@ -1003,7 +1009,7 @@ export class HermesRunEngine {
       )
       recovery = await this.#native.recover(
         liveSessionId,
-        request.position.lastSeen
+        request.position?.lastSeen
       )
       active = {
         scope,
@@ -1012,7 +1018,7 @@ export class HermesRunEngine {
         queue,
         unsubscribe,
         epoch: recovery.epoch,
-        lastSeen: request.position.lastSeen,
+        lastSeen: request.position?.lastSeen ?? 0,
         textStarted: false,
         reasoningStarted: false,
         reasoningEnded: false,
@@ -1034,13 +1040,14 @@ export class HermesRunEngine {
     const replay = validatedRecovery(
       recovery,
       liveSessionId,
-      request.position.lastSeen
+      request.position?.lastSeen
     )
     if (
       recovery.truncated === true ||
       !replay ||
       buffered.overflow ||
-      recovery.epoch !== request.position.epoch
+      (request.position !== undefined &&
+        recovery.epoch !== request.position.epoch)
     ) {
       drainBufferedEvents(buffered)
       this.#fail(
@@ -1065,7 +1072,9 @@ export class HermesRunEngine {
 
   async #reattach(
     active: ActiveRun,
-    request: HermesReconnectRequest
+    request: HermesReconnectRequest & {
+      position: { epoch: string; lastSeen: number }
+    }
   ): Promise<HermesRunHandle> {
     const queue = new EventQueue()
     queue.push({

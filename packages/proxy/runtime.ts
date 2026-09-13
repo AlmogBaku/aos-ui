@@ -30,7 +30,7 @@ export type ServerRunHandle = {
 export type ServerReconnectRequest = {
   threadId: string
   runId: string
-  position: { epoch: string; lastSeen: number }
+  position?: { epoch: string; lastSeen: number }
 }
 
 export type ServerRunEngine = {

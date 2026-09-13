@@ -1135,6 +1135,75 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(start).toHaveBeenCalledTimes(2)
   })
 
+  it("reattaches an authoritative native run after the proxy active-run map is empty", async () => {
+    const recovered = {
+      events: (async function* () {
+        yield {
+          type: "RUN_STARTED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "restored-run",
+        }
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "restored-run",
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: vi.fn(async () => "idle" as const),
+      disconnect: vi.fn(),
+      recoveryPosition: vi.fn(() => ({ epoch: "native", lastSeen: 8 })),
+    }
+    const reconnect = vi.fn(async () => recovered)
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      runEngine: { start: vi.fn(), reconnect } as unknown as HermesRunEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await app.request(
+      request(
+        "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/reconnect",
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "hermes:researcher:stored",
+            runId: "restored-run",
+          }),
+        }
+      )
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('"type":"RUN_FINISHED"')
+    expect(reconnect).toHaveBeenCalledWith(
+      {
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "hermes:researcher:stored",
+      },
+      {
+        threadId: "hermes:researcher:stored",
+        runId: "restored-run",
+      }
+    )
+  })
+
   it("pulls at most one AG-UI event ahead of a slow SSE consumer", async () => {
     let index = 0
     const next = vi.fn(async () => {

@@ -371,24 +371,24 @@ export function registerRunRoutes(
       const key = runKey(scope)
       const active = activeRuns.get(key)
       if (
-        !active ||
-        active.principalId !== principalId ||
-        active.runId !== runId
+        active &&
+        (active.principalId !== principalId || active.runId !== runId)
       )
         return errorResponse("not_found", 404)
       let handle: ServerRunHandle
+      const engine = active?.engine ?? options.runEngine ?? runtime.runs
       try {
         const request: ServerReconnectRequest = {
           threadId,
           runId,
-          position: active.handle.recoveryPosition(),
+          ...(active ? { position: active.handle.recoveryPosition() } : {}),
         }
-        active.handle.disconnect()
-        handle = await active.engine.reconnect(scope, request)
+        active?.handle.disconnect()
+        handle = await engine.reconnect(scope, request)
       } catch {
         return errorResponse("temporarily_unavailable", 503)
       }
-      const reconnected = { ...active, handle }
+      const reconnected = { handle, runId, engine, principalId }
       activeRuns.set(key, reconnected)
       return runStream(context, key, reconnected, activeRuns)
     }

@@ -36,4 +36,58 @@ describe("AOS remote thread-list adapter", () => {
     await adapter.list({ after: first.nextCursor })
     expect(listSessionCatalog.mock.calls.slice(1)).toEqual([[50, 50]])
   })
+
+  it("marks an active native Session for assistant-ui reload recovery without resending a prompt", async () => {
+    const loadHistory = vi.fn(async () => ({
+      sessionId: "session-1",
+      messages: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+      nextOffset: 0,
+    }))
+    const pendingInteraction = vi.fn(async () => ({
+      runId: "restored-run",
+      running: true,
+      status: "running" as const,
+    }))
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "TEXT_MESSAGE_CONTENT" as const,
+        messageId: "assistant-1",
+        delta: "Recovered",
+      }
+      yield {
+        type: "RUN_FINISHED" as const,
+        threadId: "session-1",
+        runId: "restored-run",
+        outcome: { type: "success" as const },
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      pendingInteraction,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+
+    await expect(history.load()).resolves.toMatchObject({
+      unstable_resume: true,
+    })
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(reconnectRun).toHaveBeenCalledWith(
+      "session-1",
+      "restored-run",
+      expect.any(AbortSignal)
+    )
+    expect(updates.at(-1)).toEqual({
+      content: [{ type: "text", text: "Recovered" }],
+      status: { type: "complete", reason: "stop" },
+    })
+  })
 })

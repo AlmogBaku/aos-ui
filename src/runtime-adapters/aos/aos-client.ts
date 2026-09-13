@@ -4,9 +4,11 @@ import {
   RunAgentInputSchema,
   type HttpAgentFetchFn,
 } from "@ag-ui/client"
+import type { AGUIEvent } from "@ag-ui/core"
 
 import {
   AgentCatalogResponseSchema,
+  ErrorResponseSchema,
   OperatorAuthStateSchema,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
@@ -66,7 +68,11 @@ async function dataUrl(blob: Blob) {
 }
 
 export type AosClientFailure =
-  "connection-interrupted" | "provider-unavailable" | "proxy-failure"
+  | "aos-auth-required"
+  | "runtime-auth-required"
+  | "connection-interrupted"
+  | "provider-unavailable"
+  | "proxy-failure"
 
 export class AosClientError extends Error {
   constructor(
@@ -386,10 +392,24 @@ export class AosRemoteClient implements WorkspaceAdapter {
     } catch {
       throw new AosClientError("connection-interrupted")
     }
-    if (!response.ok)
+    if (!response.ok) {
+      if (response.status === 401) {
+        const error = ErrorResponseSchema.safeParse(
+          await response.json().catch(() => undefined)
+        )
+        if (error.success)
+          throw new AosClientError(
+            error.data.error.code === "unauthenticated"
+              ? "aos-auth-required"
+              : error.data.error.code === "runtime_authentication_required"
+                ? "runtime-auth-required"
+                : "proxy-failure"
+          )
+      }
       throw new AosClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure"
       )
+    }
     let payload: unknown
     try {
       payload = await response.json()
@@ -735,6 +755,77 @@ export class AosRemoteClient implements WorkspaceAdapter {
       }`,
       SessionInteractionSnapshotResponseSchema
     )
+  }
+
+  async *reconnectRun(
+    threadId: string,
+    runId: string,
+    signal?: AbortSignal
+  ): AsyncGenerator<AGUIEvent> {
+    const agentId = this.#owner(threadId)
+    const url = `${this.#basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/reconnect`
+    const agent = new HttpAgent({
+      url,
+      agentId,
+      threadId,
+      fetch: async (_url, init) => {
+        const headers = new Headers(init.headers)
+        headers.set("content-type", "application/json")
+        if (this.#authorization)
+          headers.set("authorization", this.#authorization)
+        return this.#fetch(url, {
+          ...init,
+          signal,
+          credentials: "same-origin",
+          headers,
+          body: JSON.stringify({ threadId, runId }),
+        })
+      },
+    })
+    const events: AGUIEvent[] = []
+    let wake: (() => void) | undefined
+    let complete = false
+    let failure: unknown
+    const subscription = agent
+      .run({
+        threadId,
+        runId,
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      })
+      .subscribe({
+        next: (event) => {
+          events.push(event as AGUIEvent)
+          wake?.()
+          wake = undefined
+        },
+        error: (error) => {
+          failure = error
+          complete = true
+          wake?.()
+          wake = undefined
+        },
+        complete: () => {
+          complete = true
+          wake?.()
+          wake = undefined
+        },
+      })
+    try {
+      while (!complete || events.length) {
+        if (!events.length)
+          await new Promise<void>((resolve) => {
+            wake = resolve
+          })
+        while (events.length) yield events.shift()!
+      }
+      if (failure) throw failure
+    } finally {
+      subscription.unsubscribe()
+    }
   }
 
   async stageAttachments(

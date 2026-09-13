@@ -6,6 +6,8 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 
 export type AuthGateFailureKind =
+  | "aos-auth-required"
+  | "runtime-auth-required"
   | "connection-interrupted"
   | "provider-unavailable"
   | "proxy-failure"
@@ -73,6 +75,8 @@ const copy = {
 } as const
 
 const failureKinds = new Set<AuthGateFailureKind>([
+  "aos-auth-required",
+  "runtime-auth-required",
   "connection-interrupted",
   "provider-unavailable",
   "proxy-failure",

@@ -1,6 +1,8 @@
 import {
   ExportedMessageRepository,
+  type ChatModelRunResult,
   type RemoteThreadListAdapter,
+  type ThreadAssistantMessagePart,
   type ThreadHistoryAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react"
@@ -9,7 +11,7 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
   type Session,
 } from "../../../packages/protocol"
-import type { AosRemoteClient } from "./aos-client"
+import { AosClientError, type AosRemoteClient } from "./aos-client"
 
 const PAGE_SIZE = 50
 type RemoteThreadMetadata = Awaited<
@@ -38,13 +40,26 @@ function cursorOffset(cursor: string | undefined) {
 }
 
 class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
+  #activeRunId?: string
   constructor(
     private readonly client: AosRemoteClient,
     private readonly threadId: string
   ) {}
 
   async load() {
-    const history = await this.client.loadHistory(this.threadId)
+    const [history, active] = await Promise.all([
+      this.client.loadHistory(this.threadId),
+      this.client.pendingInteraction(this.threadId).catch((error: unknown) => {
+        if (
+          error instanceof AosClientError &&
+          (error.kind === "aos-auth-required" ||
+            error.kind === "runtime-auth-required")
+        )
+          throw error
+        return undefined
+      }),
+    ])
+    this.#activeRunId = active?.running ? active.runId : undefined
     const repository = ExportedMessageRepository.fromArray(
       history.messages.map((message): ThreadMessageLike => ({
         ...message,
@@ -54,6 +69,88 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
     return {
       ...repository,
       headId: repository.messages.at(-1)?.message.id ?? null,
+      ...(this.#activeRunId ? { unstable_resume: true } : {}),
+    }
+  }
+
+  async *resume(options: {
+    abortSignal: AbortSignal
+  }): AsyncGenerator<ChatModelRunResult> {
+    const runId = this.#activeRunId
+    if (!runId) return
+    const content: ThreadAssistantMessagePart[] = []
+    const tools = new Map<string, number>()
+    for await (const event of this.client.reconnectRun(
+      this.threadId,
+      runId,
+      options.abortSignal
+    )) {
+      if (event.type === "TEXT_MESSAGE_CONTENT") {
+        const last = content.at(-1)
+        if (last?.type === "text")
+          content[content.length - 1] = {
+            ...last,
+            text: last.text + event.delta,
+          }
+        else content.push({ type: "text", text: event.delta })
+      } else if (event.type === "REASONING_MESSAGE_CONTENT") {
+        const last = content.at(-1)
+        if (last?.type === "reasoning")
+          content[content.length - 1] = {
+            ...last,
+            text: last.text + event.delta,
+          }
+        else content.push({ type: "reasoning", text: event.delta })
+      } else if (event.type === "TOOL_CALL_START") {
+        tools.set(event.toolCallId, content.length)
+        content.push({
+          type: "tool-call",
+          toolCallId: event.toolCallId,
+          toolName: event.toolCallName ?? "tool",
+          args: {},
+          argsText: "",
+        })
+      } else if (event.type === "TOOL_CALL_ARGS") {
+        const index = tools.get(event.toolCallId)
+        const part = index === undefined ? undefined : content[index]
+        if (index !== undefined && part?.type === "tool-call")
+          content[index] = { ...part, argsText: part.argsText + event.delta }
+      } else if (event.type === "TOOL_CALL_RESULT") {
+        const index = tools.get(event.toolCallId)
+        const part = index === undefined ? undefined : content[index]
+        if (index !== undefined && part?.type === "tool-call")
+          content[index] = {
+            ...part,
+            result: event.content,
+            ...(event.role === "tool" ? { isError: false } : {}),
+          }
+      }
+      if (event.type === "RUN_ERROR") {
+        yield {
+          content: [...content],
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: event.message ?? "AOS run failed",
+          },
+        }
+        return
+      }
+      if (event.type === "RUN_FINISHED") {
+        yield {
+          content: [...content],
+          status: { type: "complete", reason: "stop" },
+        }
+        return
+      }
+      if (
+        event.type === "TEXT_MESSAGE_CONTENT" ||
+        event.type === "REASONING_MESSAGE_CONTENT" ||
+        event.type === "TOOL_CALL_START" ||
+        event.type === "TOOL_CALL_ARGS" ||
+        event.type === "TOOL_CALL_RESULT"
+      )
+        yield { content: [...content], status: { type: "running" } }
     }
   }
 

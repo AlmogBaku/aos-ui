@@ -1009,6 +1009,59 @@ describe("HermesRunEngine", () => {
     expect(submissions).toBe(1)
   })
 
+  it("reconstructs an active run from authoritative Hermes recovery after proxy restart", async () => {
+    let submissions = 0
+    const engine = new HermesRunEngine(
+      native({
+        recover: async (_liveSessionId, lastSeen) => {
+          expect(lastSeen).toBeUndefined()
+          return {
+            epoch: "epoch-after-restart",
+            lastSeen: 3,
+            events: [
+              {
+                type: "message.start",
+                session_id: "live-secret",
+                seq: 1,
+                payload: { message_id: "message-42" },
+              },
+              {
+                type: "message.delta",
+                session_id: "live-secret",
+                seq: 2,
+                payload: { text: "Recovered" },
+              },
+              {
+                type: "message.complete",
+                session_id: "live-secret",
+                seq: 3,
+                payload: {},
+              },
+            ],
+          }
+        },
+        submit: async () => {
+          submissions += 1
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const resumed = await engine.reconnect(scope, {
+      threadId: scope.threadId,
+      runId: "restored-run",
+    })
+
+    await expect(collect(resumed)).resolves.toMatchObject([
+      { type: EventType.RUN_STARTED, runId: "restored-run" },
+      { type: EventType.TEXT_MESSAGE_START, messageId: "message-42" },
+      { type: EventType.TEXT_MESSAGE_CONTENT, delta: "Recovered" },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "message-42" },
+      { type: EventType.RUN_FINISHED, runId: "restored-run" },
+    ])
+    expect(submissions).toBe(0)
+  })
+
   it("detaches browser transport without interrupting the native run", async () => {
     let interrupts = 0
     const engine = new HermesRunEngine(

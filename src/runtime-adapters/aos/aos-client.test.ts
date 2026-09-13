@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { AosRemoteClient } from "./aos-client"
+import { AosClientError, AosRemoteClient } from "./aos-client"
 
 const catalog = {
   revision: "profiles:researcher@hermes-bots:7",
@@ -22,6 +22,25 @@ const catalog = {
 }
 
 describe("provider-neutral AOS browser client", () => {
+  it.each([
+    ["unauthenticated", "aos-auth-required"],
+    ["runtime_authentication_required", "runtime-auth-required"],
+  ] as const)(
+    "classifies normalized 401 %s responses for the authentication gate",
+    async (code, kind) => {
+      const client = new AosRemoteClient({
+        fetcher: vi.fn(async () =>
+          Response.json({ error: { code } }, { status: 401 })
+        ),
+      })
+
+      await expect(client.listAgentCatalog()).rejects.toMatchObject({
+        name: "AosClientError",
+        kind,
+      } satisfies Partial<AosClientError>)
+    }
+  )
+
   it("does not subscribe before a Session owner has been restored", () => {
     const client = new AosRemoteClient({ fetcher: vi.fn() })
 
