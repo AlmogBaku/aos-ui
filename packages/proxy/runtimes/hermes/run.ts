@@ -65,7 +65,10 @@ export type HermesRunNative = {
   submit(
     liveSessionId: string,
     prompt: { text: string; runId: string; allowSlashCommands?: boolean }
-  ): Promise<{ acknowledgement: "accepted" | "uncertain"; completion?: { output: string } }>
+  ): Promise<{
+    acknowledgement: "accepted" | "rejected" | "uncertain"
+    completion?: { output: string }
+  }>
   interrupt(liveSessionId: string): Promise<void>
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
   acceptInteraction?(
@@ -931,7 +934,7 @@ export class HermesRunEngine {
       return this.#handle(active)
     }
     if (!this.#isSubmitEligible(active)) return this.#handle(active)
-    let acknowledgement: "accepted" | "uncertain"
+    let acknowledgement: "accepted" | "rejected" | "uncertain"
     try {
       const result = await this.#native.submit(liveSessionId, {
         text: text!,
@@ -943,13 +946,28 @@ export class HermesRunEngine {
         if (result.completion.output) {
           active.messageId = `aos-command:${input.runId}`
           active.textStarted = true
-          this.#emit(active, { type: EventType.TEXT_MESSAGE_START, messageId: active.messageId, role: "assistant" })
-          this.#emit(active, { type: EventType.TEXT_MESSAGE_CONTENT, messageId: active.messageId, delta: result.completion.output })
+          this.#emit(active, {
+            type: EventType.TEXT_MESSAGE_START,
+            messageId: active.messageId,
+            role: "assistant",
+          })
+          this.#emit(active, {
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: active.messageId,
+            delta: result.completion.output,
+          })
         }
         this.#finish(active)
       }
     } catch {
       acknowledgement = "uncertain"
+    }
+    if (acknowledgement === "rejected" && !active.terminal) {
+      this.#fail(
+        active,
+        "AOS_PROVIDER_RUN_FAILED",
+        "Hermes rejected this command."
+      )
     }
     if (
       acknowledgement === "uncertain" &&

@@ -32,8 +32,10 @@ type ComposerClient = SessionCapabilityClient & {
   ): Promise<{ selectedId: string }>
 }
 
+const EMPTY_SLASH_COMMANDS: readonly SlashCommand[] = []
+
 export function useAosSlashCommands(
-  client: Pick<ComposerClient, "commands" | "subscribeSessionInvalidation">,
+  client: Pick<ComposerClient, "commands">,
   threadId: string | undefined,
   enabled = true
 ): readonly SlashCommand[] | undefined {
@@ -60,16 +62,14 @@ export function useAosSlashCommands(
       )
     }
     refresh()
-    const unsubscribe = client.subscribeSessionInvalidation?.(threadId, refresh)
     return () => {
       active = false
-      unsubscribe?.()
     }
   }, [client, threadId, enabled])
   return enabled
     ? snapshot?.client === client && snapshot.threadId === threadId
       ? snapshot.commands
-      : []
+      : EMPTY_SLASH_COMMANDS
     : undefined
 }
 

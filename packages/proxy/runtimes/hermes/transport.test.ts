@@ -55,10 +55,29 @@ describe("Hermes WebSocket RPC transport", () => {
     const socket = new FakeSocket()
     socket.send = (raw) => {
       const frame = JSON.parse(raw) as { id: string }
-      queueMicrotask(() => socket.emit("message", { data: JSON.stringify({ jsonrpc: "2.0", id: frame.id, error: { code: -32601, message: "private native failure" } }) }))
+      queueMicrotask(() =>
+        socket.emit("message", {
+          data: JSON.stringify({
+            jsonrpc: "2.0",
+            id: frame.id,
+            error: { code: -32601, message: "private native failure" },
+          }),
+        })
+      )
     }
-    const transport = new HermesWebSocketRpcTransport({ baseUrl: "http://127.0.0.1:9119", credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }), fetcher: vi.fn(async () => Response.json({ ticket: "ticket" })), socketFactory: () => { queueMicrotask(() => socket.open()); return socket } })
-    await expect(transport.request("slash.exec", {})).rejects.toMatchObject({ code: -32601, message: "Hermes RPC failed" })
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "ticket" })),
+      socketFactory: () => {
+        queueMicrotask(() => socket.open())
+        return socket
+      },
+    })
+    await expect(transport.request("slash.exec", {})).rejects.toMatchObject({
+      code: -32601,
+      message: "Hermes RPC failed",
+    })
   })
   it("observes native notifications on a server-only ticketed socket", async () => {
     const socket = new FakeSocket()

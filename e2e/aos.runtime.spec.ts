@@ -217,6 +217,15 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
           nextOffset: 1,
         },
       })
+    if (path.endsWith("/commands"))
+      return route.fulfill({
+        json: {
+          commands: Array.from({ length: 30 }, (_, index) => ({
+            name: `command-${index}`,
+            description: `Command ${index}`,
+          })),
+        },
+      })
     if (path.endsWith("/workspace/capabilities"))
       return route.fulfill({ json: sessionCapabilities })
     if (path.endsWith("/workspace/models"))
@@ -283,7 +292,20 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
   await page.reload()
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
 
-  await page.getByRole("textbox", { name: "Message input" }).fill("Send once")
+  const input = page.getByRole("textbox", { name: "Message input" })
+  await input.fill("/")
+  const commandMenu = page.getByRole("listbox")
+  await expect(commandMenu.getByRole("option")).toHaveCount(30)
+  for (let index = 0; index < 15; index += 1) await input.press("ArrowDown")
+  await expect
+    .poll(() => commandMenu.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0)
+  await input.press("Escape")
+  await input.fill("/command-2")
+  await page.getByRole("option", { name: /^\/command-2\b/ }).click()
+  await expect(input).toHaveValue("/command-2 ")
+
+  await input.fill("Send once")
   await page.getByRole("button", { name: "Send message" }).click()
   await expect(page.getByText("Streamed by AOS.")).toBeVisible()
   expect(runRequests).toBe(1)

@@ -88,6 +88,14 @@ describe("AOS normalized Session browser integration", () => {
             },
           ],
         }
+      if (method === "commands.catalog")
+        return { pairs: [["/status", "Show status"]] }
+      if (method === "session.resume")
+        return {
+          session_id: "live-alpha-secret",
+          running: false,
+          info: {},
+        }
       throw new Error(`Unexpected native RPC: ${method}`)
     })
     const nativeHttp = vi.fn(async (path: string) => {
@@ -256,6 +264,11 @@ describe("AOS normalized Session browser integration", () => {
       expect(
         supplied!.assistantRuntime.thread.getState().messages
       ).toHaveLength(2)
+    )
+    await waitFor(() =>
+      expect(supplied?.composer?.slashCommands).toEqual([
+        { name: "status", description: "Show status" },
+      ])
     )
     await waitFor(() =>
       expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(

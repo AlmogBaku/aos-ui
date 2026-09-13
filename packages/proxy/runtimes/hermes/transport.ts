@@ -377,11 +377,20 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
               frame.id !== id
             )
               return
-            if ("error" in frame && frame.error)
-              finish(() => reject(new HermesRpcError(
-                typeof frame.error === "object" && "code" in frame.error && typeof frame.error.code === "number" && Number.isSafeInteger(frame.error.code)
-                  ? frame.error.code : undefined
-              )))
+            const frameError = "error" in frame ? frame.error : undefined
+            if (frameError)
+              finish(() =>
+                reject(
+                  new HermesRpcError(
+                    typeof frameError === "object" &&
+                      "code" in frameError &&
+                      typeof frameError.code === "number" &&
+                      Number.isSafeInteger(frameError.code)
+                      ? frameError.code
+                      : undefined
+                  )
+                )
+              )
             else
               finish(() =>
                 resolve(

@@ -45,6 +45,10 @@ describe("fixture composer features", () => {
     expect(features.context).toEqual({
       usage: { system: 2, tools: 1, messages: 9, total: 66 },
     })
+    expect(features.slashCommands).toEqual([
+      { name: "help", description: "Show fixture runtime help" },
+      { name: "status", description: "Show fixture Session status" },
+    ])
 
     act(() => {
       runtime!.thread.append({
@@ -59,9 +63,7 @@ describe("fixture composer features", () => {
       })
     )
 
-    await act(() =>
-      features.model!.select("fixture-fast")
-    )
+    await act(() => features.model!.select("fixture-fast"))
     expect(features.model?.selectedId).toBe("fixture-fast")
     expect(features.context).toEqual({
       usage: { system: 2, tools: 1, messages: 10, total: 33 },

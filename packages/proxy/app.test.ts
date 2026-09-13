@@ -332,6 +332,7 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(start).toHaveBeenCalledWith(
       {
         agentId: "researcher",
+        hasAttachments: true,
         sessionId: "stored",
         threadId: "hermes:researcher:stored",
       },

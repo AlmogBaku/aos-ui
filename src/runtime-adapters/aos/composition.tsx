@@ -27,6 +27,7 @@ import { createAosInteractions } from "./aos-interactions"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
+import { useAosReconcilerLifecycle } from "./use-reconciler-lifecycle"
 
 function ReadyAosRuntimeProvider({
   children,
@@ -42,7 +43,7 @@ function ReadyAosRuntimeProvider({
     () => new AosReconciler({ onReconnect }),
     [onReconnect]
   )
-  useEffect(() => () => reconciler.close(), [reconciler])
+  useAosReconcilerLifecycle(reconciler)
   const client = useMemo(
     () => new AosRemoteClient({ reconciler, onAuthRequired }),
     [onAuthRequired, reconciler]

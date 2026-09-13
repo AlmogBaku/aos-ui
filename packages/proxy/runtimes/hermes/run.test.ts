@@ -315,6 +315,28 @@ describe("HermesRunEngine", () => {
     expect(submissions).toBe(1)
   })
 
+  it("terminalizes a definitive command rejection without marking delivery uncertain", async () => {
+    const engine = new HermesRunEngine(
+      native({
+        submit: async () => ({ acknowledgement: "rejected" }),
+      })
+    )
+
+    const handle = await engine.start(scope, input())
+
+    await expect(collect(handle)).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Hermes rejected this command.",
+        code: "AOS_PROVIDER_RUN_FAILED",
+      },
+    ])
+    await expect(
+      engine.start(scope, input({ runId: "run-2" }))
+    ).resolves.toBeDefined()
+  })
+
   it("normalizes reasoning and complete tool calls as standard AG-UI events", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(

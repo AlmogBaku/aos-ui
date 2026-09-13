@@ -6,7 +6,7 @@ import {
   type AssistantState,
 } from "@assistant-ui/react"
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
-import { useEffect, useMemo } from "react"
+import { useMemo } from "react"
 
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import {
@@ -37,6 +37,7 @@ import {
 } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
 import { useAosSlashCommands } from "./aos-composer-features"
+import { useAosReconcilerLifecycle } from "./use-reconciler-lifecycle"
 
 const dictionaries = { en, he } as const
 
@@ -211,7 +212,7 @@ function ReadyGuestAosSurface({
       }),
     [authorization, config.basePath]
   )
-  useEffect(() => () => reconciler.close(), [reconciler])
+  useAosReconcilerLifecycle(reconciler)
   const client = useMemo(
     () =>
       new AosRemoteClient({

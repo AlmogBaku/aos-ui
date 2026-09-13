@@ -14,7 +14,11 @@ import {
   type RuntimeInfo,
   type VisibilityUpdateResponse,
 } from "../../../protocol"
-import { HermesAuthenticationError, HermesHttpError } from "./transport"
+import {
+  HermesAuthenticationError,
+  HermesHttpError,
+  HermesRpcError,
+} from "./transport"
 import { projectHermesHistory } from "./history"
 import {
   HermesRunEngine,
@@ -44,6 +48,73 @@ import { HermesDashboardClient } from "./dashboard-client"
 import type { ServerRuntime } from "../../runtime"
 import type { ResumeEntry } from "@ag-ui/core"
 import { nativeSlashCommands, slashInvocation } from "./slash-commands"
+
+async function executeSlashCommand(
+  transport: HermesRpcTransport,
+  liveSessionId: string,
+  name: string,
+  args: string,
+  depth = 0
+): Promise<{ output: string } | undefined> {
+  if (depth >= 4) throw new HermesUnavailableError()
+  let result: unknown
+  try {
+    result = await transport.request(
+      "slash.exec",
+      {
+        command: `${name}${args ? ` ${args}` : ""}`,
+        session_id: liveSessionId,
+      },
+      1_048_576
+    )
+  } catch (error) {
+    if (
+      !(error instanceof HermesRpcError) ||
+      (error.code !== -32601 && error.code !== 4018)
+    )
+      throw error
+    result = await transport.request(
+      "command.dispatch",
+      { session_id: liveSessionId, name, arg: args },
+      1_048_576
+    )
+  }
+  if (!isRecord(result)) throw new HermesUnavailableError()
+  if (result.type === "alias") {
+    const target =
+      typeof result.target === "string"
+        ? /^\/?([^\s/]+)(?:\s+([\s\S]*))?$/u.exec(result.target)
+        : undefined
+    if (!target) throw new HermesUnavailableError()
+    return executeSlashCommand(
+      transport,
+      liveSessionId,
+      target[1]!,
+      [target[2], args].filter(Boolean).join(" "),
+      depth + 1
+    )
+  }
+  if (result.type === "send" || result.type === "skill") {
+    if (typeof result.message !== "string" || !result.message.trim())
+      throw new HermesUnavailableError()
+    await transport.request("prompt.submit", {
+      session_id: liveSessionId,
+      text: result.message,
+    })
+    return undefined
+  }
+  if (
+    result.type !== "exec" &&
+    result.type !== "plugin" &&
+    typeof result.output !== "string" &&
+    typeof result.warning !== "string"
+  )
+    throw new HermesUnavailableError()
+  const output = [result.warning, result.output]
+    .filter((value): value is string => typeof value === "string" && !!value)
+    .join("\n")
+  return { output }
+}
 
 export interface HermesRpcTransport {
   request(
@@ -914,18 +985,53 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
 
   async slashCommands(agentId: string, publicSessionId: string) {
     const scope = await this.#requireAttachedSession(agentId, publicSessionId)
-    return { commands: await nativeSlashCommands(this.transport, { session_id: scope.liveSessionId, profile: agentId }) }
+    try {
+      return {
+        commands: await nativeSlashCommands(this.transport, {
+          session_id: scope.liveSessionId,
+          profile: agentId,
+        }),
+      }
+    } catch (error) {
+      throwUnavailable(error)
+    }
   }
 
-  async submit(liveSessionId: string, prompt: { text: string; runId: string; allowSlashCommands?: boolean }) {
+  async submit(
+    liveSessionId: string,
+    prompt: { text: string; runId: string; allowSlashCommands?: boolean }
+  ) {
+    let invocation: ReturnType<typeof slashInvocation>
+    if (prompt.allowSlashCommands !== false && prompt.text.startsWith("/")) {
+      let commands
+      try {
+        commands = await nativeSlashCommands(this.transport, {
+          session_id: liveSessionId,
+        })
+      } catch {
+        return { acknowledgement: "rejected" as const }
+      }
+      invocation = slashInvocation(prompt.text, commands)
+    }
     try {
-      const invocation = prompt.allowSlashCommands !== false && prompt.text.startsWith("/")
-        ? slashInvocation(prompt.text, await nativeSlashCommands(this.transport, { session_id: liveSessionId }))
-        : undefined
       if (invocation) {
-        const result = await this.transport.request("slash.exec", { command: `${invocation.name}${invocation.args ? ` ${invocation.args}` : ""}`, session_id: liveSessionId }, 1_048_576)
-        if (!isRecord(result) || typeof result.output !== "string") throw new HermesUnavailableError()
-        return { acknowledgement: "accepted" as const, completion: { output: result.output } }
+        let completion
+        try {
+          completion = await executeSlashCommand(
+            this.transport,
+            liveSessionId,
+            invocation.name,
+            invocation.args
+          )
+        } catch (error) {
+          if (error instanceof HermesRpcError)
+            return { acknowledgement: "rejected" as const }
+          throw error
+        }
+        return {
+          acknowledgement: "accepted" as const,
+          ...(completion ? { completion } : {}),
+        }
       }
       await this.transport.request("prompt.submit", {
         session_id: liveSessionId,
