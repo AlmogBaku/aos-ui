@@ -41,6 +41,79 @@ const runtime = {
   },
 }
 
+const sessionCapabilities = {
+  workspace: {
+    models: {
+      status: "available",
+      scope: "attached-session",
+      selection: "native-session",
+      choices: "provider-reported",
+    },
+    context: {
+      status: "available",
+      scope: "attached-session",
+      source: "provider-usage-or-estimate",
+      breakdown: "provider-categories",
+    },
+    todos: {
+      status: "available",
+      scope: "session",
+      mode: "read-only-projection",
+      source: "latest-completed-todo-tool-result",
+    },
+    activity: {
+      status: "available",
+      scope: "attached-active-session",
+      coverage: "active-session-only",
+      source: "session.info",
+    },
+  },
+  interactions: {
+    approvals: {
+      status: "available",
+      protocol: "ag-ui-interrupt",
+      scope: "run",
+      choices: [
+        { value: "once", scope: "request" },
+        { value: "session", scope: "session" },
+        { value: "always", scope: "agent" },
+        { value: "deny", scope: "request" },
+      ],
+      maxPending: 64,
+    },
+    questions: {
+      status: "available",
+      protocol: "ag-ui-interrupt",
+      scope: "run",
+      answerModes: ["single", "multiple", "free-text"],
+      cancellation: "native-empty-answer",
+      maxQuestions: 32,
+      maxChoicesPerQuestion: 64,
+      maxAnswerValuesPerQuestion: 64,
+      maxStringBytes: 4096,
+    },
+    reactions: { status: "unavailable", reason: "not-supported" },
+  },
+  content: {
+    attachments: {
+      status: "available",
+      scope: "attached-session",
+      inputs: ["image", "file"],
+      imageMimeTypes: ["image/png"],
+      fileMimeTypes: "valid-type/subtype",
+      maxMimeTypeBytes: 256,
+      maxFilenameBytes: 255,
+      maxCount: 16,
+      maxImageBytes: 26_214_400,
+      maxFileBytes: 26_214_400,
+      maxTotalBytes: 26_214_400,
+    },
+    artifacts: { status: "unavailable", reason: "not-supported" },
+    transcription: { status: "unavailable", reason: "not-configured" },
+    speech: { status: "unavailable", reason: "not-configured" },
+  },
+}
+
 test("AOS proxy gates auth, restores history, streams one turn, stops, and reconnects", async ({
   page,
 }) => {
@@ -144,9 +217,14 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
           nextOffset: 1,
         },
       })
+    if (path.endsWith("/workspace/capabilities"))
+      return route.fulfill({ json: sessionCapabilities })
     if (path.endsWith("/workspace/models"))
       return route.fulfill({
-        json: { selectedId: "default", options: [{ id: "default", label: "Default", group: "Hermes" }] },
+        json: {
+          selectedId: "default",
+          options: [{ id: "default", label: "Default", group: "Hermes" }],
+        },
       })
     if (path.endsWith("/workspace/context"))
       return route.fulfill({
@@ -192,7 +270,10 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
         ].join("\n\n"),
       })
     }
-    return route.fulfill({ status: 404, json: { error: { code: "not_found" } } })
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found" } },
+    })
   })
 
   await page.goto("/")
