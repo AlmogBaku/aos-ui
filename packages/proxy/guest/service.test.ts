@@ -526,6 +526,129 @@ describe("Hermes guest listener", () => {
     expect(reconnectStream).not.toContain("native-epoch-secret")
   })
 
+  it("preserves an interrupted guest run so the normalized client can reconnect", async () => {
+    const interrupted = runHandle(
+      eventStream(
+        { type: EventType.RUN_STARTED, threadId: sessionId, runId: "run-1" },
+        {
+          type: EventType.RUN_ERROR,
+          code: "AOS_CONNECTION_INTERRUPTED",
+          message: "Bearer operator-secret at /srv/hermes/private",
+        }
+      )
+    )
+    const recovered = runHandle(
+      eventStream(
+        { type: EventType.RUN_STARTED, threadId: sessionId, runId: "run-1" },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: sessionId,
+          runId: "run-1",
+        }
+      )
+    )
+    const runs = {
+      start: vi.fn(async () => interrupted),
+      reconnect: vi.fn(async () => recovered),
+    }
+    const { service } = harness({ runs })
+    const issued = await invitation([
+      "errors:read",
+      "messages:create",
+      "messages:read",
+    ])
+    const route = `/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}/runs`
+    const headers = {
+      ...requestHeaders(issued.token, true),
+      "content-type": "application/json",
+    }
+    const input = {
+      threadId: sessionId,
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "guest-message", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }
+
+    const response = await service.app.request(route, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input),
+    })
+    const stream = await response.text()
+
+    expect(stream).toContain('"code":"AOS_CONNECTION_INTERRUPTED"')
+    expect(stream).not.toContain("operator-secret")
+    expect(stream).not.toContain("/srv/hermes/private")
+
+    const reconnect = await service.app.request(`${route}/reconnect`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ threadId: sessionId, runId: "run-1" }),
+    })
+
+    expect(reconnect.status).toBe(200)
+    expect(runs.reconnect).toHaveBeenCalledOnce()
+  })
+
+  it("keeps an uncertain guest send fenced for authoritative reconciliation", async () => {
+    const uncertain = runHandle(
+      eventStream(
+        { type: EventType.RUN_STARTED, threadId: sessionId, runId: "run-1" },
+        {
+          type: EventType.RUN_ERROR,
+          code: "AOS_SEND_UNCERTAIN",
+          message: "Native request leaked operator-secret",
+        }
+      )
+    )
+    const runs = {
+      start: vi.fn(async () => uncertain),
+      reconnect: vi.fn(),
+    }
+    const { service } = harness({ runs })
+    const issued = await invitation([
+      "errors:read",
+      "messages:create",
+      "messages:read",
+    ])
+    const route = `/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}/runs`
+    const headers = {
+      ...requestHeaders(issued.token, true),
+      "content-type": "application/json",
+    }
+    const input = {
+      threadId: sessionId,
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "guest-message", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    }
+
+    const response = await service.app.request(route, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input),
+    })
+    const stream = await response.text()
+
+    expect(stream).toContain('"code":"AOS_SEND_UNCERTAIN"')
+    expect(stream).not.toContain("operator-secret")
+
+    const duplicate = await service.app.request(route, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...input, runId: "run-2" }),
+    })
+
+    expect(duplicate.status).toBe(409)
+    expect(runs.start).toHaveBeenCalledOnce()
+  })
+
   it("requires exact operations and same-origin authorization for send and Stop", async () => {
     const active = runHandle(pendingEventStream())
     const runs = {

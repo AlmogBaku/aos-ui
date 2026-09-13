@@ -401,11 +401,22 @@ function safeMessageId(value: unknown) {
 }
 
 function publicErrorCode(code: unknown) {
-  return code === "AOS_RESET_REQUIRED" ||
+  if (
     code === "AOS_CONNECTION_INTERRUPTED" ||
     code === "AOS_SEND_UNCERTAIN"
+  )
+    return { code, retryable: true }
+  return code === "AOS_RESET_REQUIRED"
     ? { code: "temporarily_unavailable" as const, retryable: true }
     : { code: "request_failed" as const, retryable: false }
+}
+
+function isReconcileRequiredError(event: AGUIEvent) {
+  return (
+    event.type === EventType.RUN_ERROR &&
+    (event.code === "AOS_CONNECTION_INTERRUPTED" ||
+      event.code === "AOS_SEND_UNCERTAIN")
+  )
 }
 
 function projectRunStream(input: {
@@ -499,7 +510,7 @@ function projectRunStream(input: {
         },
         input.errors
       )
-      input.onTerminal()
+      if (!isReconcileRequiredError(candidate)) input.onTerminal()
       return projected?.payload.type === "error"
         ? {
             type: EventType.RUN_ERROR,
@@ -544,7 +555,8 @@ function projectRunStream(input: {
           controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
           if (
             event.type === EventType.RUN_FINISHED ||
-            event.type === EventType.RUN_ERROR
+            (event.type === EventType.RUN_ERROR &&
+              !isReconcileRequiredError(event))
           ) {
             state = "closed"
             await iterator.return?.()

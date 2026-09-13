@@ -67,6 +67,8 @@ const errorKeys = [
 type Transport = "rest" | "ag-ui" | "ws" | "artifact" | "error"
 
 const publicErrorCodes = [
+  "AOS_CONNECTION_INTERRUPTED",
+  "AOS_SEND_UNCERTAIN",
   "forbidden",
   "not_found",
   "rate_limited",
