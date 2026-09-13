@@ -158,8 +158,21 @@ describe("AOS normalized Session browser integration", () => {
       runEngine: { start } as unknown as HermesRunEngine,
       logger: { info: vi.fn(), error: vi.fn() },
     })
+    let runtimeExpired = false
     const browserFetch = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = new URL(String(input), "http://app.test").pathname
+        if (runtimeExpired && path.endsWith("/agents"))
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "runtime_authentication_required" } },
+              { status: 401 }
+            )
+          )
+        if (runtimeExpired && path.endsWith("/auth/runtime"))
+          return Promise.resolve(
+            Response.json({ status: "authentication-required" })
+          )
         const headers = new Headers(init?.headers)
         headers.set("cookie", "aos_operator=valid")
         if (init?.method === "POST") headers.set("origin", "http://app.test")
@@ -297,5 +310,13 @@ describe("AOS normalized Session browser integration", () => {
     expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
       "/api/aos/v1/agents/alpha/sessions/hermes%3Aalpha%3Astored-alpha/runs/stop"
     )
+
+    runtimeExpired = true
+    await expect(supplied!.workspace.refreshAgents()).rejects.toMatchObject({
+      kind: "runtime-auth-required",
+    })
+    expect(
+      await screen.findByRole("link", { name: "Connect runtime" })
+    ).toBeVisible()
   })
 })

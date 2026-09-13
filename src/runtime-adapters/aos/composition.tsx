@@ -33,15 +33,19 @@ function ReadyAosRuntimeProvider({
   config,
   locale,
   onReconnect,
-}: RuntimeAdapterProps<"aos"> & { onReconnect(): Promise<void> }) {
+  onAuthRequired,
+}: RuntimeAdapterProps<"aos"> & {
+  onReconnect(): Promise<void>
+  onAuthRequired(): void
+}) {
   const reconciler = useMemo(
     () => new AosReconciler({ onReconnect }),
     [onReconnect]
   )
   useEffect(() => () => reconciler.close(), [reconciler])
   const client = useMemo(
-    () => new AosRemoteClient({ reconciler }),
-    [reconciler]
+    () => new AosRemoteClient({ reconciler, onAuthRequired }),
+    [onAuthRequired, reconciler]
   )
   const threadList = useMemo(() => new AosThreadListAdapter(client), [client])
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
@@ -170,6 +174,10 @@ function ReadyAosRuntimeProvider({
 export function AosRuntimeProvider(props: RuntimeAdapterProps<"aos">) {
   const startupClient = useMemo(() => new AosRemoteClient(), [])
   const [gateGeneration, setGateGeneration] = useState(0)
+  const onAuthRequired = useCallback(
+    () => setGateGeneration((generation) => generation + 1),
+    []
+  )
   const operatorAuth = useCallback(
     async (signal: AbortSignal) => {
       const state = await startupClient.operatorAuth(signal)
@@ -215,7 +223,11 @@ export function AosRuntimeProvider(props: RuntimeAdapterProps<"aos">) {
       runtimeAuth={runtimeAuth}
       startup={startup}
     >
-      <ReadyAosRuntimeProvider {...props} onReconnect={onReconnect} />
+      <ReadyAosRuntimeProvider
+        {...props}
+        onReconnect={onReconnect}
+        onAuthRequired={onAuthRequired}
+      />
     </AosAuthGate>
   )
 }

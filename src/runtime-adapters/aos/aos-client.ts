@@ -93,6 +93,9 @@ export type AosRemoteClientOptions = {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
     subscribe?(scope: AosEventScope, listener: () => void): () => void
   }
+  onAuthRequired?: (
+    kind: "aos-auth-required" | "runtime-auth-required"
+  ) => void
 }
 
 type StagedRunAttachment = {
@@ -348,6 +351,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
   readonly #authorization?: string
   readonly #scope?: AosEventScope
   readonly #reconciler?: AosRemoteClientOptions["reconciler"]
+  readonly #onAuthRequired?: AosRemoteClientOptions["onAuthRequired"]
   readonly #revisions = new Map<string, string>()
   readonly #sessions = new Map<string, Session>()
   readonly #sessionOwners = new Map<string, string>()
@@ -358,6 +362,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     this.#authorization = options.authorization
     this.#scope = options.scope
     this.#reconciler = options.reconciler
+    this.#onAuthRequired = options.onAuthRequired
     if (options.scope)
       this.#sessionOwners.set(options.scope.sessionId, options.scope.agentId)
   }
@@ -397,14 +402,18 @@ export class AosRemoteClient implements WorkspaceAdapter {
         const error = ErrorResponseSchema.safeParse(
           await response.json().catch(() => undefined)
         )
-        if (error.success)
-          throw new AosClientError(
+        if (error.success) {
+          const kind =
             error.data.error.code === "unauthenticated"
               ? "aos-auth-required"
               : error.data.error.code === "runtime_authentication_required"
                 ? "runtime-auth-required"
-                : "proxy-failure"
-          )
+                : undefined
+          if (kind) {
+            this.#onAuthRequired?.(kind)
+            throw new AosClientError(kind)
+          }
+        }
       }
       throw new AosClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure"

@@ -28,16 +28,19 @@ describe("provider-neutral AOS browser client", () => {
   ] as const)(
     "classifies normalized 401 %s responses for the authentication gate",
     async (code, kind) => {
+      const onAuthRequired = vi.fn()
       const client = new AosRemoteClient({
         fetcher: vi.fn(async () =>
           Response.json({ error: { code } }, { status: 401 })
         ),
+        onAuthRequired,
       })
 
       await expect(client.listAgentCatalog()).rejects.toMatchObject({
         name: "AosClientError",
         kind,
       } satisfies Partial<AosClientError>)
+      expect(onAuthRequired).toHaveBeenCalledWith(kind)
     }
   )
 
