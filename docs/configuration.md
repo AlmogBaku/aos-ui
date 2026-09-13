@@ -33,6 +33,13 @@ The AOS proxy privately selects and authenticates Hermes. Future OpenCode and
 OpenClaw integrations remain server-side until they have normalized proxy
 adapters; no browser runtime mode or provider route is available for them.
 
+Slash-command suggestions are shown in the main app whenever the runtime
+provides commands. They are hidden for guests by default. Set
+`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` in the proxy environment to show
+them in guest chat. Only `true` enables the guest UI (case-insensitive, with
+outer whitespace ignored). This setting only controls visibility; it does not
+disable runtime commands or prevent a guest from typing one manually.
+
 ## Deployment
 
 The Bun proxy serves the built browser assets, `/runtime-config.json`, and the

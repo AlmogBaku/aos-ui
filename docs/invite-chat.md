@@ -149,7 +149,7 @@ The runtime stores a durable initialization marker or recoverable native Session
 
 ## Understand guest limits
 
-Every guest mutation checks the configured Origin, invitation expiry, and the Agent/reference binding. Guest history may include participant messages, attachments, and supported rich displays. It excludes system rows, reasoning, raw tool data, Subagents, permissions, management, unrelated Sessions, model changes, and executable slash commands.
+Every guest mutation checks the configured Origin, invitation expiry, and the Agent/reference binding. Guest history may include participant messages, attachments, and supported rich displays. It excludes system rows, reasoning, raw tool data, Subagents, permissions, management, unrelated Sessions, and model changes. Slash-command suggestions are hidden by default, but this is presentation only: recognized commands typed manually still reach the selected runtime.
 
 Hermes, OpenCode, and OpenClaw provide chat, streaming, Stop, reconnect, and attachments where native support exists. OpenCode additionally supports its safe edit/regenerate flow. OpenCode and OpenClaw expose pending questions. OpenClaw guest edit/regenerate, Todos, transcription, and branches are explicitly unavailable. Hermes execution approvals remain excluded from guest chat.
 
