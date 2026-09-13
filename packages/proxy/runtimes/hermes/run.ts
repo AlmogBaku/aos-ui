@@ -7,6 +7,7 @@ import {
   type RunAgentInput,
   type TokenUsage,
 } from "@ag-ui/core"
+import { ServerRunConflictError } from "../../runtime"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_USER_TURN_BYTES = 1_048_576
@@ -801,7 +802,7 @@ export class HermesRunEngine {
 
     const key = scopeKey(scope)
     if (this.#active.has(key) || this.#admissions.has(key))
-      throw new Error("An AOS run is already active for this Session")
+      throw new ServerRunConflictError()
     this.#admissions.add(key)
 
     const queue = new EventQueue()
@@ -963,11 +964,10 @@ export class HermesRunEngine {
         existing.runId !== request.runId ||
         (!existing.uncertain && !existing.detached)
       )
-        throw new Error("An AOS run is already active for this Session")
+        throw new ServerRunConflictError()
       return this.#reattach(existing, request)
     }
-    if (this.#admissions.has(key))
-      throw new Error("An AOS run is already active for this Session")
+    if (this.#admissions.has(key)) throw new ServerRunConflictError()
     this.#admissions.add(key)
 
     const queue = new EventQueue()

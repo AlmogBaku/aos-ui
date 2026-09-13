@@ -30,10 +30,7 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateResponseSchema,
 } from "@aos/protocol"
-import type {
-  Session,
-  SessionHistoryResponse,
-} from "@aos/protocol"
+import type { Session, SessionHistoryResponse } from "@aos/protocol"
 import type {
   AgentCatalogEntry,
   AgentVisibility,
@@ -47,18 +44,6 @@ type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 const InteractionResponseSchema = z.strictObject({
   status: z.enum(["resolved", "expired", "already-resolved"]),
 })
-const ArtifactCatalogSchema = z.strictObject({
-  artifacts: z
-    .array(
-      z.strictObject({
-        id: z.string().min(1).max(512),
-        filename: z.string().min(1).max(4_096),
-        mimeType: z.string().min(1).max(256).optional(),
-        sizeBytes: z.number().int().min(0).optional(),
-      })
-    )
-    .max(1_000),
-})
 export type AosWorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
 >
@@ -68,9 +53,6 @@ export type AosSessionActivity = z.infer<typeof SessionActivityResponseSchema>
 export type AosStagedAttachment = z.infer<
   typeof SessionAttachmentStageResponseSchema
 >
-export type AosArtifact = z.infer<
-  typeof ArtifactCatalogSchema
->["artifacts"][number]
 export type AosPendingInteraction = z.infer<
   typeof SessionInteractionSnapshotResponseSchema
 >
@@ -158,6 +140,113 @@ function attachmentsForStage(value: unknown): StagedRunAttachment[] {
   return staged
 }
 
+function sseFrameBoundary(value: string) {
+  const boundaries = ["\n\n", "\r\n\r\n", "\r\r"]
+    .map((separator) => ({ index: value.indexOf(separator), separator }))
+    .filter(({ index }) => index >= 0)
+    .sort((left, right) => left.index - right.index)
+  return boundaries[0]
+}
+
+function sseEvent(frame: string) {
+  const data = frame
+    .split(/\r?\n|\r/u)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /u, ""))
+    .join("\n")
+  if (!data) return undefined
+  try {
+    const event: unknown = JSON.parse(data)
+    return event && typeof event === "object"
+      ? (event as { type?: unknown; code?: unknown })
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function* reconnectingSse(
+  initial: Response,
+  reconnect: () => Promise<Response>,
+  signal: AbortSignal | null | undefined
+) {
+  let response = initial
+  let reconnected = false
+  let terminal = false
+  while (true) {
+    if (!response.ok || !response.body)
+      throw new Error(`AOS run request failed (${response.status})`)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder("utf-8", { fatal: true })
+    let buffered = ""
+    let interrupted = false
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        buffered += decoder.decode(value, { stream: !done })
+        while (true) {
+          const boundary = sseFrameBoundary(buffered)
+          if (!boundary) break
+          const frame = buffered.slice(0, boundary.index)
+          buffered = buffered.slice(boundary.index + boundary.separator.length)
+          const event = sseEvent(frame)
+          if (
+            event?.type === "RUN_ERROR" &&
+            event.code === "AOS_CONNECTION_INTERRUPTED" &&
+            !reconnected
+          ) {
+            interrupted = true
+            break
+          }
+          if (reconnected && event?.type === "RUN_STARTED") continue
+          terminal =
+            event?.type === "RUN_FINISHED" || event?.type === "RUN_ERROR"
+          yield new TextEncoder().encode(`${frame}${boundary.separator}`)
+        }
+        if (interrupted || done) break
+      }
+    } catch (error) {
+      if (reconnected || signal?.aborted) throw error
+      interrupted = true
+    } finally {
+      if (interrupted) await reader.cancel().catch(() => undefined)
+      reader.releaseLock()
+    }
+    if (terminal || reconnected || signal?.aborted) {
+      if (buffered) yield new TextEncoder().encode(buffered)
+      return
+    }
+    reconnected = true
+    response = await reconnect()
+  }
+}
+
+function reconnectingResponse(
+  initial: Response,
+  reconnect: () => Promise<Response>,
+  signal: AbortSignal | null | undefined
+) {
+  if (!initial.ok || !initial.body) return initial
+  const events = reconnectingSse(initial, reconnect, signal)
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await events.next()
+          if (next.done) controller.close()
+          else controller.enqueue(next.value)
+        } catch (error) {
+          controller.error(error)
+        }
+      },
+      async cancel() {
+        await events.return(undefined)
+      },
+    }),
+    { status: initial.status, headers: initial.headers }
+  )
+}
+
 export function createAosRunAgent({
   agentId,
   threadId,
@@ -209,7 +298,7 @@ export function createAosRunAgent({
     delete messageWithoutAttachments.attachments
     const headers = new Headers(init.headers)
     if (authorization) headers.set("authorization", authorization)
-    return fetcher(url, {
+    const request = {
       ...init,
       credentials: "same-origin",
       headers,
@@ -223,7 +312,21 @@ export function createAosRunAgent({
         context: [],
         forwardedProps: stage ? { aosAttachmentStageId: stage.stageId } : {},
       }),
-    })
+    } satisfies RequestInit
+    const response = await fetcher(url, request)
+    const reconnectUrl = `${url}/reconnect`
+    return reconnectingResponse(
+      response,
+      () =>
+        fetcher(reconnectUrl, {
+          ...request,
+          body: JSON.stringify({
+            threadId: input.threadId,
+            runId: input.runId,
+          }),
+        }),
+      init.signal
+    )
   }
   return new HttpAgent({
     url,
@@ -667,12 +770,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
   }
 
-  async listArtifacts(threadId: string) {
-    return (
-      await this.#sessionRead(threadId, "/artifacts", ArtifactCatalogSchema)
-    ).artifacts
-  }
-
   async readArtifact(
     threadId: string,
     artifactId: string,
@@ -688,12 +785,14 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   audioAvailability(threadId: string) {
-    return this.#sessionRead(threadId, "/audio", SessionAudioResponseSchema).then(
-      ({ speech, transcription }) => ({
-        transcription: transcription.status,
-        speech: speech.status,
-      })
-    )
+    return this.#sessionRead(
+      threadId,
+      "/audio",
+      SessionAudioResponseSchema
+    ).then(({ speech, transcription }) => ({
+      transcription: transcription.status,
+      speech: speech.status,
+    }))
   }
 
   async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {

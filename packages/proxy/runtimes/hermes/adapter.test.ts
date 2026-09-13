@@ -142,6 +142,15 @@ describe("Hermes server adapter", () => {
       { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
     ])
     expect(JSON.stringify(staged.public)).not.toContain("/private")
+    expect(request).toHaveBeenCalledWith(
+      "image.attach_bytes",
+      {
+        session_id: "live-secret",
+        content_base64: "data:image/png;base64,aGVsbG8=",
+        filename: "image.png",
+      },
+      65_536
+    )
 
     await expect(
       adapter.artifact("researcher", threadId, "artifact-1")
@@ -153,6 +162,9 @@ describe("Hermes server adapter", () => {
     expect(http.mock.calls.at(-1)?.[0]).toContain(
       "path=reports%2Fresult.txt&profile=researcher&session_id=stored"
     )
+    expect(http.mock.calls.at(-1)?.[1]).toEqual({
+      maxResponseBytes: 26_214_400,
+    })
   })
 
   it("restores pending interactions from authoritative owned Session state", async () => {

@@ -7,9 +7,21 @@ import {
   type ComposerFeatureViewModel,
 } from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
-import type { AosContext, AosModelChoices } from "./aos-client"
+import type {
+  AosContext,
+  AosModelChoices,
+  AosWorkspaceCapabilities,
+} from "./aos-client"
 
-type ComposerClient = {
+type SessionCapabilityClient = {
+  workspaceCapabilities(threadId: string): Promise<AosWorkspaceCapabilities>
+  subscribeSessionInvalidation?: (
+    threadId: string,
+    listener: () => void
+  ) => () => void
+}
+
+type ComposerClient = SessionCapabilityClient & {
   models(threadId: string): Promise<AosModelChoices>
   context(threadId: string): Promise<AosContext>
   selectModel(
@@ -18,11 +30,54 @@ type ComposerClient = {
   ): Promise<{ selectedId: string }>
 }
 
+/** Reads one authoritative capability projection for the selected Session. */
+export function useAosSessionCapabilities(
+  client: SessionCapabilityClient,
+  threadId: string | undefined,
+  onError?: (error: Error) => void
+) {
+  const [snapshot, setSnapshot] = useState<
+    { threadId: string; capabilities: AosWorkspaceCapabilities } | undefined
+  >()
+
+  useEffect(() => {
+    let active = true
+    if (!threadId)
+      return () => {
+        active = false
+      }
+    const refresh = () => {
+      void client.workspaceCapabilities(threadId).then(
+        (capabilities) => {
+          if (active) setSnapshot({ threadId, capabilities })
+        },
+        (reason) => {
+          if (active)
+            onError?.(
+              reason instanceof Error ? reason : new Error(String(reason))
+            )
+        }
+      )
+    }
+    refresh()
+    const unsubscribe = client.subscribeSessionInvalidation?.(threadId, refresh)
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }, [client, onError, threadId])
+
+  return snapshot && snapshot.threadId === threadId
+    ? snapshot.capabilities
+    : undefined
+}
+
 /** Reads the normalized Session projection; selection remains provider-authoritative. */
 export function useAosComposerFeatures(
   client: ComposerClient,
   config: ComposerFeatureConfig,
   threadId: string | undefined,
+  capabilities: AosWorkspaceCapabilities | undefined,
   onError?: (error: Error) => void
 ): ComposerFeatureViewModel {
   const [models, setModels] = useState<AosModelChoices>()
@@ -32,6 +87,9 @@ export function useAosComposerFeatures(
     | { status: "pending"; targetId: string }
     | { status: "error"; targetId: string; error: string }
   >({ status: "idle" })
+  const modelsAvailable = capabilities?.workspace.models.status === "available"
+  const contextAvailable =
+    capabilities?.workspace.context.status === "available"
 
   useEffect(() => {
     let active = true
@@ -39,7 +97,7 @@ export function useAosComposerFeatures(
       return () => {
         active = false
       }
-    if (config.modelSelectorEnabled)
+    if (config.modelSelectorEnabled && modelsAvailable)
       void client.models(threadId).then(
         (next) => active && setModels(next),
         (reason) =>
@@ -48,7 +106,7 @@ export function useAosComposerFeatures(
             reason instanceof Error ? reason : new Error(String(reason))
           )
       )
-    if (config.contextEnabled)
+    if (config.contextEnabled && contextAvailable)
       void client.context(threadId).then(
         (next) => active && setContext(next),
         (reason) =>
@@ -64,6 +122,8 @@ export function useAosComposerFeatures(
     client,
     config.contextEnabled,
     config.modelSelectorEnabled,
+    contextAvailable,
+    modelsAvailable,
     onError,
     threadId,
   ])
@@ -71,7 +131,7 @@ export function useAosComposerFeatures(
   return useMemo(
     () => ({
       model:
-        config.modelSelectorEnabled && models && threadId
+        config.modelSelectorEnabled && modelsAvailable && models && threadId
           ? {
               selectedId: models.selectedId,
               selection,
@@ -100,7 +160,7 @@ export function useAosComposerFeatures(
             }
           : undefined,
       context:
-        config.contextEnabled && context
+        config.contextEnabled && contextAvailable && context
           ? {
               usage: composerUsageFromTokens({
                 systemTokens: context.breakdown?.systemTokens ?? 0,
@@ -121,7 +181,9 @@ export function useAosComposerFeatures(
       config.contextEnabled,
       config.modelSelectorEnabled,
       context,
+      contextAvailable,
       models,
+      modelsAvailable,
       onError,
       selection,
       threadId,

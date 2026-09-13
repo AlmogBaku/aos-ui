@@ -22,19 +22,6 @@ export function errorResponse(code: ErrorCode, status: number) {
   )
 }
 
-export function storedSessionId(agentId: string, sessionId: string) {
-  if (!validIdentifier(agentId) || sessionId.length > 1_024) return undefined
-  const match = /^hermes:([^:]+):(.+)$/u.exec(sessionId)
-  if (!match) return undefined
-  try {
-    const owner = decodeURIComponent(match[1])
-    const storedId = decodeURIComponent(match[2])
-    return owner === agentId && validIdentifier(storedId) ? storedId : undefined
-  } catch {
-    return undefined
-  }
-}
-
 export function validIdentifier(value: string) {
   return (
     value.length >= 1 &&
@@ -90,17 +77,44 @@ export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
     return undefined
   const rawLength = request.headers.get("content-length")
   if (rawLength !== null) {
-    if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) return undefined
+    if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) {
+      void request.body?.cancel().catch(() => undefined)
+      return undefined
+    }
     const contentLength = Number(rawLength)
-    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes)
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      void request.body?.cancel().catch(() => undefined)
       return undefined
+    }
   }
+  if (!request.body) return undefined
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
   try {
-    const text = await request.text()
-    if (!text || new TextEncoder().encode(text).byteLength > maxBytes)
-      return undefined
-    return JSON.parse(text) as unknown
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value.byteLength > maxBytes - total) {
+        await reader.cancel().catch(() => undefined)
+        return undefined
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+    if (total === 0) return undefined
+    const bytes = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    ) as unknown
   } catch {
     return undefined
+  } finally {
+    reader.releaseLock()
   }
 }

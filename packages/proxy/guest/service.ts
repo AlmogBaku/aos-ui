@@ -27,6 +27,7 @@ import {
   type HermesRunNative,
   type HermesRunScope,
 } from "../runtimes/hermes/run"
+import { boundedJson } from "../routes/http"
 
 const securityHeaders = {
   "cache-control": "no-store",
@@ -160,30 +161,6 @@ function pageQuery(requestUrl: string) {
     limit <= 500
     ? { limit, offset }
     : undefined
-}
-
-async function boundedJson(request: Request, maxBytes = 1_100_000) {
-  if (
-    request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"
-  )
-    return undefined
-  const declared = request.headers.get("content-length")
-  if (declared !== null) {
-    if (!/^(?:0|[1-9]\d*)$/u.test(declared)) return undefined
-    const size = Number(declared)
-    if (!Number.isSafeInteger(size) || size > maxBytes) return undefined
-  }
-  try {
-    const text = await request.text()
-    if (
-      text.length === 0 ||
-      new TextEncoder().encode(text).byteLength > maxBytes
-    )
-      return undefined
-    return JSON.parse(text) as unknown
-  } catch {
-    return undefined
-  }
 }
 
 async function authorize(
@@ -860,7 +837,7 @@ export function createGuestListenerService(
         return emptyError(401)
       const sessionId = storedSessionId(agentId, threadId)
       if (!sessionId) return emptyError(404)
-      const input = await boundedJson(context.req.raw)
+      const input = await boundedJson(context.req.raw, 1_100_000)
       if (input === undefined) return emptyError(400)
       const scope = { agentId, sessionId, threadId }
       const key = runKey(scope)

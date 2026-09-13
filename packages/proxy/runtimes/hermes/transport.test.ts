@@ -407,7 +407,7 @@ describe("Hermes WebSocket RPC transport", () => {
     expect(disconnected).toHaveBeenCalledTimes(1)
   })
 
-  it("bounds native RPC response frames before decoding", async () => {
+  it("clamps requested native RPC response limits to the hard frame ceiling", async () => {
     const socket = new FakeSocket()
     socket.send = () => {
       queueMicrotask(() =>
@@ -425,10 +425,112 @@ describe("Hermes WebSocket RPC transport", () => {
       timeoutMs: 1_000,
     })
 
-    await expect(transport.request("profiles.list", {})).rejects.toThrow(
-      "Hermes connection failed"
-    )
+    await expect(
+      transport.request("profiles.list", {}, Number.MAX_SAFE_INTEGER)
+    ).rejects.toThrow("Hermes connection failed")
     expect(socket.readyState).toBe(3)
+  })
+
+  it("enforces a request-specific native RPC response limit", async () => {
+    const socket = new FakeSocket()
+    socket.send = (value) => {
+      const { id } = JSON.parse(value) as { id: string }
+      queueMicrotask(() =>
+        socket.emit("message", {
+          data: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            result: { value: "x".repeat(256) },
+          }),
+        })
+      )
+    }
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "rpc-ticket" })),
+      socketFactory: vi.fn(() => {
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    await expect(
+      transport.request("image.attach_bytes", {}, 128)
+    ).rejects.toThrow("Hermes connection failed")
+    expect(socket.readyState).toBe(3)
+  })
+
+  it("cancels a native HTTP response at its request-specific byte limit", async () => {
+    let pulls = 0
+    const cancel = vi.fn()
+    const response = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulls += 1
+            if (pulls === 1) {
+              controller.enqueue(new Uint8Array(128))
+              return
+            }
+            if (pulls === 2) {
+              controller.enqueue(Uint8Array.of(1))
+              return
+            }
+            controller.close()
+          },
+          cancel,
+        },
+        { highWaterMark: 0 }
+      ),
+      { headers: { "content-length": "1" } }
+    )
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => response),
+      timeoutMs: 1_000,
+    })
+
+    const outcome = await transport
+      .http("/api/fs/read-data-url", { maxResponseBytes: 128 })
+      .then(
+        () => "resolved",
+        (error: unknown) =>
+          error instanceof Error ? error.message : "unknown error"
+      )
+
+    expect(outcome).toBe("Hermes request failed")
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(pulls).toBe(2)
+  })
+
+  it("clamps requested native HTTP response limits to the hard ceiling", async () => {
+    const cancel = vi.fn()
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{}"))
+          controller.close()
+        },
+        cancel,
+      }),
+      { headers: { "content-length": String(64 * 1024 * 1024 + 1) } }
+    )
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://hermes.test",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => response),
+      timeoutMs: 1_000,
+    })
+
+    await expect(
+      transport.http("/api/sessions", {
+        maxResponseBytes: Number.MAX_SAFE_INTEGER,
+      })
+    ).rejects.toThrow("Hermes request failed")
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce())
   })
 
   it("settles matching asynchronous RPC frames in arrival order", async () => {

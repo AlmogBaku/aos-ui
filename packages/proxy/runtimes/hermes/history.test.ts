@@ -125,7 +125,7 @@ describe("server-side Hermes history projection", () => {
               filename: "report.md",
               mimeType: "text/markdown",
               sizeBytes: 42,
-              source: { type: "provider", reference: "artifact:report-1" },
+              source: { type: "provider", reference: "report-1" },
             },
           },
           { type: "text", text: "Here it is." },
@@ -135,6 +135,82 @@ describe("server-side Hermes history projection", () => {
     expect(JSON.stringify(messages)).not.toContain("/srv/hermes")
     expect(JSON.stringify(messages)).not.toContain("native_position")
   })
+
+  it.each([
+    "/opt/service/private.txt",
+    "/usr/local/bin/private-tool",
+    "relative/private.txt",
+    String.raw`\\server\share\private.txt`,
+    "home/operator/private.txt",
+    "https://public.example.test/private",
+    "wss://public.example.test/private",
+  ])(
+    "makes receipt text opaque instead of guessing whether %s is private",
+    (privateText) => {
+      const messages = projectHermesHistory([
+        {
+          id: "assistant-1",
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "command-1",
+              function: {
+                name: "execute_command",
+                arguments: JSON.stringify({
+                  command: privateText,
+                  description: "Run a command",
+                }),
+              },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "command-1",
+          tool_name: "execute_command",
+          content: JSON.stringify({
+            ok: true,
+            command: privateText,
+            summary: privateText,
+            message: privateText,
+          }),
+        },
+      ])
+
+      expect(messages[0]?.content).toMatchObject([
+        {
+          type: "tool-call",
+          toolName: "execute_command",
+          args: { description: "Run a command" },
+          result: { ok: true },
+        },
+      ])
+      expect(JSON.stringify(messages)).not.toContain(privateText)
+
+      const plain = projectHermesHistory([
+        {
+          id: "assistant-2",
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "command-2",
+              function: { name: "execute_command", arguments: "{}" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "command-2",
+          tool_name: "execute_command",
+          content: privateText,
+        },
+      ])
+      expect(plain[0]?.content).toMatchObject([
+        { type: "tool-call", result: { status: "completed" } },
+      ])
+      expect(JSON.stringify(plain)).not.toContain(privateText)
+    }
+  )
 
   it("allowlists useful supported tool data and makes unsupported results opaque", () => {
     const messages = projectHermesHistory([

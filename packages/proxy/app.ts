@@ -2,38 +2,17 @@ import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
 import { RuntimeAuthStateSchema } from "../protocol"
-import {
-  HermesAgentNotFoundError,
-  HermesRevisionConflictError,
-  HermesServerAdapter,
-  HermesSessionConflictError,
-  HermesSessionNotFoundError,
-  HermesUnavailableError,
-} from "./runtimes/hermes/adapter"
-import { HermesBrowserAuthenticationError } from "./runtimes/hermes/auth-broker"
-import {
-  HermesContentScopeError,
-  HermesContentUnavailableError,
-} from "./runtimes/hermes/content"
-import { HermesInteractionPublicError } from "./runtimes/hermes/interactions"
-import {
-  type HermesRunEngine,
-  type HermesRunHandle,
-} from "./runtimes/hermes/run"
 import { HermesAttachmentStageRegistry } from "./runtimes/hermes/stage-registry"
-import { HermesAuthenticationError } from "./runtimes/hermes/transport"
-import {
-  HermesWorkspaceScopeError,
-  HermesWorkspaceUnavailableError,
-} from "./runtimes/hermes/workspace"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OidcAuthenticationError, type OidcCore } from "./auth/oidc"
 import type { OperatorSession } from "./auth/session-cookie"
 import { OperatorAuthError, type OperatorAuthenticator } from "./operator-auth"
 import { redactForLog } from "./redaction"
+import type { ServerRunEngine, ServerRunHandle, ServerRuntime } from "./runtime"
+import { ServerSessionNotFoundError } from "./runtime"
 import { registerAuthRoutes } from "./routes/auth"
 import { registerContentRoutes } from "./routes/content"
-import { errorResponse, type ErrorCode, storedSessionId } from "./routes/http"
+import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerRunRoutes } from "./routes/runs"
 import { registerSessionRoutes } from "./routes/sessions"
 import { registerWorkspaceRoutes } from "./routes/workspace"
@@ -73,10 +52,10 @@ export type ProxyAppOptions = {
       returnPath: string
     }): Promise<{ status: "authenticated"; returnPath: string }>
   }
-  hermes: HermesServerAdapter
-  hermesForOperator?: (principalId: string) => HermesServerAdapter
+  hermes: ServerRuntime
+  hermesForOperator?: (principalId: string) => ServerRuntime
   readiness?: () => Promise<"ready" | "not-ready">
-  runEngine?: HermesRunEngine
+  runEngine?: ServerRunEngine
   maxActiveRuns?: number
   logger: Logger
   clock?: () => number
@@ -97,10 +76,25 @@ class RuntimeAuthenticationError extends Error {
   }
 }
 
+class RuntimeUnavailableError extends Error {
+  constructor() {
+    super("Runtime unavailable")
+    this.name = "RuntimeUnavailableError"
+  }
+}
+
 export function createProxyApp(options: ProxyAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
-  const activeRuns = new Map<string, HermesRunHandle>()
+  const activeRuns = new Map<
+    string,
+    {
+      handle: ServerRunHandle
+      runId: string
+      engine: ServerRunEngine
+      principalId: string
+    }
+  >()
   const runAdmissions = new Set<string>()
   const attachmentStages = new HermesAttachmentStageRegistry()
   const maxActiveRuns = options.maxActiveRuns ?? 256
@@ -130,7 +124,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   })
 
-  const requireRuntime = async (request: Request) => {
+  const requireRuntimeBinding = async (request: Request) => {
     const operator = await options.operatorAuth.require(request)
     if (options.runtimeAuth) {
       const state = RuntimeAuthStateSchema.parse(
@@ -141,19 +135,25 @@ export function createProxyApp(options: ProxyAppOptions) {
       )
       if (state.status === "authentication-required")
         throw new RuntimeAuthenticationError()
-      if (state.status === "unavailable") throw new HermesUnavailableError()
+      if (state.status === "unavailable") throw new RuntimeUnavailableError()
     }
-    return options.hermesForOperator?.(operator.operator.id) ?? options.hermes
+    return {
+      runtime:
+        options.hermesForOperator?.(operator.operator.id) ?? options.hermes,
+      principalId: operator.operator.id,
+    }
   }
+  const requireRuntime = async (request: Request) =>
+    (await requireRuntimeBinding(request)).runtime
 
   const requireScopedSession = async (
-    hermes: HermesServerAdapter,
+    runtime: ServerRuntime,
     agentId: string,
     publicSessionId: string
   ) => {
-    const id = storedSessionId(agentId, publicSessionId)
-    if (!id) throw new HermesSessionNotFoundError()
-    await hermes.getSession(agentId, id)
+    const id = runtime.resolveSessionId(agentId, publicSessionId)
+    if (!id) throw new ServerSessionNotFoundError()
+    await runtime.getSession(agentId, id)
     return id
   }
 
@@ -196,10 +196,11 @@ export function createProxyApp(options: ProxyAppOptions) {
     runAdmissions,
     attachmentStages,
     maxActiveRuns,
-    requireRuntime
+    requireRuntimeBinding
   )
 
   app.onError((cause, context) => {
+    const runtimeError = options.hermes.publicError(cause)
     const [code, status]: [ErrorCode, number] =
       cause instanceof OperatorAuthError
         ? ["unauthenticated", 401]
@@ -207,39 +208,15 @@ export function createProxyApp(options: ProxyAppOptions) {
           ? cause.code === "temporarily-unavailable"
             ? ["temporarily_unavailable", 503]
             : ["invalid_request", 400]
-          : cause instanceof HermesBrowserAuthenticationError
-            ? cause.code === "provider-temporarily-unavailable"
+          : cause instanceof RuntimeAuthenticationError
+            ? ["runtime_authentication_required", 401]
+            : cause instanceof RuntimeUnavailableError
               ? ["temporarily_unavailable", 503]
-              : cause.code === "invalid-request"
-                ? ["invalid_request", 400]
-                : ["runtime_authentication_required", 401]
-            : cause instanceof HermesAuthenticationError
-              ? ["runtime_authentication_required", 401]
-              : cause instanceof RuntimeAuthenticationError
-                ? ["runtime_authentication_required", 401]
-                : cause instanceof HermesAgentNotFoundError
-                  ? ["not_found", 404]
-                  : cause instanceof HermesRevisionConflictError
-                    ? ["revision_conflict", 409]
-                    : cause instanceof HermesSessionNotFoundError
-                      ? ["not_found", 404]
-                      : cause instanceof HermesSessionConflictError
-                        ? ["revision_conflict", 409]
-                        : cause instanceof HermesWorkspaceScopeError ||
-                            cause instanceof HermesContentScopeError
-                          ? ["not_found", 404]
-                          : cause instanceof HermesWorkspaceUnavailableError ||
-                              cause instanceof HermesContentUnavailableError ||
-                              (cause instanceof HermesInteractionPublicError &&
-                                (cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-                                  cause.code === "AOS_RECONCILIATION_STALE")) ||
-                              cause instanceof HermesUnavailableError
-                            ? ["temporarily_unavailable", 503]
-                            : cause instanceof HermesInteractionPublicError
-                              ? cause.code === "AOS_INTERACTION_NOT_FOUND"
-                                ? ["not_found", 404]
-                                : ["invalid_request", 400]
-                              : ["internal_error", 500]
+              : cause instanceof ServerSessionNotFoundError
+                ? ["not_found", 404]
+                : runtimeError
+                  ? [runtimeError.code, runtimeError.status]
+                  : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

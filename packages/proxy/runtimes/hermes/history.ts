@@ -81,18 +81,21 @@ const activityProjection: ToolProjection = {
   results: ["name", "status", "summary", "message", "transcript"],
 }
 const receiptProjection: ToolProjection = {
-  args: [
-    "name",
-    "description",
-    "command",
-    "start",
-    "end",
-    "line",
-    "limit",
-    "offset",
-  ],
-  results: ["ok", "status", "summary", "message", "count", "exitCode"],
+  args: ["name", "description", "start", "end", "line", "limit", "offset"],
+  results: ["ok", "status", "count", "exitCode"],
 }
+
+const receiptTools = new Set([
+  "read",
+  "read_file",
+  "write",
+  "write_file",
+  "edit",
+  "apply_patch",
+  "bash",
+  "terminal",
+  "execute_command",
+])
 
 /** Public fields are explicit; every retained nested value is sanitized again. */
 const toolProjections: Readonly<Record<string, ToolProjection>> = {
@@ -310,10 +313,13 @@ function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
 }
 
 function publicToolResult(name: string, value: unknown, isError: boolean) {
-  const projection = toolProjections[canonicalToolName(name)]
+  const canonicalName = canonicalToolName(name)
+  const projection = toolProjections[canonicalName]
   if (!projection) return { status: isError ? "failed" : "completed" }
   const projected = projectFields(value, projection.results)
   if (projected && Object.keys(projected).length > 0) return projected
+  if (receiptTools.has(canonicalName))
+    return { status: isError ? "failed" : "completed" }
   const parsed = parseJson(value)
   if (typeof parsed === "string") {
     const text = publicJsonValue(parsed)
@@ -438,7 +444,7 @@ function artifactReceipt(raw: unknown) {
       name: "aos.artifact",
       data: {
         ...descriptor,
-        source: { type: "provider", reference: `artifact:${id}` },
+        source: { type: "provider", reference: id },
       },
     },
   }

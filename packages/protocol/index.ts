@@ -474,6 +474,9 @@ const SessionAttachmentSchema = z.discriminatedUnion("type", [
 export const SessionAttachmentStageRequestSchema = z.strictObject({
   attachments: z.array(SessionAttachmentSchema).max(16),
 })
+export type SessionAttachmentStageRequest = z.infer<
+  typeof SessionAttachmentStageRequestSchema
+>
 const PublicSessionAttachmentSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("image"),

@@ -26,6 +26,139 @@ function collect(
 }
 
 describe("AOS normalized HttpAgent transport", () => {
+  it("reconnects an interrupted run without resending the user prompt", async () => {
+    const threadId = "hermes:researcher:stored"
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "RUN_STARTED", threadId, runId: "run-1" })}`,
+            `data: ${JSON.stringify({
+              type: "RUN_ERROR",
+              message: "Reconnect",
+              code: "AOS_CONNECTION_INTERRUPTED",
+            })}`,
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "RUN_STARTED", threadId, runId: "run-1" })}`,
+            `data: ${JSON.stringify({
+              type: "TEXT_MESSAGE_START",
+              messageId: "assistant-1",
+              role: "assistant",
+            })}`,
+            `data: ${JSON.stringify({
+              type: "TEXT_MESSAGE_CONTENT",
+              messageId: "assistant-1",
+              delta: "Recovered",
+            })}`,
+            `data: ${JSON.stringify({ type: "TEXT_MESSAGE_END", messageId: "assistant-1" })}`,
+            `data: ${JSON.stringify({
+              type: "RUN_FINISHED",
+              threadId,
+              runId: "run-1",
+              outcome: { type: "success" },
+            })}`,
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId,
+      fetcher,
+    })
+
+    const events = await collect(agent, {
+      threadId,
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "message-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(events.map((event) => (event as { type: string }).type)).toEqual([
+      "RUN_STARTED",
+      "TEXT_MESSAGE_START",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_END",
+      "RUN_FINISHED",
+    ])
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1]?.[0]).toBe(
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/reconnect"
+    )
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+      threadId,
+      runId: "run-1",
+    })
+  })
+
+  it("reconnects when the operator SSE body fails before a terminal event", async () => {
+    const threadId = "hermes:researcher:stored"
+    let pulls = 0
+    const interrupted = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1
+          if (pulls === 1) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ type: "RUN_STARTED", threadId, runId: "run-1" })}\n\n`
+              )
+            )
+            return
+          }
+          controller.error(new Error("socket lost"))
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } }
+    )
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(interrupted)
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "RUN_STARTED", threadId, runId: "run-1" })}`,
+            `data: ${JSON.stringify({ type: "RUN_FINISHED", threadId, runId: "run-1", outcome: { type: "success" } })}`,
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId,
+      fetcher,
+    })
+
+    const events = await collect(agent, {
+      threadId,
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "message-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(events.map((event) => (event as { type: string }).type)).toEqual([
+      "RUN_STARTED",
+      "RUN_FINISHED",
+    ])
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
   it("stages browser attachments and forwards only the opaque stage id to the normalized run", async () => {
     const stageAttachments = vi.fn(async () => ({
       stageId: "stage-1",

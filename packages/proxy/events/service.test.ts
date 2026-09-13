@@ -20,6 +20,7 @@ describe("authenticated operator event service", () => {
     }))
     const observe = vi.fn(async () => stop)
     const resume = vi.fn(async () => ({ liveSessionId: "live-session" }))
+    const resolveSessionId = vi.fn(() => "stored")
     const operatorSession = vi.fn(async () => ({
       principalId: "aos_principal_operator",
       sessionId: "browser-session",
@@ -37,7 +38,12 @@ describe("authenticated operator event service", () => {
       }),
       operatorSession,
       runtimeState: vi.fn(() => ({ status: "authenticated" })),
-      hermesForOperator: vi.fn(() => ({ getSession, resume, observe })),
+      hermesForOperator: vi.fn(() => ({
+        resolveSessionId,
+        getSession,
+        resume,
+        observe,
+      })),
       now: () => 1_000,
     })
 
@@ -69,6 +75,7 @@ describe("authenticated operator event service", () => {
     )
 
     expect(getSession).toHaveBeenCalledWith("researcher", "stored")
+    expect(resolveSessionId).toHaveBeenCalledWith("researcher", scope.sessionId)
     expect(resume).toHaveBeenCalledWith({
       agentId: "researcher",
       sessionId: "stored",
@@ -100,6 +107,7 @@ describe("authenticated operator event service", () => {
     })
     const observe = vi.fn()
     const resume = vi.fn()
+    const resolveSessionId = vi.fn(() => "stored")
     const service = createOperatorEventService({
       publicOrigin: "https://aos.example.test",
       deploymentId: "production-a",
@@ -116,7 +124,12 @@ describe("authenticated operator event service", () => {
         expiresAt: 901,
       })),
       runtimeState: vi.fn(() => ({ status: "authentication-required" })),
-      hermesForOperator: vi.fn(() => ({ getSession, resume, observe })),
+      hermesForOperator: vi.fn(() => ({
+        resolveSessionId,
+        getSession,
+        resume,
+        observe,
+      })),
       now: () => 1_000,
     })
     const upgrade = await service.authorizeUpgrade(
@@ -149,6 +162,7 @@ describe("authenticated operator event service", () => {
     const getSession = vi.fn()
     const observe = vi.fn()
     const resume = vi.fn()
+    const resolveSessionId = vi.fn(() => undefined)
     const service = createOperatorEventService({
       publicOrigin: "https://aos.example.test",
       deploymentId: "production-a",
@@ -165,7 +179,12 @@ describe("authenticated operator event service", () => {
         expiresAt: 901,
       })),
       runtimeState: vi.fn(() => ({ status: "authenticated" })),
-      hermesForOperator: vi.fn(() => ({ getSession, resume, observe })),
+      hermesForOperator: vi.fn(() => ({
+        resolveSessionId,
+        getSession,
+        resume,
+        observe,
+      })),
       now: () => 1_000,
     })
     const upgrade = await service.authorizeUpgrade(

@@ -78,6 +78,12 @@ function cancelBody(response: Response) {
   void response.body?.cancel().catch(() => undefined)
 }
 
+function responseLimit(requested: number | undefined, ceiling: number) {
+  if (requested === undefined) return ceiling
+  if (!Number.isSafeInteger(requested) || requested < 1) throw new Error()
+  return Math.min(requested, ceiling)
+}
+
 function withinDeadline<T>(operation: () => Promise<T>, signal: AbortSignal) {
   return new Promise<T>((resolve, reject) => {
     let settled = false
@@ -176,27 +182,30 @@ function boundedJsonShape(value: unknown) {
   return true
 }
 
-async function boundedSocketJson(event: unknown) {
+async function boundedSocketJson(
+  event: unknown,
+  maxBytes = MAX_NATIVE_SOCKET_FRAME_BYTES
+) {
   if (!event || typeof event !== "object" || !("data" in event))
     throw new Error()
   const data = event.data
   let bytes: Uint8Array
   if (typeof data === "string") {
-    if (data.length > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    if (data.length > maxBytes) throw new Error()
     bytes = new TextEncoder().encode(data)
   } else if (data instanceof ArrayBuffer) {
-    if (data.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    if (data.byteLength > maxBytes) throw new Error()
     bytes = new Uint8Array(data)
   } else if (ArrayBuffer.isView(data)) {
-    if (data.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    if (data.byteLength > maxBytes) throw new Error()
     bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   } else if (typeof Blob !== "undefined" && data instanceof Blob) {
-    if (data.size > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+    if (data.size > maxBytes) throw new Error()
     bytes = new Uint8Array(await data.arrayBuffer())
   } else {
     throw new Error()
   }
-  if (bytes.byteLength > MAX_NATIVE_SOCKET_FRAME_BYTES) throw new Error()
+  if (bytes.byteLength > maxBytes) throw new Error()
   const frame: unknown = JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(bytes)
   )
@@ -204,15 +213,17 @@ async function boundedSocketJson(event: unknown) {
   return frame
 }
 
-function socketFrameWithinBound(event: unknown) {
+function socketFrameWithinBound(
+  event: unknown,
+  maxBytes = MAX_NATIVE_SOCKET_FRAME_BYTES
+) {
   if (!event || typeof event !== "object" || !("data" in event)) return false
   const data = event.data
-  if (typeof data === "string")
-    return data.length <= MAX_NATIVE_SOCKET_FRAME_BYTES
+  if (typeof data === "string") return data.length <= maxBytes
   if (data instanceof ArrayBuffer || ArrayBuffer.isView(data))
-    return data.byteLength <= MAX_NATIVE_SOCKET_FRAME_BYTES
+    return data.byteLength <= maxBytes
   if (typeof Blob !== "undefined" && data instanceof Blob)
-    return data.size <= MAX_NATIVE_SOCKET_FRAME_BYTES
+    return data.size <= maxBytes
   return false
 }
 
@@ -235,11 +246,18 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     this.#timeoutMs = options.timeoutMs ?? 15_000
   }
 
-  async http(path: string, init: { method?: string; body?: unknown } = {}) {
+  async http(
+    path: string,
+    init: { method?: string; body?: unknown; maxResponseBytes?: number } = {}
+  ) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs)
     let response: Response
     try {
+      const maxResponseBytes = responseLimit(
+        init.maxResponseBytes,
+        MAX_NATIVE_HTTP_RESPONSE_BYTES
+      )
       response = await this.#fetch(`${this.#baseUrl}${path}`, {
         method: init.method,
         signal: controller.signal,
@@ -267,7 +285,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
       }
       return await boundedJsonResponse(
         response,
-        MAX_NATIVE_HTTP_RESPONSE_BYTES,
+        maxResponseBytes,
         controller.signal
       )
     } catch (error) {
@@ -284,8 +302,18 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
 
   async request(
     method: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    requestedMaxResponseBytes?: number
   ): Promise<unknown> {
+    let maxResponseBytes: number
+    try {
+      maxResponseBytes = responseLimit(
+        requestedMaxResponseBytes,
+        MAX_NATIVE_SOCKET_FRAME_BYTES
+      )
+    } catch {
+      throw new Error("Hermes connection failed")
+    }
     const ticket = await this.#ticket()
     const socket = this.#socketFactory(webSocketUrl(this.#baseUrl), [
       "hermes-gateway-v1",
@@ -324,7 +352,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
       const onMessage = (event: unknown) => {
         if (
           settled ||
-          !socketFrameWithinBound(event) ||
+          !socketFrameWithinBound(event, maxResponseBytes) ||
           pendingFrames >= MAX_PENDING_NATIVE_SOCKET_FRAMES
         ) {
           finish(() => reject(new Error("Hermes connection failed")))
@@ -334,7 +362,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         frameChain = frameChain
           .then(async () => {
             if (settled) return
-            const frame = await boundedSocketJson(event)
+            const frame = await boundedSocketJson(event, maxResponseBytes)
             if (
               !frame ||
               typeof frame !== "object" ||

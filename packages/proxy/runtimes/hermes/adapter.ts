@@ -16,27 +16,42 @@ import {
 } from "../../../protocol"
 import { HermesAuthenticationError, HermesHttpError } from "./transport"
 import { projectHermesHistory } from "./history"
-import type { HermesRunNative, HermesRunScope } from "./run"
+import {
+  HermesRunEngine,
+  HermesRunPublicError,
+  type HermesRunNative,
+  type HermesRunScope,
+} from "./run"
 import {
   createHermesWorkspaceOperations,
+  HermesWorkspaceScopeError,
+  HermesWorkspaceUnavailableError,
   type HermesWorkspaceOperations,
   type HermesWorkspaceSession,
 } from "./workspace"
 import {
   createHermesContentOperations,
+  HermesContentScopeError,
+  HermesContentUnavailableError,
   type HermesContentAttachment,
 } from "./content"
-import { HermesInteractions } from "./interactions"
+import {
+  HermesInteractionPublicError,
+  HermesInteractions,
+} from "./interactions"
+import { HermesBrowserAuthenticationError } from "./auth-broker"
+import type { ServerRuntime } from "../../runtime"
 import type { ResumeEntry } from "@ag-ui/core"
 
 export interface HermesRpcTransport {
   request(
     method: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    maxResponseBytes?: number
   ): Promise<unknown>
   http?(
     path: string,
-    init?: { method?: string; body?: unknown }
+    init?: { method?: string; body?: unknown; maxResponseBytes?: number }
   ): Promise<unknown>
   authState?(): Promise<RuntimeAuthState>
   observeEvents?(
@@ -290,10 +305,11 @@ function timestamp(value: unknown) {
     : new Date(0).toISOString()
 }
 
-export class HermesServerAdapter implements HermesRunNative {
+export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly interactions: HermesInteractions
+  readonly runs: HermesRunEngine
 
   constructor(private readonly transport: HermesRpcTransport) {
     const requireSession = (agentId: string, publicSessionId: string) =>
@@ -314,8 +330,9 @@ export class HermesServerAdapter implements HermesRunNative {
           publishedArtifact(await this.#rawHistory(scope), artifactId),
       },
       transport: {
-        request: (method, params) => this.transport.request(method, params),
-        readArtifact: async (scope, reference) => {
+        request: (method, params, maxResponseBytes) =>
+          this.transport.request(method, params, maxResponseBytes),
+        readArtifact: async (scope, reference, _maxBytes, maxResponseBytes) => {
           if (!this.transport.http) throw new HermesUnavailableError()
           const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
           if (!storedId) throw new HermesUnavailableError()
@@ -325,30 +342,35 @@ export class HermesServerAdapter implements HermesRunNative {
             session_id: storedId,
           })
           return dataUrlBytes(
-            await this.transport.http(`/api/fs/read-data-url?${query}`)
+            await this.transport.http(`/api/fs/read-data-url?${query}`, {
+              maxResponseBytes,
+            })
           ) as { bytes: Uint8Array; mimeType?: string }
         },
-        audioConfig: async (scope, kind) => {
+        audioConfig: async (scope, kind, maxResponseBytes) => {
           if (!this.transport.http) throw new HermesUnavailableError()
           const query = new URLSearchParams({ profile: scope.agentId })
           return this.transport.http(
-            `/api/tools/toolsets/${kind}/config?${query}`
+            `/api/tools/toolsets/${kind}/config?${query}`,
+            { maxResponseBytes }
           )
         },
-        transcribe: async (scope, request) => {
+        transcribe: async (scope, request, _signal, maxResponseBytes) => {
           if (!this.transport.http) throw new HermesUnavailableError()
           const query = new URLSearchParams({ profile: scope.agentId })
           return this.transport.http(`/api/audio/transcribe?${query}`, {
             method: "POST",
             body: request,
+            maxResponseBytes,
           })
         },
-        speak: async (scope, text) => {
+        speak: async (scope, text, _signal, maxResponseBytes) => {
           if (!this.transport.http) throw new HermesUnavailableError()
           const query = new URLSearchParams({ profile: scope.agentId })
           return this.transport.http(`/api/audio/speak?${query}`, {
             method: "POST",
             body: { text },
+            maxResponseBytes,
           })
         },
       },
@@ -356,6 +378,56 @@ export class HermesServerAdapter implements HermesRunNative {
     this.interactions = new HermesInteractions({
       request: (method, params) => this.transport.request(method, params),
     })
+    this.runs = new HermesRunEngine(this)
+  }
+
+  resolveSessionId(agentId: string, publicSessionId: string) {
+    return storedSessionIdentity(agentId, publicSessionId)
+  }
+
+  publicError(cause: unknown) {
+    if (cause instanceof HermesBrowserAuthenticationError)
+      return cause.code === "provider-temporarily-unavailable"
+        ? ({ code: "temporarily_unavailable", status: 503 } as const)
+        : cause.code === "invalid-request"
+          ? ({ code: "invalid_request", status: 400 } as const)
+          : ({ code: "runtime_authentication_required", status: 401 } as const)
+    if (cause instanceof HermesAuthenticationError)
+      return { code: "runtime_authentication_required", status: 401 } as const
+    if (
+      cause instanceof HermesAgentNotFoundError ||
+      cause instanceof HermesSessionNotFoundError ||
+      cause instanceof HermesWorkspaceScopeError ||
+      cause instanceof HermesContentScopeError
+    )
+      return { code: "not_found", status: 404 } as const
+    if (
+      cause instanceof HermesRevisionConflictError ||
+      cause instanceof HermesSessionConflictError
+    )
+      return { code: "revision_conflict", status: 409 } as const
+    if (
+      cause instanceof HermesWorkspaceUnavailableError ||
+      cause instanceof HermesContentUnavailableError ||
+      cause instanceof HermesRunPublicError ||
+      cause instanceof HermesUnavailableError ||
+      (cause instanceof HermesInteractionPublicError &&
+        (cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
+          cause.code === "AOS_RECONCILIATION_STALE"))
+    )
+      return { code: "temporarily_unavailable", status: 503 } as const
+    if (cause instanceof HermesInteractionPublicError)
+      return cause.code === "AOS_INTERACTION_NOT_FOUND"
+        ? ({ code: "not_found", status: 404 } as const)
+        : ({ code: "invalid_request", status: 400 } as const)
+    return undefined
+  }
+
+  respondInteraction(
+    scope: HermesRunScope & { runId: string },
+    response: ResumeEntry
+  ) {
+    return this.interactions.respond(scope, response)
   }
 
   async #requireAttachedSession(agentId: string, publicSessionId: string) {

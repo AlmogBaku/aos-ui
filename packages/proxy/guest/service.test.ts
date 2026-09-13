@@ -202,6 +202,59 @@ function harness(
 }
 
 describe("Hermes guest listener", () => {
+  it("cancels a chunked run body as soon as it exceeds the request limit", async () => {
+    const runs = {
+      start: vi.fn(),
+      reconnect: vi.fn(),
+    }
+    const { service } = harness({ runs })
+    const issued = await invitation([
+      "errors:read",
+      "messages:create",
+      "messages:read",
+    ])
+    const route = `${ORIGIN}/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}/runs`
+    let pulls = 0
+    const cancel = vi.fn()
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1
+          if (pulls === 1) {
+            controller.enqueue(new Uint8Array(1_100_000))
+            return
+          }
+          if (pulls === 2) {
+            controller.enqueue(Uint8Array.of(1))
+            return
+          }
+          controller.close()
+        },
+        cancel,
+      },
+      { highWaterMark: 0 }
+    )
+
+    const outcome = await service.app.fetch(
+      new Request(route, {
+        method: "POST",
+        headers: {
+          ...requestHeaders(issued.token, true),
+          "content-type": "application/json",
+          "content-length": "1",
+        },
+        body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" })
+    )
+
+    expect(outcome).toBeInstanceOf(Response)
+    expect((outcome as Response).status).toBe(400)
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(pulls).toBe(2)
+    expect(runs.start).not.toHaveBeenCalled()
+  })
+
   it("uses the invitation service's configured clock-skew expiry", async () => {
     const issuer = invitations(() => NOW, 10)
     const verifier = invitations(() => NOW + 305_000, 10)

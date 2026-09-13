@@ -9,16 +9,16 @@ import {
   VisibilityUpdateRequestSchema,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { HermesServerAdapter } from "../runtimes/hermes/adapter"
+import type { ServerRuntime } from "../runtime"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
 export function registerWorkspaceRoutes(
   app: ProxyRouteApp,
   options: ProxyAppOptions,
-  requireRuntime: (request: Request) => Promise<HermesServerAdapter>,
+  requireRuntime: (request: Request) => Promise<ServerRuntime>,
   requireScopedSession: (
-    hermes: HermesServerAdapter,
+    runtime: ServerRuntime,
     agentId: string,
     sessionId: string
   ) => Promise<string>
@@ -37,21 +37,9 @@ export function registerWorkspaceRoutes(
     const hermes = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
-    const contentType = context.req.header("content-type")?.split(";", 1)[0]
-    if (contentType !== "application/json")
-      return errorResponse("invalid_request", 400)
-    const contentLength = Number(context.req.header("content-length") ?? "0")
-    if (Number.isFinite(contentLength) && contentLength > 16 * 1024)
-      return errorResponse("invalid_request", 400)
-    let payload: unknown
-    try {
-      const text = await context.req.text()
-      if (text.length > 16 * 1024) return errorResponse("invalid_request", 400)
-      payload = JSON.parse(text) as unknown
-    } catch {
-      return errorResponse("invalid_request", 400)
-    }
-    const parsed = VisibilityUpdateRequestSchema.safeParse(payload)
+    const parsed = VisibilityUpdateRequestSchema.safeParse(
+      await boundedJson(context.req.raw)
+    )
     if (!parsed.success) return errorResponse("invalid_request", 400)
     return context.json(
       await hermes.updateAgentVisibility(

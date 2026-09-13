@@ -25,7 +25,9 @@ describe("provider-neutral AOS browser client", () => {
   it("does not subscribe before a Session owner has been restored", () => {
     const client = new AosRemoteClient({ fetcher: vi.fn() })
 
-    expect(() => client.subscribeSessionInvalidation("unknown", vi.fn())).not.toThrow()
+    expect(() =>
+      client.subscribeSessionInvalidation("unknown", vi.fn())
+    ).not.toThrow()
   })
 
   it("maps a selected Session's normalized workspace, content, interaction, and audio operations", async () => {
@@ -192,17 +194,6 @@ describe("provider-neutral AOS browser client", () => {
             ],
           })
         }
-        if (path.endsWith("/artifacts"))
-          return Response.json({
-            artifacts: [
-              {
-                id: "artifact-1",
-                filename: "brief.pdf",
-                mimeType: "application/pdf",
-                sizeBytes: 3,
-              },
-            ],
-          })
         if (path.endsWith("/artifacts/artifact-1"))
           return new Response(Uint8Array.from([1, 2, 3]), {
             headers: { "content-type": "application/pdf" },
@@ -261,12 +252,12 @@ describe("provider-neutral AOS browser client", () => {
         },
       ])
     ).resolves.toMatchObject({ stageId: "stage-1" })
-    await expect(client.listArtifacts(session.id)).resolves.toMatchObject([
-      { id: "artifact-1", filename: "brief.pdf" },
-    ])
     await expect(
       client.readArtifact(session.id, "artifact-1")
     ).resolves.toBeInstanceOf(Blob)
+    expect(fetcher.mock.calls.map(([input]) => String(input))).not.toContain(
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/artifacts"
+    )
     await expect(client.audioAvailability(session.id)).resolves.toEqual({
       transcription: "ready",
       speech: "unavailable",

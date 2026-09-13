@@ -1,6 +1,6 @@
 import type { RuntimeAuthState } from "../../protocol"
 import type { OperatorSession } from "../auth/session-cookie"
-import type { HermesServerAdapter } from "../runtimes/hermes/adapter"
+import type { ServerRuntime } from "../runtime"
 import type { ReconnectCursorCodec } from "./cursor"
 import { createEventsSocket, type EventsSocket } from "./socket"
 
@@ -15,9 +15,9 @@ export type OperatorEventPeer = {
   close(code: number, reason: string): void
 }
 
-type EventHermes = Pick<
-  HermesServerAdapter,
-  "getSession" | "resume" | "observe"
+type EventRuntime = Pick<
+  ServerRuntime,
+  "resolveSessionId" | "getSession" | "resume" | "observe"
 >
 
 export type OperatorEventServiceOptions = {
@@ -30,32 +30,8 @@ export type OperatorEventServiceOptions = {
     principalId: string
     lane: "operator"
   }): Promise<RuntimeAuthState> | RuntimeAuthState
-  hermesForOperator(principalId: string): EventHermes
+  hermesForOperator(principalId: string): EventRuntime
   now?: () => number
-}
-
-function storedSessionId(agentId: string, sessionId: string) {
-  if (!validIdentifier(agentId) || sessionId.length > 1_024) return undefined
-  const match = /^hermes:([^:]+):(.+)$/u.exec(sessionId)
-  if (!match) return undefined
-  try {
-    const owner = decodeURIComponent(match[1])
-    const storedId = decodeURIComponent(match[2])
-    return owner === agentId && validIdentifier(storedId) ? storedId : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function validIdentifier(value: string) {
-  return (
-    value.length >= 1 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
 }
 
 function canonicalScope(scope: {
@@ -116,7 +92,10 @@ export function createOperatorEventService(
         if (runtimeState.status !== "authenticated") return null
 
         try {
-          const storedId = storedSessionId(scope.agentId, scope.sessionId)
+          const storedId = hermes.resolveSessionId(
+            scope.agentId,
+            scope.sessionId
+          )
           if (!storedId) return null
           await hermes.getSession(scope.agentId, storedId)
         } catch {
@@ -139,7 +118,10 @@ export function createOperatorEventService(
         }
       },
       async observe({ scope, invalidate, reset }) {
-        const sessionId = storedSessionId(scope.agentId, scope.sessionId)
+        const sessionId = hermes.resolveSessionId(
+          scope.agentId,
+          scope.sessionId
+        )
         if (!sessionId) throw new Error("Invalid Session scope")
         const { liveSessionId } = await hermes.resume({
           agentId: scope.agentId,

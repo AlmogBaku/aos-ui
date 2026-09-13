@@ -8,8 +8,7 @@ import {
   SessionTranscriptionResponseSchema,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { HermesServerAdapter } from "../runtimes/hermes/adapter"
-import { HermesAttachmentStageRegistry } from "../runtimes/hermes/stage-registry"
+import type { ServerAttachmentStages, ServerRuntime } from "../runtime"
 import { boundedJson, errorResponse, validIdentifier } from "./http"
 import type { ProxyRouteApp } from "./types"
 
@@ -35,10 +34,10 @@ function recordingBytes(dataUrl: string, mimeType: string) {
 export function registerContentRoutes(
   app: ProxyRouteApp,
   options: ProxyAppOptions,
-  attachmentStages: HermesAttachmentStageRegistry,
-  requireRuntime: (request: Request) => Promise<HermesServerAdapter>,
+  attachmentStages: ServerAttachmentStages,
+  requireRuntime: (request: Request) => Promise<ServerRuntime>,
   requireScopedSession: (
-    hermes: HermesServerAdapter,
+    runtime: ServerRuntime,
     agentId: string,
     sessionId: string
   ) => Promise<string>

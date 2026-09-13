@@ -19,7 +19,10 @@ import type {
 import { AosAuthGate, AuthGateFailure } from "./aos-auth-gate"
 import { AosAttachmentAdapter } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
-import { useAosComposerFeatures } from "./aos-composer-features"
+import {
+  useAosComposerFeatures,
+  useAosSessionCapabilities,
+} from "./aos-composer-features"
 import { createAosInteractions } from "./aos-interactions"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { AosReconciler } from "./aos-reconciliation"
@@ -102,25 +105,44 @@ function ReadyAosRuntimeProvider({
     },
     () => undefined
   )
+  const capabilities = useAosSessionCapabilities(client, selectedThreadId)
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    selectedThreadId
+    selectedThreadId,
+    capabilities
   )
   useEffect(() => {
     media.setScope(selectedThreadId)
     media.setSafelyIdle(false)
-    if (!selectedThreadId) return
+    if (!selectedThreadId || !capabilities) return
+    const transcriptionAvailable =
+      capabilities.content.transcription.status === "available"
+    const speechAvailable = capabilities.content.speech.status === "available"
+    const activityAvailable =
+      capabilities.workspace.activity.status === "available"
+    if (!transcriptionAvailable && !speechAvailable) {
+      media.setAvailability(selectedThreadId, {
+        transcription: "unavailable",
+        speech: "unavailable",
+      })
+      return
+    }
     const operation = new AbortController()
     void Promise.all([
       client.audioAvailability(selectedThreadId),
-      client.activity(selectedThreadId),
+      activityAvailable ? client.activity(selectedThreadId) : undefined,
     ]).then(
       ([availability, activity]) => {
         if (operation.signal.aborted) return
-        media.setAvailability(selectedThreadId, availability)
+        media.setAvailability(selectedThreadId, {
+          transcription: transcriptionAvailable
+            ? availability.transcription
+            : "unavailable",
+          speech: speechAvailable ? availability.speech : "unavailable",
+        })
         media.setSafelyIdle(
-          activity.status === "available" && activity.state === "idle"
+          activity?.status === "available" && activity.state === "idle"
         )
       },
       () => {
@@ -132,7 +154,7 @@ function ReadyAosRuntimeProvider({
       }
     )
     return () => operation.abort()
-  }, [client, media, selectedThreadId])
+  }, [capabilities, client, media, selectedThreadId])
 
   return children({
     assistantRuntime,

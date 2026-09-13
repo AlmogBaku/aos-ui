@@ -4,14 +4,14 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { HermesServerAdapter } from "../runtimes/hermes/adapter"
-import { boundedJson, errorResponse, pageQuery, storedSessionId } from "./http"
+import type { ServerRuntime } from "../runtime"
+import { boundedJson, errorResponse, pageQuery } from "./http"
 import type { ProxyRouteApp } from "./types"
 
 export function registerSessionRoutes(
   app: ProxyRouteApp,
   options: ProxyAppOptions,
-  requireRuntime: (request: Request) => Promise<HermesServerAdapter>
+  requireRuntime: (request: Request) => Promise<ServerRuntime>
 ) {
   app.get("/api/aos/v1/sessions", async (context) => {
     const hermes = await requireRuntime(context.req.raw)
@@ -47,7 +47,7 @@ export function registerSessionRoutes(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/history",
     async (context) => {
       const hermes = await requireRuntime(context.req.raw)
-      const storedId = storedSessionId(
+      const storedId = hermes.resolveSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
       )
@@ -69,7 +69,7 @@ export function registerSessionRoutes(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId",
     async (context) => {
       const hermes = await requireRuntime(context.req.raw)
-      const id = storedSessionId(
+      const id = hermes.resolveSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
       )
@@ -103,7 +103,7 @@ export function registerSessionRoutes(
       const hermes = await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
-      const id = storedSessionId(
+      const id = hermes.resolveSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
       )
@@ -128,7 +128,7 @@ export function registerSessionRoutes(
       const hermes = await requireRuntime(context.req.raw)
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
-      const id = storedSessionId(
+      const id = hermes.resolveSessionId(
         context.req.param("agentId"),
         context.req.param("sessionId")
       )

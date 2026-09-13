@@ -37,6 +37,46 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("delegates opaque public Session identity resolution to the server runtime", async () => {
+    const resolveSessionId = vi.fn((agentId: string, sessionId: string) =>
+      agentId === "researcher" && sessionId === "opaque-session"
+        ? "stored"
+        : undefined
+    )
+    const hermes = Object.assign(
+      new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      { resolveSessionId }
+    )
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async () => ({
+          subject: "operator@example.test",
+        })),
+      }),
+      hermes,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await app.request(
+      request("/api/aos/v1/agents/researcher/sessions/opaque-session")
+    )
+
+    expect(response.status).toBe(200)
+    expect(resolveSessionId).toHaveBeenCalledWith(
+      "researcher",
+      "opaque-session"
+    )
+  })
+
   it("allows only an authenticated operator to create a scoped guest invitation", async () => {
     const issue = vi.fn(async (grant) => ({ token: "guest.jwt", grant }))
     const app = createProxyApp({
@@ -281,21 +321,22 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(replay.status).toBe(400)
   })
 
-  it("keeps the interaction response alias limited to bound AG-UI resume input", async () => {
-    const start = vi.fn(async () => ({
-      events: (async function* () {
-        yield {
-          type: "RUN_FINISHED" as const,
-          threadId: "hermes:researcher:stored",
-          runId: "run-2",
-          outcome: { type: "success" as const },
+  it("responds to a restored interaction through the normalized JSON route", async () => {
+    const nativeRequest = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-private",
+          running: true,
+          pending_approval: {
+            request_id: "approval-1",
+            description: "Deploy?",
+            choices: ["deny", "once"],
+          },
         }
-      })(),
-      stop: async () => "idle" as const,
-      disconnect: vi.fn(),
-      recoveryPosition: () => ({ epoch: "epoch", lastSeen: 0 }),
-    }))
-    const hermes = new HermesServerAdapter({ request: vi.fn() })
+      if (method === "approval.respond") return { status: "ok" }
+      throw new Error(`Unexpected native RPC: ${method}`)
+    })
+    const hermes = new HermesServerAdapter({ request: nativeRequest })
     vi.spyOn(hermes, "getSession").mockResolvedValue({
       id: "hermes:researcher:stored",
       agentId: "researcher",
@@ -313,49 +354,39 @@ describe("AOS v1 proxy walking skeleton", () => {
         })),
       }),
       hermes,
-      runEngine: { start } as unknown as HermesRunEngine,
       logger: { info: vi.fn(), error: vi.fn() },
     })
     const route =
       "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/interactions/respond"
-    const plain = await app.request(
+    const invalid = await app.request(
       request(route, {
         method: "POST",
         headers: { origin, "content-type": "application/json" },
-        body: JSON.stringify({
-          threadId: "hermes:researcher:stored",
-          runId: "run-1",
-          state: {},
-          messages: [{ id: "user-1", role: "user", content: "not resume" }],
-          tools: [],
-          context: [],
-          forwardedProps: {},
-        }),
+        body: JSON.stringify({ runId: "run-1", requestId: "approval-1" }),
       })
     )
-    expect(plain.status).toBe(400)
-    expect(start).not.toHaveBeenCalled()
+    expect(invalid.status).toBe(400)
+    expect(nativeRequest).not.toHaveBeenCalled()
 
-    const resumed = await app.request(
+    const response = await app.request(
       request(route, {
         method: "POST",
         headers: { origin, "content-type": "application/json" },
         body: JSON.stringify({
-          threadId: "hermes:researcher:stored",
-          runId: "run-2",
-          state: {},
-          messages: [],
-          tools: [],
-          context: [],
-          forwardedProps: {},
-          resume: [
-            { interruptId: "approval-1", status: "resolved", payload: "once" },
-          ],
+          runId: "run-1",
+          requestId: "approval-1",
+          response: { kind: "question", answers: [["once"]] },
         }),
       })
     )
-    expect(resumed.status).toBe(200)
-    expect(start).toHaveBeenCalledOnce()
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("application/json")
+    expect(await response.json()).toEqual({ status: "resolved" })
+    expect(nativeRequest).toHaveBeenLastCalledWith("approval.respond", {
+      session_id: "live-private",
+      request_id: "approval-1",
+      choice: "once",
+    })
   })
 
   it("restores authoritative pending interactions without a client-held run ID", async () => {
@@ -959,6 +990,149 @@ describe("AOS v1 proxy walking skeleton", () => {
     expect(stillStopping.status).toBe(202)
     expect(await stillStopping.json()).toEqual({ status: "stopping" })
     expect(stop).toHaveBeenCalledTimes(2)
+  })
+
+  it("reconnects only the owning operator's exact active run and evicts it after a terminal event", async () => {
+    let releaseFirst: (() => void) | undefined
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const first = {
+      events: (async function* () {
+        yield {
+          type: "RUN_STARTED" as const,
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+        }
+        await firstReleased
+      })(),
+      stop: vi.fn(async () => "stopping" as const),
+      disconnect: vi.fn(() => releaseFirst?.()),
+      recoveryPosition: vi.fn(() => ({
+        epoch: "server-held-epoch",
+        lastSeen: 7,
+      })),
+    }
+    const terminalHandle = (runId: string) => ({
+      events: (async function* () {
+        yield {
+          type: "RUN_STARTED" as const,
+          threadId: "hermes:researcher:stored",
+          runId,
+        }
+        yield {
+          type: "RUN_FINISHED" as const,
+          threadId: "hermes:researcher:stored",
+          runId,
+          outcome: { type: "success" as const },
+        }
+      })(),
+      stop: vi.fn(async () => "idle" as const),
+      disconnect: vi.fn(),
+      recoveryPosition: vi.fn(() => ({ epoch: "next", lastSeen: 8 })),
+    })
+    const recovered = terminalHandle("run-1")
+    const start = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(terminalHandle("run-2"))
+    const reconnect = vi.fn(async () => recovered)
+    const runEngine = { start, reconnect } as unknown as HermesRunEngine
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["one@example.test", "two@example.test"],
+        verifySession: vi.fn(async (incoming) => ({
+          subject:
+            incoming.headers.get("cookie") === "aos_operator=two"
+              ? "two@example.test"
+              : "one@example.test",
+        })),
+      }),
+      hermes: new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          id: "stored",
+          profile: "researcher",
+          title: "Owned",
+        })),
+      }),
+      runEngine,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const base =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs"
+    const runBody = (runId: string) =>
+      JSON.stringify({
+        threadId: "hermes:researcher:stored",
+        runId,
+        state: {},
+        messages: [{ id: `user-${runId}`, role: "user", content: "Hello" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      })
+    const opened = await app.request(
+      request(base, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: runBody("run-1"),
+      })
+    )
+    await opened.body?.cancel()
+
+    const foreign = await app.request(
+      request(`${base}/reconnect`, {
+        method: "POST",
+        headers: {
+          origin,
+          cookie: "aos_operator=two",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+        }),
+      })
+    )
+    expect(foreign.status).toBe(404)
+    expect(reconnect).not.toHaveBeenCalled()
+
+    const response = await app.request(
+      request(`${base}/reconnect`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "hermes:researcher:stored",
+          runId: "run-1",
+        }),
+      })
+    )
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('"type":"RUN_FINISHED"')
+    expect(first.recoveryPosition).toHaveBeenCalledOnce()
+    expect(reconnect).toHaveBeenCalledWith(
+      {
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "hermes:researcher:stored",
+      },
+      {
+        threadId: "hermes:researcher:stored",
+        runId: "run-1",
+        position: { epoch: "server-held-epoch", lastSeen: 7 },
+      }
+    )
+
+    const next = await app.request(
+      request(base, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: runBody("run-2"),
+      })
+    )
+    expect(next.status).toBe(200)
+    expect(start).toHaveBeenCalledTimes(2)
   })
 
   it("pulls at most one AG-UI event ahead of a slow SSE consumer", async () => {

@@ -158,17 +158,18 @@ describe("AOS normalized Session browser integration", () => {
       runEngine: { start } as unknown as HermesRunEngine,
       logger: { info: vi.fn(), error: vi.fn() },
     })
-    const browserFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
-      app.request(
-        new Request(new URL(String(input), "http://app.test"), {
-          ...init,
-          headers: {
-            cookie: "aos_operator=valid",
-            ...(init?.method === "POST" ? { origin: "http://app.test" } : {}),
-            ...init?.headers,
-          },
-        })
-      )
+    const browserFetch = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        headers.set("cookie", "aos_operator=valid")
+        if (init?.method === "POST") headers.set("origin", "http://app.test")
+        return app.request(
+          new Request(new URL(String(input), "http://app.test"), {
+            ...init,
+            headers,
+          })
+        )
+      }
     )
     vi.stubGlobal("fetch", browserFetch)
 
@@ -226,9 +227,10 @@ describe("AOS normalized Session browser integration", () => {
             reject(
               new Error(
                 `Session switch did not settle: ${JSON.stringify({
-                  browser: browserFetch.mock.calls.map(([input]) =>
-                    String(input)
-                  ),
+                  browser: browserFetch.mock.calls.map(([input, init]) => ({
+                    input: String(input),
+                    body: init?.body,
+                  })),
                   native: nativeHttp.mock.calls.map(([path]) => String(path)),
                 })}`
               )
@@ -241,6 +243,11 @@ describe("AOS normalized Session browser integration", () => {
       expect(
         supplied!.assistantRuntime.thread.getState().messages
       ).toHaveLength(2)
+    )
+    await waitFor(() =>
+      expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
+        "/api/aos/v1/agents/alpha/sessions/hermes%3Aalpha%3Astored-alpha/workspace/capabilities"
+      )
     )
     expect(supplied!.assistantRuntime.thread.getState().messages).toMatchObject(
       [
