@@ -169,9 +169,13 @@ function harness(
     offset: 0,
     nextOffset: 3,
   }))
+  const slashCommands = vi.fn(async () => ({
+    commands: [{ name: "help", description: "Show help" }],
+  }))
   const hermes = {
     getSession,
     history,
+    slashCommands,
     resume: vi.fn(async () => ({ liveSessionId: "live-secret" })),
     observe: vi.fn(async () => () => undefined),
     recover: vi.fn(async () => ({
@@ -374,6 +378,42 @@ describe("Hermes guest listener", () => {
     expect(operatorRoute.status).toBe(404)
     expect(nativeRoute.status).toBe(404)
     expect(hermes.history).toHaveBeenCalledTimes(1)
+  })
+
+  it("serves slash commands only for an invitation's exact Agent and Session", async () => {
+    const { service, hermes } = harness()
+    const issued = await invitation()
+    const route = `/api/guest/v1/agents/${agentId}/sessions/${encodeURIComponent(sessionId)}/commands`
+
+    const response = await service.app.request(route, {
+      headers: requestHeaders(issued.token),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      commands: [{ name: "help", description: "Show help" }],
+    })
+    expect(hermes.slashCommands).toHaveBeenCalledWith(agentId, sessionId)
+
+    const wrongSession = await service.app.request(
+      `/api/guest/v1/agents/${agentId}/sessions/hermes%3Aresearcher%3Aother/commands`,
+      { headers: requestHeaders(issued.token) }
+    )
+    const wrongAgent = await service.app.request(
+      `/api/guest/v1/agents/other/sessions/${encodeURIComponent(sessionId)}/commands`,
+      { headers: requestHeaders(issued.token) }
+    )
+    const agentOnly = await invitation(["messages:read"], {
+      sessionId: undefined,
+    })
+    const unboundSession = await service.app.request(route, {
+      headers: requestHeaders(agentOnly.token),
+    })
+
+    expect(wrongSession.status).toBe(401)
+    expect(wrongAgent.status).toBe(401)
+    expect(unboundSession.status).toBe(401)
+    expect(hermes.slashCommands).toHaveBeenCalledTimes(1)
   })
 
   it("projects AG-UI runs and reconnects without exposing native positions", async () => {

@@ -22,6 +22,35 @@ const catalog = {
 }
 
 describe("provider-neutral AOS browser client", () => {
+  it("reads and validates the scoped slash catalog using the same guest authorization as other reads", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ commands: [{ name: "help", description: "Help" }] })
+    )
+    const client = new AosRemoteClient({
+      fetcher,
+      authorization: "Bearer test-invitation",
+      scope: {
+        workspaceId: "guest",
+        agentId: "researcher",
+        sessionId: "session/one",
+      },
+    })
+    await expect(client.commands("session/one")).resolves.toEqual({
+      commands: [{ name: "help", description: "Help" }],
+    })
+    expect(fetcher.mock.calls[0]?.[0]).toBe(
+      "/api/aos/v1/agents/researcher/sessions/session%2Fone/commands"
+    )
+    expect(
+      new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
+    ).toBe("Bearer test-invitation")
+    fetcher.mockResolvedValueOnce(
+      Response.json({ commands: [{ name: "/bad name" }] })
+    )
+    await expect(client.commands("session/one")).rejects.toThrow(
+      "Invalid AOS proxy response"
+    )
+  })
   it.each([
     ["unauthenticated", "aos-auth-required"],
     ["runtime_authentication_required", "runtime-auth-required"],

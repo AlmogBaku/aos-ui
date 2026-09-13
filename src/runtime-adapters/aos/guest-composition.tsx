@@ -17,6 +17,7 @@ import {
   useArtifactWorkspace,
 } from "@/components/artifacts"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { DocumentLocale } from "@/components/document-locale"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -35,6 +36,7 @@ import {
   type AosEventSocket,
 } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
+import { useAosSlashCommands } from "./aos-composer-features"
 
 const dictionaries = { en, he } as const
 
@@ -120,11 +122,13 @@ function GuestArtifactShell({
   agentId,
   sessionId,
   artifacts,
+  composerFeatures,
 }: {
   locale: Locale
   agentId: string
   sessionId: string
   artifacts: AosArtifactAdapter
+  composerFeatures: ComposerFeatureViewModel
 }) {
   const stabilize = useMemo(() => createArtifactMessageStabilizer(), [])
   const messages = useAuiState((state: AssistantState) =>
@@ -138,7 +142,11 @@ function GuestArtifactShell({
       threadId={sessionId}
       messages={messages}
     >
-      <GuestConversationShell locale={locale} agentId={agentId} />
+      <GuestConversationShell
+        locale={locale}
+        agentId={agentId}
+        composerFeatures={composerFeatures}
+      />
     </ArtifactWorkspaceProvider>
   )
 }
@@ -146,9 +154,11 @@ function GuestArtifactShell({
 function GuestConversationShell({
   locale,
   agentId,
+  composerFeatures,
 }: {
   locale: Locale
   agentId: string
+  composerFeatures: ComposerFeatureViewModel
 }) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
   return (
@@ -170,6 +180,7 @@ function GuestConversationShell({
       <ArtifactDataUI />
       <ToolUiLocaleProvider locale={locale}>
         <Thread
+          composerFeatures={composerFeatures}
           autoFocus={false}
           labels={threadLabels[locale]}
           components={{ ToolFallback: AosToolPresentation }}
@@ -226,6 +237,12 @@ function ReadyGuestAosSurface({
     [authorization, config.basePath, scope.agentId, scope.sessionId]
   )
   const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
+  const slashCommands = useAosSlashCommands(
+    client,
+    scope.sessionId,
+    config.composerSlashCommandsEnabled
+  )
+  const composerFeatures = useMemo(() => ({ slashCommands }), [slashCommands])
   const runtime = useAgUiRuntime({
     agent,
     adapters: { history },
@@ -241,6 +258,7 @@ function ReadyGuestAosSurface({
           agentId={scope.agentId}
           sessionId={scope.sessionId}
           artifacts={artifacts}
+          composerFeatures={composerFeatures}
         />
       </AssistantRuntimeProvider>
     </ThemeProvider>

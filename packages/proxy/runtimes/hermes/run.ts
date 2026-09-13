@@ -34,6 +34,7 @@ const RUN_INPUT_FIELDS = new Set([
 ])
 
 export type HermesRunScope = {
+  hasAttachments?: boolean
   agentId: string
   sessionId: string
   threadId: string
@@ -63,8 +64,8 @@ export type HermesRunNative = {
   recover(liveSessionId: string, lastSeen?: number): Promise<HermesRecovery>
   submit(
     liveSessionId: string,
-    prompt: { text: string; runId: string }
-  ): Promise<{ acknowledgement: "accepted" | "uncertain" }>
+    prompt: { text: string; runId: string; allowSlashCommands?: boolean }
+  ): Promise<{ acknowledgement: "accepted" | "uncertain"; completion?: { output: string } }>
   interrupt(liveSessionId: string): Promise<void>
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
   acceptInteraction?(
@@ -932,10 +933,21 @@ export class HermesRunEngine {
     if (!this.#isSubmitEligible(active)) return this.#handle(active)
     let acknowledgement: "accepted" | "uncertain"
     try {
-      ;({ acknowledgement } = await this.#native.submit(liveSessionId, {
+      const result = await this.#native.submit(liveSessionId, {
         text: text!,
         runId: input.runId,
-      }))
+        ...(scope.hasAttachments ? { allowSlashCommands: false } : {}),
+      })
+      acknowledgement = result.acknowledgement
+      if (result.completion && !active.terminal) {
+        if (result.completion.output) {
+          active.messageId = `aos-command:${input.runId}`
+          active.textStarted = true
+          this.#emit(active, { type: EventType.TEXT_MESSAGE_START, messageId: active.messageId, role: "assistant" })
+          this.#emit(active, { type: EventType.TEXT_MESSAGE_CONTENT, messageId: active.messageId, delta: result.completion.output })
+        }
+        this.#finish(active)
+      }
     } catch {
       acknowledgement = "uncertain"
     }

@@ -169,6 +169,13 @@ const ProxyConfigSchema = z
 
 export type ProxyConfig = z.infer<typeof ProxyConfigSchema>
 
+/** Guest composer discovery is opt-in; this does not control runtime commands. */
+export function parseGuestComposerSlashCommandsEnabled(
+  value?: string
+): boolean {
+  return value?.trim().toLowerCase() === "true"
+}
+
 /** Parser issues are deliberately hidden because rejected input may contain secrets. */
 export function parseProxyConfig(input: unknown): ProxyConfig {
   const result = ProxyConfigSchema.safeParse(input)

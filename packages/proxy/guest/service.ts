@@ -3,8 +3,10 @@ import { EventEncoder } from "@ag-ui/encoder"
 import { Hono } from "hono"
 
 import {
+  SessionCommandsResponseSchema,
   SessionHistoryResponseSchema,
   type Session,
+  type SessionCommandsResponse,
   type SessionHistoryResponse,
 } from "../../protocol"
 import type {
@@ -48,6 +50,10 @@ type GuestHermesAdapter = HermesRunNative & {
     limit: number,
     offset: number
   ): Promise<SessionHistoryResponse>
+  slashCommands(
+    agentId: string,
+    publicSessionId: string
+  ): Promise<SessionCommandsResponse>
 }
 
 type GuestRunOperations = {
@@ -401,10 +407,7 @@ function safeMessageId(value: unknown) {
 }
 
 function publicErrorCode(code: unknown) {
-  if (
-    code === "AOS_CONNECTION_INTERRUPTED" ||
-    code === "AOS_SEND_UNCERTAIN"
-  )
+  if (code === "AOS_CONNECTION_INTERRUPTED" || code === "AOS_SEND_UNCERTAIN")
     return { code, retryable: true }
   return code === "AOS_RESET_REQUIRED"
     ? { code: "temporarily_unavailable" as const, retryable: true }
@@ -718,6 +721,40 @@ export function createGuestListenerService(
           )
         )
         return context.json(projectHistory(history, authorization))
+      } catch {
+        return projectedErrorResponse(
+          options,
+          now,
+          context.req.raw,
+          agentId,
+          sessionId,
+          "temporarily_unavailable",
+          true,
+          503
+        )
+      }
+    }
+  )
+
+  app.get(
+    "/api/guest/v1/agents/:agentId/sessions/:sessionId/commands",
+    async (context) => {
+      const agentId = context.req.param("agentId")
+      const sessionId = context.req.param("sessionId")
+      const authorization = await authorize(
+        options.invitations,
+        context.req.raw,
+        { agentId, sessionId, operation: "messages:read" },
+        now
+      )
+      if (!authorization) return emptyError(401)
+      if (!storedSessionId(agentId, sessionId)) return emptyError(404)
+      try {
+        return context.json(
+          SessionCommandsResponseSchema.parse(
+            await options.hermes.slashCommands(agentId, sessionId)
+          )
+        )
       } catch {
         return projectedErrorResponse(
           options,

@@ -24,6 +24,7 @@ import {
   SessionInteractionSnapshotResponseSchema,
   SessionModelSelectRequestSchema,
   SessionModelsResponseSchema,
+  SessionCommandsResponseSchema,
   SessionSchema,
   SessionSpeechRequestSchema,
   SessionTodosResponseSchema,
@@ -93,9 +94,7 @@ export type AosRemoteClientOptions = {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
     subscribe?(scope: AosEventScope, listener: () => void): () => void
   }
-  onAuthRequired?: (
-    kind: "aos-auth-required" | "runtime-auth-required"
-  ) => void
+  onAuthRequired?: (kind: "aos-auth-required" | "runtime-auth-required") => void
 }
 
 type StagedRunAttachment = {
@@ -647,6 +646,14 @@ export class AosRemoteClient implements WorkspaceAdapter {
       threadId,
       "/workspace/models",
       SessionModelsResponseSchema
+    )
+  }
+
+  commands(threadId: string) {
+    return this.#sessionRead(
+      threadId,
+      "/commands",
+      SessionCommandsResponseSchema
     )
   }
 

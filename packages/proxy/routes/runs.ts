@@ -224,7 +224,7 @@ export function registerRunRoutes(
         Object.keys(forwarded).length !== 1)
     )
       return errorResponse("invalid_request", 400)
-    const scope = { agentId, sessionId, threadId }
+    const scope = { agentId, sessionId, threadId, hasAttachments: false }
     const key = runKey(scope)
     if (activeRuns.has(key) || runAdmissions.has(key))
       return errorResponse("run_conflict", 409)
@@ -241,6 +241,8 @@ export function registerRunRoutes(
       typeof stageId === "string"
         ? attachmentStages.take(agentId, threadId, stageId)
         : undefined
+
+    scope.hasAttachments = Boolean(stage)
     if (typeof stageId === "string" && !stage) {
       runAdmissions.delete(key)
       return errorResponse("invalid_request", 400)

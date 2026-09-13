@@ -7,6 +7,7 @@ import {
   type ComposerFeatureViewModel,
 } from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
+import type { SlashCommand } from "@aos/protocol"
 import type {
   AosContext,
   AosModelChoices,
@@ -22,12 +23,54 @@ type SessionCapabilityClient = {
 }
 
 type ComposerClient = SessionCapabilityClient & {
+  commands?: (threadId: string) => Promise<{ commands: SlashCommand[] }>
   models(threadId: string): Promise<AosModelChoices>
   context(threadId: string): Promise<AosContext>
   selectModel(
     threadId: string,
     selectedId: string
   ): Promise<{ selectedId: string }>
+}
+
+export function useAosSlashCommands(
+  client: Pick<ComposerClient, "commands" | "subscribeSessionInvalidation">,
+  threadId: string | undefined,
+  enabled = true
+): readonly SlashCommand[] | undefined {
+  const [snapshot, setSnapshot] = useState<{
+    client: typeof client
+    threadId: string
+    commands: readonly SlashCommand[]
+  }>()
+  useEffect(() => {
+    if (!threadId || !enabled || !client.commands) return
+    let active = true
+    let revision = 0
+    const refresh = () => {
+      const request = ++revision
+      void client.commands!(threadId).then(
+        ({ commands }) => {
+          if (active && request === revision)
+            setSnapshot({ client, threadId, commands })
+        },
+        () => {
+          if (active && request === revision)
+            setSnapshot({ client, threadId, commands: [] })
+        }
+      )
+    }
+    refresh()
+    const unsubscribe = client.subscribeSessionInvalidation?.(threadId, refresh)
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }, [client, threadId, enabled])
+  return enabled
+    ? snapshot?.client === client && snapshot.threadId === threadId
+      ? snapshot.commands
+      : []
+    : undefined
 }
 
 /** Reads one authoritative capability projection for the selected Session. */
@@ -80,6 +123,7 @@ export function useAosComposerFeatures(
   capabilities: AosWorkspaceCapabilities | undefined,
   onError?: (error: Error) => void
 ): ComposerFeatureViewModel {
+  const slashCommands = useAosSlashCommands(client, threadId)
   const [models, setModels] = useState<AosModelChoices>()
   const [context, setContext] = useState<AosContext>()
   const [selection, setSelection] = useState<
@@ -130,6 +174,7 @@ export function useAosComposerFeatures(
 
   return useMemo(
     () => ({
+      slashCommands,
       model:
         config.modelSelectorEnabled && modelsAvailable && models && threadId
           ? {
@@ -187,6 +232,7 @@ export function useAosComposerFeatures(
       onError,
       selection,
       threadId,
+      slashCommands,
     ]
   )
 }

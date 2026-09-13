@@ -364,6 +364,7 @@ function LocalThread({
   toolFallback?: typeof RichToolRenderer
   composer?: ThreadComponents["Composer"]
   composerFeatures?: {
+    slashCommands?: readonly { name: string; description?: string }[]
     model?: {
       options: readonly { id: string; label: string; group?: string }[]
       selectedId: string
@@ -399,6 +400,132 @@ function LocalThread({
     </AssistantRuntimeProvider>
   )
 }
+
+describe("slash command completion", () => {
+  it("scrolls the highlighted command within a clipped menu without moving focus", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        composerFeatures={{
+          slashCommands: Array.from({ length: 30 }, (_, index) => ({
+            name: `command-${index}`,
+          })),
+        }}
+      />
+    )
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "/")
+    const menu = await screen.findByRole("listbox")
+    Object.defineProperty(menu, "clientHeight", {
+      configurable: true,
+      value: 100,
+    })
+    vi.spyOn(menu, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, 200, 100)
+    )
+    const options = screen.getAllByRole("option")
+    options.forEach((option, index) => {
+      vi.spyOn(option, "getBoundingClientRect").mockImplementation(
+        () => new DOMRect(0, index * 40 - menu.scrollTop, 200, 40)
+      )
+    })
+    for (let i = 0; i < 15; i++) await user.keyboard("{ArrowDown}")
+    expect(menu.scrollTop).toBe(540)
+    for (let i = 0; i < 15; i++) await user.keyboard("{ArrowUp}")
+    expect(menu.scrollTop).toBe(0)
+    expect(input).toHaveFocus()
+    expect(input).toHaveValue("/")
+  })
+
+  const slashCommands = [
+    { name: "help", description: "Available commands" },
+    { name: "summarize", description: "Summarize conversation" },
+  ]
+
+  it("filters and inserts editable text without sending on keyboard selection", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({ content: [] }))
+    render(<LocalThread model={{ run }} composerFeatures={{ slashCommands }} />)
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "/su")
+    expect(
+      await screen.findByRole("option", { name: /summarize/ })
+    ).toHaveTextContent("Summarize conversation")
+    expect(
+      screen.queryByRole("option", { name: /help/ })
+    ).not.toBeInTheDocument()
+    await user.keyboard("{Enter}")
+    expect(input).toHaveValue("/summarize ")
+    expect(input).toHaveFocus()
+    expect(run).not.toHaveBeenCalled()
+    await user.type(input, "today")
+    expect(input).toHaveValue("/summarize today")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
+  it("navigates suggestions instead of history and closes with Escape", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread composerFeatures={{ slashCommands }} />)
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "/")
+    await screen.findByRole("option", { name: /help/ })
+    await user.keyboard("{ArrowDown}{Tab}")
+    expect(input).toHaveValue("/summarize ")
+    await user.clear(input)
+    await user.type(input, "/")
+    await screen.findByRole("listbox")
+    await user.keyboard("{Escape}")
+    expect(input).toHaveValue("/")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
+  it("supports pointer selection and localized accessible names", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        direction="rtl"
+        labels={{ slashCommands: "פקודות" }}
+        composerFeatures={{ slashCommands }}
+      />
+    )
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "/")
+    expect(await screen.findByRole("listbox", { name: "פקודות" })).toBeVisible()
+    await user.click(screen.getByRole("option", { name: /help/ }))
+    expect(input).toHaveValue("/help ")
+    expect(input).toHaveFocus()
+  })
+
+  it.each([undefined, []])(
+    "shows no suggestions for a hidden or unavailable catalog: %s",
+    async (commands) => {
+      const user = userEvent.setup()
+      render(
+        <LocalThread
+          composerFeatures={commands ? { slashCommands: commands } : {}}
+        />
+      )
+      await user.type(
+        screen.getByRole("textbox", { name: "Message input" }),
+        "/"
+      )
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    }
+  )
+
+  it.each(["hello /", " /", "/unknown", "/help argument"])(
+    "does not complete outside a matching leading command: %s",
+    async (text) => {
+      const user = userEvent.setup()
+      render(<LocalThread composerFeatures={{ slashCommands }} />)
+      await user.type(
+        screen.getByRole("textbox", { name: "Message input" }),
+        text
+      )
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    }
+  )
+})
 
 const MULTI_SESSION_MESSAGES: Record<string, readonly ThreadMessageLike[]> = {
   "session-one": [],

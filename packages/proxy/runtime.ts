@@ -5,6 +5,7 @@ import type {
   RuntimeInfo,
   Session,
   SessionCatalogResponse,
+  SessionCommandsResponse,
   SessionHistoryResponse,
   SessionInteractionSnapshotResponse,
   SessionAttachmentStageRequest,
@@ -18,6 +19,8 @@ export type ServerRunScope = {
   sessionId: string
   /** Opaque public Session identity supplied by the browser. */
   threadId: string
+  /** Command routing is limited to plain text-only submissions. */
+  hasAttachments?: boolean
 }
 
 export type ServerRunHandle = {
@@ -121,6 +124,10 @@ export interface ServerRuntime {
     body?: unknown
   ): Promise<void>
   workspaceCapabilities(): unknown
+  slashCommands(
+    agentId: string,
+    publicSessionId: string
+  ): Promise<SessionCommandsResponse>
   models(agentId: string, publicSessionId: string): Promise<unknown>
   selectModel(
     agentId: string,

@@ -360,6 +360,22 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
   }),
 })
 
+export const SlashCommandSchema = z.strictObject({
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[^\s/]+$/u),
+  description: z.string().max(4096).optional(),
+})
+export type SlashCommand = z.infer<typeof SlashCommandSchema>
+export const SessionCommandsResponseSchema = z.strictObject({
+  commands: z.array(SlashCommandSchema).max(256),
+})
+export type SessionCommandsResponse = z.infer<
+  typeof SessionCommandsResponseSchema
+>
+
 export const SessionModelsResponseSchema = z.strictObject({
   selectedId: IdentifierSchema,
   options: z

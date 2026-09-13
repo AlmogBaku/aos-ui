@@ -37,6 +37,51 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 describe("AOS v1 proxy walking skeleton", () => {
+  it("serves a validated slash-command catalog only to an authenticated operator in the requested Session", async () => {
+    const slashCommands = vi.fn(async () => ({
+      commands: [{ name: "help", description: "Show help" }],
+    }))
+    const hermes = Object.assign(
+      new HermesServerAdapter({ request: vi.fn() }),
+      { slashCommands }
+    )
+    vi.spyOn(hermes, "getSession").mockResolvedValue({
+      id: "hermes:researcher:stored",
+      agentId: "researcher",
+      title: "Owned",
+      archived: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      status: "idle",
+    })
+    const app = createProxyApp({
+      publicOrigin: origin,
+      operatorAuth: createOperatorAuthenticator({
+        allowedSubjects: ["operator@example.test"],
+        verifySession: vi.fn(async (incoming) =>
+          incoming.headers.get("cookie") === "aos_operator=valid"
+            ? { subject: "operator@example.test" }
+            : undefined
+        ),
+      }),
+      hermes,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const path =
+      "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/commands"
+
+    expect((await app.request(`http://proxy.test${path}`)).status).toBe(401)
+    const response = await app.request(request(path))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      commands: [{ name: "help", description: "Show help" }],
+    })
+    expect(slashCommands).toHaveBeenCalledWith(
+      "researcher",
+      "hermes:researcher:stored"
+    )
+  })
+
   it("delegates opaque public Session identity resolution to the server runtime", async () => {
     const resolveSessionId = vi.fn((agentId: string, sessionId: string) =>
       agentId === "researcher" && sessionId === "opaque-session"

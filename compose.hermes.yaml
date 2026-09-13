@@ -3,6 +3,8 @@
 # ingress owns TLS; only this listener is published by the Compose example.
 services:
   web:
+    environment:
+      AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED: ${AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED:-false}
     command:
       - bun
       - run

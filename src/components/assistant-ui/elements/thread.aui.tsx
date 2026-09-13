@@ -28,6 +28,7 @@ import {
   ModelSelectorTrigger,
 } from "@/components/assistant-ui/elements/model-selector"
 import { ComposerContext } from "@/components/assistant-ui/elements/composer-context"
+import { ComposerSlashCommands } from "@/components/assistant-ui/elements/composer-slash-commands"
 import {
   ConversationSearch,
   DEFAULT_CONVERSATION_SEARCH_LABELS,
@@ -170,6 +171,7 @@ export type ThreadLabels = {
   next: string
   conversationHeading?: string | undefined
   modelSelector: string
+  slashCommands?: string | undefined
   contextUsage: string
   contextTitle: string
   contextSystem: string
@@ -210,6 +212,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   next: "Next",
   conversationHeading: "Conversation",
   modelSelector: "Choose model",
+  slashCommands: "Slash commands",
   contextUsage: "Context usage",
   contextTitle: "Context",
   contextSystem: "System",
@@ -849,6 +852,10 @@ const Composer: FC<{
         return
       }
 
+      // Let Assistant UI select completion before the custom Send shortcut.
+      if (event.key === "Enter" && triggerPopover?.getActiveAria() != null)
+        return
+
       const action = resolveComposerEnterAction(
         event as unknown as ComposerEnterEvent,
         {
@@ -1006,6 +1013,7 @@ const Composer: FC<{
         }
       >
         <div className="contents" inert={voiceActive}>
+          <ThreadSlashCommands />
           <ComposerAttachments />
         </div>
         <div
@@ -1042,6 +1050,17 @@ const Composer: FC<{
       </ComposerPrimitive.AttachmentDropzone>
       <VoiceComposerNotice />
     </ComposerPrimitive.Root>
+  )
+}
+
+const ThreadSlashCommands: FC = () => {
+  const features = useContext(ThreadComposerFeaturesContext)
+  const labels = useContext(ThreadLabelsContext)
+  return (
+    <ComposerSlashCommands
+      commands={features.slashCommands}
+      label={labels.slashCommands ?? "Slash commands"}
+    />
   )
 }
 

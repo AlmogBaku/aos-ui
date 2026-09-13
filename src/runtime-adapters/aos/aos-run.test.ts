@@ -26,6 +26,47 @@ function collect(
 }
 
 describe("AOS normalized HttpAgent transport", () => {
+  it.each(["/help  topic  ", "/unknown", " /help", "/HELP"])(
+    "preserves %j for runtime-owned command recognition through the normal run transport",
+    async (text) => {
+      const fetcher = vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            [
+              `data: ${JSON.stringify({ type: "RUN_STARTED", threadId: "session", runId: "run" })}`,
+              `data: ${JSON.stringify({ type: "RUN_ERROR", message: "Native command failed", code: "COMMAND_FAILED" })}`,
+              "",
+            ].join("\n\n"),
+            { headers: { "content-type": "text/event-stream" } }
+          )
+      )
+      const agent = createAosRunAgent({
+        agentId: "agent",
+        threadId: "session",
+        fetcher,
+        authorization: "Bearer invitation",
+      })
+      await collect(agent, {
+        threadId: "session",
+        runId: "run",
+        state: {},
+        messages: [{ id: "message", role: "user", content: text }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(fetcher.mock.calls[0]?.[0]).toBe(
+        "/api/aos/v1/agents/agent/sessions/session/runs"
+      )
+      expect(
+        JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).messages
+      ).toEqual([{ id: "message", role: "user", content: text }])
+      expect(
+        new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
+      ).toBe("Bearer invitation")
+    }
+  )
   it("reconnects an interrupted run without resending the user prompt", async () => {
     const threadId = "hermes:researcher:stored"
     const fetcher = vi

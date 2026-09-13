@@ -8,6 +8,7 @@ import { runProxyCli } from "./cli"
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -31,6 +32,7 @@ describe("proxy executable", () => {
   })
 
   it("starts separate operator and guest Bun listeners and shuts down both", async () => {
+    vi.stubEnv("AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED", " TRUE ")
     const directory = await mkdtemp(join(tmpdir(), "aos-proxy-cli-"))
     temporaryDirectories.push(directory)
     const operatorSecret = join(directory, "operator-secret")
@@ -140,6 +142,7 @@ describe("proxy executable", () => {
       surface: "guest",
       basePath: "/api/guest/v1",
       lane: "guest",
+      composerSlashCommandsEnabled: true,
     })
     expect(staticHandler).toHaveBeenCalledOnce()
     expect(start).toHaveBeenNthCalledWith(

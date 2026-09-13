@@ -3,11 +3,27 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { parseProxyConfig } from "./config"
+import {
+  parseGuestComposerSlashCommandsEnabled,
+  parseProxyConfig,
+} from "./config"
 import { redactForLog } from "./redaction"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 
 const temporaryDirectories: string[] = []
+
+it.each([
+  [undefined, false],
+  ["", false],
+  ["false", false],
+  ["1", false],
+  ["yes", false],
+  ["true", true],
+  [" TRUE ", true],
+  ["\tTrUe\n", true],
+] as const)("parses guest slash-command visibility %j as %s", (value, expected) => {
+  expect(parseGuestComposerSlashCommandsEnabled(value)).toBe(expected)
+})
 
 afterEach(async () => {
   await Promise.all(

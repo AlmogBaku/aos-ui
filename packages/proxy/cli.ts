@@ -5,6 +5,7 @@ import {
   createConfiguredProxy,
   type ConfiguredProxyDependencies,
 } from "./composition"
+import { parseGuestComposerSlashCommandsEnabled } from "./config"
 import { redactForLog } from "./redaction"
 import { startProxyServer } from "./server"
 import { createStaticHandler, type StaticHandler } from "./static"
@@ -71,6 +72,10 @@ export async function runProxyCli(
   const { config: configFile } = options
   const input = JSON.parse(await readFile(configFile, "utf8")) as unknown
   const configured = await createConfiguredProxy(input, dependencies)
+  const guestComposerSlashCommandsEnabled =
+    parseGuestComposerSlashCommandsEnabled(
+      process.env.AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED
+    )
   const start = dependencies.start ?? startProxyServer
   const lifecycle = start({
     app: listenerApp(configured.app, "/api/aos/v1", dependencies.staticHandler),
@@ -90,6 +95,7 @@ export async function runProxyCli(
             surface: "guest",
             basePath: "/api/guest/v1",
             lane: "guest",
+            composerSlashCommandsEnabled: guestComposerSlashCommandsEnabled,
           }
         ),
         events: {

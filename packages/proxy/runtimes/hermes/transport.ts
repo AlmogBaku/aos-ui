@@ -28,6 +28,13 @@ export type HermesWebSocketRpcTransportOptions = {
 }
 
 /** Private native-auth classification; never serialized across the AOS API. */
+export class HermesRpcError extends Error {
+  constructor(readonly code?: number) {
+    super("Hermes RPC failed")
+    this.name = "HermesRpcError"
+  }
+}
+
 export class HermesAuthenticationError extends Error {
   constructor() {
     super("Hermes authentication failed")
@@ -371,7 +378,10 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
             )
               return
             if ("error" in frame && frame.error)
-              finish(() => reject(new Error("Hermes RPC failed")))
+              finish(() => reject(new HermesRpcError(
+                typeof frame.error === "object" && "code" in frame.error && typeof frame.error.code === "number" && Number.isSafeInteger(frame.error.code)
+                  ? frame.error.code : undefined
+              )))
             else
               finish(() =>
                 resolve(

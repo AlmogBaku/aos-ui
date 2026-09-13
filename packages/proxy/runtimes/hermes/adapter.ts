@@ -43,6 +43,7 @@ import { HermesBrowserAuthenticationError } from "./auth-broker"
 import { HermesDashboardClient } from "./dashboard-client"
 import type { ServerRuntime } from "../../runtime"
 import type { ResumeEntry } from "@ag-ui/core"
+import { nativeSlashCommands, slashInvocation } from "./slash-commands"
 
 export interface HermesRpcTransport {
   request(
@@ -911,8 +912,21 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     }
   }
 
-  async submit(liveSessionId: string, prompt: { text: string; runId: string }) {
+  async slashCommands(agentId: string, publicSessionId: string) {
+    const scope = await this.#requireAttachedSession(agentId, publicSessionId)
+    return { commands: await nativeSlashCommands(this.transport, { session_id: scope.liveSessionId, profile: agentId }) }
+  }
+
+  async submit(liveSessionId: string, prompt: { text: string; runId: string; allowSlashCommands?: boolean }) {
     try {
+      const invocation = prompt.allowSlashCommands !== false && prompt.text.startsWith("/")
+        ? slashInvocation(prompt.text, await nativeSlashCommands(this.transport, { session_id: liveSessionId }))
+        : undefined
+      if (invocation) {
+        const result = await this.transport.request("slash.exec", { command: `${invocation.name}${invocation.args ? ` ${invocation.args}` : ""}`, session_id: liveSessionId }, 1_048_576)
+        if (!isRecord(result) || typeof result.output !== "string") throw new HermesUnavailableError()
+        return { acknowledgement: "accepted" as const, completion: { output: result.output } }
+      }
       await this.transport.request("prompt.submit", {
         session_id: liveSessionId,
         text: prompt.text,
