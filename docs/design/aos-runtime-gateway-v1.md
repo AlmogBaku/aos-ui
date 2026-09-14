@@ -50,6 +50,39 @@ The Bun gateway may serve the built Vite application and normalized endpoints
 directly. A reverse proxy or TLS terminator is optional deployment
 infrastructure, not an application requirement.
 
+## Maintainability and next-adapter readiness
+
+V1 ends with one clean TypeScript implementation, not a working Hermes path
+beside migration scaffolding.
+
+The proxy has one provider-neutral `ServerRuntime` seam. Core run coordination,
+normalized routes, authorization/projection, events, and browser code depend
+only on that interface. One adapter factory is the sole production location
+that selects a runtime kind. In V1 its strict configuration union and exhaustive
+factory contain only Hermes.
+
+Provider-native transport, authentication, live identity, recovery, and
+Session-retention behavior remain adapter-private. A future OpenCode or
+OpenClaw adapter may use its own native lifecycle; it is not required to adopt
+Hermes' WebSocket or attachment registry.
+
+Adding either known adapter should require one configuration variant, one new
+adapter package, one factory case, and adapter-specific deployment
+documentation. It must not require changes to the coordinator, normalized
+routes, guest policy, AG-UI schemas, or browser runtime. V1 proves this seam
+with a provider-neutral conformance runtime in tests; it does not add empty
+production adapter packages.
+
+Operator and guest listeners mount the same normalized route implementation
+with distinct lane policies. No provider-neutral operation is reimplemented in
+the guest listener.
+
+All code replaced by the TypeScript proxy is removed before V1 acceptance:
+the Go gateway, its build/deployment wiring, obsolete native browser paths,
+rollout shims, deleted endpoint clients, stale schemas, tests, generated
+instructions, and maintained documentation. A compatibility artifact remains
+only when an active external consumer is named and tested.
+
 ## Access model
 
 ### Operator listener
@@ -257,3 +290,15 @@ streaming, terminal delivery, Stop settlement, questions and approvals,
 attachments and artifacts, malformed and oversized inputs, uncertain sends,
 connection loss, idle Session release, native reconnect, and deployment port
 isolation.
+
+Acceptance also requires:
+
+- packages and files follow their stated ownership without duplicate route or
+  runtime implementations;
+- common proxy and browser modules contain no Hermes native types or protocol
+  constants;
+- the adapter factory is the only runtime-kind selection point;
+- the Go gateway and every replaced/deprecated V1 path are absent;
+- the provider-neutral runtime conformance suite proves the next adapter can be
+  added without modifying common coordination, routes, authorization, events,
+  protocol, or browser modules.

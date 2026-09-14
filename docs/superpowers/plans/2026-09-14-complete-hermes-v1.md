@@ -40,6 +40,12 @@ remaining work. It supersedes earlier task text as an execution checklist.
 - An interrupt ends one AG-UI run segment. Answer or cancel starts one fresh
   AG-UI `runId` with a complete `resume[]` while retaining the same logical
   Hermes execution.
+- V1 includes a clean structural cutover. File/package cleanup, removal of
+  replaced code, and a proven adapter-selection seam are acceptance work, not
+  optional follow-up.
+- V1 does not create empty OpenCode/OpenClaw adapters or a generic transport
+  framework. It leaves one clear place to add each real adapter without
+  changing core coordination, normalized routes, or browser code.
 
 ## Implemented baseline — do not schedule again
 
@@ -124,9 +130,136 @@ remaining work. It supersedes earlier task text as an execution checklist.
 
 This evidence protects the checkpoint; it is not the final V1 acceptance gate.
 
+## Structural gaps in the protected baseline
+
+Commit `08ea31f` protects working behavior, but it is not yet the desired
+final structure:
+
+- `composition.ts` imports and constructs Hermes directly, and its dependency
+  interface exposes Hermes transport types.
+- `guest/service.ts` contains a second large Hono route stack instead of
+  mounting the same normalized route modules with a guest policy.
+- `HermesRunEngine.reconnect()` remains as a deprecated rollout shim even
+  though `recover()` is the runtime interface.
+- The package root exports Hermes implementation types alongside the public
+  proxy surface.
+- The old Go `gateway/`, its build stage, systemd/Nginx templates, environment
+  variables, tests, generated invite instructions, and maintained docs still
+  coexist with the TypeScript proxy.
+- Some affected comments and tests still describe removed “legacy” interaction
+  and gateway paths.
+
+These are cleanup gaps, not permission to redesign working run, interaction,
+retention, authorization, or projection behavior.
+
 ## Remaining work
 
-### 1. Revalidate the current live build
+### 1. Finish the file and package structure
+
+Perform a behavior-preserving move to this ownership shape:
+
+```text
+packages/proxy/
+├── adapters/
+│   ├── create-runtime.ts
+│   └── hermes/
+├── auth/
+├── core/
+├── events/
+├── listeners/
+│   ├── operator.ts
+│   └── guest.ts
+├── routes/
+├── app.ts
+├── composition.ts
+├── config.ts
+├── server.ts
+└── cli.ts
+```
+
+- `core/` owns only provider-neutral runtime, coordinator, fanout, attachment
+  staging, and lifecycle concepts.
+- `adapters/hermes/` owns every Hermes DTO, validator, converter, dashboard
+  operation, native transport, attachment, and retention detail.
+- `adapters/create-runtime.ts` is the only production module that selects an
+  adapter kind. For V1 it has one exhaustive `hermes` case.
+- `composition.ts` loads shared configuration/secrets, asks the adapter
+  factory for one `RuntimeInstance`, and injects that exact instance into both
+  listeners. Its dependency interface must not expose Hermes transport types.
+- `routes/` owns one set of normalized route handlers. Operator and guest
+  listeners mount those handlers with lane-specific authorization, projection,
+  origin, expiry, and limit policies.
+- `listeners/` owns port/listener composition only. It must not duplicate
+  catalogs, history, run, Stop, content, or capability behavior.
+- The package root exports the provider-neutral composition/server surface.
+  Adapter internals are imported through their own modules only.
+- Split a large file only when it mixes these ownership responsibilities.
+  File length alone is not a reason to create pass-through modules.
+
+Run the current focused proxy, Hermes, guest, and browser suites after each
+move. A move is complete only when `git diff --find-renames` shows moves rather
+than delete-and-recreate churn where the implementation was preserved.
+
+### 2. Remove every replaced V1 path
+
+Delete code only after its TypeScript replacement is covered:
+
+- remove the deprecated Hermes `reconnect()` shim and make its tests use the
+  public `recover()` interface;
+- remove the Go `gateway/` tree and Go build/copy steps;
+- remove obsolete gateway systemd/Nginx templates, Compose wiring, environment
+  variables, container tests, and troubleshooting instructions;
+- replace maintained invite instructions that invoke `aos-gateway` with the
+  TypeScript proxy's supported invitation operation, then regenerate tracked
+  integration copies through the repository's existing build;
+- remove stale browser/provider routes, adapters, schemas, imports, tests, and
+  comments whose replacement is already active;
+- remove obsolete workspace Todo/activity/pending/audio read routes and
+  contracts once no production caller or recovery path uses them;
+- update maintained OpenCode/OpenClaw docs to describe their current status
+  accurately rather than directing operators to the deleted Go gateway.
+
+Audit the affected proxy/AOS/deployment paths for `deprecated`, `legacy`,
+`compat`, old gateway commands, and deleted endpoint names. Every match must
+either be removed or identify an active external compatibility requirement.
+Do not retain dead code as a donor; the research documents preserve the useful
+native findings.
+
+### 3. Prove readiness for OpenCode and OpenClaw
+
+V1 remains a single-Hermes deployment, but the next adapter must require only:
+
+1. one strict runtime-config variant;
+2. one new `adapters/<kind>/` implementation of `ServerRuntime`;
+3. one exhaustive case in `adapters/create-runtime.ts`;
+4. adapter-specific tests and deployment documentation.
+
+Adding an adapter must not require edits to:
+
+- `core/session-coordinator.ts` or subscriber fanout;
+- normalized route handlers;
+- operator/guest authorization and projection semantics;
+- AG-UI protocol schemas;
+- the provider-neutral browser runtime or workspace UI.
+
+Add conformance tests proving:
+
+- a provider-neutral test runtime can pass through the common listener/routes
+  stack without importing Hermes;
+- both lanes receive the exact same selected `RuntimeInstance`;
+- runtime shutdown closes the selected adapter exactly once;
+- adapter capabilities and unavailability reasons reach the browser without
+  boolean reduction;
+- common run admission, Stop, reconnect, interrupts, and guest projection use
+  only the `ServerRuntime` interface;
+- production imports from `core`, `routes`, `auth`, `events`, and browser
+  AOS modules contain no Hermes types or native protocol constants.
+
+Transport connection, native identity, recovery, and Session-retention policy
+remain inside each adapter. Do not force OpenCode or OpenClaw into Hermes'
+WebSocket/attachment model.
+
+### 4. Revalidate the current live build
 
 Use the running Tailnet application and current Hermes data. Do not restart the
 Hermes service or mutate Agents/profiles. Confirm these user-visible behaviors:
@@ -149,7 +282,7 @@ Record each failure with its Session, visible symptom, relevant normalized
 request/event sequence, and whether refresh changes the result. Do not patch a
 second symptom until the first has a deterministic regression test.
 
-### 2. Fix only reproduced acceptance failures
+### 5. Fix only reproduced acceptance failures
 
 For each live failure:
 
@@ -173,7 +306,7 @@ Keep ownership narrow:
 Do not let parallel writers edit the same surface. Shared contract changes are
 applied by one integration owner after consumers demonstrate the requirement.
 
-### 3. Complete operator and guest acceptance
+### 6. Complete operator and guest acceptance
 
 After the operator journey is stable, verify one scoped guest invitation over
 the same runtime:
@@ -189,7 +322,7 @@ the same runtime:
 No live native acceptance may be claimed without an approved disposable target
 and credentials.
 
-### 4. Run the final gate once after the last implementation edit
+### 7. Run the final gate once after the last implementation edit
 
 ```bash
 bun run test
@@ -209,13 +342,18 @@ record the user-driven browser acceptance separately. Classify failures before
 changing scope: fix regressions from V1, document unrelated pre-existing or
 upstream failures, and do not broaden the architecture to make a test pass.
 
-### 5. Final review and cutover
+### 8. Final review and cutover
 
 - Review conformance against the V1 design and this frozen baseline.
+- Confirm the final file tree matches the ownership map and has no duplicate
+  route/runtime implementations.
+- Confirm the adapter-selection seam satisfies the four-location change budget
+  above without adding placeholder adapters.
 - Review capability fidelity, ownership, guest isolation, credential/native
   payload non-disclosure, reconnect, and uncertain-send behavior.
-- Confirm no browser provider SDK/direct provider path or obsolete Go gateway
-  route remains in the production bundle or deployment.
+- Confirm no discarded/deprecated V1 shim, browser provider SDK/direct provider
+  path, Go gateway source/build/deployment artifact, or obsolete endpoint
+  remains.
 - Update the evidence below with final command results and live acceptance.
 - Only then mark V1 complete and plan OpenCode/OpenClaw adapter work.
 
@@ -227,6 +365,11 @@ upstream failures, and do not broaden the architecture to make a test pass.
 - [x] Standard AG-UI streaming, PLAN Activities, and interrupts
 - [x] Shared guest authorization/projection path
 - [x] Server-token configuration and deployment implementation
+- [ ] Files/packages match the final ownership structure
+- [ ] Operator and guest mount one normalized route implementation
+- [ ] Adapter selection is isolated and composition is provider-neutral
+- [ ] Go gateway and all replaced/deprecated V1 paths are removed
+- [ ] OpenCode/OpenClaw adapter-readiness conformance tests pass
 - [ ] Current user-visible regressions revalidated against `08ea31f`
 - [ ] Operator journey passes without refresh-based recovery
 - [ ] Scoped guest journey passes over the shared runtime
