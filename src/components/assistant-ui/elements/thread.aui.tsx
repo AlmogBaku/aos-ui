@@ -239,6 +239,7 @@ export const THREAD_VIEWPORT_SCROLL_BEHAVIOR = {
   autoScroll: false,
   scrollToBottomOnInitialize: false,
   scrollToBottomOnThreadSwitch: false,
+  turnAnchor: "bottom",
 } as const
 
 const EMPTY_COMPONENTS: ThreadComponents = {}
@@ -402,7 +403,6 @@ const ThreadRoot: FC<{
       <ThreadPrimitive.Viewport
         ref={viewportRef}
         {...THREAD_VIEWPORT_SCROLL_BEHAVIOR}
-        turnAnchor="top"
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}

@@ -227,11 +227,12 @@ describe("assistant tool timeline", () => {
 })
 
 describe("thread scroll ownership", () => {
-  it("leaves automatic scrolling to the reading-position controller", () => {
+  it("follows new turns at the bottom through the reading-position controller", () => {
     expect(THREAD_VIEWPORT_SCROLL_BEHAVIOR).toEqual({
       autoScroll: false,
       scrollToBottomOnInitialize: false,
       scrollToBottomOnThreadSwitch: false,
+      turnAnchor: "bottom",
     })
   })
 })

@@ -135,6 +135,20 @@ describe("thread reading position", () => {
     expect(viewport.scrollTop).toBe(500)
   })
 
+  it("keeps an unseen thread following when a new turn grows the content", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({
+      clientHeight: 400,
+      scrollHeight: 900,
+    })
+
+    controller.restore("new-thread", viewport)
+    setMetric(viewport, "scrollHeight", 1_200)
+    controller.syncAfterContentChange("new-thread", viewport)
+
+    expect(viewport.scrollTop).toBe(800)
+  })
+
   it("keeps bookmarks independent by thread for the controller lifetime", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ scrollTop: 300 })
