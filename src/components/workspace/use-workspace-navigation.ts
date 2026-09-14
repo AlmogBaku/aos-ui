@@ -40,7 +40,6 @@ import {
   getAgentCreator,
   isRosterAgent,
 } from "@/runtime-adapters/agent-identity"
-import { switchToAosDraft } from "@/runtime-adapters/aos"
 
 const emptySessions: SessionMetadata[] = []
 const emptyTodos: TodoItem[] = []
@@ -84,13 +83,16 @@ export function useWorkspaceNavigation({
   now,
   readNow,
 }: {
-  bundle: Pick<HarnessRuntime, "assistantRuntime" | "workspace">
+  bundle: Pick<
+    HarnessRuntime,
+    "assistantRuntime" | "workspace" | "createSessionDraft"
+  >
   locale: Locale
   dictionary: Dictionary
   now: Date
   readNow: () => Date
 }) {
-  const { assistantRuntime: runtime, workspace } = bundle
+  const { assistantRuntime: runtime, workspace, createSessionDraft } = bundle
   const location = useLocation()
   const navigate = useNavigate()
   const pathname = location.pathname || "/"
@@ -254,7 +256,7 @@ export function useWorkspaceNavigation({
     async (agentId: string) => {
       localDraftAgent.current = agentId
       try {
-        const draftId = await switchToAosDraft(runtime, agentId)
+        const draftId = await createSessionDraft?.(agentId)
         if (draftId) {
           localDraftId.current = draftId
           return true
@@ -270,16 +272,12 @@ export function useWorkspaceNavigation({
         throw error
       }
     },
-    [runtime]
+    [createSessionDraft, runtime]
   )
 
   useEffect(() => {
     const agentId = localDraftAgent.current
-    if (
-      !agentId ||
-      !activeThreadId ||
-      mainItemId !== localDraftId.current
-    )
+    if (!agentId || !activeThreadId || mainItemId !== localDraftId.current)
       return
     localDraftAgent.current = null
     localDraftId.current = null
@@ -362,8 +360,7 @@ export function useWorkspaceNavigation({
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
     const draftAgentId = localDraftAgent.current
     if (draftAgentId && !activeThreadId) {
-      if (selectedAgentId !== draftAgentId)
-        setPreferredAgentId(draftAgentId)
+      if (selectedAgentId !== draftAgentId) setPreferredAgentId(draftAgentId)
       lastSelected.current.set(draftAgentId, null)
       const selection = { agentId: draftAgentId, sessionId: null }
       const canonicalPathname = buildWorkspacePathname(selection)

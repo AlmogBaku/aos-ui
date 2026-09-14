@@ -6,11 +6,14 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { HermesRpcTransport } from "./adapters/hermes/adapter"
+import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
   HermesAuthenticationError,
   type HermesWebSocketRpcTransportOptions,
 } from "./adapters/hermes/transport"
 import { createConfiguredProxy } from "./composition"
+import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
+import type { RuntimeFactory } from "./adapters/create-runtime"
 
 const directories: string[] = []
 
@@ -86,13 +89,66 @@ function profile() {
   }
 }
 
+function hermesRuntimeFactory(
+  transportFactory: NonNullable<
+    Parameters<typeof createHermesRuntime>[2]
+  >["transportFactory"]
+): RuntimeFactory {
+  return (config, limits) =>
+    createHermesRuntime(config, limits, { transportFactory })
+}
+
 describe("configured proxy composition", () => {
+  it("uses an injected provider-neutral runtime factory without reading adapter secrets", async () => {
+    const input = await configuration(true)
+    input.runtime.tokenFile = "/missing/provider-private-secret"
+    const listAgents = vi.fn(async () => ({
+      revision: "test-catalog-1",
+      agents: [],
+    }))
+    const runtime = {
+      runtimeInfo: vi.fn(async () => ({
+        id: "test-runtime",
+        kind: "test",
+        status: "ready",
+        capabilities: {},
+      })),
+      listAgents,
+    } as unknown as ServerRuntime
+    const runtimeInstance = {
+      id: "test-runtime",
+      runtime,
+      sessions: {},
+      close: vi.fn(async () => undefined),
+    } as unknown as RuntimeInstance
+    const runtimeFactory = vi.fn(async () => runtimeInstance)
+
+    const configured = await createConfiguredProxy(input, {
+      runtimeFactory,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    expect(runtimeFactory).toHaveBeenCalledOnce()
+    expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits)
+    expect(configured.runtimeInstance).toBe(runtimeInstance)
+    expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/agents"
+    )
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      revision: "test-catalog-1",
+      agents: [],
+    })
+    expect(listAgents).toHaveBeenCalledOnce()
+  })
+
   it("starts a trusted operator app without OIDC or operator cookies", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [] } : undefined
     )
     const configured = await createConfiguredProxy(await configuration(), {
-      transportFactory: () => ({ request }),
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: { info: vi.fn(), error: vi.fn() },
     })
 
@@ -119,15 +175,13 @@ describe("configured proxy composition", () => {
         }) as HermesRpcTransport & { credentials: typeof options.credentials }
     )
     const configured = await createConfiguredProxy(await configuration(true), {
-      transportFactory,
+      runtimeFactory: hermesRuntimeFactory(transportFactory),
       logger: { info: vi.fn(), error: vi.fn() },
       clock: () => 1_700_000_000_000,
     })
 
     expect(transportFactory).toHaveBeenCalledOnce()
     expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
-    expect(configured.runtimeInstance.runtime).toBe(configured.hermes)
-    expect(configured.transport).toBe(transportFactory.mock.results[0]?.value)
     await expect(
       transportFactory.mock.results[0]?.value.credentials()
     ).resolves.toEqual({ "X-Hermes-Session-Token": "hermes-secret" })
@@ -142,7 +196,7 @@ describe("configured proxy composition", () => {
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
     const configured = await createConfiguredProxy(await configuration(true), {
-      transportFactory: () => ({ request }),
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: { info: vi.fn(), error: vi.fn() },
       clock: () => 1_700_000_000_000,
     })
@@ -173,11 +227,11 @@ describe("configured proxy composition", () => {
 
   it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {
     const configured = await createConfiguredProxy(await configuration(), {
-      transportFactory: () => ({
+      runtimeFactory: hermesRuntimeFactory(() => ({
         request: vi.fn(async () => {
           throw new HermesAuthenticationError()
         }),
-      }),
+      })),
       logger: { info: vi.fn(), error: vi.fn() },
     })
 

@@ -672,9 +672,7 @@ describe("HermesRunEngine", () => {
         toolCallId: "clarify-call",
         content: JSON.stringify({
           status: "cancelled",
-          responses: [
-            { question: "Answer whichever apply.", answers: [] },
-          ],
+          responses: [{ question: "Answer whichever apply.", answers: [] }],
         }),
         role: "tool",
       },
@@ -1346,7 +1344,7 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const handle = await engine.reconnect(scope, {
+    const handle = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 10 },
@@ -1616,7 +1614,7 @@ describe("HermesRunEngine", () => {
     const position = first.recoveryPosition()
     disconnected?.()
 
-    const resumed = await engine.reconnect(scope, {
+    const resumed = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "run-1",
       position,
@@ -1683,7 +1681,7 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const resumed = await engine.reconnect(scope, {
+    const resumed = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "restored-run",
     })
@@ -2092,7 +2090,7 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const handle = await engine.reconnect(scope, {
+    const handle = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 10 },
@@ -2238,11 +2236,11 @@ describe("HermesRunEngine", () => {
       position: { epoch: "epoch-1", lastSeen: 0 },
     }
 
-    await expect(engine.reconnect(scope, request)).rejects.toMatchObject({
+    await expect(engine.recover(scope, request)).rejects.toMatchObject({
       code: "AOS_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
-    await expect(engine.reconnect(scope, request)).resolves.toBeDefined()
+    await expect(engine.recover(scope, request)).resolves.toBeDefined()
     expect(unsubscribes).toBe(1)
   })
 
@@ -2307,7 +2305,7 @@ describe("HermesRunEngine", () => {
         }),
       })
     )
-    const handle = await engine.reconnect(scope, {
+    const handle = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 0 },
@@ -2371,7 +2369,7 @@ describe("HermesRunEngine", () => {
       })
     )
     await expect(
-      reconnect.reconnect(scope, {
+      reconnect.recover(scope, {
         threadId: scope.threadId,
         runId: "run-1",
         position: { epoch: "epoch-1", lastSeen: 0 },

@@ -23,13 +23,13 @@ const errorDescriptions: Record<ErrorCode, string> = {
   run_conflict: "A run is already active for this session.",
   run_capacity_exceeded: "AOS is at capacity. Please try again shortly.",
   runtime_authentication_required:
-    "Hermes rejected the configured server token. Check the gateway configuration.",
+    "The configured runtime credentials were rejected. Check the gateway configuration.",
   temporarily_unavailable:
     "The service is temporarily unavailable. Please try again.",
   connection_interrupted:
     "The connection was interrupted. AOS will reconcile before continuing.",
   uncertain_mutation:
-    "Hermes may have accepted the request. Refresh to reconcile before trying again.",
+    "The runtime may have accepted the request. Refresh to reconcile before trying again.",
   internal_error: "Something went wrong. Please try again.",
 }
 

@@ -147,9 +147,3 @@ From the guest origin, verify that:
 
 Live acceptance requires an approved disposable Session and real credentials.
 Fixture or mocked tests do not establish a live invitation journey.
-
-## Legacy helper
-
-The Go `aos-gateway` and its systemd/Nginx templates remain in the checkout only
-for migration and parity verification. They are not the Hermes V1 browser path
-and should not be deployed alongside the TypeScript guest listener.

@@ -22,17 +22,17 @@ export function registerWorkspaceRoutes(
   ) => Promise<string>
 ) {
   app.get("/api/aos/v1/runtime", async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    return context.json(RuntimeInfoSchema.parse(await hermes.runtimeInfo()))
+    const runtime = await requireRuntime(context.req.raw)
+    return context.json(RuntimeInfoSchema.parse(await runtime.runtimeInfo()))
   })
 
   app.get("/api/aos/v1/agents", async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    return context.json(await hermes.listAgents())
+    const runtime = await requireRuntime(context.req.raw)
+    return context.json(await runtime.listAgents())
   })
 
   app.patch("/api/aos/v1/agents/:agentId/visibility", async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const parsed = VisibilityUpdateRequestSchema.safeParse(
@@ -40,7 +40,7 @@ export function registerWorkspaceRoutes(
     )
     if (!parsed.success) return errorResponse("invalid_request", 400)
     return context.json(
-      await hermes.updateAgentVisibility(
+      await runtime.updateAgentVisibility(
         context.req.param("agentId"),
         parsed.data.visibility,
         parsed.data.revision
@@ -52,29 +52,31 @@ export function registerWorkspaceRoutes(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/workspace"
 
   app.get(`${sessionWorkspacePath}/capabilities`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     const agentId = context.req.param("agentId")
     const sessionId = context.req.param("sessionId")
-    await requireScopedSession(hermes, agentId, sessionId)
+    await requireScopedSession(runtime, agentId, sessionId)
     return context.json(
       SessionWorkspaceCapabilitiesResponseSchema.parse(
-        hermes.workspaceCapabilities()
+        runtime.workspaceCapabilities()
       )
     )
   })
 
   app.get(`${sessionWorkspacePath}/models`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     const agentId = context.req.param("agentId")
     const sessionId = context.req.param("sessionId")
-    await requireScopedSession(hermes, agentId, sessionId)
+    await requireScopedSession(runtime, agentId, sessionId)
     return context.json(
-      SessionModelsResponseSchema.parse(await hermes.models(agentId, sessionId))
+      SessionModelsResponseSchema.parse(
+        await runtime.models(agentId, sessionId)
+      )
     )
   })
 
   app.post(`${sessionWorkspacePath}/models/select`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const body = SessionModelSelectRequestSchema.safeParse(
@@ -82,13 +84,13 @@ export function registerWorkspaceRoutes(
     )
     if (!body.success) return errorResponse("invalid_request", 400)
     await requireScopedSession(
-      hermes,
+      runtime,
       context.req.param("agentId"),
       context.req.param("sessionId")
     )
     return context.json(
       SessionModelSelectRequestSchema.parse(
-        await hermes.selectModel(
+        await runtime.selectModel(
           context.req.param("agentId"),
           context.req.param("sessionId"),
           body.data.selectedId
@@ -98,15 +100,15 @@ export function registerWorkspaceRoutes(
   })
 
   app.get(`${sessionWorkspacePath}/context`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     await requireScopedSession(
-      hermes,
+      runtime,
       context.req.param("agentId"),
       context.req.param("sessionId")
     )
     return context.json(
       SessionContextResponseSchema.parse(
-        await hermes.context(
+        await runtime.context(
           context.req.param("agentId"),
           context.req.param("sessionId")
         )

@@ -30,10 +30,6 @@ import {
 
 import { FixtureAosUiApp } from "@/runtime-adapters/fixture/composition"
 import {
-  AosDraftRegistry,
-  registerAosDraftRegistry,
-} from "@/runtime-adapters/aos"
-import {
   ControlledWorkspaceFixture,
   type WorkspaceFixtureRuntime,
 } from "./test-utils/controlled-workspace-fixture"
@@ -69,17 +65,18 @@ function RegisteredDraftWorkspace({
   bundle: WorkspaceFixtureRuntime
   capture: (bundle: WorkspaceFixtureRuntime) => void
 }) {
-  const [drafts] = useState(() => new AosDraftRegistry())
-  useEffect(() => registerAosDraftRegistry(bundle.assistantRuntime, drafts), [
-    bundle.assistantRuntime,
-    drafts,
-  ])
   useEffect(() => capture(bundle), [bundle, capture])
   return (
     <AosUiWorkspace
       locale="en"
       dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
+      runtime={{
+        ...asHarnessRuntime(bundle),
+        createSessionDraft: async () => {
+          await bundle.assistantRuntime.threads.switchToNewThread()
+          return bundle.assistantRuntime.threads.getState().mainThreadId
+        },
+      }}
       now={FIXTURE_NOW}
     />
   )

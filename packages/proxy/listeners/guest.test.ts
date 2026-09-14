@@ -17,7 +17,7 @@ import type {
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createReconnectCursorCodec } from "../events/cursor"
-import { createGuestListenerService } from "./service"
+import { createGuestListenerService } from "./guest"
 
 const NOW = 1_700_000_000_000
 const ORIGIN = "https://guest.example.test"

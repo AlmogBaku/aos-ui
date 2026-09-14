@@ -106,8 +106,8 @@ export function createAgUiInterruptRequest(
   const request: RuntimeQuestionRequest = {
     kind: "question",
     requestId: interrupts.map(({ id }) => id).join("-"),
-    // AG-UI scopes interrupts to the mounted thread; this field is only used
-    // by the legacy provider-neutral interaction adapter.
+    // AG-UI scopes interrupts to the mounted thread; this field satisfies the
+    // shared question composer contract used by non-AG-UI runtimes.
     sessionId: "ag-ui",
     questions,
   }

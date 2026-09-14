@@ -222,6 +222,8 @@ export type ArtifactAdapter = {
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
+  /** Creates a provider-owned local draft without performing a remote write. */
+  createSessionDraft?: (agentId: string) => Promise<string>
   /** The selected thread runtime carries standard AG-UI interrupt state. */
   agUiInterrupts?: true
   interactions?: RuntimeInteractionAdapter

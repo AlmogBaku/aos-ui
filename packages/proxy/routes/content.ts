@@ -10,6 +10,18 @@ import type { ServerAttachmentStages, ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
+export async function loadSessionArtifact(
+  runtime: ServerRuntime,
+  agentId: string,
+  publicSessionId: string,
+  artifactId: string
+) {
+  const storedId = runtime.resolveSessionId(agentId, publicSessionId)
+  if (!storedId) return undefined
+  await runtime.getSession(agentId, storedId)
+  return runtime.artifact(agentId, publicSessionId, artifactId)
+}
+
 function recordingBytes(dataUrl: string, mimeType: string) {
   const prefix = `data:${mimeType};base64,`
   if (!dataUrl.startsWith(prefix)) return undefined
@@ -43,7 +55,7 @@ export function registerContentRoutes(
   const sessionContentPath = "/api/aos/v1/agents/:agentId/sessions/:sessionId"
 
   app.post(`${sessionContentPath}/attachments/stage`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const body = SessionAttachmentStageRequestSchema.safeParse(
@@ -52,8 +64,8 @@ export function registerContentRoutes(
     if (!body.success) return errorResponse("invalid_request", 400)
     const agentId = context.req.param("agentId")
     const sessionId = context.req.param("sessionId")
-    await requireScopedSession(hermes, agentId, sessionId)
-    const stage = await hermes.stageAttachments(
+    await requireScopedSession(runtime, agentId, sessionId)
+    const stage = await runtime.stageAttachments(
       agentId,
       sessionId,
       body.data.attachments
@@ -73,17 +85,14 @@ export function registerContentRoutes(
   })
 
   app.get(`${sessionContentPath}/artifacts/:artifactId`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    await requireScopedSession(
-      hermes,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
-    const artifact = await hermes.artifact(
+    const runtime = await requireRuntime(context.req.raw)
+    const artifact = await loadSessionArtifact(
+      runtime,
       context.req.param("agentId"),
       context.req.param("sessionId"),
       context.req.param("artifactId")
     )
+    if (!artifact) return errorResponse("not_found", 404)
     return new Response(Uint8Array.from(artifact.bytes).buffer, {
       headers: {
         "content-type": artifact.mimeType ?? "application/octet-stream",
@@ -93,7 +102,7 @@ export function registerContentRoutes(
   })
 
   app.post(`${sessionContentPath}/audio/transcribe`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const body = SessionTranscriptionRequestSchema.safeParse(
@@ -103,13 +112,13 @@ export function registerContentRoutes(
     const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
     if (!bytes) return errorResponse("invalid_request", 400)
     await requireScopedSession(
-      hermes,
+      runtime,
       context.req.param("agentId"),
       context.req.param("sessionId")
     )
     return context.json(
       SessionTranscriptionResponseSchema.parse({
-        transcript: await hermes.transcribe(
+        transcript: await runtime.transcribe(
           context.req.param("agentId"),
           context.req.param("sessionId"),
           bytes,
@@ -121,7 +130,7 @@ export function registerContentRoutes(
   })
 
   app.post(`${sessionContentPath}/audio/speak`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
+    const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const body = SessionSpeechRequestSchema.safeParse(
@@ -129,11 +138,11 @@ export function registerContentRoutes(
     )
     if (!body.success) return errorResponse("invalid_request", 400)
     await requireScopedSession(
-      hermes,
+      runtime,
       context.req.param("agentId"),
       context.req.param("sessionId")
     )
-    const speech = await hermes.speak(
+    const speech = await runtime.speak(
       context.req.param("agentId"),
       context.req.param("sessionId"),
       body.data.text,

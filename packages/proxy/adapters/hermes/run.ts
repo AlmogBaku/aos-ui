@@ -1168,11 +1168,6 @@ export class HermesRunEngine {
     }
   }
 
-  /** @deprecated Compatibility shim for adapter-local callers during V1 rollout. */
-  async reconnect(scope: HermesRunScope, request: HermesReconnectRequest) {
-    return this.recover(scope, request)
-  }
-
   async #reattach(
     active: ActiveRun,
     request: HermesReconnectRequest & {

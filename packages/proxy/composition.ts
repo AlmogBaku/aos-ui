@@ -1,30 +1,22 @@
 import { randomUUID } from "node:crypto"
 
+import {
+  createRuntimeInstance,
+  type RuntimeFactory,
+} from "./adapters/create-runtime"
 import { createProxyApp } from "./app"
 import {
   createGuestInvitationService,
   type GuestInvitationKey,
 } from "./auth/guest-invitation"
-import { SessionCoordinator } from "./core/session-coordinator"
-import type { RuntimeInstance } from "./core/runtime"
 import { parseProxyConfig } from "./config"
 import { createReconnectCursorCodec } from "./events/cursor"
 import { createOperatorEventService } from "./events/service"
-import {
-  HermesServerAdapter,
-  type HermesRpcTransport,
-} from "./adapters/hermes/adapter"
-import {
-  HermesWebSocketRpcTransport,
-  type HermesWebSocketRpcTransportOptions,
-} from "./adapters/hermes/transport"
-import { createGuestListenerService } from "./guest/service"
-import { readSecretFile, readSecretKeyFile } from "./secrets"
+import { createGuestListenerService } from "./listeners/guest"
+import { readSecretKeyFile } from "./secrets"
 
 export type ConfiguredProxyDependencies = {
-  transportFactory?: (
-    options: HermesWebSocketRpcTransportOptions
-  ) => HermesRpcTransport
+  runtimeFactory?: RuntimeFactory
   logger: { info(value: unknown): void; error(value: unknown): void }
   clock?: () => number
 }
@@ -35,8 +27,11 @@ export async function createConfiguredProxy(
   dependencies: ConfiguredProxyDependencies
 ) {
   const config = parseProxyConfig(input)
-  const [token, cursorKeys, invitationKeys] = await Promise.all([
-    readSecretFile(config.runtime.tokenFile),
+  const [runtimeInstance, cursorKeys, invitationKeys] = await Promise.all([
+    (dependencies.runtimeFactory ?? createRuntimeInstance)(
+      config.runtime,
+      config.limits
+    ),
     Promise.all(
       config.events.keys.map(async ({ id, secretFile }) => ({
         id,
@@ -54,39 +49,6 @@ export async function createConfiguredProxy(
         )
       : Promise.resolve(undefined),
   ])
-  const transportFactory =
-    dependencies.transportFactory ??
-    ((options: HermesWebSocketRpcTransportOptions) =>
-      new HermesWebSocketRpcTransport(options))
-  const transport = transportFactory({
-    baseUrl: config.runtime.baseUrl,
-    credentials: async () => ({ "X-Hermes-Session-Token": token }),
-  })
-  const hermes = new HermesServerAdapter(transport, {
-    sessionIdleMs: config.runtime.sessionIdleMs,
-  })
-  const sessions = new SessionCoordinator({
-    engine: hermes.runs,
-    maxActiveExecutions: config.limits.activeExecutions,
-    maxGuestActiveExecutions: config.limits.guestActiveExecutions,
-    maxSubscriberEvents: config.limits.subscriberEvents,
-    maxSubscriberBytes: config.limits.subscriberBytes,
-    maxReplayEvents: config.limits.subscriberEvents,
-    maxReplayBytes: config.limits.subscriberBytes,
-  })
-  let closePromise: Promise<void> | undefined
-  const runtimeInstance: RuntimeInstance = {
-    id: config.runtime.id,
-    runtime: hermes,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        await hermes.close()
-      })
-      return closePromise
-    },
-  }
   const cursor = createReconnectCursorCodec({
     activeKeyId: config.events.activeKeyId,
     keys: Object.fromEntries(cursorKeys.map(({ id, secret }) => [id, secret])),
@@ -143,7 +105,8 @@ export async function createConfiguredProxy(
     ...(invitations === undefined ? {} : { guestInvitations: invitations }),
     readiness: async () => {
       try {
-        return (await hermes.runtimeInfo()).status === "unavailable"
+        return (await runtimeInstance.runtime.runtimeInfo()).status ===
+          "unavailable"
           ? "not-ready"
           : "ready"
       } catch {
@@ -158,8 +121,6 @@ export async function createConfiguredProxy(
     app,
     config,
     runtimeInstance,
-    hermes,
-    transport,
     cursor,
     eventService,
     guest,

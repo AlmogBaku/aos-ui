@@ -19,19 +19,17 @@ OpenCode and generic AG-UI are future server-side adapters and do not expose a
 browser route in this deployment. Use `AOS_UI_RUNTIME_MODE=aos` with the
 configured proxy, or explicit `fixture` mode for a backend-free preview.
 
-## Hermes asks you to sign in
+## Hermes authentication fails
 
-Use the **Sign in to Hermes** action, complete native authentication in the new tab, then reload AOS. The browser relies on Hermes cookies and single-use WebSocket tickets; credentials never belong in public runtime configuration.
-
-The production Hermes deployment does not mount Hermes at a browser path.
-Authentication must use the normalized proxy routes under
-`/api/aos/v1/auth`; `/hermes` and native `/auth` routes should return `404`.
+Hermes V1 uses a configured server token loaded from the proxy's private secret
+file. Verify the configured file exists, is owner-only, is readable by the
+proxy process, and contains the current Hermes token. The browser never handles
+Hermes cookies or credentials.
 
 ## Hermes HTTP works but live updates fail
 
 - Confirm Nginx forwards WebSocket upgrades on `/api/aos/v1/events` and keeps
   buffering disabled for `/api/aos/v1`.
-- Confirm operator session cookies apply to the public origin.
 - Verify the proxy config's Hermes base URL is reachable from the proxy
   container; it is never a browser-facing URL.
 - Check that the server version exposes the native interfaces described in the [Hermes guide](runtimes/hermes.md).
@@ -56,8 +54,8 @@ same-origin `/api/aos/v1` path.
   `/openclaw` and does not attach a browser Gateway.
 - `compose.openclaw.yaml` and `deploy/runtime-config.openclaw.json` are retained
   only as an explicit fail-closed marker; do not use them as a connection command.
-- For invited chat, set `AOS_GATEWAY_OPENCLAW_DEVICE_FILE` to an absolute writable persistent path. The file must be a regular `0600` file, not a symlink. If first start reports `PAIRING_REQUIRED`, run `openclaw devices list`, approve the exact current request with `openclaw devices approve <requestId>`, and restart the guest gateway.
-- If invited chat reports a missing scope, re-pair that device for exactly `operator.read`, `operator.write`, and `operator.questions`; do not delete or replace a working device file merely to bypass approval.
+- Invited chat remains unavailable until the TypeScript OpenClaw server adapter
+  implements and verifies native pairing and scoped access.
 - A missing Todo, visibility, edit/regenerate, creator, handoff, or STT control is an explicit capability limit, not a connection failure.
 - Confirm Session records include matching `threadId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.

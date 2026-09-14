@@ -33,27 +33,14 @@ export class AosDraftRegistry {
 
 type DraftRuntime = Pick<AssistantRuntime, "threads">
 
-const registries = new WeakMap<DraftRuntime, AosDraftRegistry>()
 const transitions = new WeakMap<DraftRuntime, Promise<unknown>>()
 
-export function registerAosDraftRegistry(
+/** Creates a local Assistant UI thread and records its owning Agent. */
+export async function createAosSessionDraft(
   runtime: DraftRuntime,
-  registry: AosDraftRegistry
+  registry: AosDraftRegistry,
+  agentId: string
 ) {
-  registries.set(runtime, registry)
-  return () => {
-    if (registries.get(runtime) === registry) registries.delete(runtime)
-  }
-}
-
-/**
- * Creates a local Assistant UI thread and records its owning Agent. This does
- * not perform any network work; RemoteThreadListAdapter.initialize owns the
- * first remote write when a message is actually sent.
- */
-export async function switchToAosDraft(runtime: DraftRuntime, agentId: string) {
-  const registry = registries.get(runtime)
-  if (!registry) return false
   const previous = transitions.get(runtime) ?? Promise.resolve()
   const transition = previous
     .catch(() => undefined)

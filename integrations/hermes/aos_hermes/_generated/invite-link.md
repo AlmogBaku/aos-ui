@@ -1,48 +1,43 @@
 ---
 name: aos-invite-link
-description: Use when a user asks to create a signed AOS guest invitation for a specific OpenCode Agent or Hermes profile.
+description: Use when a user asks to create a scoped AOS guest invitation for an existing Agent or Session.
 ---
 
-# Create an invite link
+# Create an AOS guest invitation
 
-Resolve the guest origin before collecting user input:
+Use the trusted operator listener. The TypeScript proxy validates the Agent and
+optional Session before signing; do not call a native runtime or mint a JWT
+locally.
 
-- when `AOS_GATEWAY_GUEST_ORIGIN` is non-empty, use it as the deployed guest
-  origin and do not ask for it;
-- otherwise, collect the deployed HTTPS guest origin, such as
-  `https://guest.example.com`, and set it only for the mint command.
+Collect these exact values:
 
-Collect these required values from the user without inferring them:
+- operator origin and guest origin;
+- runtime ID;
+- Agent ID and optional durable Session ID;
+- guest principal ID beginning with `guest_`;
+- invitation ID beginning with `invite_`;
+- the smallest required operations and output capabilities.
 
-- the exact target Agent identifier; and
-- the inline first-turn Agent instruction.
+Allowed operations are `artifacts:read`, `attachments:read`, `errors:read`,
+`interactions:respond`, `messages:create`, `messages:read`, and
+`messages:stop`. Allowed capabilities are `artifact-metadata`,
+`attachment-metadata`, `custom-ui`, `message-text`, and `safe-errors`.
 
-Accept an optional stable reference, expiry, prefill, language, guest name, logo URL, accent, title, and welcome message. The default expiry is 24 hours. An omitted reference creates a new random conversation reference; use an explicit reference only when another invitation should reopen the same Agent conversation.
-
-## Verify the target
-
-Use the native runtime that loaded this skill.
-
-- In OpenCode, run `opencode agent list` in the current worktree. Continue only when exactly one listed Agent identifier equals the user-supplied value.
-- In Hermes, run `hermes profile show "$agent"`. Continue only when the exact profile exists.
-
-Reject `agent-builder`, `build`, `plan`, `general`, and `explore`, plus any target marked as a creator, hidden, or system-only. AOS guest filtering is not an Agent sandbox: remind the user to choose an Agent whose native filesystem, network, tools, and permissions match the guest's trust level.
-
-## Mint the invitation
-
-Invoke `aos-gateway` with a Bash array so each value remains one argument. Encode each user-supplied literal as a single-quoted shell word, replacing every embedded `'` with `'"'"'`. Populate variables, then build and execute this shape:
+POST the grant to `/api/aos/v1/guest-invitations` on the operator origin with
+that exact origin in the `Origin` header. Treat a non-201 response, invalid
+JSON, or missing `token` as failure. Do not retry an uncertain request.
 
 ```bash
-args=(aos-gateway invite --agent "$agent" --instruction "$instruction")
-# Append only the optional flags the user supplied:
-# --ref --expires-in --prefill --lang --name --logo --accent --title --message
-if [[ -n ${AOS_GATEWAY_GUEST_ORIGIN:-} ]]; then
-  "${args[@]}"
-else
-  AOS_GATEWAY_GUEST_ORIGIN="$guest_origin" "${args[@]}"
-fi
+curl --fail --silent --show-error \
+  --request POST \
+  --header "Origin: $operator_origin" \
+  --header "Content-Type: application/json" \
+  --data "$grant_json" \
+  "$operator_origin/api/aos/v1/guest-invitations"
 ```
 
-Execute the array directly. Treat a missing signing key, failed Agent lookup, nonzero CLI exit, or output that is not exactly one invite URL as failure. Never retry an uncertain mint automatically.
-
-Return the URL without decoding or rewriting it. State that it is a reusable bearer credential until expiry and that its signed JWT claims, including the instruction, are readable by anyone holding the link. The inline instruction can also appear in the native tool transcript and process argument list; never accept secrets in it.
+Read the `token` field and return
+`$guest_origin/#invite=$token` without decoding or rewriting it. State that
+the link is a reusable bearer credential until expiry and that JWT claims are
+readable by its holder. Never place secrets or a live provider Session ID in
+the grant.

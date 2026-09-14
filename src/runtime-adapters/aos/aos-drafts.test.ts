@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import {
-  AosDraftRegistry,
-  registerAosDraftRegistry,
-  switchToAosDraft,
-} from "./aos-drafts"
+import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 
 describe("AOS local draft registry", () => {
   it("serializes rapid new-draft selections so each local id keeps its Agent", async () => {
@@ -35,10 +31,8 @@ describe("AOS local draft registry", () => {
       },
     } as never
     const drafts = new AosDraftRegistry()
-    registerAosDraftRegistry(runtime, drafts)
-
-    const alpha = switchToAosDraft(runtime, "alpha")
-    const beta = switchToAosDraft(runtime, "beta")
+    const alpha = createAosSessionDraft(runtime, drafts, "alpha")
+    const beta = createAosSessionDraft(runtime, drafts, "beta")
     releaseFirst!()
     await vi.waitFor(() => expect(switchToNewThread).toHaveBeenCalledTimes(2))
     releaseSecond!()

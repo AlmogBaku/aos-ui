@@ -48,7 +48,7 @@ function runText(candidate: unknown) {
   return content.map((part) => (part as { text: string }).text).join("\n")
 }
 
-function normalizeRunInput(
+export function normalizeRunInput(
   candidate: RunAgentInput,
   threadId: string,
   rewindSourceId?: string
@@ -86,21 +86,39 @@ function normalizeRunInput(
   }
 }
 
-function streamResponse(
-  context: Context<{ Variables: { requestId: string } }>,
-  subscription: CoordinatedRunSubscription
+type RunStreamOptions = {
+  signal?: AbortSignal
+  expiresAt?: number
+  now?: () => number
+  schedule?: (delayMs: number, task: () => void) => unknown
+  cancel?: (timer: unknown) => void
+}
+
+export function createRunStreamResponse(
+  subscription: CoordinatedRunSubscription,
+  options: RunStreamOptions = {}
 ) {
   const encoder = new EventEncoder({ accept: "text/event-stream" })
   const textEncoder = new TextEncoder()
   const iterator = subscription.events[Symbol.asyncIterator]()
+  const now = options.now ?? Date.now
+  const schedule =
+    options.schedule ??
+    ((delayMs: number, task: () => void) => setTimeout(task, delayMs))
+  const cancel =
+    options.cancel ?? ((timer: unknown) => clearTimeout(timer as number))
   let closed = false
+  let timer: unknown
   const close = () => {
     if (closed) return
     closed = true
+    if (timer !== undefined) cancel(timer)
+    options.signal?.removeEventListener("abort", close)
     subscription.close()
   }
-  const onAbort = () => close()
-  context.req.raw.signal.addEventListener("abort", onAbort, { once: true })
+  options.signal?.addEventListener("abort", close, { once: true })
+  if (options.expiresAt !== undefined)
+    timer = schedule(Math.max(0, options.expiresAt - now()), close)
   return new Response(
     new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -108,8 +126,7 @@ function streamResponse(
         try {
           const result = await iterator.next()
           if (result.done) {
-            closed = true
-            context.req.raw.signal.removeEventListener("abort", onAbort)
+            close()
             controller.close()
             return
           }
@@ -118,20 +135,17 @@ function streamResponse(
             textEncoder.encode(`id: ${sequence}\n${encoder.encodeSSE(event)}`)
           )
           if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
-            closed = true
-            context.req.raw.signal.removeEventListener("abort", onAbort)
+            close()
             await iterator.return?.()
             controller.close()
           }
         } catch {
           close()
-          context.req.raw.signal.removeEventListener("abort", onAbort)
           controller.error(new Error("AOS run stream failed"))
         }
       },
       async cancel() {
         close()
-        context.req.raw.signal.removeEventListener("abort", onAbort)
         await iterator.return?.()
       },
     }),
@@ -244,7 +258,9 @@ export function registerRunRoutes(
         input,
         access(context, principalId)
       )
-      return streamResponse(context, subscription)
+      return createRunStreamResponse(subscription, {
+        signal: context.req.raw.signal,
+      })
     } catch (cause) {
       await stage?.cleanup().catch(() => undefined)
       options.logger.error(
@@ -296,7 +312,9 @@ export function registerRunRoutes(
         },
         access(context, principalId)
       )
-      return streamResponse(context, subscription)
+      return createRunStreamResponse(subscription, {
+        signal: context.req.raw.signal,
+      })
     }
   )
 

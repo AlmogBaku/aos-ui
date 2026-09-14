@@ -68,7 +68,7 @@ describe("errorResponse", () => {
     ["run_capacity_exceeded", "AOS is at capacity. Please try again shortly."],
     [
       "runtime_authentication_required",
-      "Hermes rejected the configured server token. Check the gateway configuration.",
+      "The configured runtime credentials were rejected. Check the gateway configuration.",
     ],
     [
       "temporarily_unavailable",
@@ -80,7 +80,7 @@ describe("errorResponse", () => {
     ],
     [
       "uncertain_mutation",
-      "Hermes may have accepted the request. Refresh to reconcile before trying again.",
+      "The runtime may have accepted the request. Refresh to reconcile before trying again.",
     ],
     ["internal_error", "Something went wrong. Please try again."],
   ] as const)(

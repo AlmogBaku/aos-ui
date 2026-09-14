@@ -145,9 +145,7 @@ it starts owns both distinct listeners:
 
 An external reverse proxy may expose only the guest listener for invited chat.
 It must preserve SSE flushing and WebSocket upgrades and must not route the
-operator API or any native Hermes endpoint. Nginx is optional. The retained
-`aos-gateway` and guest-Nginx templates are migration artifacts, not the V1
-Hermes path.
+operator API or any native Hermes endpoint. Nginx is optional.
 
 Copy and substitute the templates outside the checkout; they are not an
 installer and intentionally contain no domain, proxy provider, tunnel, or
@@ -218,18 +216,5 @@ AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing
 When runtime container behavior changes, also build the affected image and
 smoke its health and streaming endpoints.
 
-## P1 cutover blockers retained for later deletion
-
-The old native forwarding artifacts remain in the checkout until parity is
-proven and are not part of the Hermes operator deployment:
-
-- the local Vite Hermes forwarding shortcut and its direct runtime configuration
-  example; OpenClaw's runtime example is already fail-closed;
-- the legacy Go `aos-gateway` guest listener and its acceptance coverage,
-  retained until the TypeScript dual-listener path has proven parity;
-- the planned OpenClaw deployment overlay and live acceptance coverage.
-
-Delete those artifacts only after an approved Hermes operator and guest
-acceptance run proves authentication, Agent/Session ownership, history,
-streaming, Stop, reconnect, invitation expiry/isolation, and deployment
-rollback on the normalized proxy path.
+The TypeScript proxy is the only AOS gateway. The checkout contains no parallel
+Go gateway, native browser-forwarding path, or compatibility deployment.

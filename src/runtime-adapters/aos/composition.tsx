@@ -28,7 +28,7 @@ import {
   useAosSessionCapabilities,
 } from "./aos-composer-features"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
-import { AosDraftRegistry, registerAosDraftRegistry } from "./aos-drafts"
+import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
@@ -179,8 +179,9 @@ function ReadyAosRuntimeProvider({
         assistantRuntimeRef.current = null
     }
   }, [assistantRuntime])
-  useEffect(
-    () => registerAosDraftRegistry(assistantRuntime, drafts),
+  const createSessionDraft = useCallback(
+    (agentId: string) =>
+      createAosSessionDraft(assistantRuntime, drafts, agentId),
     [assistantRuntime, drafts]
   )
   const selectedScopeKey = useSyncExternalStore(
@@ -257,6 +258,7 @@ function ReadyAosRuntimeProvider({
   return children({
     assistantRuntime,
     workspace: client,
+    createSessionDraft,
     agUiInterrupts: true,
     artifacts: { resolver: artifacts },
     composer,

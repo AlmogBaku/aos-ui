@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
 
 const temporaryDirectories: string[] = []
@@ -98,10 +99,13 @@ describe("proxy executable", () => {
     const lifecycle = await runProxyCli(
       ["bun", "proxy", "--config", await proxyConfig()],
       {
-        transportFactory: () => ({
-          request: vi.fn(),
-          close: transportClose,
-        }),
+        runtimeFactory: (config, limits) =>
+          createHermesRuntime(config, limits, {
+            transportFactory: () => ({
+              request: vi.fn(),
+              close: transportClose,
+            }),
+          }),
         logger: { info: vi.fn(), error: vi.fn() },
         start,
         staticHandler,
