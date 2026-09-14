@@ -129,7 +129,13 @@ const toolProjections: Readonly<Record<string, ToolProjection>> = {
     results: ["ok", "status", "message"],
   },
   question: {
-    args: ["question", "options", "allowFreeform", "multiple"],
+    args: [
+      "question",
+      "questions",
+      "options",
+      "allowFreeform",
+      "multiple",
+    ],
     results: [
       "answer",
       "answers",
@@ -314,6 +320,10 @@ function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
 
 function publicToolResult(name: string, value: unknown, isError: boolean) {
   const canonicalName = canonicalToolName(name)
+  if (canonicalName === "question") {
+    const responses = projectQuestionResponses(value)
+    if (responses) return responses
+  }
   const projection = toolProjections[canonicalName]
   if (!projection) return { status: isError ? "failed" : "completed" }
   const projected = projectFields(value, projection.results)
@@ -350,6 +360,35 @@ function canonicalToolName(name: string) {
 
 function canonicalToolArgs(name: string, args: JsonRecord) {
   if (name === "clarify") {
+    if (Array.isArray(args.questions)) {
+      const questions = args.questions.flatMap((candidate) => {
+        if (!isRecord(candidate)) return []
+        const question = stringValue(candidate.question)
+        if (!question) return []
+        const options = Array.isArray(candidate.choices)
+          ? candidate.choices.filter(
+              (choice): choice is string =>
+                typeof choice === "string" && choice.trim().length > 0
+            )
+          : []
+        return [
+          {
+            question,
+            ...(options.length ? { options } : {}),
+            allowFreeform: options.length === 0,
+            multiple: candidate.multi_select === true,
+          } satisfies JsonRecord,
+        ]
+      })
+      if (questions.length)
+        return {
+          question: `${questions.length} ${questions.length === 1 ? "question" : "questions"}`,
+          questions,
+          // This keeps the existing question renderer valid while its
+          // settled receipt reads the richer batched shape below.
+          allowFreeform: true,
+        }
+    }
     const { choices, multi_select, allow_freeform, ...rest } = args
     const options = Array.isArray(choices)
       ? choices.filter(
@@ -385,6 +424,57 @@ function canonicalToolArgs(name: string, args: JsonRecord) {
     : args
 }
 
+function projectQuestionResponses(value: unknown): JsonRecord | undefined {
+  const parsed = parseJson(value)
+  if (!isRecord(parsed) || !Array.isArray(parsed.responses)) return undefined
+  const responses = parsed.responses.flatMap((candidate) => {
+    if (!isRecord(candidate)) return []
+    const question = stringValue(candidate.question)
+    const rawResponse = candidate.user_response
+    if (!question || typeof rawResponse !== "string") return []
+    let answers: string[] = []
+    if (rawResponse) {
+      try {
+        const decoded: unknown = JSON.parse(rawResponse)
+        answers = Array.isArray(decoded)
+          ? decoded.filter((answer): answer is string => {
+              const safe = publicJsonValue(answer)
+              return typeof safe === "string" && safe.length > 0
+            })
+          : [rawResponse]
+      } catch {
+        answers = [rawResponse]
+      }
+    }
+    answers = answers.flatMap((answer) => {
+      const safe = publicJsonValue(answer)
+      return typeof safe === "string" && safe.length > 0 ? [safe] : []
+    })
+    return [{ question, answers } satisfies JsonRecord]
+  })
+  if (!responses.length) return undefined
+  return {
+    status: responses.some(({ answers }) => (answers as JsonValue[]).length)
+      ? "answered"
+      : "cancelled",
+    responses,
+  }
+}
+
+export function projectHermesQuestionArgs(value: unknown) {
+  const parsed = parseJson(value)
+  if (!isRecord(parsed)) return undefined
+  const normalized =
+    Array.isArray(parsed.questions) || "choices" in parsed
+      ? canonicalToolArgs("clarify", parsed)
+      : parsed
+  return publicToolArgs("question", normalized)
+}
+
+export function projectHermesQuestionResult(value: unknown) {
+  return projectQuestionResponses(value)
+}
+
 function unwrapTool(name: string, args: JsonRecord) {
   if (name !== "tool_call") return { name, args }
   const selectedName = stringValue(args.name)
@@ -408,7 +498,7 @@ function safeArtifactToken(value: string, maxLength: number) {
   )
 }
 
-function artifactReceipt(raw: unknown) {
+export function projectHermesArtifactReceipt(raw: unknown) {
   const value = parseJson(raw)
   if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
     return undefined
@@ -468,7 +558,7 @@ export function projectHermesHistory(
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
 
   rows.forEach((value, index) => {
-    if (!isRecord(value) || value.display_kind === "hidden") return
+    if (!isRecord(value) || stringValue(value.display_kind)) return
     const role = stringValue(value.role)
     if (role === "tool") {
       const toolCallId = stringValue(value.tool_call_id ?? value.toolCallId)
@@ -488,7 +578,7 @@ export function projectHermesHistory(
         : part.toolName
       const artifact =
         toolName === "present_artifact" && value.is_error !== true
-          ? artifactReceipt(value.content ?? value.result)
+          ? projectHermesArtifactReceipt(value.content ?? value.result)
           : undefined
       const content = [...message.content]
       content[target.partIndex] = {
@@ -509,9 +599,10 @@ export function projectHermesHistory(
     }
 
     if (role !== "user" && role !== "assistant" && role !== "system") return
+    const rowId = value.row_id ?? value._row_id
     const id =
-      value._row_id !== undefined
-        ? `hermes-row-${String(value._row_id)}`
+      typeof rowId === "number" && Number.isSafeInteger(rowId) && rowId > 0
+        ? `hermes-row-${rowId}`
         : typeof value.id === "number" &&
             Number.isSafeInteger(value.id) &&
             value.id > 0
@@ -525,8 +616,13 @@ export function projectHermesHistory(
       ? messages.length - 1
       : messages.length
     const rawContent = parseJson(value.content)
+    // Hermes only attaches a display projection while rendering a persisted
+    // compaction carrier. Ignore it on ordinary rows so provider-only fields
+    // cannot replace a Session's durable transcript content.
+    const displayContent =
+      value._compressed_summary === true ? value.display_content : undefined
     const text = String(
-      value.display_content ??
+      displayContent ??
         value.text ??
         (Array.isArray(rawContent)
           ? rawContent

@@ -1,4 +1,9 @@
-import type { AGUIEvent, ResumeEntry } from "@ag-ui/core"
+import type {
+  AGUIEvent,
+  Interrupt,
+  ResumeEntry,
+  RunAgentInput,
+} from "@ag-ui/core"
 import type {
   AgentCatalogResponse,
   RuntimeAuthState,
@@ -6,13 +11,12 @@ import type {
   Session,
   SessionCatalogResponse,
   SessionHistoryResponse,
-  SessionInteractionSnapshotResponse,
   SessionAttachmentStageRequest,
   SessionAttachmentStageResponse,
   VisibilityUpdateResponse,
-} from "../protocol"
+} from "../../protocol"
 
-export type ServerRunScope = {
+export type SessionScope = {
   agentId: string
   /** Provider-resolved Session identity; never supplied by the browser. */
   sessionId: string
@@ -20,31 +24,81 @@ export type ServerRunScope = {
   threadId: string
 }
 
+export type ServerRunScope = SessionScope
+
+export type NewTurnRunInput = RunAgentInput & {
+  resume?: undefined
+  /** User turn to rewind before Edit or Retry; validated authoritatively. */
+  rewindSourceId?: string
+}
+export type ResumeRunInput = RunAgentInput & {
+  messages: []
+  resume: ResumeEntry[]
+}
+
 export type ServerRunHandle = {
   events: AsyncIterable<AGUIEvent>
+  /** Resolves only when the provider segment is terminal. */
+  settled: Promise<void>
   stop(): Promise<"stopping" | "idle">
-  disconnect(): void
   recoveryPosition(): { epoch: string; lastSeen: number }
 }
 
-export type ServerReconnectRequest = {
+export type RecoveryRequest = {
   threadId: string
   runId: string
   position?: { epoch: string; lastSeen: number }
 }
 
+export type ServerReconnectRequest = RecoveryRequest
+
 export type ServerRunEngine = {
-  start(scope: ServerRunScope, input: unknown): Promise<ServerRunHandle>
-  reconnect(
-    scope: ServerRunScope,
-    request: ServerReconnectRequest
+  start(
+    scope: SessionScope,
+    input: NewTurnRunInput | ResumeRunInput
   ): Promise<ServerRunHandle>
+  recover(
+    scope: SessionScope,
+    request: RecoveryRequest
+  ): Promise<ServerRunHandle>
+  discover?(
+    scope: SessionScope,
+    runId: string
+  ): Promise<
+    | {
+        handle: ServerRunHandle
+        state: "running" | "waiting-for-input"
+        interrupts?: Interrupt[]
+      }
+    | undefined
+  >
+}
+
+export type RuntimeInstance = {
+  id: string
+  runtime: ServerRuntime
+  sessions: import("./session-coordinator").SessionCoordinator
+  close(): Promise<void>
 }
 
 export class ServerRunConflictError extends Error {
   constructor() {
     super("An AOS run is already active for this Session")
     this.name = "ServerRunConflictError"
+  }
+}
+
+export class ServerRunCapacityError extends Error {
+  constructor(readonly lane: "global" | "guest" = "global") {
+    super("AOS execution capacity exceeded")
+    this.name = "ServerRunCapacityError"
+  }
+}
+
+export class ServerRunControlError extends Error {
+  constructor() {
+    super("Run control is not authorized")
+    this.name = "ServerRunControlError"
   }
 }
 
@@ -81,6 +135,8 @@ export type ServerRuntimePublicError = {
     | "not_found"
     | "revision_conflict"
     | "temporarily_unavailable"
+    | "connection_interrupted"
+    | "uncertain_mutation"
   status: 400 | 401 | 404 | 409 | 503
 }
 
@@ -128,17 +184,12 @@ export interface ServerRuntime {
     selectedId: string
   ): Promise<unknown>
   context(agentId: string, publicSessionId: string): Promise<unknown>
-  todos(agentId: string, publicSessionId: string): Promise<unknown>
-  activity(agentId: string, publicSessionId: string): Promise<unknown>
-  pendingInteractions(
+  subscribeSessionInvalidation(
     agentId: string,
     publicSessionId: string,
-    requestedRunId?: string
-  ): Promise<SessionInteractionSnapshotResponse>
-  respondInteraction(
-    scope: ServerRunScope & { runId: string },
-    response: ResumeEntry
-  ): Promise<{ status: string }>
+    listener: () => void,
+    reset?: () => void
+  ): Promise<() => void>
   stageAttachments(
     agentId: string,
     publicSessionId: string,
@@ -149,7 +200,6 @@ export interface ServerRuntime {
     publicSessionId: string,
     artifactId: string
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }>
-  audio(agentId: string, publicSessionId: string): Promise<unknown>
   transcribe(
     agentId: string,
     publicSessionId: string,
@@ -163,10 +213,4 @@ export interface ServerRuntime {
     text: string,
     signal?: AbortSignal
   ): Promise<{ bytes: Uint8Array; mimeType: string }>
-  resume(scope: ServerRunScope): Promise<{ liveSessionId: string }>
-  observe(
-    liveSessionId: string,
-    listener: (event: unknown) => void,
-    disconnected?: (error?: Error) => void
-  ): Promise<() => void>
 }

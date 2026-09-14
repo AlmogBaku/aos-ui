@@ -1,36 +1,18 @@
 {
   "version": 1,
+  "deploymentId": "aos-hermes-local",
   "listen": {
     "host": "0.0.0.0",
     "port": 3000,
     "exposure": "private-container"
   },
   "publicOrigin": "http://127.0.0.1:3000",
-  "operator": {
-    "issuer": "https://identity.example.test",
-    "clientId": "aos-ui",
-    "clientSecretFile": "/run/secrets/oidc-client-secret",
-    "principalHmacKeyFile": "/run/secrets/operator-principal-hmac",
-    "redirectUri": "http://127.0.0.1:3000/api/aos/v1/auth/operator/callback",
-    "allowedSubjects": ["operator@example.test"],
-    "session": {
-      "deploymentId": "aos-hermes-local",
-      "keys": [
-        {
-          "id": "current",
-          "secretFile": "/run/secrets/operator-session-key"
-        }
-      ],
-      "ttlSeconds": 900
-    }
-  },
-  "hermes": {
+  "runtime": {
+    "id": "hermes-default",
+    "kind": "hermes",
     "baseUrl": "http://host.docker.internal:9119",
-    "auth": {
-      "mode": "browser-broker",
-      "callbackUrl": "http://127.0.0.1:3000/api/aos/v1/auth/runtime/upstream/auth/callback",
-      "allowedIdentityOrigins": ["https://identity.example.test"]
-    }
+    "tokenFile": "/run/secrets/hermes-token",
+    "sessionIdleMs": 300000
   },
   "events": {
     "activeKeyId": "current",
@@ -47,11 +29,7 @@
       "port": 3001,
       "exposure": "private-container"
     },
-    "publicOrigin": "https://guest.example.test",
-    "hermes": {
-      "baseUrl": "http://host.docker.internal:9119",
-      "tokenFile": "/run/secrets/guest-hermes-token"
-    },
+    "publicOrigin": "http://127.0.0.1:3001",
     "invitations": {
       "keys": [
         {
@@ -62,6 +40,15 @@
       "ttlSeconds": 300,
       "clockSkewSeconds": 0
     }
+  },
+  "limits": {
+    "activeExecutions": 256,
+    "guestActiveExecutions": 32,
+    "operatorEventPeers": 256,
+    "guestEventPeers": 64,
+    "guestEventPeersPerInvitation": 4,
+    "subscriberEvents": 512,
+    "subscriberBytes": 2097152
   },
   "shutdownGraceMs": 5000
 }

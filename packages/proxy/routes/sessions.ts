@@ -4,9 +4,33 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { ServerRuntime } from "../runtime"
+import type { ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse, pageQuery } from "./http"
 import type { ProxyRouteApp } from "./types"
+
+function sessionStatus(
+  options: ProxyAppOptions,
+  runtime: ServerRuntime,
+  session: Awaited<ReturnType<ServerRuntime["getSession"]>>
+) {
+  const sessionId = runtime.resolveSessionId(session.agentId, session.id)
+  if (!sessionId) return session
+  const state = options.runtimeInstance.sessions.state({
+    agentId: session.agentId,
+    sessionId,
+  })
+  return {
+    ...session,
+    status:
+      state === "waiting-for-input"
+        ? ("waiting-for-input" as const)
+        : state === "running" || state === "stopping"
+          ? ("running" as const)
+          : state === "uncertain"
+            ? ("failed" as const)
+            : session.status,
+  }
+}
 
 export function registerSessionRoutes(
   app: ProxyRouteApp,
@@ -22,7 +46,13 @@ export function registerSessionRoutes(
       SESSION_CATALOG_MAX_WINDOW
     )
     if (!page) return errorResponse("invalid_request", 400)
-    return context.json(await hermes.listAllSessions(page.limit, page.offset))
+    const result = await hermes.listAllSessions(page.limit, page.offset)
+    return context.json({
+      ...result,
+      sessions: result.sessions.map((session) =>
+        sessionStatus(options, hermes, session)
+      ),
+    })
   })
 
   app.get("/api/aos/v1/agents/:agentId/sessions", async (context) => {
@@ -34,13 +64,17 @@ export function registerSessionRoutes(
       SESSION_CATALOG_MAX_WINDOW
     )
     if (!page) return errorResponse("invalid_request", 400)
-    return context.json(
-      await hermes.listSessions(
-        context.req.param("agentId"),
-        page.limit,
-        page.offset
-      )
+    const result = await hermes.listSessions(
+      context.req.param("agentId"),
+      page.limit,
+      page.offset
     )
+    return context.json({
+      ...result,
+      sessions: result.sessions.map((session) =>
+        sessionStatus(options, hermes, session)
+      ),
+    })
   })
 
   app.get(
@@ -54,14 +88,57 @@ export function registerSessionRoutes(
       if (!storedId) return errorResponse("not_found", 404)
       const page = pageQuery(context.req.url, { limit: 200, offset: 0 }, 500)
       if (!page) return errorResponse("invalid_request", 400)
-      return context.json(
-        await hermes.history(
-          context.req.param("agentId"),
-          storedId,
-          page.limit,
-          page.offset
-        )
+      const scope = {
+        agentId: context.req.param("agentId"),
+        sessionId: storedId,
+        threadId: context.req.param("sessionId"),
+      }
+      if (options.runtimeInstance.sessions.state(scope) === "idle") {
+        const session = await hermes.getSession(scope.agentId, storedId)
+        if (session.status === "running")
+          await options.runtimeInstance.sessions.discover(scope)
+      }
+      const history = await hermes.history(
+        scope.agentId,
+        storedId,
+        page.limit,
+        page.offset
       )
+      const execution = options.runtimeInstance.sessions.snapshot(scope)
+      if (
+        execution.state === "waiting-for-input" &&
+        execution.interrupts.length
+      ) {
+        const index = history.messages.findLastIndex(
+          (message) => message.role === "assistant"
+        )
+        const message = history.messages[index]
+        if (message?.role === "assistant")
+          history.messages[index] = {
+            ...message,
+            status: { type: "requires-action", reason: "interrupt" },
+            metadata: {
+              custom: {
+                ...message.metadata?.custom,
+                agui: { interrupts: execution.interrupts },
+              },
+            },
+          }
+      }
+      return context.json({
+        ...history,
+        execution: {
+          status:
+            execution.state === "waiting-for-input"
+              ? "waiting-for-input"
+              : execution.state === "running" || execution.state === "stopping"
+                ? "running"
+                : execution.state === "uncertain"
+                  ? "failed"
+                  : "idle",
+          ...(execution.state === "idle" ? {} : { runId: execution.runId }),
+        },
+      })
     }
   )
 
@@ -75,7 +152,11 @@ export function registerSessionRoutes(
       )
       if (!id) return errorResponse("not_found", 404)
       return context.json(
-        await hermes.getSession(context.req.param("agentId"), id)
+        sessionStatus(
+          options,
+          hermes,
+          await hermes.getSession(context.req.param("agentId"), id)
+        )
       )
     }
   )

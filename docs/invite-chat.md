@@ -1,172 +1,155 @@
 # Share an invited chat
 
-The Hermes Compose deployment serves an isolated guest surface from the Bun
-proxy's separate listener. The legacy `aos-gateway` Go helper remains available
-for migration and parity testing, but is not an AOS browser runtime or the
-operator path:
+The Hermes V1 proxy can expose a JWT-scoped guest conversation on a separate
+listener. Guests and operators use the same Hermes runtime, transport, and
+Session coordinator, but different routes, authorization, projection, and
+limits.
 
-- a guest listener with restricted chat reached through a signed, expiring invitation.
+An invitation grants access only to its declared runtime, Agent, Session, and
+operations. It does not grant access to the trusted operator listener or reveal
+the Hermes token.
 
-The gateway is not a runtime or conversation database. The selected native runtime still owns Agents, Sessions, messages, tools, credentials, and persistence.
+## Configure the guest listener
 
-The Hermes operator deployment uses the private TypeScript runtime proxy and
-normalized `/api/aos/v1` boundary documented in [Deployment](deployment.md).
-Do not publish the gateway's legacy operator listener or use it as a second
-browser-to-Hermes path. Keep the guest listener on its own origin and reverse
-proxy so invitation credentials and guest authorization cannot reach the
-operator surface.
+Add `guest` to the private proxy configuration, as shown in
+[`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json):
 
-For Compose Hermes deployments, set `AOS_UI_GUEST_HERMES_TOKEN_FILE` and
-`AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE` to owner-only files, then set the guest
-`publicOrigin` and separate `listen` host/port in the private
-`deploy/proxy-config.hermes.json`. The guest listener is published separately
-on loopback port `3001` by default (`AOS_UI_GUEST_PUBLISHED_PORT`); external
-HTTPS ingress must target only that port. It serves the same built static UI,
-but only `/api/guest/v1` and guest event upgrades.
-
-## Build the gateway
-
-```bash
-bun run build
-go build -C gateway -o ../aos-gateway ./cmd/aos-gateway
+```json
+{
+  "guest": {
+    "listen": {
+      "host": "0.0.0.0",
+      "port": 3001,
+      "exposure": "private-container"
+    },
+    "publicOrigin": "https://guest.example.com",
+    "invitations": {
+      "keys": [
+        {
+          "id": "current",
+          "secretFile": "/run/secrets/guest-invite-signing-key"
+        }
+      ],
+      "ttlSeconds": 300,
+      "clockSkewSeconds": 0
+    }
+  }
+}
 ```
 
-Inspect the current CLI surface without starting a listener:
+Generate a 32-byte base64url signing key, store it in an owner-only file, and
+mount that file at the configured path:
 
 ```bash
-./aos-gateway --help
-./aos-gateway help serve
-./aos-gateway help invite
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' \
+  > /absolute/private/path/guest-invite-signing-key
+chmod 600 /absolute/private/path/guest-invite-signing-key
 ```
 
-## Configure the listeners
+The Compose overlay publishes the guest listener separately on loopback port
+`3001` by default. External HTTPS ingress must target only this port, preserve
+SSE and WebSocket behavior, and expose neither `/api/aos/v1` nor native Hermes
+routes. Nginx is optional.
 
-Generate a random 32-byte base64url signing key and keep it outside the repository. The same key signs and verifies invitations; rotating it invalidates outstanding links.
-
-```bash
-export AOS_GATEWAY_INVITE_SIGNING_KEY='<base64url-encoded 32-byte key>'
-export AOS_GATEWAY_GUEST_ORIGIN='https://guest.example.com'
-```
-
-| Variable                           | Required value or default                                           |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| `AOS_GATEWAY_RUNTIME`              | Required: `hermes` (legacy helper only)                             |
-| `AOS_GATEWAY_UPSTREAM`             | Required fixed native HTTP origin                                   |
-| `AOS_GATEWAY_DIST`                 | `dist`                                                              |
-| `AOS_GATEWAY_OPERATOR_ADDR`        | `127.0.0.1:8080`                                                    |
-| `AOS_GATEWAY_GUEST_ADDR`           | `127.0.0.1:8081`                                                    |
-| `AOS_GATEWAY_INVITE_SIGNING_KEY`   | Required: 32 random base64url-encoded bytes                         |
-| `AOS_GATEWAY_GUEST_ORIGIN`         | Required public HTTPS guest origin                                  |
-| `AOS_GATEWAY_HERMES_TOKEN`         | Required Hermes Desktop Session token for Hermes                    |
-
-Example Hermes server:
-
-```bash
-AOS_GATEWAY_RUNTIME=hermes \
-AOS_GATEWAY_UPSTREAM=http://127.0.0.1:9119 \
-AOS_GATEWAY_HERMES_TOKEN="$HERMES_SESSION_TOKEN" \
-  ./aos-gateway serve
-```
-
-The operator listener forwards only the selected native prefix. The guest listener exposes neither native forwarding nor operator APIs.
-
-
-> [!IMPORTANT]
-> The helper binds to loopback and does not provision TLS. Terminate public HTTPS at an operator-managed reverse proxy and forward only the intended guest origin to the guest listener.
-
-The guest origin is a signed invitation audience, not a cosmetic link prefix.
-Set `AOS_GATEWAY_GUEST_ORIGIN` to the final HTTPS guest origin in both the
-gateway's managed service environment and any deliberately authorized minting
-process. Changing it invalidates existing links. A `.env` file is not enough
-for a systemd-managed process unless its unit imports that file.
+The guest lane uses the same `runtime.tokenFile` as the operator lane. Do not
+configure or mount a second Hermes token.
 
 ## Create an invitation
 
-Mint invitations locally; there is no HTTP minting endpoint. The Agent and
-inline instruction are required. The reference is generated when omitted:
+Create invitations through the trusted operator API. Validate the target Agent
+and Session first; the proxy also verifies both before signing.
 
 ```bash
-./aos-gateway invite \
-  --agent interviewer \
-  --expires-in 24h \
-  --prefill 'Hey, Almog sent me here!' \
-  --instruction 'Load the interview skill for Dan.' \
-  --name 'Almog' \
-  --title 'Interview' \
-  --message 'Thanks for taking the time to speak with us.' \
-  --lang en
+TOKEN="$(
+  curl --fail --silent --show-error \
+    --request POST \
+    --header 'Origin: http://127.0.0.1:3000' \
+    --header 'Content-Type: application/json' \
+    --data '{
+      "principalId": "guest_recipient",
+      "invitationId": "invite_interview_01",
+      "runtimeId": "hermes-default",
+      "agentId": "interviewer",
+      "sessionId": "20260914_084917_21de69",
+      "operations": [
+        "artifacts:read",
+        "attachments:read",
+        "errors:read",
+        "interactions:respond",
+        "messages:create",
+        "messages:read",
+        "messages:stop"
+      ],
+      "capabilities": [
+        "artifact-metadata",
+        "attachment-metadata",
+        "custom-ui",
+        "message-text",
+        "safe-errors"
+      ]
+    }' \
+    http://127.0.0.1:3000/api/aos/v1/guest-invitations \
+  | jq --raw-output .token
+)"
+
+printf 'https://guest.example.com/#invite=%s\n' "$TOKEN"
 ```
 
-Run `./aos-gateway invite --help` for optional branding fields. The command
-prints only a URL such as `https://guest.example.com/#invite=<JWT>`.
+Use the operator listener's exact configured `publicOrigin` in the `Origin`
+header. Use stable native Agent and Session IDs from the normalized catalog;
+never place a live Hermes Session ID in an invitation.
 
-By default the CLI generates a unique conversation reference, so each invitation starts an independently recoverable guest conversation. Supply `--ref STABLE_REFERENCE` only when another invitation should deliberately resolve to the same Agent and conversation. Keep explicit references opaque and free of personal or secret data.
+Choose only the operations and capabilities the recipient needs. For example,
+a read-only invitation can grant only `messages:read` and `message-text`.
+Invitation IDs and guest principal IDs are operator-chosen audit identities;
+they must begin with `invite_` and `guest_` respectively.
 
-The link is a reusable bearer credential until expiration. Share it through an appropriate private channel. The browser immediately exchanges the fragment for a Secure, HttpOnly, host-only, SameSite=Strict cookie and removes the fragment from the visible URL.
+The link fragment keeps the bearer token out of HTTP requests during initial
+navigation. The browser captures it, removes it from the visible URL, and sends
+it only as guest API authorization. The signed JWT is not encrypted: its
+recipient can read every claim. Do not put secrets or private instructions in
+it.
 
-> [!WARNING]
-> The invitation is a signed JWT, not an encrypted container. Its recipient can read every claim, including first-turn instructions. Never place secrets in an invitation.
+## Understand expiry and scope
 
-## Use first-turn content
+The configured invitation TTL applies when the token is issued and is limited
+to one hour. Expiry fails closed for reads, runs, Stop, interaction responses,
+reconnect, and event observation. Expiring or disconnecting a guest detaches
+only that guest; Hermes work and operator delivery continue.
 
-`--prefill` places an editable draft in the guest composer. It is not sent until the guest submits it.
+Guest responses are projected before entering the guest queue. The guest lane
+excludes reasoning, privileged roles, raw tool data, approval internals, native
+metadata and positions, provider paths, and live Session IDs. Guest JWTs cannot
+widen their scope through URLs, request bodies, AG-UI fields, or reconnect
+cursors.
 
-`--instruction` supplies the required first-turn Agent instruction as one shell
-argument. The guest UI does not display it after redemption, but the link
-recipient can decode it from the JWT. The gateway applies it only while
-initializing the first submitted participant turn. It may also appear in the
-process argument list, shell history, or a native Agent's tool transcript; do
-not use it for secrets.
-
-## Create an invitation through an Agent
-
-The native OpenCode and Hermes integrations include the `aos-invite-link`
-skill. Ask the Agent to create an invite and provide:
-
-- the exact target Agent or Hermes profile identifier; and
-- the inline first-turn instruction.
-
-You may also provide a stable reference, expiry, prefill, language, guest name,
-logo URL, accent, title, or welcome message. The skill verifies the exact native
-target before it runs `aos-gateway`. It never assumes that the current Agent is
-the invite target.
-
-The `aos-gateway` binary must be available to the native Agent process. It uses
-`AOS_GATEWAY_GUEST_ORIGIN` when configured and asks only when it is absent. In
-OpenCode Compose deployments the supplied image contains the binary. For local
-OpenCode and Hermes installations, build the binary above and place it on the
-process `PATH`. `AOS_GATEWAY_INVITE_SIGNING_KEY` authorizes bearer-link
-minting, so grant it to an Agent process only after an explicit opt-in; do not
-put it in a shell profile. The gateway itself needs the key, but an Agent may
-safely lack it and report that minting is unavailable.
+Questions and approvals use standard AG-UI interrupts. An authorized guest can
+answer only when the invitation grants `interactions:respond`. Reopening the
+original invitation link authorizes a fresh browser load; it does not resend a
+prompt.
 
 > [!WARNING]
-> Every shell-capable Agent in the same native process may be able to read the
-> signing key and mint invitations. Prefer a dedicated deployment and restrict
-> the invited Agent's native tools and permissions for the guest's trust level.
+> Guest filtering is not an Agent sandbox. Configure the invited Agent's native
+> filesystem, network, tools, and permissions for the recipient's trust level.
+> An Agent can repeat runtime context in an ordinary answer.
 
-The runtime stores a durable initialization marker or recoverable native Session identity so refreshes, delayed messages, and gateway restarts do not reapply first-turn content. Opening or dismissing the welcome screen does not create a Session or send a prompt.
+## Verify the boundary
 
-## Understand guest limits
+From the guest origin, verify that:
 
-Every guest mutation checks the configured Origin, invitation expiry, and the Agent/reference binding. Guest history may include participant messages, attachments, and supported rich displays. It excludes system rows, reasoning, raw tool data, Subagents, permissions, management, unrelated Sessions, model changes, and executable slash commands.
+- the invitation can read only its bound Session;
+- a missing, changed, or expired bearer receives `401` or `403`;
+- `/api/aos/v1`, `/hermes`, `/auth`, and native provider routes return `404`;
+- streaming, Stop, reload, reconnect, and an interrupt response stay within the
+  same Agent and Session; and
+- an operator observing the same run continues receiving events if the guest
+  disconnects or expires.
 
-Hermes, OpenCode, and OpenClaw provide chat, streaming, Stop, reconnect, and attachments where native support exists. OpenCode additionally supports its safe edit/regenerate flow. OpenCode and OpenClaw expose pending questions. OpenClaw guest edit/regenerate, Todos, transcription, and branches are explicitly unavailable. Hermes execution approvals remain excluded from guest chat.
+Live acceptance requires an approved disposable Session and real credentials.
+Fixture or mocked tests do not establish a live invitation journey.
 
-> [!WARNING]
-> Guest filtering is not an Agent sandbox. Configure the invited Agent's native filesystem, network, tools, and permissions for the guest's trust level. An Agent can repeat first-turn instructions or other runtime context in an ordinary answer.
+## Legacy helper
 
-Run one gateway instance for a given runtime state. Distributed creation locks are not provided. Manual native Session renaming, deletion, archival, or metadata edits can break reference recovery.
-
-## Verify
-
-```bash
-go -C gateway test ./...
-go -C gateway vet ./...
-CGO_ENABLED=1 go -C gateway test -race ./...
-bun run typecheck
-bun run lint
-bun run build
-```
-
-Use disposable native Agents and real credentials for live acceptance. Fixture or mocked tests do not establish a live invitation journey.
+The Go `aos-gateway` and its systemd/Nginx templates remain in the checkout only
+for migration and parity verification. They are not the Hermes V1 browser path
+and should not be deployed alongside the TypeScript guest listener.

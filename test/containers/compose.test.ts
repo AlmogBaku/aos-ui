@@ -59,48 +59,62 @@ describe("container orchestration", () => {
     )
   })
 
-  it("ships a browser-broker proxy example with sealed key references", () => {
+  it("ships the V1 Hermes proxy example with one runtime credential", () => {
     const proxy = JSON.parse(
       readFileSync(
         resolve(root, "deploy/proxy-config.hermes.example.json"),
         "utf8"
       )
     ) as {
+      deploymentId: string
       listen: { host: string; port: number; exposure: string }
-      hermes: { auth: { mode: string } }
-      operator: {
-        principalHmacKeyFile: string
-        session: { keys: Array<{ secretFile: string }> }
+      runtime: {
+        id: string
+        kind: string
+        baseUrl: string
+        tokenFile: string
+        sessionIdleMs: number
       }
       events: { keys: Array<{ secretFile: string }> }
       guest: {
         listen: { host: string; port: number; exposure: string }
         publicOrigin: string
-        hermes: { tokenFile: string }
         invitations: { keys: Array<{ secretFile: string }> }
       }
+      limits: Record<string, number>
     }
+    expect(proxy.deploymentId).toBe("aos-hermes-local")
     expect(proxy.listen).toMatchObject({
       host: "0.0.0.0",
       port: 3000,
       exposure: "private-container",
     })
+    expect(proxy.runtime).toEqual({
+      id: "hermes-default",
+      kind: "hermes",
+      baseUrl: "http://host.docker.internal:9119",
+      tokenFile: "/run/secrets/hermes-token",
+      sessionIdleMs: 300_000,
+    })
     expect(proxy.guest).toMatchObject({
       listen: { host: "0.0.0.0", port: 3001, exposure: "private-container" },
-      publicOrigin: "https://guest.example.test",
-      hermes: { tokenFile: "/run/secrets/guest-hermes-token" },
+      publicOrigin: "http://127.0.0.1:3001",
     })
     expect(proxy.guest.invitations.keys[0]!.secretFile).toBe(
       "/run/secrets/guest-invite-signing-key"
     )
-    expect(proxy.hermes.auth).toMatchObject({ mode: "browser-broker" })
-    expect(proxy.operator.principalHmacKeyFile).toMatch(/^\/run\/secrets\//u)
-    expect(proxy.operator.session.keys[0].secretFile).toMatch(
-      /^\/run\/secrets\//u
-    )
     expect(proxy.events.keys[0].secretFile).toMatch(/^\/run\/secrets\//u)
-    expect(JSON.stringify(proxy).toLowerCase()).not.toContain(
-      "hermes-session-token"
+    expect(proxy.limits).toMatchObject({
+      activeExecutions: 256,
+      guestActiveExecutions: 32,
+      operatorEventPeers: 256,
+      guestEventPeers: 64,
+      guestEventPeersPerInvitation: 4,
+    })
+    expect(proxy).not.toHaveProperty("operator")
+    expect(proxy.guest).not.toHaveProperty("hermes")
+    expect(JSON.stringify(proxy).toLowerCase()).not.toMatch(
+      /oidc|browser-broker|operator-session|guest-hermes-token/u
     )
   })
 
@@ -168,11 +182,8 @@ describe("container orchestration", () => {
         root,
         "deploy/proxy-config.hermes.example.json"
       ),
-      AOS_UI_OIDC_CLIENT_SECRET_FILE: resolve(root, ".env.example"),
-      AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_OPERATOR_SESSION_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_GUEST_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
     })
 
@@ -207,57 +218,42 @@ describe("container orchestration", () => {
         target: "/run/aos-ui/proxy-config.json",
       })
     )
-    expect(config.services.web.secrets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: "operator-oidc-client-secret",
-          target: "oidc-client-secret",
-        }),
-        expect.objectContaining({
-          source: "operator-principal-hmac",
-          target: "operator-principal-hmac",
-        }),
-        expect.objectContaining({
-          source: "operator-session-key",
-          target: "operator-session-key",
-        }),
-        expect.objectContaining({
-          source: "reconnect-cursor-key",
-          target: "reconnect-cursor-key",
-        }),
-        expect.objectContaining({
-          source: "guest-hermes-token",
-          target: "guest-hermes-token",
-        }),
-        expect.objectContaining({
-          source: "guest-invite-signing-key",
-          target: "guest-invite-signing-key",
-        }),
-      ])
-    )
+    expect(config.services.web.secrets).toEqual([
+      expect.objectContaining({
+        source: "hermes-token",
+        target: "hermes-token",
+      }),
+      expect.objectContaining({
+        source: "reconnect-cursor-key",
+        target: "reconnect-cursor-key",
+      }),
+      expect.objectContaining({
+        source: "guest-invite-signing-key",
+        target: "guest-invite-signing-key",
+      }),
+    ])
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.hermes.json")
     )
     expect(config.configs?.["proxy-config"]?.file).toBe(
       resolve(root, "deploy/proxy-config.hermes.example.json")
     )
-    expect(config.secrets?.["operator-oidc-client-secret"]?.file).toBe(
-      resolve(root, ".env.example")
-    )
-    expect(config.secrets?.["operator-principal-hmac"]?.file).toBe(
-      resolve(root, ".env.example")
-    )
-    expect(config.secrets?.["operator-session-key"]?.file).toBe(
+    expect(config.secrets?.["hermes-token"]?.file).toBe(
       resolve(root, ".env.example")
     )
     expect(config.secrets?.["reconnect-cursor-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    expect(config.secrets?.["guest-hermes-token"]?.file).toBe(
-      resolve(root, ".env.example")
-    )
     expect(config.secrets?.["guest-invite-signing-key"]?.file).toBe(
       resolve(root, ".env.example")
+    )
+    expect(Object.keys(config.secrets ?? {}).sort()).toEqual([
+      "guest-invite-signing-key",
+      "hermes-token",
+      "reconnect-cursor-key",
+    ])
+    expect(JSON.stringify(config.services.web.environment)).not.toMatch(
+      /HERMES|TOKEN|OIDC|SECRET/u
     )
   })
 

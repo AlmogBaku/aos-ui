@@ -69,6 +69,7 @@ export type ToolUiLocaleLabels = {
     recording: string
     response: string
     recorded: string
+    discarded: string
     expired: string
     failed: string
   }
@@ -202,6 +203,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     recording: "Recording your answer…",
     response: "Response:",
     recorded: "Recorded",
+    discarded: "Discarded",
     expired: "This question expired before an answer was recorded.",
     failed:
       "The answer could not be recorded. Retry from the active request if it is still available.",
@@ -366,6 +368,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     recording: "התשובה נשמרת…",
     response: "תשובה:",
     recorded: "נשמרה",
+    discarded: "נדחתה",
     expired: "תוקף השאלה פג לפני שנשמרה תשובה.",
     failed: "לא ניתן היה לשמור את התשובה. אפשר לנסות שוב כל עוד הבקשה פעילה.",
   },

@@ -13,8 +13,10 @@ export const guestOperations = [
   "artifacts:read",
   "attachments:read",
   "errors:read",
+  "interactions:respond",
   "messages:create",
   "messages:read",
+  "messages:stop",
 ] as const
 
 export const guestCapabilities = [
@@ -46,6 +48,7 @@ export type GuestInvitationOptions = {
 export type GuestInvitationRequest = {
   principalId: string
   invitationId: string
+  runtimeId: string
   agentId: string
   sessionId?: string
   operations: readonly GuestOperation[]
@@ -53,6 +56,7 @@ export type GuestInvitationRequest = {
 }
 
 export type GuestInvitationTarget = {
+  runtimeId: string
   agentId: string
   sessionId?: string
   operation: GuestOperation
@@ -66,6 +70,7 @@ type GuestIdentity = {
   deploymentId: string
   principalId: string
   invitationId: string
+  runtimeId: string
   agentId: string
   sessionId?: string
   capabilities: readonly GuestCapability[]
@@ -124,6 +129,7 @@ type InvitationClaims = {
   lane: "guest"
   nbf: number
   ops: GuestOperation[]
+  runtime: string
   session?: string
   sub: string
   v: 1
@@ -305,11 +311,19 @@ function parseRequest(request: GuestInvitationRequest) {
     request === null ||
     !exactKeys(
       request as unknown as Record<string, unknown>,
-      ["principalId", "invitationId", "agentId", "operations", "capabilities"],
+      [
+        "principalId",
+        "invitationId",
+        "runtimeId",
+        "agentId",
+        "operations",
+        "capabilities",
+      ],
       ["sessionId"]
     ) ||
     !validGuestPrincipal(request.principalId) ||
     !validInvitationId(request.invitationId) ||
+    !validIdentifier(request.runtimeId) ||
     !validIdentifier(request.agentId) ||
     (request.sessionId !== undefined && !validIdentifier(request.sessionId))
   )
@@ -317,6 +331,7 @@ function parseRequest(request: GuestInvitationRequest) {
   return {
     principalId: request.principalId,
     invitationId: request.invitationId,
+    runtimeId: request.runtimeId,
     agentId: request.agentId,
     ...(request.sessionId === undefined
       ? {}
@@ -349,6 +364,7 @@ function parseClaims(
         "lane",
         "nbf",
         "ops",
+        "runtime",
         "sub",
         "v",
       ],
@@ -359,6 +375,7 @@ function parseClaims(
     claims.iss !== options.issuer ||
     claims.aud !== options.audience ||
     claims.dep !== options.deploymentId ||
+    !validIdentifier(claims.runtime) ||
     !validGuestPrincipal(claims.sub) ||
     !validInvitationId(claims.inv) ||
     !validIdentifier(claims.agent) ||
@@ -388,6 +405,7 @@ function parseClaims(
     lane: "guest",
     nbf: claims.nbf,
     ops: operations,
+    runtime: claims.runtime,
     ...(claims.session === undefined ? {} : { session: claims.session }),
     sub: claims.sub,
     v: 1,
@@ -403,6 +421,7 @@ function identity(claims: InvitationClaims): GuestIdentity {
     deploymentId: claims.dep,
     principalId: claims.sub,
     invitationId: claims.inv,
+    runtimeId: claims.runtime,
     agentId: claims.agent,
     ...(claims.session === undefined ? {} : { sessionId: claims.session }),
     capabilities: claims.caps,
@@ -451,6 +470,7 @@ function makeService(
         lane: "guest",
         nbf: issuedAt,
         ops: request.operations,
+        runtime: request.runtimeId,
         ...(request.sessionId === undefined
           ? {}
           : { session: request.sessionId }),
@@ -477,9 +497,10 @@ function makeService(
         target === null ||
         !exactKeys(
           target as unknown as Record<string, unknown>,
-          ["agentId", "operation"],
+          ["runtimeId", "agentId", "operation"],
           ["sessionId"]
         ) ||
+        !validIdentifier(target.runtimeId) ||
         !validIdentifier(target.agentId) ||
         !guestOperations.includes(target.operation) ||
         (target.sessionId !== undefined && !validIdentifier(target.sessionId))
@@ -524,6 +545,7 @@ function makeService(
           !claims ||
           Buffer.from(JSON.stringify(claims), "utf8").toString("base64url") !==
             segments[1] ||
+          claims.runtime !== target.runtimeId ||
           claims.agent !== target.agentId ||
           !claims.ops.includes(target.operation) ||
           (claims.session !== undefined &&

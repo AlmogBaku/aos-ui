@@ -1,26 +1,20 @@
 import { randomUUID } from "node:crypto"
 
-import type { HermesPublicAttachment } from "./content"
-
-export type HermesAttachmentStage = {
-  public: readonly HermesPublicAttachment[]
-  appendTo(text: string): string
-  cleanup(): Promise<void>
-}
+import type { ServerAttachmentStage, ServerAttachmentStages } from "./runtime"
 
 type Entry = {
   agentId: string
   sessionId: string
-  stage: HermesAttachmentStage
+  stage: ServerAttachmentStage
 }
 
 /** Bounded one-shot registry; native references remain only inside closures. */
-export class HermesAttachmentStageRegistry {
+export class AttachmentStageRegistry implements ServerAttachmentStages {
   readonly #entries = new Map<string, Entry>()
 
   constructor(private readonly maximum = 256) {}
 
-  create(agentId: string, sessionId: string, stage: HermesAttachmentStage) {
+  create(agentId: string, sessionId: string, stage: ServerAttachmentStage) {
     if (this.#entries.size >= this.maximum) return undefined
     const stageId = `aos-stage-${randomUUID()}`
     this.#entries.set(stageId, { agentId, sessionId, stage })

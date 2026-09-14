@@ -58,11 +58,8 @@ Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
 AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
-AOS_UI_OIDC_CLIENT_SECRET_FILE=/absolute/private/path/oidc-client-secret \
-AOS_UI_OPERATOR_PRINCIPAL_KEY_FILE=/absolute/private/path/operator-principal-hmac \
-AOS_UI_OPERATOR_SESSION_KEY_FILE=/absolute/private/path/operator-session-key \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
-AOS_UI_GUEST_HERMES_TOKEN_FILE=/absolute/private/path/guest-hermes-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```
@@ -70,16 +67,22 @@ AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing
 Hermes remains independently operated. The overlay runs one Bun process that
 serves static assets and the private TypeScript proxy on separate operator and
 guest listeners. External ingress owns TLS; the browser uses the normalized
-`/api/aos/v1` API for operator OIDC, Hermes authentication brokerage, catalogs,
-history, AG-UI/SSE runs, Stop, and reconnect. The operator listener has no
-guest API route, and the guest listener has no operator API route.
+`/api/aos/v1` API for catalogs, history, AG-UI/SSE runs, Stop, and reconnect.
+The operator listener has no application authentication: anyone who can reach
+it has full operator access. The operator listener has no guest API route, and
+the guest listener has no operator API route.
 
 Start from [`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json)
-and customize its public origin, OIDC issuer/allowlist, and Hermes address.
-The browser-broker mode is the supported auth-gated Hermes path. Secret files
-must be owner-only and contain no public runtime configuration. The mounted
+and customize its listener origins and Hermes address. Hermes uses one server
+token file for both operator and guest requests. Reconnect cursors and guest
+invitations have separate signing-key files. Secret files must be owner-only
+and contain no public runtime configuration. The mounted
 [`runtime-config.hermes.json`](../deploy/runtime-config.hermes.json) contains
 only `{ "mode": "aos" }`.
+
+The example enables the guest listener. For an operator-only deployment,
+remove the `guest` block and its invitation-key secret mount from a private
+overlay. The one Hermes token and runtime instance remain unchanged.
 
 Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
 
@@ -114,29 +117,37 @@ See the [configuration reference](configuration.md) for accepted fields and secr
 
 ## Network exposure
 
-All published ports bind to `127.0.0.1` by default. Set `AOS_UI_BIND_ADDRESS` only when another host must connect, and use browser-reachable runtime URLs and CORS origins.
+All published ports bind to `127.0.0.1` by default. Set
+`AOS_UI_BIND_ADDRESS` or `AOS_UI_GUEST_BIND_ADDRESS` only when another host
+must connect, and configure the corresponding exact browser origin.
 
 > [!WARNING]
-> The Compose stack does not provide TLS or public multi-user authentication. Treat a wider bind as a trusted-private-network deployment and place appropriate access controls in front of it.
+> The operator listener has no application login. Treat a wider operator bind
+> as a trusted-private-network deployment and place appropriate authentication
+> and TLS controls in front of it. A guest JWT does not authorize access to the
+> operator listener.
 
 Hermes must listen on an address reachable from the web container. A host-loopback-only listener is not reachable through `host.docker.internal`.
 
 ## Systemd and a private operator UI
 
-For a host-managed deployment, use the provider-neutral templates in
-[`deploy/systemd`](../deploy/systemd). They model two distinct surfaces:
+For a host-managed deployment, `aos-ui.service.template` in
+[`deploy/systemd`](../deploy/systemd) runs the Compose service. The V1 process
+it starts owns both distinct listeners:
 
 - `aos-ui.service.template` runs the regular operator UI as a private Compose
   service. Bind it to loopback or a trusted private network; do not publish it
   through the guest host.
-- `aos-gateway.service.template` runs the optional invited-chat gateway. Both
-  of its listeners are loopback-bound: the operator listener remains private,
-  while an external reverse proxy may reach only the guest listener. The Compose
-  Hermes overlay publishes that listener separately on loopback port `3001` by
-  default.
-- `aos-guest-nginx.conf.template` is an example external guest-only virtual
-  host. It sends the guest UI and `/api/guest/*` to the guest listener and has
-  no route to native Hermes/OpenCode endpoints.
+- the trusted operator listener is published on loopback port `3000` by
+  default;
+- the optional JWT-scoped guest listener is published separately on loopback
+  port `3001` by default.
+
+An external reverse proxy may expose only the guest listener for invited chat.
+It must preserve SSE flushing and WebSocket upgrades and must not route the
+operator API or any native Hermes endpoint. Nginx is optional. The retained
+`aos-gateway` and guest-Nginx templates are migration artifacts, not the V1
+Hermes path.
 
 Copy and substitute the templates outside the checkout; they are not an
 installer and intentionally contain no domain, proxy provider, tunnel, or
@@ -150,17 +161,16 @@ process. Store native tokens and invite signing keys in an operator-managed
 secret facility such as systemd encrypted credentials, never in
 `/runtime-config.json`, `VITE_*`, or a shell startup file.
 
-After changing a unit or proxy configuration, validate it before reload:
+After changing the unit or proxy configuration, validate it before reload:
 
 ```bash
 systemd-analyze verify /etc/systemd/system/aos-ui.service
-systemd-analyze verify /etc/systemd/system/aos-gateway.service
 systemctl daemon-reload
 ```
 
 Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
-target the loopback guest listener exclusively; it must not expose the private
-operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
+target the Bun proxy's loopback guest listener exclusively; it must not expose
+the private operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
 Then verify the guest root and an unauthenticated `/api/guest/v1` request
 (`401`/`404` as appropriate), and that `/hermes/`, `/auth/`, and non-guest
 `/api/` routes cannot reach the native runtime. The guest origin remains a
@@ -174,8 +184,7 @@ Provider persistence remains native:
 - Independently operated OpenCode keeps all state in its own worktree and native data directories.
 - The optional OpenCode overlay uses the external worktree plus the `opencode-data` named volume.
 - Hermes keeps all state in the operator-managed Hermes installation.
-- The separately operated OpenClaw guest gateway keeps all state and device
-  credentials in its own installation; the browser runtime lane is unavailable.
+- OpenClaw remains unavailable on the normalized runtime path.
 - The web container holds no conversation database.
 
 Stop AOS with the same file set used to start it. For the web-only attachment:
@@ -199,7 +208,11 @@ bunx vitest run test/containers/compose.test.ts
 docker compose -f compose.yaml config --quiet
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
-docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
 ```
 
 When runtime container behavior changes, also build the affected image and
@@ -212,8 +225,8 @@ proven and are not part of the Hermes operator deployment:
 
 - the local Vite Hermes forwarding shortcut and its direct runtime configuration
   example; OpenClaw's runtime example is already fail-closed;
-- the optional legacy Go `aos-gateway` guest listener and its acceptance
-  coverage, retained until the TypeScript dual-listener path has proven parity;
+- the legacy Go `aos-gateway` guest listener and its acceptance coverage,
+  retained until the TypeScript dual-listener path has proven parity;
 - the planned OpenClaw deployment overlay and live acceptance coverage.
 
 Delete those artifacts only after an approved Hermes operator and guest

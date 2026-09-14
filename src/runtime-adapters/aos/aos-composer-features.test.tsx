@@ -9,6 +9,19 @@ import {
 
 function capabilities(): AosWorkspaceCapabilities {
   return {
+    agent: {
+      transport: { streaming: true, resumable: true },
+      reasoning: { supported: true, streaming: true },
+      multimodal: {
+        input: { image: true, audio: false, file: true },
+        output: { audio: false },
+      },
+      humanInTheLoop: {
+        supported: true,
+        approvals: true,
+        interrupts: true,
+      },
+    },
     workspace: {
       models: {
         status: "available",
@@ -91,6 +104,32 @@ describe("AOS composer features", () => {
     )
     expect(models).not.toHaveBeenCalled()
     expect(context).not.toHaveBeenCalled()
+  })
+
+  it("does not refetch capabilities for a generic Session invalidation or rerender", async () => {
+    const workspaceCapabilities = vi.fn(async () => capabilities())
+    let invalidate: (() => void) | undefined
+    const client = {
+      workspaceCapabilities,
+      subscribeSessionInvalidation: vi.fn(
+        (_threadId: string, listener: () => void) => {
+          invalidate = listener
+          return () => undefined
+        }
+      ),
+    }
+    const { rerender } = renderHook(
+      ({ threadId }) => useAosSessionCapabilities(client, threadId),
+      { initialProps: { threadId: "session-1" } }
+    )
+
+    await waitFor(() => expect(workspaceCapabilities).toHaveBeenCalledOnce())
+    invalidate?.()
+    rerender({ threadId: "session-1" })
+    await Promise.resolve()
+
+    expect(workspaceCapabilities).toHaveBeenCalledOnce()
+    expect(client.subscribeSessionInvalidation).not.toHaveBeenCalled()
   })
 
   it("projects normalized selected model and context for only the selected Session", async () => {

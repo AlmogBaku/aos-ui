@@ -40,6 +40,7 @@ import {
   getAgentCreator,
   isRosterAgent,
 } from "@/runtime-adapters/agent-identity"
+import { switchToAosDraft } from "@/runtime-adapters/aos"
 
 const emptySessions: SessionMetadata[] = []
 const emptyTodos: TodoItem[] = []
@@ -133,6 +134,8 @@ export function useWorkspaceNavigation({
   // null remembers an intentionally empty tab strip; undefined permits initial history fallback.
   const lastSelected = useRef(new Map<string, string | null>())
   const desiredThread = useRef<string | null>(null)
+  const localDraftAgent = useRef<string | null>(null)
+  const localDraftId = useRef<string | null>(null)
   const pendingSelection = useRef<symbol | null>(null)
   const appliedPathname = useRef<string | null>(null)
   const routeTransitionPathname = useRef<string | null>(null)
@@ -184,6 +187,7 @@ export function useWorkspaceNavigation({
     [runtimeThreads]
   )
   const mainItem = threadState.threadItems[threadState.mainThreadId]
+  const mainItemId = mainItem?.id
   const activeThreadId =
     mainItem?.remoteId ??
     mainItem?.externalId ??
@@ -228,6 +232,8 @@ export function useWorkspaceNavigation({
 
   const selectRuntimeThread = useCallback(
     async (threadId: string) => {
+      localDraftAgent.current = null
+      localDraftId.current = null
       const operation = Symbol("selection")
       pendingSelection.current = operation
       desiredThread.current = threadId
@@ -244,6 +250,47 @@ export function useWorkspaceNavigation({
     },
     [runtime]
   )
+  const switchToNewThread = useCallback(
+    async (agentId: string) => {
+      localDraftAgent.current = agentId
+      try {
+        const draftId = await switchToAosDraft(runtime, agentId)
+        if (draftId) {
+          localDraftId.current = draftId
+          return true
+        }
+        await runtime.threads.switchToNewThread()
+        localDraftId.current = runtime.threads.getState().mainThreadId
+        return false
+      } catch (error) {
+        if (localDraftAgent.current === agentId) {
+          localDraftAgent.current = null
+          localDraftId.current = null
+        }
+        throw error
+      }
+    },
+    [runtime]
+  )
+
+  useEffect(() => {
+    const agentId = localDraftAgent.current
+    if (
+      !agentId ||
+      !activeThreadId ||
+      mainItemId !== localDraftId.current
+    )
+      return
+    localDraftAgent.current = null
+    localDraftId.current = null
+    setPreferredAgentId(agentId)
+    setManuallyOpened((current) => ({
+      ...current,
+      [agentId]: [...new Set([...(current[agentId] ?? []), activeThreadId])],
+    }))
+    lastSelected.current.set(agentId, activeThreadId)
+    updateRoute({ agentId, sessionId: activeThreadId }, "replace")
+  }, [activeThreadId, mainItemId, updateRoute])
 
   useEffect(() => {
     if (threadState.isLoading) return
@@ -313,6 +360,17 @@ export function useWorkspaceNavigation({
   useEffect(() => {
     if (readBrowserPathname() !== pathname) return
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
+    const draftAgentId = localDraftAgent.current
+    if (draftAgentId && !activeThreadId) {
+      if (selectedAgentId !== draftAgentId)
+        setPreferredAgentId(draftAgentId)
+      lastSelected.current.set(draftAgentId, null)
+      const selection = { agentId: draftAgentId, sessionId: null }
+      const canonicalPathname = buildWorkspacePathname(selection)
+      if (pathname !== canonicalPathname) updateRoute(selection, "replace")
+      else appliedPathname.current = canonicalPathname
+      return
+    }
     if (appliedPathname.current !== pathname) {
       if (routeTransitionPathname.current === pathname) return
       routeTransitionPathname.current = pathname
@@ -358,7 +416,7 @@ export function useWorkspaceNavigation({
       const canonicalPathname = buildWorkspacePathname(selection)
       const select = threadId
         ? selectRuntimeThread(threadId)
-        : runtime.threads.switchToNewThread()
+        : switchToNewThread(agentId)
       void select
         .then(() => {
           if (routeTransitionPathname.current !== pathname) return
@@ -378,6 +436,7 @@ export function useWorkspaceNavigation({
       return
     }
     if (!selectedAgentId) return
+    if (localDraftAgent.current) return
     // Browser navigation can supersede an in-flight adapter switch. Only
     // automatic selection repair waits for that switch to settle.
     if (pendingSelection.current) return
@@ -438,7 +497,7 @@ export function useWorkspaceNavigation({
       void selectRuntimeThread(nextThread).catch(setActionError)
     } else if (activeThreadId) {
       desiredThread.current = null
-      void runtime.threads.switchToNewThread().catch(setActionError)
+      void switchToNewThread(selectedAgentId).catch(setActionError)
     }
   }, [
     activeThreadId,
@@ -456,6 +515,7 @@ export function useWorkspaceNavigation({
     threadState.isLoading,
     titles,
     runtime,
+    switchToNewThread,
     pathname,
     updateRoute,
   ])
@@ -594,7 +654,7 @@ export function useWorkspaceNavigation({
     if (!threadId) {
       desiredThread.current = null
       updateRoute({ agentId, sessionId: null }, "push")
-      await runtime.threads.switchToNewThread()
+      await switchToNewThread(agentId)
       return
     }
     if (!view.openSessions.some((session) => session.threadId === threadId)) {
@@ -680,7 +740,7 @@ export function useWorkspaceNavigation({
       lastSelected.current.set(agentId, null)
       desiredThread.current = null
       updateRoute({ agentId, sessionId: null }, "replace")
-      await runtime.threads.switchToNewThread()
+      await switchToNewThread(agentId)
     }
   }
 
@@ -722,6 +782,13 @@ export function useWorkspaceNavigation({
   }
 
   async function createSession(agentId: string) {
+    setPreferredAgentId(agentId)
+    lastSelected.current.set(agentId, null)
+    desiredThread.current = null
+    updateRoute({ agentId, sessionId: null }, "push")
+    if (await switchToNewThread(agentId)) {
+      return
+    }
     const created = await workspace.createSession(agentId, {
       title: dictionary.actions.newSession,
     })

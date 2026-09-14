@@ -222,6 +222,8 @@ export type ArtifactAdapter = {
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime
   workspace: WorkspaceAdapter
+  /** The selected thread runtime carries standard AG-UI interrupt state. */
+  agUiInterrupts?: true
   interactions?: RuntimeInteractionAdapter
   artifacts?: {
     resolver: ArtifactAdapter
@@ -231,6 +233,14 @@ export type HarnessRuntime = {
     htmlAssetOrigins?: readonly string[]
   }
   composer?: ComposerFeatureViewModel
+  /** Omit for ordinary local branches; false hides durable Edit and Retry. */
+  messageRewind?:
+    | false
+    | {
+        runConfig(sourceUserId: string): {
+          custom: Record<string, unknown>
+        }
+      }
   media?: VoiceMediaController
   assistantConfig?: { instructions?: string; toolkit?: Toolkit }
   activityCoverage: "workspace" | "active-session"

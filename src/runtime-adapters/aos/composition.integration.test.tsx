@@ -1,12 +1,18 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
+import { StrictMode, useEffect } from "react"
 
 import { createProxyApp } from "../../../packages/proxy/app"
-import { HermesServerAdapter } from "../../../packages/proxy/runtimes/hermes/adapter"
-import { createOperatorAuthenticator } from "../../../packages/proxy/operator-auth"
-import type { HermesRunEngine } from "../../../packages/proxy/runtimes/hermes/run"
+import { HermesServerAdapter } from "../../../packages/proxy/adapters/hermes/adapter"
+import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
+import type {
+  RuntimeInstance,
+  ServerRunEngine,
+} from "../../../packages/proxy/core/runtime"
 import type { HarnessRuntime } from "../contracts"
+import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { runtimeAdapter } from "./composition"
 
 afterEach(() => {
@@ -16,10 +22,16 @@ afterEach(() => {
 
 describe("AOS normalized Session browser integration", () => {
   it("opens normalized history, sends one turn, and issues separate deliberate Stop", async () => {
+    const user = userEvent.setup()
+    let authoritativeUserId = "native-user-1"
+    let authoritativeUserText = "Open it"
+    let invalidateEvents: (() => void) | undefined
     class ReadySocket extends EventTarget {
       readyState = 0
+      readonly streams = new Map<string, unknown>()
       constructor() {
         super()
+        invalidateEvents = () => this.invalidate()
         queueMicrotask(() => {
           this.readyState = 1
           this.dispatchEvent(new Event("open"))
@@ -30,6 +42,7 @@ describe("AOS normalized Session browser integration", () => {
           streamId: string
           scope: unknown
         }
+        this.streams.set(request.streamId, request.scope)
         queueMicrotask(() =>
           this.dispatchEvent(
             new MessageEvent("message", {
@@ -45,31 +58,82 @@ describe("AOS normalized Session browser integration", () => {
           )
         )
       }
+      invalidate() {
+        for (const [streamId, scope] of this.streams)
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                type: "aos.invalidate",
+                version: 1,
+                streamId,
+                scope,
+                generation: 1,
+              }),
+            })
+          )
+      }
       close() {
         this.readyState = 3
         this.dispatchEvent(new Event("close"))
       }
     }
     vi.stubGlobal("WebSocket", ReadySocket)
-    let finishObservation: (() => void) | undefined
-    const observationFinished = new Promise<void>((resolve) => {
-      finishObservation = resolve
+    const finishObservations: Array<() => void> = []
+    let continueReasoning: (() => void) | undefined
+    const reasoningContinued = new Promise<void>((resolve) => {
+      continueReasoning = resolve
     })
-    const stop = vi.fn(async () => "stopping" as const)
-    const disconnect = vi.fn(() => finishObservation?.())
-    const start = vi.fn(async (_scope, input) => ({
-      events: (async function* () {
-        yield {
-          type: "RUN_STARTED" as const,
-          threadId: "hermes:alpha:stored-alpha",
-          runId: input.runId,
-        }
-        await observationFinished
-      })(),
-      stop,
-      disconnect,
-      recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
-    }))
+    const stop = vi.fn()
+    const start = vi.fn(async (_scope, input) => {
+      let finishObservation: (() => void) | undefined
+      const observationFinished = new Promise<void>((resolve) => {
+        finishObservation = resolve
+      })
+      finishObservations.push(() => finishObservation?.())
+      return {
+        events: (async function* () {
+          yield {
+            type: "RUN_STARTED" as const,
+            threadId: "stored-alpha",
+            runId: input.runId,
+          }
+          yield {
+            type: "REASONING_MESSAGE_START" as const,
+            messageId: `${input.runId}:reasoning`,
+            role: "reasoning" as const,
+          }
+          yield {
+            type: "REASONING_MESSAGE_CONTENT" as const,
+            messageId: `${input.runId}:reasoning`,
+            delta: "First",
+          }
+          await reasoningContinued
+          yield {
+            type: "REASONING_MESSAGE_CONTENT" as const,
+            messageId: `${input.runId}:reasoning`,
+            delta: " second",
+          }
+          await observationFinished
+          yield {
+            type: "REASONING_MESSAGE_END" as const,
+            messageId: `${input.runId}:reasoning`,
+          }
+          yield {
+            type: "RUN_FINISHED" as const,
+            threadId: "stored-alpha",
+            runId: input.runId,
+            outcome: { type: "success" as const },
+          }
+        })(),
+        stop: async () => {
+          stop()
+          finishObservation?.()
+          return "stopping" as const
+        },
+        settled: observationFinished,
+        recoveryPosition: () => ({ epoch: "opaque", lastSeen: 0 }),
+      }
+    })
     const nativeRequest = vi.fn(async (method: string) => {
       if (method === "profiles.list")
         return {
@@ -119,14 +183,16 @@ describe("AOS normalized Session browser integration", () => {
         }
       if (path === "/api/sessions/stored-alpha?profile=alpha")
         return { id: "stored-alpha", profile: "alpha", title: "Older" }
+      if (path === "/api/sessions/stored-beta?profile=alpha")
+        return { id: "stored-beta", profile: "beta", title: "Newer" }
       if (path.startsWith("/api/sessions/stored-alpha/messages?"))
         return {
           session_id: "stored-alpha",
           messages: [
             {
-              id: "native-user-1",
+              id: authoritativeUserId,
               role: "user",
-              content: "Open it",
+              content: authoritativeUserText,
               timestamp: 1,
               native_position: 99,
               private_path: "/srv/hermes/private",
@@ -143,38 +209,41 @@ describe("AOS normalized Session browser integration", () => {
         }
       throw new Error(`Unexpected native REST path: ${path}`)
     })
+    const hermes = new HermesServerAdapter({
+      request: nativeRequest,
+      http: nativeHttp,
+    })
+    const sessions = new SessionCoordinator({
+      engine: {
+        start,
+        recover: vi.fn(async () => {
+          throw new Error("Unexpected run recovery")
+        }),
+      } as unknown as ServerRunEngine,
+      maxActiveExecutions: 8,
+      maxGuestActiveExecutions: 2,
+      maxSubscriberEvents: 64,
+      maxSubscriberBytes: 1_000_000,
+      maxReplayEvents: 64,
+      maxReplayBytes: 1_000_000,
+    })
+    const runtimeInstance: RuntimeInstance = {
+      id: "hermes-main",
+      runtime: hermes,
+      sessions,
+      close: async () => {
+        sessions.close()
+        await hermes.close()
+      },
+    }
     const app = createProxyApp({
       publicOrigin: "http://app.test",
-      operatorAuth: createOperatorAuthenticator({
-        allowedSubjects: ["operator@example.test"],
-        verifySession: vi.fn(async () => ({
-          subject: "operator@example.test",
-        })),
-      }),
-      hermes: new HermesServerAdapter({
-        request: nativeRequest,
-        http: nativeHttp,
-      }),
-      runEngine: { start } as unknown as HermesRunEngine,
+      runtimeInstance,
       logger: { info: vi.fn(), error: vi.fn() },
     })
-    let runtimeExpired = false
     const browserFetch = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = new URL(String(input), "http://app.test").pathname
-        if (runtimeExpired && path.endsWith("/agents"))
-          return Promise.resolve(
-            Response.json(
-              { error: { code: "runtime_authentication_required" } },
-              { status: 401 }
-            )
-          )
-        if (runtimeExpired && path.endsWith("/auth/runtime"))
-          return Promise.resolve(
-            Response.json({ status: "authentication-required" })
-          )
         const headers = new Headers(init?.headers)
-        headers.set("cookie", "aos_operator=valid")
         if (init?.method === "POST") headers.set("origin", "http://app.test")
         return app.request(
           new Request(new URL(String(input), "http://app.test"), {
@@ -187,35 +256,41 @@ describe("AOS normalized Session browser integration", () => {
     vi.stubGlobal("fetch", browserFetch)
 
     let supplied: HarnessRuntime | undefined
+    function RuntimeCapture({ runtime }: { runtime: HarnessRuntime }) {
+      useEffect(() => {
+        supplied = runtime
+      }, [runtime])
+      return (
+        <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
+          <main>Mounted</main>
+          <Thread autoFocus={false} messageRewind={runtime.messageRewind} />
+        </AssistantRuntimeProvider>
+      )
+    }
     const Provider = runtimeAdapter.Provider
     render(
-      <Provider
-        config={{
-          status: "ready",
-          mode: "aos",
-          composerFeatures: {
-            modelSelectorEnabled: true,
-            contextEnabled: true,
-          },
-        }}
-        locale="en"
-      >
-        {(runtime) => {
-          supplied = runtime
-          return (
-            <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
-              <main>Mounted</main>
-            </AssistantRuntimeProvider>
-          )
-        }}
-      </Provider>
+      <StrictMode>
+        <Provider
+          config={{
+            status: "ready",
+            mode: "aos",
+            composerFeatures: {
+              modelSelectorEnabled: true,
+              contextEnabled: true,
+            },
+          }}
+          locale="en"
+        >
+          {(runtime) => <RuntimeCapture runtime={runtime} />}
+        </Provider>
+      </StrictMode>
     )
     expect(await screen.findByRole("main")).toHaveTextContent("Mounted")
-
+    await waitFor(() => expect(supplied).toBeDefined())
     await supplied!.assistantRuntime.threads.getLoadThreadsPromise()
     expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([
-      "hermes:beta:stored-beta",
-      "hermes:alpha:stored-alpha",
+      "stored-beta",
+      "stored-alpha",
     ])
     expect(
       nativeHttp.mock.calls.some(([path]) =>
@@ -225,15 +300,13 @@ describe("AOS normalized Session browser integration", () => {
 
     const beforeCrossAgent = nativeHttp.mock.calls.length
     const crossAgent = await browserFetch(
-      "/api/aos/v1/agents/alpha/sessions/hermes%3Abeta%3Astored-beta/history"
+      "/api/aos/v1/agents/alpha/sessions/stored-beta/history"
     )
     expect(crossAgent.status).toBe(404)
-    expect(nativeHttp).toHaveBeenCalledTimes(beforeCrossAgent)
+    expect(nativeHttp).toHaveBeenCalledTimes(beforeCrossAgent + 1)
 
     await Promise.race([
-      supplied!.assistantRuntime.threads.switchToThread(
-        "hermes:alpha:stored-alpha"
-      ),
+      supplied!.assistantRuntime.threads.switchToThread("stored-alpha"),
       new Promise<never>((_, reject) =>
         setTimeout(
           () =>
@@ -259,9 +332,31 @@ describe("AOS normalized Session browser integration", () => {
     )
     await waitFor(() =>
       expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
-        "/api/aos/v1/agents/alpha/sessions/hermes%3Aalpha%3Astored-alpha/workspace/capabilities"
+        "/api/aos/v1/agents/alpha/sessions/stored-alpha/workspace/capabilities"
       )
     )
+    await waitFor(() =>
+      expect(
+        browserFetch.mock.calls.filter(([input]) =>
+          String(input).endsWith("/audio")
+        )
+      ).toHaveLength(0)
+    )
+    const capabilityReads = browserFetch.mock.calls.filter(([input]) =>
+      String(input).endsWith("/workspace/capabilities")
+    ).length
+    act(() => invalidateEvents?.())
+    await Promise.resolve()
+    expect(
+      browserFetch.mock.calls.filter(([input]) =>
+        String(input).endsWith("/workspace/capabilities")
+      ).length
+    ).toBe(capabilityReads)
+    expect(
+      browserFetch.mock.calls.filter(([input]) =>
+        String(input).endsWith("/audio")
+      )
+    ).toHaveLength(0)
     expect(supplied!.assistantRuntime.thread.getState().messages).toMatchObject(
       [
         { id: "native-user-1", role: "user" },
@@ -288,35 +383,90 @@ describe("AOS normalized Session browser integration", () => {
     expect(browserState).not.toContain("/srv/hermes")
 
     act(() => {
-      supplied!.assistantRuntime.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Continue" }],
-      })
+      supplied!.assistantRuntime.thread
+        .getMessageById("native-user-1")
+        .composer.beginEdit()
     })
+    const editor = document.querySelector<HTMLTextAreaElement>(
+      ".aui-edit-composer-input"
+    )
+    if (!editor) throw new Error("Expected an edit composer")
+    await user.clear(editor)
+    await user.type(editor, "Open it carefully")
+    await user.click(screen.getByRole("button", { name: "Update" }))
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
     expect(start.mock.calls[0]![1]).toMatchObject({
       state: {},
+      rewindSourceId: "native-user-1",
       messages: [
-        expect.objectContaining({ role: "user", content: "Continue" }),
+        expect.objectContaining({ role: "user", content: "Open it carefully" }),
       ],
       tools: [],
       context: [],
       forwardedProps: {},
     })
-
-    act(() => supplied!.assistantRuntime.thread.cancelRun())
-    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1))
-    expect(disconnect).toHaveBeenCalledTimes(1)
-    expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
-      "/api/aos/v1/agents/alpha/sessions/hermes%3Aalpha%3Astored-alpha/runs/stop"
+    const liveReasoning = () => {
+      const messages = supplied!.assistantRuntime.thread.getState().messages
+      const assistant = [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant")
+      return assistant?.content.find((part) => part.type === "reasoning")
+    }
+    await waitFor(() =>
+      expect(liveReasoning()).toMatchObject({
+        type: "reasoning",
+        text: "First",
+      })
+    )
+    act(() => continueReasoning?.())
+    await waitFor(() =>
+      expect(liveReasoning()).toMatchObject({
+        type: "reasoning",
+        text: "First second",
+      })
     )
 
-    runtimeExpired = true
-    await expect(supplied!.workspace.refreshAgents()).rejects.toMatchObject({
-      kind: "runtime-auth-required",
+    authoritativeUserId = "hermes-row-8"
+    authoritativeUserText = "Open it carefully"
+    act(() => finishObservations[0]?.())
+    await waitFor(() =>
+      expect(supplied!.assistantRuntime.thread.getState().isRunning).toBe(false)
+    )
+    await waitFor(() =>
+      expect(
+        supplied!.assistantRuntime.thread
+          .getState()
+          .messages.findLast((message) => message.role === "user")?.id
+      ).toBe("hermes-row-8")
+    )
+    const replacement = supplied!.assistantRuntime.thread
+      .getState()
+      .messages.findLast((message) => message.role === "user")
+    if (!replacement) throw new Error("Expected the replacement user turn")
+    act(() => {
+      supplied!.assistantRuntime.thread
+        .getMessageById(replacement.id)
+        .composer.beginEdit()
     })
-    expect(
-      await screen.findByRole("link", { name: "Connect runtime" })
-    ).toBeVisible()
-  })
+    const secondEditor = document.querySelector<HTMLTextAreaElement>(
+      ".aui-edit-composer-input"
+    )
+    if (!secondEditor) throw new Error("Expected a second edit composer")
+    await user.clear(secondEditor)
+    await user.type(secondEditor, "Open it once more")
+    await user.click(screen.getByRole("button", { name: "Update" }))
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(2))
+    expect(start.mock.calls[1]![1]).toMatchObject({
+      rewindSourceId: "hermes-row-8",
+      messages: [
+        expect.objectContaining({ role: "user", content: "Open it once more" }),
+      ],
+    })
+    act(() => supplied!.assistantRuntime.thread.cancelRun())
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1))
+    expect(browserFetch.mock.calls.map(([input]) => String(input))).toContain(
+      "/api/aos/v1/agents/alpha/sessions/stored-alpha/runs/stop"
+    )
+    await runtimeInstance.close()
+  }, 15_000)
 })

@@ -1,3 +1,4 @@
+import { EventType } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import { AosClientError, AosRemoteClient } from "./aos-client"
@@ -22,27 +23,28 @@ const catalog = {
 }
 
 describe("provider-neutral AOS browser client", () => {
-  it.each([
-    ["unauthenticated", "aos-auth-required"],
-    ["runtime_authentication_required", "runtime-auth-required"],
-  ] as const)(
-    "classifies normalized 401 %s responses for the authentication gate",
-    async (code, kind) => {
-      const onAuthRequired = vi.fn()
-      const client = new AosRemoteClient({
-        fetcher: vi.fn(async () =>
-          Response.json({ error: { code } }, { status: 401 })
-        ),
-        onAuthRequired,
-      })
+  it("uses a normalized error description instead of proxy response details", async () => {
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              code: "temporarily_unavailable",
+              description:
+                "The service is temporarily unavailable. Please try again.",
+            },
+          },
+          { status: 503 }
+        )
+      ),
+    })
 
-      await expect(client.listAgentCatalog()).rejects.toMatchObject({
-        name: "AosClientError",
-        kind,
-      } satisfies Partial<AosClientError>)
-      expect(onAuthRequired).toHaveBeenCalledWith(kind)
-    }
-  )
+    await expect(client.listAgentCatalog()).rejects.toMatchObject({
+      name: "AosClientError",
+      kind: "provider-unavailable",
+      message: "The service is temporarily unavailable. Please try again.",
+    } satisfies Partial<AosClientError>)
+  })
 
   it("does not subscribe before a Session owner has been restored", () => {
     const client = new AosRemoteClient({ fetcher: vi.fn() })
@@ -52,7 +54,35 @@ describe("provider-neutral AOS browser client", () => {
     ).not.toThrow()
   })
 
-  it("maps a selected Session's normalized workspace, content, interaction, and audio operations", async () => {
+  it("rehydrates immutable Session ownership from normalized thread metadata", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      void input
+      return Response.json({
+        id: "session-1",
+        agentId: "researcher",
+        title: "Research",
+        archived: false,
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        status: "idle",
+      })
+    })
+    const client = new AosRemoteClient({ fetcher })
+
+    client.adoptSessionOwnership("session-1", "researcher")
+
+    await expect(client.getSession("session-1")).resolves.toMatchObject({
+      id: "session-1",
+      agentId: "researcher",
+    })
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+      "/api/aos/v1/agents/researcher/sessions/session-1"
+    )
+    expect(() => client.adoptSessionOwnership("session-1", "other")).toThrow(
+      "Conflicting Session ownership metadata"
+    )
+  })
+
+  it("maps a selected Session's normalized workspace, content, and audio operations", async () => {
     const session = {
       id: "opaque-session-1",
       agentId: "researcher",
@@ -73,6 +103,19 @@ describe("provider-neutral AOS browser client", () => {
           })
         if (path.endsWith("/workspace/capabilities"))
           return Response.json({
+            agent: {
+              transport: { streaming: true, resumable: true },
+              reasoning: { supported: true, streaming: true },
+              multimodal: {
+                input: { image: true, audio: false, file: true },
+                output: { audio: false },
+              },
+              humanInTheLoop: {
+                supported: true,
+                approvals: true,
+                interrupts: true,
+              },
+            },
             workspace: {
               models: {
                 status: "available",
@@ -171,28 +214,6 @@ describe("provider-neutral AOS browser client", () => {
               messageTokens: 900,
             },
           })
-        if (path.endsWith("/workspace/todos"))
-          return Response.json({
-            todos: [{ id: "todo-1", label: "Ship", status: "active" }],
-          })
-        if (path.endsWith("/workspace/activity"))
-          return Response.json({
-            status: "available",
-            scope: "attached-active-session",
-            coverage: "active-session-only",
-            state: "waiting-for-input",
-          })
-        if (path.endsWith("/interactions/respond")) {
-          expect(init?.method).toBe("POST")
-          expect(init?.body).toBe(
-            JSON.stringify({
-              runId: "run-1",
-              requestId: "request-1",
-              response: { kind: "question", answers: [["yes"]] },
-            })
-          )
-          return Response.json({ status: "resolved" })
-        }
         if (path.endsWith("/attachments/stage")) {
           expect(init?.method).toBe("POST")
           expect(JSON.parse(String(init?.body))).toEqual({
@@ -220,11 +241,6 @@ describe("provider-neutral AOS browser client", () => {
           return new Response(Uint8Array.from([1, 2, 3]), {
             headers: { "content-type": "application/pdf" },
           })
-        if (path.endsWith("/audio"))
-          return Response.json({
-            transcription: { status: "ready" },
-            speech: { status: "unavailable", reason: "not-supported" },
-          })
         if (path.endsWith("/audio/transcribe")) {
           expect(init?.method).toBe("POST")
           return Response.json({ transcript: "Hello" })
@@ -242,6 +258,7 @@ describe("provider-neutral AOS browser client", () => {
     await expect(
       client.workspaceCapabilities(session.id)
     ).resolves.toMatchObject({ workspace: { models: { status: "available" } } })
+    await client.workspaceCapabilities(session.id)
     await expect(client.models(session.id)).resolves.toMatchObject({
       selectedId: "native/small",
     })
@@ -251,19 +268,6 @@ describe("provider-neutral AOS browser client", () => {
     await expect(client.context(session.id)).resolves.toMatchObject({
       usedTokens: 1200,
     })
-    await expect(client.todos(session.id)).resolves.toEqual([
-      { id: "todo-1", label: "Ship", status: "active" },
-    ])
-    await expect(client.activity(session.id)).resolves.toMatchObject({
-      status: "available",
-      state: "waiting-for-input",
-    })
-    await expect(
-      client.respondToInteraction(session.id, "run-1", "request-1", {
-        kind: "question",
-        answers: [["yes"]],
-      })
-    ).resolves.toBeUndefined()
     await expect(
       client.stageAttachments(session.id, [
         {
@@ -280,19 +284,27 @@ describe("provider-neutral AOS browser client", () => {
     expect(fetcher.mock.calls.map(([input]) => String(input))).not.toContain(
       "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/artifacts"
     )
-    await expect(client.audioAvailability(session.id)).resolves.toEqual({
-      transcription: "ready",
-      speech: "unavailable",
-    })
     await expect(
       client.transcribe(session.id, new Blob(["audio"], { type: "audio/webm" }))
     ).resolves.toBe("Hello")
     await expect(client.speak(session.id, "Hello")).resolves.toBeInstanceOf(
       Blob
     )
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).endsWith("/workspace/capabilities")
+      )
+    ).toHaveLength(1)
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        /\/(?:workspace\/(?:todos|activity)|interactions\/pending|audio)$/u.test(
+          String(input)
+        )
+      )
+    ).toHaveLength(0)
   })
 
-  it("loads only the normalized pending interaction snapshot for an observed Session", async () => {
+  it("projects PLAN snapshots and deltas without a Todo request", async () => {
     const session = {
       id: "session-1",
       agentId: "researcher",
@@ -310,99 +322,145 @@ describe("provider-neutral AOS browser client", () => {
           limit: 50,
           offset: 0,
         })
-      if (path.endsWith("/interactions/pending"))
-        return Response.json({
-          runId: "run-1",
-          running: true,
-          status: "waiting-for-input",
-          outcome: {
-            type: "interrupt",
-            interrupts: [
-              {
-                id: "question-1",
-                reason: "question",
-                message: "Choose",
-                responseSchema: {
-                  type: "object",
-                  properties: {
-                    answers: {
-                      type: "array",
-                      prefixItems: [
-                        {
-                          type: "array",
-                          title: "Choose",
-                          items: { type: "string", enum: ["Yes", "No"] },
-                          minItems: 0,
-                          maxItems: 1,
-                        },
-                      ],
-                    },
-                  },
-                  required: ["answers"],
-                  additionalProperties: false,
-                },
-                metadata: { "aos.kind": "questions" },
-              },
-            ],
-          },
-        })
       throw new Error(`Unexpected normalized request: ${path}`)
     })
     const client = new AosRemoteClient({ fetcher })
     await client.listSessions("researcher")
-    await expect(client.pendingInteraction("session-1")).resolves.toMatchObject(
-      {
-        outcome: { type: "interrupt" },
-      }
+    const snapshots: unknown[] = []
+    const unsubscribe = client.subscribeTodos("session-1", (todos) =>
+      snapshots.push(todos)
     )
+    await Promise.resolve()
+    client.acceptRunEvent("session-1", {
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "aos-plan:session-1",
+      activityType: "PLAN",
+      content: {
+        todos: [{ id: "todo-1", label: "Ship", status: "active" }],
+      },
+      replace: true,
+    })
+    client.acceptRunEvent("session-1", {
+      type: EventType.ACTIVITY_DELTA,
+      messageId: "aos-plan:session-1",
+      activityType: "PLAN",
+      patch: [
+        {
+          op: "replace",
+          path: "/todos",
+          value: [{ id: "todo-1", label: "Ship", status: "completed" }],
+        },
+      ],
+    })
+
+    expect(snapshots).toEqual([
+      [],
+      [{ id: "todo-1", label: "Ship", status: "active" }],
+      [{ id: "todo-1", label: "Ship", status: "completed" }],
+    ])
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 
-  it("reads only normalized same-origin auth/runtime/catalog endpoints", async () => {
+  it("derives Session status from scoped AG-UI lifecycle events", async () => {
+    const session = {
+      id: "session-1",
+      agentId: "researcher",
+      title: "Research",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "idle" as const,
+    }
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json({
+          sessions: [session],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      ),
+    })
+    await client.listSessions("researcher")
+    const activities: unknown[] = []
+    const unsubscribe = client.subscribeActivity((event) =>
+      activities.push(event)
+    )
+
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "another-session",
+      runId: "foreign-run",
+    })
+    expect(client.sessionStatus("session-1")).toBe("idle")
+
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+    expect(client.sessionStatus("session-1")).toBe("running")
+
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_FINISHED,
+      threadId: "session-1",
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "question-1", reason: "question" }],
+      },
+    })
+    expect(client.sessionStatus("session-1")).toBe("waiting-for-input")
+    expect(activities).toEqual([
+      expect.objectContaining({ type: "run-started", threadId: "session-1" }),
+      expect.objectContaining({
+        type: "attention-requested",
+        threadId: "session-1",
+        requestId: "question-1",
+      }),
+    ])
+    unsubscribe()
+  })
+
+  it("reads only normalized same-origin runtime and catalog endpoints", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
-      const body = path.endsWith("/auth/operator")
+      const body = path.endsWith("/runtime")
         ? {
-            status: "authenticated",
-            operator: { id: "operator@example.test" },
+            runtime: { id: "hermes", name: "Hermes" },
+            status: "ready",
+            capabilities: {
+              agentCatalog: { status: "available" },
+              agentVisibility: {
+                status: "available",
+                concurrency: "revision",
+              },
+              sessionCatalog: {
+                status: "available",
+                scope: "workspace",
+                order: "recent",
+                defaultPageSize: 50,
+                maxPageSize: 100,
+                maxWindow: 1_000,
+              },
+              sessionHistory: {
+                status: "available",
+                order: "chronological",
+                compacted: true,
+                loading: "on-open",
+                defaultPageSize: 200,
+                maxPageSize: 500,
+              },
+              sessionDetail: { status: "available" },
+              sessionCreation: { status: "available" },
+              sessionTitle: { status: "available" },
+              sessionArchival: { status: "available" },
+              sessionDeletion: { status: "available" },
+              sessionRun: { status: "available" },
+              sessionStop: { status: "available" },
+            },
           }
-        : path.endsWith("/auth/runtime")
-          ? { status: "authenticated" }
-          : path.endsWith("/runtime")
-            ? {
-                runtime: { id: "hermes", name: "Hermes" },
-                status: "ready",
-                capabilities: {
-                  agentCatalog: { status: "available" },
-                  agentVisibility: {
-                    status: "available",
-                    concurrency: "revision",
-                  },
-                  sessionCatalog: {
-                    status: "available",
-                    scope: "workspace",
-                    order: "recent",
-                    defaultPageSize: 50,
-                    maxPageSize: 100,
-                    maxWindow: 1_000,
-                  },
-                  sessionHistory: {
-                    status: "available",
-                    order: "chronological",
-                    compacted: true,
-                    loading: "on-open",
-                    defaultPageSize: 200,
-                    maxPageSize: 500,
-                  },
-                  sessionDetail: { status: "available" },
-                  sessionCreation: { status: "available" },
-                  sessionTitle: { status: "available" },
-                  sessionArchival: { status: "available" },
-                  sessionDeletion: { status: "available" },
-                  sessionRun: { status: "available" },
-                  sessionStop: { status: "available" },
-                },
-              }
-            : catalog
+        : catalog
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -410,12 +468,6 @@ describe("provider-neutral AOS browser client", () => {
     })
     const client = new AosRemoteClient({ fetcher })
 
-    await expect(client.operatorAuth()).resolves.toMatchObject({
-      status: "authenticated",
-    })
-    await expect(client.runtimeAuth()).resolves.toEqual({
-      status: "authenticated",
-    })
     await expect(client.runtimeInfo()).resolves.toMatchObject({
       status: "ready",
     })
@@ -429,8 +481,6 @@ describe("provider-neutral AOS browser client", () => {
     ])
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/aos/v1/auth/operator",
-      "/api/aos/v1/auth/runtime",
       "/api/aos/v1/runtime",
       "/api/aos/v1/agents",
     ])
@@ -446,10 +496,6 @@ describe("provider-neutral AOS browser client", () => {
     }
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
-      if (path.endsWith("/auth/operator"))
-        return Response.json({ status: "unauthenticated" })
-      if (path.endsWith("/auth/runtime"))
-        return Response.json({ status: "authentication-required" })
       if (path.endsWith("/agents")) return Response.json(catalog)
       if (path.endsWith("/runtime"))
         return Response.json({
@@ -514,8 +560,6 @@ describe("provider-neutral AOS browser client", () => {
     })
     const client = new AosRemoteClient({ fetcher, reconciler })
 
-    await client.operatorAuth()
-    await client.runtimeAuth()
     await client.runtimeInfo()
     await client.listAgentCatalog()
     await client.listSessions("researcher")
@@ -708,44 +752,64 @@ describe("provider-neutral AOS browser client", () => {
           limit: 50,
           offset: 0,
         })
-      const offset = path.endsWith("offset=0") ? 0 : 2
+      const offset = 0
       return Response.json({
         sessionId: "opaque-session-1",
         messages: [
           {
-            id: offset === 0 ? "message-1" : "message-2",
-            role: offset === 0 ? "user" : "assistant",
+            id: "message-1",
+            role: "user",
             content: [
               {
-                type: offset === 0 ? "text" : "reasoning",
-                text: offset === 0 ? "Question" : "Thinking",
+                type: "text",
+                text: "Question",
               },
             ],
-            createdAt:
-              offset === 0
-                ? "2026-01-01T00:00:00.000Z"
-                : "2026-01-01T00:00:01.000Z",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "aos-plan:opaque-session-1",
+            role: "activity",
+            activityType: "PLAN",
+            content: {
+              todos: [
+                {
+                  id: "todo-1",
+                  label: "Ship",
+                  status: "active",
+                },
+              ],
+            },
           },
         ],
         total: 3,
         limit: 200,
         offset,
-        nextOffset: offset === 0 ? 2 : 3,
+        nextOffset: 2,
       })
     })
     const client = new AosRemoteClient({ fetcher })
     await client.listSessions("researcher")
+    const plans: unknown[] = []
+    const unsubscribe = client.subscribeTodos("opaque-session-1", (todos) =>
+      plans.push(todos)
+    )
+    await Promise.resolve()
 
     await expect(client.loadHistory("opaque-session-1")).resolves.toMatchObject(
       {
         sessionId: "opaque-session-1",
-        messages: [{ id: "message-1" }, { id: "message-2" }],
+        messages: [{ id: "message-1" }],
       }
     )
+    expect(plans).toEqual([
+      [],
+      [{ id: "todo-1", label: "Ship", status: "active" }],
+    ])
+    unsubscribe()
     expect(fetcher.mock.calls.slice(1).map(([input]) => String(input))).toEqual(
       [
         "/api/aos/v1/agents/researcher/sessions/opaque-session-1/history?limit=200&offset=0",
-        "/api/aos/v1/agents/researcher/sessions/opaque-session-1/history?limit=200&offset=2",
       ]
     )
     expect(JSON.stringify(fetcher.mock.calls)).not.toContain("/api/sessions")

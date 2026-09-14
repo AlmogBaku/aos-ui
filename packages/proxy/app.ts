@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
-import { RuntimeAuthStateSchema } from "../protocol"
-import { HermesAttachmentStageRegistry } from "./runtimes/hermes/stage-registry"
 import type { GuestInvitationService } from "./auth/guest-invitation"
-import { OidcAuthenticationError, type OidcCore } from "./auth/oidc"
-import type { OperatorSession } from "./auth/session-cookie"
-import { OperatorAuthError, type OperatorAuthenticator } from "./operator-auth"
+import { AttachmentStageRegistry } from "./core/attachment-stages"
+import {
+  ServerRunCapacityError,
+  ServerRunConflictError,
+  ServerRunControlError,
+  ServerSessionNotFoundError,
+  type RuntimeInstance,
+  type ServerRuntime,
+} from "./core/runtime"
 import { redactForLog } from "./redaction"
-import type { ServerRunEngine, ServerRunHandle, ServerRuntime } from "./runtime"
-import { ServerSessionNotFoundError } from "./runtime"
 import { registerAuthRoutes } from "./routes/auth"
 import { registerContentRoutes } from "./routes/content"
 import { errorResponse, type ErrorCode } from "./routes/http"
@@ -24,39 +26,9 @@ type Logger = {
 
 export type ProxyAppOptions = {
   publicOrigin: string
-  operatorAuth: OperatorAuthenticator & {
-    session?(request: Request): Promise<OperatorSession | undefined>
-  }
-  operatorOidc?: OidcCore<OperatorSession>
+  runtimeInstance: RuntimeInstance
   guestInvitations?: GuestInvitationService
-  runtimeAuth?: {
-    state(scope: {
-      principalId: string
-      lane: "operator"
-    }): Promise<unknown> | unknown
-    begin?(binding: {
-      principalId: string
-      lane: "operator"
-      browserSessionId: string
-      callbackUrl: string
-      returnPath: string
-    }): Promise<
-      | { status: "redirect"; response: Response }
-      | { status: "unavailable"; reason: string }
-    >
-    complete?(binding: {
-      principalId: string
-      lane: "operator"
-      browserSessionId: string
-      callbackUrl: string
-      returnPath: string
-    }): Promise<{ status: "authenticated"; returnPath: string }>
-  }
-  hermes: ServerRuntime
-  hermesForOperator?: (principalId: string) => ServerRuntime
   readiness?: () => Promise<"ready" | "not-ready">
-  runEngine?: ServerRunEngine
-  maxActiveRuns?: number
   logger: Logger
   clock?: () => number
 }
@@ -69,41 +41,11 @@ const securityHeaders = {
   "x-frame-options": "DENY",
 } as const
 
-class RuntimeAuthenticationError extends Error {
-  constructor() {
-    super("Runtime authentication required")
-    this.name = "RuntimeAuthenticationError"
-  }
-}
-
-class RuntimeUnavailableError extends Error {
-  constructor() {
-    super("Runtime unavailable")
-    this.name = "RuntimeUnavailableError"
-  }
-}
-
 export function createProxyApp(options: ProxyAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
-  const activeRuns = new Map<
-    string,
-    {
-      handle: ServerRunHandle
-      runId: string
-      engine: ServerRunEngine
-      principalId: string
-    }
-  >()
-  const runAdmissions = new Set<string>()
-  const attachmentStages = new HermesAttachmentStageRegistry()
-  const maxActiveRuns = options.maxActiveRuns ?? 256
-  if (
-    !Number.isSafeInteger(maxActiveRuns) ||
-    maxActiveRuns < 1 ||
-    maxActiveRuns > 4_096
-  )
-    throw new Error("Invalid active run limit")
+  const runtime = options.runtimeInstance.runtime
+  const attachmentStages = new AttachmentStageRegistry()
 
   app.use("*", async (context, next) => {
     const requestId = randomUUID()
@@ -125,35 +67,19 @@ export function createProxyApp(options: ProxyAppOptions) {
   })
 
   const requireRuntimeBinding = async (request: Request) => {
-    const operator = await options.operatorAuth.require(request)
-    if (options.runtimeAuth) {
-      const state = RuntimeAuthStateSchema.parse(
-        await options.runtimeAuth.state({
-          principalId: operator.operator.id,
-          lane: "operator",
-        })
-      )
-      if (state.status === "authentication-required")
-        throw new RuntimeAuthenticationError()
-      if (state.status === "unavailable") throw new RuntimeUnavailableError()
-    }
-    return {
-      runtime:
-        options.hermesForOperator?.(operator.operator.id) ?? options.hermes,
-      principalId: operator.operator.id,
-    }
+    void request
+    return { runtime, principalId: "operator" }
   }
   const requireRuntime = async (request: Request) =>
     (await requireRuntimeBinding(request)).runtime
-
   const requireScopedSession = async (
-    runtime: ServerRuntime,
+    selected: ServerRuntime,
     agentId: string,
     publicSessionId: string
   ) => {
-    const id = runtime.resolveSessionId(agentId, publicSessionId)
+    const id = selected.resolveSessionId(agentId, publicSessionId)
     if (!id) throw new ServerSessionNotFoundError()
-    await runtime.getSession(agentId, id)
+    await selected.getSession(agentId, id)
     return id
   }
 
@@ -168,14 +94,15 @@ export function createProxyApp(options: ProxyAppOptions) {
         status === "ready" ? 200 : 503
       )
     }
-    const info = await options.hermes.runtimeInfo()
+    const info = await runtime.runtimeInfo()
+    const ready = info.status !== "unavailable"
     return context.json(
       {
-        status: info.status === "unavailable" ? "not-ready" : "ready",
+        status: ready ? "ready" : "not-ready",
         timestamp: clock(),
         runtime: info.status,
       },
-      info.status === "unavailable" ? 503 : 200
+      ready ? 200 : 503
     )
   })
 
@@ -189,34 +116,22 @@ export function createProxyApp(options: ProxyAppOptions) {
     requireRuntime,
     requireScopedSession
   )
-  registerRunRoutes(
-    app,
-    options,
-    activeRuns,
-    runAdmissions,
-    attachmentStages,
-    maxActiveRuns,
-    requireRuntimeBinding
-  )
+  registerRunRoutes(app, options, attachmentStages, requireRuntimeBinding)
 
   app.onError((cause, context) => {
-    const runtimeError = options.hermes.publicError(cause)
+    const runtimeError = runtime.publicError(cause)
     const [code, status]: [ErrorCode, number] =
-      cause instanceof OperatorAuthError
-        ? ["unauthenticated", 401]
-        : cause instanceof OidcAuthenticationError
-          ? cause.code === "temporarily-unavailable"
-            ? ["temporarily_unavailable", 503]
-            : ["invalid_request", 400]
-          : cause instanceof RuntimeAuthenticationError
-            ? ["runtime_authentication_required", 401]
-            : cause instanceof RuntimeUnavailableError
-              ? ["temporarily_unavailable", 503]
-              : cause instanceof ServerSessionNotFoundError
-                ? ["not_found", 404]
-                : runtimeError
-                  ? [runtimeError.code, runtimeError.status]
-                  : ["internal_error", 500]
+      cause instanceof ServerRunConflictError
+        ? ["run_conflict", 409]
+        : cause instanceof ServerRunCapacityError
+          ? ["run_capacity_exceeded", 503]
+          : cause instanceof ServerRunControlError
+            ? ["not_found", 404]
+            : cause instanceof ServerSessionNotFoundError
+              ? ["not_found", 404]
+              : runtimeError
+                ? [runtimeError.code, runtimeError.status]
+                : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

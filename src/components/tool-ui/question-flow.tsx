@@ -30,11 +30,16 @@ export function QuestionFlowTool({
   const submissionInFlight = useRef(false)
   const { labels } = useToolUiLocale()
   const providerState = normalizeRichToolState(part, { interactive: true })
-  const state = normalizeRichToolState(part, {
+  const normalizedState = normalizeRichToolState(part, {
     interactive: true,
     overridePhase:
       providerState.phase === "pending" ? submission.phase : undefined,
   })
+  const responses = readResponses(part.result)
+  const state =
+    readResultStatus(part.result) === "cancelled"
+      ? { phase: "cancelled" as const, label: "Cancelled", canRespond: false }
+      : normalizedState
   const providerAnswer = readAnswer(part.result, part.approval)
   const answer = providerAnswer ?? submission.answer
   const options = payload.args.options ?? []
@@ -157,7 +162,23 @@ export function QuestionFlowTool({
           {labels.question.recording}
         </p>
       ) : null}
-      {state.phase === "answered" ? (
+      {(state.phase === "answered" || state.phase === "cancelled") &&
+      responses?.length ? (
+        <dl className="flex flex-col gap-3 text-sm">
+          {responses.map((response, index) => (
+            <div key={`${response.question}:${index}`} className="grid gap-0.5">
+              <dt className="text-muted-foreground" dir="auto">
+                {response.question}
+              </dt>
+              <dd className="font-medium" dir="auto">
+                {response.answers.length
+                  ? response.answers.join(", ")
+                  : labels.question.discarded}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : state.phase === "answered" ? (
         <p className="text-sm">
           <span className="text-muted-foreground">
             {labels.question.response}{" "}
@@ -206,4 +227,33 @@ function readAnswer(
     if (typeof value === "string" && value.trim()) return value
   }
   return undefined
+}
+
+function readResultStatus(result: unknown) {
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    return undefined
+  const status = Reflect.get(result, "status")
+  return status === "cancelled" ? status : undefined
+}
+
+function readResponses(result: unknown) {
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    return undefined
+  const candidates = Reflect.get(result, "responses")
+  if (!Array.isArray(candidates)) return undefined
+  const responses = candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      return []
+    const question = Reflect.get(candidate, "question")
+    const answers = Reflect.get(candidate, "answers")
+    if (
+      typeof question !== "string" ||
+      !question.trim() ||
+      !Array.isArray(answers) ||
+      answers.some((answer) => typeof answer !== "string")
+    )
+      return []
+    return [{ question, answers: answers as string[] }]
+  })
+  return responses.length ? responses : undefined
 }

@@ -736,6 +736,36 @@ describe("provider permission renderer", () => {
     expect(screen.queryByText("Unavailable")).toBeNull()
   })
 
+  it("renders every settled Hermes question with its recorded answer or discard", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "question",
+          args: {
+            question: "2 questions",
+            questions: [
+              { question: "Where do you live?" },
+              { question: "Which amenities do you use?" },
+            ],
+            allowFreeform: true,
+          },
+          result: {
+            status: "cancelled",
+            responses: [
+              { question: "Where do you live?", answers: [] },
+              { question: "Which amenities do you use?", answers: [] },
+            ],
+          },
+          status: { type: "complete" },
+        })}
+      />
+    )
+
+    expect(screen.getByText("Where do you live?")).toBeVisible()
+    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
+    expect(screen.getAllByText("Discarded")).toHaveLength(2)
+  })
+
   it("retries the same provider-native choice once without double-submit", async () => {
     const user = userEvent.setup()
     let resolveRetry: (() => void) | undefined

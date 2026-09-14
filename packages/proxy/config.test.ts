@@ -19,27 +19,16 @@ afterEach(async () => {
 
 function validConfig(tokenFile = "/run/secrets/hermes-token") {
   return {
-    version: 1,
-    listen: { host: "127.0.0.1", port: 4100 },
+    version: 1 as const,
+    deploymentId: "production-a",
+    listen: { host: "127.0.0.1" as const, port: 4100 },
     publicOrigin: "https://aos.example.test",
-    operator: {
-      issuer: "https://identity.example.test",
-      clientId: "aos-ui",
-      clientSecretFile: "/run/secrets/oidc-client-secret",
-      principalHmacKeyFile: "/run/secrets/operator-principal-hmac",
-      redirectUri: "https://aos.example.test/api/aos/v1/auth/operator/callback",
-      allowedSubjects: ["operator@example.test"],
-      session: {
-        deploymentId: "production-a",
-        keys: [
-          { id: "current", secretFile: "/run/secrets/operator-session-key" },
-        ],
-        ttlSeconds: 900,
-      },
-    },
-    hermes: {
+    runtime: {
+      id: "hermes-main",
+      kind: "hermes" as const,
       baseUrl: "http://127.0.0.1:9119",
-      auth: { mode: "static-token", tokenFile },
+      tokenFile,
+      sessionIdleMs: 300_000,
     },
     events: {
       activeKeyId: "current",
@@ -47,153 +36,135 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
         { id: "current", secretFile: "/run/secrets/reconnect-cursor-key" },
       ],
     },
+    limits: {
+      activeExecutions: 256,
+      guestActiveExecutions: 32,
+      operatorEventPeers: 256,
+      guestEventPeers: 64,
+      guestEventPeersPerInvitation: 4,
+      subscriberEvents: 512,
+      subscriberBytes: 2_097_152,
+    },
     shutdownGraceMs: 5_000,
   }
 }
 
 describe("proxy configuration and secret boundary", () => {
-  it("accepts a loopback listener with OIDC allowlist and secret references", () => {
+  it("accepts the minimal server-token-only V1 configuration", () => {
     expect(parseProxyConfig(validConfig())).toEqual(validConfig())
   })
 
-  it("rejects wildcard listeners, inline secrets, and unknown keys", () => {
+  it("rejects legacy operator, OIDC, and Hermes browser-broker fields", () => {
+    for (const legacy of [
+      { operator: { issuer: "https://identity.example.test" } },
+      { hermes: { auth: { mode: "browser-broker" } } },
+      { runtimeAuth: { callbackUrl: "https://aos.example.test/callback" } },
+    ])
+      expect(() => parseProxyConfig({ ...validConfig(), ...legacy })).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+
+  it("rejects wildcard listeners, inline secrets, and unknown fields", () => {
     for (const candidate of [
       { ...validConfig(), listen: { host: "0.0.0.0", port: 4100 } },
       {
         ...validConfig(),
-        hermes: { baseUrl: "http://127.0.0.1:9119", token: "secret" },
+        runtime: { ...validConfig().runtime, token: "secret" },
       },
       { ...validConfig(), extra: true },
-    ]) {
+    ])
       expect(() => parseProxyConfig(candidate)).toThrow(
         "Invalid proxy configuration"
       )
-    }
   })
 
-  it("requires exact public-origin OIDC and runtime-broker callbacks", () => {
-    const browserBroker = {
-      mode: "browser-broker" as const,
-      callbackUrl:
-        "https://aos.example.test/api/aos/v1/auth/runtime/upstream/auth/callback",
-      allowedIdentityOrigins: ["https://identity.example.test"],
-    }
-    expect(
-      parseProxyConfig({
-        ...validConfig(),
-        hermes: {
-          baseUrl: "http://127.0.0.1:9119",
-          auth: browserBroker,
-        },
-      }).hermes.auth
-    ).toEqual(browserBroker)
-
-    for (const candidate of [
-      {
-        ...validConfig(),
-        operator: {
-          ...validConfig().operator,
-          redirectUri:
-            "https://other.example.test/api/aos/v1/auth/operator/callback",
-        },
-      },
-      {
-        ...validConfig(),
-        hermes: {
-          baseUrl: "http://127.0.0.1:9119",
-          auth: {
-            ...browserBroker,
-            callbackUrl: "https://aos.example.test/auth/callback",
-          },
-        },
-      },
-    ]) {
-      expect(() => parseProxyConfig(candidate)).toThrow(
-        "Invalid proxy configuration"
-      )
-    }
-  })
-
-  it("allows plain HTTP only for exact loopback application origins", () => {
-    const loopback = {
-      ...validConfig(),
-      publicOrigin: "http://127.0.0.1:3000",
-      operator: {
-        ...validConfig().operator,
-        redirectUri: "http://127.0.0.1:3000/api/aos/v1/auth/operator/callback",
-      },
-    }
-    expect(parseProxyConfig(loopback).publicOrigin).toBe(
-      "http://127.0.0.1:3000"
-    )
-
-    for (const publicOrigin of [
-      "http://192.168.1.4:3000",
-      "https://user@aos.example.test",
-      "https://aos.example.test/path",
-      "https://aos.example.test?debug=true",
-      "https://aos.example.test#fragment",
-    ]) {
-      expect(() =>
-        parseProxyConfig({ ...validConfig(), publicOrigin })
-      ).toThrow("Invalid proxy configuration")
-    }
-  })
-
-  it("requires the active reconnect key to be declared", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        events: { ...validConfig().events, activeKeyId: "missing" },
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
-
-  it("accepts an explicitly private container listener without permitting an unscoped wildcard", () => {
-    const containerConfig = {
-      ...validConfig(),
-      listen: {
-        host: "0.0.0.0",
-        port: 4100,
-        exposure: "private-container",
-      },
-    }
-
-    expect(parseProxyConfig(containerConfig)).toEqual(containerConfig)
-    expect(() =>
-      parseProxyConfig({
-        ...containerConfig,
-        listen: { host: "0.0.0.0", port: 4100 },
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
-
-  it("accepts a separately addressed Hermes guest lane with file-backed invitation and runtime keys", () => {
+  it("accepts a guest lane without a second runtime or token", () => {
     const configured = parseProxyConfig({
       ...validConfig(),
       guest: {
         listen: { host: "127.0.0.1", port: 4101 },
         publicOrigin: "https://guest.example.test",
-        hermes: {
-          baseUrl: "http://127.0.0.1:9120",
-          tokenFile: "/run/secrets/hermes-guest-token",
-        },
         invitations: {
-          keys: [{ id: "guest-current", secretFile: "/run/secrets/guest-key" }],
+          keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
           ttlSeconds: 300,
           clockSkewSeconds: 0,
         },
       },
     })
-
-    expect(configured.guest).toMatchObject({
+    expect(configured.guest).toEqual({
       listen: { host: "127.0.0.1", port: 4101 },
       publicOrigin: "https://guest.example.test",
-      invitations: { ttlSeconds: 300, clockSkewSeconds: 0 },
+      invitations: {
+        keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
+        ttlSeconds: 300,
+        clockSkewSeconds: 0,
+      },
     })
   })
 
-  it("reads a bounded owner-only secret and trims its single trailing newline", async () => {
+  it("requires distinct operator and guest origins and listeners", () => {
+    for (const guest of [
+      {
+        listen: { host: "127.0.0.1", port: 4101 },
+        publicOrigin: "https://aos.example.test",
+      },
+      {
+        listen: { host: "127.0.0.1", port: 4100 },
+        publicOrigin: "https://guest.example.test",
+      },
+    ])
+      expect(() =>
+        parseProxyConfig({
+          ...validConfig(),
+          guest: {
+            ...guest,
+            invitations: {
+              keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
+              ttlSeconds: 300,
+              clockSkewSeconds: 0,
+            },
+          },
+        })
+      ).toThrow("Invalid proxy configuration")
+  })
+
+  it("accepts plain HTTP only for exact loopback application origins", () => {
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        publicOrigin: "http://127.0.0.1:3000",
+      }).publicOrigin
+    ).toBe("http://127.0.0.1:3000")
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        publicOrigin: "http://192.168.1.4:3000",
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("requires active reconnect keys and coherent limits", () => {
+    for (const candidate of [
+      {
+        ...validConfig(),
+        events: { ...validConfig().events, activeKeyId: "missing" },
+      },
+      {
+        ...validConfig(),
+        limits: { ...validConfig().limits, guestActiveExecutions: 257 },
+      },
+      {
+        ...validConfig(),
+        limits: { ...validConfig().limits, guestEventPeersPerInvitation: 65 },
+      },
+    ])
+      expect(() => parseProxyConfig(candidate)).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+
+  it("reads a bounded owner-only secret and trims its trailing newline", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aos-secret-"))
     temporaryDirectories.push(directory)
     const file = join(directory, "token")
@@ -223,7 +194,6 @@ describe("proxy configuration and secret boundary", () => {
     await writeFile(invalid, Buffer.alloc(31, 7).toString("base64url"), {
       mode: 0o600,
     })
-
     await expect(readSecretKeyFile(valid)).resolves.toEqual(
       new Uint8Array(Buffer.alloc(32, 7))
     )
@@ -232,19 +202,17 @@ describe("proxy configuration and secret boundary", () => {
     )
   })
 
-  it("redacts nested credentials and URL query values without serializing errors", () => {
+  it("redacts credentials and URL query values", () => {
     expect(
       redactForLog({
         authorization: "Bearer secret",
         nested: { token: "secret", safe: "kept" },
         url: "https://example.test/path?code=secret",
-        error: new Error("native failure at /private/path token=secret"),
       })
     ).toEqual({
       authorization: "[REDACTED]",
       nested: { token: "[REDACTED]", safe: "kept" },
       url: "https://example.test/path",
-      error: { name: "Error", message: "Upstream request failed" },
     })
   })
 })

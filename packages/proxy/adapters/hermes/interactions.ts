@@ -92,6 +92,12 @@ export type HermesInteractionResult = {
     "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
 }
 
+type HermesInteractionResumeSnapshot = {
+  running: boolean
+  status: "waiting-for-input" | "running" | "idle" | "unknown"
+  outcome?: RunFinishedInterruptOutcome
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -321,28 +327,16 @@ function sameScope(
   return (
     left.agentId === right.agentId &&
     left.sessionId === right.sessionId &&
-    left.threadId === right.threadId &&
-    left.runId === right.runId
+    left.threadId === right.threadId
   )
 }
 
 function interactionKey(scope: HermesInteractionScope, id: string) {
-  return JSON.stringify([
-    scope.agentId,
-    scope.sessionId,
-    scope.threadId,
-    scope.runId,
-    id,
-  ])
+  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId, id])
 }
 
 function sessionKey(scope: HermesInteractionScope) {
-  return JSON.stringify([
-    scope.agentId,
-    scope.sessionId,
-    scope.threadId,
-    scope.runId,
-  ])
+  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId])
 }
 
 function strictResume(value: unknown) {
@@ -430,6 +424,10 @@ export class HermesInteractions {
   readonly #live = new Map<
     string,
     { scope: HermesInteractionScope; liveSessionId: string }
+  >()
+  readonly #resuming = new Map<
+    string,
+    Promise<HermesInteractionResumeSnapshot>
   >()
   readonly #resumeGenerations = new Map<string, number>()
   #sequence = 0
@@ -707,8 +705,25 @@ export class HermesInteractions {
     }
   }
 
-  async resume(scope: HermesInteractionScope) {
+  resume(scope: HermesInteractionScope) {
     const reconciliationKey = sessionKey(scope)
+    const inFlight = this.#resuming.get(reconciliationKey)
+    if (inFlight) return inFlight
+    const reconciliation = this.#reconcile(scope, reconciliationKey)
+    this.#resuming.set(reconciliationKey, reconciliation)
+    void reconciliation
+      .finally(() => {
+        if (this.#resuming.get(reconciliationKey) === reconciliation)
+          this.#resuming.delete(reconciliationKey)
+      })
+      .catch(() => undefined)
+    return reconciliation
+  }
+
+  async #reconcile(
+    scope: HermesInteractionScope,
+    reconciliationKey: string
+  ): Promise<HermesInteractionResumeSnapshot> {
     const generation = (this.#resumeGenerations.get(reconciliationKey) ?? 0) + 1
     this.#resumeGenerations.set(reconciliationKey, generation)
     let result: unknown
@@ -727,7 +742,7 @@ export class HermesInteractions {
     const liveSessionId = validString(result.session_id, 512)
     if (
       !liveSessionId ||
-      typeof result.running !== "boolean" ||
+      (result.running !== undefined && typeof result.running !== "boolean") ||
       (result.status !== undefined && typeof result.status !== "string") ||
       (result.pending_approval !== undefined &&
         result.pending_approval !== null &&
@@ -782,10 +797,10 @@ export class HermesInteractions {
       throw error
     }
     return {
-      running: result.running,
+      running: result.running === true,
       status: interrupts.length
         ? ("waiting-for-input" as const)
-        : result.running
+        : result.running === true
           ? ("running" as const)
           : result.status === "idle"
             ? ("idle" as const)

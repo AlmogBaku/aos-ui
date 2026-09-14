@@ -11,6 +11,7 @@ import {
 } from "./adapter"
 import { HermesAuthenticationError } from "./transport"
 import { HermesHttpError } from "./transport"
+import { HermesRunRewindConflictError } from "./run"
 
 function profile(hidden = false, revision: number | null = 7) {
   return {
@@ -74,7 +75,7 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "hermes:researcher:stored"
+    const threadId = "stored"
 
     await expect(adapter.models("researcher", threadId)).resolves.toEqual({
       selectedId: '["native","small"]',
@@ -133,7 +134,7 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "hermes:researcher:stored"
+    const threadId = "stored"
 
     const staged = await adapter.stageAttachments("researcher", threadId, [
       { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
@@ -189,7 +190,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({ request, http })
 
     await expect(
-      adapter.pendingInteractions("researcher", "hermes:researcher:stored")
+      adapter.pendingInteractions("researcher", "stored")
     ).resolves.toMatchObject({
       runId: "aos-hermes-restored-interaction",
       running: true,
@@ -229,7 +230,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       sessionId: "stored",
-      threadId: "hermes:researcher:stored",
+      threadId: "stored",
     }
 
     await expect(adapter.resume(scope)).resolves.toEqual({
@@ -237,7 +238,7 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       adapter.observe("live-secret", vi.fn(), vi.fn())
-    ).resolves.toBe(stopObservation)
+    ).resolves.toEqual(expect.any(Function))
     await expect(adapter.recover("live-secret", 2)).resolves.toEqual({
       epoch: "epoch-1",
       lastSeen: 4,
@@ -245,7 +246,7 @@ describe("Hermes server adapter", () => {
       events: [],
     })
     await expect(
-      adapter.submit("live-secret", { text: "Hello", runId: "run-1" })
+      adapter.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
     ).resolves.toEqual({ acknowledgement: "accepted" })
     await expect(adapter.interrupt("live-secret")).resolves.toBeUndefined()
     await expect(adapter.status("live-secret")).resolves.toBe("running")
@@ -260,6 +261,117 @@ describe("Hermes server adapter", () => {
       ["session.active_list", {}],
     ])
     expect(observeEvents).toHaveBeenCalledTimes(1)
+  })
+
+  it("rewinds Edit or Retry at the authoritative durable user row", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "prompt.submit") return { accepted: true }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.includes("/messages?"))
+        return {
+          session_id: "stored",
+          messages: [
+            { row_id: 10, role: "user", text: "Keep" },
+            { row_id: 11, role: "assistant", text: "Kept reply" },
+            { row_id: 12, role: "user", text: "Original" },
+            { row_id: 13, role: "assistant", text: "Old reply" },
+          ],
+        }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const scope = {
+      agentId: "researcher",
+      sessionId: "stored",
+      threadId: "stored",
+    }
+
+    await expect(
+      adapter.submit("live-secret", {
+        scope,
+        text: "Edited",
+        runId: "edit-run",
+        rewindSourceId: "hermes-row-12",
+      })
+    ).resolves.toEqual({ acknowledgement: "accepted" })
+
+    expect(request).toHaveBeenCalledWith("prompt.submit", {
+      session_id: "live-secret",
+      text: "Edited",
+      confirm_truncate: true,
+      truncate_before_row_id: 12,
+    })
+  })
+
+  it("guards a first-turn rewind and never appends when the source is stale", async () => {
+    const request = vi.fn(async () => ({ accepted: true }))
+    let messages: readonly unknown[] = [
+      { row_id: 10, role: "user", text: "Original" },
+      { row_id: 11, role: "assistant", text: "Old reply" },
+    ]
+    const adapter = new HermesServerAdapter({
+      request,
+      http: async (path: string) => {
+        if (path.includes("/messages?"))
+          return { session_id: "stored", messages }
+        throw new Error(`unexpected ${path}`)
+      },
+    })
+    const scope = {
+      agentId: "researcher",
+      sessionId: "stored",
+      threadId: "stored",
+    }
+
+    await adapter.submit("live-secret", {
+      scope,
+      text: "Retry",
+      runId: "retry-run",
+      rewindSourceId: "hermes-row-10",
+    })
+    expect(request).toHaveBeenLastCalledWith("prompt.submit", {
+      session_id: "live-secret",
+      text: "Retry",
+      confirm_truncate: true,
+      confirm_empty_truncate: true,
+      truncate_before_row_id: 10,
+    })
+
+    request.mockClear()
+    messages = [{ row_id: 12, role: "assistant", text: "Changed" }]
+    await expect(
+      adapter.submit("live-secret", {
+        scope,
+        text: "Retry",
+        runId: "stale-retry-run",
+        rewindSourceId: "hermes-row-10",
+      })
+    ).rejects.toBeInstanceOf(HermesRunRewindConflictError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("accepts Hermes recovery cursors returned as latest_seq", async () => {
+    const adapter = new HermesServerAdapter({
+      request: async (method: string) => {
+        if (method === "session.events.since")
+          return {
+            epoch: "epoch-1",
+            latest_seq: 4,
+            truncated: false,
+            events: [],
+          }
+        throw new Error(`unexpected ${method}`)
+      },
+    })
+
+    await expect(adapter.recover("live-secret")).resolves.toEqual({
+      epoch: "epoch-1",
+      lastSeen: 4,
+      truncated: false,
+      events: [],
+    })
   })
 
   it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
@@ -295,16 +407,13 @@ describe("Hermes server adapter", () => {
     const second = await adapter.listAllSessions(50, 50)
 
     expect(first.sessions).toHaveLength(50)
-    expect(first.sessions[0]?.id).toBe("hermes:alpha:alpha-120")
-    expect(first.sessions.at(-1)?.id).toBe("hermes:alpha:alpha-71")
+    expect(first.sessions[0]?.id).toBe("alpha-120")
+    expect(first.sessions.at(-1)?.id).toBe("alpha-71")
     expect(second.sessions).toHaveLength(50)
     expect(second.sessions.slice(0, 10).map(({ id }) => id)).toEqual(
-      Array.from(
-        { length: 10 },
-        (_, index) => `hermes:alpha:alpha-${70 - index}`
-      )
+      Array.from({ length: 10 }, (_, index) => `alpha-${70 - index}`)
     )
-    expect(second.sessions[10]?.id).toBe("hermes:beta:beta-60")
+    expect(second.sessions[10]?.id).toBe("beta-60")
     expect(
       new Set([...first.sessions, ...second.sessions].map(({ id }) => id)).size
     ).toBe(100)
@@ -354,7 +463,7 @@ describe("Hermes server adapter", () => {
     ])
   })
 
-  it("creates only Agent-owned Sessions and returns a stable stored identity", async () => {
+  it("creates Agent-owned lazy Sessions using the native stored identity", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "profiles.list") return { profiles: [profile()] }
       if (method === "session.create")
@@ -367,7 +476,7 @@ describe("Hermes server adapter", () => {
       adapter.createSession("researcher", "New Session")
     ).resolves.toEqual({
       session: {
-        id: "hermes:researcher:stored%2F1",
+        id: "stored/1",
         agentId: "researcher",
       },
     })
@@ -388,6 +497,63 @@ describe("Hermes server adapter", () => {
       HermesAgentNotFoundError
     )
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("projects an unpersisted lazy Session from its native resume snapshot", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-private",
+          stored_session_id: "stored/1",
+          message_count: 0,
+          messages: [],
+          info: { lazy: true, profile_name: "researcher" },
+        }
+      throw new Error(`unexpected ${method}`)
+    })
+    const adapter = new HermesServerAdapter({
+      request,
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+
+    await expect(adapter.getSession("researcher", "stored/1")).resolves.toEqual(
+      {
+        id: "stored/1",
+        agentId: "researcher",
+        title: "stored/1",
+        archived: false,
+        updatedAt: "1970-01-01T00:00:00.000Z",
+        status: "idle",
+      }
+    )
+    expect(request).toHaveBeenCalledWith("session.resume", {
+      session_id: "stored/1",
+      profile: "researcher",
+      omit_messages: true,
+    })
+  })
+
+  it("returns empty Todos for an unpersisted lazy Session", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async (method: string) => {
+        if (method === "session.resume")
+          return {
+            session_id: "live-private",
+            stored_session_id: "stored/1",
+            message_count: 0,
+            messages: [],
+            info: { lazy: true, profile_name: "researcher" },
+          }
+        throw new Error(`unexpected ${method}`)
+      }),
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+
+    await expect(adapter.todos("researcher", "stored/1")).resolves.toEqual([])
   })
 
   it("distinguishes missing and conflicting stored Session operations from outages", async () => {
@@ -459,6 +625,7 @@ describe("Hermes server adapter", () => {
             profile: "researcher",
             title: "One",
             last_active: 1,
+            is_active: true,
             session_id: "live-secret",
           },
         ],
@@ -469,12 +636,12 @@ describe("Hermes server adapter", () => {
     await expect(adapter.listSessions("researcher", 50, 0)).resolves.toEqual({
       sessions: [
         {
-          id: "hermes:researcher:stored%2F1",
+          id: "stored/1",
           agentId: "researcher",
           title: "One",
           archived: false,
           updatedAt: "1970-01-01T00:00:01.000Z",
-          status: "unknown",
+          status: "running",
         },
       ],
       total: 1,
@@ -516,7 +683,7 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.history("researcher", "stored", 200, 0)
     ).resolves.toEqual({
-      sessionId: "hermes:researcher:stored",
+      sessionId: "stored",
       messages: [
         {
           id: "user-1",
@@ -723,7 +890,6 @@ describe("Hermes server adapter", () => {
             id: "researcher",
             name: "Researcher",
             description: "Investigates primary sources",
-            activity: "unknown",
             visibility: "visible",
           },
           visibility: "visible",
@@ -903,7 +1069,7 @@ describe("Hermes server adapter", () => {
       adapter.resume({
         agentId: "researcher",
         sessionId: "stored",
-        threadId: "hermes:researcher:stored",
+        threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })

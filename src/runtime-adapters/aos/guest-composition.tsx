@@ -172,6 +172,7 @@ function GuestConversationShell({
         <Thread
           autoFocus={false}
           labels={threadLabels[locale]}
+          messageRewind={false}
           components={{ ToolFallback: AosToolPresentation }}
         />
       </ToolUiLocaleProvider>

@@ -1,15 +1,13 @@
 import {
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
-  SessionAudioResponseSchema,
-  SessionInteractionSnapshotResponseSchema,
   SessionSpeechRequestSchema,
   SessionTranscriptionRequestSchema,
   SessionTranscriptionResponseSchema,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { ServerAttachmentStages, ServerRuntime } from "../runtime"
-import { boundedJson, errorResponse, validIdentifier } from "./http"
+import type { ServerAttachmentStages, ServerRuntime } from "../core/runtime"
+import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
 function recordingBytes(dataUrl: string, mimeType: string) {
@@ -43,24 +41,6 @@ export function registerContentRoutes(
   ) => Promise<string>
 ) {
   const sessionContentPath = "/api/aos/v1/agents/:agentId/sessions/:sessionId"
-
-  app.get(`${sessionContentPath}/interactions/pending`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    const runIds = new URL(context.req.url).searchParams.getAll("runId")
-    if (
-      runIds.length > 1 ||
-      (runIds[0] !== undefined && !validIdentifier(runIds[0]))
-    )
-      return errorResponse("invalid_request", 400)
-    const agentId = context.req.param("agentId")
-    const sessionId = context.req.param("sessionId")
-    await requireScopedSession(hermes, agentId, sessionId)
-    return context.json(
-      SessionInteractionSnapshotResponseSchema.parse(
-        await hermes.pendingInteractions(agentId, sessionId, runIds[0])
-      )
-    )
-  })
 
   app.post(`${sessionContentPath}/attachments/stage`, async (context) => {
     const hermes = await requireRuntime(context.req.raw)
@@ -110,23 +90,6 @@ export function registerContentRoutes(
         "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(artifact.filename)}`,
       },
     })
-  })
-
-  app.get(`${sessionContentPath}/audio`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    await requireScopedSession(
-      hermes,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
-    return context.json(
-      SessionAudioResponseSchema.parse(
-        await hermes.audio(
-          context.req.param("agentId"),
-          context.req.param("sessionId")
-        )
-      )
-    )
   })
 
   app.post(`${sessionContentPath}/audio/transcribe`, async (context) => {

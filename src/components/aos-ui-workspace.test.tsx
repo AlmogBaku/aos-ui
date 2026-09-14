@@ -30,6 +30,10 @@ import {
 
 import { FixtureAosUiApp } from "@/runtime-adapters/fixture/composition"
 import {
+  AosDraftRegistry,
+  registerAosDraftRegistry,
+} from "@/runtime-adapters/aos"
+import {
   ControlledWorkspaceFixture,
   type WorkspaceFixtureRuntime,
 } from "./test-utils/controlled-workspace-fixture"
@@ -56,6 +60,29 @@ function asHarnessRuntime(bundle: WorkspaceFixtureRuntime): HarnessRuntime {
     artifacts: bundle.artifacts ? { resolver: bundle.artifacts } : undefined,
     activityCoverage: "workspace",
   }
+}
+
+function RegisteredDraftWorkspace({
+  bundle,
+  capture,
+}: {
+  bundle: WorkspaceFixtureRuntime
+  capture: (bundle: WorkspaceFixtureRuntime) => void
+}) {
+  const [drafts] = useState(() => new AosDraftRegistry())
+  useEffect(() => registerAosDraftRegistry(bundle.assistantRuntime, drafts), [
+    bundle.assistantRuntime,
+    drafts,
+  ])
+  useEffect(() => capture(bundle), [bundle, capture])
+  return (
+    <AosUiWorkspace
+      locale="en"
+      dictionary={en}
+      runtime={asHarnessRuntime(bundle)}
+      now={FIXTURE_NOW}
+    />
+  )
 }
 
 it("renders pending provider interactions through the unified runtime and submits to their owning Session", async () => {
@@ -167,6 +194,59 @@ function CreatorFixtureAosUiApp({ locale }: { locale: "en" | "he" }) {
 }
 
 describe("reversible local Session tabs", () => {
+  it("keeps a provider-neutral local draft selected without creating a remote Session", async () => {
+    const user = userEvent.setup()
+    let bundle: WorkspaceFixtureRuntime | undefined
+    const capture = (value: WorkspaceFixtureRuntime) => {
+      bundle = value
+    }
+    render(
+      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
+        {(value) => (
+          <RegisteredDraftWorkspace bundle={value} capture={capture} />
+        )}
+      </ControlledWorkspaceFixture>
+    )
+    await screen.findByRole("tab", { name: "Market brief" })
+    const create = vi.spyOn(bundle!.workspace, "createSession")
+    const threads = bundle!.assistantRuntime.threads
+    const originalSwitchToThread = threads.switchToThread.bind(threads)
+    let clickStarted = false
+    const switchesAfterClick: string[] = []
+    vi.spyOn(threads, "switchToThread").mockImplementation(async (id) => {
+      if (clickStarted) switchesAfterClick.push(id)
+      await originalSwitchToThread(id)
+    })
+    const switchToNew = vi.spyOn(threads, "switchToNewThread")
+    const button = (
+      await screen.findAllByRole("button", {
+        name: en.actions.newSession,
+      })
+    ).find((candidate) => candidate.closest("[data-session-actions]"))
+    expect(button).toBeDefined()
+
+    clickStarted = true
+    await user.click(button!)
+
+    await waitFor(() => expect(switchToNew).toHaveBeenCalledOnce())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(switchesAfterClick).toEqual([])
+    await waitFor(() => {
+      const state = bundle!.assistantRuntime.threads.getState()
+      expect(state.mainThreadId).not.toBe("thread-aster-market")
+      expect(state.threadItems[state.mainThreadId]).toMatchObject({
+        remoteId: undefined,
+        externalId: undefined,
+      })
+    })
+    const draftId = bundle!.assistantRuntime.threads.getState().mainThreadId
+    expect(bundle!.assistantRuntime.threads.getState().mainThreadId).toBe(
+      draftId
+    )
+    expect(create).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe("/agent-aster")
+  })
+
   it("applies browser navigation while a previous Session switch is finishing", async () => {
     const user = userEvent.setup()
     let bundle: WorkspaceFixtureRuntime | undefined

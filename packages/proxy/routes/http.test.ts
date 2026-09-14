@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 
-import { boundedJson } from "./http"
+import { boundedJson, errorResponse } from "./http"
 
 function oversizedBody(maxBytes: number) {
   let pulls = 0
@@ -53,6 +53,45 @@ describe("boundedJson", () => {
       expect(result).toBeUndefined()
       expect(stream.cancel).toHaveBeenCalledOnce()
       expect(stream.pulls()).toBe(2)
+    }
+  )
+})
+
+describe("errorResponse", () => {
+  it.each([
+    ["unauthenticated", "Sign in to AOS to continue."],
+    ["forbidden", "You do not have permission to do that."],
+    ["invalid_request", "The request could not be processed."],
+    ["not_found", "The requested item was not found."],
+    ["revision_conflict", "This item changed. Refresh and try again."],
+    ["run_conflict", "A run is already active for this session."],
+    ["run_capacity_exceeded", "AOS is at capacity. Please try again shortly."],
+    [
+      "runtime_authentication_required",
+      "Hermes rejected the configured server token. Check the gateway configuration.",
+    ],
+    [
+      "temporarily_unavailable",
+      "The service is temporarily unavailable. Please try again.",
+    ],
+    [
+      "connection_interrupted",
+      "The connection was interrupted. AOS will reconcile before continuing.",
+    ],
+    [
+      "uncertain_mutation",
+      "Hermes may have accepted the request. Refresh to reconcile before trying again.",
+    ],
+    ["internal_error", "Something went wrong. Please try again."],
+  ] as const)(
+    "returns a safe friendly description for %s",
+    async (code, description) => {
+      const response = errorResponse(code, 503)
+
+      expect(response.status).toBe(503)
+      await expect(response.json()).resolves.toEqual({
+        error: { code, description },
+      })
     }
   )
 })

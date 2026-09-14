@@ -15,10 +15,6 @@ import type {
 
 type SessionCapabilityClient = {
   workspaceCapabilities(threadId: string): Promise<AosWorkspaceCapabilities>
-  subscribeSessionInvalidation?: (
-    threadId: string,
-    listener: () => void
-  ) => () => void
 }
 
 type ComposerClient = SessionCapabilityClient & {
@@ -46,24 +42,19 @@ export function useAosSessionCapabilities(
       return () => {
         active = false
       }
-    const refresh = () => {
-      void client.workspaceCapabilities(threadId).then(
-        (capabilities) => {
-          if (active) setSnapshot({ threadId, capabilities })
-        },
-        (reason) => {
-          if (active)
-            onError?.(
-              reason instanceof Error ? reason : new Error(String(reason))
-            )
-        }
-      )
-    }
-    refresh()
-    const unsubscribe = client.subscribeSessionInvalidation?.(threadId, refresh)
+    void client.workspaceCapabilities(threadId).then(
+      (capabilities) => {
+        if (active) setSnapshot({ threadId, capabilities })
+      },
+      (reason) => {
+        if (active)
+          onError?.(
+            reason instanceof Error ? reason : new Error(String(reason))
+          )
+      }
+    )
     return () => {
       active = false
-      unsubscribe?.()
     }
   }, [client, onError, threadId])
 

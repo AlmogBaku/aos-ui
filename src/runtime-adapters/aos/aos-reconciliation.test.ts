@@ -136,6 +136,42 @@ describe("AOS authoritative browser reconciliation", () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 
+  it("multiplexes multiple Session scopes over one browser events socket", async () => {
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket)
+    const reconciler = new AosReconciler({ socketFactory })
+    const otherScope = { ...scope, sessionId: "another-session" }
+
+    const first = reconciler.read(scope, async () => "first")
+    const second = reconciler.read(otherScope, async () => "second")
+    socket.open()
+    await tick()
+
+    expect(socketFactory).toHaveBeenCalledOnce()
+    const subscriptions = socket.sent.map(
+      (value) => JSON.parse(value) as { streamId: string; scope: typeof scope }
+    )
+    expect(subscriptions.map(({ scope }) => scope.sessionId)).toEqual([
+      scope.sessionId,
+      otherScope.sessionId,
+    ])
+    for (const subscription of subscriptions)
+      socket.message({
+        type: "aos.ready",
+        version: 1,
+        streamId: subscription.streamId,
+        scope: subscription.scope,
+        generation: 0,
+        read: "authoritative",
+      })
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "first",
+      "second",
+    ])
+    reconciler.close()
+  })
+
   it("discards a read overlapped by invalidation and repeats it", async () => {
     const socket = new FakeSocket()
     const first = deferred<string>()

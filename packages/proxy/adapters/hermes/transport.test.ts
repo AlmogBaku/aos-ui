@@ -51,7 +51,188 @@ class FakeSocket implements HermesSocket {
 }
 
 describe("Hermes WebSocket RPC transport", () => {
-  it("observes native notifications on a server-only ticketed socket", async () => {
+  it("correlates concurrent out-of-order replies on one persistent socket", async () => {
+    const socket = new FakeSocket()
+    socket.send = (value) => socket.sent.push(value)
+    const factory = vi.fn(() => {
+      queueMicrotask(() => socket.open())
+      return socket
+    })
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "ticket" })),
+      socketFactory: factory,
+      timeoutMs: 1_000,
+    })
+
+    const first = transport.request("profiles.list", {})
+    const second = transport.request("session.events.since", {
+      session_id: "a",
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2))
+    expect(factory).toHaveBeenCalledTimes(1)
+    const [firstFrame, secondFrame] = socket.sent.map(
+      (value) => JSON.parse(value) as { id: string }
+    )
+    socket.emit("message", {
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id: secondFrame!.id,
+        result: "second",
+      }),
+    })
+    socket.emit("message", {
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id: firstFrame!.id,
+        result: "first",
+      }),
+    })
+
+    await expect(first).resolves.toBe("first")
+    await expect(second).resolves.toBe("second")
+    expect(socket.readyState).toBe(1)
+  })
+
+  it("reauthenticates after loss and never replays an uncertain mutation", async () => {
+    const sockets: FakeSocket[] = []
+    const credentials = vi.fn(async () => ({
+      "X-Hermes-Session-Token": "native-secret",
+    }))
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials,
+      socketFactory: vi.fn(() => {
+        const socket = new FakeSocket()
+        socket.send = (value) => socket.sent.push(value)
+        sockets.push(socket)
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    const mutation = transport.request("prompt.submit", {
+      session_id: "live-a",
+      text: "once",
+    })
+    await vi.waitFor(() => expect(sockets[0]?.sent).toHaveLength(1))
+    sockets[0]!.emit("close", {})
+    await expect(mutation).rejects.toThrow("Hermes connection failed")
+
+    const read = transport.request("profiles.list", {})
+    await vi.waitFor(() => expect(sockets).toHaveLength(2))
+    expect(sockets[0]!.sent).toHaveLength(1)
+    const frame = JSON.parse(sockets[1]!.sent[0]!) as { id: string }
+    sockets[1]!.emit("message", {
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id: frame.id,
+        result: { profiles: [] },
+      }),
+    })
+    await expect(read).resolves.toEqual({ profiles: [] })
+    expect(credentials).toHaveBeenCalledTimes(2)
+  })
+
+  it("uses one socket for one hundred concurrent Session requests", async () => {
+    const socket = new FakeSocket()
+    const factory = vi.fn(() => {
+      queueMicrotask(() => socket.open())
+      return socket
+    })
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "ticket" })),
+      socketFactory: factory,
+      timeoutMs: 1_000,
+    })
+
+    await expect(
+      Promise.all(
+        Array.from({ length: 100 }, (_, index) =>
+          transport.request("session.events.since", {
+            session_id: `live-${index}`,
+          })
+        )
+      )
+    ).resolves.toHaveLength(100)
+    expect(factory).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the prompt socket bound and forwards its post-ack events to observers", async () => {
+    const sockets: FakeSocket[] = []
+    const observed = vi.fn()
+    const transport = new HermesWebSocketRpcTransport({
+      baseUrl: "http://127.0.0.1:9119",
+      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
+      fetcher: vi.fn(async () => Response.json({ ticket: "ticket" })),
+      socketFactory: vi.fn(() => {
+        const socket = new FakeSocket()
+        socket.send = (value) => socket.sent.push(value)
+        sockets.push(socket)
+        queueMicrotask(() => socket.open())
+        return socket
+      }),
+      timeoutMs: 1_000,
+    })
+
+    const stop = await transport.observeEvents(observed, vi.fn())
+    const submitted = transport.request("prompt.submit", {
+      session_id: "live-secret",
+      text: "Hello",
+    })
+    await vi.waitFor(() => expect(sockets).toHaveLength(1))
+    const promptSocket = sockets[0]!
+    await vi.waitFor(() => expect(promptSocket.sent).toHaveLength(1))
+    const { id } = JSON.parse(promptSocket.sent[0]!) as { id: string }
+    promptSocket.emit("message", {
+      data: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: { status: "streaming" },
+      }),
+    })
+
+    await expect(submitted).resolves.toEqual({ status: "streaming" })
+    expect(promptSocket.readyState).toBe(1)
+
+    for (const [seq, type, payload] of [
+      [1, "message.start", { message_id: "reply" }],
+      [2, "message.delta", { text: "Hi" }],
+      [3, "message.complete", {}],
+    ] as const)
+      promptSocket.emit("message", {
+        data: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "event",
+          params: {
+            type,
+            ...(type === "message.complete"
+              ? {}
+              : { session_id: "live-secret" }),
+            seq,
+            payload,
+          },
+        }),
+      })
+
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3))
+    expect(observed.mock.calls.map(([event]) => event.type)).toEqual([
+      "message.start",
+      "message.delta",
+      "message.complete",
+    ])
+    expect(observed.mock.calls[2]![0]).toMatchObject({
+      type: "message.complete",
+    })
+    expect(promptSocket.readyState).toBe(1)
+    stop()
+  })
+
+  it("observes native notifications on the server-token socket", async () => {
     const socket = new FakeSocket()
     const observed = vi.fn()
     const disconnected = vi.fn()
@@ -162,7 +343,7 @@ describe("Hermes WebSocket RPC transport", () => {
     const frame = new Blob(["{}"])
     Object.defineProperty(frame, "arrayBuffer", { value: () => pending })
 
-    for (let index = 0; index < 65; index += 1)
+    for (let index = 0; index < 257; index += 1)
       socket.emit("message", { data: frame })
 
     expect(socket.readyState).toBe(3)
@@ -208,14 +389,8 @@ describe("Hermes WebSocket RPC transport", () => {
       })
     )
   })
-  it("uses the configured static token only for native ws-ticket brokerage", async () => {
-    const fetcher = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ ticket: "single-use-ticket" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
-    )
+  it("uses the configured static token directly for the server-side socket", async () => {
+    const fetcher = vi.fn()
     const socket = new FakeSocket()
     const socketFactory = vi.fn(() => {
       queueMicrotask(() => socket.open())
@@ -232,20 +407,11 @@ describe("Hermes WebSocket RPC transport", () => {
     await expect(
       transport.request("profiles.list", { include_sessions: false })
     ).resolves.toEqual({ profiles: [] })
-    expect(fetcher).toHaveBeenCalledWith(
-      "http://127.0.0.1:9119/api/auth/ws-ticket",
-      expect.objectContaining({
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "X-Hermes-Session-Token": "native-secret",
-        },
-      })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(socketFactory).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9119/api/ws?token=native-secret",
+      []
     )
-    expect(socketFactory).toHaveBeenCalledWith("ws://127.0.0.1:9119/api/ws", [
-      "hermes-gateway-v1",
-      "hermes-gateway-ticket.single-use-ticket",
-    ])
     expect(socket.sent).toEqual([
       JSON.stringify({
         jsonrpc: "2.0",
@@ -256,72 +422,19 @@ describe("Hermes WebSocket RPC transport", () => {
     ])
   })
 
-  it.each([401, 403])(
-    "returns a typed private authentication failure for ticket status %i",
-    async (status) => {
+  it.each([undefined, "", "line\nbreak"])(
+    "returns a typed private authentication failure for invalid server token %j",
+    async (token) => {
       const transport = new HermesWebSocketRpcTransport({
         baseUrl: "http://127.0.0.1:9119",
-        credentials: async () => ({
-          "X-Hermes-Session-Token": "native-secret",
-        }),
-        fetcher: vi.fn(async () => new Response("native details", { status })),
+        credentials: async () =>
+          token === undefined ? {} : { "X-Hermes-Session-Token": token },
         socketFactory: vi.fn(),
         timeoutMs: 1_000,
       })
       await expect(
         transport.request("profiles.list", {})
       ).rejects.toBeInstanceOf(HermesAuthenticationError)
-    }
-  )
-
-  it.each([
-    [
-      "declared oversized",
-      () =>
-        new Response(JSON.stringify({ ticket: "ignored" }), {
-          headers: { "content-length": "8193" },
-        }),
-    ],
-    [
-      "chunked oversized",
-      () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array(4_096))
-              controller.enqueue(new Uint8Array(4_097))
-              controller.close()
-            },
-          })
-        ),
-    ],
-    [
-      "never-ending",
-      () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull() {
-              return new Promise<void>(() => undefined)
-            },
-          })
-        ),
-    ],
-  ])(
-    "bounds %s ticket responses through the full deadline",
-    async (_name, response) => {
-      const transport = new HermesWebSocketRpcTransport({
-        baseUrl: "http://127.0.0.1:9119",
-        credentials: async () => ({
-          "X-Hermes-Session-Token": "native-secret",
-        }),
-        fetcher: vi.fn(async () => response()),
-        socketFactory: vi.fn(),
-        timeoutMs: 20,
-      })
-
-      await expect(transport.request("profiles.list", {})).rejects.toThrow(
-        "Hermes connection failed"
-      )
     }
   )
 
@@ -583,24 +696,7 @@ describe("Hermes WebSocket RPC transport", () => {
     await expect(requestPromise).resolves.toEqual({ profiles: ["first"] })
   })
 
-  it("cancels rejected declared-length bodies and redacts credential failures", async () => {
-    const cancelled = vi.fn()
-    const oversized = new Response(
-      new ReadableStream<Uint8Array>({ cancel: cancelled }),
-      { headers: { "content-length": "8193" } }
-    )
-    const ticketTransport = new HermesWebSocketRpcTransport({
-      baseUrl: "http://127.0.0.1:9119",
-      credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
-      fetcher: vi.fn(async () => oversized),
-      socketFactory: vi.fn(),
-      timeoutMs: 1_000,
-    })
-    await expect(ticketTransport.request("profiles.list", {})).rejects.toThrow(
-      "Hermes connection failed"
-    )
-    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(1))
-
+  it("redacts credential failures", async () => {
     const credentialFailure = new Error(
       "token=native-secret from /srv/hermes/private"
     )
@@ -623,7 +719,7 @@ describe("Hermes WebSocket RPC transport", () => {
 
   it.each([
     ["native HTTP", "Hermes request failed"],
-    ["ticket brokerage", "Hermes connection failed"],
+    ["native WebSocket", "Hermes connection failed"],
   ])(
     "includes stalled %s credentials in the deadline and discards late results",
     async (operation, expectedError) => {
@@ -632,11 +728,7 @@ describe("Hermes WebSocket RPC transport", () => {
       const credentialsReady = new Promise<void>((resolve) => {
         releaseCredentials = resolve
       })
-      const fetcher = vi.fn(async (input: RequestInfo | URL) =>
-        String(input).endsWith("/api/auth/ws-ticket")
-          ? Response.json({ ticket: "late-ticket" })
-          : Response.json({ sessions: [] })
-      )
+      const fetcher = vi.fn(async () => Response.json({ sessions: [] }))
       const socketFactory = vi.fn(() => {
         const socket = new FakeSocket()
         queueMicrotask(() => socket.open())

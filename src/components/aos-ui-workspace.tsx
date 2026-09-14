@@ -59,7 +59,10 @@ import type { ArtifactMessage } from "@/artifacts/artifacts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
-import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+import {
+  AgUiInterruptComposer,
+  PendingInteractionComposer,
+} from "@/components/runtime-interactions/pending-composer"
 import { useRuntimeErrorReporter } from "@/runtime-adapters/runtime-error-context"
 
 type AosUiWorkspaceProps = {
@@ -75,6 +78,7 @@ type AosUiWorkspaceProps = {
 export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
   const interactions = runtime.interactions
   const locale = props.locale
+  const isAgUiRuntime = runtime.agUiInterrupts === true
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>
       interactions
@@ -92,8 +96,14 @@ export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
               />
             )
           }
-        : undefined,
-    [interactions, locale]
+        : isAgUiRuntime
+          ? function AgUiComposer({ fallback }) {
+              return (
+                <AgUiInterruptComposer locale={locale} fallback={fallback} />
+              )
+            }
+          : undefined,
+    [interactions, isAgUiRuntime, locale]
   )
   const workspace = (
     <WorkspaceContent {...props} harness={runtime} composer={composer} />
@@ -627,6 +637,7 @@ function WorkspaceContent({
                   direction={getLocaleDirection(locale)}
                   labels={threadLabels[locale]}
                   composerFeatures={composerFeatures}
+                  messageRewind={bundle.messageRewind}
                   components={activeThreadComponents}
                 />
               </WorkspaceThreadChromeContext.Provider>

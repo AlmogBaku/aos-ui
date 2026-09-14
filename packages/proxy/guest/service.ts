@@ -1,32 +1,46 @@
-import { EventSchemas, EventType, type AGUIEvent } from "@ag-ui/core"
+import { createHash } from "node:crypto"
+
+import {
+  EventSchemas,
+  EventType,
+  RunAgentInputSchema,
+  type AGUIEvent,
+} from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import { Hono } from "hono"
 
 import {
   SessionHistoryResponseSchema,
-  type Session,
   type SessionHistoryResponse,
 } from "../../protocol"
 import type {
   GuestAuthorization,
   GuestInvitationService,
   GuestOperation,
+  VerifiedGuestAuthorization,
 } from "../auth/guest-invitation"
-import { projectGuestOutbound } from "../auth/guest-projection"
+import {
+  guestErrorDescription,
+  projectGuestOutbound,
+  type GuestPublicErrorCode,
+} from "../auth/guest-projection"
+import type {
+  RuntimeInstance,
+  NewTurnRunInput,
+  ResumeRunInput,
+  SessionScope,
+} from "../core/runtime"
+import { ServerRunConflictError } from "../core/runtime"
+import type {
+  CoordinatedRunSubscription,
+  CoordinatorAccess,
+} from "../core/session-coordinator"
 import type { ReconnectCursorCodec } from "../events/cursor"
 import {
   createEventsSocket,
   type EventsSocket,
   type EventSocketServerFrame,
 } from "../events/socket"
-import type { createHermesContentOperations } from "../runtimes/hermes/content"
-import {
-  HermesRunEngine,
-  type HermesReconnectRequest,
-  type HermesRunHandle,
-  type HermesRunNative,
-  type HermesRunScope,
-} from "../runtimes/hermes/run"
 import { boundedJson } from "../routes/http"
 
 const securityHeaders = {
@@ -40,42 +54,16 @@ const securityHeaders = {
 const GUEST_EVENTS_COOKIE = "__Host-aos-guest-events"
 const GUEST_EVENTS_CREDENTIAL_SECONDS = 60
 
-type GuestHermesAdapter = HermesRunNative & {
-  getSession(agentId: string, storedSessionId: string): Promise<Session>
-  history(
-    agentId: string,
-    storedSessionId: string,
-    limit: number,
-    offset: number
-  ): Promise<SessionHistoryResponse>
-}
-
-type GuestRunOperations = {
-  start(scope: HermesRunScope, input: unknown): Promise<HermesRunHandle>
-  reconnect(
-    scope: HermesRunScope,
-    input: HermesReconnectRequest
-  ): Promise<HermesRunHandle>
-}
-
-type GuestContentOperations = Pick<
-  ReturnType<typeof createHermesContentOperations>,
-  "artifact"
->
-
 export type GuestListenerServiceOptions = {
   publicOrigin: string
   deploymentId: string
   bootEpoch: string
+  runtime: RuntimeInstance
   invitations: GuestInvitationService
   cursor: ReconnectCursorCodec
-  /** A dedicated guest-lane adapter; never pass an operator-bound adapter. */
-  hermes: GuestHermesAdapter
-  /** Test seam; production should use the default engine bound to `hermes`. */
-  runs?: GuestRunOperations
-  /** Existing content service bound to the same dedicated guest adapter. */
-  content?: GuestContentOperations
-  maxActiveRuns?: number
+  maxEventPeers?: number
+  maxEventPeersPerInvitation?: number
+  maxEventStreamsPerPeer?: number
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
   cancel?: (timer: unknown) => void
@@ -95,10 +83,37 @@ export type GuestEventPeer = {
   close(code: number, reason: string): void
 }
 
+function validIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= 256 &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+  )
+}
+
 function bearerToken(request: Request) {
   const value = request.headers.get("authorization")
   const match = value === null ? null : /^Bearer ([^\s]{1,4096})$/u.exec(value)
   return match?.[1]
+}
+
+function cookieValue(request: Request, name: string) {
+  const header = request.headers.get("cookie")
+  if (header === null || header.length > 8_192) return undefined
+  const values = header
+    .split(";")
+    .map((item) => item.trim())
+    .flatMap((item) => {
+      const separator = item.indexOf("=")
+      return separator > 0 && item.slice(0, separator) === name
+        ? [item.slice(separator + 1)]
+        : []
+    })
+  return values.length === 1 ? values[0] : undefined
 }
 
 function eventTarget(request: Request, pathname: string) {
@@ -113,26 +128,11 @@ function eventTarget(request: Request, pathname: string) {
     url.searchParams.getAll("sessionId").length !== 1
   )
     return undefined
-  const agentId = url.searchParams.get("agentId") ?? ""
-  const sessionId = url.searchParams.get("sessionId") ?? ""
-  const storedId = storedSessionId(agentId, sessionId)
-  return storedId ? { agentId, sessionId, storedId } : undefined
-}
-
-function storedSessionId(agentId: string, sessionId: string) {
-  if (agentId.length === 0 || agentId.length > 256 || sessionId.length > 1_024)
-    return undefined
-  const match = /^hermes:([^:]+):(.+)$/u.exec(sessionId)
-  if (!match) return undefined
-  try {
-    const owner = decodeURIComponent(match[1])
-    const storedId = decodeURIComponent(match[2])
-    return owner === agentId && storedId.length > 0 && storedId.length <= 256
-      ? storedId
-      : undefined
-  } catch {
-    return undefined
-  }
+  const agentId = url.searchParams.get("agentId")
+  const sessionId = url.searchParams.get("sessionId")
+  return validIdentifier(agentId) && validIdentifier(sessionId)
+    ? { agentId, sessionId }
+    : undefined
 }
 
 function pageQuery(requestUrl: string) {
@@ -163,44 +163,113 @@ function pageQuery(requestUrl: string) {
     : undefined
 }
 
-async function authorize(
-  invitations: GuestInvitationService,
-  request: Request,
-  target: { agentId: string; sessionId: string; operation: GuestOperation },
+function authorizationActive(
+  authorization: { authorizationExpiresAt: number },
   now: () => number
 ) {
-  const token = bearerToken(request)
-  if (!token) return undefined
-  return verifyAuthorization(invitations, token, target, now)
+  try {
+    const current = now()
+    return (
+      Number.isSafeInteger(current) &&
+      authorization.authorizationExpiresAt * 1_000 > current
+    )
+  } catch {
+    return false
+  }
 }
 
 async function verifyAuthorization(
-  invitations: GuestInvitationService,
+  options: GuestListenerServiceOptions,
   token: string,
   target: { agentId: string; sessionId: string; operation: GuestOperation },
   now: () => number
 ) {
-  const authorization = await invitations.verify(token, target)
+  const authorization = await options.invitations.verify(token, {
+    runtimeId: options.runtime.id,
+    ...target,
+  })
   return authorization?.sessionId === target.sessionId &&
     authorizationActive(authorization, now)
     ? authorization
     : undefined
 }
 
-function authorizationActive(
-  authorization: { authorizationExpiresAt: number },
+async function authorize(
+  options: GuestListenerServiceOptions,
+  request: Request,
+  target: { agentId: string; sessionId: string; operation: GuestOperation },
   now: () => number
 ) {
-  let current: number
-  try {
-    current = now()
-  } catch {
-    return undefined
-  }
+  const token = bearerToken(request)
+  return token ? verifyAuthorization(options, token, target, now) : undefined
+}
+
+function sameBinding(first: GuestAuthorization, second: GuestAuthorization) {
   return (
-    Number.isSafeInteger(current) &&
-    authorization.authorizationExpiresAt * 1_000 > current
+    first.runtimeId === second.runtimeId &&
+    first.principalId === second.principalId &&
+    first.invitationId === second.invitationId &&
+    first.tokenId === second.tokenId &&
+    first.agentId === second.agentId &&
+    first.sessionId === second.sessionId
   )
+}
+
+function controllerId(authorization: GuestAuthorization) {
+  return `guest:${authorization.tokenId}`
+}
+
+function emptyError(status: number) {
+  return new Response(null, { status })
+}
+
+function projectedError(
+  authorization: GuestAuthorization,
+  code: GuestPublicErrorCode,
+  retryable: boolean,
+  status: number
+) {
+  const projected = projectGuestOutbound(
+    {
+      transport: "error",
+      agentId: authorization.agentId,
+      sessionId: authorization.sessionId,
+      payload: {
+        type: "error",
+        code,
+        description: guestErrorDescription(code),
+        retryable,
+      },
+    },
+    authorization
+  )
+  return projected
+    ? new Response(JSON.stringify(projected), {
+        status,
+        headers: { "content-type": "application/json; charset=UTF-8" },
+      })
+    : emptyError(status)
+}
+
+async function projectedErrorResponse(
+  options: GuestListenerServiceOptions,
+  request: Request,
+  agentId: string,
+  sessionId: string,
+  now: () => number,
+  code: GuestPublicErrorCode,
+  retryable: boolean,
+  status: number
+) {
+  const authorization = await authorize(
+    options,
+    request,
+    { agentId, sessionId, operation: "errors:read" },
+    now
+  )
+  return authorization
+    ? projectedError(authorization, code, retryable, status)
+    : emptyError(status)
 }
 
 function projectHistory(
@@ -210,7 +279,7 @@ function projectHistory(
   return {
     sessionId: history.sessionId,
     messages: history.messages.flatMap((message) => {
-      if (message.role === "system") return []
+      if (message.role === "system" || message.role === "activity") return []
       const content = message.content.flatMap((part) => {
         if (part.type !== "text") return []
         const projected = projectGuestOutbound(
@@ -249,48 +318,6 @@ function projectHistory(
   }
 }
 
-function emptyError(status: number) {
-  return new Response(null, { status })
-}
-
-async function projectedErrorResponse(
-  options: GuestListenerServiceOptions,
-  now: () => number,
-  request: Request,
-  agentId: string,
-  sessionId: string,
-  code: "not_found" | "request_failed" | "temporarily_unavailable",
-  retryable: boolean,
-  status: number
-) {
-  const authorization = await authorize(
-    options.invitations,
-    request,
-    {
-      agentId,
-      sessionId,
-      operation: "errors:read",
-    },
-    now
-  )
-  if (!authorization) return emptyError(status)
-  const projected = projectGuestOutbound(
-    {
-      transport: "error",
-      agentId,
-      sessionId,
-      payload: { type: "error", code, retryable },
-    },
-    authorization
-  )
-  return projected
-    ? new Response(JSON.stringify(projected), {
-        status,
-        headers: { "content-type": "application/json; charset=UTF-8" },
-      })
-    : emptyError(status)
-}
-
 function encodedFilename(filename: string) {
   return encodeURIComponent(filename).replace(
     /[!'()*]/gu,
@@ -298,27 +325,261 @@ function encodedFilename(filename: string) {
   )
 }
 
-function runKey(scope: Pick<HermesRunScope, "agentId" | "sessionId">) {
-  return `${scope.agentId.length}:${scope.agentId}${scope.sessionId}`
+function sanitizeRunInput(
+  candidate: unknown,
+  threadId: string
+): NewTurnRunInput | ResumeRunInput | undefined {
+  const parsed = RunAgentInputSchema.safeParse(candidate)
+  if (
+    !parsed.success ||
+    parsed.data.threadId !== threadId ||
+    !validIdentifier(parsed.data.runId)
+  )
+    return undefined
+  const base = {
+    threadId,
+    runId: parsed.data.runId,
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {},
+  }
+  if (parsed.data.resume !== undefined) {
+    if (parsed.data.messages.length !== 0 || parsed.data.resume.length === 0)
+      return undefined
+    return {
+      ...base,
+      messages: [],
+      resume: parsed.data.resume.map(({ interruptId, status, payload }) => ({
+        interruptId,
+        status,
+        ...(payload === undefined ? {} : { payload }),
+      })),
+    }
+  }
+  if (
+    parsed.data.messages.length !== 1 ||
+    parsed.data.messages[0]?.role !== "user"
+  )
+    return undefined
+  const message = parsed.data.messages[0]
+  return {
+    ...base,
+    messages: [{ id: message.id, role: "user", content: message.content }],
+  }
 }
 
-type GuestRunBinding = Pick<
-  GuestAuthorization,
-  "lane" | "principalId" | "invitationId" | "tokenId" | "agentId" | "sessionId"
->
+function publicRunError(code: string | undefined) {
+  if (code === "AOS_CONNECTION_INTERRUPTED")
+    return { code, retryable: true } as const
+  if (code === "AOS_SEND_UNCERTAIN") return { code, retryable: true } as const
+  if (code === "AOS_INTERACTION_UNCERTAIN")
+    return { code, retryable: true } as const
+  if (code === "AOS_RESET_REQUIRED")
+    return { code: "temporarily_unavailable", retryable: true } as const
+  return { code: "request_failed", retryable: false } as const
+}
 
-function sameRunBinding(
-  binding: GuestRunBinding,
-  authorization: GuestAuthorization
+function guestMessageId(tokenId: string, sourceId: string) {
+  return `guest-message-${createHash("sha256")
+    .update(tokenId)
+    .update("\0")
+    .update(sourceId)
+    .digest("base64url")
+    .slice(0, 24)}`
+}
+
+function runProjector(
+  scope: SessionScope,
+  runId: string,
+  read: VerifiedGuestAuthorization,
+  errors: VerifiedGuestAuthorization,
+  now: () => number
 ) {
-  return (
-    binding.lane === authorization.lane &&
-    binding.principalId === authorization.principalId &&
-    binding.invitationId === authorization.invitationId &&
-    binding.tokenId === authorization.tokenId &&
-    binding.agentId === authorization.agentId &&
-    binding.sessionId === authorization.sessionId
-  )
+  const assistantMessages = new Set<string>()
+  return (candidate: AGUIEvent): AGUIEvent | undefined => {
+    if (
+      !authorizationActive(read, now) ||
+      !authorizationActive(errors, now) ||
+      !EventSchemas.safeParse(candidate).success
+    )
+      return undefined
+    if (candidate.type === EventType.RUN_STARTED)
+      return { type: EventType.RUN_STARTED, threadId: scope.threadId, runId }
+    if (candidate.type === EventType.TEXT_MESSAGE_START) {
+      if (
+        candidate.role !== "assistant" ||
+        !validIdentifier(candidate.messageId)
+      )
+        return undefined
+      assistantMessages.add(candidate.messageId)
+      return {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: guestMessageId(read.tokenId, candidate.messageId),
+        role: "assistant",
+      }
+    }
+    if (candidate.type === EventType.TEXT_MESSAGE_CONTENT) {
+      if (!assistantMessages.has(candidate.messageId)) return undefined
+      const projected = projectGuestOutbound(
+        {
+          transport: "ag-ui",
+          agentId: scope.agentId,
+          sessionId: scope.threadId,
+          payload: {
+            type: "message",
+            role: "assistant",
+            text: candidate.delta,
+          },
+        },
+        read
+      )
+      return projected?.payload.type === "message" &&
+        projected.payload.text !== undefined
+        ? {
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: guestMessageId(read.tokenId, candidate.messageId),
+            delta: projected.payload.text,
+          }
+        : undefined
+    }
+    if (candidate.type === EventType.TEXT_MESSAGE_END) {
+      if (!assistantMessages.delete(candidate.messageId)) return undefined
+      return {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: guestMessageId(read.tokenId, candidate.messageId),
+      }
+    }
+    if (candidate.type === EventType.RUN_FINISHED) {
+      if (candidate.outcome?.type === "interrupt") {
+        const projected = projectGuestOutbound(
+          {
+            transport: "ag-ui",
+            agentId: scope.agentId,
+            sessionId: scope.threadId,
+            payload: {
+              type: "interrupt",
+              interrupts: candidate.outcome.interrupts,
+            },
+          },
+          read
+        )
+        if (projected?.payload.type !== "interrupt") return undefined
+        return {
+          type: EventType.RUN_FINISHED,
+          threadId: scope.threadId,
+          runId,
+          outcome: {
+            type: "interrupt",
+            interrupts: [...projected.payload.interrupts],
+          },
+        }
+      }
+      return {
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId,
+        outcome: { type: "success" },
+      }
+    }
+    if (candidate.type === EventType.RUN_ERROR) {
+      const error = publicRunError(candidate.code)
+      const projected = projectGuestOutbound(
+        {
+          transport: "error",
+          agentId: scope.agentId,
+          sessionId: scope.threadId,
+          payload: {
+            type: "error",
+            code: error.code,
+            description: guestErrorDescription(error.code),
+            retryable: error.retryable,
+          },
+        },
+        errors
+      )
+      return projected?.payload.type === "error"
+        ? {
+            type: EventType.RUN_ERROR,
+            code: projected.payload.code,
+            message:
+              projected.payload.description ??
+              guestErrorDescription(projected.payload.code),
+          }
+        : undefined
+    }
+    return undefined
+  }
+}
+
+function runAccess(
+  read: VerifiedGuestAuthorization,
+  errors: VerifiedGuestAuthorization,
+  scope: SessionScope,
+  runId: string,
+  now: () => number,
+  subscriberId: string
+): CoordinatorAccess {
+  return {
+    subscriberId,
+    controllerId: controllerId(read),
+    lane: "guest",
+    canControl: true,
+    project: runProjector(scope, runId, read, errors, now),
+  }
+}
+
+function projectRunStream(
+  subscription: CoordinatedRunSubscription,
+  expiresAt: number,
+  now: () => number,
+  schedule: (delayMs: number, task: () => void) => unknown,
+  cancel: (timer: unknown) => void
+) {
+  const encoder = new EventEncoder({ accept: "text/event-stream" })
+  const textEncoder = new TextEncoder()
+  const iterator = subscription.events[Symbol.asyncIterator]()
+  let closed = false
+  const timer = schedule(Math.max(0, expiresAt - now()), () => {
+    if (closed) return
+    closed = true
+    subscription.close()
+  })
+  const cleanup = () => {
+    if (closed) return
+    closed = true
+    cancel(timer)
+    subscription.close()
+  }
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (closed) {
+        controller.close()
+        return
+      }
+      try {
+        const result = await iterator.next()
+        if (result.done) {
+          cleanup()
+          controller.close()
+          return
+        }
+        controller.enqueue(
+          textEncoder.encode(encoder.encodeSSE(result.value.event))
+        )
+      } catch {
+        cleanup()
+        controller.error(new Error("Guest run stream failed"))
+      }
+    },
+    async cancel() {
+      cleanup()
+      await Promise.resolve(iterator.return?.()).catch(() => undefined)
+    },
+  })
+  return new Response(stream, {
+    headers: { "content-type": encoder.getContentType() },
+  })
 }
 
 function canonicalEventScope(scope: {
@@ -329,21 +590,6 @@ function canonicalEventScope(scope: {
   const encode = (value: string) =>
     Buffer.from(value, "utf8").toString("base64url")
   return `ws1.${encode(scope.workspaceId)}.${encode(scope.agentId)}.${encode(scope.sessionId)}`
-}
-
-function cookieValue(request: Request, name: string) {
-  const header = request.headers.get("cookie")
-  if (header === null || header.length > 8_192) return undefined
-  const values = header
-    .split(";")
-    .map((item) => item.trim())
-    .flatMap((item) => {
-      const separator = item.indexOf("=")
-      return separator > 0 && item.slice(0, separator) === name
-        ? [item.slice(separator + 1)]
-        : []
-    })
-  return values.length === 1 ? values[0] : undefined
 }
 
 function projectEventFrame(raw: string, upgrade: GuestEventUpgrade) {
@@ -388,202 +634,12 @@ function projectEventFrame(raw: string, upgrade: GuestEventUpgrade) {
   })
 }
 
-function safeMessageId(value: unknown) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-    ? value
-    : undefined
-}
-
-function publicErrorCode(code: unknown) {
-  if (
-    code === "AOS_CONNECTION_INTERRUPTED" ||
-    code === "AOS_SEND_UNCERTAIN"
-  )
-    return { code, retryable: true }
-  return code === "AOS_RESET_REQUIRED"
-    ? { code: "temporarily_unavailable" as const, retryable: true }
-    : { code: "request_failed" as const, retryable: false }
-}
-
-function isReconcileRequiredError(event: AGUIEvent) {
-  return (
-    event.type === EventType.RUN_ERROR &&
-    (event.code === "AOS_CONNECTION_INTERRUPTED" ||
-      event.code === "AOS_SEND_UNCERTAIN")
-  )
-}
-
-function projectRunStream(input: {
-  handle: HermesRunHandle
-  scope: HermesRunScope
-  runId: string
-  read: GuestAuthorization
-  errors: GuestAuthorization
-  onTerminal(): void
-}) {
-  const encoder = new EventEncoder({ accept: "text/event-stream" })
-  const textEncoder = new TextEncoder()
-  const iterator = input.handle.events[Symbol.asyncIterator]()
-  let state: "open" | "closed" | "cancelled" = "open"
-  let activeMessageId: string | undefined
-  let messageStarted = false
-  let readInFlight: Promise<IteratorResult<AGUIEvent>> | undefined
-
-  const projectedEvent = (candidate: AGUIEvent): AGUIEvent | undefined => {
-    if (!EventSchemas.safeParse(candidate).success) return undefined
-    if (candidate.type === EventType.RUN_STARTED)
-      return {
-        type: EventType.RUN_STARTED,
-        threadId: input.scope.threadId,
-        runId: input.runId,
-      }
-    if (candidate.type === EventType.TEXT_MESSAGE_START) {
-      if (candidate.role !== "assistant") return undefined
-      activeMessageId = safeMessageId(candidate.messageId)
-      messageStarted = false
-      return undefined
-    }
-    if (candidate.type === EventType.TEXT_MESSAGE_CONTENT) {
-      if (
-        activeMessageId === undefined ||
-        candidate.messageId !== activeMessageId
-      )
-        return undefined
-      const projected = projectGuestOutbound(
-        {
-          transport: "ag-ui",
-          agentId: input.scope.agentId,
-          sessionId: input.scope.threadId,
-          payload: {
-            type: "message",
-            role: "assistant",
-            text: candidate.delta,
-          },
-        },
-        input.read
-      )
-      if (
-        projected?.payload.type !== "message" ||
-        projected.payload.text === undefined
-      )
-        return undefined
-      return {
-        type: EventType.TEXT_MESSAGE_CONTENT,
-        messageId: activeMessageId,
-        delta: projected.payload.text,
-      }
-    }
-    if (candidate.type === EventType.TEXT_MESSAGE_END) {
-      if (
-        !messageStarted ||
-        activeMessageId === undefined ||
-        candidate.messageId !== activeMessageId
-      )
-        return undefined
-      const messageId = activeMessageId
-      activeMessageId = undefined
-      messageStarted = false
-      return { type: EventType.TEXT_MESSAGE_END, messageId }
-    }
-    if (candidate.type === EventType.RUN_FINISHED) {
-      input.onTerminal()
-      return {
-        type: EventType.RUN_FINISHED,
-        threadId: input.scope.threadId,
-        runId: input.runId,
-      }
-    }
-    if (candidate.type === EventType.RUN_ERROR) {
-      const error = publicErrorCode(candidate.code)
-      const projected = projectGuestOutbound(
-        {
-          transport: "error",
-          agentId: input.scope.agentId,
-          sessionId: input.scope.threadId,
-          payload: { type: "error", ...error },
-        },
-        input.errors
-      )
-      if (!isReconcileRequiredError(candidate)) input.onTerminal()
-      return projected?.payload.type === "error"
-        ? {
-            type: EventType.RUN_ERROR,
-            code: projected.payload.code,
-            message: "Guest run failed",
-          }
-        : undefined
-    }
-    return undefined
+function inertSocket(): EventsSocket {
+  return {
+    receive: async () => undefined,
+    drain: () => [],
+    close: () => undefined,
   }
-
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (state !== "open" || readInFlight) return
-      try {
-        while (state === "open") {
-          readInFlight = Promise.resolve(iterator.next())
-          const result = await readInFlight
-          if (state !== "open") return
-          if (result.done) {
-            state = "closed"
-            controller.close()
-            return
-          }
-          const event = projectedEvent(result.value)
-          if (!event) continue
-          if (
-            event.type === EventType.TEXT_MESSAGE_CONTENT &&
-            !messageStarted
-          ) {
-            messageStarted = true
-            controller.enqueue(
-              textEncoder.encode(
-                encoder.encodeSSE({
-                  type: EventType.TEXT_MESSAGE_START,
-                  messageId: event.messageId,
-                  role: "assistant",
-                })
-              )
-            )
-          }
-          controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
-          if (
-            event.type === EventType.RUN_FINISHED ||
-            (event.type === EventType.RUN_ERROR &&
-              !isReconcileRequiredError(event))
-          ) {
-            state = "closed"
-            await iterator.return?.()
-            controller.close()
-          }
-          return
-        }
-      } catch {
-        if (state === "open") {
-          state = "closed"
-          input.onTerminal()
-          controller.error(new Error("Guest run stream failed"))
-        }
-      } finally {
-        readInFlight = undefined
-      }
-    },
-    async cancel() {
-      if (state !== "open") return
-      state = "cancelled"
-      input.handle.disconnect()
-      await Promise.resolve(iterator.return?.()).catch(() => undefined)
-    },
-  })
-  return new Response(stream, {
-    headers: { "content-type": encoder.getContentType() },
-  })
 }
 
 export function createGuestListenerService(
@@ -591,61 +647,16 @@ export function createGuestListenerService(
 ) {
   const app = new Hono()
   const now = options.now ?? Date.now
-  const runs = options.runs ?? new HermesRunEngine(options.hermes)
-  const maxActiveRuns = options.maxActiveRuns ?? 32
   const schedule =
     options.schedule ??
     ((delayMs: number, task: () => void) => setTimeout(task, delayMs))
   const cancel =
     options.cancel ?? ((timer: unknown) => clearTimeout(timer as number))
-  const activeRuns = new Map<
-    string,
-    {
-      runId: string
-      handle: HermesRunHandle
-      binding: GuestRunBinding
-      expiresAt: number
-      expiryTimer?: unknown
-    }
-  >()
-  const admissions = new Set<string>()
-
-  function removeActive(key: string, handle: HermesRunHandle) {
-    const active = activeRuns.get(key)
-    if (!active || active.handle !== handle) return
-    activeRuns.delete(key)
-    if (active.expiryTimer !== undefined) cancel(active.expiryTimer)
-  }
-
-  function activate(
-    key: string,
-    runId: string,
-    handle: HermesRunHandle,
-    binding: GuestRunBinding,
-    expiresAt: number
-  ) {
-    const remaining = expiresAt - now()
-    if (remaining <= 0) {
-      handle.disconnect()
-      return false
-    }
-    const previous = activeRuns.get(key)
-    if (previous?.expiryTimer !== undefined) cancel(previous.expiryTimer)
-    const active: {
-      runId: string
-      handle: HermesRunHandle
-      binding: GuestRunBinding
-      expiresAt: number
-      expiryTimer?: unknown
-    } = { runId, handle, binding, expiresAt }
-    activeRuns.set(key, active)
-    active.expiryTimer = schedule(remaining, () => {
-      if (activeRuns.get(key) !== active) return
-      activeRuns.delete(key)
-      active.handle.disconnect()
-    })
-    return true
-  }
+  const maxEventPeers = options.maxEventPeers ?? 64
+  const maxEventPeersPerInvitation = options.maxEventPeersPerInvitation ?? 4
+  let eventPeers = 0
+  const eventPeersByInvitation = new Map<string, number>()
+  let subscriberSequence = 0
 
   app.use("*", async (context, next) => {
     await next()
@@ -662,18 +673,19 @@ export function createGuestListenerService(
     )
     if (!target) return emptyError(404)
     const authorization = await authorize(
-      options.invitations,
+      options,
       context.req.raw,
-      {
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        operation: "messages:read",
-      },
+      { ...target, operation: "messages:read" },
       now
     )
     if (!authorization) return emptyError(401)
+    const storedSessionId = options.runtime.runtime.resolveSessionId(
+      target.agentId,
+      target.sessionId
+    )
+    if (!storedSessionId) return emptyError(404)
     try {
-      await options.hermes.getSession(target.agentId, target.storedId)
+      await options.runtime.runtime.getSession(target.agentId, storedSessionId)
       const token = bearerToken(context.req.raw)
       const remainingSeconds = Math.min(
         GUEST_EVENTS_CREDENTIAL_SECONDS,
@@ -699,20 +711,24 @@ export function createGuestListenerService(
       const agentId = context.req.param("agentId")
       const sessionId = context.req.param("sessionId")
       const authorization = await authorize(
-        options.invitations,
+        options,
         context.req.raw,
         { agentId, sessionId, operation: "messages:read" },
         now
       )
       if (!authorization) return emptyError(401)
-      const storedId = storedSessionId(agentId, sessionId)
+      const storedSessionId = options.runtime.runtime.resolveSessionId(
+        agentId,
+        sessionId
+      )
       const page = pageQuery(context.req.url)
-      if (!storedId || !page) return emptyError(storedId ? 400 : 404)
+      if (!storedSessionId || !page)
+        return emptyError(storedSessionId ? 400 : 404)
       try {
         const history = SessionHistoryResponseSchema.parse(
-          await options.hermes.history(
+          await options.runtime.runtime.history(
             agentId,
-            storedId,
+            storedSessionId,
             page.limit,
             page.offset
           )
@@ -721,10 +737,10 @@ export function createGuestListenerService(
       } catch {
         return projectedErrorResponse(
           options,
-          now,
           context.req.raw,
           agentId,
           sessionId,
+          now,
           "temporarily_unavailable",
           true,
           503
@@ -739,16 +755,20 @@ export function createGuestListenerService(
       const agentId = context.req.param("agentId")
       const sessionId = context.req.param("sessionId")
       const authorization = await authorize(
-        options.invitations,
+        options,
         context.req.raw,
         { agentId, sessionId, operation: "artifacts:read" },
         now
       )
       if (!authorization) return emptyError(401)
-      if (!storedSessionId(agentId, sessionId) || !options.content)
-        return emptyError(404)
+      const storedSessionId = options.runtime.runtime.resolveSessionId(
+        agentId,
+        sessionId
+      )
+      if (!storedSessionId) return emptyError(404)
       try {
-        const artifact = await options.content.artifact(
+        await options.runtime.runtime.getSession(agentId, storedSessionId)
+        const artifact = await options.runtime.runtime.artifact(
           agentId,
           sessionId,
           context.req.param("artifactId")
@@ -767,17 +787,7 @@ export function createGuestListenerService(
           },
           authorization
         )
-        if (projected?.payload.type !== "artifact")
-          return projectedErrorResponse(
-            options,
-            now,
-            context.req.raw,
-            agentId,
-            sessionId,
-            "request_failed",
-            false,
-            503
-          )
+        if (projected?.payload.type !== "artifact") return emptyError(503)
         return new Response(Buffer.from(artifact.bytes), {
           headers: {
             "content-type": projected.payload.mediaType,
@@ -788,10 +798,10 @@ export function createGuestListenerService(
       } catch {
         return projectedErrorResponse(
           options,
-          now,
           context.req.raw,
           agentId,
           sessionId,
+          now,
           "temporarily_unavailable",
           true,
           503
@@ -807,90 +817,74 @@ export function createGuestListenerService(
         return emptyError(403)
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
-      const target = { agentId, sessionId: threadId }
-      const create = await authorize(
-        options.invitations,
+      const candidate = await boundedJson(context.req.raw, 1_100_000)
+      const input = sanitizeRunInput(candidate, threadId)
+      if (!input) return emptyError(400)
+      const operation: GuestOperation = input.resume
+        ? "interactions:respond"
+        : "messages:create"
+      const primary = await authorize(
+        options,
         context.req.raw,
-        {
-          ...target,
-          operation: "messages:create",
-        },
+        { agentId, sessionId: threadId, operation },
         now
       )
-      const read = create
+      const read = primary
         ? await authorize(
-            options.invitations,
+            options,
             context.req.raw,
-            {
-              ...target,
-              operation: "messages:read",
-            },
+            { agentId, sessionId: threadId, operation: "messages:read" },
             now
           )
         : undefined
       const errors = read
         ? await authorize(
-            options.invitations,
+            options,
             context.req.raw,
-            {
-              ...target,
-              operation: "errors:read",
-            },
+            { agentId, sessionId: threadId, operation: "errors:read" },
             now
           )
         : undefined
       if (
-        !create ||
+        !primary ||
         !read ||
         !errors ||
-        !sameRunBinding(create, read) ||
-        !sameRunBinding(create, errors)
+        !sameBinding(primary, read) ||
+        !sameBinding(primary, errors)
       )
         return emptyError(401)
-      const sessionId = storedSessionId(agentId, threadId)
+      const sessionId = options.runtime.runtime.resolveSessionId(
+        agentId,
+        threadId
+      )
       if (!sessionId) return emptyError(404)
-      const input = await boundedJson(context.req.raw, 1_100_000)
-      if (input === undefined) return emptyError(400)
       const scope = { agentId, sessionId, threadId }
-      const key = runKey(scope)
-      if (activeRuns.has(key) || admissions.has(key)) return emptyError(409)
-      if (activeRuns.size + admissions.size >= maxActiveRuns)
-        return emptyError(503)
-      admissions.add(key)
       try {
-        await options.hermes.getSession(agentId, sessionId)
-        if (!authorizationActive(create, now)) return emptyError(401)
-        const handle = await runs.start(scope, input)
-        const runId =
-          typeof input === "object" &&
-          input !== null &&
-          typeof (input as { runId?: unknown }).runId === "string"
-            ? (input as { runId: string }).runId
-            : ""
-        if (
-          !activate(
-            key,
-            runId,
-            handle,
-            create,
-            create.authorizationExpiresAt * 1_000
+        await options.runtime.runtime.getSession(agentId, sessionId)
+        const subscription = await options.runtime.sessions.start(
+          scope,
+          input,
+          runAccess(
+            read,
+            errors,
+            scope,
+            input.runId,
+            now,
+            `${read.tokenId}:${++subscriberSequence}`
           )
         )
-          return emptyError(401)
-        return projectRunStream({
-          handle,
-          scope,
-          runId,
-          read,
-          errors,
-          onTerminal() {
-            removeActive(key, handle)
-          },
-        })
-      } catch {
-        return emptyError(503)
-      } finally {
-        admissions.delete(key)
+        return projectRunStream(
+          subscription,
+          Math.min(read.authorizationExpiresAt, errors.authorizationExpiresAt) *
+            1_000,
+          now,
+          schedule,
+          cancel
+        )
+      } catch (cause) {
+        return cause instanceof ServerRunConflictError
+          ? projectedError(errors, "request_failed", false, 409)
+          : projectedError(errors, "temporarily_unavailable", true, 503)
       }
     }
   )
@@ -902,83 +896,75 @@ export function createGuestListenerService(
         return emptyError(403)
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
-      const target = { agentId, sessionId: threadId }
       const read = await authorize(
-        options.invitations,
+        options,
         context.req.raw,
-        {
-          ...target,
-          operation: "messages:read",
-        },
+        { agentId, sessionId: threadId, operation: "messages:read" },
         now
       )
       const errors = read
         ? await authorize(
-            options.invitations,
+            options,
             context.req.raw,
-            {
-              ...target,
-              operation: "errors:read",
-            },
+            { agentId, sessionId: threadId, operation: "errors:read" },
             now
           )
         : undefined
-      if (!read || !errors) return emptyError(401)
-      const sessionId = storedSessionId(agentId, threadId)
-      if (!sessionId) return emptyError(404)
+      if (!read || !errors || !sameBinding(read, errors)) return emptyError(401)
       const candidate = await boundedJson(context.req.raw, 16_384)
       if (
         typeof candidate !== "object" ||
         candidate === null ||
         Array.isArray(candidate) ||
-        Object.keys(candidate).length !== 2 ||
-        !Object.hasOwn(candidate, "threadId") ||
-        !Object.hasOwn(candidate, "runId") ||
+        !validIdentifier((candidate as { runId?: unknown }).runId) ||
         (candidate as { threadId?: unknown }).threadId !== threadId ||
-        !safeMessageId((candidate as { runId?: unknown }).runId)
+        Object.keys(candidate).some(
+          (key) => key !== "threadId" && key !== "runId" && key !== "after"
+        ) ||
+        ((candidate as { after?: unknown }).after !== undefined &&
+          (!Number.isSafeInteger((candidate as { after: number }).after) ||
+            (candidate as { after: number }).after < 0))
       )
         return emptyError(400)
+      const sessionId = options.runtime.runtime.resolveSessionId(
+        agentId,
+        threadId
+      )
+      if (!sessionId) return emptyError(404)
       const runId = (candidate as { runId: string }).runId
       const scope = { agentId, sessionId, threadId }
-      const key = runKey(scope)
-      const active = activeRuns.get(key)
-      if (
-        !active ||
-        active.runId !== runId ||
-        !sameRunBinding(active.binding, read)
-      )
-        return emptyError(404)
       try {
-        if (!authorizationActive(read, now)) return emptyError(401)
-        const position = active.handle.recoveryPosition()
-        active.handle.disconnect()
-        const handle = await runs.reconnect(scope, {
-          threadId,
-          runId,
-          position,
-        })
-        if (
-          !activate(
-            key,
+        await options.runtime.runtime.getSession(agentId, sessionId)
+        const subscription = await options.runtime.sessions.recover(
+          scope,
+          {
+            threadId,
             runId,
-            handle,
+            ...((candidate as { after?: number }).after === undefined
+              ? {}
+              : { after: (candidate as { after: number }).after }),
+          },
+          runAccess(
             read,
-            read.authorizationExpiresAt * 1_000
+            errors,
+            scope,
+            runId,
+            now,
+            `${read.tokenId}:${++subscriberSequence}`
           )
         )
-          return emptyError(401)
-        return projectRunStream({
-          handle,
-          scope,
-          runId,
-          read,
-          errors,
-          onTerminal() {
-            removeActive(key, handle)
-          },
-        })
-      } catch {
-        return emptyError(503)
+        return projectRunStream(
+          subscription,
+          Math.min(read.authorizationExpiresAt, errors.authorizationExpiresAt) *
+            1_000,
+          now,
+          schedule,
+          cancel
+        )
+      } catch (cause) {
+        return cause instanceof ServerRunConflictError
+          ? projectedError(errors, "request_failed", false, 409)
+          : projectedError(errors, "temporarily_unavailable", true, 503)
       }
     }
   )
@@ -990,30 +976,29 @@ export function createGuestListenerService(
         return emptyError(403)
       const agentId = context.req.param("agentId")
       const threadId = context.req.param("sessionId")
-      const create = await authorize(
-        options.invitations,
+      const authorization = await authorize(
+        options,
         context.req.raw,
-        {
-          agentId,
-          sessionId: threadId,
-          operation: "messages:create",
-        },
+        { agentId, sessionId: threadId, operation: "messages:stop" },
         now
       )
-      if (!create) return emptyError(401)
-      const sessionId = storedSessionId(agentId, threadId)
+      if (!authorization) return emptyError(401)
+      const sessionId = options.runtime.runtime.resolveSessionId(
+        agentId,
+        threadId
+      )
       if (!sessionId) return emptyError(404)
-      const key = runKey({ agentId, sessionId })
-      const active = activeRuns.get(key)
-      if (!active || !sameRunBinding(active.binding, create))
-        return emptyError(404)
       try {
-        if (!authorizationActive(create, now)) return emptyError(401)
-        const status = await active.handle.stop()
-        if (status === "idle") removeActive(key, active.handle)
-        return context.json({ status }, status === "stopping" ? 202 : 200)
+        const status = await options.runtime.sessions.stop(
+          { agentId, sessionId },
+          controllerId(authorization)
+        )
+        return Response.json(
+          { status },
+          { status: status === "stopping" ? 202 : 200 }
+        )
       } catch {
-        return emptyError(503)
+        return emptyError(404)
       }
     }
   )
@@ -1035,18 +1020,19 @@ export function createGuestListenerService(
       bearerToken(request) ?? cookieValue(request, GUEST_EVENTS_COOKIE)
     if (!token) return undefined
     const authorization = await verifyAuthorization(
-      options.invitations,
+      options,
       token,
-      {
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        operation: "messages:read",
-      },
+      { ...target, operation: "messages:read" },
       now
     )
     if (!authorization) return undefined
+    const storedSessionId = options.runtime.runtime.resolveSessionId(
+      target.agentId,
+      target.sessionId
+    )
+    if (!storedSessionId) return undefined
     try {
-      await options.hermes.getSession(target.agentId, target.storedId)
+      await options.runtime.runtime.getSession(target.agentId, storedSessionId)
     } catch {
       return undefined
     }
@@ -1055,7 +1041,7 @@ export function createGuestListenerService(
       authorizationRevision: authorization.tokenId,
       agentId: target.agentId,
       sessionId: target.sessionId,
-      storedSessionId: target.storedId,
+      storedSessionId,
       expiresAt: authorization.authorizationExpiresAt * 1_000,
     }
   }
@@ -1064,12 +1050,45 @@ export function createGuestListenerService(
     upgrade: GuestEventUpgrade,
     peer: GuestEventPeer
   ): EventsSocket {
-    const socket: EventsSocket = createEventsSocket({
+    const invitationPeers =
+      eventPeersByInvitation.get(upgrade.invitationId) ?? 0
+    if (
+      eventPeers >= maxEventPeers ||
+      invitationPeers >= maxEventPeersPerInvitation ||
+      now() >= upgrade.expiresAt
+    ) {
+      peer.close(
+        now() >= upgrade.expiresAt ? 4401 : 1013,
+        now() >= upgrade.expiresAt
+          ? "Authorization expired"
+          : "Guest event peer limit exceeded"
+      )
+      return inertSocket()
+    }
+    eventPeers += 1
+    eventPeersByInvitation.set(upgrade.invitationId, invitationPeers + 1)
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      eventPeers -= 1
+      const remaining =
+        (eventPeersByInvitation.get(upgrade.invitationId) ?? 1) - 1
+      if (remaining === 0) eventPeersByInvitation.delete(upgrade.invitationId)
+      else eventPeersByInvitation.set(upgrade.invitationId, remaining)
+    }
+    const socket = createEventsSocket({
       cursor: options.cursor,
       now,
       schedule,
       cancel,
-      close: peer.close,
+      ...(options.maxEventStreamsPerPeer === undefined
+        ? {}
+        : { maxStreams: options.maxEventStreamsPerPeer }),
+      close(code, reason) {
+        release()
+        peer.close(code, reason)
+      },
       notify() {
         for (const raw of socket.drain()) {
           const projected = projectEventFrame(raw, upgrade)
@@ -1085,7 +1104,7 @@ export function createGuestListenerService(
         )
           return null
         try {
-          await options.hermes.getSession(
+          await options.runtime.runtime.getSession(
             upgrade.agentId,
             upgrade.storedSessionId
           )
@@ -1114,20 +1133,23 @@ export function createGuestListenerService(
           scope.sessionId !== upgrade.sessionId
         )
           throw new Error("Invalid guest event scope")
-        const { liveSessionId } = await options.hermes.resume({
-          agentId: upgrade.agentId,
-          sessionId: upgrade.storedSessionId,
-          threadId: upgrade.sessionId,
-        })
-        const stop = await options.hermes.observe(
-          liveSessionId,
-          () => invalidate(),
-          () => reset()
+        const stop = await options.runtime.runtime.subscribeSessionInvalidation(
+          upgrade.agentId,
+          upgrade.sessionId,
+          invalidate,
+          reset
         )
         return { stop }
       },
     })
-    return socket
+    return {
+      receive: (raw) => socket.receive(raw),
+      drain: (maxFrames) => socket.drain(maxFrames),
+      close() {
+        release()
+        socket.close()
+      },
+    }
   }
 
   return { app, authorizeEventUpgrade, openEvents }

@@ -1,15 +1,13 @@
 import {
   RuntimeInfoSchema,
-  SessionActivityResponseSchema,
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
   SessionModelSelectRequestSchema,
-  SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
-import type { ServerRuntime } from "../runtime"
+import type { ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
@@ -109,40 +107,6 @@ export function registerWorkspaceRoutes(
     return context.json(
       SessionContextResponseSchema.parse(
         await hermes.context(
-          context.req.param("agentId"),
-          context.req.param("sessionId")
-        )
-      )
-    )
-  })
-
-  app.get(`${sessionWorkspacePath}/todos`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    await requireScopedSession(
-      hermes,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
-    return context.json(
-      SessionTodosResponseSchema.parse({
-        todos: await hermes.todos(
-          context.req.param("agentId"),
-          context.req.param("sessionId")
-        ),
-      })
-    )
-  })
-
-  app.get(`${sessionWorkspacePath}/activity`, async (context) => {
-    const hermes = await requireRuntime(context.req.raw)
-    await requireScopedSession(
-      hermes,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
-    return context.json(
-      SessionActivityResponseSchema.parse(
-        await hermes.activity(
           context.req.param("agentId"),
           context.req.param("sessionId")
         )

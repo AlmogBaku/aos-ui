@@ -3,6 +3,52 @@ import { describe, expect, it } from "vitest"
 import { projectHermesHistory } from "./history"
 
 describe("server-side Hermes history projection", () => {
+  it("omits native bookkeeping rows with a display kind", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "bookkeeping-row",
+        role: "user",
+        content: "internal-content",
+        display_kind: "internal_notification",
+      },
+      {
+        id: "conversation-row",
+        role: "user",
+        content: "conversation-content",
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        id: "conversation-row",
+        content: [{ type: "text", text: "conversation-content" }],
+      },
+    ])
+  })
+
+  it("uses display content only for a compacted native row", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "ordinary-row",
+        role: "user",
+        content: "own-content",
+        display_content: "foreign-content",
+      },
+      {
+        id: "compacted-row",
+        role: "user",
+        content: "compaction-carrier",
+        display_content: "recovered-content",
+        _compressed_summary: true,
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      { content: [{ type: "text", text: "own-content" }] },
+      { content: [{ type: "text", text: "recovered-content" }] },
+    ])
+  })
+
   it("preserves message IDs, reasoning, tools, images, and safe rich descriptors without native disclosure", () => {
     const messages = projectHermesHistory([
       {
@@ -134,6 +180,147 @@ describe("server-side Hermes history projection", () => {
     ])
     expect(JSON.stringify(messages)).not.toContain("/srv/hermes")
     expect(JSON.stringify(messages)).not.toContain("native_position")
+  })
+
+  it("preserves settled batched clarification questions and their recorded answers", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-question",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "clarify-1",
+            function: {
+              name: "clarify",
+              arguments: JSON.stringify({
+                questions: [
+                  {
+                    question: "Where do you live?",
+                    choices: ["Tel Aviv", "Jerusalem"],
+                  },
+                  {
+                    question: "Which amenities do you use?",
+                    choices: ["Parks", "Transit"],
+                    multi_select: true,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "clarify-1",
+        tool_name: "clarify",
+        content: JSON.stringify({
+          responses: [
+            {
+              question: "Where do you live?",
+              choices_offered: ["Tel Aviv", "Jerusalem"],
+              user_response: "Jerusalem",
+            },
+            {
+              question: "Which amenities do you use?",
+              choices_offered: ["Parks", "Transit"],
+              user_response: '["Parks","Transit"]',
+            },
+          ],
+        }),
+      },
+    ])
+
+    expect(messages[0]?.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "clarify-1",
+        toolName: "question",
+        args: {
+          question: "2 questions",
+          questions: [
+            {
+              question: "Where do you live?",
+              options: ["Tel Aviv", "Jerusalem"],
+              allowFreeform: false,
+              multiple: false,
+            },
+            {
+              question: "Which amenities do you use?",
+              options: ["Parks", "Transit"],
+              allowFreeform: false,
+              multiple: true,
+            },
+          ],
+          allowFreeform: true,
+        },
+        argsText: expect.any(String),
+        result: {
+          status: "answered",
+          responses: [
+            { question: "Where do you live?", answers: ["Jerusalem"] },
+            {
+              question: "Which amenities do you use?",
+              answers: ["Parks", "Transit"],
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  it("records an explicitly discarded Hermes clarification without inventing answers", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-question",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "clarify-cancelled",
+            function: {
+              name: "clarify",
+              arguments: JSON.stringify({
+                questions: [
+                  {
+                    question: "Answer whichever apply.",
+                    choices: ["One", "Two"],
+                    multi_select: true,
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "clarify-cancelled",
+        tool_name: "clarify",
+        content: JSON.stringify({
+          responses: [
+            {
+              question: "Answer whichever apply.",
+              choices_offered: ["One", "Two"],
+              user_response: "",
+            },
+          ],
+        }),
+      },
+    ])
+
+    expect(messages[0]?.content).toMatchObject([
+      {
+        toolName: "question",
+        args: {
+          questions: [{ question: "Answer whichever apply." }],
+        },
+        result: {
+          status: "cancelled",
+          responses: [
+            { question: "Answer whichever apply.", answers: [] },
+          ],
+        },
+      },
+    ])
   })
 
   it.each([

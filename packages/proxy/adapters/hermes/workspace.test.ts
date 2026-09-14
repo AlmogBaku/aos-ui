@@ -436,6 +436,23 @@ describe("Hermes workspace operations", () => {
     })
   })
 
+  it("reports an attached idle Session as available and idle", async () => {
+    const { operations, request } = harness({
+      scope: { attached: true, active: false },
+      sessionInfo: { running: false },
+    })
+
+    await expect(
+      operations.activity("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      status: "available",
+      scope: "attached-active-session",
+      coverage: "active-session-only",
+      state: "idle",
+    })
+    expect(request).not.toHaveBeenCalled()
+  })
+
   it("rejects an authority result for another Agent before any Hermes I/O", async () => {
     const { operations, request } = harness({ scope: { agentId: "other" } })
 

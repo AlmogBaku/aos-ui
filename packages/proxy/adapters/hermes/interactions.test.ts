@@ -10,6 +10,36 @@ const scope = {
 }
 
 describe("HermesInteractions", () => {
+  it("accepts a pending interrupt from a fresh AG-UI segment run id", async () => {
+    const request = vi.fn(async () => ({ status: "ok" }))
+    const interactions = new HermesInteractions({ request })
+    interactions.acceptNative(scope, "live-private", {
+      type: "approval.request",
+      session_id: "live-private",
+      payload: {
+        request_id: "approval-fresh-segment",
+        message: "Continue?",
+        choices: ["session"],
+      },
+    })
+
+    await expect(
+      interactions.respond(
+        { ...scope, runId: "run-2" },
+        {
+          interruptId: "approval-fresh-segment",
+          status: "resolved",
+          payload: "session",
+        }
+      )
+    ).resolves.toEqual({ status: "resolved" })
+    expect(request).toHaveBeenCalledWith("approval.respond", {
+      session_id: "live-private",
+      request_id: "approval-fresh-segment",
+      choice: "session",
+    })
+  })
+
   it("normalizes a native approval as a run-bound AG-UI interrupt", () => {
     const request = vi.fn()
     const interactions = new HermesInteractions({ request })
@@ -316,7 +346,7 @@ describe("HermesInteractions", () => {
     ])
   })
 
-  it("rejects cross-Agent, cross-Session, and cross-run interaction substitution", async () => {
+  it("rejects cross-Agent and cross-Session interaction substitution", async () => {
     const request = vi.fn().mockResolvedValue({ resolved: 1 })
     const interactions = new HermesInteractions({ request })
     interactions.acceptNative(scope, "live-private", {
@@ -333,7 +363,6 @@ describe("HermesInteractions", () => {
     for (const changed of [
       { ...scope, agentId: "other" },
       { ...scope, sessionId: "other", threadId: "other" },
-      { ...scope, runId: "other" },
     ]) {
       await expect(interactions.respond(changed, resume)).rejects.toMatchObject(
         {
@@ -534,6 +563,28 @@ describe("HermesInteractions", () => {
     expect(JSON.stringify(resumed)).not.toMatch(
       /live-private|hermes\.internal|provider_url/
     )
+  })
+
+  it("accepts the no-prompt live resume shape when Hermes omits running", async () => {
+    const request = vi.fn().mockResolvedValue({
+      session_id: "live-private",
+      stored_session_id: "session-1",
+      message_count: 0,
+      messages: [],
+      messages_omitted: true,
+      info: { lazy: true },
+    })
+    const interactions = new HermesInteractions({ request })
+
+    await expect(interactions.resume(scope)).resolves.toEqual({
+      running: false,
+      status: "unknown",
+    })
+    expect(request).toHaveBeenCalledWith("session.resume", {
+      session_id: "session-1",
+      profile: "research",
+      omit_messages: true,
+    })
   })
 
   it("projects resume outages and malformed native results with safe typed errors", async () => {
@@ -880,7 +931,7 @@ describe("HermesInteractions", () => {
     )
   })
 
-  it("keeps another run's pending interrupt when reconciling the same Session", async () => {
+  it("clears a logical Session's pending interrupt after authoritative idle reconciliation", async () => {
     const request = vi.fn().mockResolvedValue({
       session_id: "live-run-2",
       running: false,
@@ -895,7 +946,7 @@ describe("HermesInteractions", () => {
 
     await interactions.resume({ ...scope, runId: "run-2" })
 
-    expect(interactions.pending(scope)).toHaveLength(1)
+    expect(interactions.pending(scope)).toHaveLength(0)
   })
 
   it("ignores a delayed native event that conflicts with an established run binding", async () => {
@@ -1001,33 +1052,27 @@ describe("HermesInteractions", () => {
     })
   })
 
-  it("rejects a stale concurrent resume generation before it can replace the authoritative binding", async () => {
-    let resolveFirst!: (value: unknown) => void
-    let resolveSecond!: (value: unknown) => void
-    const request = vi
-      .fn()
-      .mockImplementationOnce(
-        () => new Promise((resolve) => (resolveFirst = resolve))
-      )
-      .mockImplementationOnce(
-        () => new Promise((resolve) => (resolveSecond = resolve))
-      )
+  it("coalesces concurrent resume reconciliation for the same pending snapshot", async () => {
+    let resolve!: (value: unknown) => void
+    const request = vi.fn(() => new Promise((settle) => (resolve = settle)))
     const interactions = new HermesInteractions({ request })
     const first = interactions.resume(scope)
     const second = interactions.resume(scope)
-    resolveSecond({ session_id: "live-new", running: false, status: "idle" })
-    await expect(second).resolves.toMatchObject({ status: "idle" })
-    resolveFirst({ session_id: "live-stale", running: false, status: "idle" })
 
-    await expect(first).rejects.toMatchObject({
-      code: "AOS_RECONCILIATION_STALE",
-    })
+    expect(request).toHaveBeenCalledOnce()
+    resolve({ session_id: "live-current", running: false, status: "idle" })
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { running: false, status: "idle" },
+      { running: false, status: "idle" },
+    ])
     expect(
-      interactions.acceptNative(scope, "live-stale", {
+      interactions.acceptNative(scope, "live-current", {
         type: "approval.request",
-        session_id: "live-stale",
-        payload: { request_id: "stale", command: "stale" },
+        session_id: "live-current",
+        payload: { request_id: "current", command: "current" },
       })
-    ).toBeUndefined()
+    ).toMatchObject({
+      type: "interrupt",
+    })
   })
 })

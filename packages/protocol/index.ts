@@ -1,4 +1,8 @@
 import { z } from "zod"
+import {
+  AgentCapabilitiesSchema as AgUiAgentCapabilitiesSchema,
+  type AgentCapabilities,
+} from "@ag-ui/core"
 
 export const AOS_API_PREFIX = "/api/aos/v1" as const
 export const SESSION_CATALOG_MAX_WINDOW = 1_000 as const
@@ -13,20 +17,6 @@ const IdentifierSchema = z
       return code >= 32 && code !== 127
     })
   )
-
-const OperatorSchema = z.strictObject({
-  id: IdentifierSchema,
-  displayName: z.string().min(1).max(256).optional(),
-})
-
-export const OperatorAuthStateSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("unauthenticated") }),
-  z.strictObject({
-    status: z.literal("authenticated"),
-    operator: OperatorSchema,
-  }),
-])
-export type OperatorAuthState = z.infer<typeof OperatorAuthStateSchema>
 
 export const RuntimeAuthStateSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("authenticated") }),
@@ -141,7 +131,7 @@ export type VisibilityUpdateResponse = z.infer<
   typeof VisibilityUpdateResponseSchema
 >
 
-const SessionStatusSchema = z.enum([
+export const SessionStatusSchema = z.enum([
   "idle",
   "running",
   "waiting-for-input",
@@ -200,16 +190,56 @@ export const SessionMessageSchema = z.strictObject({
   role: z.enum(["user", "assistant", "system"]),
   content: z.array(SessionMessagePartSchema).max(2_000),
   createdAt: z.string().datetime(),
+  status: z
+    .strictObject({
+      type: z.literal("requires-action"),
+      reason: z.literal("interrupt"),
+    })
+    .optional(),
+  metadata: z
+    .strictObject({ custom: z.record(z.string(), z.json()) })
+    .optional(),
 })
 export type SessionMessage = z.infer<typeof SessionMessageSchema>
 
+const TodoSchema = z.strictObject({
+  id: IdentifierSchema,
+  label: z.string().min(1).max(4096),
+  status: z.enum(["pending", "active", "completed", "failed"]),
+})
+
+export const SessionPlanActivityMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.literal("activity"),
+  activityType: z.literal("PLAN"),
+  content: z.strictObject({
+    todos: z.array(TodoSchema).max(10_000),
+  }),
+})
+export type SessionPlanActivityMessage = z.infer<
+  typeof SessionPlanActivityMessageSchema
+>
+
 export const SessionHistoryResponseSchema = z.strictObject({
   sessionId: IdentifierSchema,
-  messages: z.array(SessionMessageSchema).max(500),
+  messages: z
+    .array(
+      z.discriminatedUnion("role", [
+        SessionMessageSchema,
+        SessionPlanActivityMessageSchema,
+      ])
+    )
+    .max(501),
   total: z.number().int().min(0),
   limit: z.number().int().min(1).max(500),
   offset: z.number().int().min(0),
   nextOffset: z.number().int().min(0),
+  execution: z
+    .strictObject({
+      status: SessionStatusSchema,
+      runId: IdentifierSchema.optional(),
+    })
+    .optional(),
 })
 export type SessionHistoryResponse = z.infer<
   typeof SessionHistoryResponseSchema
@@ -238,7 +268,13 @@ const CapabilityUnavailableSchema = z.strictObject({
   status: z.literal("unavailable"),
   reason: z.string().min(1).max(256),
 })
+// AG-UI currently brings Zod 3 while AOS uses Zod 4. Embedding its schema in a
+// Zod 4 object is invalid, so validate through the public AG-UI schema instead.
+const AgentCapabilitiesSchema = z.custom<AgentCapabilities>(
+  (value) => AgUiAgentCapabilitiesSchema.safeParse(value).success
+)
 export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
+  agent: AgentCapabilitiesSchema,
   workspace: z.strictObject({
     models: z.strictObject({
       status: z.literal("available"),
@@ -399,11 +435,6 @@ export type SessionContextResponse = z.infer<
   typeof SessionContextResponseSchema
 >
 
-const TodoSchema = z.strictObject({
-  id: IdentifierSchema,
-  label: z.string().min(1).max(4096),
-  status: z.enum(["pending", "active", "completed", "failed"]),
-})
 export const SessionTodosResponseSchema = z.strictObject({
   todos: z.array(TodoSchema).max(10_000),
 })
@@ -535,8 +566,11 @@ export const ErrorResponseSchema = z.strictObject({
       "run_capacity_exceeded",
       "runtime_authentication_required",
       "temporarily_unavailable",
+      "connection_interrupted",
+      "uncertain_mutation",
       "internal_error",
     ]),
+    description: z.string().min(1).max(512),
   }),
 })
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>

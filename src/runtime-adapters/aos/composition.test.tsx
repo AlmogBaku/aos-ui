@@ -15,13 +15,6 @@ describe("provider-neutral AOS runtime composition", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const path = String(input)
-        if (path === "/api/aos/v1/auth/operator")
-          return Response.json({
-            status: "authenticated",
-            operator: { id: "principal" },
-          })
-        if (path === "/api/aos/v1/auth/runtime")
-          return Response.json({ status: "authenticated" })
         if (path === "/api/aos/v1/runtime")
           return Response.json({
             runtime: { id: "hermes", name: "Hermes" },
@@ -114,6 +107,8 @@ describe("provider-neutral AOS runtime composition", () => {
       { id: "researcher", name: "Researcher" },
     ])
     expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([])
-    expect(supplied!.activityCoverage).toBe("workspace")
+    expect(supplied!.interactions).toBeUndefined()
+    expect(supplied!.agUiInterrupts).toBe(true)
+    expect(supplied!.activityCoverage).toBe("active-session")
   })
 })

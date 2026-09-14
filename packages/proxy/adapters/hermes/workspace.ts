@@ -277,9 +277,9 @@ function completedToolRow(row: NativeRecord) {
   )
 }
 
-function projectTodos(value: unknown): HermesTodo[] {
+export function projectHermesTodos(value: unknown): HermesTodo[] | undefined {
   const payload = parseJson(value)
-  if (!isRecord(payload) || !Array.isArray(payload.todos)) return []
+  if (!isRecord(payload) || !Array.isArray(payload.todos)) return undefined
   const seen = new Set<string>()
   return payload.todos.flatMap((raw, index) => {
     if (!isRecord(raw)) return []
@@ -299,7 +299,9 @@ function projectTodos(value: unknown): HermesTodo[] {
   })
 }
 
-function latestTodos(rows: readonly unknown[]): HermesTodo[] {
+export function latestHermesTodos(
+  rows: readonly unknown[]
+): HermesTodo[] | undefined {
   const calls = todoCallIds(rows)
   let latest: HermesTodo[] | undefined
   for (const row of rows) {
@@ -319,9 +321,9 @@ function latestTodos(rows: readonly unknown[]): HermesTodo[] {
       (resultName !== undefined && resultName !== invokedName)
     )
       continue
-    latest = projectTodos(row.content ?? row.result)
+    latest = projectHermesTodos(row.content ?? row.result)
   }
-  return latest ?? []
+  return latest
 }
 
 function activityState(value: unknown): HermesActivityState {
@@ -474,14 +476,19 @@ export function createHermesWorkspaceOperations(input: {
       } catch {
         throw new HermesWorkspaceUnavailableError()
       }
-      return latestTodos(rows)
+      return latestHermesTodos(rows) ?? []
     },
     async activity(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)
       if (!session.attached)
         return { status: "unavailable", reason: "session-not-attached" }
       if (!session.active)
-        return { status: "unavailable", reason: "session-idle" }
+        return {
+          status: "available",
+          scope: "attached-active-session",
+          coverage: "active-session-only",
+          state: "idle",
+        }
       if (!input.transport.sessionInfo)
         return { status: "unavailable", reason: "session-info-unavailable" }
       const info = await input.transport.sessionInfo(session).catch(() => {

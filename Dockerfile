@@ -19,5 +19,5 @@ FROM dependencies AS proxy
 COPY --chown=bun:bun packages ./packages
 COPY --from=builder --chown=bun:bun /app/dist /app/dist
 USER bun
-EXPOSE 3000
+EXPOSE 3000 3001
 CMD ["bun", "run", "static:serve"]

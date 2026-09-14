@@ -38,6 +38,7 @@ function service(overrides?: {
 const invitation = {
   principalId: "guest_4Ez4k6W5",
   invitationId: "invite_Q9mZ2",
+  runtimeId: "hermes-primary",
   agentId: "agent_planner",
   sessionId: "session_launch",
   operations: ["messages:create", "messages:read"] as const,
@@ -46,6 +47,7 @@ const invitation = {
 
 function target(operation: GuestOperation = "messages:read") {
   return {
+    runtimeId: "hermes-primary",
     agentId: "agent_planner",
     sessionId: "session_launch",
     operation,
@@ -93,6 +95,7 @@ describe("guest invitation", () => {
       lane: "guest",
       nbf: 1_700_000_000,
       ops: ["messages:create", "messages:read"],
+      runtime: "hermes-primary",
       session: "session_launch",
       sub: "guest_4Ez4k6W5",
       v: 1,
@@ -105,6 +108,7 @@ describe("guest invitation", () => {
       deploymentId: "aos-prod-il1",
       principalId: "guest_4Ez4k6W5",
       invitationId: "invite_Q9mZ2",
+      runtimeId: "hermes-primary",
       agentId: "agent_planner",
       sessionId: "session_launch",
       operations: ["messages:create", "messages:read"],
@@ -122,6 +126,7 @@ describe("guest invitation", () => {
       deploymentId: "aos-prod-il1",
       principalId: "guest_4Ez4k6W5",
       invitationId: "invite_Q9mZ2",
+      runtimeId: "hermes-primary",
       agentId: "agent_planner",
       sessionId: "session_launch",
       operation: "messages:read",
@@ -177,6 +182,7 @@ describe("guest invitation", () => {
       { ...claims, iss: "https://attacker.example" },
       { ...claims, aud: "operator-listener" },
       { ...claims, dep: "aos-prod-us1" },
+      { ...claims, runtime: "hermes-secondary" },
       { ...claims, lane: "operator" },
       { ...claims, v: 2 },
     ]
@@ -272,11 +278,18 @@ describe("guest invitation", () => {
     await expect(
       service().verify(issued.token, {
         ...target(),
+        runtimeId: "hermes-secondary",
+      })
+    ).resolves.toBeUndefined()
+    await expect(
+      service().verify(issued.token, {
+        ...target(),
         agentId: "agent_other",
       })
     ).resolves.toBeUndefined()
     await expect(
       service().verify(issued.token, {
+        runtimeId: "hermes-primary",
         agentId: "agent_planner",
         sessionId: "session_other",
         operation: "messages:read",
@@ -300,6 +313,7 @@ describe("guest invitation", () => {
     }
     await expect(
       service().verify(issued.token, {
+        runtimeId: "hermes-primary",
         agentId: "agent_planner",
         sessionId: "session_launch",
       } as never)
@@ -317,6 +331,23 @@ describe("guest invitation", () => {
 
     await expect(
       service().verify(issued.token, target("artifacts:read"))
+    ).resolves.toBeUndefined()
+  })
+
+  it("issues independent Stop and interaction-response grants", async () => {
+    const issued = await service().issue({
+      ...invitation,
+      operations: ["interactions:respond", "messages:stop"],
+    })
+
+    await expect(
+      service().verify(issued.token, target("messages:stop"))
+    ).resolves.toMatchObject({ operation: "messages:stop" })
+    await expect(
+      service().verify(issued.token, target("interactions:respond"))
+    ).resolves.toMatchObject({ operation: "interactions:respond" })
+    await expect(
+      service().verify(issued.token, target("messages:create"))
     ).resolves.toBeUndefined()
   })
 

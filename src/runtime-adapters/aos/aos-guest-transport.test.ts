@@ -67,16 +67,17 @@ describe("AOS guest transport configuration", () => {
   })
 
   it("streams runs through the configured guest path with the same bearer", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () =>
-      new Response(
-        `data: ${JSON.stringify({
-          type: "RUN_FINISHED",
-          threadId: scope.sessionId,
-          runId: "run-1",
-          outcome: { type: "success" },
-        })}\n\n`,
-        { headers: { "content-type": "text/event-stream" } }
-      )
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "RUN_FINISHED",
+            threadId: scope.sessionId,
+            runId: "run-1",
+            outcome: { type: "success" },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } }
+        )
     )
     const agent = createAosRunAgent({
       agentId: scope.agentId,

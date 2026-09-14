@@ -10,6 +10,7 @@ type EventSocketData<Authorization> = {
   authorization: Authorization
   socket?: EventsSocket
   failed?: boolean
+  overloaded?: boolean
 }
 type EventPeer<Authorization> = {
   data: EventSocketData<Authorization>
@@ -21,6 +22,9 @@ type UpgradeServer = {
     request: Request,
     options: { data: EventSocketData<Authorization> }
   ): boolean
+}
+type RequestServer = UpgradeServer & {
+  timeout?(request: Request, seconds: number): void
 }
 type ServeOptions<Authorization> = {
   hostname: string
@@ -52,6 +56,7 @@ export type StartProxyServerOptions<Authorization = OperatorEventUpgrade> = {
   host: string
   port: number
   shutdownGraceMs: number
+  maxEventPeers?: number
   close?: () => Promise<void> | void
   serve?: Serve
   installSignalHandlers?: boolean
@@ -67,6 +72,10 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
   options: StartProxyServerOptions<Authorization>
 ) {
   const activeEventPeers = new Set<EventPeer<Authorization>>()
+  const maxEventPeers = options.maxEventPeers ?? Number.MAX_SAFE_INTEGER
+  let reservedEventPeers = 0
+  if (!Number.isSafeInteger(maxEventPeers) || maxEventPeers < 1)
+    throw new Error("Invalid event peer limit")
   const failEventPeer = (peer: EventPeer<Authorization>) => {
     if (peer.data.failed) return
     peer.data.failed = true
@@ -85,6 +94,11 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
   const websocket = options.events
     ? {
         open(peer: EventPeer<Authorization>) {
+          if (reservedEventPeers > 0) reservedEventPeers -= 1
+          if (peer.data.overloaded) {
+            peer.close(1013, "Event peer capacity exceeded")
+            return
+          }
           try {
             peer.data.socket = options.events!.open(peer.data.authorization, {
               send: (raw) => peer.send(raw),
@@ -124,12 +138,25 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
       if (request.method !== "GET") return new Response(null, { status: 405 })
       const authorization = await options.events.authorizeUpgrade(request)
       if (!authorization) return new Response(null, { status: 401 })
-      const upgrade = rawServer as UpgradeServer | undefined
-      if (!upgrade?.upgrade(request, { data: { authorization } }))
+      const upgrade = rawServer as RequestServer | undefined
+      const overloaded =
+        activeEventPeers.size + reservedEventPeers >= maxEventPeers
+      if (!overloaded) reservedEventPeers += 1
+      if (!upgrade?.upgrade(request, { data: { authorization, overloaded } })) {
+        if (!overloaded) reservedEventPeers -= 1
         return new Response(null, { status: 500 })
+      }
       return undefined
     }
-    return options.app.fetch(request, rawServer)
+    const response = await options.app.fetch(request, rawServer)
+    if (
+      response?.headers
+        .get("content-type")
+        ?.toLowerCase()
+        .startsWith("text/event-stream")
+    )
+      (rawServer as RequestServer | undefined)?.timeout?.(request, 0)
+    return response
   }
   const server = (options.serve ?? bunServe())({
     hostname: options.host,
@@ -138,6 +165,7 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
     ...(websocket === undefined ? {} : { websocket }),
   })
   let shutdownPromise: Promise<void> | undefined
+  let onSignal: (() => void) | undefined
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise
     for (const peer of activeEventPeers) {
@@ -156,25 +184,33 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
     activeEventPeers.clear()
     shutdownPromise = new Promise<void>((resolve) => {
       let settled = false
-      const finish = () => {
+      let resourcesClosed = false
+      const closeResources = async () => {
+        if (resourcesClosed) return
+        resourcesClosed = true
+        await options.close?.()
+      }
+      const finish = async () => {
         if (settled) return
         settled = true
         clearTimeout(forceTimer)
+        if (onSignal) {
+          process.removeListener("SIGINT", onSignal)
+          process.removeListener("SIGTERM", onSignal)
+        }
+        await closeResources().catch(() => undefined)
         resolve()
       }
       const forceTimer = setTimeout(() => {
         void Promise.resolve(server.stop(true)).then(finish, finish)
       }, options.shutdownGraceMs)
-      void Promise.all([
-        Promise.resolve(server.stop(false)),
-        Promise.resolve(options.close?.()),
-      ]).then(finish, finish)
+      void Promise.resolve(server.stop(false)).then(finish, finish)
     })
     return shutdownPromise
   }
 
   if (options.installSignalHandlers !== false) {
-    const onSignal = () => void shutdown()
+    onSignal = () => void shutdown()
     process.once("SIGINT", onSignal)
     process.once("SIGTERM", onSignal)
   }

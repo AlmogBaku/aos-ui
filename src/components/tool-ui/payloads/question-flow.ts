@@ -9,10 +9,18 @@ const questionOptionSchema = z.union([
   }),
 ])
 
+const settledQuestionSchema = z.object({
+  question: z.string().min(1),
+  options: z.array(questionOptionSchema).optional(),
+  allowFreeform: z.boolean().optional(),
+  multiple: z.boolean().optional(),
+})
+
 export const questionPayloadSchema = z
   .object({
     args: z.object({
       question: z.string().min(1),
+      questions: z.array(settledQuestionSchema).min(1).optional(),
       options: z.array(questionOptionSchema).optional(),
       allowFreeform: z.boolean().optional(),
     }),
@@ -20,7 +28,9 @@ export const questionPayloadSchema = z
   })
   .refine(
     ({ args }) =>
-      args.allowFreeform === true || (args.options?.length ?? 0) > 0,
+      (args.questions?.length ?? 0) > 0 ||
+      args.allowFreeform === true ||
+      (args.options?.length ?? 0) > 0,
     {
       message: "A question requires options or a freeform answer",
       path: ["args", "options"],
