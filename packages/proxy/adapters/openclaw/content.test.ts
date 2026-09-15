@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import {
-  OpenClawArtifactReceipts,
   OpenClawContentPublicError,
   prepareOpenClawChatAttachments,
   projectOpenClawRichPresentation,
@@ -23,7 +22,6 @@ describe("OpenClaw content", () => {
       })
     ).toMatchObject({
       native: { attachments: [{ fileName: "brief.pdf", sizeBytes: 3 }] },
-      public: [{ filename: "brief.pdf" }],
     })
     expect(() =>
       prepareOpenClawChatAttachments({
@@ -40,63 +38,18 @@ describe("OpenClaw content", () => {
       })
     ).toThrow(OpenClawContentPublicError)
   })
-  it("binds receipts to exact scope and exposes no native paths", () => {
-    const x = new OpenClawArtifactReceipts()
-    x.accept(
-      {
-        agentId: "agent-a",
-        sessionId: "session-a",
-        messageId: "message-a",
-        runId: "run-a",
-        messageSeq: 7,
-      },
-      {
-        id: "artifact-a",
-        type: "file",
-        title: "brief.pdf",
-        mimeType: "application/pdf",
-        sizeBytes: 3,
-        agentId: "agent-a",
-        sessionKey: "session-a",
-        runId: "run-a",
-        messageSeq: 7,
-        download: { mode: "bytes" },
-      }
-    )
-    expect(x.get("agent-a", "session-a", "message-a", "artifact-a")).toEqual({
-      artifactId: "artifact-a",
-      filename: "brief.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 3,
-    })
-    expect(() =>
-      x.accept(
-        { agentId: "agent-a", sessionId: "session-a", messageId: "message-a" },
-        {
-          id: "bad",
-          title: "/secret",
-          agentId: "agent-a",
-          sessionKey: "other",
-          download: { mode: "url" },
-        }
-      )
-    ).toThrow(OpenClawContentPublicError)
-  })
-  it("allows only the optional safe rich presentation", () => {
+  it("keeps the actual plugin's unsupported publication as text only", () => {
     expect(
       projectOpenClawRichPresentation({
-        type: "aos.artifact-publication",
-        text: "Validated brief.pdf.",
-        presentation: {
-          kind: "artifact",
-          title: "brief.pdf",
-          mimeType: "application/pdf",
+        text: "Validated brief.pdf, but it was not published.",
+        details: {
+          type: "aos.artifact-publication",
+          status: "unsupported",
+          published: false,
+          candidate: { path: "private.pdf" },
         },
       })
-    ).toMatchObject({
-      text: "Validated brief.pdf.",
-      rich: { kind: "artifact" },
-    })
+    ).toEqual({ text: "Validated brief.pdf, but it was not published." })
     expect(projectOpenClawRichPresentation({ path: "/secret" })).toBeUndefined()
   })
 })

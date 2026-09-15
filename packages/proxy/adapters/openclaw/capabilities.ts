@@ -35,16 +35,13 @@ export function openClawCapabilities() {
       limits,
     },
     artifacts: {
-      status: "available" as const,
-      scope: "agent-session-message" as const,
-      operation: "artifacts.download" as const,
-      receipt: "exact-native-identity-bound" as const,
-      downloadModes: ["bytes"] as const,
+      status: "unavailable" as const,
+      reason: "native-scoped-download-not-yet-proven" as const,
     },
     richPresentation: {
       status: "available" as const,
-      source: "optional-aos-plugin" as const,
-      fallback: "inspectable-text" as const,
+      source: "optional-aos-plugin-unsupported-receipt" as const,
+      fallback: "inspectable-text-only" as const,
     },
     audio: {
       status: "unavailable" as const,

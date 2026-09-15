@@ -6,7 +6,10 @@ describe("OpenClaw capabilities", () =>
       questions: { status: "available", protocol: "ag-ui-interrupt" },
       approvals: { allowedDecisions: "native-request" },
       attachments: { operation: "chat.send" },
-      artifacts: { operation: "artifacts.download" },
+      artifacts: {
+        status: "unavailable",
+        reason: "native-scoped-download-not-yet-proven",
+      },
       audio: { status: "unavailable" },
       visibility: { status: "unavailable" },
       todos: { status: "unavailable" },

@@ -106,96 +106,24 @@ export function prepareOpenClawChatAttachments(
   if (!validateChatSendParams(native)) throw new OpenClawContentPublicError()
   return { native, public: publicAttachments }
 }
-type ArtifactScope = Readonly<{
-  agentId: string
-  sessionId: string
-  messageId: string
-  runId?: string
-  messageSeq?: number
-}>
-type Receipt = Readonly<{
-  artifactId: string
-  filename: string
-  mimeType?: string
-  sizeBytes?: number
-}>
-/** Only exact provider receipts become downloadable normalized artifact identities. */
-export class OpenClawArtifactReceipts {
-  readonly #values = new Map<string, Receipt>()
-  accept(scope: ArtifactScope, raw: unknown) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw))
-      throw new OpenClawContentPublicError()
-    const v = raw as Record<string, unknown>,
-      artifactId = id(v.id),
-      title = filename(v.title),
-      mimeType = v.mimeType === undefined ? undefined : mime(v.mimeType),
-      sizeBytes = v.sizeBytes,
-      download = v.download as Record<string, unknown> | undefined
-    if (
-      !artifactId ||
-      !title ||
-      (v.mimeType !== undefined && !mimeType) ||
-      (sizeBytes !== undefined &&
-        (!Number.isSafeInteger(sizeBytes) ||
-          (sizeBytes as number) < 0 ||
-          (sizeBytes as number) > MAX)) ||
-      v.agentId !== scope.agentId ||
-      v.sessionKey !== scope.sessionId ||
-      (scope.runId !== undefined && v.runId !== scope.runId) ||
-      (scope.messageSeq !== undefined && v.messageSeq !== scope.messageSeq) ||
-      !download ||
-      download.mode !== "bytes"
-    )
-      throw new OpenClawContentPublicError()
-    const receipt = {
-      artifactId,
-      filename: title,
-      ...(mimeType ? { mimeType } : {}),
-      ...(sizeBytes === undefined ? {} : { sizeBytes: sizeBytes as number }),
-    }
-    this.#values.set(
-      this.key(scope.agentId, scope.sessionId, scope.messageId, artifactId),
-      receipt
-    )
-    return receipt
-  }
-  get(
-    agentId: string,
-    sessionId: string,
-    messageId: string,
-    artifactId: string
-  ) {
-    return this.#values.get(this.key(agentId, sessionId, messageId, artifactId))
-  }
-  private key(
-    agentId: string,
-    sessionId: string,
-    messageId: string,
-    artifactId: string
-  ) {
-    return `${agentId}\0${sessionId}\0${messageId}\0${artifactId}`
-  }
-}
-/** Optional AOS plugin cards stay a tiny allowlist with inspectable prose. */
+/** The verified plugin reports validation only; it cannot publish a native artifact. */
 export function projectOpenClawRichPresentation(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
   const v = raw as Record<string, unknown>,
-    p = v.presentation
+    details = v.details
   if (
-    v.type !== "aos.artifact-publication" ||
     !text(v.text, 8192) ||
-    !p ||
-    typeof p !== "object" ||
-    Array.isArray(p)
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details)
   )
     return undefined
-  const rich = p as Record<string, unknown>,
-    title = filename(rich.title),
-    mimeType = mime(rich.mimeType)
-  return rich.kind === "artifact" && title && mimeType
-    ? {
-        text: text(v.text, 8192)!,
-        rich: { kind: "artifact" as const, title, mimeType },
-      }
-    : undefined
+  const result = details as Record<string, unknown>
+  if (
+    result.type !== "aos.artifact-publication" ||
+    result.status !== "unsupported" ||
+    result.published !== false
+  )
+    return undefined
+  return { text: text(v.text, 8192)! }
 }

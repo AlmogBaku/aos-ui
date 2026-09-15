@@ -1,6 +1,7 @@
 import type { ResumeEntry, RunFinishedInterruptOutcome } from "@ag-ui/core"
 import {
-  validateApprovalResolveParams,
+  validateApprovalGetResult,
+  validateApprovalResolveResult,
   validateQuestionResolveParams,
 } from "@openclaw/gateway-protocol"
 
@@ -12,7 +13,13 @@ export type OpenClawInteractionScope = Readonly<{
 }>
 export type OpenClawInteractionTransport = Readonly<{
   request(
-    method: "question.resolve" | "approval.resolve",
+    method:
+      | "question.get"
+      | "question.list"
+      | "question.resolve"
+      | "approval.get"
+      | "approval.list"
+      | "approval.resolve",
     params: unknown
   ): Promise<unknown>
 }>
@@ -25,342 +32,429 @@ export class OpenClawInteractionPublicError extends Error {
     readonly code:
       | "AOS_INVALID_INTERACTION"
       | "AOS_INTERACTION_NOT_FOUND"
-      | "AOS_INTERACTION_EXPIRED"
       | "AOS_PROVIDER_INVALID_RESPONSE"
   ) {
     super(
       code === "AOS_INTERACTION_NOT_FOUND"
         ? "Interaction not found"
-        : code === "AOS_INTERACTION_EXPIRED"
-          ? "Interaction has expired"
-          : code === "AOS_PROVIDER_INVALID_RESPONSE"
-            ? "OpenClaw returned invalid interaction data"
-            : "Invalid interaction response"
+        : code === "AOS_PROVIDER_INVALID_RESPONSE"
+          ? "OpenClaw returned invalid interaction data"
+          : "Invalid interaction response"
     )
     this.name = "OpenClawInteractionPublicError"
   }
 }
-type Question = Readonly<{
+type Question = {
   questionId: string
-  header: string
   question: string
-  options: readonly Readonly<{ label: string; description?: string }>[]
-  multiSelect?: boolean
-}>
-type Pending = Readonly<{
+  options: string[]
+  multi?: boolean
+  other?: boolean
+  secret?: boolean
+}
+type Pending = {
   scope: OpenClawInteractionScope
   id: string
-  expiresAtMs?: number
+  expiresAtMs: number
   outcome: RunFinishedInterruptOutcome
-}> &
-  (
-    | { kind: "question"; questions: readonly Question[] }
-    | {
-        kind: "approval"
-        nativeKind: "plugin" | "system-agent" | "exec"
-        decisions: readonly ("deny" | "allow-once" | "allow-always")[]
-      }
-  )
-const encoder = new TextEncoder()
-const safe = (v: unknown, max = 4096) =>
-  typeof v === "string" && v.trim() && encoder.encode(v).byteLength <= max
-    ? v.trim()
-    : undefined
-const safeId = (v: unknown) => {
-  const x = safe(v, 256)
-  return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
-}
-const key = (s: OpenClawInteractionScope, id: string) =>
-  `${s.agentId}\0${s.sessionId}\0${s.runId}\0${id}`
-const same = (a: OpenClawInteractionScope, b: OpenClawInteractionScope) =>
-  a.agentId === b.agentId &&
-  a.sessionId === b.sessionId &&
-  a.threadId === b.threadId &&
-  a.runId === b.runId
-const invalid = (): never => {
-  throw new OpenClawInteractionPublicError("AOS_INVALID_INTERACTION")
-}
-function resume(v: unknown): ResumeEntry {
+} & (
+  | { kind: "question"; questions: Question[] }
+  | {
+      kind: "approval"
+      nativeKind: "plugin" | "system-agent" | "exec"
+      decisions: string[]
+    }
+)
+const encoder = new TextEncoder(),
+  text = (v: unknown, max = 4096) =>
+    typeof v === "string" && v.trim() && encoder.encode(v).byteLength <= max
+      ? v.trim()
+      : undefined,
+  id = (v: unknown) => {
+    const x = text(v, 256)
+    return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
+  },
+  key = (s: OpenClawInteractionScope, i: string) =>
+    `${s.agentId}\0${s.sessionId}\0${s.runId}\0${i}`,
+  invalid = (): never => {
+    throw new OpenClawInteractionPublicError("AOS_INVALID_INTERACTION")
+  },
+  bad = (): never => {
+    throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+  }
+function record(scope: OpenClawInteractionScope, raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) bad()
+  const r = raw as Record<string, unknown>,
+    requestId = id(r.id)
   if (
-    !Array.isArray(v) ||
-    v.length !== 1 ||
-    !v[0] ||
-    typeof v[0] !== "object" ||
-    Array.isArray(v[0])
+    !requestId ||
+    r.agentId !== scope.agentId ||
+    r.sessionKey !== scope.sessionId ||
+    r.runId !== scope.runId ||
+    r.status !== "pending" ||
+    !Number.isSafeInteger(r.expiresAtMs) ||
+    !Array.isArray(r.questions) ||
+    r.questions.length < 1 ||
+    r.questions.length > 3
+  )
+    bad()
+  const nativeQuestions = r.questions as unknown[]
+  const questions = nativeQuestions.map((x): Question => {
+    if (!x || typeof x !== "object" || Array.isArray(x)) bad()
+    const q = x as Record<string, unknown>,
+      questionId =
+        typeof q.questionId === "string" &&
+        /^[a-z][a-z0-9_]*$/u.test(q.questionId)
+          ? q.questionId
+          : undefined
+    if (
+      !questionId ||
+      !text(q.header, 12) ||
+      !text(q.question) ||
+      !Array.isArray(q.options) ||
+      q.options.length > 4 ||
+      (q.multiSelect !== undefined && typeof q.multiSelect !== "boolean") ||
+      (q.isOther !== undefined && typeof q.isOther !== "boolean") ||
+      (q.isSecret !== undefined && typeof q.isSecret !== "boolean")
+    )
+      bad()
+    const nativeOptions = q.options as unknown[]
+    const options = nativeOptions.map((o) => {
+      if (
+        !o ||
+        typeof o !== "object" ||
+        !text((o as Record<string, unknown>).label)
+      )
+        bad()
+      return (o as { label: string }).label
+    })
+    return {
+      questionId: questionId!,
+      question: q.question as string,
+      options,
+      ...(q.multiSelect ? { multi: true } : {}),
+      ...(q.isOther ? { other: true } : {}),
+      ...(q.isSecret ? { secret: true } : {}),
+    }
+  })
+  if (new Set(questions.map((q) => q.questionId)).size !== questions.length)
+    bad()
+  return { id: requestId, questions, expiresAtMs: r.expiresAtMs as number }
+}
+function resume(raw: unknown) {
+  if (
+    !Array.isArray(raw) ||
+    raw.length !== 1 ||
+    !raw[0] ||
+    typeof raw[0] !== "object"
   )
     invalid()
-  const r = (v as unknown[])[0] as Record<string, unknown>
+  const r = (raw as unknown[])[0] as Record<string, unknown>
   if (
-    !Object.keys(r).every((k) =>
-      ["interruptId", "status", "payload", "metadata"].includes(k)
-    ) ||
-    !safeId(r.interruptId) ||
+    !id(r.interruptId) ||
     (r.status !== "resolved" && r.status !== "cancelled")
   )
     invalid()
   return r as ResumeEntry
 }
-function answerMap(v: unknown, qs: readonly Question[]) {
+function answerMap(value: unknown, questions: Question[]) {
   if (
-    !v ||
-    typeof v !== "object" ||
-    Array.isArray(v) ||
-    !(v as Record<string, unknown>).answers ||
-    typeof (v as Record<string, unknown>).answers !== "object"
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !(value as Record<string, unknown>).answers ||
+    typeof (value as Record<string, unknown>).answers !== "object"
   )
     invalid()
-  const raw = (v as { answers: Record<string, unknown> }).answers
-  if (
-    Object.keys(raw).length !== qs.length ||
-    !qs.every((q) => Object.hasOwn(raw, q.questionId))
-  )
-    invalid()
+  const raw = (value as { answers: Record<string, unknown> }).answers
+  if (Object.keys(raw).length !== questions.length) invalid()
   const answers: Record<string, string[]> = {}
-  for (const q of qs) {
-    const got = raw[q.questionId]
+  for (const q of questions) {
+    const values = raw[q.questionId]
     if (
-      !Array.isArray(got) ||
-      !got.length ||
-      (!q.multiSelect && got.length !== 1) ||
-      got.some(
-        (a) =>
-          !safe(a) || !q.options.some((o: { label: string }) => o.label === a)
-      )
+      !Array.isArray(values) ||
+      (!q.multi && values.length > 1) ||
+      values.some((v) => !text(v)) ||
+      (!q.other &&
+        !q.secret &&
+        q.options.length > 0 &&
+        values.some((v) => !q.options.includes(v as string)))
     )
       invalid()
-    answers[q.questionId] = [...(got as unknown[])] as string[]
+    answers[q.questionId] = values as string[]
   }
   return answers
 }
 
-/** Validates official native interaction batches before mapping them to AG-UI. */
+/** Maps exact pinned V4 records; pending interactions are rediscovered before resume. */
 export class OpenClawInteractions {
   readonly #pending = new Map<string, Pending>()
   readonly #done = new Map<
     string,
     { fingerprint: string; result: OpenClawInteractionResult }
   >()
-  readonly #dispatching = new Set<string>()
   constructor(private readonly transport: OpenClawInteractionTransport) {}
-  acceptQuestion(
-    scope: OpenClawInteractionScope,
-    raw: Readonly<{
-      id: string
-      questions: readonly Question[]
-      expiresAtMs?: number
-      agentId?: string
-      sessionKey?: string
-      runId?: string
-    }>
-  ) {
-    const id = safeId(raw.id),
-      expiresAtMs = raw.expiresAtMs
-    if (
-      !id ||
-      !Array.isArray(raw.questions) ||
-      !raw.questions.length ||
-      raw.questions.length > 32 ||
-      (raw.agentId !== undefined && raw.agentId !== scope.agentId) ||
-      (raw.sessionKey !== undefined && raw.sessionKey !== scope.sessionId) ||
-      (raw.runId !== undefined && raw.runId !== scope.runId) ||
-      (expiresAtMs !== undefined &&
-        (!Number.isSafeInteger(expiresAtMs) || expiresAtMs < 1))
-    )
-      throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    for (const q of raw.questions)
-      if (
-        !safeId(q.questionId) ||
-        !safe(q.header) ||
-        !safe(q.question) ||
-        !Array.isArray(q.options) ||
-        q.options.length > 64 ||
-        q.options.some(
-          (o: { label: string; description?: string }) =>
-            !safe(o.label) ||
-            (o.description !== undefined && !safe(o.description))
-        )
-      )
-        throw new OpenClawInteractionPublicError(
-          "AOS_PROVIDER_INVALID_RESPONSE"
-        )
-    if (
-      new Set(raw.questions.map((q) => q.questionId)).size !==
-      raw.questions.length
-    )
-      throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const outcome: RunFinishedInterruptOutcome = {
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "question",
-          message:
-            raw.questions.length === 1
-              ? raw.questions[0]!.question
-              : `${raw.questions.length} questions require answers`,
-          responseSchema: {
-            type: "object",
-            properties: { answers: { type: "object" } },
-            required: ["answers"],
-            additionalProperties: false,
+  acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
+    const r = record(scope, raw),
+      outcome: RunFinishedInterruptOutcome = {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: r.id!,
+            reason: "question",
+            message:
+              r.questions.length === 1
+                ? r.questions[0]!.question
+                : `${r.questions.length} questions require answers`,
+            expiresAt: new Date(r.expiresAtMs).toISOString(),
+            responseSchema: {
+              type: "object",
+              properties: { answers: { type: "object" } },
+              required: ["answers"],
+            },
+            metadata: {
+              "aos.kind": "openclaw-question",
+              "aos.scope": "run",
+              "aos.answerModes": r.questions.map((q) =>
+                q.secret
+                  ? "secret"
+                  : q.other || !q.options.length
+                    ? "free-text"
+                    : q.multi
+                      ? "multiple"
+                      : "single"
+              ),
+            },
           },
-          ...(expiresAtMs
-            ? { expiresAt: new Date(expiresAtMs).toISOString() }
-            : {}),
-          metadata: { "aos.kind": "openclaw-question", "aos.scope": "run" },
-        },
-      ],
-    }
+        ],
+      }
     return this.remember({
       kind: "question",
       scope,
-      id,
-      questions: raw.questions,
-      expiresAtMs,
+      id: r.id!,
+      questions: r.questions,
+      expiresAtMs: r.expiresAtMs,
       outcome,
     })
   }
-  acceptApproval(
-    scope: OpenClawInteractionScope,
-    raw: Readonly<{
+  acceptApproval(scope: OpenClawInteractionScope, raw: unknown) {
+    if (!validateApprovalGetResult({ approval: raw })) bad()
+    const r = raw as {
       id: string
+      status: string
+      sourceSessionKey?: string
       expiresAtMs: number
-      source: { agentId?: string; sessionKey?: string }
       presentation: {
         kind: "plugin" | "system-agent" | "exec"
-        allowedDecisions: readonly ("deny" | "allow-once" | "allow-always")[]
+        agentId?: string | null
+        allowedDecisions: string[]
         commandText?: string
         title?: string
         description?: string
       }
-    }>
-  ) {
-    const id = safeId(raw.id),
-      decisions = raw.presentation?.allowedDecisions
+    }
     if (
-      !id ||
-      !Number.isSafeInteger(raw.expiresAtMs) ||
-      raw.expiresAtMs < 1 ||
-      raw.source?.agentId !== scope.agentId ||
-      raw.source?.sessionKey !== scope.sessionId ||
-      !["plugin", "system-agent", "exec"].includes(raw.presentation?.kind) ||
-      !Array.isArray(decisions) ||
-      !decisions.length ||
-      new Set(decisions).size !== decisions.length ||
-      decisions.some((d) => !["deny", "allow-once", "allow-always"].includes(d))
+      r.status !== "pending" ||
+      r.sourceSessionKey !== scope.sessionId ||
+      r.presentation.agentId !== scope.agentId ||
+      !Number.isSafeInteger(r.expiresAtMs)
     )
-      throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const message =
-      safe(
-        raw.presentation.commandText ??
-          raw.presentation.title ??
-          raw.presentation.description
-      ) ?? "OpenClaw requires approval to continue."
+      bad()
     const outcome: RunFinishedInterruptOutcome = {
       type: "interrupt",
       interrupts: [
         {
-          id,
+          id: r.id,
           reason: "approval",
-          message,
-          responseSchema: { type: "string", enum: decisions },
-          expiresAt: new Date(raw.expiresAtMs).toISOString(),
+          message:
+            text(
+              r.presentation.commandText ??
+                r.presentation.title ??
+                r.presentation.description
+            ) ?? "OpenClaw requires approval to continue.",
+          expiresAt: new Date(r.expiresAtMs).toISOString(),
+          responseSchema: {
+            type: "string",
+            enum: r.presentation.allowedDecisions,
+          },
           metadata: {
             "aos.kind": "openclaw-approval",
             "aos.scope": "run",
-            "aos.allowedDecisions": [...decisions],
+            "aos.allowedDecisions": r.presentation.allowedDecisions,
           },
         },
       ],
     }
     return this.remember({
       kind: "approval",
-      nativeKind: raw.presentation.kind,
       scope,
-      id,
-      decisions,
-      expiresAtMs: raw.expiresAtMs,
+      id: r.id!,
+      nativeKind: r.presentation.kind,
+      decisions: r.presentation.allowedDecisions,
+      expiresAtMs: r.expiresAtMs,
       outcome,
     })
   }
-  pending(scope: OpenClawInteractionScope) {
-    return [...this.#pending.values()]
-      .filter((p) => same(p.scope, scope))
-      .map((p) => p.outcome)
+  async reconcile(scope: OpenClawInteractionScope) {
+    const [qs, as] = await Promise.all([
+      this.transport.request("question.list", {}),
+      this.transport.request("approval.list", {}),
+    ])
+    if (
+      !qs ||
+      typeof qs !== "object" ||
+      !Array.isArray((qs as Record<string, unknown>).questions) ||
+      !as ||
+      typeof as !== "object" ||
+      !Array.isArray((as as Record<string, unknown>).approvals)
+    )
+      bad()
+    const outcomes: RunFinishedInterruptOutcome[] = []
+    for (const q of (qs as { questions: unknown[] }).questions) {
+      try {
+        outcomes.push(this.acceptQuestion(scope, q))
+      } catch (e) {
+        if (
+          !(e instanceof OpenClawInteractionPublicError) ||
+          e.code !== "AOS_PROVIDER_INVALID_RESPONSE"
+        )
+          throw e
+      }
+    }
+    for (const a of (as as { approvals: unknown[] }).approvals) {
+      try {
+        outcomes.push(this.acceptApproval(scope, a))
+      } catch (e) {
+        if (
+          !(e instanceof OpenClawInteractionPublicError) ||
+          e.code !== "AOS_PROVIDER_INVALID_RESPONSE"
+        )
+          throw e
+      }
+    }
+    return outcomes
   }
   async respond(
     scope: OpenClawInteractionScope,
-    candidate: unknown
+    raw: unknown
   ): Promise<OpenClawInteractionResult> {
-    const r = resume(candidate),
+    const r = resume(raw),
       k = key(scope, r.interruptId),
       fingerprint = JSON.stringify(r),
-      prior = this.#done.get(k)
-    if (prior) {
-      if (prior.fingerprint !== fingerprint) invalid()
-      return prior.result
+      done = this.#done.get(k)
+    if (done) {
+      if (done.fingerprint !== fingerprint) invalid()
+      return done.result
     }
     const p = this.#pending.get(k)
-    if (!p || !same(p.scope, scope))
+    if (!p)
       throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    if (p.expiresAtMs !== undefined && p.expiresAtMs <= Date.now()) {
-      const result = { status: "expired" as const }
-      this.#pending.delete(k)
-      this.#done.set(k, { fingerprint, result })
-      return result
+    const current = await this.current(p)
+    if (current) return this.complete(k, fingerprint, current)
+    let method: "question.resolve" | "approval.resolve",
+      params: unknown,
+      expected: Record<string, string[]> | undefined
+    if (p.kind === "question") {
+      expected =
+        r.status === "cancelled" ? undefined : answerMap(r.payload, p.questions)
+      method = "question.resolve"
+      params =
+        r.status === "cancelled"
+          ? { id: p.id, cancel: true }
+          : { id: p.id, answers: { answers: expected } }
+      if (!validateQuestionResolveParams(params)) invalid()
+    } else {
+      const decision = r.status === "cancelled" ? "deny" : r.payload
+      if (typeof decision !== "string" || !p.decisions.includes(decision))
+        invalid()
+      method = "approval.resolve"
+      params = { id: p.id, kind: p.nativeKind, decision }
     }
-    if (this.#dispatching.has(k)) return { status: "in-progress" }
-    const [method, params] =
-      p.kind === "question"
-        ? [
-            "question.resolve" as const,
-            r.status === "cancelled"
-              ? { id: p.id, cancel: true }
-              : {
-                  id: p.id,
-                  answers: { answers: answerMap(r.payload, p.questions) },
-                },
-          ]
-        : [
-            "approval.resolve" as const,
-            {
-              id: p.id,
-              kind: p.nativeKind,
-              decision: r.status === "cancelled" ? "deny" : r.payload,
-            },
-          ]
-    if (
-      (method === "question.resolve" &&
-        !validateQuestionResolveParams(params)) ||
-      (method === "approval.resolve" && !validateApprovalResolveParams(params))
-    )
-      invalid()
-    this.#dispatching.add(k)
     try {
-      await this.transport.request(method, params)
-      const result = { status: "resolved" as const }
-      this.#pending.delete(k)
-      this.#done.set(k, { fingerprint, result })
-      return result
-    } catch {
-      const result = { status: "uncertain" as const }
-      this.#pending.delete(k)
-      this.#done.set(k, { fingerprint, result })
-      return result
-    } finally {
-      this.#dispatching.delete(k)
+      const value = await this.transport.request(method, params),
+        result =
+          p.kind === "question"
+            ? this.questionResult(value, expected)
+            : this.approvalResult(value, p, params as { decision: string })
+      return this.complete(k, fingerprint, result)
+    } catch (e) {
+      if (e instanceof OpenClawInteractionPublicError) throw e
+      return this.complete(k, fingerprint, { status: "uncertain" })
     }
+  }
+  private async current(
+    p: Pending
+  ): Promise<OpenClawInteractionResult | undefined> {
+    const value = await this.transport.request(
+      p.kind === "question" ? "question.get" : "approval.get",
+      { id: p.id }
+    )
+    if (!value || typeof value !== "object") bad()
+    const item = (value as Record<string, unknown>)[
+      p.kind === "question" ? "question" : "approval"
+    ] as Record<string, unknown> | undefined
+    if (!item || item.id !== p.id) bad()
+    const established = item!
+    return established.status === "pending"
+      ? undefined
+      : established.status === "expired"
+        ? { status: "expired" }
+        : { status: "already-resolved" }
+  }
+  private questionResult(
+    value: unknown,
+    expected?: Record<string, string[]>
+  ): OpenClawInteractionResult {
+    if (!value || typeof value !== "object") bad()
+    const r = value as Record<string, unknown>
+    if (r.status === "cancelled" && expected === undefined)
+      return { status: "resolved" }
+    if (
+      r.status === "answered" &&
+      expected &&
+      JSON.stringify((r.answers as { answers?: unknown })?.answers) ===
+        JSON.stringify(expected)
+    )
+      return { status: "resolved" }
+    return bad()
+  }
+  private approvalResult(
+    value: unknown,
+    p: Extract<Pending, { kind: "approval" }>,
+    params: { decision: string }
+  ): OpenClawInteractionResult {
+    if (validateApprovalResolveResult(value)) {
+      const r = value as {
+        applied: boolean
+        approval: { id: string; decision: string; status: string }
+      }
+      if (r.approval.id !== p.id || r.approval.decision !== params.decision)
+        bad()
+      return r.applied && r.approval.status === "allowed"
+        ? { status: "resolved" }
+        : { status: "already-resolved" }
+    }
+    if (
+      value &&
+      typeof value === "object" &&
+      (value as Record<string, unknown>).status === "expired"
+    )
+      return { status: "expired" }
+    return bad()
+  }
+  private complete(
+    k: string,
+    fingerprint: string,
+    result: OpenClawInteractionResult
+  ) {
+    this.#pending.delete(k)
+    this.#done.set(k, { fingerprint, result })
+    return result
   }
   private remember(p: Pending) {
     const k = key(p.scope, p.id),
       old = this.#pending.get(k)
-    if (old) {
-      if (JSON.stringify(old.outcome) !== JSON.stringify(p.outcome))
-        throw new OpenClawInteractionPublicError(
-          "AOS_PROVIDER_INVALID_RESPONSE"
-        )
-      return old.outcome
-    }
+    if (old) return old.outcome
     this.#pending.set(k, p)
     return p.outcome
   }

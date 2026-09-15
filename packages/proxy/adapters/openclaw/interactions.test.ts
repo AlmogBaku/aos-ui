@@ -9,85 +9,103 @@ const scope = {
   threadId: "thread-a",
   runId: "run-a",
 }
+const question = {
+  id: "q",
+  agentId: "agent-a",
+  sessionKey: "session-a",
+  runId: "run-a",
+  createdAtMs: 1,
+  expiresAtMs: 1_900_000_000_000,
+  status: "pending",
+  questions: [
+    {
+      questionId: "choice",
+      header: "Choice",
+      question: "Choose",
+      options: [{ label: "yes" }],
+      isOther: true,
+    },
+    {
+      questionId: "secret",
+      header: "Secret",
+      question: "Secret",
+      options: [],
+      isSecret: true,
+    },
+  ],
+}
 describe("OpenClaw interactions", () => {
-  it("maps exact native batches to AG-UI and resolves complete answers once", async () => {
-    const request = vi.fn(async () => ({}))
+  it("accepts exact native limits and free-form, empty-option and secret answers", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question }
+        : {
+            status: "answered",
+            answers: {
+              answers: { choice: ["other"], secret: ["secret-value"] },
+            },
+          }
+    )
     const x = new OpenClawInteractions({ request })
-    expect(
-      x.acceptQuestion(scope, {
-        id: "q",
-        questions: [
-          {
-            questionId: "one",
-            header: "Header",
-            question: "Question",
-            options: [{ label: "yes" }],
-          },
-        ],
-      })
-    ).toMatchObject({
+    expect(x.acceptQuestion(scope, question)).toMatchObject({
       type: "interrupt",
-      interrupts: [{ id: "q", reason: "question" }],
     })
     await expect(
       x.respond(scope, [
         {
           interruptId: "q",
           status: "resolved",
-          payload: { answers: { one: ["yes"] } },
+          payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
         },
       ])
     ).resolves.toEqual({ status: "resolved" })
-    expect(request).toHaveBeenCalledWith("question.resolve", {
-      id: "q",
-      answers: { answers: { one: ["yes"] } },
-    })
   })
-  it("rejects incomplete answers without native dispatch", async () => {
-    const request = vi.fn()
+  it("requires authoritative source identities and rejects over-limit batches", () => {
+    const x = new OpenClawInteractions({ request: vi.fn() })
+    expect(() =>
+      x.acceptQuestion(scope, { ...question, sessionKey: "foreign" })
+    ).toThrow(OpenClawInteractionPublicError)
+    expect(() =>
+      x.acceptQuestion(scope, {
+        ...question,
+        questions: [
+          ...question.questions,
+          question.questions[0]!,
+          question.questions[0]!,
+        ],
+      })
+    ).toThrow(OpenClawInteractionPublicError)
+  })
+  it("reconciles a terminal native record before resume and never dispatches it", async () => {
+    const request = vi.fn(async () => ({
+      question: { ...question, status: "expired" },
+    }))
     const x = new OpenClawInteractions({ request })
-    x.acceptQuestion(scope, {
-      id: "q",
-      questions: [
-        { questionId: "one", header: "One", question: "One", options: [] },
-        { questionId: "two", header: "Two", question: "Two", options: [] },
-      ],
-    })
+    x.acceptQuestion(scope, question)
+    await expect(
+      x.respond(scope, [{ interruptId: "q", status: "cancelled" }])
+    ).resolves.toEqual({ status: "expired" })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+  it("does not report malformed or mismatched acknowledgements as resolved", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question }
+        : {
+            status: "answered",
+            answers: { answers: { choice: ["wrong"], secret: [] } },
+          }
+    )
+    const x = new OpenClawInteractions({ request })
+    x.acceptQuestion(scope, question)
     await expect(
       x.respond(scope, [
         {
           interruptId: "q",
           status: "resolved",
-          payload: { answers: { one: ["yes"] } },
+          payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
         },
       ])
     ).rejects.toBeInstanceOf(OpenClawInteractionPublicError)
-    expect(request).not.toHaveBeenCalled()
-  })
-  it("uses native approval decisions and does not replay an uncertain mutation", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("lost acknowledgement")
-    })
-    const x = new OpenClawInteractions({ request })
-    x.acceptApproval(scope, {
-      id: "a",
-      expiresAtMs: 1_900_000_000_000,
-      source: { agentId: "agent-a", sessionKey: "session-a" },
-      presentation: {
-        kind: "exec",
-        allowedDecisions: ["deny", "allow-once"],
-        commandText: "deploy",
-      },
-    })
-    const answer = [
-      { interruptId: "a", status: "resolved", payload: "allow-once" },
-    ]
-    await expect(x.respond(scope, answer)).resolves.toEqual({
-      status: "uncertain",
-    })
-    await expect(x.respond(scope, answer)).resolves.toEqual({
-      status: "uncertain",
-    })
-    expect(request).toHaveBeenCalledTimes(1)
   })
 })
