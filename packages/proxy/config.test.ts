@@ -21,9 +21,12 @@ it.each([
   ["true", true],
   [" TRUE ", true],
   ["\tTrUe\n", true],
-] as const)("parses guest slash-command visibility %j as %s", (value, expected) => {
-  expect(parseGuestComposerSlashCommandsEnabled(value)).toBe(expected)
-})
+] as const)(
+  "parses guest slash-command visibility %j as %s",
+  (value, expected) => {
+    expect(parseGuestComposerSlashCommandsEnabled(value)).toBe(expected)
+  }
+)
 
 afterEach(async () => {
   await Promise.all(

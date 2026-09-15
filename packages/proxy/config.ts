@@ -104,9 +104,7 @@ const LimitsSchema = z.strictObject({
     .max(64 * 1024 * 1024),
 })
 
-const RuntimeIdSchema = z
-  .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u)
+const RuntimeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u)
 
 const RuntimeSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -125,7 +123,14 @@ const RuntimeSchema = z.discriminatedUnion("kind", [
       .string()
       .min(1)
       .max(255)
-      .regex(/^[^:\u0000-\u001F\u007F]+$/u),
+      .refine(
+        (value) =>
+          !value.includes(":") &&
+          [...value].every((character) => {
+            const code = character.charCodeAt(0)
+            return code >= 32 && code !== 127
+          })
+      ),
     passwordFile: AbsoluteSecretFileSchema,
   }),
   z.strictObject({
