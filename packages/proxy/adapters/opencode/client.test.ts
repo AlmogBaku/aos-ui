@@ -254,6 +254,29 @@ describe("OpenCodeClient", () => {
     }
   })
 
+  it("classifies a malformed successful mutation acknowledgement as uncertain", async () => {
+    let received = false
+    const server = await nativeServer((request) => {
+      expect(request.url.pathname).toBe("/api/session/session-1/prompt")
+      received = true
+      return Response.json({})
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.sessions.prompt("session-1", {
+          id: "admission-2",
+          prompt: { text: "continue" },
+        })
+      ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
+      expect(received).toBe(true)
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
   it("classifies caller cancellation after native mutation dispatch as uncertain", async () => {
     let received: (() => void) | undefined
     const dispatched = new Promise<void>((resolve) => {

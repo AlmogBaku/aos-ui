@@ -588,7 +588,7 @@ class Facade implements OpenCodeClient {
       if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
       dispatched = true
       const result = record(await operation(lease.controller.signal))
-      if (!result) throw new OpenCodeClientError("invalid_response")
+      if (!result) throw new OpenCodeMutationUncertainError()
       if (result.error !== undefined) {
         const response = result.response
         const status =
@@ -597,8 +597,17 @@ class Facade implements OpenCodeClient {
         throw statusError(status)
       }
       if (!Object.hasOwn(result, "data"))
-        throw new OpenCodeClientError("invalid_response")
-      return validate(result.data)
+        throw new OpenCodeMutationUncertainError()
+      try {
+        return validate(result.data)
+      } catch (error) {
+        if (
+          error instanceof OpenCodeClientError &&
+          error.code === "invalid_response"
+        )
+          throw new OpenCodeMutationUncertainError()
+        throw error
+      }
     } catch (error) {
       if (error instanceof OpenCodeClientError) throw error
       if (dispatched) throw new OpenCodeMutationUncertainError()
