@@ -11,6 +11,7 @@ import {
   createOpenCodeServeArguments,
   parseCorsOrigins,
   parseOpenCodeWorktree,
+  readOpenCodeServerPassword,
 } from "./opencode-config"
 
 const forwardedSignals = ["SIGTERM", "SIGINT"] as const
@@ -106,6 +107,15 @@ export async function main() {
   const rawPort = process.env.AOS_UI_OPENCODE_PORT?.trim() || "4096"
   const port = Number(rawPort)
   const corsOrigins = parseCorsOrigins(process.env.AOS_UI_OPENCODE_CORS_ORIGINS)
+  let serverPassword: string | undefined
+  try {
+    serverPassword = await readOpenCodeServerPassword(process.env)
+  } catch (reason) {
+    console.error(
+      `OpenCode password setup failed: ${reason instanceof Error ? reason.message : String(reason)}`
+    )
+    return 1
+  }
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     console.error(
@@ -151,7 +161,8 @@ export async function main() {
     {
       env: createOpenCodeChildEnvironment(
         { ...process.env, AOS_UI_OPENCODE_WORKTREE: configuredWorktree },
-        configContent
+        configContent,
+        serverPassword
       ),
       cwd: configuredWorktree,
       stdio: "inherit",

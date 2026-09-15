@@ -1,0 +1,6 @@
+interface:
+  display_name: "AOS Runtime Adapter"
+  short_description: "Add, audit, and debug runtime adapters"
+  default_prompt: "Use $aos-runtime-adapter to map this native runtime behavior into AOS."
+policy:
+  allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { access, readFile } from "node:fs/promises"
+import { access } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { parse } from "yaml"
@@ -44,20 +44,6 @@ describe("packaged OpenCode Agent and harness configuration", () => {
     expect(builder.prompt).toMatch(/final confirmation/i)
     expect(builder.prompt).toMatch(/create_agent exactly once/i)
     expect(builder.prompt).toMatch(/never.*create a first Session/i)
-  })
-
-  it("preserves the user-owned Aster definition outside the package", async () => {
-    const source = await readFile(
-      resolve(process.cwd(), ".opencode/agents/aster.md"),
-      "utf8"
-    )
-    const aster = parseAgentDefinition(source)
-
-    expect(aster.metadata).toMatchObject({
-      mode: "primary",
-      hidden: false,
-    })
-    expect(aster.prompt).toMatch(/\S/)
   })
 
   it("does not load integration-owned tools or prompts from the source worktree", async () => {

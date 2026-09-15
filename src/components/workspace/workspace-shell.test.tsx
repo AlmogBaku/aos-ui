@@ -375,7 +375,7 @@ describe("WorkspaceShell", () => {
     }
   )
 
-  it("focuses the conversation when the final tab is removed", async () => {
+  it("focuses new Session when the final tab is removed", async () => {
     const user = userEvent.setup()
     const { props, rerender } = renderShell({
       openSessions: [{ ...openSessions[0], canClose: true }],
@@ -387,7 +387,9 @@ describe("WorkspaceShell", () => {
       <WorkspaceShell {...props} openSessions={[]} activeThreadId={null} />
     )
     expect(
-      document.getElementById("workspace-conversation-panel")
+      within(
+        document.querySelector("[data-session-actions]") as HTMLElement
+      ).getByRole("button", { name: "New session" })
     ).toHaveFocus()
   })
   it("retains the neighbor focus handoff while provider selection is deferred", async () => {
@@ -408,7 +410,9 @@ describe("WorkspaceShell", () => {
     )
     rerender(<WorkspaceShell {...props} openSessions={openSessions.slice(1)} />)
     expect(
-      screen.getByRole("button", { name: "New session" })
+      within(
+        document.querySelector("[data-session-actions]") as HTMLElement
+      ).getByRole("button", { name: "New session" })
     ).not.toHaveFocus()
     await act(async () => {
       publishSelection()
@@ -453,6 +457,59 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
     expect(
       screen.getByRole("tab", { name: /Launch review.*1 unread/ })
+    ).toBeVisible()
+  })
+
+  it("labels attention indicators in Agent, history, and tab navigation", () => {
+    renderShell({
+      agents: [{ ...agents[0]!, status: "attention" }, agents[1]!],
+      activity: {
+        items: [
+          {
+            id: "question",
+            type: "attention-requested",
+            attentionKind: "question",
+            requestId: "question-1",
+            agentId: "agent-aster",
+            threadId: "thread-scan",
+            occurredAt: "2026-09-05T12:00:00Z",
+            read: true,
+            resolved: false,
+            browserDeliveredAt: null,
+            available: true,
+          },
+        ],
+        notice: null,
+        error: false,
+        supported: true,
+        openActivity: async () => true,
+        markAllRead: () => {},
+        dismissNotice: () => {},
+      },
+    })
+
+    const agentButton = screen.getByRole("button", {
+      name: /^Aster, Status: Needs attention/,
+    })
+    expect(within(agentButton).getAllByTitle("Needs attention")).toHaveLength(1)
+
+    const inspector = screen.getByRole("complementary", {
+      name: "Agent details",
+    })
+    const sessionButton = within(inspector).getByRole("button", {
+      name: /Open session: Competitive scan/,
+    })
+    expect(within(sessionButton).getByTitle("Needs attention")).toBeVisible()
+    expect(
+      within(sessionButton).queryByTitle("Waiting for input")
+    ).not.toBeInTheDocument()
+
+    expect(
+      within(
+        screen.getByRole("tab", {
+          name: /Competitive scan.*Needs attention/,
+        })
+      ).getByTitle("Needs attention")
     ).toBeVisible()
   })
 
@@ -522,11 +579,58 @@ describe("WorkspaceShell", () => {
     renderShell()
 
     const tablist = screen.getByRole("tablist", { name: "Sessions" })
-    const newSession = screen.getByRole("button", { name: "New session" })
+    const sessionActions = document.querySelector("[data-session-actions]")
+    expect(sessionActions).not.toBeNull()
+    const newSession = within(sessionActions as HTMLElement).getByRole(
+      "button",
+      { name: "New session" }
+    )
+    const inspector = screen.getByRole("complementary", {
+      name: "Agent details",
+    })
 
     expect(newSession.closest("[data-session-actions]")).not.toBeNull()
     expect(newSession.closest("[data-tab-viewport]")).toBeNull()
     expect(tablist.closest("[data-tab-viewport]")).not.toBeNull()
+    expect(
+      within(inspector).getByRole("button", { name: "New session" })
+    ).toBeVisible()
+  })
+
+  it("keeps new-session actions available with no provider Sessions", () => {
+    const onCreateSession = vi.fn()
+    renderShell({
+      openSessions: [],
+      olderSessions: [],
+      navigationCatalog: new Map([
+        [
+          "agent-aster",
+          {
+            agentId: "agent-aster",
+            openSessions: [],
+            historySessions: [],
+            lastSelectedThreadId: null,
+          },
+        ],
+      ]),
+      activeThreadId: null,
+      onCreateSession,
+    })
+
+    const sessionActions = document.querySelector("[data-session-actions]")
+    expect(sessionActions).not.toBeNull()
+    const tabBarAction = within(sessionActions as HTMLElement).getByRole(
+      "button",
+      { name: "New session" }
+    )
+    const inspectorAction = within(
+      screen.getByRole("complementary", { name: "Agent details" })
+    ).getByRole("button", { name: "New session" })
+
+    fireEvent.click(tabBarAction)
+    fireEvent.click(inspectorAction)
+    expect(onCreateSession).toHaveBeenNthCalledWith(1, "agent-aster")
+    expect(onCreateSession).toHaveBeenNthCalledWith(2, "agent-aster")
   })
 
   it.each(["en", "he"] as const)(
@@ -955,7 +1059,16 @@ describe("WorkspaceShell", () => {
   it("exposes the inspector action in RTL", () => {
     renderShell({ locale: "he", dictionary: he })
 
-    expect(screen.getByRole("button", { name: he.actions.hideAgentDetails })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: he.actions.hideAgentDetails })
+    ).toBeVisible()
+    expect(
+      within(
+        screen.getByRole("complementary", {
+          name: he.workspace.agentDetails,
+        })
+      ).getByRole("button", { name: he.actions.newSession })
+    ).toBeVisible()
   })
 
   it("routes rejected action promises to the optional error callback", async () => {
@@ -967,7 +1080,11 @@ describe("WorkspaceShell", () => {
       onActionError,
     })
 
-    await user.click(screen.getByRole("button", { name: "New session" }))
+    await user.click(
+      within(
+        screen.getByRole("complementary", { name: "Agent details" })
+      ).getByRole("button", { name: "New session" })
+    )
 
     await waitFor(() => expect(onActionError).toHaveBeenCalledWith(error))
   })

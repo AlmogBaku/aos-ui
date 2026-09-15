@@ -20,17 +20,32 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type {
+  AgentSubscriber,
+  AgentSubscriberParams,
+  HttpAgent,
+} from "@ag-ui/client"
+import { EventType } from "@ag-ui/core"
+import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
 
 import {
   createComposerHistorySelector,
+  SteerAcceptedDataUI,
   Thread,
   THREAD_VIEWPORT_SCROLL_BEHAVIOR,
   type ThreadComponents,
   type ThreadLabels,
 } from "./thread.aui"
 import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 
 afterEach(cleanup)
+
+describe("active-turn steering data UI", () => {
+  it("registers the replayable steering acknowledgement event", () => {
+    expect(SteerAcceptedDataUI.unstable_data.name).toBe("aos.steer.accepted")
+  })
+})
 
 describe("composer history performance", () => {
   it("keeps history stable across assistant-only streaming updates", () => {
@@ -220,11 +235,12 @@ describe("assistant tool timeline", () => {
 })
 
 describe("thread scroll ownership", () => {
-  it("leaves automatic scrolling to the reading-position controller", () => {
+  it("follows new turns at the bottom through the reading-position controller", () => {
     expect(THREAD_VIEWPORT_SCROLL_BEHAVIOR).toEqual({
       autoScroll: false,
       scrollToBottomOnInitialize: false,
       scrollToBottomOnThreadSwitch: false,
+      turnAnchor: "bottom",
     })
   })
 })
@@ -355,6 +371,7 @@ function LocalThread({
   composerFeatures,
   enableMessageQueue = false,
   attachmentAdapter,
+  messageRewind,
 }: {
   labels?: Partial<ThreadLabels>
   direction?: "ltr" | "rtl"
@@ -363,19 +380,16 @@ function LocalThread({
   initialMessages?: readonly ThreadMessageLike[]
   toolFallback?: typeof RichToolRenderer
   composer?: ThreadComponents["Composer"]
-  composerFeatures?: {
-    model?: {
-      options: readonly { id: string; label: string; group?: string }[]
-      selectedId: string
-      select(id: string): Promise<void>
-    }
-    context?: {
-      usage: { system: number; tools: number; messages: number; total: number }
-      segments?: readonly ("system" | "tools" | "messages")[]
-    }
-  }
+  composerFeatures?: ComposerFeatureViewModel
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
+  messageRewind?:
+    | false
+    | {
+        runConfig(sourceUserId: string): {
+          custom: Record<string, unknown>
+        }
+      }
 }) {
   const runtime = useLocalRuntime(model, {
     initialMessages,
@@ -395,6 +409,7 @@ function LocalThread({
         autoFocus={false}
         composerFeatures={composerFeatures}
         components={{ ToolFallback: toolFallback, Composer: composer }}
+        messageRewind={messageRewind}
       />
     </AssistantRuntimeProvider>
   )
@@ -483,6 +498,28 @@ describe("Thread accessibility", () => {
 
     await screen.findByText("The reference is ready.")
     expect(screen.getByText("The reference is ready.")).toBeVisible()
+  })
+
+  it("does not render a completed assistant turn with no content", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-user",
+            role: "user",
+            content: [{ type: "text", text: "Continue?" }],
+          },
+          {
+            id: "discard-resume",
+            role: "assistant",
+            content: [],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByText("Continue?")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
   })
 
   it("allows a provider interaction to replace the normal composer", async () => {
@@ -625,6 +662,127 @@ describe("Thread accessibility", () => {
 
     await user.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("The refreshed answer.")).toBeInTheDocument()
+  })
+
+  it("carries the source user turn in the retry run config", async () => {
+    const user = userEvent.setup()
+    const runConfig = vi.fn((sourceUserId: string) => ({
+      custom: { "aos.rewindSourceId": sourceUserId },
+    }))
+    const run = vi.fn(async () => ({ content: [] }))
+
+    render(<LocalThread messageRewind={{ runConfig }} model={{ run }} />)
+
+    await user.click(await screen.findByRole("button", { name: "Refresh" }))
+
+    expect(runConfig).toHaveBeenCalledOnce()
+    expect(runConfig).toHaveBeenCalledWith("message-user")
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runConfig: {
+          custom: { "aos.rewindSourceId": "message-user" },
+        },
+      })
+    )
+  })
+
+  it("disables run-changing actions and queues follow-ups while an AG-UI question is pending", async () => {
+    const user = userEvent.setup()
+    const steer = vi.fn(async () => ({ status: "steered" as const }))
+    const runAgent = vi.fn(
+      async (_input: unknown, subscriber: AgentSubscriber) => {
+        const subscriberParams = {} as AgentSubscriberParams
+        const interrupts = [
+          {
+            id: "question-1",
+            reason: "input_required",
+            message: "Choose one",
+          },
+        ]
+        subscriber.onTextMessageStartEvent?.({
+          ...subscriberParams,
+          event: {
+            type: EventType.TEXT_MESSAGE_START,
+            messageId: "assistant-question",
+            role: "assistant",
+          },
+        })
+        subscriber.onTextMessageContentEvent?.({
+          ...subscriberParams,
+          textMessageBuffer: "I need your answer.",
+          event: {
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: "assistant-question",
+            delta: "I need your answer.",
+          },
+        })
+        subscriber.onTextMessageEndEvent?.({
+          ...subscriberParams,
+          textMessageBuffer: "I need your answer.",
+          event: {
+            type: EventType.TEXT_MESSAGE_END,
+            messageId: "assistant-question",
+          },
+        })
+        subscriber.onRunFinishedEvent?.({
+          ...subscriberParams,
+          outcome: "interrupt",
+          interrupts,
+          event: {
+            type: EventType.RUN_FINISHED,
+            threadId: "thread-question",
+            runId: "question-run",
+            outcome: {
+              type: "interrupt",
+              interrupts,
+            },
+          },
+        })
+        subscriber.onRunFinalized?.(subscriberParams)
+      }
+    )
+    const agent = {
+      runAgent,
+      abortRun: vi.fn(),
+    } as unknown as HttpAgent
+    function PendingQuestionThread() {
+      const runtime = useAgUiRuntime({
+        agent,
+        unstable_enableMessageQueue: true,
+      })
+      return (
+        <AssistantRuntimeProvider runtime={runtime}>
+          <Thread autoFocus={false} composerFeatures={{ steer }} />
+        </AssistantRuntimeProvider>
+      )
+    }
+
+    render(<PendingQuestionThread />)
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message input" }),
+      "Start"
+    )
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    await screen.findByText("I need your answer.")
+
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+    expect(
+      screen.getByRole("button", {
+        name: "Answer the pending question before changing this conversation",
+      })
+    ).toBeDisabled()
+
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "Follow up")
+    await user.keyboard("{Enter}")
+    expect(
+      await screen.findByRole("region", { name: "Queued messages" })
+    ).toBeVisible()
+    expect(runAgent).toHaveBeenCalledOnce()
+    expect(steer).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole("button", { name: "Steer queued message" })
+    ).not.toBeInTheDocument()
   })
 
   it("cancels a streaming response while preserving its partial content", async () => {
@@ -786,6 +944,36 @@ describe("Thread accessibility", () => {
       await screen.findByRole("dialog", { name: "תצוגה מקדימה של קובץ" })
     ).toBeInTheDocument()
     expect(screen.getByAltText("תצוגה מקדימה של קובץ")).toBeInTheDocument()
+  })
+
+  it("returns focus to the composer after an attachment is added", async () => {
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    screen.getByRole("button", { name: "Add attachment" }).focus()
+
+    await act(() =>
+      runtime!.thread.composer.addAttachment({
+        name: "notes.txt",
+        type: "file",
+        content: [
+          {
+            type: "file",
+            data: "data:text/plain;base64,aGVsbG8=",
+            filename: "notes.txt",
+            mimeType: "text/plain",
+          },
+        ],
+      })
+    )
+
+    await waitFor(() => expect(input).toHaveFocus())
   })
 
   it("renders an optional model selector and exact authoritative context usage", async () => {
@@ -1191,6 +1379,12 @@ describe("Thread accessibility", () => {
     )
     expect(run).toHaveBeenCalledTimes(1)
     expect(screen.getByText("second")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Steer queued message" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Remove queued message" })
+    ).toBeVisible()
 
     await user.keyboard("{Escape}")
     await waitFor(() =>
@@ -1209,6 +1403,190 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2))
     expect(screen.getByText("second")).toBeInTheDocument()
     await act(async () => release?.())
+  })
+
+  it("steers the targeted queued row and leaves the remaining FIFO order intact", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+    const steer = vi.fn(async () => ({ status: "steered" as const }))
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        composerFeatures={{ steer }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "running")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await user.type(input, "steer this")
+    await user.keyboard("{Enter}")
+    await user.type(input, "keep this")
+    await user.keyboard("{Enter}")
+
+    const rows = await screen.findAllByRole("listitem")
+    expect(rows).toHaveLength(2)
+    await user.click(
+      within(rows[0]!).getByRole("button", { name: "Steer queued message" })
+    )
+
+    await waitFor(() => expect(steer).toHaveBeenCalledOnce())
+    expect(steer).toHaveBeenCalledWith({
+      requestId: expect.any(String),
+      text: "steer this",
+    })
+    await waitFor(() =>
+      expect(runtime?.thread.composer.getState().queue).toHaveLength(1)
+    )
+    expect(screen.queryByText("steer this")).not.toBeInTheDocument()
+    expect(screen.getByText("keep this")).toBeVisible()
+  })
+
+  it("disables a queued row while steering and preserves it after a definite rejection", async () => {
+    const user = userEvent.setup()
+    let rejectSteer: ((error: Error) => void) | undefined
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+    const steer = vi.fn(
+      () =>
+        new Promise<{ status: "steered" }>((_resolve, reject) => {
+          rejectSteer = reject
+        })
+    )
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        composerFeatures={{ steer }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "running")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await user.type(input, "keep on failure")
+    await user.keyboard("{Enter}")
+
+    const steerButton = await screen.findByRole("button", {
+      name: "Steer queued message",
+    })
+    const removeButton = screen.getByRole("button", {
+      name: "Remove queued message",
+    })
+    await user.click(steerButton)
+    expect(steerButton).toBeDisabled()
+    expect(removeButton).toBeDisabled()
+    expect(screen.getByText("Steering queued message")).toBeInTheDocument()
+
+    await act(async () => rejectSteer?.(new Error("offline")))
+    await waitFor(() => expect(steerButton).toBeEnabled())
+    expect(removeButton).toBeEnabled()
+    expect(screen.getByText("keep on failure")).toBeVisible()
+    expect(screen.getAllByText("Could not steer").length).toBeGreaterThan(0)
+  })
+
+  it("turns an uncertain queued steer into a non-sending receipt", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+    const steer = vi.fn(async () => {
+      throw { code: "uncertain_mutation" }
+    })
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        composerFeatures={{ steer }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "running")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await user.type(input, "maybe delivered")
+    await user.keyboard("{Enter}")
+    await user.click(
+      await screen.findByRole("button", { name: "Steer queued message" })
+    )
+
+    expect(await screen.findByText("Delivery unconfirmed")).toBeVisible()
+    expect(screen.getByText("maybe delivered")).toBeVisible()
+    expect(
+      screen.queryByRole("region", { name: "Queued messages" })
+    ).not.toBeInTheDocument()
+    expect(run).toHaveBeenCalledOnce()
+
+    act(() => {
+      runtime?.thread.reset([
+        {
+          id: "durable-steering-message",
+          role: "user",
+          content: [{ type: "text", text: "maybe delivered" }],
+        },
+      ])
+    })
+    await waitFor(() =>
+      expect(screen.queryByText("Delivery unconfirmed")).toBeNull()
+    )
+    expect(screen.getByText("maybe delivered")).toBeVisible()
+  })
+
+  it("uses the busy steering shortcut without adding an assistant-ui queue item", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+    const steer = vi.fn(async () => ({ status: "steered" as const }))
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        composerFeatures={{ steer }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "running")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await user.type(input, "correct now")
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      ctrlKey: true,
+      shiftKey: true,
+    })
+
+    await waitFor(() => expect(steer).toHaveBeenCalledOnce())
+    expect(steer).toHaveBeenCalledWith({
+      requestId: expect.any(String),
+      text: "correct now",
+    })
+    expect(runtime?.thread.composer.getState().queue).toHaveLength(0)
+    await waitFor(() => expect(input).toHaveValue(""))
   })
 
   it("cancels from the transcript while leaving a queued follow-up parked", async () => {

@@ -29,6 +29,7 @@ import {
   AgentSessionHistory,
   type AgentSessionHistoryCopy,
 } from "./agent-session-history"
+import { AttentionDot } from "./activity"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -84,7 +85,6 @@ export type MobileNavigatorCopy = AgentSessionHistoryCopy & {
   close: string
   searchAgents: string
   newAgent: string
-  newSession: string
   manageAgents: string
   preferences: string
   agentDetails: string
@@ -247,7 +247,7 @@ function ActivityMarker({
   return (
     <span className={styles.activity} aria-hidden="true">
       {activity.needsAttention ? (
-        <span className={styles.attentionDot} title={copy.needsAttention} />
+        <AttentionDot label={copy.needsAttention} />
       ) : null}
       {activity.unreadCount > 0 ? (
         <span className={styles.unreadCount}>{activity.unreadCount}</span>
@@ -443,6 +443,7 @@ export function MobileNavigator({
                     <span className={styles.agentIcon}>
                       {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" />}
                     </span>
+                    <ActivityMarker activity={activity} copy={copy} />
                     <span className={styles.rowText}>
                       <bdi className={styles.rowTitle}>{agent.name}</bdi>
                       {agent.description ? (
@@ -451,8 +452,9 @@ export function MobileNavigator({
                         </bdi>
                       ) : null}
                     </span>
-                    <StatusDot status={agent.status} copy={copy} />
-                    <ActivityMarker activity={activity} copy={copy} />
+                    {!activity?.needsAttention ? (
+                      <StatusDot status={agent.status} copy={copy} />
+                    ) : null}
                     <ChevronRight
                       className={styles.chevron}
                       aria-hidden="true"
@@ -597,8 +599,8 @@ function SessionsView({
           onClick={onBack}
         >
           <ArrowLeft aria-hidden="true" />
-          <span>{copy.agents}</span>
           <ActivityMarker activity={otherAgentsActivity} copy={copy} />
+          <span>{copy.agents}</span>
         </Button>
         <Button
           variant="ghost"

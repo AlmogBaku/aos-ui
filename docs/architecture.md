@@ -4,7 +4,7 @@ AOS UI is the business-agent workspace and UI companion to the [AOS capability k
 
 ## Ownership model
 
-A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, Todos, activity, and optional capabilities.
+A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, and optional capabilities. Session Todos arrive as AG-UI PLAN activity, and execution status derives from the normalized run lifecycle.
 
 The core relationships are strict:
 
@@ -24,7 +24,25 @@ Assistant UI manages the frontend projection of threads, messages, runs, branche
 
 ## Runtime boundaries
 
-OpenCode, Hermes, and OpenClaw have independent native integrations behind the shared harness-runtime contract. OpenClaw uses its official Gateway WebSocket, not AG-UI. Generic AG-UI uses one HTTP Agent per Session and a separate workspace service. Fixture mode is explicit synthetic data for evaluation and tests; invalid real-runtime configuration renders an unavailable screen rather than falling back to fixtures.
+The proxy selects one configured runtime adapter for a deployment. Hermes is
+the V1 implementation. The selection seam can accept OpenCode and OpenClaw
+later without adding provider branches to the browser. Each native adapter
+implements the same normalized server boundary while keeping its own transport,
+credentials, recovery positions, and provider payloads private.
+
+The browser uses AG-UI to start or resume Session runs and receive their event
+streams. Namespaced AOS REST operations provide workspace resources and the
+active-run controls that AG-UI does not standardize, including Stop and
+capability-gated steering. The AOS WebSocket carries invalidations, not native
+run events. Fixture mode remains explicit synthetic data for evaluation and
+tests; invalid real-runtime configuration renders an unavailable screen rather
+than falling back to fixtures.
+
+Assistant UI owns queued messages. While a run is busy, an ordinary Send adds
+one FIFO follow-up; a supported text-only steering action targets the existing
+logical run through AOS REST. It does not create another AG-UI run. The proxy
+correlates the acknowledgement into the existing event stream, and provider
+history remains authoritative after settlement or reconnect.
 
 Browser code never imports native filesystem writers or provider implementations. Native packages install presentation tools and, only where the harness exposes the required safe authority, creator support. Agent profiles, worktrees, secrets, and runtime state remain outside the frontend checkout.
 
@@ -36,8 +54,27 @@ An Agent may explicitly publish an Artifact. AOS provides read-only resolution, 
 
 ## Network and authentication boundary
 
-The standard production image serves static assets through Nginx and forwards only restricted integration routes. Native runtimes keep their own authentication and credentials. Public runtime configuration is browser-readable and therefore accepts no secrets.
+The Bun proxy serves the compiled Vite application and normalized API on one
+trusted operator listener. The operator listener intentionally has no
+application authentication: network access grants operator access. It must
+therefore remain on loopback or a trusted private network, or sit behind an
+operator-managed authenticated ingress. Nginx is optional TLS/reverse-proxy
+infrastructure, not part of the runtime boundary.
 
-Compose binds to loopback by default. It supplies neither TLS nor public multi-user authentication. Wider exposure belongs behind an operator-managed trusted-network, authentication, and TLS boundary.
+The optional guest listener uses a distinct port and scoped, expiring JWTs.
+Operator and guest lanes share the same configured Hermes adapter, transport,
+and Session coordinator. Authorization and outbound projection remain
+lane-specific, so a guest token grants only its declared runtime, Agent,
+Session, and operations. There is no second guest Hermes credential.
 
-The optional gateway adds same-origin native forwarding and a separate restricted guest listener using signed, expiring bearer invitations. It does not replace the runtime or sandbox the invited Agent's native tools. See [Invited chat](invite-chat.md) for that narrower trust model.
+Hermes authentication uses one server token read from a private file. Reconnect
+cursor keys and optional guest invitation keys are also file-backed secrets.
+None appear in the browser-readable `/runtime-config.json`, browser bundle,
+URLs, logs, or normalized provider responses.
+
+One multiplexed Hermes WebSocket is retained for the configured runtime. The
+Session coordinator retains an attachment while work is running, stopping,
+waiting for a question or approval, reconciling, or actively observed. A
+terminal unobserved Session stays warm for five minutes, after which the proxy
+closes only that native Session attachment; the shared socket remains open.
+Disconnecting or reloading a browser never stops native work.

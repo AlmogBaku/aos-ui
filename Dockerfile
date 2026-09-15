@@ -15,14 +15,9 @@ FROM dependencies AS builder
 COPY . .
 RUN bun run build
 
-FROM nginxinc/nginx-unprivileged:1.29.3-alpine AS runner
-ENV AOS_UI_WEB_PORT=3000 \
-    AOS_UI_HERMES_HOST=127.0.0.1 \
-    AOS_UI_HERMES_PORT=9119
-
-COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=builder --chown=nginx:nginx /app/dist /usr/share/nginx/html
-RUN rm -f /usr/share/nginx/html/runtime-config.json
-
-USER nginx
-EXPOSE 3000
+FROM dependencies AS proxy
+COPY --chown=bun:bun packages ./packages
+COPY --from=builder --chown=bun:bun /app/dist /app/dist
+USER bun
+EXPOSE 3000 3001
+CMD ["bun", "run", "static:serve"]

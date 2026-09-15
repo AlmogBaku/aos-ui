@@ -12,7 +12,7 @@ describe("runtime selection", () => {
     const fixture = createRuntimeClock("fixture", later)
     expect(fixture.now.toISOString()).toBe("2026-09-03T12:00:00.000Z")
     expect(fixture.readNow().toISOString()).toBe("2026-09-03T12:00:00.000Z")
-    expect(createRuntimeClock("ag-ui", later).now).toEqual(later)
+    expect(createRuntimeClock("aos", later).now).toEqual(later)
   })
   it("never selects a provider for an unknown or missing mode", () => {
     for (const mode of [undefined, "", "OPENCode", "other", "toString"]) {
@@ -21,12 +21,14 @@ describe("runtime selection", () => {
     }
   })
 
-  it("selects the requested provider entrypoint", () => {
+  it("selects only fixture and the normalized AOS browser entrypoints", () => {
     expect(getRuntimeEntrypoint("fixture")).toBe(
       "/src/runtime-adapters/fixture/index.ts"
     )
-    expect(getRuntimeEntrypoint("ag-ui")).toBe(
-      "/src/runtime-adapters/ag-ui/index.ts"
+    expect(getRuntimeEntrypoint("aos")).toBe(
+      "/src/runtime-adapters/aos/index.ts"
     )
+    for (const retiredMode of ["opencode", "hermes", "ag-ui", "openclaw"])
+      expect(getRuntimeEntrypoint(retiredMode)).toBeUndefined()
   })
 })

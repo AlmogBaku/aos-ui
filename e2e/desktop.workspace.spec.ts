@@ -275,7 +275,9 @@ test("Hebrew launches as a fully localized RTL workspace", async ({ page }) => {
   await expect(
     page.getByRole("main", { name: hebrew.conversation })
   ).toBeVisible()
-  await expect(page.getByRole("button", { name: "שיחה חדשה" })).toBeEnabled()
+  await expect(
+    page.getByRole("button", { name: "שיחה חדשה" }).first()
+  ).toBeEnabled()
 })
 
 test("the desktop Agent inspector can be collapsed and the preference persists", async ({

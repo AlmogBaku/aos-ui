@@ -29,6 +29,7 @@ import {
   createFixtureArtifactAdapter,
   FIXTURE_ARTIFACT_CATALOG,
 } from "./fixture-artifacts"
+import { fixtureSlashCommand } from "./fixture-slash-commands"
 
 const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
   new SimpleImageAttachmentAdapter(),
@@ -467,8 +468,12 @@ export function createFixtureThreadListAdapter(
   return adapter
 }
 
-function latestUserText({ messages }: ChatModelRunOptions) {
-  const message = [...messages].reverse().find(({ role }) => role === "user")
+function latestUserMessage({ messages }: ChatModelRunOptions) {
+  return [...messages].reverse().find(({ role }) => role === "user")
+}
+
+function latestUserText(options: ChatModelRunOptions) {
+  const message = latestUserMessage(options)
   if (!message) return ""
   return message.content
     .filter((part) => part.type === "text")
@@ -531,7 +536,8 @@ export function createFixtureChatModel(
 ): ChatModelAdapter {
   return {
     async *run(options): AsyncGenerator<ChatModelRunResult, void> {
-      const scenario = buildFixtureScenario(latestUserText(options))
+      const userText = latestUserText(options)
+      const scenario = buildFixtureScenario(userText)
       const threadId = options.unstable_threadId
       const activity = threadId
         ? workspace.beginRunActivity(
@@ -541,6 +547,12 @@ export function createFixtureChatModel(
         : undefined
 
       try {
+        const commandOutput = fixtureSlashCommand(userText)
+        if (commandOutput !== undefined) {
+          yield { content: [{ type: "text", text: commandOutput }] }
+          workspace.finishRunActivity(activity, "finished")
+          return
+        }
         const resolution = resolvedAttention(options)
         if (resolution) {
           if (threadId) {

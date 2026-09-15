@@ -138,6 +138,47 @@ async function collectRun(
   return updates
 }
 
+it("routes recognized fixture slash commands and leaves unknown commands as messages", async () => {
+  const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+  const model = createFixtureChatModel(workspace, { streamDelayMs: 0 })
+
+  const help = await collectRun(model.run(runOptions("/help details")))
+  expect(help.at(-1)?.content).toEqual([
+    {
+      type: "text",
+      text: "Fixture commands: /help and /status. Arguments: details",
+    },
+  ])
+
+  const unknown = await collectRun(model.run(runOptions("/unknown")))
+  expect(unknown.at(-1)?.content).not.toEqual(help.at(-1)?.content)
+
+  const baseAttachmentTurn = runOptions("/help")
+  const latest = baseAttachmentTurn.messages.at(-1)!
+  const attachmentTurn = {
+    ...baseAttachmentTurn,
+    messages: [
+      {
+        ...latest,
+        attachments: [
+          {
+            id: "attachment-1",
+            type: "document",
+            name: "notes.txt",
+            contentType: "text/plain",
+            status: { type: "complete" },
+            content: [{ type: "text", text: "Attached notes" }],
+          },
+        ],
+      },
+    ],
+  } as ChatModelRunOptions
+  const attachment = await collectRun(model.run(attachmentTurn))
+  expect(attachment.at(-1)?.content).toEqual([
+    { type: "text", text: "Fixture commands: /help and /status." },
+  ])
+})
+
 describe("fixture Assistant UI thread adapter", () => {
   it("lists stable provider Sessions with authoritative Agent ownership", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })

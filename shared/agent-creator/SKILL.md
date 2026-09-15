@@ -13,4 +13,11 @@ description: Create a native Agent after interviewing the user and confirming it
 
 Preserve existing definitions. Never copy credentials, clone the creator profile, or place secrets in instructions, tool arguments, or results. The native writer owns path validation, exclusive writes, and activation checks.
 
+If the Agent will serve invited guests, establish the external audience and
+data boundary before drafting it. Recommend a dedicated Agent for that business
+workflow and only the focused skills it needs. Restrict its native tools,
+filesystem, network, credentials, and approval policy accordingly. Agent
+visibility and invitation scope are authorization boundaries, not an Agent
+sandbox.
+
 The created Agent should use the installed presentation tools for appropriate structured output and the native start_session tool when independent Agent-owned work is needed. A Plan is message-scoped presentation; Todos are native Session execution state.

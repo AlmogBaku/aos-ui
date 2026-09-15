@@ -15,8 +15,11 @@
 - `DESIGN.md` defines reusable component rules. Read **Conversation and
   Execution** before changing tool timelines, reasoning, rich tool placement,
   conversation search, or their responsive presentation.
-- `src/runtime-adapters/contracts.ts` is the shared provider boundary. Keep
-  provider-specific details behind the corresponding adapter.
+- `src/runtime-adapters/contracts.ts` is the browser runtime boundary;
+  `packages/proxy/core/runtime.ts` is the server adapter boundary. Read
+  `docs/development/runtime-adapter-authoring.md` before adding, auditing, or
+  debugging a server runtime adapter, and keep provider details behind the
+  corresponding boundary.
 
 ## Install and run
 
@@ -32,19 +35,17 @@ Run fixture mode for backend-free UI work:
 AOS_UI_RUNTIME_MODE=fixture bun run dev
 ```
 
-For integration development, the optional launcher invokes a separately
-installed OpenCode binary and loads the checkout's native integration. Run it
-and the attaching frontend in two terminals:
+For local proxy development, run the proxy against an independently operated
+Hermes server, then attach Vite to the normalized proxy:
 
 ```bash
-bun run integrations:build
-AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree bun run opencode:serve
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
 ```
 
 ```bash
-AOS_UI_RUNTIME_MODE=opencode \
-AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
-bun run dev
+AOS_UI_RUNTIME_MODE=aos \
+AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+  bun run dev
 ```
 
 Open `http://localhost:3000`; compact Agent/Session URLs preserve local EN/HE preference.
@@ -57,24 +58,17 @@ cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json docker compose up --build
 ```
 
-Run the hot-reloading web container with containerized OpenCode:
-
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
-AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
-docker compose -f compose.yaml -f compose.opencode.yaml -f compose.dev.yaml up --build
-```
-
-Compose is loopback-only by default. Its browser-facing OpenCode URL uses the
-published host and port, not the `opencode` service hostname. Treat any wider
-binding as a trusted-private-network deployment: this stack has no TLS or
-public multi-user authentication. Nginx serves static assets and restricted integration forwarding.
+Compose is loopback-only by default. Treat any wider operator binding as a
+trusted-private-network deployment: this stack has no TLS or public multi-user
+authentication. The Bun proxy serves static assets and normalized APIs; an
+external reverse proxy is optional.
 
 ## Architecture and invariants
 
 - Assistant UI owns threads, messages, runs, branches, composer state, and
   thread lifecycle. `WorkspaceAdapter` adds only Agent ownership, Session
-  metadata, Todos, creator identity, and provider capabilities. Creation uses
+  metadata, creator identity, and provider capabilities. Session Todos arrive
+  as AG-UI PLAN activity. Creation uses
   an ordinary creator-owned Session opened through `New Agent`; the hidden
   creator is excluded from normal roster and management surfaces. There are no
   provisional Agents or ownership promotion.
@@ -86,7 +80,10 @@ public multi-user authentication. Nginx serves static assets and restricted inte
   falling back to synthetic data. Public fixtures intentionally omit Agent
   creation; configured real runtimes may expose the hidden creator through
   `New Agent`.
-- OpenCode and Hermes have independent native integrations. One engine is selected per deployment. Generic AG-UI uses a separate workspace host and degrades visibly when a capability is absent. Monty is optional.
+- The browser supports only the normalized `aos` runtime and explicit
+  `fixture` mode. The proxy selects one server adapter per deployment; Hermes
+  is the V1 implementation, while future OpenCode and OpenClaw adapters keep
+  their native transports server-side. Monty is optional.
 - The app chooses no OpenCode model by default. Set
   `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID` together or
   leave both empty. The three `AOS_UI_OPENAI_COMPATIBLE_*` values are likewise
@@ -106,10 +103,13 @@ public multi-user authentication. Nginx serves static assets and restricted inte
 - `src/app` owns Vite bootstrap, React Router navigation, and selected runtime composition.
 - `src/components/aos-ui-workspace.tsx` is the provider-neutral workspace UI;
   `src/components/workspace` owns navigation and catalog observation.
-- `src/runtime-adapters/{opencode,hermes,ag-ui,fixture}/composition.tsx` are
-  lazily loaded provider composition seams.
-- `src/runtime-adapters/{opencode,hermes,ag-ui,fixture}` contain provider behavior.
-  Extend `contracts.ts` only for genuinely shared concepts.
+- `src/runtime-adapters/aos` contains the provider-neutral remote browser
+  runtime; `src/runtime-adapters/fixture` contains the explicit preview.
+  Extend browser `contracts.ts` only for genuinely shared UI concepts.
+- `packages/proxy/core` owns normalized execution coordination;
+  `packages/proxy/adapters` owns native server clients, transports, identity,
+  retention, recovery, validation, and conversion. Do not move a native
+  transport concern into the shared coordinator.
 - `src/components/tool-ui` owns rich tool lifecycles and safe fallbacks.
 - `src/components/assistant-ui/elements` owns Thread/Message composition,
   execution timelines, ordinary tool-call presentation, reasoning disclosure,
@@ -133,7 +133,8 @@ parallel local implementations. Customize through supported composition seams;
 when a product requirement truly needs a replacement, document the unsupported
 case and keep the custom surface as narrow as possible.
 Native runtimes own the catalog, visibility, creator role, and persistence.
-Hermes uses native HTTP/WebSocket APIs; no AOS server, registry, or SQLite.
+The proxy uses Hermes native HTTP/WebSocket APIs without adding a workspace
+database or provider registry.
 
 ## Conventions
 
@@ -152,7 +153,10 @@ Hermes uses native HTTP/WebSocket APIs; no AOS server, registry, or SQLite.
   `data-slot` markup, icon internals, or storage keys. Restrict pixel checks
   to documented accessibility or responsive invariants, and do not add test
   IDs solely to preserve implementation-coupled tests.
-- Load public runtime configuration from `/runtime-config.json`, separate from the frontend build. Never put credentials in it or `VITE_*`. Production is static Nginx, not a custom app server.
+- Load public runtime configuration from `/runtime-config.json`, separate from
+  the frontend build. Never put credentials in it or `VITE_*`. The Bun proxy
+  serves the production assets and normalized APIs; Nginx may be an external
+  TLS/reverse proxy.
 - Use `@/` imports for project modules and logical CSS properties for RTL-safe
   layout.
 

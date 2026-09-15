@@ -31,9 +31,20 @@ vi.mock("@/runtime-adapters/fixture", () => ({
 vi.mock("@/components/theme-provider", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
-vi.mock("@/components/guest", () => ({
-  GuestApp: ({ inviteToken }: { inviteToken?: string }) => (
-    <div data-invite-token={inviteToken} data-testid="guest-app">
+vi.mock("@/runtime-adapters/aos", () => ({
+  GuestAosSurface: ({
+    inviteToken,
+    config,
+  }: {
+    inviteToken?: string
+    config: { basePath: string; lane: string }
+  }) => (
+    <div
+      data-invite-token={inviteToken}
+      data-base-path={config.basePath}
+      data-lane={config.lane}
+      data-testid="guest-app"
+    >
       guest
     </div>
   ),
@@ -112,17 +123,32 @@ describe("App", () => {
 
   it("loads the provider-neutral guest surface without a runtime configuration", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(JSON.stringify({ surface: "guest" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
+      new Response(
+        JSON.stringify({
+          surface: "guest",
+          basePath: "/api/guest/v1",
+          lane: "guest",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      )
     )
     render(<App />)
     expect(await screen.findByTestId("guest-app")).toBeVisible()
+    expect(screen.getByTestId("guest-app")).toHaveAttribute(
+      "data-base-path",
+      "/api/guest/v1"
+    )
+    expect(screen.getByTestId("guest-app")).toHaveAttribute(
+      "data-lane",
+      "guest"
+    )
     expect(screen.queryByTestId("fixture-app")).not.toBeInTheDocument()
   })
 
-  it("scrubs and retains an invitation before runtime configuration loads", async () => {
+  it("retains an invitation fragment before runtime configuration loads", async () => {
     let resolveConfiguration!: (response: Response) => void
     vi.mocked(fetch).mockReturnValueOnce(
       new Promise<Response>((resolve) => {
@@ -133,17 +159,25 @@ describe("App", () => {
 
     render(<App />)
 
-    expect(window.location.hash).toBe("")
+    expect(window.location.hash).toBe("#invite=early-secret")
     resolveConfiguration(
-      new Response(JSON.stringify({ surface: "guest" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })
+      new Response(
+        JSON.stringify({
+          surface: "guest",
+          basePath: "/api/guest/v1",
+          lane: "guest",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      )
     )
     expect(await screen.findByTestId("guest-app")).toHaveAttribute(
       "data-invite-token",
       "early-secret"
     )
+    expect(window.location.hash).toBe("#invite=early-secret")
   })
 
   it("migrates a locale-prefixed deep link to the compact URL and preference", async () => {

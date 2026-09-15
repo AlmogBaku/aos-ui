@@ -12,26 +12,11 @@ describe("RuntimeUnavailable", () => {
     expect(screen.getByRole("alert")).toBeVisible()
   })
 
-  it("explains that both OpenCode model override values are required", () => {
-    render(
-      <RuntimeUnavailable
-        locale="en"
-        reason="incomplete-opencode-model-override"
-      />
-    )
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Set both AOS_UI_OPENCODE_PROVIDER_ID and AOS_UI_OPENCODE_MODEL_ID, or neither."
-    )
-  })
-
-  it("localizes the AG-UI configuration state in Hebrew", () => {
-    render(
-      <RuntimeUnavailable locale="he" reason="missing-ag-ui-workspace-url" />
-    )
+  it("localizes an invalid public configuration in Hebrew", () => {
+    render(<RuntimeUnavailable locale="he" reason="invalid-public-config" />)
 
     const alert = screen.getByRole("alert")
     expect(alert).toHaveAttribute("dir", "rtl")
-    expect(alert).toHaveTextContent("תצורת AG-UI אינה מלאה")
+    expect(alert).toHaveTextContent("תצורת סביבת ההרצה חסרה או אינה תקינה.")
   })
 })

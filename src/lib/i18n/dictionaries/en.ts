@@ -133,9 +133,6 @@ export const en = {
     noAgents: "No Agents are available from this provider",
     noSessions: "No sessions yet",
     agentBuilderUnavailable: "Agent Builder is unavailable from this provider",
-    conversationTitle: "Start your first session",
-    conversationDescription:
-      "Begin a conversation with this Agent. Your work and history will stay together here.",
   },
   accessibility: {
     selectedAgent: "Selected Agent",

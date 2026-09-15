@@ -1,13 +1,10 @@
 "use client"
 
 import { makeAssistantDataUI } from "@assistant-ui/react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import {
   ChevronDownIcon,
   CopyIcon,
   DownloadIcon,
-  ExternalLinkIcon,
   FileIcon,
   Loader2Icon,
   RotateCcwIcon,
@@ -27,10 +24,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { HighlightedCode } from "@/components/code/syntax-highlighter"
-import {
-  normalizeSyntaxLanguage,
-  syntaxLanguageFromFilename,
-} from "@/components/code/syntax-language"
+import { syntaxLanguageFromFilename } from "@/components/code/syntax-language"
 import { ArtifactUnavailableError } from "@/artifacts/browser-artifact-adapter"
 import {
   ARTIFACT_DATA_PART_NAME,
@@ -54,6 +48,7 @@ import {
   type ArtifactPreviewKind,
 } from "./artifact-renderers"
 import { injectArtifactHtmlCsp } from "./artifact-frame-policy"
+import { ArtifactMarkdown } from "./artifact-markdown"
 
 export const MAX_ARTIFACT_PREVIEW_BYTES = 25 * 1024 * 1024
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -386,43 +381,30 @@ export function ArtifactCard({
     <article
       className={
         compact
-          ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 border-b border-border/70 px-2 py-1.5 text-card-foreground last:border-b-0"
+          ? "grid grid-cols-[minmax(0,1fr)_auto] items-stretch gap-1.5 border-b border-border/70 text-card-foreground last:border-b-0"
           : "grid w-fit max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border bg-card p-2 text-card-foreground"
       }
     >
-      {compact ? (
-        <div className="flex min-w-0 items-center gap-2">{identity}</div>
-      ) : (
-        <button
-          type="button"
-          aria-label={`${labels.open}: ${artifact.filename}`}
-          className="flex min-w-0 items-center gap-2 rounded-lg text-start outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11"
-          onClick={(event) => openArtifact(artifact, event.currentTarget)}
-        >
-          {identity}
-        </button>
-      )}
+      <button
+        type="button"
+        aria-label={`${labels.open}: ${artifact.filename}`}
+        data-artifact-open-id={compact ? artifact.id : undefined}
+        className={
+          compact
+            ? "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-start outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+            : "flex min-w-0 items-center gap-2 rounded-lg text-start outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11"
+        }
+        onClick={(event) => openArtifact(artifact, event.currentTarget)}
+      >
+        {identity}
+      </button>
       <div
         className={
           compact
-            ? "col-start-2 row-start-1 flex items-center gap-0.5"
+            ? "col-start-2 row-start-1 flex items-center pe-2"
             : "col-start-2 row-start-1 flex items-center gap-1"
         }
       >
-        {compact && (
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            aria-label={labels.open}
-            title={labels.open}
-            data-artifact-open-id={artifact.id}
-            onClick={(event) => openArtifact(artifact, event.currentTarget)}
-            className="motion-reduce:transition-none [@media(pointer:coarse)]:size-11"
-          >
-            <ExternalLinkIcon data-icon="inline-start" />
-          </Button>
-        )}
         <Button
           type="button"
           variant="ghost"
@@ -677,7 +659,7 @@ export function ArtifactViewerContent({
 
   return (
     <section
-      className={`flex min-h-0 flex-col overflow-hidden bg-background ${className}`}
+      className={`flex h-full min-h-0 flex-col overflow-hidden bg-background ${className}`}
       dir={locale === "he" ? "rtl" : "ltr"}
       aria-label={labels.viewerLabel}
       onKeyDown={(event) => {
@@ -842,45 +824,7 @@ function ArtifactPreview({
     return <HtmlPreview text={state.text ?? ""} labels={labels} />
   }
   if (state.kind === "markdown") {
-    return (
-      <div className="aui-md overflow-auto rounded-xl bg-background p-5 text-sm leading-6 shadow-sm">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            pre: ({ children }) => <>{children}</>,
-            code: ({ className, children, ...props }) => {
-              const code = String(children).replace(/\n$/u, "")
-              const language = /(?:^|\s)language-([^\s]+)/u.exec(
-                className ?? ""
-              )?.[1]
-              if (language || String(children).endsWith("\n")) {
-                return (
-                  <HighlightedCode
-                    code={code}
-                    language={normalizeSyntaxLanguage(language)}
-                    className="my-4 rounded-xl border-t"
-                  />
-                )
-              }
-              return (
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              )
-            },
-            a: ({ href, ...props }) =>
-              href && /^https?:\/\//u.test(href) ? (
-                <a {...props} href={href} target="_blank" rel="noreferrer" />
-              ) : (
-                <span {...props} />
-              ),
-            img: ({ alt }) => <span>{alt ? `[${alt}]` : "[image]"}</span>,
-          }}
-        >
-          {state.text ?? ""}
-        </ReactMarkdown>
-      </div>
-    )
+    return <ArtifactMarkdown source={state.text ?? ""} />
   }
 
   let text = state.text ?? ""

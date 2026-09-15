@@ -497,16 +497,17 @@ describe("real Assistant UI voice composer", () => {
     )
     media.dispose()
   })
-  it("does not record an unsafe voice turn but still opens its mode picker", async () => {
+  it("does not record an unsafe voice turn but still toggles mode on hold", async () => {
+    vi.useFakeTimers()
     const h = setup({ voiceTurn: true, speech: "unconfigured" })
     const mic = screen.getByRole("button", { name: "Record: Voice turn" })
     fireEvent.click(mic)
     expect(h.recording.state).toBe("inactive")
-    fireEvent.keyDown(mic, { key: "ArrowDown" })
-    expect(await screen.findByRole("menu")).toBeVisible()
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: "Transcription" })
-    )
+    fireEvent.pointerDown(mic, { button: 0, isPrimary: true })
+    await act(() => vi.advanceTimersByTimeAsync(450))
+    fireEvent.pointerUp(mic)
+    fireEvent.click(mic)
+    vi.useRealTimers()
     fireEvent.click(
       screen.getByRole("button", { name: "Record: Transcription" })
     )

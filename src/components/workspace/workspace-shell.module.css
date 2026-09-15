@@ -7,7 +7,7 @@
   --workspace-accent: oklch(0.68 0.2 285);
   --workspace-accent-strong: oklch(0.75 0.18 285);
   --workspace-status-running: oklch(0.75 0.17 166);
-  --workspace-status-attention: oklch(0.79 0.15 78);
+  --workspace-status-attention: var(--workspace-status-running);
   --workspace-status-idle: oklch(0.67 0 0);
   --workspace-message-content-visibility: visible;
   --workspace-message-contain-intrinsic-size: none;
@@ -233,10 +233,18 @@
 }
 
 .agentName {
+  display: flex;
+  align-items: center;
   overflow: hidden;
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agentName bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agentDescription {
@@ -462,6 +470,7 @@
   min-width: 0;
   flex: 1;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-inline: contain;
   scrollbar-color: var(--muted) transparent;
   scrollbar-width: thin;
@@ -526,13 +535,21 @@
 }
 
 .tabLabel {
-  display: block;
+  display: flex;
+  align-items: center;
   overflow: hidden;
+  gap: 0.5rem;
   padding-inline: 0.625rem;
   font-size: 0.9375rem;
   line-height: 3.5rem;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tabLabel bdi {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
 }
 
 .tab[data-closable="true"] .tabLabel {
@@ -700,7 +717,9 @@
 .recentSessions {
   display: flex;
   min-height: 0;
+  flex: 1;
   flex-direction: column;
+  overflow: hidden;
   border-block-start: 1px solid var(--border);
 }
 
@@ -805,6 +824,7 @@
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 26rem)
         ),
+        80cqi,
         calc(100cqi - 35.5rem)
       );
   }
@@ -821,6 +841,7 @@
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 26rem)
         ),
+        80cqi,
         calc(100cqi - 20rem)
       );
   }
@@ -941,25 +962,27 @@
 
   .shell[data-artifact-viewer-open="true"] {
     grid-template-columns:
-      17.5rem minmax(28rem, 1fr)
+      17.5rem minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 30rem)
         ),
-        calc(100cqi - 45.5rem)
+        80cqi,
+        calc(100cqi - 37.5rem)
       );
   }
 
   .shell[data-navigation-hidden="true"][data-artifact-viewer-open="true"] {
     grid-template-columns:
-      minmax(28rem, 1fr)
+      minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 30rem)
         ),
-        calc(100cqi - 28rem)
+        80cqi,
+        calc(100cqi - 20rem)
       );
   }
 }
@@ -975,25 +998,27 @@
 
   .shell[data-artifact-viewer-open="true"] {
     grid-template-columns:
-      19.5rem minmax(36rem, 1fr)
+      19.5rem minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 34rem)
         ),
-        calc(100cqi - 55.5rem)
+        80cqi,
+        calc(100cqi - 39.5rem)
       );
   }
 
   .shell[data-navigation-hidden="true"][data-artifact-viewer-open="true"] {
     grid-template-columns:
-      minmax(36rem, 1fr)
+      minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 34rem)
         ),
-        calc(100cqi - 36rem)
+        80cqi,
+        calc(100cqi - 20rem)
       );
   }
 }

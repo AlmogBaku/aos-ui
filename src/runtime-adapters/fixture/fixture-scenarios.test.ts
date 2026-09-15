@@ -135,4 +135,18 @@ describe("deterministic fixture scenarios", () => {
       toolName: "unknown_fixture_tool",
     })
   })
+
+  it("gives successful and failed Monty calls distinct deterministic IDs", () => {
+    const successfulCall = buildFixtureScenario("run monty").parts[0]
+    const failedCall = buildFixtureScenario("make monty fail").parts[0]
+
+    expect(successfulCall).toMatchObject({
+      type: "tool-call",
+      toolCallId: "fixture-monty_execute-success",
+    })
+    expect(failedCall).toMatchObject({
+      type: "tool-call",
+      toolCallId: "fixture-monty_execute-failure",
+    })
+  })
 })

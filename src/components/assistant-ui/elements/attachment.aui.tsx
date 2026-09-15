@@ -2,6 +2,8 @@
 
 import {
   type PropsWithChildren,
+  useEffect,
+  useRef,
   useState,
   type FC,
   isValidElement,
@@ -242,8 +244,23 @@ export const UserMessageAttachments: FC = () => {
 }
 
 export const ComposerAttachments: FC = () => {
+  const root = useRef<HTMLDivElement>(null)
+  const count = useAuiState((s) => s.composer.attachments.length)
+  const previousCount = useRef(count)
+  useEffect(() => {
+    const added = count > previousCount.current
+    previousCount.current = count
+    if (!added || document.visibilityState === "hidden") return
+    root.current
+      ?.closest('[data-slot="aui_composer-shell"]')
+      ?.querySelector<HTMLTextAreaElement>("textarea:not([aria-hidden=true])")
+      ?.focus({ preventScroll: true })
+  }, [count])
   return (
-    <div className="aui-composer-attachments col-span-full row-start-1 flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
+    <div
+      ref={root}
+      className="aui-composer-attachments col-span-full row-start-1 flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden"
+    >
       <ComposerPrimitive.Attachments>
         {() => <AttachmentUI />}
       </ComposerPrimitive.Attachments>

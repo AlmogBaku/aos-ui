@@ -47,6 +47,14 @@ export default defineConfig({
         browserName: "chromium",
       },
     },
+    {
+      name: "aos-proxy-chromium",
+      testMatch: /aos\.runtime\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 1000 },
+      },
+    },
   ],
   webServer: externalBaseURL
     ? undefined

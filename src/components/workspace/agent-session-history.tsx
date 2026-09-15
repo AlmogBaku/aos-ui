@@ -4,7 +4,7 @@ import {
   ThreadListPrimitive,
   type ThreadListRuntime,
 } from "@assistant-ui/react"
-import { Ellipsis, Search, X } from "lucide-react"
+import { Ellipsis, Plus, Search, X } from "lucide-react"
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -19,10 +19,12 @@ import {
 } from "./session-thread-list-item"
 import type { WorkspaceSession } from "./workspace-shell"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
+import { AttentionDot } from "./activity"
 import styles from "./agent-session-history.module.css"
 
 export type AgentSessionHistoryCopy = {
   searchSessions: string
+  newSession: string
   openSessions: string
   history: string
   clearSearch: string
@@ -56,6 +58,7 @@ export type AgentSessionHistoryProps = {
   query: string
   onQueryChange: (query: string) => void
   onOpenSession: (agentId: string, threadId: string) => void | Promise<unknown>
+  onCreateSession?: (agentId: string) => void | Promise<unknown>
   onRemoveOpenSession?: (
     agentId: string,
     threadId: string
@@ -92,7 +95,7 @@ function ActivityMarker({
   return (
     <span className={styles.activity} aria-hidden="true">
       {activity.needsAttention ? (
-        <span className={styles.attentionDot} title={copy.needsAttention} />
+        <AttentionDot label={copy.needsAttention} />
       ) : null}
       {activity.unreadCount > 0 ? (
         <span className={styles.unreadCount}>{activity.unreadCount}</span>
@@ -201,7 +204,7 @@ function SessionSection({
               >
                 <span className={cn(styles.rowText, "gap-0.5")}>
                   <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
-                    {session.status !== "idle" ? (
+                    {session.status !== "idle" && !activity?.needsAttention ? (
                       <span
                         className={styles.statusDot}
                         data-status={session.status}
@@ -209,10 +212,10 @@ function SessionSection({
                         aria-hidden="true"
                       />
                     ) : null}
+                    <ActivityMarker activity={activity} copy={copy} />
                     <bdi className={cn(styles.rowTitle, "text-sm")}>
                       <SessionThreadListTitle fallback={session.title} />
                     </bdi>
-                    <ActivityMarker activity={activity} copy={copy} />
                   </span>
                   {Number.isFinite(parsedDate.getTime()) ? (
                     <time className="text-xs" dateTime={session.updatedAt}>
@@ -280,6 +283,7 @@ export function AgentSessionHistory({
   query,
   onQueryChange,
   onOpenSession,
+  onCreateSession,
   onRemoveOpenSession,
   threadListRuntime,
   onActionError,
@@ -306,19 +310,43 @@ export function AgentSessionHistory({
 
   return (
     <div className={styles.history}>
-      <label
-        className={cn(styles.searchField, "m-2 min-h-11 gap-2.5 px-3 text-sm")}
+      <div
+        className={styles.historyControls}
+        role="group"
+        aria-label={copy.sessionActions}
       >
-        <Search aria-hidden="true" />
-        <span className={styles.srOnly}>{copy.searchSessions}</span>
-        <input
-          type="search"
-          aria-label={copy.searchSessions}
-          placeholder={copy.searchSessions}
-          value={query}
-          onChange={(event) => onQueryChange(event.currentTarget.value)}
-        />
-      </label>
+        <label
+          className={cn(styles.searchField, "min-h-11 gap-2.5 px-3 text-sm")}
+        >
+          <Search aria-hidden="true" />
+          <span className={styles.srOnly}>{copy.searchSessions}</span>
+          <input
+            type="search"
+            aria-label={copy.searchSessions}
+            placeholder={copy.searchSessions}
+            value={query}
+            onChange={(event) => onQueryChange(event.currentTarget.value)}
+          />
+        </label>
+        {onCreateSession ? (
+          <Button
+            className={styles.createSessionButton}
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={copy.newSession}
+            title={copy.newSession}
+            onClick={() =>
+              runAction(
+                () => onCreateSession(navigation.agentId),
+                onActionError
+              )
+            }
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+        ) : null}
+      </div>
       <ThreadListPrimitive.Root className={styles.sessionScroller}>
         {visibleOpen.length ? (
           <SessionSection

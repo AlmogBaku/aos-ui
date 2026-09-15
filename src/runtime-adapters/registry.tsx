@@ -28,13 +28,10 @@ function defineLazyAdapter<M extends RuntimeMode>(
   }
 }
 
-/** Exhaustive registry. Adding a mode requires an explicit lazy browser adapter. */
+/** Every configured browser runtime has an explicit lazy adapter. */
 const runtimeAdapters = {
   fixture: defineLazyAdapter("fixture", () => import("./fixture")),
-  opencode: defineLazyAdapter("opencode", () => import("./opencode")),
-  hermes: defineLazyAdapter("hermes", () => import("./hermes")),
-  "ag-ui": defineLazyAdapter("ag-ui", () => import("./ag-ui")),
-  openclaw: defineLazyAdapter("openclaw", () => import("./openclaw")),
+  aos: defineLazyAdapter("aos", () => import("./aos")),
 } satisfies { [M in RuntimeMode]: RuntimeAdapterDefinition<M> }
 
 export function getRuntimeAdapter<M extends RuntimeMode>(
@@ -58,23 +55,8 @@ export function HarnessRuntimeProvider({
         ...props,
         config,
       })
-    case "opencode":
-      return createElement(runtimeAdapters.opencode.Provider, {
-        ...props,
-        config,
-      })
-    case "hermes":
-      return createElement(runtimeAdapters.hermes.Provider, {
-        ...props,
-        config,
-      })
-    case "ag-ui":
-      return createElement(runtimeAdapters["ag-ui"].Provider, {
-        ...props,
-        config,
-      })
-    case "openclaw":
-      return createElement(runtimeAdapters.openclaw.Provider, {
+    case "aos":
+      return createElement(runtimeAdapters.aos.Provider, {
         ...props,
         config,
       })

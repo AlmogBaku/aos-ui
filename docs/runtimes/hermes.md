@@ -1,42 +1,133 @@
 # Run AOS with Hermes
 
-AOS attaches directly to an independently installed `hermes serve` HTTP/WebSocket API. Hermes remains responsible for its process, profiles, authentication, Sessions, runs, credentials, tools, and persistence; AOS neither installs Hermes nor adds a bridge database or profile registry.
+AOS connects to an independently operated `hermes serve` HTTP/WebSocket API
+through the TypeScript proxy. Hermes owns profiles, Sessions, runs, tools,
+credentials, and durable history. The browser sees only normalized AOS and
+AG-UI data.
 
 ## Prerequisites
 
-- An operator-managed Hermes installation with native server authentication configured
-- Bun for the AOS frontend
-- `uv` when building or testing the AOS Hermes plugin locally
+- An authenticated Hermes server reachable from the proxy
+- A Hermes server token in a private, owner-readable file
+- A 32-byte base64url reconnect-cursor key in another private file
+- Bun, or Docker with Compose
+- `uv` only when building or testing the optional native plugin
 
-The adapter is tested against Hermes checkout `b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b`; its required RPC surface was also verified in unmodified Hermes `v2026.9.7`.
+The adapter is tested against Hermes checkout
+`b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b`; its required RPC surface was also
+verified in unmodified Hermes `v2026.9.7`.
 
 ## Start Hermes independently
 
-Install and configure Hermes outside the AOS checkout. Start its authenticated native server using your normal Hermes configuration:
+Install and configure Hermes outside the AOS checkout, then start its native
+server:
 
 ```bash
 hermes serve
 ```
 
-The examples below expect Hermes at `http://127.0.0.1:9119`. Keep its authentication enabled and its profile state and credentials outside AOS.
+The example proxy configuration expects Hermes at
+`http://host.docker.internal:9119`. Keep native profile state and credentials
+outside AOS.
 
-## Attach AOS
+## Create private configuration
 
-In the AOS checkout, install frontend dependencies and attach through the development proxy:
+Copy the example outside the checkout:
 
 ```bash
-bun install
-AOS_UI_RUNTIME_MODE=hermes \
-AOS_UI_HERMES_BASE_URL=/hermes \
-AOS_UI_HERMES_TARGET=http://127.0.0.1:9119 \
+cp deploy/proxy-config.hermes.example.json /absolute/private/path/proxy-config.json
+chmod 600 /absolute/private/path/proxy-config.json
+```
+
+Set these fields in the private copy:
+
+- `listen` and `publicOrigin` for the trusted operator listener;
+- `runtime.baseUrl` and `runtime.tokenFile` for the one selected Hermes runtime;
+- `events.keys` for sealed reconnect cursors;
+- optionally, a distinct `guest.listen`, `guest.publicOrigin`, and invitation
+  signing key.
+
+The operator listener has no application login. Anyone who can reach it can
+operate every visible Agent and Session, so bind it to loopback or a trusted
+private network. State-changing browser requests must still use the exact
+configured origin.
+
+Secret files must be regular, non-symlinked, owner-only files. Generate each
+32-byte base64url key with:
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+Write the Hermes token exactly as supplied by Hermes, with at most one trailing
+newline. Never put it in `/runtime-config.json`, an environment variable, or a
+browser-facing URL.
+
+## Run locally
+
+For a Vite development server on port `3000`, configure the private proxy to
+listen on `127.0.0.1:4100` with `publicOrigin` set to
+`http://localhost:3000`. Then run:
+
+```bash
+# Terminal 1
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+
+# Terminal 2
+AOS_UI_RUNTIME_MODE=aos \
+AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
-Vite forwards `/hermes`, native authentication routes, and WebSockets to the target. Open <http://localhost:3000>, follow **Sign in to Hermes** when prompted, then reload the workspace.
+Open <http://localhost:3000>. Vite forwards only normalized AOS traffic to the
+proxy; the browser never receives the Hermes URL or token.
 
-Hermes owns recovery policy, including auto-continue. AOS reattaches without submitting a new prompt, so it does not require a particular auto-continue setting.
+## Run with Compose
 
-Stopping AOS leaves Hermes and its Sessions running. Stop or restart Hermes through your normal runtime operations.
+The Hermes overlay runs the Bun proxy as both the static server and normalized
+API. Hermes itself remains outside the stack:
+
+```bash
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.hermes.yaml up --build
+```
+
+The example config enables the optional guest listener on port `3001`; remove
+its `guest` block and the corresponding secret mount if the deployment does not
+offer guest access. Both listeners use the same Hermes token and runtime
+instance. Nginx is optional external TLS or access-control infrastructure.
+
+The browser talks only to same-origin `/api/aos/v1`; guests use the separate
+`/api/guest/v1` listener. The proxy never exposes Hermes' native `/auth`,
+`/api`, or WebSocket routes.
+
+Create a guest invitation locally from the configured signing key:
+
+```bash
+AOS_RUNTIME_PROXY_CONFIG=/absolute/private/path/proxy-config.json \
+  bun run gateway -- invite --agent default
+```
+
+The command prints a link, defaults to 72 hours, and generates a stable
+conversation reference. Add `--ref`, `--instruction`, `--prefill`, `--title`,
+`--message`, `--lang`, or `--expires-in` only when needed. Creating or opening
+the link does not contact Hermes or create a Session; the first guest Send
+atomically reuses or creates `aos-invite:<reference>`.
+
+Before issuing a link, follow the [invited-chat guide](../invite-chat.md) to
+prepare a dedicated, narrowly skilled Hermes profile and restrict its native
+tools, filesystem, network, credentials, and approval behavior for the guest
+workflow.
+
+Hermes owns native recovery policy, including auto-continue. AOS reattaches
+without submitting a new prompt. Disconnecting a browser does not stop work.
+After a terminal Session has no subscribers or pending interaction, the proxy
+keeps it warm for five minutes and then closes only that Session attachment.
+The shared Hermes socket stays open.
 
 ## Optionally install the AOS native plugin
 
@@ -53,29 +144,10 @@ hermes -p PROFILE tools enable --platform cli aos-presentation aos-session-hando
 
 Use `file:///absolute/path/to/aos-ui#integrations/hermes` instead of the repository source for a committed local checkout. The package-level [Hermes integration README](../../integrations/hermes/README.md) documents the exact native tools and creator provisioning. Installing the plugin extends Hermes; it does not move runtime ownership into AOS.
 
-The plugin registers the read-only skill as
-`aos-integration:aos-invite-link`. When asked for a guest invite, Hermes loads
-it with `skill_view`. Install `aos-gateway` on the Hermes process `PATH` and
-set `AOS_GATEWAY_GUEST_ORIGIN` in its managed service environment to avoid a
-per-invite domain prompt. Grant `AOS_GATEWAY_INVITE_SIGNING_KEY` to Hermes only
-when an operator intentionally authorizes shell-capable Agents to mint bearer
-links. See [Invited chat](../invite-chat.md) for usage and security guidance.
-
 For upgrades, install from a new full committed SHA, run `plugins doctor`,
-enable the required tools, then restart the managed Hermes gateway. Do not patch
+enable the required tools, then restart Hermes. Do not patch
 an installed plugin cache to carry local or uncommitted AOS changes; commit and
 reinstall from an immutable ref instead.
-
-## Run with Compose
-
-Hermes remains outside the Compose stack. The overlay lets the web container reach the operator-managed server:
-
-```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes-native.json \
-  docker compose -f compose.yaml -f compose.hermes.yaml up --build
-```
-
-By default the container reaches `host.docker.internal:9119`. Set `AOS_UI_HERMES_HOST` and `AOS_UI_HERMES_PORT` when Hermes is elsewhere. A server bound only to host loopback is not reachable through Docker's host gateway.
 
 ## Creator profile
 
@@ -96,7 +168,17 @@ The integration reads this metadata; it does not grant creator authority itself.
 - Native profiles form the AOS Agent catalog and can expose visibility changes.
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity coverage is limited to the active Session.
-- Stop uses native Session interruption.
+- AG-UI starts or resumes a run and carries its server-to-browser event stream.
+  Stop and steering are separate normalized AOS REST controls on that existing
+  run; neither submits a second AG-UI run.
+- Stop uses native `session.interrupt`.
+- Text-only active-turn steering uses native `session.redirect`. Hermes may
+  report the correction as immediately redirected or accepted into its native
+  build-window queue; both outcomes mean AOS must not submit another copy.
+- A steering redirect seals the current assistant generation, preserves
+  completed tool results, presents the visible correction at that boundary,
+  and continues under the same logical AOS run until Hermes is authoritatively
+  idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
 - Voice controls appear only for native STT/TTS interfaces; see [Chat voice](../chat-voice.md).
 

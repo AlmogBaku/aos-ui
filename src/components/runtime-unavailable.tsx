@@ -6,121 +6,23 @@ import type { RuntimeUnavailableReason } from "@/lib/runtime-config"
 const copy = {
   en: {
     eyebrow: "AOS",
-    title: {
-      runtime: "The configured runtime is not supported",
-      agUi: "AG-UI configuration is incomplete",
-    },
-    description: {
-      runtime:
-        "Configure fixture, opencode, hermes, openclaw, or ag-ui in runtime-config.json.",
-      opencodeUrl:
-        "AOS_UI_OPENCODE_BASE_URL must be an absolute HTTP or HTTPS URL.",
-      opencodeDirectory:
-        "Configure the absolute OpenCode worktree directory for this deployment.",
-      publicConfig:
-        "The deployment runtime configuration is missing or malformed.",
-      hermesUrl:
-        "Configure the native Hermes URL or same-origin proxy path, such as /hermes.",
-      incompleteOpencodeModelOverride:
-        "Set both AOS_UI_OPENCODE_PROVIDER_ID and AOS_UI_OPENCODE_MODEL_ID, or neither.",
-      runUrl:
-        "Set AOS_UI_AG_UI_URL to the HTTP endpoint that streams AG-UI events.",
-      workspaceUrl:
-        "Set AOS_UI_AG_UI_WORKSPACE_URL to the host that provides Agent and Session ownership.",
-      invalidRunUrl: "AOS_UI_AG_UI_URL must be an absolute HTTP or HTTPS URL.",
-      invalidWorkspaceUrl:
-        "AOS_UI_AG_UI_WORKSPACE_URL must be an absolute HTTP or HTTPS URL.",
-      openclawUrl:
-        "Configure a credential-free OpenClaw WebSocket URL or same-origin proxy path, such as /openclaw.",
-    },
+    title: "The configured runtime is not supported",
+    invalid: "The deployment runtime configuration is missing or malformed.",
+    mode: "Configure fixture or aos in runtime-config.json.",
   },
   he: {
     eyebrow: "AOS",
-    title: {
-      runtime: "סביבת ההרצה שהוגדרה אינה נתמכת",
-      agUi: "תצורת AG-UI אינה מלאה",
-    },
-    description: {
-      runtime:
-        "יש להגדיר fixture, opencode, hermes, openclaw או ag-ui בקובץ runtime-config.json.",
-      opencodeUrl:
-        "הערך AOS_UI_OPENCODE_BASE_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
-      opencodeDirectory:
-        "יש להגדיר נתיב מוחלט לסביבת העבודה של OpenCode עבור פריסה זו.",
-      publicConfig: "תצורת סביבת ההרצה חסרה או אינה תקינה.",
-      hermesUrl:
-        "יש להגדיר כתובת Hermes או נתיב מתווך באותו מקור, למשל ‎/hermes.",
-      incompleteOpencodeModelOverride:
-        "יש להגדיר גם AOS_UI_OPENCODE_PROVIDER_ID וגם AOS_UI_OPENCODE_MODEL_ID, או לא להגדיר אף אחד מהם.",
-      runUrl: "יש להגדיר את AOS_UI_AG_UI_URL כנקודת הקצה שמזרימה אירועי AG-UI.",
-      workspaceUrl:
-        "יש להגדיר את AOS_UI_AG_UI_WORKSPACE_URL כמארח שמספק בעלות על סוכנים ושיחות.",
-      invalidRunUrl:
-        "הערך AOS_UI_AG_UI_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
-      invalidWorkspaceUrl:
-        "הערך AOS_UI_AG_UI_WORKSPACE_URL חייב להיות כתובת HTTP או HTTPS מלאה.",
-      openclawUrl:
-        "יש להגדיר כתובת WebSocket של OpenClaw ללא פרטי גישה או נתיב מתווך באותו מקור, למשל ‎/openclaw.",
-    },
+    title: "סביבת ההרצה שהוגדרה אינה נתמכת",
+    invalid: "תצורת סביבת ההרצה חסרה או אינה תקינה.",
+    mode: "יש להגדיר fixture או aos בקובץ runtime-config.json.",
   },
 } as const
 
 function getMessage(locale: Locale, reason: RuntimeUnavailableReason) {
   const labels = copy[locale]
-
-  switch (reason) {
-    case "invalid-public-config":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.publicConfig,
-      }
-    case "missing-hermes-base-url":
-    case "invalid-hermes-base-url":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.hermesUrl,
-      }
-    case "invalid-runtime-mode":
-      return { title: labels.title.runtime, body: labels.description.runtime }
-    case "invalid-opencode-base-url":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.opencodeUrl,
-      }
-    case "missing-opencode-directory":
-    case "invalid-opencode-directory":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.opencodeDirectory,
-      }
-    case "incomplete-opencode-model-override":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.incompleteOpencodeModelOverride,
-      }
-    case "missing-ag-ui-run-url":
-      return { title: labels.title.agUi, body: labels.description.runUrl }
-    case "invalid-ag-ui-run-url":
-      return {
-        title: labels.title.agUi,
-        body: labels.description.invalidRunUrl,
-      }
-    case "missing-ag-ui-workspace-url":
-      return {
-        title: labels.title.agUi,
-        body: labels.description.workspaceUrl,
-      }
-    case "invalid-ag-ui-workspace-url":
-      return {
-        title: labels.title.agUi,
-        body: labels.description.invalidWorkspaceUrl,
-      }
-    case "missing-openclaw-base-url":
-    case "invalid-openclaw-base-url":
-      return {
-        title: labels.title.runtime,
-        body: labels.description.openclawUrl,
-      }
+  return {
+    title: labels.title,
+    body: reason === "invalid-public-config" ? labels.invalid : labels.mode,
   }
 }
 

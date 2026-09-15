@@ -1,8 +1,68 @@
-# OpenClaw is independently operated; this overlay only forwards its Gateway.
+# OpenClaw remains independently operated. This overlay runs the normalized AOS
+# proxy and attaches it to the private Gateway endpoint without publishing a
+# native port or passing device credentials through browser configuration.
 services:
   web:
+    command:
+      - bun
+      - run
+      - proxy:serve
+      - --
+      - --config
+      - /run/aos-ui/proxy-config.json
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      AOS_UI_OPENCLAW_HOST: ${AOS_UI_OPENCLAW_HOST:-host.docker.internal}
-      AOS_UI_OPENCLAW_PORT: ${AOS_UI_OPENCLAW_PORT:-18789}
+    ports:
+      - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:3001
+    configs:
+      - source: proxy-config
+        target: /run/aos-ui/proxy-config.json
+        mode: 0444
+    secrets:
+      - source: openclaw-device-identity
+        target: openclaw-device-identity
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: openclaw-device-token
+        target: openclaw-device-token
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: reconnect-cursor-key
+        target: reconnect-cursor-key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: guest-invite-signing-key
+        target: guest-invite-signing-key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:3000/api/aos/v1/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    init: true
+
+configs:
+  runtime-config:
+    file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.openclaw.json}
+  proxy-config:
+    file: ${AOS_UI_PROXY_CONFIG_FILE:?Set AOS_UI_PROXY_CONFIG_FILE to a private proxy configuration file}
+
+secrets:
+  openclaw-device-identity:
+    file: ${AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE:?Set AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE to the private OpenClaw device identity file}
+  openclaw-device-token:
+    file: ${AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE:?Set AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE to the private OpenClaw device token file}
+  reconnect-cursor-key:
+    file: ${AOS_UI_RECONNECT_CURSOR_KEY_FILE:?Set AOS_UI_RECONNECT_CURSOR_KEY_FILE to an owner-only 32-byte key file}
+  guest-invite-signing-key:
+    file: ${AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE:?Set AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE to the private guest invitation key file}

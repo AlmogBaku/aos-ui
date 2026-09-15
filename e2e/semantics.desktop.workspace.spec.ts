@@ -68,9 +68,13 @@ for (const locale of ["en", "he"] as const) {
       })
     ).toBeVisible()
     await sendPrompt(page, "Present a plan", locale)
-    const plan = page
-      .getByRole("progressbar")
-      .locator("xpath=ancestor::section[1]")
+    const plan = page.locator('[data-slot="inline-plan"]').filter({
+      has: page.getByRole("heading", {
+        name: "Plan",
+        level: 2,
+        exact: true,
+      }),
+    })
     await expect(
       plan.getByRole("heading", { name: "Plan", level: 2 })
     ).toBeVisible()
@@ -89,9 +93,13 @@ test("reduced motion disables audited transitions without hiding their state cha
   await openWorkspace(page)
   await sendPrompt(page, "Present a plan")
 
-  const plan = page
-    .getByRole("progressbar")
-    .locator("xpath=ancestor::section[1]")
+  const plan = page.locator('[data-slot="inline-plan"]').filter({
+    has: page.getByRole("heading", {
+      name: "Plan",
+      level: 2,
+      exact: true,
+    }),
+  })
   const progress = plan.getByRole("progressbar")
   const moreSteps = plan.getByRole("button", { name: "Show 1 more step" })
 

@@ -1,6 +1,7 @@
 "use client"
 
-import { AosToolFallback } from "./aos-tool-fallback"
+import { AosToolError, AosToolFallback } from "./aos-tool-fallback"
+import { normalizeRichToolState } from "./lifecycle"
 import { RichToolRenderer, richToolRegistry } from "./registry"
 import type { RichToolFallbackComponent, RichToolPart } from "./types"
 
@@ -16,6 +17,9 @@ export function isAosRichTool(part: RichToolPart) {
  * Provider-supplied `toolUI` remains preferred by the message surface.
  */
 export const AosToolPresentation: RichToolFallbackComponent = (part) => {
+  if (normalizeRichToolState(part).phase === "failed") {
+    return <AosToolError {...part} />
+  }
   if (isAosRichTool(part)) {
     return <RichToolRenderer {...part} />
   }

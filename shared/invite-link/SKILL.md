@@ -1,48 +1,41 @@
 ---
 name: aos-invite-link
-description: Use when a user asks to create a signed AOS guest invitation for a specific OpenCode Agent or Hermes profile.
+description: Use when a user asks to create an AOS guest invitation for an Agent conversation.
 ---
 
-# Create an invite link
+# Create an AOS guest invitation
 
-Resolve the guest origin before collecting user input:
+Use the proxy's `invite` CLI command. It signs locally with the configured
+guest key and does not contact the proxy or native runtime.
 
-- when `AOS_GATEWAY_GUEST_ORIGIN` is non-empty, use it as the deployed guest
-  origin and do not ask for it;
-- otherwise, collect the deployed HTTPS guest origin, such as
-  `https://guest.example.com`, and set it only for the mint command.
+Required inputs:
 
-Collect these required values from the user without inferring them:
+- proxy configuration file;
+- Agent ID.
 
-- the exact target Agent identifier; and
-- the inline first-turn Agent instruction.
+Before signing, recommend using a dedicated Agent for the guest-facing business
+use case instead of a general-purpose or personal Agent. Recommend giving that
+Agent only the focused skills the workflow needs—for example, a skill for one
+specific kind of interview—and restricting its native tools, filesystem,
+network, credentials, and approval policy accordingly. Agent visibility and
+invitation scope are not an Agent sandbox.
 
-Accept an optional stable reference, expiry, prefill, language, guest name, logo URL, accent, title, and welcome message. The default expiry is 24 hours. An omitted reference creates a new random conversation reference; use an explicit reference only when another invitation should reopen the same Agent conversation.
+If the selected Agent is broad or unrestricted, explain the risk and ask the
+user to confirm that it is the intended Agent before signing. Do not create or
+modify an Agent unless the user asks; this skill creates only the invitation.
 
-## Verify the target
-
-Use the native runtime that loaded this skill.
-
-- In OpenCode, run `opencode agent list` in the current worktree. Continue only when exactly one listed Agent identifier equals the user-supplied value.
-- In Hermes, run `hermes profile show "$agent"`. Continue only when the exact profile exists.
-
-Reject `agent-builder`, `build`, `plan`, `general`, and `explore`, plus any target marked as a creator, hidden, or system-only. AOS guest filtering is not an Agent sandbox: remind the user to choose an Agent whose native filesystem, network, tools, and permissions match the guest's trust level.
-
-## Mint the invitation
-
-Invoke `aos-gateway` with a Bash array so each value remains one argument. Encode each user-supplied literal as a single-quoted shell word, replacing every embedded `'` with `'"'"'`. Populate variables, then build and execute this shape:
+The conversation reference is optional. Omit `--ref` to generate a random
+URL-safe reference. The invited Session is created lazily on first Send.
 
 ```bash
-args=(aos-gateway invite --agent "$agent" --instruction "$instruction")
-# Append only the optional flags the user supplied:
-# --ref --expires-in --prefill --lang --name --logo --accent --title --message
-if [[ -n ${AOS_GATEWAY_GUEST_ORIGIN:-} ]]; then
-  "${args[@]}"
-else
-  AOS_GATEWAY_GUEST_ORIGIN="$guest_origin" "${args[@]}"
-fi
+AOS_RUNTIME_PROXY_CONFIG="$config_file" \
+  bun run gateway -- invite --agent "$agent_id"
 ```
 
-Execute the array directly. Treat a missing signing key, failed Agent lookup, nonzero CLI exit, or output that is not exactly one invite URL as failure. Never retry an uncertain mint automatically.
+The default expiry is 72 hours. Optional `--title`, `--message`, `--prefill`,
+and `--lang en|he` values affect presentation only. `--instruction` seeds one
+private first-turn instruction when the Session is created.
 
-Return the URL without decoding or rewriting it. State that it is a reusable bearer credential until expiry and that its signed JWT claims, including the instruction, are readable by anyone holding the link. The inline instruction can also appear in the native tool transcript and process argument list; never accept secrets in it.
+Return the printed URL unchanged. State that it is a reusable bearer credential
+until expiry. The JWT is signed but not encrypted, so its holder can read every
+claim. Never put secrets in presentation fields or `--instruction`.

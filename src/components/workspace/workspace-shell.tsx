@@ -203,20 +203,33 @@ const inspectorPreferenceKey = "aos_ui:workspace:inspector-open"
 const inspectorPreferenceEvent = "aos_ui:inspector-preference-change"
 const artifactWidthPreferenceKey = "aos_ui:workspace:artifact-width"
 const artifactWidthMin = 320
-const artifactWidthMax = 640
+const artifactConversationWidthMin = 320
+const artifactWidthMaxRatio = 0.8
 const artifactWidthStep = 16
 const artifactWidthDefault = 416
+
+function getArtifactWidthBounds(shellWidth: number, navigationWidth: number) {
+  if (shellWidth <= 0) {
+    return { min: artifactWidthMin, max: artifactWidthMin }
+  }
+  const usableWidth = Math.max(0, shellWidth - navigationWidth)
+  const proportionalMax = usableWidth * artifactWidthMaxRatio
+  const conversationSafeMax = usableWidth - artifactConversationWidthMin
+  return {
+    min: artifactWidthMin,
+    max: Math.max(
+      artifactWidthMin,
+      Math.floor(Math.min(proportionalMax, conversationSafeMax))
+    ),
+  }
+}
 
 function readArtifactWidthPreference() {
   try {
     const width = Number(
       window.localStorage.getItem(artifactWidthPreferenceKey)
     )
-    return Number.isFinite(width) &&
-      width >= artifactWidthMin &&
-      width <= artifactWidthMax
-      ? width
-      : null
+    return Number.isFinite(width) && width >= artifactWidthMin ? width : null
   } catch {
     return null
   }
@@ -496,8 +509,8 @@ function AgentsPanel({
               />
               <span className={styles.agentText}>
                 <span className={cn(styles.agentName, "text-sm leading-5")}>
-                  <bdi>{agent.name}</bdi>
                   {indicator.marker}
+                  <bdi>{agent.name}</bdi>
                 </span>
                 {agent.description ? (
                   <bdi
@@ -507,7 +520,9 @@ function AgentsPanel({
                   </bdi>
                 ) : null}
               </span>
-              {agent.status && agent.status !== "idle" ? (
+              {agent.status &&
+              agent.status !== "idle" &&
+              !indicator.attention ? (
                 <span
                   className={styles.statusDot}
                   data-status={agent.status}
@@ -727,10 +742,10 @@ function SessionTabs({
                     onBlur={() => setFocusedThreadId(null)}
                   >
                     <span className={styles.tabLabel}>
+                      {indicator.marker}
                       <bdi>
                         <SessionThreadListTitle fallback={session.title} />
                       </bdi>
-                      {indicator.marker}
                     </span>
                   </SessionThreadListTrigger>
                 </SessionThreadListItem>
@@ -769,7 +784,7 @@ function SessionTabs({
         </div>
       </div>
       <div className={styles.sessionActions} data-session-actions>
-        {selectedAgentId && openSessions.length > 0 ? (
+        {selectedAgentId ? (
           <Button
             ref={newSessionRef}
             className={styles.newSessionButton}
@@ -831,6 +846,7 @@ type InspectorPanelProps = Pick<
   | "dictionary"
   | "activeThreadId"
   | "onOpenSession"
+  | "onCreateSession"
   | "onActionError"
   | "threadListRuntime"
 > & {
@@ -847,6 +863,7 @@ function InspectorPanel({
   dictionary,
   activeThreadId,
   onOpenSession,
+  onCreateSession,
   onActionError,
   threadListRuntime,
   agent,
@@ -907,6 +924,7 @@ function InspectorPanel({
             query={query}
             onQueryChange={setQuery}
             onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+            onCreateSession={onCreateSession}
             threadListRuntime={threadListRuntime}
             onActionError={onActionError}
           />
@@ -1095,6 +1113,9 @@ export function WorkspaceShell({
   const [artifactWidth, setArtifactWidth] = useState<number | null>(
     readArtifactWidthPreference
   )
+  const [artifactWidthMaximum, setArtifactWidthMaximum] = useState<
+    number | null
+  >(null)
   const [mobileNavigator, dispatchMobileNavigator] = useReducer(
     mobileNavigatorReducer,
     { view: "closed" }
@@ -1200,11 +1221,19 @@ export function WorkspaceShell({
       if (!entry) return
       const desktop = entry.contentRect.width >= 1024
       setDesktopLayout(desktop)
+      const navigationWidth = navigationHidden
+        ? 0
+        : (shell
+            .querySelector<HTMLElement>(`.${styles.desktopAgents}`)
+            ?.getBoundingClientRect().width ?? 0)
+      setArtifactWidthMaximum(
+        getArtifactWidthBounds(entry.contentRect.width, navigationWidth).max
+      )
       if (desktop) dispatchMobileNavigator({ type: "ENTER_DESKTOP" })
     })
     observer.observe(shell)
     return () => observer.disconnect()
-  }, [])
+  }, [navigationHidden])
 
   function toggleDesktopInspector() {
     const nextValue = !desktopInspectorOpen
@@ -1219,20 +1248,21 @@ export function WorkspaceShell({
 
   const artifactWidthBounds = useCallback(() => {
     const shellWidth = shellRef.current?.getBoundingClientRect().width ?? 0
+    if (shellWidth <= 0 && artifactWidthMaximum !== null) {
+      return { min: artifactWidthMin, max: artifactWidthMaximum }
+    }
     const navigationWidth = navigationHidden
       ? 0
       : (shellRef.current
           ?.querySelector<HTMLElement>(`.${styles.desktopAgents}`)
           ?.getBoundingClientRect().width ?? 0)
-    const available = shellWidth - navigationWidth - artifactWidthMin
-    return {
-      min: artifactWidthMin,
-      max:
-        shellWidth > 0
-          ? Math.max(artifactWidthMin, Math.min(artifactWidthMax, available))
-          : artifactWidthMax,
-    }
-  }, [navigationHidden])
+    return getArtifactWidthBounds(shellWidth, navigationWidth)
+  }, [artifactWidthMaximum, navigationHidden])
+
+  const effectiveArtifactWidth =
+    artifactWidth === null || artifactWidthMaximum === null
+      ? artifactWidth
+      : Math.min(artifactWidth, artifactWidthMaximum)
 
   const commitArtifactWidth = useCallback(
     (width: number) => {
@@ -1283,7 +1313,8 @@ export function WorkspaceShell({
       const bounds = artifactWidthBounds()
       const renderedWidth =
         artifactPanelRef.current?.getBoundingClientRect().width
-      const current = artifactWidth || renderedWidth || artifactWidthDefault
+      const current =
+        effectiveArtifactWidth || renderedWidth || artifactWidthDefault
       let next: number | undefined
       if (event.key === "Home") next = bounds.min
       if (event.key === "End") next = bounds.max
@@ -1303,7 +1334,7 @@ export function WorkspaceShell({
       event.preventDefault()
       commitArtifactWidth(next)
     },
-    [artifactWidth, artifactWidthBounds, commitArtifactWidth, locale]
+    [artifactWidthBounds, commitArtifactWidth, effectiveArtifactWidth, locale]
   )
 
   const agentsPanelProps: AgentsPanelProps = {
@@ -1342,6 +1373,7 @@ export function WorkspaceShell({
     threadListRuntime,
     activeThreadId,
     onOpenSession,
+    onCreateSession,
     onActionError,
     agent: selectedAgent,
     artifactOutputs,
@@ -1373,10 +1405,10 @@ export function WorkspaceShell({
                   "--workspace-artifact-default-width": "min(40rem, 50cqi)",
                 }
               : {}),
-            ...(artifactWidth === null
+            ...(effectiveArtifactWidth === null
               ? {}
               : {
-                  "--workspace-artifact-width": `${artifactWidth}px`,
+                  "--workspace-artifact-width": `${effectiveArtifactWidth}px`,
                 }),
           } as CSSProperties
         }
@@ -1537,8 +1569,11 @@ export function WorkspaceShell({
                 ).toLocaleLowerCase(locale)}`}
                 aria-orientation="vertical"
                 aria-valuemin={artifactWidthMin}
-                aria-valuemax={artifactWidthMax}
-                aria-valuenow={artifactWidth ?? artifactWidthDefault}
+                aria-valuemax={
+                  artifactWidthMaximum ??
+                  Math.max(artifactWidth ?? 0, artifactWidthDefault)
+                }
+                aria-valuenow={effectiveArtifactWidth ?? artifactWidthDefault}
                 tabIndex={0}
                 onKeyDown={onArtifactResizeKeyDown}
                 onPointerDown={onArtifactResizePointerDown}
@@ -1754,6 +1789,7 @@ function navigationActivity(
     .filter(Boolean)
     .join(", ")
   return {
+    attention,
     label,
     marker: (
       <ActivityMarker

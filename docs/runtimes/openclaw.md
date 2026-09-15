@@ -1,54 +1,45 @@
-# Run AOS with OpenClaw
+# Run OpenClaw behind the AOS proxy
 
-AOS attaches to an independently installed OpenClaw Gateway through its official protocol-v4 WebSocket. AOS does not install OpenClaw, manage its model credentials, or store its device identity in public runtime configuration.
+The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`). The proxy connects to one independently operated OpenClaw Gateway over WebSocket, using its device identity and device token from private files. There is no browser Gateway route and AOS does not manage OpenClaw or model credentials.
 
-## Browser connection
+## Prerequisites
 
-Start OpenClaw with a Gateway endpoint reachable by AOS, then run:
+- A reachable, already configured OpenClaw Gateway
+- Private, owner-only files containing the Gateway device identity and device token
+- Private reconnect-cursor and guest-invitation signing-key files when those proxy features are enabled
+
+Start from [`deploy/proxy-config.openclaw.example.json`](../../deploy/proxy-config.openclaw.example.json). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
+
+## Compose attachment
+
+The OpenClaw overlay runs the AOS proxy and static UI only. It does not start, publish, or proxy a native OpenClaw Gateway.
 
 ```bash
-AOS_UI_RUNTIME_MODE=openclaw \
-AOS_UI_OPENCLAW_BASE_URL=ws://127.0.0.1:18789 \
-  bun run dev
-```
-
-For a same-origin container deployment, use the supplied proxy:
-
-```bash
+cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.openclaw.yaml up --build
 ```
 
-The browser performs OpenClaw's official challenge, device pairing, and scoped token flow. Bootstrap credentials are entered in the connection form, retained only in memory, and never belong in `runtime-config.json` or a `VITE_*` value. Grant `operator.read`, `operator.write`, `operator.questions`, and `operator.approvals`; Talk access is needed only for speech.
+For a host Gateway, the overlay maps `host.docker.internal` to Docker's host gateway. A service bound only to host loopback may still be unreachable from the container; use a trusted container-reachable address and update the private proxy configuration. Keep the native Gateway off the browser-facing network.
 
 ## Optional native tools
 
-Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API cannot register a native downloadable artifact, create an Agent, or initiate a cross-Agent Session with the required authority, so the plugin does not advertise publication, creator, or handoff tools.
+Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API does not prove native downloadable artifact publication, Agent creation, or cross-Agent Session handoff, so those tools are not advertised.
 
-## Exact limitations
+## Capability limits
 
-OpenClaw tasks/goals are not AOS Session Todos, so the adapter does not relabel them. Agent visibility mutation and edit/regenerate are unavailable because the verified protocol has no equivalent matching AOS semantics. Context usage is aggregate rather than Hermes's detailed system/tool/message breakdown. Guest chat additionally omits transcription and branches. Unsupported controls stay absent instead of invoking a nearby destructive operation.
+- AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
+- Creating, renaming, deleting, or changing visibility of Sessions/Agents is unavailable because the pinned Gateway leaves do not prove matching native mutations. Todos, Activity, edit/regenerate, steering, artifacts, transcription, and speech are also unavailable.
+- An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
+- Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
 
-## Invited chat
+## Verify
 
-The private Go gateway uses `AOS_GATEWAY_OPENCLAW_TOKEN`, an
-`AOS_GATEWAY_UPSTREAM` WebSocket URL, and an absolute persistent
-`AOS_GATEWAY_OPENCLAW_DEVICE_FILE`. It creates a stable Ed25519 identity in the
-private file, requires `0600` permissions, verifies the live read/write/question
-scopes, and persists the paired device token atomically. Keep both token and
-device file in the service environment, never in public browser configuration.
-The first connection may return `PAIRING_REQUIRED`; use `openclaw devices list`
-and `openclaw devices approve <requestId>` on the OpenClaw host, then restart
-the gateway. The invitation instruction and guest text are submitted together
-as OpenClaw's one native initial turn. A non-admitted initial run remains an
-uncertain send and is never blindly replayed without its instruction.
-After the paired token has been persisted, the bootstrap token may be removed
-from the guest-gateway environment; reconnect uses the scoped device token.
+Run the proxy checks for the selected deployment and verify the Gateway is reachable from the proxy host or container. Native live acceptance has not been run; mocked protocol tests do not prove a paired live OpenClaw journey.
 
-Guest history projects artifacts only from Session-scoped authoritative
-`artifacts.list` receipts with a byte-download mode and exact message sequence;
-the receipt's `messageSeq` must match the transcript message's authoritative
-`__openclaw.seq`, including paginated or noncontiguous history. Unscoped
-chat-content lookalikes are ignored. The browser-only OpenClaw Compose overlay
-does not run the guest gateway. If you containerize it separately, bind-mount
-the device-file directory as writable persistent private storage.
+For connection problems, see [Troubleshooting](../troubleshooting.md).

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   RichToolRenderer,
+  AosToolPresentation,
   AosToolFallback,
   isAosRichTool,
   ToolChrome,
@@ -129,9 +130,7 @@ describe("rich tool classification", () => {
         toolPart({
           toolName: "question",
           args: {
-            questions: [
-              { question: "Proceed?", options: [{ label: "Yes" }] },
-            ],
+            questions: [{ question: "Proceed?", options: [{ label: "Yes" }] }],
           },
         })
       )
@@ -142,7 +141,6 @@ describe("rich tool classification", () => {
 describe("AosToolFallback", () => {
   it.each([
     ["an unknown call", "unknown_tool", { type: "complete" }],
-    ["an errored call", "read_file", { type: "incomplete", reason: "error" }],
     [
       "an interrupted question",
       "question",
@@ -168,14 +166,8 @@ describe("AosToolFallback", () => {
       ).not.toBeInTheDocument()
       const trigger = screen.getByRole("button")
       expect(trigger).toHaveAttribute("aria-expanded", "false")
-      expect(
-        within(trigger).getByText(toolName === "read_file" ? "Read" : "Used")
-      ).toBeVisible()
-      expect(
-        within(trigger).getByText(
-          toolName === "read_file" ? "read_file" : "Continue?"
-        )
-      ).toBeVisible()
+      expect(within(trigger).getByText("Used")).toBeVisible()
+      expect(within(trigger).getByText(toolName)).toBeVisible()
       expect(screen.queryByText("[REDACTED]", { exact: false })).toBeNull()
       expect(screen.queryByText(/Provider result/)).toBeNull()
       expect(container.querySelector("[data-tool-state]")).toHaveAttribute(
@@ -194,6 +186,74 @@ describe("AosToolFallback", () => {
       expect(screen.getByText(/Provider result/)).toBeVisible()
     }
   )
+
+  it("uses Tool Error for a failed call", () => {
+    const { container } = render(
+      <AosToolPresentation
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "bun run build" },
+          result: { output: "Build failed", exit_code: 1 },
+        })}
+      />
+    )
+
+    expect(container.querySelector('[data-slot="tool-error"]')).toBeVisible()
+    expect(screen.getByText("bun run build")).toBeVisible()
+    expect(screen.getByText("Build failed")).toBeVisible()
+  })
+
+  it("uses Terminal Block for command output", async () => {
+    const user = userEvent.setup()
+    const { container } = render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "bun run build" },
+          result: { output: "Built successfully", exit_code: 0 },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button"))
+    expect(
+      container.querySelector('[data-slot="terminal-block"]')
+    ).toBeVisible()
+    expect(screen.getByText("Built successfully")).toBeVisible()
+  })
+
+  it("uses Code Runner for execute_code output", async () => {
+    const user = userEvent.setup()
+    const { container } = render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "execute_code",
+          args: { code: "print(42)" },
+          result: {
+            status: "success",
+            output: "42",
+            exit_code: 0,
+            duration_seconds: 0.02,
+          },
+        })}
+      />
+    )
+
+    const trigger = screen.getByRole("button")
+    expect(within(trigger).getByText("execute_code")).toBeVisible()
+    expect(screen.queryByText("print(42)")).not.toBeInTheDocument()
+
+    await user.click(trigger)
+
+    expect(container.querySelector('[data-slot="code-runner"]')).toBeVisible()
+    expect(container.querySelector('[data-slot="terminal-block"]')).toBeNull()
+    expect(screen.getByText("python")).toBeVisible()
+    expect(screen.getByText("print(42)")).toBeVisible()
+    expect(screen.getByText("42")).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Run this snippet" })
+    ).toBeDisabled()
+  })
 })
 
 describe("accessible rich-tool semantics", () => {
@@ -734,6 +794,36 @@ describe("provider permission renderer", () => {
     )
     expect(screen.getByText("Expired")).toBeInTheDocument()
     expect(screen.queryByText("Unavailable")).toBeNull()
+  })
+
+  it("renders every settled Hermes question with its recorded answer or discard", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "question",
+          args: {
+            question: "2 questions",
+            questions: [
+              { question: "Where do you live?" },
+              { question: "Which amenities do you use?" },
+            ],
+            allowFreeform: true,
+          },
+          result: {
+            status: "cancelled",
+            responses: [
+              { question: "Where do you live?", answers: [] },
+              { question: "Which amenities do you use?", answers: [] },
+            ],
+          },
+          status: { type: "complete" },
+        })}
+      />
+    )
+
+    expect(screen.getByText("Where do you live?")).toBeVisible()
+    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
+    expect(screen.getAllByText("Discarded")).toHaveLength(2)
   })
 
   it("retries the same provider-native choice once without double-submit", async () => {

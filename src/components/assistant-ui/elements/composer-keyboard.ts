@@ -7,11 +7,15 @@ export type ComposerEnterState = {
   readonly isRunning: boolean
   readonly hasQueue: boolean
   readonly isEmpty: boolean
+  readonly canSteer?: boolean
+  readonly hasAttachments?: boolean
 }
 
 export type ComposerEnterEvent = {
   readonly key: string
   readonly shiftKey?: boolean
+  readonly metaKey?: boolean
+  readonly ctrlKey?: boolean
   readonly isComposing?: boolean
   readonly keyCode?: number
   readonly defaultPrevented?: boolean
@@ -22,7 +26,8 @@ export type ComposerEnterEvent = {
   }
 }
 
-export type ComposerEnterAction = "send" | "newline" | "noop"
+export type ComposerEnterAction =
+  "send" | "queue" | "steer" | "newline" | "noop"
 
 export type VisualLineBoundary = "first" | "last"
 
@@ -122,7 +127,14 @@ export function resolveComposerEnterAction(
   ) {
     return "noop"
   }
-  if (event.shiftKey) return "newline"
-  if (state.isEmpty || (state.isRunning && !state.hasQueue)) return "noop"
-  return "send"
+  if (state.isEmpty) return "noop"
+  const steeringShortcut =
+    event.shiftKey && (event.metaKey === true || event.ctrlKey === true)
+  if (!steeringShortcut && event.shiftKey) return "newline"
+  if (!state.isRunning) return "send"
+  if (steeringShortcut) {
+    if (state.canSteer && !state.hasAttachments) return "steer"
+    return state.hasQueue ? "queue" : "noop"
+  }
+  return state.hasQueue ? "queue" : "noop"
 }

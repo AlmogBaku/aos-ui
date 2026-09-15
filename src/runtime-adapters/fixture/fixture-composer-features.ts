@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
+import { FIXTURE_SLASH_COMMANDS } from "./fixture-slash-commands"
 
 const FIXTURE_MODEL_OPTIONS = [
   { id: "fixture-balanced", label: "Fixture Balanced", group: "Fixture" },
@@ -90,6 +91,7 @@ export function useFixtureComposerFeatures({
   return useMemo(() => {
     if (!threadId) return {}
     return {
+      slashCommands: FIXTURE_SLASH_COMMANDS,
       ...(config.modelSelectorEnabled
         ? {
             model: {

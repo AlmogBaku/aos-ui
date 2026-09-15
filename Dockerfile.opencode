@@ -2,18 +2,12 @@
 
 FROM oven/bun:1.3.10-alpine AS bun-runtime
 
-FROM golang:1.25-alpine AS gateway-build
-WORKDIR /gateway
-COPY gateway/go.mod gateway/go.sum ./
-RUN go mod download
-COPY gateway/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/aos-gateway ./cmd/aos-gateway
-
 FROM bun-runtime AS integration-build
 WORKDIR /bundle
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
 COPY scripts/opencode-config.ts scripts/opencode-serve.ts ./scripts/
+COPY packages/proxy/secrets.ts ./packages/proxy/secrets.ts
 COPY shared/ ./shared/
 COPY integrations/opencode/ ./integrations/opencode/
 RUN install -d integrations/opencode/dist \
@@ -46,7 +40,6 @@ RUN case "${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID}" in *[!0-9:]*|:*|*:) exit 1 ;; e
 RUN install -d -o "${AOS_UI_HOST_UID}" -g "${AOS_UI_HOST_GID}" /home/aos-ui/.local/state
 
 COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
-COPY --from=gateway-build /out/aos-gateway /usr/local/bin/aos-gateway
 
 ENV HOME=/home/aos-ui \
     XDG_CACHE_HOME=/home/aos-ui/.cache \

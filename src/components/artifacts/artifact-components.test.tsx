@@ -172,7 +172,7 @@ describe("artifact workspace", () => {
       screen.getAllByText(/\.txt$/).map(({ textContent }) => textContent)
     ).toEqual(["newer.txt", "older.txt"])
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Open" })[0]!)
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
 
     expect(await screen.findByText("Newer body")).toBeInTheDocument()
     expect(resolve).toHaveBeenCalledWith(
@@ -223,7 +223,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
 
     expect(await screen.findByRole("heading", { name: "Report" })).toBeVisible()
     expect(screen.queryByRole("img")).not.toBeInTheDocument()
@@ -270,7 +270,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    await user.click(screen.getByRole("button", { name: "Open" }))
+    await user.click(screen.getByRole("button", { name: /^Open:/ }))
     await user.click(await screen.findByRole("button", { name: "Copy" }))
 
     await waitFor(() => expect(clipboard).toHaveBeenCalledWith(source))
@@ -314,7 +314,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
 
     await waitFor(() =>
       expect(
@@ -342,7 +342,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Open" })[0]!)
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     await waitFor(() => expect(signals).toHaveLength(1))
     rerender(
       <ArtifactWorkspaceProvider
@@ -383,7 +383,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Open" })[0]!)
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     await waitFor(() => expect(resolve).toHaveBeenCalledOnce())
     rerender(
       <ArtifactWorkspaceProvider
@@ -416,7 +416,7 @@ describe("artifact workspace", () => {
         <ArtifactTestSurface />
       </ArtifactWorkspaceProvider>
     )
-    const open = screen.getByRole("button", { name: "Open" })
+    const open = screen.getByRole("button", { name: /^Open:/ })
     open.focus()
     fireEvent.click(open)
     fireEvent.click(
@@ -479,7 +479,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Open" })[0]!)
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     expect(
       await screen.findByText("This output could not be loaded.")
     ).toBeInTheDocument()
@@ -523,7 +523,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
     expect(
       await screen.findByText("This text file is too large to preview.")
     ).toBeInTheDocument()
@@ -567,7 +567,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
 
     expect(await screen.findByTitle("PDF preview")).toHaveAttribute(
       "src",
@@ -614,7 +614,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
     const previewTab = await screen.findByRole("tab", { name: "Preview" })
     expect(previewTab).toHaveAttribute("aria-selected", "true")
     const frame = screen.getByTitle("HTML preview")
@@ -647,7 +647,7 @@ describe("artifact workspace", () => {
 
     fireEvent.click(summary!)
 
-    expect(screen.getAllByRole("button", { name: "פתיחה" })).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: /^פתיחה:/ })).toHaveLength(2)
   })
 
   it("opens an accessible unavailable state when the runtime has no resolver", async () => {
@@ -663,7 +663,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Open" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
 
     expect(
       await screen.findByText("This runtime cannot open this output.")

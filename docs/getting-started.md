@@ -6,7 +6,8 @@ This tutorial attaches AOS UI to an independently operated agent harness, then i
 
 For real work, you need:
 
-- one installed agent harness—[OpenCode](runtimes/opencode.md), [Hermes](runtimes/hermes.md), [OpenClaw](runtimes/openclaw.md), or compatible [AG-UI services](runtimes/ag-ui.md)
+- an authenticated AOS proxy connected to the harness selected by the
+  deployment (Hermes is the supported adapter today)
 - any credentials required by that harness
 - [Bun](https://bun.sh/)
 - a current desktop browser
@@ -32,10 +33,7 @@ bun install
 
 Start and authenticate your harness independently, then choose **one** connection guide:
 
-- [Connect OpenCode](runtimes/opencode.md)
-- [Connect Hermes](runtimes/hermes.md)
-- [Connect generic AG-UI services](runtimes/ag-ui.md)
-- [Connect OpenClaw](runtimes/openclaw.md)
+- [Run AOS with Hermes](runtimes/hermes.md)
 
 Follow the local-development steps in that guide. When both the harness and AOS UI are running, open <http://localhost:3000>.
 

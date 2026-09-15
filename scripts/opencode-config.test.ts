@@ -1,3 +1,7 @@
+import { chmod, mkdtemp, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 import { describe, expect, it } from "vitest"
 
 import {
@@ -6,6 +10,7 @@ import {
   createOpenCodeServeArguments,
   parseCorsOrigins,
   parseOpenCodeWorktree,
+  readOpenCodeServerPassword,
 } from "./opencode-config"
 
 describe("OpenCode startup configuration", () => {
@@ -122,6 +127,25 @@ describe("OpenCode startup configuration", () => {
       GEMINI_API_KEY: "gemini-key",
       GOOGLE_GENERATIVE_AI_API_KEY: "gemini-key",
     })
+  })
+
+  it("reads the native server password only from a bounded owner-only file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aos-ui-opencode-password-"))
+    const passwordFile = join(directory, "password")
+    await writeFile(passwordFile, "native-password\n", "utf8")
+    await chmod(passwordFile, 0o600)
+
+    await expect(
+      readOpenCodeServerPassword({
+        AOS_UI_OPENCODE_PASSWORD_FILE: passwordFile,
+      })
+    ).resolves.toBe("native-password")
+    expect(
+      createOpenCodeChildEnvironment({}, undefined, "native-password")
+    ).toMatchObject({ OPENCODE_SERVER_PASSWORD: "native-password" })
+    expect(createOpenCodeChildEnvironment({}, undefined)).not.toHaveProperty(
+      "OPENCODE_SERVER_PASSWORD"
+    )
   })
 
   it("preserves an explicitly configured OpenCode Google credential", () => {

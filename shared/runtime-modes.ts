@@ -1,18 +1,15 @@
-/** Public runtime names and their development entrypoints. No unknown-mode fallback. */
+/** Browser runtime names and their development entrypoints. No unknown-mode fallback. */
 export const runtimeCatalog = {
   fixture: {
     entrypoint: "/src/runtime-adapters/fixture/index.ts",
     fixedNow: "2026-09-03T12:00:00.000Z",
   },
-  opencode: { entrypoint: "/src/runtime-adapters/opencode/index.ts" },
-  hermes: { entrypoint: "/src/runtime-adapters/hermes/index.ts" },
-  "ag-ui": { entrypoint: "/src/runtime-adapters/ag-ui/index.ts" },
-  openclaw: { entrypoint: "/src/runtime-adapters/openclaw/index.ts" },
+  aos: { entrypoint: "/src/runtime-adapters/aos/index.ts" },
 } as const
 
 export type RuntimeMode = keyof typeof runtimeCatalog
 
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "opencode"
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "aos"
 
 export function isRuntimeMode(value: unknown): value is RuntimeMode {
   return typeof value === "string" && Object.hasOwn(runtimeCatalog, value)

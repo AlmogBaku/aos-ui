@@ -1,6 +1,8 @@
 /** Run with `bun run test/containers/hermes-audio-proxy-smoke.ts`.
- * Uses only disposable containers and a loopback-published Nginx port.
- * Set AOS_UI_AUDIO_SMOKE_IMAGE to smoke a freshly built production image.
+ *
+ * The filename is retained for command compatibility. The smoke validates
+ * the normalized AOS proxy boundary and never exposes a native provider path.
+ * It uses only disposable containers and a loopback-published Nginx port.
  */
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
@@ -8,10 +10,10 @@ import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 
 const root = resolve(import.meta.dirname, "../..")
-const prefix = `aos-ui-audio-smoke-${randomUUID().slice(0, 8)}`
+const prefix = `aos-ui-proxy-smoke-${randomUUID().slice(0, 8)}`
 const network = `${prefix}-network`
 const upstream = `${prefix}-upstream`
-const proxy = `${prefix}-proxy`
+const proxy = `${prefix}-nginx`
 const image =
   process.env.AOS_UI_AUDIO_SMOKE_IMAGE ??
   "nginxinc/nginx-unprivileged:1.29.3-alpine"
@@ -19,7 +21,7 @@ const image =
 const upstreamScript = `
 import { createServer } from "node:http";
 createServer(async (request, response) => {
-  if (request.url === "/api/smoke/stream") {
+  if (request.url === "/api/aos/v1/smoke/stream") {
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
     response.write("data: started\\n\\n");
     setTimeout(() => response.end("data: finished\\n\\n"), 300);
@@ -28,29 +30,23 @@ createServer(async (request, response) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   const raw = Buffer.concat(chunks);
-  if (!request.url.startsWith("/api/audio/transcribe?")) {
+  if (!request.url.startsWith("/api/aos/v1/smoke/request?")) {
     response.writeHead(404).end();
     return;
   }
-  const payload = JSON.parse(raw.toString());
-  const encoded = payload.data_url.slice(payload.data_url.indexOf(",") + 1);
   response.writeHead(200, {
     "content-type": "application/json",
-    "set-cookie": "hermes-audio-smoke=accepted; Path=/; HttpOnly; SameSite=Lax",
+    "set-cookie": "aos-proxy-smoke=accepted; Path=/; HttpOnly; SameSite=Lax",
   });
   response.end(JSON.stringify({
     ok: true,
-    transcript: "proxy smoke accepted",
-    provider: "disposable-mock",
     received: {
       url: request.url,
       bodyBytes: raw.length,
-      audioBytes: Buffer.from(encoded, "base64").length,
-      mimeType: payload.mime_type,
       cookie: request.headers.cookie,
       authorization: request.headers.authorization,
       host: request.headers.host,
-      prefix: request.headers["x-forwarded-prefix"],
+      forwardedHost: request.headers["x-forwarded-host"],
       forwardedFor: request.headers["x-forwarded-for"],
       protocol: request.headers["x-forwarded-proto"],
       connection: request.headers.connection,
@@ -81,21 +77,15 @@ async function waitForHealth(baseUrl: string) {
 }
 
 async function runSmoke(baseUrl: string) {
-  const address = new URL(baseUrl).host
   await waitForHealth(baseUrl)
-
-  const mimeType = "audio/webm;codecs=opus"
-  const body = JSON.stringify({
-    data_url: `data:${mimeType};base64,${Buffer.alloc(5 * 1024 * 1024).toString("base64")}`,
-    mime_type: mimeType,
-  })
+  const body = JSON.stringify({ message: "normalized proxy" })
   const response = await fetch(
-    `${baseUrl}/hermes/api/audio/transcribe?profile=smoke+profile`,
+    `${baseUrl}/api/aos/v1/smoke/request?profile=smoke+profile`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        cookie: "hermes-session=synthetic-smoke",
+        cookie: "aos-session=synthetic-smoke",
         authorization: "Bearer synthetic-smoke",
         "x-forwarded-for": "203.0.113.7",
       },
@@ -107,17 +97,13 @@ async function runSmoke(baseUrl: string) {
   const result = await response.json()
   assert.deepEqual(result, {
     ok: true,
-    transcript: "proxy smoke accepted",
-    provider: "disposable-mock",
     received: {
-      url: "/api/audio/transcribe?profile=smoke+profile",
+      url: "/api/aos/v1/smoke/request?profile=smoke+profile",
       bodyBytes: Buffer.byteLength(body),
-      audioBytes: 5 * 1024 * 1024,
-      mimeType,
-      cookie: "hermes-session=synthetic-smoke",
+      cookie: "aos-session=synthetic-smoke",
       authorization: "Bearer synthetic-smoke",
-      host: address,
-      prefix: "/hermes",
+      host: new URL(baseUrl).host,
+      forwardedHost: new URL(baseUrl).host,
       forwardedFor: result.received.forwardedFor,
       protocol: "http",
       connection: "close",
@@ -127,28 +113,16 @@ async function runSmoke(baseUrl: string) {
   assert.match(result.received.forwardedFor, /^203\.0\.113\.7, .+$/u)
   assert.equal(
     response.headers.get("set-cookie"),
-    "hermes-audio-smoke=accepted; Path=/; HttpOnly; SameSite=Lax"
+    "aos-proxy-smoke=accepted; Path=/; HttpOnly; SameSite=Lax"
   )
 
-  for (const [path, bytes] of [
-    ["/hermes/api/audio/transcribe?profile=smoke", 8 * 1024 * 1024 + 1],
-    ["/hermes/api/audio/speak?profile=smoke", 1024 * 1024 + 1],
-    ["/hermes/api/audio/transcribe/extra", 1024 * 1024 + 1],
-  ] as const) {
-    const rejected = await fetch(`${baseUrl}${path}`, {
-      method: "POST",
-      body: "x".repeat(bytes),
-      signal: AbortSignal.timeout(10_000),
-    })
-    assert.equal(
-      rejected.status,
-      413,
-      `${path} must retain its bounded body limit`
-    )
-    await rejected.arrayBuffer()
-  }
+  const nativePath = await fetch(`${baseUrl}/hermes/api/sessions`, {
+    signal: AbortSignal.timeout(10_000),
+  })
+  assert.equal(nativePath.status, 404)
+  await nativePath.arrayBuffer()
 
-  const stream = await fetch(`${baseUrl}/hermes/api/smoke/stream`, {
+  const stream = await fetch(`${baseUrl}/api/aos/v1/smoke/stream`, {
     signal: AbortSignal.timeout(10_000),
   })
   assert.equal(stream.status, 200)
@@ -164,7 +138,7 @@ async function runSmoke(baseUrl: string) {
   }
   assert.equal(remaining, "data: finished\n\n")
   console.log(
-    "Hermes proxy smoke passed: 5 MiB audio upload, exact-route limits, auth/cookie/header forwarding, health, and streaming."
+    "AOS normalized proxy smoke passed: request forwarding, auth/cookie/header forwarding, native-route isolation, health, and streaming."
   )
 }
 
@@ -187,7 +161,7 @@ if (process.env.AOS_UI_AUDIO_SMOKE_CLIENT_URL) {
       "--network",
       network,
       "--network-alias",
-      "hermes-audio-smoke",
+      "proxy-upstream",
       "node:22-slim",
       "node",
       "--input-type=module",
@@ -208,15 +182,16 @@ if (process.env.AOS_UI_AUDIO_SMOKE_CLIENT_URL) {
       "-e",
       "AOS_UI_WEB_PORT=3000",
       "-e",
-      "AOS_UI_HERMES_HOST=hermes-audio-smoke",
+      "AOS_UI_PROXY_HOST=proxy-upstream",
       "-e",
-      "AOS_UI_HERMES_PORT=8123",
+      "AOS_UI_PROXY_PORT=8123",
       "-v",
       `${resolve(root, "deploy/nginx/default.conf.template")}:/etc/nginx/templates/default.conf.template:ro`,
       image
     )
     proxyCreated = true
-    assert.match(docker("port", proxy, "3000/tcp"), /^127\.0\.0\.1:\d+$/u)
+    const published = docker("port", proxy, "3000/tcp")
+    assert.match(published, /^127\.0\.0\.1:\d+$/u)
     // Share only the disposable proxy's network namespace: the requester uses
     // real loopback even when the Docker daemon is outside the caller's namespace.
     console.log(
@@ -254,5 +229,5 @@ if (process.env.AOS_UI_AUDIO_SMOKE_CLIENT_URL) {
     }
   }
   if (errors.length)
-    throw new AggregateError(errors, "Hermes proxy smoke or cleanup failed")
+    throw new AggregateError(errors, "AOS proxy smoke or cleanup failed")
 }

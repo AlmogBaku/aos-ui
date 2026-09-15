@@ -17,6 +17,7 @@ afterEach(cleanup)
 
 const copy: AgentSessionHistoryCopy = {
   searchSessions: "Search Sessions",
+  newSession: "New session",
   openSessions: "Open sessions",
   history: "History",
   clearSearch: "Clear search",
@@ -68,6 +69,31 @@ const navigation: AgentSessionNavigation = {
 }
 
 describe("AgentSessionHistory", () => {
+  it("offers Session creation beside search, including empty results", () => {
+    const onCreateSession = vi.fn()
+    render(
+      <AgentSessionHistory
+        navigation={navigation}
+        activeThreadId={null}
+        locale="en"
+        copy={copy}
+        query="missing"
+        onQueryChange={vi.fn()}
+        onOpenSession={vi.fn()}
+        onCreateSession={onCreateSession}
+      />
+    )
+
+    const controls = screen.getByRole("group", { name: "Session actions" })
+    expect(
+      within(controls).getByRole("searchbox", { name: "Search Sessions" })
+    ).toBeVisible()
+    fireEvent.click(
+      within(controls).getByRole("button", { name: "New session" })
+    )
+    expect(onCreateSession).toHaveBeenCalledWith("agent-a")
+  })
+
   it("renders unique open and history rows and opens the chosen owner pair", () => {
     const onOpenSession = vi.fn()
     render(

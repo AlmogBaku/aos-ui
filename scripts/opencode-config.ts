@@ -1,5 +1,7 @@
 import { isAbsolute, resolve } from "node:path"
 
+import { readSecretFile } from "../packages/proxy/secrets"
+
 type Environment = Readonly<Record<string, string | undefined>>
 
 const customProviderVariables = [
@@ -150,11 +152,13 @@ export function createOpenCodeChildEnvironment<
   TEnvironment extends Environment,
 >(
   environment: TEnvironment,
-  configContent?: string
+  configContent?: string,
+  serverPassword?: string
 ): TEnvironment & {
   AOS_UI_OPENCODE_MONTY_TOOLS?: string
   GOOGLE_GENERATIVE_AI_API_KEY?: string
   OPENCODE_CONFIG_CONTENT?: string
+  OPENCODE_SERVER_PASSWORD?: string
 } {
   const monty = parseMontyConfiguration(environment)
   const googleApiKey =
@@ -168,7 +172,15 @@ export function createOpenCodeChildEnvironment<
       ? { AOS_UI_OPENCODE_MONTY_TOOLS: montyToolNames }
       : {}),
     ...(configContent ? { OPENCODE_CONFIG_CONTENT: configContent } : {}),
+    ...(serverPassword ? { OPENCODE_SERVER_PASSWORD: serverPassword } : {}),
   }
+}
+
+export async function readOpenCodeServerPassword(
+  environment: Environment
+): Promise<string | undefined> {
+  const path = environment.AOS_UI_OPENCODE_PASSWORD_FILE?.trim()
+  return path ? readSecretFile(path) : undefined
 }
 
 export function parseCorsOrigins(rawOrigins: string | undefined): string[] {

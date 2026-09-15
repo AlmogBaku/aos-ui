@@ -1,151 +1,89 @@
 # Configuration reference
 
-AOS loads runtime selection from browser-readable JSON or, during local Vite development, from an allowlisted set of environment variables. These values tell the browser how to attach to an already-running runtime; they do not install or start it.
-
-## Configuration precedence
-
-When `AOS_UI_RUNTIME_CONFIG_FILE` is set, Vite serves that file as `/runtime-config.json`. Otherwise it derives the same public shape from local environment variables. Production Nginx always reads the mounted `/runtime-config.json` file.
-
-The browser fetches the file without caching. Invalid or missing configuration renders an unavailable state; AOS never falls back to fixture data.
-
-> [!WARNING]
-> Everything in `/runtime-config.json` is public to the browser. Keep credentials in the native runtime or server environment. Never put secrets in this file or in `VITE_*` variables.
-
-Guest-invitation signing keys are native-process secrets, not browser runtime
-configuration. See [Invited chat](invite-chat.md) for gateway and skill setup.
-
-## Public runtime JSON
-
-Shared optional fields:
-
-| Field                          | Type     | Default | Meaning                                           |
-| ------------------------------ | -------- | ------- | ------------------------------------------------- |
-| `composerModelSelectorEnabled` | boolean  | `true`  | Show the runtime model selector when supported.   |
-| `composerContextEnabled`       | boolean  | `true`  | Show authoritative context usage when supported.  |
-| `artifactHtmlAssetOrigins`     | string[] | omitted | HTTPS origins allowed by published HTML previews. |
-
-Unknown fields are rejected. Ready configurations use one of these shapes.
-
-### Fixture
+The browser loads `/runtime-config.json` without caching. It has exactly two
+runtime modes: `aos` for the normalized same-origin proxy and `fixture` for a
+deterministic local preview. Native provider URLs, credentials, directories,
+and model identifiers never belong in this public file.
 
 ```json
 {
-  "mode": "fixture",
+  "mode": "aos",
   "composerModelSelectorEnabled": true,
   "composerContextEnabled": true
 }
 ```
 
-### OpenCode
+Unknown fields are rejected. Optional `artifactHtmlAssetOrigins` is an array of
+at most 16 credential-free HTTPS origins; omit it to block external HTML
+preview assets.
 
-```json
-{
-  "mode": "opencode",
-  "baseUrl": "http://127.0.0.1:4096",
-  "directory": "/workspace",
-  "composerModelSelectorEnabled": true,
-  "composerContextEnabled": true
-}
-```
+## Local development
 
-`directory` is the absolute path understood by the OpenCode server. In the supplied container it is `/workspace`. Add `defaultModel` only when both native identifiers are known:
+Vite derives the same public shape when no configuration file is supplied.
 
-```json
-"defaultModel": {
-  "providerID": "amazon-bedrock",
-  "modelID": "your-model-id"
-}
-```
+| Variable                                 | Default                 | Use                                  |
+| ---------------------------------------- | ----------------------- | ------------------------------------ |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Public runtime JSON file.            |
+| `AOS_UI_RUNTIME_MODE`                    | `aos`                   | `aos` or explicit `fixture`.         |
+| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100` | Local normalized proxy target.       |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection. |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.   |
 
-### Hermes
+The AOS proxy privately selects and authenticates exactly one Hermes, OpenCode,
+or OpenClaw runtime. There is no browser runtime mode or provider route for any
+of them.
 
-```json
-{
-  "mode": "hermes",
-  "baseUrl": "/hermes",
-  "composerModelSelectorEnabled": true,
-  "composerContextEnabled": true
-}
-```
+## Private proxy configuration
 
-Use the same-origin `/hermes` prefix with the supplied Vite or Nginx forwarding. Authentication remains native to Hermes.
+The Bun proxy reads a strict private JSON file passed to
+`bun run proxy:serve -- --config PATH`. Start from the maintained example for
+the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
+[`OpenCode`](../deploy/proxy-config.opencode.example.json), or
+[`OpenClaw`](../deploy/proxy-config.openclaw.example.json).
 
-### Generic AG-UI
+| Field             | Meaning                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------- |
+| `version`         | Configuration format; V1 accepts only `1`.                                                    |
+| `deploymentId`    | Stable identifier bound into reconnect cursors and guest invitations.                         |
+| `listen`          | Trusted operator host and port. Wildcard binds require `exposure: "private-container"`.       |
+| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests.                           |
+| `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below. |
+| `events`          | Active reconnect-cursor key ID and one to three file-backed keys.                             |
+| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                   |
+| `guest`           | Optional distinct guest listener/origin and invitation signing keys.                          |
+| `shutdownGraceMs` | Time allowed for HTTP and event connections to drain.                                         |
 
-```json
-{
-  "mode": "ag-ui",
-  "runUrl": "http://127.0.0.1:8000/agent",
-  "workspaceUrl": "http://127.0.0.1:8001",
-  "composerModelSelectorEnabled": true,
-  "composerContextEnabled": true
-}
-```
+V1 selects one of the supported adapter kinds per deployment; unknown kinds are
+rejected. Operator and guest listeners use the exact same runtime instance,
+credentials, transport, and Session coordinator. There is no second guest
+runtime or credential.
 
-Both URLs are required absolute HTTP(S) URLs without credentials, queries, or fragments.
+| `runtime.kind` | Required private fields                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs`                                          |
+| `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
+| `openclaw`     | WebSocket `baseUrl`, absolute owner-only `deviceIdentityFile`, and absolute owner-only `deviceTokenFile` |
 
-### OpenClaw
+The operator listener intentionally has no application authentication. Network
+access grants full operator access. Keep it on loopback or a trusted private
+network, or put it behind an authenticated ingress. If `guest` is configured,
+its listener and public origin must differ from the operator lane; guest access
+requires a scoped, expiring JWT.
 
-```json
-{
-  "mode": "openclaw",
-  "baseUrl": "/openclaw",
-  "creatorAgentId": "creator"
-}
-```
+Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
+`runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable), every
+`events.keys[].secretFile`, and every `guest.invitations.keys[].secretFile`
+must be absolute paths to regular, non-symlinked, owner-only files. Secret
+values never belong directly in the JSON, Compose environment, `VITE_*`, public
+runtime configuration, or browser bundle. Unknown and legacy OIDC,
+operator-cookie, Hermes browser-broker, and guest-Hermes fields are rejected.
 
-`baseUrl` is a credential-free `ws://`/`wss://` URL or same-origin proxy path. `creatorAgentId` is optional. Gateway tokens and passwords are never public fields.
+The Bun proxy serves the built browser assets, `/runtime-config.json`, the
+operator API, and—when configured—the separate guest surface. See
+[Deployment](deployment.md) for Compose mounts and listener exposure.
 
-The optional private invited-chat gateway has separate server-only settings:
-`AOS_GATEWAY_OPENCLAW_TOKEN` supplies the initial operator bootstrap secret and
-`AOS_GATEWAY_OPENCLAW_DEVICE_FILE` names an absolute, persistent, writable path
-for its paired device key and token. Neither value belongs in this public JSON
-or in a `VITE_*` value.
-
-## Artifact HTML assets
-
-`artifactHtmlAssetOrigins` accepts at most 16 credential-free HTTPS origins. Each entry must contain only the origin, with no path, query, or fragment:
-
-```json
-"artifactHtmlAssetOrigins": ["https://cdn.example.com"]
-```
-
-Omit the field to block external assets in published HTML previews.
-
-## Local Vite environment
-
-| Variable                                 | Default                 | Use                                                      |
-| ---------------------------------------- | ----------------------- | -------------------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Absolute path to public runtime JSON.                    |
-| `AOS_UI_RUNTIME_MODE`                    | `opencode`              | `fixture`, `opencode`, `hermes`, `openclaw`, or `ag-ui`. |
-| `AOS_UI_OPENCODE_BASE_URL`               | `http://127.0.0.1:4096` | Browser-reachable OpenCode URL or same-origin path.      |
-| `AOS_UI_OPENCODE_WORKTREE`               | required for OpenCode   | Absolute native working directory.                       |
-| `AOS_UI_OPENCODE_PROVIDER_ID`            | unset                   | Optional model provider; set with model ID.              |
-| `AOS_UI_OPENCODE_MODEL_ID`               | unset                   | Optional model ID; set with provider ID.                 |
-| `AOS_UI_HERMES_BASE_URL`                 | required for Hermes     | Absolute URL or same-origin path such as `/hermes`.      |
-| `AOS_UI_HERMES_TARGET`                   | `http://127.0.0.1:9119` | Vite forwarding target.                                  |
-| `AOS_UI_OPENCLAW_BASE_URL`               | required for OpenClaw   | Gateway WebSocket URL or `/openclaw` proxy path.         |
-| `AOS_UI_OPENCLAW_CREATOR_AGENT_ID`       | unset                   | Optional configured creator Agent ID.                    |
-| `AOS_UI_AG_UI_URL`                       | required for AG-UI      | AG-UI run endpoint.                                      |
-| `AOS_UI_AG_UI_WORKSPACE_URL`             | required for AG-UI      | Workspace-service base URL.                              |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set to `false` to hide the selector.                     |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set to `false` to hide context usage.                    |
-
-The optional OpenCode launcher and its credential-forwarding variables are described in [Run with OpenCode](runtimes/opencode.md). They are not required when attaching to an independently configured server.
-
-## Compose environment
-
-| Variable                              | Default                                    | Use                                             |
-| ------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`          | `./deploy/runtime-config.json`             | Public JSON mounted read-only.                  |
-| `AOS_UI_BIND_ADDRESS`                 | `127.0.0.1`                                | Published-service bind address.                 |
-| `AOS_UI_WEB_PUBLISHED_PORT`           | `3000`                                     | Web port on the host.                           |
-| `AOS_UI_OPENCODE_PUBLISHED_PORT`      | `4096`                                     | OpenCode port on the host.                      |
-| `AOS_UI_OPENCODE_WORKTREE`            | required by OpenCode overlay               | External worktree mounted at `/workspace`.      |
-| `AOS_UI_HOST_UID` / `AOS_UI_HOST_GID` | `1000`                                     | Non-root OpenCode container identity.           |
-| `AOS_UI_HERMES_HOST`                  | `host.docker.internal` with Hermes overlay | Hermes host reachable from the web container.   |
-| `AOS_UI_HERMES_PORT`                  | `9119`                                     | Native Hermes port.                             |
-| `AOS_UI_OPENCLAW_HOST`                | `host.docker.internal` with overlay        | OpenClaw host reachable from the web container. |
-| `AOS_UI_OPENCLAW_PORT`                | `18789`                                    | Native OpenClaw Gateway port.                   |
-
-Copy [`.env.compose.example`](../.env.compose.example) to `.env` for local overrides. See [Deployment](deployment.md) for complete commands.
+Runtime slash-command suggestions are enabled on the operator surface. The
+guest surface hides them by default; set
+`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them there.
+This flag changes presentation only. A guest submission is still routed by the
+runtime according to the invitation's existing message permissions.
