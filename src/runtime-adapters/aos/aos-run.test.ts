@@ -26,6 +26,92 @@ function collect(
 }
 
 describe("AOS normalized HttpAgent transport", () => {
+  it.each([
+    { result: { "aos.composerPrefill": 42 }, outcome: { type: "success" } },
+    {
+      result: { "aos.composerPrefill": "x".repeat(1_048_577) },
+      outcome: { type: "success" },
+    },
+    {
+      result: { "aos.composerPrefill": "א".repeat(524_289) },
+      outcome: { type: "success" },
+    },
+    { result: { "aos.composerPrefill": "draft" } },
+    {
+      result: { "aos.composerPrefill": "draft" },
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "question-1", reason: "input-required" }],
+      },
+    },
+    {
+      result: { "aos.composerPrefill": "draft" },
+      outcome: { type: "success" },
+      threadId: "another-session",
+    },
+    {
+      result: { "aos.composerPrefill": "draft" },
+      outcome: { type: "success" },
+      runId: "another-run",
+    },
+  ])(
+    "ignores invalid or unsuccessful composer prefill results %#",
+    async (finish) => {
+      const onComposerPrefill = vi.fn(async () => undefined)
+      const agent = createAosRunAgent({
+        agentId: "researcher",
+        threadId: "session-1",
+        onComposerPrefill,
+        fetcher: vi.fn(
+          async () =>
+            new Response(
+              `data: ${JSON.stringify({ type: "RUN_FINISHED", threadId: "session-1", runId: "run-1", ...finish })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } }
+            )
+        ),
+      })
+      await collect(agent, {
+        threadId: "session-1",
+        runId: "run-1",
+        state: {},
+        messages: [{ id: "user-1", role: "user", content: "/undo" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      })
+      expect(onComposerPrefill).not.toHaveBeenCalled()
+    }
+  )
+
+  it("applies a successful run composer prefill result", async () => {
+    const onComposerPrefill = vi.fn(async () => undefined)
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: "session-1",
+      onComposerPrefill,
+      fetcher: vi.fn(
+        async () =>
+          new Response(
+            'data: {"type":"RUN_FINISHED","threadId":"session-1","runId":"run-1","result":{"aos.composerPrefill":"Earlier question"},"outcome":{"type":"success"}}\n\n',
+            { headers: { "content-type": "text/event-stream" } }
+          )
+      ),
+    })
+
+    await collect(agent, {
+      threadId: "session-1",
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "user-1", role: "user", content: "/undo" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(onComposerPrefill).toHaveBeenCalledOnce()
+    expect(onComposerPrefill).toHaveBeenCalledWith("Earlier question")
+  })
+
   it("does not forward restored PLAN activity as Hermes prompt history", async () => {
     const fetcher = vi.fn<typeof fetch>(
       async () =>

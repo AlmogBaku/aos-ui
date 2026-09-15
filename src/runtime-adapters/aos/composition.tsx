@@ -76,6 +76,19 @@ function ReadyAosRuntimeProvider({
             agentId: agentId ?? "",
             threadId: remoteId ?? "",
             stageAttachments: client.stageAttachments.bind(client),
+            onComposerPrefill: remoteId
+              ? (text) => {
+                  const runtime = assistantRuntimeRef.current
+                  if (!runtime) return
+                  const threads = runtime.threads.getState()
+                  const selected = threads.threadItems[threads.mainThreadId]
+                  if ((selected?.remoteId ?? selected?.externalId) !== remoteId)
+                    return
+                  // Do not replace a new draft the user typed while the command ran.
+                  if (!runtime.thread.composer.getState().isEmpty) return
+                  runtime.thread.composer.setText(text)
+                }
+              : undefined,
             resolveRewindSourceId: remoteId
               ? (sourceId, replacement) =>
                   client.resolveRewindSourceId(remoteId, sourceId, replacement)

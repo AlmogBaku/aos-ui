@@ -50,7 +50,7 @@ import { HermesDashboardClient } from "./dashboard-client"
 import { HermesAttachmentRegistry } from "./attachment-registry"
 import type { ServerRuntime } from "../../core/runtime"
 import type { ResumeEntry } from "@ag-ui/core"
-import { nativeSlashCommands, slashInvocation } from "./slash-commands"
+import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
 
 async function executeSlashCommand(
   transport: HermesRpcTransport,
@@ -58,7 +58,7 @@ async function executeSlashCommand(
   name: string,
   args: string,
   depth = 0
-): Promise<{ output: string } | undefined> {
+): Promise<{ output: string; composerPrefill?: string } | undefined> {
   if (depth >= 4) throw new HermesUnavailableError()
   let result: unknown
   try {
@@ -105,6 +105,19 @@ async function executeSlashCommand(
       text: result.message,
     })
     return undefined
+  }
+  if (result.type === "prefill") {
+    if (
+      typeof result.message !== "string" ||
+      !result.message ||
+      Buffer.byteLength(result.message, "utf8") > 1_048_576 ||
+      (result.notice !== undefined && typeof result.notice !== "string")
+    )
+      throw new HermesUnavailableError()
+    return {
+      output: typeof result.notice === "string" ? result.notice : "",
+      composerPrefill: result.message,
+    }
   }
   if (
     result.type !== "exec" &&
@@ -1127,17 +1140,22 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       rewindSourceId?: string
     }
   ) {
-    let invocation: ReturnType<typeof slashInvocation>
-    if (!prompt.scope.hasAttachments && prompt.text.startsWith("/")) {
-      let commands
+    let invocation: Awaited<ReturnType<typeof nativeSlashInvocation>>
+    if (prompt.text.startsWith("/")) {
       try {
-        commands = await nativeSlashCommands(this.transport, {
-          session_id: liveSessionId,
-        })
+        invocation = await nativeSlashInvocation(
+          this.transport,
+          { session_id: liveSessionId },
+          prompt.text
+        )
       } catch {
         return { acknowledgement: "rejected" as const }
       }
-      invocation = slashInvocation(prompt.text, commands)
+      if (invocation && prompt.scope.hasAttachments)
+        return {
+          acknowledgement: "rejected" as const,
+          rejection: "command-with-attachments" as const,
+        }
     }
     const rewind =
       invocation || prompt.rewindSourceId === undefined

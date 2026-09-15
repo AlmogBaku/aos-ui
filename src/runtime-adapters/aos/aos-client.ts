@@ -377,6 +377,7 @@ export function createAosRunAgent({
   authorization,
   resolveRewindSourceId,
   onRewindCompleted,
+  onComposerPrefill,
   onEvent,
   getCapabilities,
 }: {
@@ -394,6 +395,7 @@ export function createAosRunAgent({
     replacement: RewindReplacement
   ) => string | Promise<string>
   onRewindCompleted?: (replacement: RewindReplacement) => Promise<void>
+  onComposerPrefill?: (text: string) => void | Promise<void>
   onEvent?: (event: AosSessionSignalEvent) => void
   getCapabilities?: () => Promise<AgentCapabilities>
 }) {
@@ -498,12 +500,25 @@ export function createAosRunAgent({
           })
         ),
       init.signal,
-      typeof rewindSourceId === "string" && rewindReplacement
-        ? (event) =>
-            event.outcome?.type === "success"
-              ? (onRewindCompleted?.(rewindReplacement) ?? Promise.resolve())
-              : Promise.resolve()
-        : undefined,
+      async (event) => {
+        if (event.outcome?.type !== "success") return
+        try {
+          const result = z
+            .object({ "aos.composerPrefill": z.string().max(1_048_576) })
+            .safeParse(event.result)
+          if (
+            event.threadId === input.threadId &&
+            event.runId === input.runId &&
+            result.success &&
+            new TextEncoder().encode(result.data["aos.composerPrefill"])
+              .byteLength <= 1_048_576
+          )
+            await onComposerPrefill?.(result.data["aos.composerPrefill"])
+        } finally {
+          if (typeof rewindSourceId === "string" && rewindReplacement)
+            await onRewindCompleted?.(rewindReplacement)
+        }
+      },
       onEvent
     )
   }

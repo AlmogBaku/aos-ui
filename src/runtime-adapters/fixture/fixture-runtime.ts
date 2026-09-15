@@ -547,9 +547,7 @@ export function createFixtureChatModel(
         : undefined
 
       try {
-        const commandOutput = latestUserMessage(options)?.attachments?.length
-          ? undefined
-          : fixtureSlashCommand(userText)
+        const commandOutput = fixtureSlashCommand(userText)
         if (commandOutput !== undefined) {
           yield { content: [{ type: "text", text: commandOutput }] }
           workspace.finishRunActivity(activity, "finished")

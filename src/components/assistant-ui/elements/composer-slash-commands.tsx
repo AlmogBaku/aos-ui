@@ -1,5 +1,6 @@
 import {
   ComposerPrimitive,
+  useAuiState,
   unstable_useTriggerPopoverScopeContext,
   type Unstable_DirectiveFormatter,
 } from "@assistant-ui/react"
@@ -40,6 +41,9 @@ export function ComposerSlashCommands({
   label: string
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
+  const hasAttachments = useAuiState(
+    (state) => state.composer.attachments.length > 0
+  )
   const adapter = useMemo(
     () => ({
       categories: () => [],
@@ -58,7 +62,7 @@ export function ComposerSlashCommands({
     }),
     [commands]
   )
-  if (!commands?.length) return null
+  if (!commands?.length || hasAttachments) return null
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopover

@@ -79,7 +79,8 @@ export type HermesRunNative = {
     }
   ): Promise<{
     acknowledgement: "accepted" | "rejected" | "uncertain"
-    completion?: { output: string }
+    rejection?: "command-with-attachments"
+    completion?: { output: string; composerPrefill?: string }
   }>
   interrupt(liveSessionId: string): Promise<void>
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
@@ -981,6 +982,7 @@ export class HermesRunEngine {
     }
     if (!this.#isSubmitEligible(active)) return this.#handle(active)
     let acknowledgement: "accepted" | "rejected" | "uncertain"
+    let rejection: "command-with-attachments" | undefined
     try {
       const result = await this.#native.submit(liveSessionId, {
         scope,
@@ -991,6 +993,7 @@ export class HermesRunEngine {
           : { rewindSourceId: rewindSourceId as string }),
       })
       acknowledgement = result.acknowledgement
+      rejection = result.rejection
       if (result.completion && !active.terminal) {
         if (result.completion.output) {
           active.messageId = `aos-command:${input.runId}`
@@ -1001,7 +1004,14 @@ export class HermesRunEngine {
             delta: result.completion.output,
           })
         }
-        this.#finish(active)
+        this.#finish(
+          active,
+          result.completion.composerPrefill === undefined
+            ? undefined
+            : {
+                "aos.composerPrefill": result.completion.composerPrefill,
+              }
+        )
       }
     } catch (error) {
       if (error instanceof HermesRunRewindConflictError) {
@@ -1018,7 +1028,9 @@ export class HermesRunEngine {
       this.#fail(
         active,
         "AOS_PROVIDER_RUN_FAILED",
-        "Hermes rejected this command."
+        rejection === "command-with-attachments"
+          ? "Slash commands cannot be sent with attachments."
+          : "Hermes rejected this command."
       )
     }
     if (

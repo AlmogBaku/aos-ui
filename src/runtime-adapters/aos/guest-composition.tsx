@@ -4,9 +4,10 @@ import {
   AssistantRuntimeProvider,
   useAuiState,
   type AssistantState,
+  type AssistantRuntime,
 } from "@assistant-ui/react"
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
-import { useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import {
@@ -204,6 +205,10 @@ function ReadyGuestAosSurface({
   scope: AosEventScope
 }) {
   const authorization = useMemo(() => `Bearer ${inviteToken}`, [inviteToken])
+  const runtimeRef = useRef<{
+    runtime: AssistantRuntime
+    sessionId: string
+  } | null>(null)
   const reconciler = useMemo(
     () =>
       new AosReconciler({
@@ -228,15 +233,34 @@ function ReadyGuestAosSurface({
     () => new AosThreadListAdapter(client).historyFor(scope.sessionId),
     [client, scope.sessionId]
   )
+  const onComposerPrefill = useCallback(
+    (text: string) => {
+      const current = runtimeRef.current
+      if (!current || current.sessionId !== scope.sessionId) return
+      const { runtime } = current
+      if (!runtime.thread.composer.getState().isEmpty) return
+      runtime.thread.composer.setText(text)
+    },
+    [scope.sessionId]
+  )
   const agent = useMemo(
     () =>
+      // The factory stores this callback; it runs only for a received terminal event.
+      // eslint-disable-next-line react-hooks/refs
       createAosRunAgent({
         agentId: scope.agentId,
         threadId: scope.sessionId,
         basePath: config.basePath,
         authorization,
+        onComposerPrefill,
       }),
-    [authorization, config.basePath, scope.agentId, scope.sessionId]
+    [
+      authorization,
+      config.basePath,
+      scope.agentId,
+      scope.sessionId,
+      onComposerPrefill,
+    ]
   )
   const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
   const slashCommands = useAosSlashCommands(
@@ -250,6 +274,12 @@ function ReadyGuestAosSurface({
     adapters: { history },
     onCancel: () => void client.stopRun(scope.sessionId).catch(() => undefined),
   })
+  useEffect(() => {
+    runtimeRef.current = { runtime, sessionId: scope.sessionId }
+    return () => {
+      runtimeRef.current = null
+    }
+  }, [runtime, scope.sessionId])
 
   return (
     <ThemeProvider>

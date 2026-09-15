@@ -513,6 +513,47 @@ describe("slash command completion", () => {
     expect(input).toHaveFocus()
   })
 
+  it("hides suggestions while the composer has an attachment", async () => {
+    const user = userEvent.setup()
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" })
+    const pending = {
+      id: "notes",
+      type: "file" as const,
+      name: file.name,
+      contentType: file.type,
+      file,
+      status: {
+        type: "running" as const,
+        reason: "uploading" as const,
+        progress: 0,
+      },
+    }
+    const attachmentAdapter: AttachmentAdapter = {
+      accept: "text/*",
+      add: async () => pending,
+      remove: async () => undefined,
+      send: async () => ({
+        ...pending,
+        status: { type: "complete" as const },
+        content: [{ type: "text" as const, text: "notes" }],
+      }),
+    }
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        initialMessages={[]}
+        attachmentAdapter={attachmentAdapter}
+        composerFeatures={{ slashCommands }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await act(() => runtime!.thread.composer.addAttachment(file))
+    await user.type(screen.getByRole("textbox", { name: "Message input" }), "/")
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+  })
+
   it.each([undefined, []])(
     "shows no suggestions for a hidden or unavailable catalog: %s",
     async (commands) => {

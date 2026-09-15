@@ -758,6 +758,57 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
+  it("explains why a recognized slash command with attachments was rejected", async () => {
+    const engine = new HermesRunEngine(
+      native({
+        submit: async () => ({
+          acknowledgement: "rejected",
+          rejection: "command-with-attachments",
+        }),
+      })
+    )
+
+    const handle = await engine.start(scope, input())
+
+    await expect(collect(handle)).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Slash commands cannot be sent with attachments.",
+        code: "AOS_PROVIDER_RUN_FAILED",
+      },
+    ])
+  })
+
+  it("returns a composer prefill from a synchronous native command", async () => {
+    const engine = new HermesRunEngine(
+      native({
+        submit: async () => ({
+          acknowledgement: "accepted",
+          completion: {
+            output: "Undid 1 turn.",
+            composerPrefill: "Earlier question",
+          },
+        }),
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+
+    expect(events).toContainEqual({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      result: { "aos.composerPrefill": "Earlier question" },
+      outcome: { type: "success" },
+    })
+    expect(events).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "aos-command:run-1",
+      delta: "Undid 1 turn.",
+    })
+  })
+
   it("normalizes reasoning and complete tool calls as standard AG-UI events", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(

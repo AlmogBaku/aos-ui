@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { EventType } from "@ag-ui/core"
 import { HermesServerAdapter } from "./adapter"
+import { nativeSlashCommands } from "./slash-commands"
 import { HermesRunEngine, type HermesRunNative } from "./run"
 import { HermesRpcError } from "./transport"
 
@@ -83,6 +84,70 @@ it("routes an exact native command to slash.exec and exposes synchronous text", 
   expect(
     request.mock.calls.some(([method]) => method === "prompt.submit")
   ).toBe(false)
+})
+
+it("preserves native prefill results for commands such as undo", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "commands.catalog") return { pairs: [["/undo", "Undo"]] }
+    if (method === "slash.exec")
+      return {
+        type: "prefill",
+        message: "Earlier question",
+        notice: "Undid 1 turn.",
+      }
+    throw new Error("unexpected RPC")
+  })
+
+  await expect(
+    new HermesServerAdapter({ request }).submit("live", {
+      scope,
+      text: "/undo",
+      runId: "run",
+    })
+  ).resolves.toEqual({
+    acknowledgement: "accepted",
+    completion: {
+      output: "Undid 1 turn.",
+      composerPrefill: "Earlier question",
+    },
+  })
+})
+
+it("recognizes typed commands beyond the bounded public catalog", async () => {
+  const pairs = Array.from({ length: 257 }, (_, index) => [
+    `/command-${index}`,
+    `Command ${index}`,
+  ])
+  const request = vi.fn(async (method: string) => {
+    if (method === "commands.catalog") return { pairs }
+    if (method === "slash.exec") return { output: "Last command" }
+    throw new Error("unexpected RPC")
+  })
+
+  await expect(
+    new HermesServerAdapter({ request }).submit("live", {
+      scope,
+      text: "/command-256",
+      runId: "run",
+    })
+  ).resolves.toEqual({
+    acknowledgement: "accepted",
+    completion: { output: "Last command" },
+  })
+  expect(
+    request.mock.calls.some(([method]) => method === "prompt.submit")
+  ).toBe(false)
+})
+
+it("keeps commands whose native descriptions exceed the public limit", async () => {
+  const commands = await nativeSlashCommands(
+    {
+      request: async () => ({ pairs: [["/long", "x".repeat(5_000)]] }),
+    },
+    { session_id: "live", profile: "writer" }
+  )
+
+  expect(commands).toEqual([{ name: "long", description: "x".repeat(4_096) }])
 })
 
 it.each(["/unknown", "/Help", " /help", "/helpful", "normal text"])(
@@ -186,23 +251,32 @@ it("follows native aliases and completes outputless synchronous commands", async
   )
 })
 
-it("keeps command-looking attachment turns on chat but rejects failed discovery", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "commands.catalog") throw new Error("discovery unavailable")
-    return { status: "streaming" }
-  })
+it("rejects recognized commands with attachments and sends unknown ones normally", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "commands.catalog"
+      ? { pairs: [["/help", "Help"]] }
+      : { status: "streaming" }
+  )
   const adapter = new HermesServerAdapter({ request })
+  await expect(
+    adapter.submit("live", {
+      scope: { ...scope, hasAttachments: true },
+      text: "/help",
+      runId: "one",
+    })
+  ).resolves.toEqual({
+    acknowledgement: "rejected",
+    rejection: "command-with-attachments",
+  })
   await adapter.submit("live", {
     scope: { ...scope, hasAttachments: true },
-    text: "/help",
-    runId: "one",
+    text: "/unknown",
+    runId: "two",
   })
-  await expect(
-    adapter.submit("live", { scope, text: "/help", runId: "two" })
-  ).resolves.toEqual({ acknowledgement: "rejected" })
   expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "prompt.submit",
     "commands.catalog",
+    "commands.catalog",
+    "prompt.submit",
   ])
 })
 
