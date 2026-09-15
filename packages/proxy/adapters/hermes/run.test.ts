@@ -1512,6 +1512,65 @@ describe("HermesRunEngine", () => {
     expect(submissions).toBe(0)
   })
 
+  it("starts a new run without downloading Hermes retained replay", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        recover: async (_liveSessionId, lastSeen) => {
+          if (lastSeen !== Number.MAX_SAFE_INTEGER)
+            throw new Error("retained replay exceeds the transport limit")
+          return { epoch: "epoch-1", lastSeen: 328, events: [] }
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 329,
+            payload: { message_id: "message-43" },
+          })
+          publish?.({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq: 330,
+            payload: { text: "Current" },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 331,
+            payload: { text: "Current", status: "complete" },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "message-43",
+        role: "assistant",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "message-43",
+        delta: "Current",
+      },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "message-43" },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-1",
+        outcome: { type: "success" },
+      },
+    ])
+  })
+
   it("uses completed baseline events only as the cursor for a new turn", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(

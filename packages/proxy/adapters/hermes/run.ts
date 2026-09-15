@@ -705,7 +705,13 @@ export class HermesRunEngine {
           if (active) this.#markInterrupted(active)
         }
       )
-      baseline = await this.#native.recover(liveSessionId)
+      // A new turn needs only Hermes' current epoch and sequence barrier. The
+      // maximum watermark keeps retained events out of the response; live
+      // events are already buffered by the observer attached above.
+      baseline = await this.#native.recover(
+        liveSessionId,
+        Number.MAX_SAFE_INTEGER
+      )
       active = {
         scope,
         runId: input.runId,
