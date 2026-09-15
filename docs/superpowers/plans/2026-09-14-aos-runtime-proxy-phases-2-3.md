@@ -25,11 +25,13 @@ first and then the already-developed OpenClaw adapter.
 
 ## Frozen surfaces and constraints
 
-- **AOS skill gate:** before changing adapter or shared integration code, the
-  main integration agent, every provider lead, and every provider leaf must
-  load `.agents/skills/aos-runtime-adapter/SKILL.md` from this worktree. The
-  generic assistant-ui `runtime` or `streaming` skills do not satisfy this
-  requirement.
+- **Mandatory AOS skill preflight:** before changing adapter or shared
+  integration code, the main integration agent, every provider lead, every
+  provider leaf, and every provider reviewer must load the complete
+  worktree-local `.agents/skills/aos-runtime-adapter/SKILL.md`. Loading an
+  assistant-ui `runtime`, `streaming`, or other frontend skill does not satisfy
+  this gate. Inherited conversation context and another agent's summary also
+  do not count: each working agent loads the file itself.
 - Each of those agents must then read `AGENTS.md`,
   `docs/development/runtime-adapter-authoring.md`, both normative gateway
   design documents, the selected runtime guide, and the selected runtime
@@ -37,10 +39,13 @@ first and then the already-developed OpenClaw adapter.
   skill-required native capability/lifecycle matrix and freezes the tested
   client facade. Each handoff reports native evidence, changed mappings,
   verification, and capabilities intentionally left unavailable.
-- Load `.agents/skills/aos-deploy/SKILL.md` only if the operator separately
-  authorizes an actual production deployment. Compose templates and deployment
-  tests in this plan are repository implementation, not permission to mutate a
-  live service.
+- **Deployment skill boundary:** `.agents/skills/aos-deploy/SKILL.md` is the
+  authority only when the operator separately asks to install, expose, change,
+  or verify production services. Compose templates and deployment tests in
+  this plan remain ordinary repository implementation and do not authorize a
+  live mutation. Before any separately authorized live deployment, the acting
+  agent must load that skill completely and follow its inspect/confirm/verify
+  gates.
 - Continue from this clean worktree's current `HEAD`; leave dirty `main`
   untouched.
 - Preserve the completed Hermes adapter, `ServerRuntime`,
@@ -149,6 +154,12 @@ Every dispatch brief repeats the worktree-local `aos-runtime-adapter` skill
 path, required reading, and evidence contract. Inheriting a parent agent's
 context or loading an assistant-ui skill does not count as loading the AOS
 skill.
+
+Before accepting a provider commit, its handoff must explicitly confirm that
+the author loaded the AOS adapter skill and must identify the native evidence,
+normalized mappings, verification performed, and intentionally unavailable
+capabilities required by that skill. A commit without this evidence returns to
+its owner for review; it is not integrated on trust.
 
 ## Phase 2: OpenCode
 
