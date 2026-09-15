@@ -316,8 +316,9 @@ describe("SessionCoordinator", () => {
     expect(sessions.state(scope)).toBe("stopping")
   })
 
-  it("keeps Stop idempotent and rejects an unrelated controller", async () => {
+  it("rechecks a stopping handle without granting another controller", async () => {
     const source = new EventSource()
+    source.stop.mockResolvedValueOnce("stopping").mockResolvedValueOnce("idle")
     const engine: ServerRunEngine = {
       start: vi.fn(async () => source),
       recover: vi.fn(async () => source),
@@ -329,8 +330,9 @@ describe("SessionCoordinator", () => {
       "not authorized"
     )
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
-    expect(source.stop).toHaveBeenCalledOnce()
+    await expect(sessions.stop(scope, "operator")).resolves.toBe("idle")
+    expect(source.stop).toHaveBeenCalledTimes(2)
+    expect(sessions.state(scope)).toBe("idle")
   })
 
   it("keeps a run active when Stop definitely was not dispatched", async () => {

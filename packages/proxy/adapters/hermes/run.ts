@@ -1508,18 +1508,25 @@ export class HermesRunEngine {
 
   async #stop(active: ActiveRun): Promise<"stopping" | "idle"> {
     if (active.terminal) return "idle"
-    active.stopping = true
+    if (!active.stopping) {
+      active.stopping = true
+      try {
+        await this.#native.interrupt(active.liveSessionId)
+      } catch {
+        active.uncertain = true
+        throw stopUncertain()
+      }
+    }
     try {
-      await this.#native.interrupt(active.liveSessionId)
       if ((await this.#native.status(active.liveSessionId)) === "idle") {
         this.#finish(active, { stopped: true })
         return "idle"
       }
-      return "stopping"
     } catch {
-      active.uncertain = true
-      throw stopUncertain()
+      // Stop was already acknowledged. An unavailable status read cannot make
+      // the mutation safe to retry or prove that Hermes is idle.
     }
+    return "stopping"
   }
 
   async #steer(active: ActiveRun, text: string) {

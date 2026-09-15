@@ -42,6 +42,7 @@ export type ServerRunHandle = {
   events: AsyncIterable<AGUIEvent>
   /** Resolves only when the provider segment is terminal. */
   settled: Promise<void>
+  /** Idempotently requests Stop or rechecks an already-stopping native run. */
   stop(): Promise<"stopping" | "idle">
   steer?(
     request: Readonly<{ requestId: string; text: string }>

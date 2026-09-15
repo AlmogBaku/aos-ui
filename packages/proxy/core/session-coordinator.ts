@@ -396,7 +396,6 @@ export class SessionCoordinator {
     return this.#withControl(execution, async () => {
       if (!execution.controllers.has(controllerId))
         throw new ServerRunControlError()
-      if (execution.state === "stopping") return "stopping" as const
       try {
         const status = await execution.segment.handle.stop()
         execution.state = status === "idle" ? "idle" : "stopping"

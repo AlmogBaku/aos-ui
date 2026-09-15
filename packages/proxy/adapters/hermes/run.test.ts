@@ -1426,6 +1426,25 @@ describe("HermesRunEngine", () => {
     ])
   })
 
+  it("rechecks an acknowledged Stop without interrupting Hermes twice", async () => {
+    let interrupted = 0
+    let statusChecks = 0
+    const engine = new HermesRunEngine(
+      native({
+        interrupt: async () => {
+          interrupted += 1
+        },
+        status: async () =>
+          interrupted === 0 || ++statusChecks > 1 ? "idle" : "running",
+      })
+    )
+    const handle = await engine.start(scope, input())
+
+    await expect(handle.stop()).resolves.toBe("stopping")
+    await expect(handle.stop()).resolves.toBe("idle")
+    expect(interrupted).toBe(1)
+  })
+
   it("terminalizes native failures without disclosing provider error bodies", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
