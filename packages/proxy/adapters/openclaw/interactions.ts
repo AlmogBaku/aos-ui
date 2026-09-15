@@ -4,10 +4,12 @@ import {
   type RunFinishedInterruptOutcome,
 } from "@ag-ui/core"
 import {
+  SessionApprovalReplaySchema,
   validateApprovalGetResult,
   validateApprovalResolveResult,
   validateQuestionResolveParams,
 } from "@openclaw/gateway-protocol"
+import { Check } from "typebox/value"
 import { OpenClawClientRequestError } from "./client"
 
 export type OpenClawInteractionScope = Readonly<{
@@ -20,6 +22,8 @@ export type OpenClawResumeScope = Pick<
   OpenClawInteractionScope,
   "agentId" | "sessionId" | "threadId"
 >
+export type OpenClawInteractionDiscoveryScope = OpenClawResumeScope &
+  Readonly<{ nativeRunId: string }>
 export type OpenClawInteractionTransport = Readonly<{
   request(
     method:
@@ -260,6 +264,60 @@ export class OpenClawInteractions {
   readonly #done = new Map<string, Done>()
   readonly #bindings = new Map<string, Binding>()
   constructor(private readonly transport: OpenClawInteractionTransport) {}
+  async discover(
+    scope: OpenClawInteractionDiscoveryScope,
+    approvalReplay: unknown
+  ): Promise<{ outcome: RunFinishedInterruptOutcome } | undefined> {
+    if (
+      !Check(SessionApprovalReplaySchema, approvalReplay) ||
+      approvalReplay.sessionKey !== scope.sessionId ||
+      approvalReplay.truncated
+    )
+      return undefined
+    const fullScope: OpenClawInteractionScope = {
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        threadId: scope.threadId,
+        runId: scope.nativeRunId,
+      },
+      listed = await this.transport.request("question.list", {})
+    if (
+      !listed ||
+      typeof listed !== "object" ||
+      !Array.isArray((listed as Record<string, unknown>).questions)
+    )
+      bad()
+    const candidates: Array<
+      | { kind: "question"; value: unknown }
+      | { kind: "approval"; value: unknown }
+    > = []
+    for (const value of (listed as { questions: unknown[] }).questions) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) bad()
+      const row = value as Record<string, unknown>
+      if (
+        row.agentId !== scope.agentId ||
+        row.sessionKey !== scope.sessionId ||
+        row.runId !== scope.nativeRunId
+      )
+        continue
+      record(fullScope, row)
+      candidates.push({ kind: "question", value })
+    }
+    for (const value of approvalReplay.approvals)
+      if (
+        value.sourceSessionKey === scope.sessionId &&
+        value.presentation.agentId === scope.agentId
+      )
+        candidates.push({ kind: "approval", value })
+    if (candidates.length !== 1) return undefined
+    const candidate = candidates[0]!
+    return {
+      outcome:
+        candidate.kind === "question"
+          ? this.acceptQuestion(fullScope, candidate.value)
+          : this.acceptApproval(fullScope, candidate.value),
+    }
+  }
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
     const r = record(scope, raw),
       outcome: RunFinishedInterruptOutcome = {

@@ -53,6 +53,12 @@ const approval = {
   status: "pending",
   sourceSessionKey: "session-a",
 }
+const approvalReplay = {
+  sessionKey: "session-a",
+  updatedAtMs: 1,
+  approvals: [approval],
+  truncated: false,
+}
 const resumeScope = {
   agentId: scope.agentId,
   sessionId: scope.sessionId,
@@ -66,6 +72,151 @@ const resolvedQuestion = [
   },
 ]
 describe("OpenClaw interactions", () => {
+  it("rediscovers and binds one exact pending question after restart", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [question] }
+      if (method === "question.get") return { question }
+      return {
+        status: "answered",
+        answers: resolvedQuestion[0].payload,
+      }
+    })
+    const interactions = new OpenClawInteractions({ request })
+
+    await expect(
+      interactions.discover(
+        { ...resumeScope, nativeRunId: "run-a" },
+        { ...approvalReplay, approvals: [] }
+      )
+    ).resolves.toMatchObject({
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "q", reason: "question" }],
+      },
+    })
+    await expect(
+      interactions.validate(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ runId: "run-a" })
+    await expect(
+      interactions.dispatch(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ status: "resolved" })
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "question.list",
+      "question.get",
+      "question.get",
+      "question.resolve",
+    ])
+  })
+
+  it("rediscovers a matching replay approval on the proven native run", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [] }
+      if (method === "approval.get") return { approval }
+      return {
+        applied: true,
+        approval: {
+          ...approvalRecord,
+          status: "allowed",
+          decision: "allow-once",
+          resolvedAtMs: 2,
+          reason: "user",
+          resolver: { kind: "device", id: "reviewer-a" },
+        },
+      }
+    })
+    const interactions = new OpenClawInteractions({ request })
+    const response = [
+      {
+        interruptId: "approval-a",
+        status: "resolved" as const,
+        payload: "allow-once",
+      },
+    ]
+
+    await expect(
+      interactions.discover(
+        { ...resumeScope, nativeRunId: "native-recovered" },
+        approvalReplay
+      )
+    ).resolves.toMatchObject({
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-a", reason: "approval" }],
+      },
+    })
+    await expect(interactions.validate(resumeScope, response)).resolves.toEqual(
+      { runId: "native-recovered" }
+    )
+    await expect(interactions.dispatch(resumeScope, response)).resolves.toEqual(
+      { status: "resolved" }
+    )
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "question.list",
+      "approval.get",
+      "approval.get",
+      "approval.resolve",
+    ])
+  })
+
+  it.each([
+    [
+      "a truncated replay",
+      { ...approvalReplay, truncated: true },
+      [question],
+      0,
+    ],
+    [
+      "a foreign replay",
+      { ...approvalReplay, sessionKey: "foreign" },
+      [] as unknown[],
+      0,
+    ],
+    [
+      "a foreign approval source",
+      {
+        ...approvalReplay,
+        approvals: [{ ...approval, sourceSessionKey: "foreign" }],
+      },
+      [] as unknown[],
+      1,
+    ],
+    [
+      "a foreign approval agent",
+      {
+        ...approvalReplay,
+        approvals: [
+          {
+            ...approval,
+            presentation: { ...approval.presentation, agentId: "foreign" },
+          },
+        ],
+      },
+      [] as unknown[],
+      1,
+    ],
+    [
+      "a foreign question",
+      { ...approvalReplay, approvals: [] },
+      [{ ...question, runId: "foreign" }],
+      1,
+    ],
+    ["ambiguous exact interactions", approvalReplay, [question], 1],
+  ])(
+    "fails closed during restart discovery with %s",
+    async (_label, replay, questions, reads) => {
+      const request = vi.fn(async () => ({ questions }))
+      const interactions = new OpenClawInteractions({ request })
+
+      await expect(
+        interactions.discover({ ...resumeScope, nativeRunId: "run-a" }, replay)
+      ).resolves.toBeUndefined()
+      await expect(
+        interactions.validate(resumeScope, resolvedQuestion)
+      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+      expect(request).toHaveBeenCalledTimes(reads)
+    }
+  )
+
   it("binds a Session resume to its original native run before dispatch", async () => {
     const request = vi.fn(async (method: string) =>
       method === "question.get"
