@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest"
 
 type ComposeConfig = {
   configs?: Record<string, { file?: string }>
-  secrets?: Record<string, { file?: string }>
+  secrets?: Record<
+    string,
+    { file?: string; mode?: string; uid?: string; gid?: string }
+  >
   services: Record<
     string,
     {
@@ -16,9 +19,16 @@ type ComposeConfig = {
       depends_on?: Record<string, { condition: string }>
       environment?: Record<string, string>
       expose?: string[]
+      extra_hosts?: string[]
       ports?: Array<{ host_ip?: string; published?: string; target: number }>
-      configs?: Array<{ source: string; target: string }>
-      secrets?: Array<{ source: string; target: string }>
+      configs?: Array<{ source: string; target: string; mode?: string }>
+      secrets?: Array<{
+        source: string
+        target: string
+        mode?: string
+        uid?: string
+        gid?: string
+      }>
       volumes?: Array<{ source: string; target: string; type: string }>
     }
   >
@@ -58,6 +68,19 @@ describe("container orchestration", () => {
       /token|secret|password|authorization|hermes\.baseurl/u
     )
   })
+
+  it.each(["runtime-config.opencode.json", "runtime-config.openclaw.json"])(
+    "keeps %s provider-neutral and credential-free",
+    (filename) => {
+      const runtime = JSON.parse(
+        readFileSync(resolve(root, "deploy", filename), "utf8")
+      ) as Record<string, unknown>
+      expect(runtime.mode).toBe("aos")
+      expect(JSON.stringify(runtime).toLowerCase()).not.toMatch(
+        /opencode|openclaw|hermes|baseurl|directory|token|secret|password|authorization/u
+      )
+    }
+  )
 
   it("ships the V1 Hermes proxy example with one runtime credential", () => {
     const proxy = JSON.parse(
@@ -138,6 +161,13 @@ describe("container orchestration", () => {
         root,
         "deploy/runtime-config.opencode.json"
       ),
+      AOS_UI_PROXY_CONFIG_FILE: resolve(
+        root,
+        "deploy/proxy-config.opencode.example.json"
+      ),
+      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
     })
 
     expect(Object.keys(config.services).sort()).toEqual(["opencode", "web"])
@@ -147,8 +177,83 @@ describe("container orchestration", () => {
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.opencode.json")
     )
+    expect(config.configs?.["proxy-config"]?.file).toBe(
+      resolve(root, "deploy/proxy-config.opencode.example.json")
+    )
+    expect(config.services.web.command).toEqual([
+      "bun",
+      "run",
+      "proxy:serve",
+      "--",
+      "--config",
+      "/run/aos-ui/proxy-config.json",
+    ])
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({ published: "3000", target: 3000 })
+    )
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({ published: "3001", target: 3001 })
+    )
+    expect(config.services.web.configs).toContainEqual(
+      expect.objectContaining({
+        source: "proxy-config",
+        target: "/run/aos-ui/proxy-config.json",
+      })
+    )
+    expect(config.services.web.secrets).toEqual([
+      expect.objectContaining({
+        source: "reconnect-cursor-key",
+        target: "reconnect-cursor-key",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+      expect.objectContaining({
+        source: "guest-invite-signing-key",
+        target: "guest-invite-signing-key",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+    ])
     expect(config.services.opencode.environment).toMatchObject({
+      OPENCODE_SERVER_USERNAME: "aos-ui",
+      AOS_UI_OPENCODE_PASSWORD_FILE: "/run/secrets/opencode-password",
       AOS_UI_OPENCODE_WORKTREE: "/workspace",
+    })
+    expect(config.services.opencode.expose).toEqual(["4096"])
+    expect(config.services.opencode.ports).toBeUndefined()
+    expect(config.services.opencode.environment).not.toHaveProperty(
+      "AOS_UI_OPENCODE_CORS_ORIGINS"
+    )
+    expect(config.services.opencode.environment).not.toHaveProperty(
+      "AOS_UI_OPENCODE_PUBLISHED_PORT"
+    )
+    expect(config.services.opencode.secrets).toEqual([
+      expect.objectContaining({
+        source: "opencode-password",
+        target: "opencode-password",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+    ])
+    expect(config.secrets?.["opencode-password"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    const proxy = JSON.parse(
+      readFileSync(
+        resolve(root, "deploy/proxy-config.opencode.example.json"),
+        "utf8"
+      )
+    ) as { runtime: Record<string, unknown> }
+    expect(proxy.runtime).toEqual({
+      id: "opencode-default",
+      kind: "opencode",
+      baseUrl: "http://opencode:4096",
+      directory: "/workspace",
+      username: "aos-ui",
+      passwordFile: "/run/secrets/opencode-password",
     })
     expect(JSON.stringify(config)).not.toContain("AOS_GATEWAY_")
   })
@@ -249,15 +354,101 @@ describe("container orchestration", () => {
     )
   })
 
-  it("keeps the planned OpenClaw overlay fail-closed", () => {
+  it("runs OpenClaw through the private AOS proxy", () => {
     const config = composeConfig(["compose.yaml", "compose.openclaw.yaml"], {
       AOS_UI_RUNTIME_CONFIG_FILE: resolve(
         root,
         "deploy/runtime-config.openclaw.json"
       ),
+      AOS_UI_PROXY_CONFIG_FILE: resolve(
+        root,
+        "deploy/proxy-config.openclaw.example.json"
+      ),
+      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
+      AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
     })
 
     expect(Object.keys(config.services)).toEqual(["web"])
+    expect(config.services.web.command).toEqual([
+      "bun",
+      "run",
+      "proxy:serve",
+      "--",
+      "--config",
+      "/run/aos-ui/proxy-config.json",
+    ])
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({ published: "3000", target: 3000 })
+    )
+    expect(config.services.web.ports).toContainEqual(
+      expect.objectContaining({ published: "3001", target: 3001 })
+    )
+    expect(config.services.web.extra_hosts).toEqual([
+      "host.docker.internal=host-gateway",
+    ])
+    expect(config.configs?.["runtime-config"]?.file).toBe(
+      resolve(root, "deploy/runtime-config.openclaw.json")
+    )
+    expect(config.configs?.["proxy-config"]?.file).toBe(
+      resolve(root, "deploy/proxy-config.openclaw.example.json")
+    )
+    expect(config.services.web.configs).toContainEqual(
+      expect.objectContaining({
+        source: "proxy-config",
+        target: "/run/aos-ui/proxy-config.json",
+      })
+    )
+    expect(config.services.web.secrets).toEqual([
+      expect.objectContaining({
+        source: "openclaw-device-identity",
+        target: "openclaw-device-identity",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+      expect.objectContaining({
+        source: "openclaw-device-token",
+        target: "openclaw-device-token",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+      expect.objectContaining({
+        source: "reconnect-cursor-key",
+        target: "reconnect-cursor-key",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+      expect.objectContaining({
+        source: "guest-invite-signing-key",
+        target: "guest-invite-signing-key",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+    ])
+    expect(config.secrets?.["openclaw-device-identity"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    expect(config.secrets?.["openclaw-device-token"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+    const proxy = JSON.parse(
+      readFileSync(
+        resolve(root, "deploy/proxy-config.openclaw.example.json"),
+        "utf8"
+      )
+    ) as { runtime: Record<string, unknown> }
+    expect(proxy.runtime).toEqual({
+      id: "openclaw-default",
+      kind: "openclaw",
+      baseUrl: "ws://host.docker.internal:18789",
+      deviceIdentityFile: "/run/secrets/openclaw-device-identity",
+      deviceTokenFile: "/run/secrets/openclaw-device-token",
+    })
     expect(config.services.web.environment).not.toHaveProperty(
       "AOS_UI_OPENCLAW_HOST"
     )
@@ -267,8 +458,8 @@ describe("container orchestration", () => {
     expect(config.services.web.environment).not.toHaveProperty(
       "AOS_GATEWAY_OPENCLAW_TOKEN"
     )
-    expect(config.configs?.["runtime-config"]?.file).toBe(
-      resolve(root, "deploy/runtime-config.openclaw.json")
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_OPENCLAW_DEVICE_TOKEN"
     )
     expect(
       JSON.parse(
@@ -277,7 +468,7 @@ describe("container orchestration", () => {
           "utf8"
         )
       )
-    ).toEqual({ status: "unavailable", reason: "invalid-runtime-mode" })
+    ).toMatchObject({ mode: "aos" })
   })
 
   it("uses the Vite development target and source mount", () => {

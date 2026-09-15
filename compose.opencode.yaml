@@ -4,6 +4,41 @@ services:
       opencode:
         condition: service_healthy
         restart: true
+    command:
+      - bun
+      - run
+      - proxy:serve
+      - --
+      - --config
+      - /run/aos-ui/proxy-config.json
+    ports:
+      - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:3001
+    configs:
+      - source: proxy-config
+        target: /run/aos-ui/proxy-config.json
+        mode: 0444
+    secrets:
+      - source: reconnect-cursor-key
+        target: reconnect-cursor-key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: guest-invite-signing-key
+        target: guest-invite-signing-key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:3000/api/aos/v1/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    init: true
 
   opencode:
     build:
@@ -24,12 +59,13 @@ services:
       AOS_UI_OPENAI_COMPATIBLE_API_KEY: ${AOS_UI_OPENAI_COMPATIBLE_API_KEY:-}
       AOS_UI_OPENAI_COMPATIBLE_BASE_URL: ${AOS_UI_OPENAI_COMPATIBLE_BASE_URL:-}
       AOS_UI_OPENAI_COMPATIBLE_MODEL_ID: ${AOS_UI_OPENAI_COMPATIBLE_MODEL_ID:-}
-      AOS_UI_OPENCODE_CORS_ORIGINS: ${AOS_UI_OPENCODE_CORS_ORIGINS:-http://localhost:${AOS_UI_WEB_PUBLISHED_PORT:-3000},http://127.0.0.1:${AOS_UI_WEB_PUBLISHED_PORT:-3000}}
       AOS_UI_OPENCODE_HOST: 0.0.0.0
+      AOS_UI_OPENCODE_PASSWORD_FILE: /run/secrets/opencode-password
       AOS_UI_OPENCODE_PORT: "4096"
       AOS_UI_OPENCODE_WORKTREE: /workspace
-    ports:
-      - ${AOS_UI_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_OPENCODE_PUBLISHED_PORT:-4096}:4096
+      OPENCODE_SERVER_USERNAME: aos-ui
+    expose:
+      - "4096"
     healthcheck:
       test:
         - CMD
@@ -42,6 +78,12 @@ services:
       retries: 20
       start_period: 10s
     init: true
+    secrets:
+      - source: opencode-password
+        target: opencode-password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
     volumes:
       - type: bind
         source: ${AOS_UI_OPENCODE_WORKTREE:?Set AOS_UI_OPENCODE_WORKTREE to the external OpenCode worktree}
@@ -56,3 +98,17 @@ services:
 
 volumes:
   opencode-data:
+
+configs:
+  runtime-config:
+    file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.opencode.json}
+  proxy-config:
+    file: ${AOS_UI_PROXY_CONFIG_FILE:?Set AOS_UI_PROXY_CONFIG_FILE to a private proxy configuration file}
+
+secrets:
+  opencode-password:
+    file: ${AOS_UI_OPENCODE_PASSWORD_FILE:?Set AOS_UI_OPENCODE_PASSWORD_FILE to the private OpenCode server password file}
+  reconnect-cursor-key:
+    file: ${AOS_UI_RECONNECT_CURSOR_KEY_FILE:?Set AOS_UI_RECONNECT_CURSOR_KEY_FILE to an owner-only 32-byte key file}
+  guest-invite-signing-key:
+    file: ${AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE:?Set AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE to the private guest invitation key file}

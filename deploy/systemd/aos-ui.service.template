@@ -8,8 +8,11 @@ Requires=docker.service
 Type=simple
 WorkingDirectory=@AOS_CHECKOUT@
 EnvironmentFile=/etc/aos-ui/aos-ui.env
-ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml up --remove-orphans
-ExecStop=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml down
+# COMPOSE_FILE in /etc/aos-ui/aos-ui.env selects compose.yaml plus exactly one
+# provider overlay (for example compose.hermes.yaml or compose.opencode.yaml).
+# The selected overlay keeps native provider ports private to its network.
+ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ up --remove-orphans
+ExecStop=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ down
 Restart=always
 RestartSec=5
 TimeoutStopSec=90

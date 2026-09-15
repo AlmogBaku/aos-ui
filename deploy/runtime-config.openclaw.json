@@ -1,4 +1,5 @@
 {
-  "status": "unavailable",
-  "reason": "invalid-runtime-mode"
+  "mode": "aos",
+  "composerModelSelectorEnabled": true,
+  "composerContextEnabled": true
 }
