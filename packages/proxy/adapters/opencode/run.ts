@@ -861,7 +861,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     try {
       if (!(await this.#active(run.scope.sessionId))) {
-        this.#settleNative(run.nativeSettlement)
+        const current = this.#runs.get(run.key)
+        if (current && !current.abandoned) this.#finish(current)
+        else this.#settleNative(run.nativeSettlement)
         return "idle"
       }
     } catch {

@@ -6,6 +6,7 @@ import type {
   OpenCodeDurableEvent,
   OpenCodeSessionEvents,
 } from "./client"
+import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeRunEngine } from "./run"
 
@@ -757,6 +758,101 @@ describe("OpenCodeRunEngine", () => {
       type: EventType.RUN_FINISHED,
       result: { stopped: true },
     })
+  })
+
+  it("terminalizes an open stopped run before the coordinator admits another turn", async () => {
+    const first = controlledStream()
+    const second = controlledStream()
+    const sources = [first.source, second.source]
+    const durable: ReturnType<typeof historyEvent>[] = []
+    let running = false
+    let nextAdmissionSeq = 0
+    const state = client({
+      events: vi.fn(async () => sources.shift()!),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+        data: durable.filter(
+          (event) => event.durable.seq > (options?.after ?? -1)
+        ),
+        hasMore: false,
+      })),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          running = true
+          return {
+            data: {
+              admittedSeq: nextAdmissionSeq++,
+              id: request.id,
+              sessionID: scope.sessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
+    })
+    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const started = vi.spyOn(engine, "start")
+    const sessions = new SessionCoordinator({
+      engine,
+      maxActiveExecutions: 8,
+      maxGuestActiveExecutions: 2,
+      maxSubscriberEvents: 8,
+      maxSubscriberBytes: 64 * 1024,
+      maxReplayEvents: 32,
+      maxReplayBytes: 256 * 1024,
+    })
+    const access = {
+      subscriberId: "operator",
+      controllerId: "operator",
+      lane: "operator",
+      canControl: true,
+    } as const
+    const subscription = await sessions.start(scope, input(), access)
+    const firstHandle = await started.mock.results[0]!.value
+    const collected = (async () => {
+      const events: unknown[] = []
+      for await (const value of subscription.events) events.push(value.event)
+      return events
+    })()
+    const firstAdmission = historyEvent(0, "session.next.prompt.admitted", {
+      timestamp: 0,
+      messageID: admission["run-1"],
+      prompt: { text: "Hello OpenCode" },
+      delivery: "queue",
+    })
+    durable.push(firstAdmission)
+    first.publish({ id: "0", event: "session", data: firstAdmission })
+
+    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
+    running = false
+    await expect(sessions.stop(scope, "operator")).resolves.toBe("idle")
+    const terminal = await Promise.race([
+      Promise.all([collected, firstHandle.settled]),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 100)
+      ),
+    ])
+    const next = await sessions.start(scope, input({ runId: "run-2" }), access)
+
+    expect(terminal).not.toBe("timed-out")
+    if (terminal === "timed-out") throw new Error("run did not settle")
+    const [events] = terminal
+    expect(events.map((event) => (event as { type: string }).type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_FINISHED,
+    ])
+    expect(events.at(-1)).toMatchObject({
+      type: EventType.RUN_FINISHED,
+      result: { stopped: true },
+    })
+    expect(EventSchemas.safeParse(events.at(-1)).success).toBe(true)
+    expect(next.runId).toBe("run-2")
+    expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
   it("replaces the prior scoped observation and bounds an unconsumed event queue", async () => {
