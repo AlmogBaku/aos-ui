@@ -113,8 +113,7 @@
   white-space: nowrap;
 }
 
-.statusDot,
-.attentionDot {
+.statusDot {
   display: inline-block;
   inline-size: 0.5rem;
   block-size: 0.5rem;
@@ -127,9 +126,8 @@
   background: var(--success);
 }
 
-.statusDot[data-status="waiting-for-input"],
-.attentionDot {
-  background: var(--primary);
+.statusDot[data-status="waiting-for-input"] {
+  background: var(--workspace-status-running, var(--success));
 }
 
 .statusDot[data-status="failed"] {

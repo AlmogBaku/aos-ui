@@ -174,8 +174,7 @@ nav.list {
   color: var(--muted-foreground);
 }
 
-.statusDot,
-.attentionDot {
+.statusDot {
   display: inline-block;
   inline-size: 0.5rem;
   block-size: 0.5rem;
@@ -190,9 +189,8 @@ nav.list {
 }
 
 .statusDot[data-status="waiting-for-input"],
-.statusDot[data-status="attention"],
-.attentionDot {
-  background: var(--primary);
+.statusDot[data-status="attention"] {
+  background: var(--workspace-status-running, var(--success));
 }
 
 .statusDot[data-status="failed"] {
