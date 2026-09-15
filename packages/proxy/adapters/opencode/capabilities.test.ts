@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 
 import { openCodeCapabilities } from "./capabilities"
 
@@ -7,22 +8,26 @@ describe("openCodeCapabilities", () => {
     expect(openCodeCapabilities()).toMatchObject({
       interactions: {
         questions: {
-          available: true,
+          status: "available",
           protocol: "ag-ui-interrupt",
-          scope: "session-run",
+          scope: "run",
         },
-        permissions: {
-          available: true,
-          choices: ["once", "always", "reject"],
+        approvals: {
+          status: "available",
         },
-      },
-      controls: {
-        steering: { available: false, reason: "native-steering-unproven" },
-        editRetry: { available: false, reason: "native-rewind-unproven" },
       },
       content: {
-        audio: { available: false, reason: "native-audio-unavailable" },
+        transcription: {
+          status: "unavailable",
+          reason: "native-audio-unavailable",
+        },
       },
     })
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.pick({
+        interactions: true,
+        content: true,
+      }).parse(openCodeCapabilities())
+    ).toBeTruthy()
   })
 })

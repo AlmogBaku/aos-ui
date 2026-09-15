@@ -6,38 +6,30 @@ const MAX_PENDING = 64
 const MAX_QUESTIONS = 32
 const MAX_OPTIONS = 64
 const MAX_TEXT_BYTES = 4_096
-const MAX_RESOURCES = 64
-
 export type OpenCodeInteractionScope = {
   agentId: string
   sessionId: string
   threadId: string
   runId: string
 }
-
-type QuestionsTransport = {
-  reply(
-    sessionId: string,
-    requestId: string,
-    reply: { answers: string[][] }
-  ): Promise<void>
-  reject(sessionId: string, requestId: string): Promise<void>
-}
-
-type PermissionsTransport = {
-  reply(
-    sessionId: string,
-    requestId: string,
-    reply: "once" | "always" | "reject",
-    message?: string
-  ): Promise<void>
-}
-
 export type OpenCodeInteractionTransport = {
-  questions: QuestionsTransport
-  permissions: PermissionsTransport
+  questions: {
+    reply(
+      sessionId: string,
+      requestId: string,
+      reply: { answers: string[][] }
+    ): Promise<void>
+    reject(sessionId: string, requestId: string): Promise<void>
+  }
+  permissions: {
+    reply(
+      sessionId: string,
+      requestId: string,
+      reply: "once" | "always" | "reject",
+      message?: string
+    ): Promise<void>
+  }
 }
-
 export class OpenCodeInteractionPublicError extends Error {
   constructor(
     readonly code:
@@ -49,349 +41,292 @@ export class OpenCodeInteractionPublicError extends Error {
       | "AOS_MUTATION_UNCERTAIN"
   ) {
     super(
-      code === "AOS_PROVIDER_INVALID_RESPONSE"
-        ? "OpenCode returned invalid interaction data"
-        : code === "AOS_INTERACTION_NOT_FOUND"
-          ? "Interaction not found"
-          : code === "AOS_MUTATION_UNCERTAIN"
-            ? "The interaction response may have been accepted"
-            : code === "AOS_PROVIDER_UNAVAILABLE"
-              ? "OpenCode interaction is temporarily unavailable"
-              : code === "AOS_LIMIT_EXCEEDED"
-                ? "Interaction limit exceeded"
-                : "Invalid interaction response"
+      code === "AOS_INTERACTION_NOT_FOUND"
+        ? "Interaction not found"
+        : code === "AOS_MUTATION_UNCERTAIN"
+          ? "The interaction response may have been accepted"
+          : code === "AOS_PROVIDER_INVALID_RESPONSE"
+            ? "OpenCode returned invalid interaction data"
+            : "Invalid interaction response"
     )
     this.name = "OpenCodeInteractionPublicError"
   }
 }
-
+type Scope = Omit<OpenCodeInteractionScope, "runId">
 type Question = {
-  header: string
-  question: string
-  options: string[]
+  options: { publicValue: string; nativeLabel: string }[]
   multiple: boolean
   custom: boolean
 }
-
 type Pending = {
-  key: string
-  scope: OpenCodeInteractionScope
   id: string
+  scope: Scope
   state: "pending" | "dispatching"
-  fingerprint?: string
-  outcome: RunFinishedInterruptOutcome
-} & (
-  | { kind: "questions"; questions: Question[] }
-  | { kind: "permission"; action: string; resources: string[] }
-)
-
-function bytes(value: string) {
-  return new TextEncoder().encode(value).byteLength
+  kind: "question" | "permission"
+  questions?: Question[]
 }
-
-function bounded(value: unknown, maximum = MAX_TEXT_BYTES) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    bytes(value) <= maximum
-    ? value
+const record = (v: unknown): Record<string, unknown> | undefined =>
+  typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
     : undefined
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+const text = (v: unknown, max = MAX_TEXT_BYTES) =>
+  typeof v === "string" &&
+  v.length > 0 &&
+  new TextEncoder().encode(v).byteLength <= max
+    ? v
     : undefined
-}
-
-function sameScope(
-  left: OpenCodeInteractionScope,
-  right: OpenCodeInteractionScope
-) {
-  return (
-    left.agentId === right.agentId &&
-    left.sessionId === right.sessionId &&
-    left.threadId === right.threadId &&
-    left.runId === right.runId
-  )
-}
-
-function key(scope: OpenCodeInteractionScope, id: string) {
-  return JSON.stringify([
-    scope.agentId,
-    scope.sessionId,
-    scope.threadId,
-    scope.runId,
-    id,
-  ])
-}
-
-function publicText(value: string) {
-  return value
-    .replace(
-      /(?:https?|wss?|file):\/\/[^\s"'<>]+/giu,
-      "[provider location redacted]"
-    )
-    .replace(
-      /(^|[\s("'=,:;\x5B])(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*/gu,
-      "$1[provider path redacted]"
-    )
-    .replace(
-      /\b(?:token|password|secret|api[-_]?key)\s*[=:]\s*[^\s,;]+/giu,
-      "[credential redacted]"
-    )
-}
-
-function validQuestion(value: unknown): Question | undefined {
-  const question = record(value)
-  const header = bounded(question?.header, 256)
-  const text = bounded(question?.question)
+const identity = (s: Scope) =>
+  JSON.stringify([s.agentId, s.sessionId, s.threadId])
+const key = (s: Scope, id: string) => `${identity(s)}:${id}`
+function parseQuestions(native: unknown, sessionId: string): Question[] {
+  const request = record(native)
   if (
-    !header ||
-    !text ||
-    !Array.isArray(question?.options) ||
-    question.options.length > MAX_OPTIONS
+    request?.sessionID !== sessionId ||
+    !Array.isArray(request.questions) ||
+    !request.questions.length ||
+    request.questions.length > MAX_QUESTIONS
   )
-    return undefined
-  const options = question.options.map((option) => {
-    const row = record(option)
-    const label = bounded(row?.label, 256)
-    const description = bounded(row?.description)
-    return label && description ? label : undefined
+    throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+  return request.questions.map((raw) => {
+    const row = record(raw)
+    if (
+      !text(row?.header, 256) ||
+      !text(row?.question) ||
+      !Array.isArray(row?.options) ||
+      row.options.length > MAX_OPTIONS ||
+      (row.multiple !== undefined && typeof row.multiple !== "boolean") ||
+      (row.custom !== undefined && typeof row.custom !== "boolean")
+    )
+      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    const options = row.options.map((option, index) => {
+      const value = record(option)
+      const label = text(value?.label, 256)
+      if (!label || !text(value?.description))
+        throw new OpenCodeInteractionPublicError(
+          "AOS_PROVIDER_INVALID_RESPONSE"
+        )
+      return { publicValue: `option-${index + 1}`, nativeLabel: label }
+    })
+    return {
+      options,
+      multiple: row.multiple === true,
+      custom: row.custom === true,
+    }
   })
-  if (
-    options.some((option) => option === undefined) ||
-    new Set(options).size !== options.length
-  )
-    return undefined
-  if (
-    question?.multiple !== undefined &&
-    typeof question.multiple !== "boolean"
-  )
-    return undefined
-  if (question?.custom !== undefined && typeof question.custom !== "boolean")
-    return undefined
-  return {
-    header: publicText(header),
-    question: publicText(text),
-    options: options as string[],
-    multiple: question?.multiple === true,
-    custom: question?.custom === true,
-  }
 }
-
-function result(
-  interrupts: RunFinishedInterruptOutcome["interrupts"]
-): RunFinishedInterruptOutcome {
-  return { type: "interrupt", interrupts }
-}
-
-function parseResume(value: unknown) {
-  if (!Array.isArray(value) || value.length !== 1)
-    throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-  const entry = record(value[0])
-  if (
-    !entry ||
-    !bounded(entry.interruptId, 512) ||
-    (entry.status !== "resolved" && entry.status !== "cancelled") ||
-    Object.keys(entry).some(
-      (name) => !["interruptId", "status", "payload", "metadata"].includes(name)
-    )
-  )
-    throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-  return {
-    interruptId: entry.interruptId as string,
-    status: entry.status,
-    payload: entry.payload,
-  }
-}
-
 export class OpenCodeInteractions {
   readonly #pending = new Map<string, Pending>()
-
   constructor(private readonly transport: OpenCodeInteractionTransport) {}
-
   acceptQuestion(
     scope: OpenCodeInteractionScope,
     native: unknown
   ): RunFinishedInterruptOutcome {
-    const request = record(native)
-    const id = bounded(request?.id, 512)
-    if (
-      !id ||
-      request?.sessionID !== scope.sessionId ||
-      !Array.isArray(request?.questions) ||
-      request.questions.length === 0 ||
-      request.questions.length > MAX_QUESTIONS
-    )
+    const id = text(record(native)?.id, 512)
+    if (!id)
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const questions = request.questions.map(validQuestion)
-    if (questions.some((question) => !question))
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const interactionKey = key(scope, id)
-    const existing = this.#pending.get(interactionKey)
-    if (existing) return existing.outcome
-    if (this.#pending.size >= MAX_PENDING)
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    if (!this.#pending.has(key(s, id)) && this.#pending.size >= MAX_PENDING)
       throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
-    const parsed = questions as Question[]
-    const outcome = result([
-      {
-        id,
-        reason: "question",
-        message: `${parsed.length} question${parsed.length === 1 ? "" : "s"} require answers`,
-        responseSchema: {
-          type: "array",
-          minItems: parsed.length,
-          maxItems: parsed.length,
-          items: parsed.map((question) => ({
-            type: "array",
-            minItems: 0,
-            maxItems: question.multiple ? question.options.length : 1,
-            items: question.custom
-              ? { type: "string", maxLength: MAX_TEXT_BYTES }
-              : { type: "string", enum: question.options },
-            ...(question.multiple ? { uniqueItems: true } : {}),
-          })),
-        },
-        metadata: {
-          "aos.kind": "questions",
-          "aos.questionCount": parsed.length,
-        },
-      },
-    ])
-    this.#pending.set(interactionKey, {
-      key: interactionKey,
-      scope,
+    this.#pending.set(key(s, id), {
       id,
+      scope: s,
       state: "pending",
-      kind: "questions",
-      questions: parsed,
-      outcome,
+      kind: "question",
+      questions: parseQuestions(native, scope.sessionId),
     })
-    return outcome
+    return this.snapshot(scope)!
   }
-
   acceptPermission(
     scope: OpenCodeInteractionScope,
     native: unknown
   ): RunFinishedInterruptOutcome {
-    const request = record(native)
-    const id = bounded(request?.id, 512)
-    const action = bounded(request?.action)
+    const row = record(native)
+    const id = text(row?.id, 512)
     if (
       !id ||
-      !action ||
-      request?.sessionID !== scope.sessionId ||
-      !Array.isArray(request?.resources) ||
-      request.resources.length > MAX_RESOURCES
+      row?.sessionID !== scope.sessionId ||
+      !text(row.action) ||
+      !Array.isArray(row.resources) ||
+      row.resources.length > 64 ||
+      row.resources.some((x) => !text(x))
     )
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const resources = request.resources.map((resource) => bounded(resource))
-    if (resources.some((resource) => !resource))
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const interactionKey = key(scope, id)
-    const existing = this.#pending.get(interactionKey)
-    if (existing) return existing.outcome
-    if (this.#pending.size >= MAX_PENDING)
-      throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
-    const outcome = result([
-      {
-        id,
-        reason: "approval",
-        message: publicText(action),
-        responseSchema: { type: "string", enum: ["once", "always", "reject"] },
-        metadata: {
-          "aos.kind": "permission",
-          "aos.resourceCount": resources.length,
-        },
-      },
-    ])
-    this.#pending.set(interactionKey, {
-      key: interactionKey,
-      scope,
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    this.#pending.set(key(s, id), {
       id,
+      scope: s,
       state: "pending",
       kind: "permission",
-      action: publicText(action),
-      resources: (resources as string[]).map(publicText),
-      outcome,
     })
-    return outcome
+    return this.snapshot(scope)!
   }
-
+  reconcile(
+    scope: OpenCodeInteractionScope,
+    native: { questions: unknown; permissions: unknown }
+  ) {
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    for (const [k, v] of this.#pending)
+      if (identity(v.scope) === identity(s)) this.#pending.delete(k)
+    const qs = Array.isArray(native.questions)
+      ? native.questions
+      : record(native.questions)?.data
+    const ps = Array.isArray(native.permissions)
+      ? native.permissions
+      : record(native.permissions)?.data
+    if (!Array.isArray(qs) || !Array.isArray(ps))
+      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    for (const q of qs) this.acceptQuestion(scope, q)
+    for (const p of ps) this.acceptPermission(scope, p)
+    return this.snapshot(scope)
+  }
+  snapshot(
+    scope: OpenCodeInteractionScope
+  ): RunFinishedInterruptOutcome | undefined {
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    const pending = [...this.#pending.values()].filter(
+      (p) => identity(p.scope) === identity(s)
+    )
+    if (!pending.length) return
+    return {
+      type: "interrupt",
+      interrupts: pending.map((p) => {
+        if (p.kind === "permission")
+          return {
+            id: p.id,
+            reason: "approval",
+            responseSchema: {
+              type: "string",
+              enum: ["once", "always", "reject"],
+            },
+          }
+        return {
+          id: p.id,
+          reason: "question",
+          message: `${p.questions!.length} questions require answers`,
+          responseSchema: {
+            type: "array",
+            minItems: p.questions!.length,
+            maxItems: p.questions!.length,
+            items: p.questions!.map((q) => ({
+              type: "array",
+              minItems: 0,
+              maxItems: q.multiple ? q.options.length : 1,
+              items: q.custom
+                ? { type: "string", maxLength: MAX_TEXT_BYTES }
+                : { type: "string", enum: q.options.map((o) => o.publicValue) },
+            })),
+          },
+        }
+      }),
+    }
+  }
   async respond(
     scope: OpenCodeInteractionScope,
     resume: unknown
   ): Promise<{ status: "resolved" | "in-progress" }> {
-    const entry = parseResume(resume)
-    const interaction = this.#pending.get(key(scope, entry.interruptId))
-    if (!interaction || !sameScope(interaction.scope, scope))
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    const pending = [...this.#pending.values()].filter(
+      (p) => identity(p.scope) === identity(s)
+    )
+    if (
+      !pending.length ||
+      !Array.isArray(resume) ||
+      resume.length !== pending.length
+    )
       throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    if (interaction.state === "dispatching") return { status: "in-progress" }
-    const fingerprint = JSON.stringify(entry)
-    if (interaction.fingerprint && interaction.fingerprint !== fingerprint)
+    const entries = resume.map((raw) => {
+      const e = record(raw)
+      if (
+        !e ||
+        !text(e.interruptId, 512) ||
+        (e.status !== "resolved" && e.status !== "cancelled")
+      )
+        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      const p = pending.find((x) => x.id === e.interruptId)
+      if (!p)
+        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      return {
+        p,
+        status: e.status,
+        payload: e.payload,
+        answers:
+          p.kind === "question" && e.status === "resolved"
+            ? this.#answers(p.questions!, e.payload)
+            : undefined,
+      }
+    })
+    if (new Set(entries.map((e) => e.p.id)).size !== entries.length)
       throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-    interaction.fingerprint = fingerprint
-    interaction.state = "dispatching"
+    if (entries.some((e) => e.p.state === "dispatching"))
+      return { status: "in-progress" }
+    for (const e of entries) e.p.state = "dispatching"
     try {
-      if (interaction.kind === "questions") {
-        if (entry.status === "cancelled")
-          await this.transport.questions.reject(scope.sessionId, interaction.id)
-        else {
-          const answers = this.#answers(interaction.questions, entry.payload)
-          await this.transport.questions.reply(
+      for (const e of entries) {
+        if (e.p.kind === "question") {
+          if (e.status === "cancelled")
+            await this.transport.questions.reject(scope.sessionId, e.p.id)
+          else
+            await this.transport.questions.reply(scope.sessionId, e.p.id, {
+              answers: e.answers!,
+            })
+        } else {
+          const choice = e.status === "cancelled" ? "reject" : e.payload
+          if (choice !== "once" && choice !== "always" && choice !== "reject")
+            throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+          await this.transport.permissions.reply(
             scope.sessionId,
-            interaction.id,
-            { answers }
+            e.p.id,
+            choice
           )
         }
-      } else {
-        const choice = entry.status === "cancelled" ? "reject" : entry.payload
-        if (choice !== "once" && choice !== "always" && choice !== "reject")
-          throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-        await this.transport.permissions.reply(
-          scope.sessionId,
-          interaction.id,
-          choice
-        )
       }
     } catch (error) {
-      if (error instanceof OpenCodeInteractionPublicError) {
-        interaction.state = "pending"
-        throw error
-      }
       if (error instanceof OpenCodeMutationUncertainError)
         throw new OpenCodeInteractionPublicError("AOS_MUTATION_UNCERTAIN")
-      interaction.state = "pending"
+      for (const e of entries) e.p.state = "pending"
+      if (error instanceof OpenCodeInteractionPublicError) throw error
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
     }
-    this.#pending.delete(interaction.key)
+    for (const e of entries) this.#pending.delete(key(s, e.p.id))
     return { status: "resolved" }
   }
-
-  #answers(questions: readonly Question[], value: unknown) {
-    if (!Array.isArray(value) || value.length !== questions.length)
+  #answers(questions: Question[], input: unknown) {
+    if (!Array.isArray(input) || input.length !== questions.length)
       throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-    return value.map((answer, index) => {
-      const question = questions[index]!
+    return input.map((answer, index) => {
+      const q = questions[index]!
       if (
         !Array.isArray(answer) ||
-        answer.length > (question.multiple ? question.options.length : 1) ||
-        (!question.multiple && answer.length > 1)
+        answer.length > (q.multiple ? q.options.length : 1)
       )
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-      const values = answer.map((item) => bounded(item))
-      if (
-        values.some((item) => !item) ||
-        new Set(values).size !== values.length
-      )
+      return answer.map((raw) => {
+        const value = text(raw, 256)
+        const option = q.options.find((x) => x.publicValue === value)
+        if (option) return option.nativeLabel
+        if (value && q.custom) return value
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-      const selected = values as string[]
-      if (
-        !question.custom &&
-        selected.some((item) => !question.options.includes(item))
-      )
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-      return selected
+      })
     })
   }
 }

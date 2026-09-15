@@ -20,14 +20,17 @@ describe("OpenCodeContent", () => {
     expect(stage.public).toEqual([
       { type: "file", filename: "notes.txt", mimeType: "text/plain" },
     ])
-    expect(stage.appendTo("Review")).toContain("[attachment: notes.txt]")
+    expect(stage.appendTo("Review")).toBe("Review")
+    expect(stage.files).toEqual([
+      { uri: "data:text/plain;base64,SGVsbG8=", name: "notes.txt" },
+    ])
     expect(JSON.stringify(stage)).not.toMatch(/path|native/i)
   })
 
-  it("accepts only the supported AOS artifact receipt shape", () => {
+  it("keeps artifact download unavailable rather than exporting an unscoped receipt", () => {
     const content = new OpenCodeContent()
 
-    expect(
+    expect(() =>
       content.artifactReceipt({
         metadata: {
           aos_ui: {
@@ -47,12 +50,7 @@ describe("OpenCodeContent", () => {
           },
         ],
       })
-    ).toEqual({
-      id: "artifact-1",
-      filename: "report.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 12,
-    })
+    ).toThrow(OpenCodeContentUnavailableError)
     expect(() =>
       content.artifactReceipt({ path: "/private/report.pdf" })
     ).toThrow(OpenCodeContentUnavailableError)
@@ -78,10 +76,25 @@ describe("OpenCodeContent", () => {
         title: "Build",
         stats: [{ key: "tests", label: "Tests", value: 5 }],
       },
-      fallback: "Build is ready for display.",
+      fallback: "Presentation is ready for display.",
     })
     expect(
       mapOpenCodeRichTool({ tool: "shell", state: { input: {} } })
     ).toBeUndefined()
+    expect(
+      JSON.stringify(
+        mapOpenCodeRichTool({
+          tool: "render_stats",
+          state: {
+            status: "completed",
+            input: {
+              title: "https://private.example token=abc /private/worktree",
+              stats: [{ key: "tests", label: "Tests", value: 5 }],
+            },
+            output: "https://private.example token=abc /private/worktree",
+          },
+        })
+      )
+    ).not.toMatch(/private\.example|token=abc|\/private\/worktree/)
   })
 })

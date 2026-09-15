@@ -53,7 +53,7 @@ describe("OpenCodeInteractions", () => {
         {
           interruptId: "native-question-id",
           status: "resolved",
-          payload: [["Europe"], ["Lint"]],
+          payload: [["option-1"], ["option-1"]],
         },
       ])
     ).resolves.toEqual({ status: "resolved" })
@@ -94,7 +94,7 @@ describe("OpenCodeInteractions", () => {
         {
           interruptId: "native-question-id",
           status: "resolved",
-          payload: [["Europe"]],
+          payload: [["option-1"]],
         },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
@@ -103,10 +103,90 @@ describe("OpenCodeInteractions", () => {
         {
           interruptId: "native-question-id",
           status: "resolved",
-          payload: [["Outside"], ["Lint"]],
+          payload: [["Outside"], ["option-1"]],
         },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    expect(reply).not.toHaveBeenCalled()
+  })
+
+  it("maps complete session-scoped resume batches from a new segment back to exact native labels", async () => {
+    const reply = vi.fn(async () => undefined)
+    const permission = vi.fn(async () => undefined)
+    const interactions = new OpenCodeInteractions({
+      questions: { reply, reject: vi.fn(async () => undefined) },
+      permissions: { reply: permission },
+    })
+    const question = interactions.acceptQuestion(scope, {
+      id: "question-1",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "Path",
+          question: "Choose",
+          options: [{ label: "/private/a", description: "A" }],
+        },
+      ],
+    })
+    interactions.acceptPermission(scope, {
+      id: "permission-1",
+      sessionID: "native-session-1",
+      action: "write",
+      resources: [],
+    })
+    const publicChoice = (
+      question.interrupts[0]!.responseSchema!.items as Array<{
+        items: { enum: string[] }
+      }>
+    )[0]!.items.enum[0]!
+
+    await expect(
+      interactions.respond({ ...scope, runId: "resume-segment" }, [
+        {
+          interruptId: "question-1",
+          status: "resolved",
+          payload: [[publicChoice]],
+        },
+        { interruptId: "permission-1", status: "resolved", payload: "once" },
+      ])
+    ).resolves.toEqual({ status: "resolved" })
+    expect(reply).toHaveBeenCalledWith("native-session-1", "question-1", {
+      answers: [["/private/a"]],
+    })
+    expect(permission).toHaveBeenCalledWith(
+      "native-session-1",
+      "permission-1",
+      "once"
+    )
+  })
+
+  it("removes externally resolved interactions during authoritative reconciliation without dispatch", async () => {
+    const reply = vi.fn(async () => undefined)
+    const interactions = new OpenCodeInteractions({
+      questions: { reply, reject: vi.fn(async () => undefined) },
+      permissions: { reply: vi.fn(async () => undefined) },
+    })
+    interactions.acceptQuestion(scope, {
+      id: "question-1",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "A",
+          question: "A?",
+          options: [{ label: "Yes", description: "Y" }],
+        },
+      ],
+    })
+    interactions.reconcile(scope, { questions: [], permissions: [] })
+    await expect(
+      interactions.respond({ ...scope, runId: "resume-segment" }, [
+        {
+          interruptId: "question-1",
+          status: "resolved",
+          payload: [["option-1"]],
+        },
+      ])
+    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
     expect(reply).not.toHaveBeenCalled()
   })
 })

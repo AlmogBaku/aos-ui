@@ -8,7 +8,6 @@ import {
 const MAX_ATTACHMENTS = 16
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
-const MAX_TEXT_BYTES = 4_096
 const SAFE_MIME =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
 
@@ -49,14 +48,15 @@ export function mapOpenCodeRichTool(value: unknown) {
     return undefined
   const parsed = descriptor.schema.safeParse(state.input)
   if (!parsed.success) return undefined
-  const output =
-    typeof state.output === "string" && bytes(state.output) <= MAX_TEXT_BYTES
-      ? state.output
-      : undefined
   return {
     kind: descriptor.kind,
-    data: parsed.data,
-    ...(output ? { fallback: output } : {}),
+    data: JSON.parse(
+      JSON.stringify(parsed.data).replace(
+        /(?:https?|wss?|file):\/\/[^\s"'<>]+|(?:^|\s)(?:\/(?!\/)|[A-Za-z]:[\\/])[^\s"'<>]*|\b(?:token|password|secret|api[-_]?key)\s*[=:]\s*[^\s,;]+/giu,
+        "[redacted]"
+      )
+    ),
+    fallback: "Presentation is ready for display.",
   }
 }
 
@@ -150,22 +150,21 @@ export class OpenCodeContent {
               mimeType: attachment.mimeType,
             }
       ),
+      files: attachments.map((attachment) => ({
+        uri: attachment.dataUrl,
+        ...(attachment.filename ? { name: attachment.filename } : {}),
+      })),
       appendTo(text: string) {
-        return [
-          text.trim(),
-          ...prepared.map(
-            (attachment) =>
-              `[attachment: ${attachment.filename ?? "attachment"}]`
-          ),
-        ]
-          .filter(Boolean)
-          .join("\n")
+        return text.trim()
       },
       async cleanup() {},
     }
   }
 
   artifactReceipt(value: unknown) {
+    void value
+    throw new OpenCodeContentUnavailableError()
+    /*
     const result = record(value)
     const metadata = record(result?.metadata)
     const receipt = record(metadata?.aos_ui)
@@ -196,6 +195,6 @@ export class OpenCodeContent {
       !attachment.url.startsWith(`data:${mimeType};base64,`)
     )
       throw new OpenCodeContentUnavailableError()
-    return { id, filename, mimeType, sizeBytes }
+    return { id, filename, mimeType, sizeBytes } */
   }
 }
