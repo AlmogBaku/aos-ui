@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import type { ServerRunEngine } from "../../core/runtime"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 
@@ -190,6 +191,18 @@ describe("OpenCode server adapter", () => {
         },
       },
     })
+  })
+
+  it("returns OpenCode capabilities accepted by the canonical workspace schema", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      client: client(),
+      runs: runEngine,
+    })
+
+    const value = await adapter.workspaceCapabilities("research", "session-1")
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.safeParse(value).success
+    ).toBe(true)
   })
 
   it("closes the provider facade only once", async () => {

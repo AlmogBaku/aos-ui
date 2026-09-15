@@ -367,6 +367,9 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   async workspaceCapabilities(agentId: string, publicSessionId: string) {
     await this.getSession(agentId, publicSessionId)
+    const { agentVisibility, sessionTitle, sessionDeletion, ...workspace } =
+      this.#workspace.capabilities()
+    void [agentVisibility, sessionTitle, sessionDeletion]
     return SessionWorkspaceCapabilitiesResponseSchema.parse({
       agent: {
         identity: { type: "opencode", provider: "OpenCode" },
@@ -392,7 +395,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
           approveWithEdits: false,
         },
       },
-      workspace: this.#workspace.capabilities(),
+      workspace,
       ...openCodeCapabilities(),
     })
   }
