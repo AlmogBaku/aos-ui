@@ -139,6 +139,46 @@ it("recognizes typed commands beyond the bounded public catalog", async () => {
   ).toBe(false)
 })
 
+it.each([
+  ["/q now", "quit now"],
+  ["/Help", "help"],
+])(
+  "routes Hermes canonical aliases and case-folded commands: %s",
+  async (text, command) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "commands.catalog")
+        return {
+          pairs: [
+            ["/help", "Help"],
+            ["/quit", "Quit"],
+          ],
+          canon: {
+            "/help": "/help",
+            "/quit": "/quit",
+            "/q": "/quit",
+          },
+        }
+      if (method === "slash.exec") return { output: "Done" }
+      throw new Error("unexpected RPC")
+    })
+
+    await new HermesServerAdapter({ request }).submit("live", {
+      scope,
+      text,
+      runId: "run",
+    })
+
+    expect(request).toHaveBeenCalledWith(
+      "slash.exec",
+      { command, session_id: "live" },
+      expect.any(Number)
+    )
+    expect(
+      request.mock.calls.some(([method]) => method === "prompt.submit")
+    ).toBe(false)
+  }
+)
+
 it("keeps commands whose native descriptions exceed the public limit", async () => {
   const commands = await nativeSlashCommands(
     {
@@ -150,7 +190,7 @@ it("keeps commands whose native descriptions exceed the public limit", async () 
   expect(commands).toEqual([{ name: "long", description: "x".repeat(4_096) }])
 })
 
-it.each(["/unknown", "/Help", " /help", "/helpful", "normal text"])(
+it.each(["/unknown", " /help", "/helpful", "normal text"])(
   "sends unmatched text normally: %s",
   async (text) => {
     const request = vi.fn(async (method: string) =>

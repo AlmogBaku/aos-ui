@@ -378,6 +378,104 @@ describe("AOS V1 proxy", () => {
     )
   })
 
+  it.each([
+    {
+      name: "a recognized command rejected before delivery",
+      terminal: {
+        type: EventType.RUN_ERROR,
+        message: "Slash commands cannot be sent with attachments.",
+        code: "AOS_COMMAND_WITH_ATTACHMENTS",
+      } as AGUIEvent,
+      cleanupCount: 1,
+    },
+    {
+      name: "an accepted prompt",
+      terminal: {
+        type: EventType.RUN_FINISHED,
+        threadId: "stored",
+        runId: "run-attachment-cleanup",
+        outcome: { type: "success" },
+      } as AGUIEvent,
+      cleanupCount: 0,
+    },
+    {
+      name: "an uncertain prompt",
+      terminal: {
+        type: EventType.RUN_ERROR,
+        message: "Hermes delivery could not be confirmed.",
+        code: "AOS_SEND_UNCERTAIN",
+      } as AGUIEvent,
+      cleanupCount: 0,
+    },
+  ])(
+    "cleans a staged attachment only for $name",
+    async ({ terminal, cleanupCount }) => {
+      const runtime = new HermesServerAdapter({ request: vi.fn() })
+      vi.spyOn(runtime, "getSession").mockResolvedValue(session())
+      const cleanup = vi.fn(async () => undefined)
+      vi.spyOn(runtime, "stageAttachments").mockResolvedValue({
+        public: [
+          { type: "file", filename: "notes.txt", mimeType: "text/plain" },
+        ],
+        appendTo: (text) => `${text}\n\n[attachment]`,
+        cleanup,
+      })
+      const engine: ServerRunEngine = {
+        start: vi.fn(async (_scope, input) =>
+          terminalHandle([
+            {
+              type: EventType.RUN_STARTED,
+              threadId: input.threadId,
+              runId: input.runId,
+            },
+            terminal,
+          ])
+        ),
+        recover: vi.fn(),
+      }
+      const proxy = app(runtime, { engine })
+      const staged = await proxy.request(
+        `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            attachments: [
+              {
+                type: "file",
+                filename: "notes.txt",
+                mimeType: "text/plain",
+                dataUrl: "data:text/plain;base64,bm90ZXM=",
+              },
+            ],
+          }),
+        }
+      )
+      const { stageId } = (await staged.json()) as { stageId: string }
+
+      const response = await proxy.request(
+        `${origin}/api/aos/v1/agents/researcher/sessions/stored/runs`,
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "stored",
+            runId: "run-attachment-cleanup",
+            state: {},
+            messages: [{ id: "user-1", role: "user", content: "/help" }],
+            tools: [],
+            context: [],
+            forwardedProps: { aosAttachmentStageId: stageId },
+          }),
+        }
+      )
+      await response.text()
+
+      expect(response.status).toBe(200)
+      expect(cleanup).toHaveBeenCalledTimes(cleanupCount)
+    }
+  )
+
   it("loads only the requested Session history page", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(runtime, "getSession").mockResolvedValue(session())

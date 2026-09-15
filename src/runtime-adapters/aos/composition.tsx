@@ -28,6 +28,7 @@ import {
   useAosSessionCapabilities,
 } from "./aos-composer-features"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
+import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
@@ -77,16 +78,15 @@ function ReadyAosRuntimeProvider({
             threadId: remoteId ?? "",
             stageAttachments: client.stageAttachments.bind(client),
             onComposerPrefill: remoteId
-              ? (text) => {
+              ? async (text) => {
                   const runtime = assistantRuntimeRef.current
                   if (!runtime) return
-                  const threads = runtime.threads.getState()
-                  const selected = threads.threadItems[threads.mainThreadId]
-                  if ((selected?.remoteId ?? selected?.externalId) !== remoteId)
-                    return
-                  // Do not replace a new draft the user typed while the command ran.
-                  if (!runtime.thread.composer.getState().isEmpty) return
-                  runtime.thread.composer.setText(text)
+                  const thread = runtime.threads.getById(localId)
+                  await reconcileComposerPrefill(
+                    thread,
+                    () => client.loadHistory(remoteId),
+                    text
+                  )
                 }
               : undefined,
             resolveRewindSourceId: remoteId
@@ -136,7 +136,7 @@ function ReadyAosRuntimeProvider({
                       .then((value) => value.agent)
                 : undefined,
           }),
-        [agentId, remoteId]
+        [agentId, remoteId, localId]
       )
       const history = useMemo(
         () =>

@@ -1,4 +1,4 @@
-import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core"
+import { EventType, RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import type { Context } from "hono"
 
@@ -261,7 +261,20 @@ export function registerRunRoutes(
           ...(stage ? { hasAttachments: true } : {}),
         },
         input,
-        access(context, principalId)
+        {
+          ...access(context, principalId),
+          ...(stage
+            ? {
+                onTerminal: async (event) => {
+                  if (
+                    event.type === EventType.RUN_ERROR &&
+                    event.code === "AOS_COMMAND_WITH_ATTACHMENTS"
+                  )
+                    await stage.cleanup().catch(() => undefined)
+                },
+              }
+            : {}),
+        }
       )
       return createRunStreamResponse(subscription, {
         signal: context.req.raw.signal,

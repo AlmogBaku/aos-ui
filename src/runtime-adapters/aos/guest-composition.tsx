@@ -31,6 +31,7 @@ import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
+import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import {
   AosReconciler,
   type AosEventScope,
@@ -234,14 +235,17 @@ function ReadyGuestAosSurface({
     [client, scope.sessionId]
   )
   const onComposerPrefill = useCallback(
-    (text: string) => {
+    async (text: string) => {
       const current = runtimeRef.current
       if (!current || current.sessionId !== scope.sessionId) return
       const { runtime } = current
-      if (!runtime.thread.composer.getState().isEmpty) return
-      runtime.thread.composer.setText(text)
+      await reconcileComposerPrefill(
+        runtime.thread,
+        () => client.loadHistory(scope.sessionId),
+        text
+      )
     },
-    [scope.sessionId]
+    [client, scope.sessionId]
   )
   const agent = useMemo(
     () =>

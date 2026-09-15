@@ -775,7 +775,7 @@ describe("HermesRunEngine", () => {
       {
         type: EventType.RUN_ERROR,
         message: "Slash commands cannot be sent with attachments.",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "AOS_COMMAND_WITH_ATTACHMENTS",
       },
     ])
   })

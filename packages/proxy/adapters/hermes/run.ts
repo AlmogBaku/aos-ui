@@ -1027,7 +1027,9 @@ export class HermesRunEngine {
     if (acknowledgement === "rejected" && !active.terminal) {
       this.#fail(
         active,
-        "AOS_PROVIDER_RUN_FAILED",
+        rejection === "command-with-attachments"
+          ? "AOS_COMMAND_WITH_ATTACHMENTS"
+          : "AOS_PROVIDER_RUN_FAILED",
         rejection === "command-with-attachments"
           ? "Slash commands cannot be sent with attachments."
           : "Hermes rejected this command."

@@ -28,6 +28,8 @@ export type CoordinatorAccess = {
   canControl: boolean
   project?(event: AGUIEvent): AGUIEvent | undefined
   onDetach?(): void
+  /** Owns request-scoped resources until the provider outcome is known. */
+  onTerminal?(event: AGUIEvent): void | Promise<void>
 }
 
 export type CoordinatorRecoveryRequest = Pick<
@@ -63,6 +65,7 @@ type Segment = {
   nextSequence: number
   terminal: boolean
   interrupts: Interrupt[]
+  onTerminal?: (event: AGUIEvent) => void | Promise<void>
 }
 
 type Execution = {
@@ -265,7 +268,7 @@ export class SessionCoordinator {
         admissionFingerprint: admissionFingerprint(input),
         startedByLane: access.lane,
         controllers: new Set(access.canControl ? [access.controllerId] : []),
-        segment: this.#segment(input.runId, handle),
+        segment: this.#segment(input.runId, handle, access.onTerminal),
       }
       this.#executions.set(key, execution)
       this.#consume(execution, execution.segment)
@@ -407,7 +410,11 @@ export class SessionCoordinator {
     }
   }
 
-  #segment(runId: string, handle: ServerRunHandle): Segment {
+  #segment(
+    runId: string,
+    handle: ServerRunHandle,
+    onTerminal?: (event: AGUIEvent) => void | Promise<void>
+  ): Segment {
     return {
       runId,
       handle,
@@ -422,6 +429,7 @@ export class SessionCoordinator {
       nextSequence: 0,
       terminal: false,
       interrupts: [],
+      ...(onTerminal ? { onTerminal } : {}),
     }
   }
 
@@ -431,6 +439,15 @@ export class SessionCoordinator {
       try {
         for await (const event of segment.handle.events) {
           if (execution.segment !== segment) return
+          if (
+            event.type === EventType.RUN_FINISHED ||
+            event.type === EventType.RUN_ERROR
+          )
+            try {
+              await segment.onTerminal?.(event)
+            } catch {
+              // Resource cleanup must not rewrite the provider outcome.
+            }
           const sequenced = {
             sequence: ++segment.nextSequence,
             event,

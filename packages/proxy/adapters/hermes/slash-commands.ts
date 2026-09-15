@@ -19,7 +19,16 @@ async function nativeCommandPairs(
     !Array.isArray(value.pairs)
   )
     throw new Error("Invalid Hermes command catalog")
-  return value.pairs
+  const canon = "canon" in value ? value.canon : undefined
+  if (
+    canon !== undefined &&
+    (!canon || typeof canon !== "object" || Array.isArray(canon))
+  )
+    throw new Error("Invalid Hermes command catalog")
+  return {
+    pairs: value.pairs,
+    canon: canon as Readonly<Record<string, unknown>> | undefined,
+  }
 }
 
 function parsedSlashInvocation(text: string) {
@@ -32,7 +41,7 @@ export async function nativeSlashCommands(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>
 ): Promise<SlashCommand[]> {
-  const pairs = await nativeCommandPairs(transport, params)
+  const { pairs } = await nativeCommandPairs(transport, params)
   const commands: SlashCommand[] = []
   const seen = new Set<string>()
   for (const pair of pairs) {
@@ -62,15 +71,30 @@ export async function nativeSlashInvocation(
 ) {
   const invocation = parsedSlashInvocation(text)
   if (!invocation) return undefined
-  const pairs = await nativeCommandPairs(transport, params)
-  const recognized = pairs.some((pair) => {
+  const { pairs, canon } = await nativeCommandPairs(transport, params)
+  const canonicalValue = canon?.[`/${invocation.name}`.toLowerCase()]
+  if (canonicalValue !== undefined) {
+    const canonical = SlashCommandSchema.safeParse({
+      name:
+        typeof canonicalValue === "string"
+          ? canonicalValue.replace(/^\//u, "")
+          : canonicalValue,
+    })
+    if (!canonical.success) throw new Error("Invalid Hermes command catalog")
+    return { ...invocation, name: canonical.data.name }
+  }
+  const recognized = pairs.find((pair) => {
     if (!Array.isArray(pair) || typeof pair[0] !== "string") return false
     const command = SlashCommandSchema.safeParse({
       name: pair[0].replace(/^\//u, ""),
     })
-    return command.success && command.data.name === invocation.name
+    return (
+      command.success &&
+      command.data.name.toLowerCase() === invocation.name.toLowerCase()
+    )
   })
-  return recognized ? invocation : undefined
+  if (!recognized) return undefined
+  return { ...invocation, name: recognized[0].replace(/^\//u, "") }
 }
 
 export function slashInvocation(
