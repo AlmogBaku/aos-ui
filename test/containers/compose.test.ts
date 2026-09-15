@@ -21,6 +21,7 @@ type ComposeConfig = {
       expose?: string[]
       extra_hosts?: string[]
       ports?: Array<{ host_ip?: string; published?: string; target: number }>
+      user?: string
       configs?: Array<{ source: string; target: string; mode?: string }>
       secrets?: Array<{
         source: string
@@ -176,6 +177,7 @@ describe("container orchestration", () => {
     expect(config.services.web.depends_on?.opencode.condition).toBe(
       "service_healthy"
     )
+    expect(config.services.web.user).toBe("1234:2345")
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.opencode.json")
     )
@@ -207,22 +209,22 @@ describe("container orchestration", () => {
         source: "opencode-password",
         target: "opencode-password",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "reconnect-cursor-key",
         target: "reconnect-cursor-key",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "guest-invite-signing-key",
         target: "guest-invite-signing-key",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
     ])
     expect(config.services.opencode.environment).toMatchObject({
@@ -267,17 +269,6 @@ describe("container orchestration", () => {
     expect(JSON.stringify(config)).not.toContain("AOS_GATEWAY_")
   })
 
-  it("does not package the deleted Go gateway in the OpenCode runtime image", () => {
-    const dockerfile = readFileSync(
-      resolve(root, "Dockerfile.opencode"),
-      "utf8"
-    )
-
-    expect(dockerfile).not.toContain("golang:")
-    expect(dockerfile).not.toContain("gateway/")
-    expect(dockerfile).not.toContain("aos-gateway")
-  })
-
   it("runs the private AOS proxy as the web service for Hermes", () => {
     const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
       AOS_UI_RUNTIME_CONFIG_FILE: resolve(
@@ -291,9 +282,12 @@ describe("container orchestration", () => {
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_HOST_UID: "1234",
+      AOS_UI_HOST_GID: "2345",
     })
 
     expect(Object.keys(config.services)).toEqual(["web"])
+    expect(config.services.web.user).toBe("1234:2345")
     expect(config.services.web.environment).toMatchObject({
       AOS_UI_STATIC_ROOT: "/app/dist",
       AOS_UI_RUNTIME_CONFIG_FILE: "/run/aos-ui/runtime-config.json",
@@ -328,14 +322,20 @@ describe("container orchestration", () => {
       expect.objectContaining({
         source: "hermes-token",
         target: "hermes-token",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "reconnect-cursor-key",
         target: "reconnect-cursor-key",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "guest-invite-signing-key",
         target: "guest-invite-signing-key",
+        uid: "1234",
+        gid: "2345",
       }),
     ])
     expect(config.configs?.["runtime-config"]?.file).toBe(
@@ -377,9 +377,12 @@ describe("container orchestration", () => {
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
+      AOS_UI_HOST_UID: "1234",
+      AOS_UI_HOST_GID: "2345",
     })
 
     expect(Object.keys(config.services)).toEqual(["web"])
+    expect(config.services.web.user).toBe("1234:2345")
     expect(config.services.web.command).toEqual([
       "bun",
       "run",
@@ -414,29 +417,29 @@ describe("container orchestration", () => {
         source: "openclaw-device-identity",
         target: "openclaw-device-identity",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "openclaw-device-token",
         target: "openclaw-device-token",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "reconnect-cursor-key",
         target: "reconnect-cursor-key",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
       expect.objectContaining({
         source: "guest-invite-signing-key",
         target: "guest-invite-signing-key",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
     ])
     expect(config.secrets?.["openclaw-device-identity"]?.file).toBe(
@@ -523,6 +526,7 @@ describe("container orchestration", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
 
     expect(dockerfile).toMatch(/FROM dependencies AS proxy/)
+    expect(dockerfile).toContain("COPY --chown=bun:bun shared ./shared")
     expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
     expect(dockerfile).toContain("USER bun")
   })

@@ -329,7 +329,7 @@ describe("AOS V1 proxy", () => {
     expect(runtime.updateAgentVisibility).not.toHaveBeenCalled()
   })
 
-  it("does not expose an HTTP invitation signing endpoint", async () => {
+  it("does not expose invitation signing when the guest surface is disabled", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)
 

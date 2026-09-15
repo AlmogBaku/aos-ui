@@ -161,6 +161,18 @@ describe("proxy executable", () => {
         "img-src 'self' https: data: blob:"
       )
       expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
+      for (const reservedPath of [
+        "/auth",
+        "/auth/callback",
+        "/hermes",
+        "/hermes/api/profiles",
+      ]) {
+        const response = await guestApp.fetch(
+          new Request(`https://guest.example.test${reservedPath}`)
+        )
+        expect(response?.status).toBe(404)
+        expect(response?.headers.get("x-content-type-options")).toBe("nosniff")
+      }
 
       await lifecycle!.shutdown()
       await lifecycle!.shutdown()
@@ -171,7 +183,7 @@ describe("proxy executable", () => {
     }
   )
 
-  it("documents the Go-compatible invite command and flags", async () => {
+  it("documents the invite command and flags", async () => {
     let output = ""
 
     await expect(

@@ -52,7 +52,7 @@ async function rogueToken(
 }
 
 describe("guest invitation", () => {
-  it("issues only the Go-compatible invitation claims", async () => {
+  it("issues only the public invitation claims", async () => {
     const issued = await service().issue(invitation)
 
     expect(decodeProtectedHeader(issued.token)).toEqual({

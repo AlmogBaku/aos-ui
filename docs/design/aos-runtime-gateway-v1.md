@@ -77,11 +77,10 @@ Operator and guest listeners mount the same normalized route implementation
 with distinct lane policies. No provider-neutral operation is reimplemented in
 the guest listener.
 
-All code replaced by the TypeScript proxy is removed before V1 acceptance:
-the Go gateway, its build/deployment wiring, obsolete native browser paths,
-rollout shims, deleted endpoint clients, stale schemas, tests, generated
-instructions, and maintained documentation. A compatibility artifact remains
-only when an active external consumer is named and tested.
+All superseded proxy code, deployment wiring, browser paths, rollout shims,
+endpoint clients, schemas, tests, generated instructions, and maintained
+documentation are removed before V1 acceptance. A compatibility artifact
+remains only when an active external consumer is named and tested.
 
 ## Access model
 
@@ -344,7 +343,7 @@ Acceptance also requires:
 - common proxy and browser modules contain no Hermes native types or protocol
   constants;
 - the adapter factory is the only runtime-kind selection point;
-- the Go gateway and every replaced/deprecated V1 path are absent;
+- every replaced or deprecated V1 path is absent;
 - the provider-neutral runtime conformance suite proves the next adapter can be
   added without modifying common coordination, routes, authorization, events,
   protocol, or browser modules.

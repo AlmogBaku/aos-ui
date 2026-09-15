@@ -37,7 +37,7 @@ export async function runProxyCli(
     .addHelpText(
       "after",
       `
-The command runs locally and does not contact Hermes. Keep the printed link
+The command runs locally and does not contact the native runtime. Keep the printed link
 private: it is a reusable bearer credential until it expires.
 
 Examples:
@@ -49,10 +49,7 @@ Examples:
     --instruction "Continue the scheduled interview."
 `
     )
-    .requiredOption(
-      "--agent <name>",
-      "Native Agent or Hermes profile name (required)"
-    )
+    .requiredOption("--agent <name>", "Native Agent ID (required)")
     .option(
       "--ref <reference>",
       "Stable conversation reference; generated when omitted"

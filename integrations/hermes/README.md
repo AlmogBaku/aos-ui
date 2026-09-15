@@ -34,10 +34,12 @@ The prompt file is mode `0600` and deleted after invocation. A timeout or lost s
 
 When a user asks for a guest invite, the plugin points Hermes to
 `aos-integration:aos-invite-link` through `skill_view`. The skill invokes the
-local TypeScript proxy CLI, which signs the invitation without contacting the
-runtime. It recommends a dedicated, narrowly skilled and restricted Agent
-before signing. The invited Session is created lazily on first Send. Follow the
-canonical [invited-chat guide](../../docs/invite-chat.md).
+trusted operator proxy's invitation endpoint with `curl`; signing keys remain
+inside the proxy. Configure `AOS_RUNTIME_PROXY_URL` for the Hermes service to a
+reachable configured operator origin. The skill recommends a dedicated,
+narrowly skilled and restricted Agent before signing. The invited Session is
+created lazily on first Send. Follow the canonical
+[invited-chat guide](../../docs/invite-chat.md).
 
 ## Provision the creator
 

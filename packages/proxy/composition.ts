@@ -97,6 +97,14 @@ export async function createConfiguredProxy(
   const app = createProxyApp({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
+    ...(config.guest && invitations
+      ? {
+          guestInvitations: {
+            publicOrigin: config.guest.publicOrigin,
+            service: invitations,
+          },
+        }
+      : {}),
     readiness: async () => {
       try {
         return (await runtimeInstance.runtime.runtimeInfo()).status ===

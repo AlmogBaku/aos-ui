@@ -63,6 +63,11 @@ and contain no public runtime configuration. The mounted
 [`runtime-config.hermes.json`](../deploy/runtime-config.hermes.json) contains
 only `{ "mode": "aos" }`.
 
+On Linux, set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` to the numeric owner of
+the secret files before starting any runtime overlay. Local Docker Compose
+bind-mounts secret files and does not apply the long-form secret ownership
+fields, so the non-root proxy runs with these IDs. The defaults are `1000:1000`.
+
 The example enables the guest listener. For an operator-only deployment,
 remove the `guest` block and its invitation-key secret mount from a private
 overlay. The one Hermes token and runtime instance remain unchanged.
@@ -253,5 +258,4 @@ When runtime container behavior changes, also build the affected image and
 smoke its health and streaming endpoints. Native live acceptance has not been
 run for the OpenClaw or OpenCode attachment paths.
 
-The TypeScript proxy is the only AOS gateway. The checkout contains no parallel
-Go gateway, native browser-forwarding path, or compatibility deployment.
+The TypeScript proxy is the only AOS gateway.

@@ -112,6 +112,12 @@ AOS_RUNTIME_PROXY_CONFIG=/absolute/private/path/proxy-config.json \
   bun run gateway -- invite --agent default
 ```
 
+The installed `aos-invite-link` skill uses `curl` against the operator proxy's
+`/api/aos/v1/guest-invitations` endpoint. Set `AOS_RUNTIME_PROXY_URL` to a
+reachable configured operator origin in the Hermes environment. This works
+for native and containerized Hermes without exposing the invitation signing
+key.
+
 The command prints a link, defaults to 72 hours, and generates a stable
 conversation reference. Add `--ref`, `--instruction`, `--prefill`, `--title`,
 `--message`, `--lang`, or `--expires-in` only when needed. Creating or opening

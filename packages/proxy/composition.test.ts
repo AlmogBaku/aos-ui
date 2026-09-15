@@ -189,7 +189,7 @@ describe("configured proxy composition", () => {
     expect(transportClose).toHaveBeenCalledOnce()
   })
 
-  it("does not expose invitation signing through operator HTTP", async () => {
+  it("issues invitations through the trusted operator HTTP surface", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
@@ -206,12 +206,85 @@ describe("configured proxy composition", () => {
           origin: "https://aos.example.test",
           "content-type": "application/json",
         },
-        body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
+        body: JSON.stringify({
+          agent: " researcher ",
+          ref: "guest-ref",
+          expiresIn: "5m",
+          prefill: "Welcome",
+          instruction: "Load the interview skill.",
+          lang: "en",
+          title: "Interview",
+        }),
+      }
+    )
+
+    expect(response.status).toBe(201)
+    const { url } = (await response.json()) as { url: string }
+    expect(url).toMatch(/^https:\/\/guest\.example\.test\/#invite=/u)
+    const token = new URLSearchParams(new URL(url).hash.slice(1)).get("invite")
+    await expect(
+      configured.guest?.invitations.verify(token!)
+    ).resolves.toMatchObject({
+      agentId: "researcher",
+      ref: "guest-ref",
+      expiresAt: 1_700_000_300,
+      firstTurn: {
+        prefill: "Welcome",
+        instruction: "Load the interview skill.",
+      },
+      ui: { lang: "en", title: "Interview" },
+    })
+    expect(request).toHaveBeenCalledWith("profiles.list", {
+      include_sessions: false,
+    })
+  })
+
+  it("rejects browser invitation signing from an untrusted origin", async () => {
+    const configured = await createConfiguredProxy(await configuration(true), {
+      runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/guest-invitations",
+      {
+        method: "POST",
+        headers: {
+          origin: "https://attacker.example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ agent: "researcher", ref: "guest-ref" }),
+      }
+    )
+
+    expect(response.status).toBe(403)
+  })
+
+  it("does not return an invitation for an unknown Agent", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "profiles.list" ? { profiles: [profile()] } : undefined
+    )
+    const configured = await createConfiguredProxy(await configuration(true), {
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/guest-invitations",
+      {
+        method: "POST",
+        headers: {
+          origin: "https://aos.example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ agent: "missing", expiresIn: "5m" }),
       }
     )
 
     expect(response.status).toBe(404)
-    expect(request).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "not_found" },
+    })
   })
 
   it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {

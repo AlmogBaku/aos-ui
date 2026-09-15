@@ -78,6 +78,11 @@ values never belong directly in the JSON, Compose environment, `VITE_*`, public
 runtime configuration, or browser bundle. Unknown and legacy OIDC,
 operator-cookie, Hermes browser-broker, and guest-Hermes fields are rejected.
 
+For Compose runtime overlays, `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` select
+the non-root proxy identity and the declared secret ownership. On Linux, use
+the numeric owner of the source secret files because local Compose mounts them
+without changing their host ownership.
+
 The Bun proxy serves the built browser assets, `/runtime-config.json`, the
 operator API, and—when configured—the separate guest surface. See
 [Deployment](deployment.md) for Compose mounts and listener exposure.

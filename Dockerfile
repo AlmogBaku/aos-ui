@@ -17,6 +17,7 @@ RUN bun run build
 
 FROM dependencies AS proxy
 COPY --chown=bun:bun packages ./packages
+COPY --chown=bun:bun shared ./shared
 COPY --from=builder --chown=bun:bun /app/dist /app/dist
 USER bun
 EXPOSE 3000 3001

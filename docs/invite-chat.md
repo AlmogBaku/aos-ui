@@ -59,6 +59,13 @@ AOS_RUNTIME_PROXY_CONFIG=/absolute/path/proxy-config.json \
   bun run gateway -- invite --agent interviewer
 ```
 
+The packaged native integration skill instead sends one POST to the trusted
+operator proxy's `/api/aos/v1/guest-invitations` endpoint. Set
+`AOS_RUNTIME_PROXY_URL` to the configured operator origin in the Hermes
+environment; native and containerized installs need only network access to
+that listener, not the signing key. The endpoint accepts the same invitation
+fields and applies the same defaults as the CLI.
+
 Useful presentation options are `--name`, `--logo`, `--accent`, `--title`,
 `--message`, `--prefill`, and `--lang en|he`. Use `--expires-in` to override the
 72-hour default. Use `--instruction` only for non-secret setup text that the

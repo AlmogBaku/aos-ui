@@ -56,6 +56,10 @@ The example proxy configuration uses `http://opencode:4096` and `/workspace`, wh
 
 OpenCode owns provider/model configuration and credentials. AOS reads the native model catalog and can select a model for an attached Session, but does not choose a default model. The optional AOS native integration supplies presentation tools, guarded creator support, Session handoff, and the `aos-invite-link` skill; it remains optional to the proxy attachment. Build and load it for local native-tool development with:
 
+Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
+configured operator proxy origin. The skill prefers the operator invitation
+endpoint over the local CLI, so it needs network access but no signing key.
+
 ```bash
 bun run integrations:build
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \

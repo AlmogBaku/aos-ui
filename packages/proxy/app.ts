@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
 import { AttachmentStageRegistry } from "./core/attachment-stages"
+import type { GuestInvitationService } from "./auth/guest-invitation"
 import {
   ServerRunCapacityError,
   ServerRunConflictError,
@@ -14,6 +15,7 @@ import {
 } from "./core/runtime"
 import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
+import { registerInvitationRoutes } from "./routes/invitations"
 import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerRunRoutes } from "./routes/runs"
 import { registerSessionRoutes } from "./routes/sessions"
@@ -30,6 +32,10 @@ export type ProxyAppOptions = {
   readiness?: () => Promise<"ready" | "not-ready">
   logger: Logger
   clock?: () => number
+  guestInvitations?: {
+    publicOrigin: string
+    service: GuestInvitationService
+  }
 }
 
 const securityHeaders = {
@@ -115,6 +121,13 @@ export function createProxyApp(options: ProxyAppOptions) {
     requireScopedSession
   )
   registerRunRoutes(app, options, attachmentStages, requireRuntimeBinding)
+  if (options.guestInvitations)
+    registerInvitationRoutes(app, {
+      publicOrigin: options.publicOrigin,
+      guestPublicOrigin: options.guestInvitations.publicOrigin,
+      invitations: options.guestInvitations.service,
+      runtime,
+    })
 
   app.onError((cause, context) => {
     const runtimeError = runtime.publicError(cause)

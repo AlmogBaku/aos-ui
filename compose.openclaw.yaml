@@ -3,6 +3,7 @@
 # native port or passing device credentials through browser configuration.
 services:
   web:
+    user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
     command:
       - bun
       - run
@@ -21,23 +22,23 @@ services:
     secrets:
       - source: openclaw-device-identity
         target: openclaw-device-identity
-        uid: "1000"
-        gid: "1000"
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
       - source: openclaw-device-token
         target: openclaw-device-token
-        uid: "1000"
-        gid: "1000"
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
       - source: reconnect-cursor-key
         target: reconnect-cursor-key
-        uid: "1000"
-        gid: "1000"
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
       - source: guest-invite-signing-key
         target: guest-invite-signing-key
-        uid: "1000"
-        gid: "1000"
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
     healthcheck:
       test:

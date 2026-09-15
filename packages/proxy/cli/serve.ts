@@ -15,6 +15,7 @@ function listenerApp(
   runtimeConfig?: unknown,
   guestSurface = false
 ) {
+  const guestReservedPaths = ["/auth", "/hermes"]
   const secureGuestResponse = (response: Response) => {
     if (!guestSurface) return response
     const headers = new Headers(response.headers)
@@ -35,6 +36,14 @@ function listenerApp(
     async fetch(request: Request, server?: unknown) {
       const pathname = new URL(request.url).pathname
       if (pathname.startsWith(apiPrefix)) return api.fetch(request, server)
+      if (
+        guestSurface &&
+        guestReservedPaths.some(
+          (reserved) =>
+            pathname === reserved || pathname.startsWith(`${reserved}/`)
+        )
+      )
+        return secureGuestResponse(new Response(null, { status: 404 }))
       if (runtimeConfig && pathname === "/runtime-config.json")
         return secureGuestResponse(
           new Response(JSON.stringify(runtimeConfig), {
