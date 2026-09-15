@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
+  OpenCodeMutationUncertainError,
   createOpenCodeClient,
 } from "./client"
 
@@ -15,8 +16,10 @@ type NativeRequest = {
   signal: AbortSignal
 }
 
+type NativeResponse = Response | Readonly<{ drop: true }>
+
 async function nativeServer(
-  handler: (request: NativeRequest) => Response | Promise<Response>
+  handler: (request: NativeRequest) => NativeResponse | Promise<NativeResponse>
 ) {
   const server = createServer(async (request, response) => {
     const controller = new AbortController()
@@ -33,6 +36,10 @@ async function nativeServer(
         url.searchParams.get("directory"),
       signal: controller.signal,
     })
+    if ("drop" in result) {
+      response.destroy()
+      return
+    }
     response.writeHead(result.status, Object.fromEntries(result.headers))
     response.end(Buffer.from(await result.arrayBuffer()))
   })
@@ -140,12 +147,20 @@ describe("OpenCodeClient", () => {
   })
 
   it("replays and validates durable Session events from the supplied aggregate position", async () => {
+    const completedText = "finished ".repeat(100)
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/event")
       expect(request.url.searchParams.get("after")).toBe("41")
       return new Response(
         [
-          'data: {"id":"42","event":"session","data":"{\\"type\\":\\"session.next.text.started\\",\\"properties\\":{\\"sessionID\\":\\"session-1\\"}}"}',
+          `data: ${JSON.stringify({
+            id: "42",
+            event: "session",
+            data: JSON.stringify({
+              type: "session.next.text.ended",
+              properties: { sessionID: "session-1", text: completedText },
+            }),
+          })}`,
           "",
           "",
         ].join("\n"),
@@ -162,8 +177,8 @@ describe("OpenCodeClient", () => {
           id: "42",
           event: "session",
           data: {
-            type: "session.next.text.started",
-            properties: { sessionID: "session-1" },
+            type: "session.next.text.ended",
+            properties: { sessionID: "session-1", text: completedText },
           },
         },
       })
@@ -174,7 +189,7 @@ describe("OpenCodeClient", () => {
   })
 
   it("rejects malformed provider payloads before a converter can consume them", async () => {
-    const server = await nativeServer(() => Response.json({ data: [] }))
+    const server = await nativeServer(() => Response.json({}))
     const subject = client(server.baseUrl)
 
     try {
@@ -214,5 +229,109 @@ describe("OpenCodeClient", () => {
     await Promise.all([subject.close(), subject.close()])
     await expect(next).resolves.toEqual({ done: true, value: undefined })
     await server.close()
+  })
+
+  it("classifies a lost mutation acknowledgement as uncertain after the server received it", async () => {
+    let received = false
+    const server = await nativeServer((request) => {
+      expect(request.url.pathname).toBe("/api/session/session-1/prompt")
+      received = true
+      return { drop: true }
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.sessions.prompt("session-1", {
+          id: "admission-1",
+          prompt: { text: "continue" },
+        })
+      ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
+      expect(received).toBe(true)
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it("classifies caller cancellation after native mutation dispatch as uncertain", async () => {
+    let received: (() => void) | undefined
+    const dispatched = new Promise<void>((resolve) => {
+      received = resolve
+    })
+    const server = await nativeServer(async (request) => {
+      received?.()
+      await new Promise<void>((resolve) => {
+        request.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        })
+      })
+      return Response.json({ data: {} })
+    })
+    const subject = client(server.baseUrl)
+    const controller = new AbortController()
+
+    try {
+      const request = subject.sessions.interrupt("session-1", controller.signal)
+      await dispatched
+      controller.abort()
+      await expect(request).rejects.toBeInstanceOf(
+        OpenCodeMutationUncertainError
+      )
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it.each([
+    [401, "authentication"],
+    [503, "unavailable"],
+  ] as const)(
+    "preserves status-only SSE %i failures as %s",
+    async (status, code) => {
+      const server = await nativeServer(
+        () =>
+          new Response("native secret must not cross the facade", {
+            status,
+            headers: { "content-type": "text/event-stream" },
+          })
+      )
+      const subject = client(server.baseUrl)
+
+      try {
+        const stream = await subject.sessions.events("session-1")
+        await expect(stream[Symbol.asyncIterator]().next()).rejects.toEqual(
+          expect.objectContaining({ name: "OpenCodeClientError", code })
+        )
+      } finally {
+        await subject.close()
+        await server.close()
+      }
+    }
+  )
+
+  it("releases an unconsumed observation when it is aborted", async () => {
+    let requests = 0
+    const server = await nativeServer(() => {
+      requests += 1
+      return new Response(null, {
+        headers: { "content-type": "text/event-stream" },
+      })
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      const stream = await subject.sessions.events("session-1")
+      stream.abort()
+      await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
+        done: true,
+        value: undefined,
+      })
+      expect(requests).toBe(0)
+    } finally {
+      await subject.close()
+      await server.close()
+    }
   })
 })
