@@ -423,6 +423,27 @@ describe("OpenClaw Session subscriptions", () => {
       ).rejects.toThrow("approval replay")
     }
   })
+
+  it("rejects a coupled acknowledgement and replay for another same-Agent Session", async () => {
+    const subscriptions = new OpenClawSessionSubscriptions({
+      request: vi.fn(async () => ({
+        key: "agent:research:other",
+        approvalReplay: {
+          sessionKey: "agent:research:other",
+          updatedAtMs: 1,
+          approvals: [],
+          truncated: false,
+        },
+      })),
+    })
+
+    await expect(
+      subscriptions.acquire(
+        { agentId: "research", sessionKey: "agent:research:main" },
+        vi.fn()
+      )
+    ).rejects.toThrow("approval replay")
+  })
 })
 
 function deferred<T>() {

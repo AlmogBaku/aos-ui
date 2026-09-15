@@ -77,18 +77,18 @@ function approvalReplayMatchesRequest(
     !validIdentity(replay.sessionKey)
   )
     return false
-  const requestedAgentId = scopedSessionAgentId(requestedKey as string)
-  const acknowledgementAgentId = scopedSessionAgentId(acknowledgementKey)
-  const normalizedAgentId = (expectedAgentId as string).trim().toLowerCase()
-  const expectedReplayKey =
-    acknowledgementKey.trim().toLowerCase() === "global"
-      ? `agent:${normalizedAgentId}:global`
-      : acknowledgementKey
+  const requested = requestedKey as string
+  const agentId = expectedAgentId as string
+  if (requested === "global" || acknowledgementKey === "global")
+    return (
+      requested === "global" &&
+      acknowledgementKey === "global" &&
+      replay.sessionKey === `agent:${agentId}:global`
+    )
   return (
-    (requestedAgentId === undefined || requestedAgentId === expectedAgentId) &&
-    (acknowledgementAgentId === undefined ||
-      acknowledgementAgentId === expectedAgentId) &&
-    replay.sessionKey === expectedReplayKey
+    acknowledgementKey === requested &&
+    replay.sessionKey === acknowledgementKey &&
+    scopedSessionAgentId(requested) === agentId
   )
 }
 
@@ -319,14 +319,14 @@ export class OpenClawSessionSubscriptions {
   }
 
   #lease(logical: LogicalLease): OpenClawSessionLease {
-    const subscriptions = this
+    const currentGeneration = () => this.#generation
     return {
       get key() {
         return logical.native?.key ?? logical.scope.sessionKey
       },
       get approvalReplayKey() {
         return !logical.released &&
-          logical.nativeGeneration === subscriptions.#generation
+          logical.nativeGeneration === currentGeneration()
           ? logical.approvalReplayKey
           : undefined
       },
