@@ -29,32 +29,40 @@ Vite derives the same public shape when no configuration file is supplied.
 | `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection. |
 | `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.   |
 
-The AOS proxy privately selects and authenticates Hermes. Future OpenCode and
-OpenClaw integrations remain server-side until they have normalized proxy
-adapters; no browser runtime mode or provider route is available for them.
+The AOS proxy privately selects and authenticates exactly one Hermes, OpenCode,
+or OpenClaw runtime. There is no browser runtime mode or provider route for any
+of them.
 
 ## Private proxy configuration
 
 The Bun proxy reads a strict private JSON file passed to
-`bun run proxy:serve -- --config PATH`. The maintained example is
-[`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json).
+`bun run proxy:serve -- --config PATH`. Start from the maintained example for
+the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
+[`OpenCode`](../deploy/proxy-config.opencode.example.json), or
+[`OpenClaw`](../deploy/proxy-config.openclaw.example.json).
 
-| Field             | Meaning                                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `version`         | Configuration format; V1 accepts only `1`.                                                                         |
-| `deploymentId`    | Stable identifier bound into reconnect cursors and guest invitations.                                              |
-| `listen`          | Trusted operator host and port. Wildcard binds require `exposure: "private-container"`.                            |
-| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests.                                                |
-| `runtime`         | The one selected runtime: stable ID, `kind: "hermes"`, native base URL, server-token file, and warm-idle duration. |
-| `events`          | Active reconnect-cursor key ID and one to three file-backed keys.                                                  |
-| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                        |
-| `guest`           | Optional distinct guest listener/origin and invitation signing keys.                                               |
-| `shutdownGraceMs` | Time allowed for HTTP and event connections to drain.                                                              |
+| Field             | Meaning                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------- |
+| `version`         | Configuration format; V1 accepts only `1`.                                                    |
+| `deploymentId`    | Stable identifier bound into reconnect cursors and guest invitations.                         |
+| `listen`          | Trusted operator host and port. Wildcard binds require `exposure: "private-container"`.       |
+| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests.                           |
+| `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below. |
+| `events`          | Active reconnect-cursor key ID and one to three file-backed keys.                             |
+| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                   |
+| `guest`           | Optional distinct guest listener/origin and invitation signing keys.                          |
+| `shutdownGraceMs` | Time allowed for HTTP and event connections to drain.                                         |
 
-V1 selects one Hermes adapter per deployment. The selection seam can accept
-more runtime kinds later, but unknown kinds are rejected now. Operator and
-guest listeners use the exact same runtime instance, Hermes token, transport,
-and Session coordinator. There is no second guest runtime or credential.
+V1 selects one of the supported adapter kinds per deployment; unknown kinds are
+rejected. Operator and guest listeners use the exact same runtime instance,
+credentials, transport, and Session coordinator. There is no second guest
+runtime or credential.
+
+| `runtime.kind` | Required private fields                                                                                  |
+| -------------- | -------------------------------------------------------------------------------------------------------- |
+| `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs`                                          |
+| `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
+| `openclaw`     | WebSocket `baseUrl`, absolute owner-only `deviceIdentityFile`, and absolute owner-only `deviceTokenFile` |
 
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private
@@ -62,12 +70,13 @@ network, or put it behind an authenticated ingress. If `guest` is configured,
 its listener and public origin must differ from the operator lane; guest access
 requires a scoped, expiring JWT.
 
-`runtime.tokenFile`, every `events.keys[].secretFile`, and every
-`guest.invitations.keys[].secretFile` must be absolute paths to regular,
-non-symlinked, owner-only files. Secret values never belong directly in the
-JSON, Compose environment, `VITE_*`, public runtime configuration, or browser
-bundle. Unknown and legacy OIDC, operator-cookie, Hermes browser-broker, and
-guest-Hermes fields are rejected.
+Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
+`runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable), every
+`events.keys[].secretFile`, and every `guest.invitations.keys[].secretFile`
+must be absolute paths to regular, non-symlinked, owner-only files. Secret
+values never belong directly in the JSON, Compose environment, `VITE_*`, public
+runtime configuration, or browser bundle. Unknown and legacy OIDC,
+operator-cookie, Hermes browser-broker, and guest-Hermes fields are rejected.
 
 The Bun proxy serves the built browser assets, `/runtime-config.json`, the
 operator API, and—when configured—the separate guest surface. See

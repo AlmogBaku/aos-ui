@@ -1,25 +1,45 @@
-# OpenClaw server adapter status
+# Run OpenClaw behind the AOS proxy
 
-AOS does not currently attach a browser to OpenClaw. The Hermes-first
-normalized deployment returns `404` for `/openclaw`; the retained Compose
-overlay and runtime-config example are explicitly fail-closed. OpenClaw does
-not install, manage, or expose model credentials through AOS.
+The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`). The proxy connects to one independently operated OpenClaw Gateway over WebSocket, using its device identity and device token from private files. There is no browser Gateway route and AOS does not manage OpenClaw or model credentials.
 
-There is no supported browser connection command. The browser uses only the
-normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`) or explicit fixture mode.
-OpenClaw remains a future server-side adapter until the normalized proxy and
-live acceptance coverage are implemented.
+## Prerequisites
+
+- A reachable, already configured OpenClaw Gateway
+- Private, owner-only files containing the Gateway device identity and device token
+- Private reconnect-cursor and guest-invitation signing-key files when those proxy features are enabled
+
+Start from [`deploy/proxy-config.openclaw.example.json`](../../deploy/proxy-config.openclaw.example.json). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
+
+## Compose attachment
+
+The OpenClaw overlay runs the AOS proxy and static UI only. It does not start, publish, or proxy a native OpenClaw Gateway.
+
+```bash
+cp .env.compose.example .env
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.openclaw.yaml up --build
+```
+
+For a host Gateway, the overlay maps `host.docker.internal` to Docker's host gateway. A service bound only to host loopback may still be unreachable from the container; use a trusted container-reachable address and update the private proxy configuration. Keep the native Gateway off the browser-facing network.
 
 ## Optional native tools
 
-Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API cannot register a native downloadable artifact, create an Agent, or initiate a cross-Agent Session with the required authority, so the plugin does not advertise publication, creator, or handoff tools.
+Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API does not prove native downloadable artifact publication, Agent creation, or cross-Agent Session handoff, so those tools are not advertised.
 
-## Exact limitations
+## Capability limits
 
-OpenClaw tasks/goals are not AOS Session Todos, so the adapter does not relabel them. Agent visibility mutation and edit/regenerate are unavailable because the verified protocol has no equivalent matching AOS semantics. Context usage is aggregate rather than Hermes's detailed system/tool/message breakdown. Guest chat additionally omits transcription and branches. Unsupported controls stay absent instead of invoking a nearby destructive operation.
+- AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
+- Creating, renaming, deleting, or changing visibility of Sessions/Agents is unavailable because the pinned Gateway leaves do not prove matching native mutations. Todos, Activity, edit/regenerate, steering, artifacts, transcription, and speech are also unavailable.
+- An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
+- Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
 
-## Invited chat
+## Verify
 
-OpenClaw guest access is unavailable until its TypeScript server adapter
-implements native authentication, pairing, scoped history, runs, interactions,
-and artifact projection behind the shared AOS guest listener.
+Run the proxy checks for the selected deployment and verify the Gateway is reachable from the proxy host or container. Native live acceptance has not been run; mocked protocol tests do not prove a paired live OpenClaw journey.
+
+For connection problems, see [Troubleshooting](../troubleshooting.md).

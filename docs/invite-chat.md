@@ -7,8 +7,10 @@ conversation reference.
 
 ## Configure the guest listener
 
-Add `guest` to the proxy configuration as shown in
-[`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json).
+Add `guest` to the private proxy configuration for the selected runtime, as
+shown in the maintained [Hermes](../deploy/proxy-config.hermes.example.json),
+[OpenCode](../deploy/proxy-config.opencode.example.json), or
+[OpenClaw](../deploy/proxy-config.openclaw.example.json) example.
 The signing key must be a private 32-byte secret file. The default invitation
 lifetime is 72 hours.
 
@@ -48,8 +50,9 @@ The packaged `aos-invite-link` skill performs the same dedicated-Agent
 preflight before it creates a link.
 
 The proxy CLI signs locally and makes no HTTP request. `--ref` is optional; if
-omitted, the CLI generates a URL-safe conversation reference. The Session is
-created lazily on the guest's first Send, not when the link is opened.
+omitted, the CLI generates a URL-safe conversation reference. Whether a new
+Session can be created on first Send depends on the selected runtime's exact
+native semantics.
 
 ```bash
 AOS_RUNTIME_PROXY_CONFIG=/absolute/path/proxy-config.json \
@@ -74,9 +77,13 @@ sent in HTTP requests. The browser sends the token as guest API authorization.
 
 - Opening a new invitation creates nothing; an existing reference loads its
   conversation.
-- The first Send atomically reuses or creates the invited Session.
-- Attachments are selected before creation and staged against the resolved
-  Session on first Send.
+- Hermes can atomically reuse or create the reserved invited Session on first
+  Send. OpenCode and OpenClaw can only resolve a pre-existing reserved Session:
+  their pinned native APIs do not prove safe equivalent creation. Do not issue
+  a new first-send invitation for those runtimes until the reserved Session
+  exists.
+- Attachments are selected before the first Send and staged only after the
+  invited Session resolves.
 - Streaming, Stop, questions, cancellation, reload, and reconnect use the same
   normalized AG-UI path as operator conversations.
 - Voice transcription and speech are Agent-scoped and do not create a Session.
@@ -87,4 +94,5 @@ Guest output is allowlisted. It excludes reasoning, raw tools, privileged
 roles, provider metadata and positions, filesystem paths, credentials, live
 provider IDs, and Agent-wide approval grants.
 
-Live acceptance requires an approved disposable target and credentials.
+Native live acceptance has not been run for the OpenCode and OpenClaw guest
+paths. It requires an approved disposable target and credentials.

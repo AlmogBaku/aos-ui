@@ -14,7 +14,7 @@
 
 Most agent harnesses present a coding-agent interface. AOS UI gives your personal harness a workspace for business use cases: an accountant, executive assistant, marketing agent, ghostwriter, product partner, hiring agent, or any other role you configure. It keeps their Agents and Sessions in one place without losing ownership, execution state, or pending work.
 
-AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. The browser uses the normalized AOS proxy; Hermes keeps control of execution, credentials, Agent definitions, and durable history.
+AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packages installable capabilities for a separately operated agent harness. The browser uses the normalized AOS proxy; the selected native runtime keeps control of execution, credentials, Agent definitions, and durable history.
 
 ## What AOS provides
 
@@ -27,7 +27,7 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
 - Optional Hermes voice controls and restricted guest invitations
 
-The browser has one real runtime: the normalized AOS proxy. Future OpenCode and OpenClaw integrations remain server-side until they implement that proxy contract.
+The browser has one real runtime: the normalized AOS proxy. The proxy privately attaches to one configured Hermes, OpenCode, or OpenClaw runtime; there is no browser-direct provider mode.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ AOS UI is not an agent harness. Run the AOS proxy against an authenticated harne
 
 ### Prerequisites
 
-- An authenticated Hermes server and a server token stored in a private file
+- An independently operated Hermes, OpenCode, or OpenClaw runtime, plus that runtime's private credentials
 - [Bun](https://bun.sh/)
 - A current desktop browser
 
@@ -51,7 +51,7 @@ For local proxy development (the browser supports only `aos` and explicit
 `fixture` mode):
 
 ```bash
-# Terminal 1: use a private copy of deploy/proxy-config.hermes.example.json
+# Terminal 1: use the private example for the selected runtime
 bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
 
 # Terminal 2
@@ -61,11 +61,12 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
 ```
 
 Open <http://localhost:3000>. The browser sends only normalized AOS requests;
-the proxy owns the Hermes server token and all native communication. Configure
+the proxy owns provider credentials and all native communication. Configure
 the private proxy copy to listen on `127.0.0.1:4100`, use
-`http://localhost:3000` as its public origin, and point its runtime at Hermes.
-See [Run AOS with Hermes](docs/runtimes/hermes.md) for the complete private
-configuration; Hermes is selected server-side, not by a browser runtime mode.
+`http://localhost:3000` as its public origin, and point its runtime at the
+selected native server. See [the runtime guides](docs/runtime-capabilities.md)
+for the exact private configuration; runtime selection is server-side, not a
+browser runtime mode.
 
 ### Preview without a harness
 

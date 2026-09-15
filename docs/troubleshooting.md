@@ -9,15 +9,24 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 3. Remove unknown fields and credentials.
 4. Provider-specific server adapters are not browser runtime modes; confirm the
    normalized AOS proxy is configured and reachable.
-5. OpenClaw is unavailable on the current normalized deployment path; its retained runtime example intentionally renders unavailable.
+5. Confirm the private proxy configuration selects one supported runtime kind:
+   `hermes`, `opencode`, or `openclaw`.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
-## OpenCode or AG-UI adapter is unavailable
+## OpenCode is unavailable
 
-OpenCode and generic AG-UI are future server-side adapters and do not expose a
-browser route in this deployment. Use `AOS_UI_RUNTIME_MODE=aos` with the
-configured proxy, or explicit `fixture` mode for a backend-free preview.
+- Use `AOS_UI_RUNTIME_MODE=aos`; the browser never connects directly to
+  OpenCode.
+- Verify the private `runtime.baseUrl`, absolute `runtime.directory`,
+  `runtime.username`, and owner-only `runtime.passwordFile` match the running
+  OpenCode server.
+- From a proxy container, use the Compose service address (`opencode:4096`),
+  not a browser-facing URL. For an independently operated server, ensure its
+  address is reachable from the proxy process.
+- A missing Todo, Activity, context meter, title/delete, artifact, voice,
+  edit/regenerate, or steering control is an explicit OpenCode capability
+  limit, not a connection failure.
 
 ## Hermes authentication fails
 
@@ -50,13 +59,16 @@ same-origin `/api/aos/v1` path.
 
 ## OpenClaw is unavailable
 
-- The normalized Hermes-first deployment intentionally returns `404` for
-  `/openclaw` and does not attach a browser Gateway.
-- `compose.openclaw.yaml` and `deploy/runtime-config.openclaw.json` are retained
-  only as an explicit fail-closed marker; do not use them as a connection command.
-- Invited chat remains unavailable until the TypeScript OpenClaw server adapter
-  implements and verifies native pairing and scoped access.
-- A missing Todo, visibility, edit/regenerate, creator, handoff, or STT control is an explicit capability limit, not a connection failure.
+- Use `AOS_UI_RUNTIME_MODE=aos`; AOS does not expose a browser Gateway route.
+- Verify the private `runtime.baseUrl` is a reachable WebSocket URL and its
+  device identity/token files are present, owner-only, and readable by the
+  proxy. Do not place either credential in browser configuration.
+- With `compose.openclaw.yaml`, `host.docker.internal` reaches Docker's host
+  gateway. A native Gateway bound only to host loopback may not be reachable;
+  use a trusted container-reachable address instead.
+- Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
+  A missing Session/Agent mutation, Todo, Activity, edit/regenerate, steering,
+  artifact, voice, creator, or handoff control is an explicit capability limit.
 - Confirm Session records include matching `threadId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Check browser CORS errors for both the run and workspace origins.
@@ -64,7 +76,7 @@ same-origin `/api/aos/v1` path.
 
 ## A capability is missing
 
-Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenCode visibility is read-only; generic AG-UI lacks shared Todos and Agent creation.
+Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenCode and OpenClaw catalogs are read-only; generic AG-UI lacks shared Todos and Agent creation.
 
 ## Browser notifications do not appear
 

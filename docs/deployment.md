@@ -31,24 +31,28 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 
 Open <http://localhost:3000>. The web health endpoint is <http://localhost:3000/api/health>.
 
-## OpenCode server-adapter development
+## Deploy the OpenCode operator surface
 
-OpenCode is not a browser runtime. Its retained overlay is for native
-server-adapter development only; the browser uses the normalized AOS proxy.
-
-There is no public OpenCode runtime configuration or direct browser route.
-
-## Optionally run the native OpenCode composition
-
-The supplied overlay is a local all-in-one convenience for operators who explicitly want Compose to start an OpenCode container:
+OpenCode is not a browser runtime. The browser uses the normalized AOS proxy;
+the optional overlay is a local all-in-one composition that starts OpenCode
+beside that proxy.
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
+cp .env.compose.example .env
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
-The overlay builds and starts OpenCode, mounts the external worktree at `/workspace`, and publishes native port `4096` on loopback by default. Its health endpoint is `/global/health`. This optional composition does not change the general attachment model.
+The overlay builds and starts OpenCode, mounts the external worktree at
+`/workspace`, and keeps native port `4096` internal to Compose. The proxy uses
+the private OpenCode password file and the `opencode:4096` service address in
+the supplied private example. Its operator health endpoint is
+`/api/aos/v1/healthz`.
 
 Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
@@ -87,19 +91,36 @@ overlay. The one Hermes token and runtime instance remain unchanged.
 
 Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
 
-## OpenClaw status
+## Deploy the OpenClaw operator surface
 
-OpenClaw is planned but unavailable on the Hermes-first normalized deployment
-path. The retained `compose.openclaw.yaml` overlay and
-`deploy/runtime-config.openclaw.json` are deliberately fail-closed and do not
-provide a browser Gateway route or accept OpenClaw host, port, or credentials.
+The OpenClaw overlay starts only the AOS proxy and static UI. It attaches to an
+independently operated Gateway; it does not publish a native Gateway route.
+
+```bash
+cp .env.compose.example .env
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.openclaw.yaml up --build
+```
+
+The private example uses `ws://host.docker.internal:18789` for a host Gateway.
+Change that URL for your topology and ensure the Gateway is reachable from the
+container. Device identity and token files remain private to the proxy.
 
 ## Use hot reload in containers
 
 Add `compose.dev.yaml` to the selected composition. For example:
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose \
     -f compose.yaml \
@@ -128,7 +149,9 @@ must connect, and configure the corresponding exact browser origin.
 > and TLS controls in front of it. A guest JWT does not authorize access to the
 > operator listener.
 
-Hermes must listen on an address reachable from the web container. A host-loopback-only listener is not reachable through `host.docker.internal`.
+The selected native runtime must listen on an address reachable from the proxy
+container. A host-loopback-only Hermes or OpenClaw listener is not reachable
+through `host.docker.internal`.
 
 ## Systemd and a private operator UI
 
@@ -183,7 +206,7 @@ Provider persistence remains native:
 - Independently operated OpenCode keeps all state in its own worktree and native data directories.
 - The optional OpenCode overlay uses the external worktree plus the `opencode-data` named volume.
 - Hermes keeps all state in the operator-managed Hermes installation.
-- OpenClaw remains unavailable on the normalized runtime path.
+- OpenClaw keeps state in its independently operated Gateway and backing services.
 - The web container holds no conversation database.
 
 Stop AOS with the same file set used to start it. For the web-only attachment:
@@ -206,16 +229,27 @@ Do not add `-v` unless you intend to delete named native-state volumes.
 bunx vitest run test/containers/compose.test.ts
 docker compose -f compose.yaml config --quiet
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+  AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+  AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+  AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
 AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
-AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+  AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+  AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+  AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
+  AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+  docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
 ```
 
 When runtime container behavior changes, also build the affected image and
-smoke its health and streaming endpoints.
+smoke its health and streaming endpoints. Native live acceptance has not been
+run for the OpenCode or OpenClaw attachment paths.
 
 The TypeScript proxy is the only AOS gateway. The checkout contains no parallel
 Go gateway, native browser-forwarding path, or compatibility deployment.
