@@ -71,6 +71,28 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
+  it("preserves native cancellation and complete-request answer limits", () => {
+    const parsed =
+      SessionWorkspaceCapabilitiesResponseSchema.shape.interactions.shape.questions.parse(
+        {
+          status: "available",
+          protocol: "ag-ui-interrupt",
+          scope: "run",
+          answerModes: ["single", "multiple", "free-text"],
+          cancellation: "native-cancel",
+          maxQuestions: 3,
+          maxChoicesPerQuestion: 4,
+          maxAnswerValuesPerQuestion: "complete-request",
+          maxStringBytes: 4096,
+        }
+      )
+
+    expect(parsed).toMatchObject({
+      cancellation: "native-cancel",
+      maxAnswerValuesPerQuestion: "complete-request",
+    })
+  })
+
   it("preserves negotiated attachment limits without inventing provider policy", () => {
     const parsed =
       SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
