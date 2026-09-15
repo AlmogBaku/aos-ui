@@ -182,6 +182,452 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
+  it("replays a compacted active run from the beginning after raw replay overflows", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a fresh browser")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    const readInitial = reader(initial)
+    const emitted: AGUIEvent[] = [
+      {
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        type: EventType.TEXT_MESSAGE_CONTENT as const,
+        messageId: "assistant-1",
+        delta: String(index % 10),
+      })),
+      ...Array.from({ length: 11 }, (_, index) => {
+        const toolCallId = `tool-${index + 1}`
+        return [
+          {
+            type: EventType.TOOL_CALL_START as const,
+            toolCallId,
+            toolCallName: "search",
+            parentMessageId: "assistant-1",
+          },
+          {
+            type: EventType.TOOL_CALL_ARGS as const,
+            toolCallId,
+            delta: `{"query":"${index + 1}"}`,
+          },
+          { type: EventType.TOOL_CALL_END as const, toolCallId },
+          {
+            type: EventType.TOOL_CALL_RESULT as const,
+            messageId: `tool-result-${index + 1}`,
+            toolCallId,
+            content: `result-${index + 1}`,
+            role: "tool" as const,
+          },
+        ]
+      }).flat(),
+    ]
+    for (const event of emitted) {
+      source.emit(event)
+      await readInitial()
+    }
+    initial.close()
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("refreshed")
+    )
+    const readRefreshed = reader(refreshed)
+
+    const replayed = await Promise.all(
+      Array.from({ length: 47 }, () => readRefreshed())
+    )
+    expect(replayed.map((entry) => entry.value?.event)).toEqual([
+      emitted[0],
+      emitted[1],
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "0123456789012345678901234567890123456789",
+      },
+      ...emitted.slice(42),
+    ])
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("compacts adjacent reasoning and tool argument deltas without interpreting them", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a fresh browser")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    const readInitial = reader(initial)
+    const events: AGUIEvent[] = [
+      {
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
+      {
+        type: EventType.REASONING_MESSAGE_START,
+        messageId: "reasoning-1",
+        role: "reasoning",
+      },
+      ...Array.from({ length: 20 }, () => ({
+        type: EventType.REASONING_MESSAGE_CONTENT as const,
+        messageId: "reasoning-1",
+        delta: "r",
+      })),
+      {
+        type: EventType.REASONING_MESSAGE_END,
+        messageId: "reasoning-1",
+      },
+      {
+        type: EventType.TOOL_CALL_START,
+        toolCallId: "tool-1",
+        toolCallName: "search",
+        parentMessageId: "assistant-1",
+      },
+      ...Array.from({ length: 20 }, () => ({
+        type: EventType.TOOL_CALL_ARGS as const,
+        toolCallId: "tool-1",
+        delta: "a",
+      })),
+    ]
+    for (const event of events) {
+      source.emit(event)
+      await readInitial()
+    }
+    initial.close()
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("refreshed")
+    )
+    const iterator = refreshed.events[Symbol.asyncIterator]()
+    const replayed = await Promise.all(
+      Array.from({ length: 6 }, () => iterator.next())
+    )
+
+    expect(replayed.map((entry) => entry.value?.event)).toEqual([
+      events[0],
+      events[1],
+      {
+        type: EventType.REASONING_MESSAGE_CONTENT,
+        messageId: "reasoning-1",
+        delta: "r".repeat(20),
+      },
+      events[22],
+      events[23],
+      {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: "tool-1",
+        delta: "a".repeat(20),
+      },
+    ])
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("keeps fresh replay journals for only the five most recently used active Sessions", async () => {
+    const sources = Array.from({ length: 6 }, () => new EventSource())
+    let sourceIndex = 0
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => sources[sourceIndex++]!),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a missing journal")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const active = await Promise.all(
+      Array.from({ length: 6 }, async (_, index) => {
+        const id = index + 1
+        const sessionScope = {
+          agentId: "researcher",
+          sessionId: `stored-${id}`,
+          threadId: `stored-${id}`,
+        }
+        const runInput = {
+          ...input(`run-${id}`),
+          threadId: sessionScope.threadId,
+        }
+        const subscription = await sessions.start(
+          sessionScope,
+          runInput,
+          access(`operator-${id}`)
+        )
+        const source = sources[index]!
+        source.emit({
+          type: EventType.RUN_STARTED,
+          threadId: sessionScope.threadId,
+          runId: runInput.runId,
+        })
+        await reader(subscription)()
+        return { sessionScope, runInput, subscription }
+      })
+    )
+    const oldest = active[0]!
+    const newest = active.at(-1)!
+
+    const evicted = await sessions.recover(
+      oldest.sessionScope,
+      {
+        threadId: oldest.sessionScope.threadId,
+        runId: oldest.runInput.runId,
+      },
+      access("refreshed-oldest")
+    )
+    await expect(reader(evicted)()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+
+    const retained = await sessions.recover(
+      newest.sessionScope,
+      {
+        threadId: newest.sessionScope.threadId,
+        runId: newest.runInput.runId,
+      },
+      access("refreshed-newest")
+    )
+    expect((await reader(retained)()).done).toBe(false)
+    expect(engine.recover).not.toHaveBeenCalled()
+    for (const { subscription } of active) subscription.close()
+  })
+
+  it("drops the fresh replay journal after publishing a terminal event", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run after completion")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    const readInitial = reader(initial)
+    source.emit({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    await expect(readInitial()).resolves.toMatchObject({
+      value: { event: { type: EventType.RUN_FINISHED } },
+    })
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("refreshed")
+    )
+    await expect(reader(refreshed)()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("delivers an event published at the fresh replay boundary exactly once", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    source.emit({
+      type: EventType.RUN_STARTED,
+      threadId: scope.threadId,
+      runId: "run-1",
+    })
+    await reader(initial)()
+    initial.close()
+    let published = false
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      {
+        ...access("refreshed"),
+        project(event) {
+          if (!published && event.type === EventType.RUN_STARTED) {
+            published = true
+            source.emit({
+              type: EventType.TEXT_MESSAGE_CONTENT,
+              messageId: "assistant-1",
+              delta: "tail",
+            })
+          }
+          return event
+        },
+      }
+    )
+    const readRefreshed = reader(refreshed)
+
+    await expect(readRefreshed()).resolves.toMatchObject({
+      value: { sequence: 1, event: { type: EventType.RUN_STARTED } },
+    })
+    await expect(readRefreshed()).resolves.toMatchObject({
+      value: {
+        sequence: 2,
+        event: { type: EventType.TEXT_MESSAGE_CONTENT, delta: "tail" },
+      },
+    })
+  })
+
+  it("projects every event in a fresh replay through the subscriber access", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    source.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "private",
+    })
+    await reader(initial)()
+    initial.close()
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      {
+        ...access("guest", "guest"),
+        project(event) {
+          return event.type === EventType.TEXT_MESSAGE_CONTENT
+            ? { ...event, delta: "public" }
+            : event
+        },
+      }
+    )
+
+    await expect(reader(refreshed)()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.TEXT_MESSAGE_CONTENT, delta: "public" },
+      },
+    })
+  })
+
+  it("returns reset-required when an active run is too large to journal", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a fresh browser")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    source.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "x".repeat(300 * 1024),
+    })
+    await reader(initial)()
+    initial.close()
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("refreshed")
+    )
+
+    await expect(reader(refreshed)()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("rejects fresh replay when the run belongs to another Agent or Session", async () => {
+    const sources = [new EventSource(), new EventSource(), new EventSource()]
+    let sourceIndex = 0
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => sources[sourceIndex++]!),
+      recover: vi.fn(async () => sources[0]!),
+    }
+    const sessions = coordinator(engine)
+    const scopes = [
+      scope,
+      { agentId: "writer", sessionId: scope.sessionId, threadId: "writer-1" },
+      {
+        agentId: scope.agentId,
+        sessionId: "stored-2",
+        threadId: "stored-2",
+      },
+    ]
+    for (const [index, sessionScope] of scopes.entries()) {
+      await sessions.start(
+        sessionScope,
+        {
+          ...input(`run-${index + 1}`),
+          threadId: sessionScope.threadId,
+        },
+        access(`operator-${index + 1}`)
+      )
+    }
+
+    for (const sessionScope of scopes.slice(1)) {
+      await expect(
+        sessions.recover(
+          sessionScope,
+          { threadId: sessionScope.threadId, runId: "run-1" },
+          access(`refresh-${sessionScope.threadId}`)
+        )
+      ).rejects.toThrow("An AOS run is already active")
+    }
+    await expect(
+      sessions.recover(
+        scope,
+        { threadId: scope.threadId, runId: "unknown-run" },
+        access("refresh-unknown")
+      )
+    ).rejects.toThrow("An AOS run is already active")
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
   it("keeps provider work alive when every browser disconnects", async () => {
     const source = new EventSource()
     const engine: ServerRunEngine = {
@@ -583,6 +1029,35 @@ describe("SessionCoordinator", () => {
     await expect(sessions.discover(scope)).resolves.toBeUndefined()
     expect(engine.discover).toHaveBeenCalledTimes(2)
     expect(sessions.state(scope)).toBe("idle")
+  })
+
+  it("requires authoritative history for a run discovered after coordinator restart", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+      discover: vi.fn(async () => ({ handle: source, state: "running" })),
+    }
+    const sessions = coordinator(engine)
+    await sessions.discover(scope)
+    const runId = sessions.snapshot(scope).runId!
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId },
+      access("refreshed")
+    )
+    source.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "future-only",
+    })
+
+    await expect(reader(refreshed)()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+    expect(engine.recover).not.toHaveBeenCalled()
   })
 
   it("admits a new turn after authoritative terminal settlement", async () => {

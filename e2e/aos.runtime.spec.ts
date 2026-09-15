@@ -148,6 +148,8 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
 }) => {
   let stopRequests = 0
   let runRequests = 0
+  let reconnectRequests = 0
+  let restoreActiveRun = false
 
   await page.addInitScript(() => {
     class AOSSocket extends EventTarget {
@@ -221,21 +223,44 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
       })
     if (path.endsWith("/history"))
       return route.fulfill({
-        json: {
-          sessionId: session.id,
-          messages: [
-            {
-              id: "history-1",
-              role: "assistant",
-              content: [{ type: "text", text: "Restored from AOS." }],
-              createdAt: "2026-09-12T00:00:00.000Z",
+        json: restoreActiveRun
+          ? {
+              sessionId: session.id,
+              messages: [
+                {
+                  id: "refresh-user",
+                  role: "user",
+                  content: [{ type: "text", text: "Continue after refresh" }],
+                  createdAt: "2026-09-12T00:00:01.000Z",
+                },
+                {
+                  id: "refresh-partial",
+                  role: "assistant",
+                  content: [{ type: "text", text: "Partial before refresh" }],
+                  createdAt: "2026-09-12T00:00:02.000Z",
+                },
+              ],
+              total: 2,
+              limit: 200,
+              offset: 0,
+              nextOffset: 2,
+              execution: { status: "running", runId: "refresh-run" },
+            }
+          : {
+              sessionId: session.id,
+              messages: [
+                {
+                  id: "history-1",
+                  role: "assistant",
+                  content: [{ type: "text", text: "Restored from AOS." }],
+                  createdAt: "2026-09-12T00:00:00.000Z",
+                },
+              ],
+              total: 1,
+              limit: 200,
+              offset: 0,
+              nextOffset: 1,
             },
-          ],
-          total: 1,
-          limit: 200,
-          offset: 0,
-          nextOffset: 1,
-        },
       })
     if (path.endsWith("/workspace/capabilities"))
       return route.fulfill({ json: sessionCapabilities })
@@ -275,6 +300,76 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     if (path.endsWith("/runs/stop")) {
       stopRequests++
       return route.fulfill({ status: 202, json: { status: "stopping" } })
+    }
+    if (path.endsWith("/runs/reconnect")) {
+      reconnectRequests++
+      const toolEvents = Array.from({ length: 11 }, (_, index) => [
+        {
+          type: "TOOL_CALL_START",
+          toolCallId: `refresh-tool-${index}`,
+          toolCallName: "search",
+          parentMessageId: "refresh-answer",
+        },
+        {
+          type: "TOOL_CALL_ARGS",
+          toolCallId: `refresh-tool-${index}`,
+          delta: "{}",
+        },
+        { type: "TOOL_CALL_END", toolCallId: `refresh-tool-${index}` },
+        {
+          type: "TOOL_CALL_RESULT",
+          messageId: `refresh-result-${index}`,
+          toolCallId: `refresh-tool-${index}`,
+          content: `result-${index}`,
+          role: "tool",
+        },
+      ]).flat()
+      restoreActiveRun = false
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: [
+          {
+            type: "RUN_STARTED",
+            threadId: session.id,
+            runId: "refresh-run",
+          },
+          {
+            type: "REASONING_MESSAGE_START",
+            messageId: "refresh-reasoning",
+            role: "reasoning",
+          },
+          {
+            type: "REASONING_MESSAGE_CONTENT",
+            messageId: "refresh-reasoning",
+            delta: "Recovered reasoning",
+          },
+          {
+            type: "REASONING_MESSAGE_END",
+            messageId: "refresh-reasoning",
+          },
+          {
+            type: "TEXT_MESSAGE_START",
+            messageId: "refresh-answer",
+            role: "assistant",
+          },
+          ...toolEvents,
+          {
+            type: "TEXT_MESSAGE_CONTENT",
+            messageId: "refresh-answer",
+            delta: "Recovered after refresh.",
+          },
+          { type: "TEXT_MESSAGE_END", messageId: "refresh-answer" },
+          {
+            type: "RUN_FINISHED",
+            threadId: session.id,
+            runId: "refresh-run",
+            outcome: { type: "success" },
+          },
+        ]
+          .map((event) => `data: ${JSON.stringify(event)}`)
+          .concat("")
+          .join("\n\n"),
+      })
     }
     if (path.endsWith("/runs")) {
       runRequests++
@@ -324,6 +419,10 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   )
   expect(stopRequests).toBe(1)
 
+  restoreActiveRun = true
   await page.reload()
-  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await expect(page.getByText("Recovered after refresh.")).toBeVisible()
+  await expect(page.getByText("Partial before refresh")).toHaveCount(0)
+  expect(runRequests).toBe(1)
+  expect(reconnectRequests).toBe(1)
 })

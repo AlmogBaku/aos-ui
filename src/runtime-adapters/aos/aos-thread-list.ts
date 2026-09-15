@@ -42,6 +42,7 @@ function cursorOffset(cursor: string | undefined) {
 
 class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
   #activeRunId?: string
+  #activeFallback?: ThreadAssistantMessagePart[]
   constructor(
     private readonly client: AosRemoteClient,
     private readonly threadId: string
@@ -53,8 +54,15 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
       history.execution?.status === "running"
         ? history.execution.runId
         : undefined
+    const messages = [...history.messages]
+    const trailing = messages.at(-1)
+    this.#activeFallback = undefined
+    if (this.#activeRunId && trailing?.role === "assistant") {
+      this.#activeFallback = trailing.content.map((part) => ({ ...part }))
+      messages.pop()
+    }
     const repository = ExportedMessageRepository.fromArray(
-      history.messages.map((message): ThreadMessageLike => ({
+      messages.map((message): ThreadMessageLike => ({
         ...message,
         createdAt: new Date(message.createdAt),
       }))
@@ -119,6 +127,41 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
           }
       }
       if (event.type === "RUN_ERROR") {
+        if (event.code === "AOS_RESET_REQUIRED") {
+          const history = await this.client.loadHistory(this.threadId)
+          const assistant = history.messages.findLast(
+            (message) => message.role === "assistant"
+          )
+          const fallback =
+            assistant?.role === "assistant"
+              ? assistant.content.map((part) => ({ ...part }))
+              : (this.#activeFallback ?? content)
+          if (
+            history.execution?.status === "waiting-for-input" &&
+            assistant?.status?.type === "requires-action"
+          ) {
+            yield {
+              content: fallback,
+              status: assistant.status,
+              metadata: assistant.metadata,
+            }
+          } else if (history.execution?.status === "idle") {
+            yield {
+              content: fallback,
+              status: { type: "complete", reason: "stop" },
+            }
+          } else {
+            yield {
+              content: fallback,
+              status: {
+                type: "incomplete",
+                reason: "error",
+                error: event.message ?? "AOS run history is unavailable",
+              },
+            }
+          }
+          return
+        }
         yield {
           content: [...content],
           status: {

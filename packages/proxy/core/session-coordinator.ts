@@ -60,9 +60,14 @@ export type SessionCoordinatorOptions = {
 }
 
 type Segment = {
+  cacheKey: string
   runId: string
   handle: ServerRunHandle
   fanout: SubscriberFanout<SequencedRunEvent>
+  journal?: {
+    replay: Array<{ value: SequencedRunEvent; bytes: number }>
+    replayBytes: number
+  }
   replay: Array<{ value: SequencedRunEvent; bytes: number }>
   replayBytes: number
   replayOverflow: boolean
@@ -88,6 +93,7 @@ type Execution = {
 }
 
 const MAX_STEERING_REQUESTS_PER_EXECUTION = 256
+const MAX_ACTIVE_RUN_JOURNALS = 5
 
 function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\u0000${scope.sessionId}`
@@ -99,6 +105,43 @@ function safeEventBytes(event: AGUIEvent) {
   } catch {
     return Number.POSITIVE_INFINITY
   }
+}
+
+function compactedEvent(
+  previous: AGUIEvent,
+  next: AGUIEvent
+): AGUIEvent | undefined {
+  if (
+    previous.timestamp !== undefined ||
+    previous.rawEvent !== undefined ||
+    previous.metadata !== undefined ||
+    next.timestamp !== undefined ||
+    next.rawEvent !== undefined ||
+    next.metadata !== undefined
+  )
+    return undefined
+  if (
+    previous.type === EventType.TEXT_MESSAGE_CONTENT &&
+    next.type === EventType.TEXT_MESSAGE_CONTENT &&
+    previous.messageId === next.messageId &&
+    previous.subagentRunId === next.subagentRunId
+  )
+    return { ...previous, delta: previous.delta + next.delta }
+  if (
+    previous.type === EventType.REASONING_MESSAGE_CONTENT &&
+    next.type === EventType.REASONING_MESSAGE_CONTENT &&
+    previous.messageId === next.messageId &&
+    previous.subagentRunId === next.subagentRunId
+  )
+    return { ...previous, delta: previous.delta + next.delta }
+  if (
+    previous.type === EventType.TOOL_CALL_ARGS &&
+    next.type === EventType.TOOL_CALL_ARGS &&
+    previous.toolCallId === next.toolCallId &&
+    previous.subagentRunId === next.subagentRunId
+  )
+    return { ...previous, delta: previous.delta + next.delta }
+  return undefined
 }
 
 function admissionFingerprint(value: unknown): string {
@@ -157,6 +200,7 @@ function uncertainError(event: AGUIEvent) {
 
 export class SessionCoordinator {
   readonly #executions = new Map<string, Execution>()
+  readonly #journals = new Map<string, Segment>()
   readonly #admissions = new Set<string>()
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
@@ -225,12 +269,20 @@ export class SessionCoordinator {
       const discovered = await this.options.engine.discover!(scope, runId)
       if (!discovered) {
         if (existing && this.#executions.get(key) === existing) {
+          this.#forgetJournal(existing.segment)
           existing.segment.fanout.close()
           this.#executions.delete(key)
         }
         return undefined
       }
-      const segment = this.#segment(runId, discovered.handle)
+      const segment = this.#segment(
+        key,
+        runId,
+        discovered.handle,
+        undefined,
+        false
+      )
+      this.#trackJournal(segment)
       segment.interrupts = structuredClone(discovered.interrupts ?? [])
       const execution: Execution = existing ?? {
         scope,
@@ -247,6 +299,7 @@ export class SessionCoordinator {
         steeringRequests: new Map(),
       }
       if (existing) {
+        this.#forgetJournal(existing.segment)
         existing.segment.fanout.close()
         execution.state = discovered.state
         execution.segment = segment
@@ -306,11 +359,12 @@ export class SessionCoordinator {
         admissionFingerprint: admissionFingerprint(input),
         startedByLane: access.lane,
         controllers: new Set(access.canControl ? [access.controllerId] : []),
-        segment: this.#segment(input.runId, handle, access.onTerminal),
+        segment: this.#segment(key, input.runId, handle, access.onTerminal),
         control: Promise.resolve(),
         steeringRequests: new Map(),
       }
       this.#executions.set(key, execution)
+      this.#trackJournal(execution.segment)
       this.#consume(execution, execution.segment)
       return this.#subscribe(execution.segment, 0, access)
     } finally {
@@ -328,6 +382,17 @@ export class SessionCoordinator {
       throw new Error("Recovery scope does not match this Session")
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
+    if (
+      request.after === undefined &&
+      existing?.segment.runId === request.runId &&
+      existing.state !== "uncertain"
+    ) {
+      if (!existing.segment.journal)
+        return this.#resetSubscription(existing.segment, access)
+      if (access.canControl) existing.controllers.add(access.controllerId)
+      this.#touchJournal(existing.segment)
+      return this.#subscribeJournal(existing.segment, access)
+    }
     const after = request.after ?? 0
     if (
       existing?.segment.runId === request.runId &&
@@ -378,10 +443,13 @@ export class SessionCoordinator {
       }
       const handle = await this.options.engine.recover(scope, providerRequest)
       const segment = this.#segment(
+        key,
         request.runId,
         handle,
-        existing?.segment.onTerminal
+        existing?.segment.onTerminal,
+        false
       )
+      if (existing) this.#forgetJournal(existing.segment)
       const execution: Execution = existing
         ? existing
         : {
@@ -400,6 +468,7 @@ export class SessionCoordinator {
       execution.segment = segment
       if (access.canControl) execution.controllers.add(access.controllerId)
       this.#executions.set(key, execution)
+      this.#trackJournal(segment)
       this.#consume(execution, segment)
       return execution
     } finally {
@@ -505,7 +574,8 @@ export class SessionCoordinator {
     this.#admissions.add(key)
     try {
       const handle = await this.options.engine.start(execution.scope, input)
-      const segment = this.#segment(input.runId, handle)
+      const segment = this.#segment(key, input.runId, handle)
+      this.#forgetJournal(execution.segment)
       execution.segment = segment
       execution.control = Promise.resolve()
       execution.steeringRequests = new Map()
@@ -513,6 +583,7 @@ export class SessionCoordinator {
       execution.admissionFingerprint = admissionFingerprint(input)
       execution.state = "running"
       if (access.canControl) execution.controllers.add(access.controllerId)
+      this.#trackJournal(segment)
       this.#consume(execution, segment)
       return this.#subscribe(segment, 0, access)
     } finally {
@@ -521,11 +592,14 @@ export class SessionCoordinator {
   }
 
   #segment(
+    cacheKey: string,
     runId: string,
     handle: ServerRunHandle,
-    onTerminal?: (event: AGUIEvent) => void | Promise<void>
+    onTerminal?: (event: AGUIEvent) => void | Promise<void>,
+    journalComplete = true
   ): Segment {
     return {
+      cacheKey,
       runId,
       handle,
       fanout: new SubscriberFanout<SequencedRunEvent>({
@@ -533,6 +607,7 @@ export class SessionCoordinator {
         maxBytes: this.options.maxSubscriberBytes,
         sizeOf: ({ event }) => safeEventBytes(event),
       }),
+      journal: journalComplete ? { replay: [], replayBytes: 0 } : undefined,
       replay: [],
       replayBytes: 0,
       replayOverflow: false,
@@ -562,9 +637,11 @@ export class SessionCoordinator {
             sequence: ++segment.nextSequence,
             event,
           }
+          this.#rememberJournal(segment, sequenced)
           this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           if (event.type === EventType.RUN_FINISHED) {
+            this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
             segment.interrupts = eventInterrupts(event)
@@ -574,6 +651,7 @@ export class SessionCoordinator {
             break
           }
           if (event.type === EventType.RUN_ERROR) {
+            this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
             execution.state = uncertainError(event) ? "uncertain" : "idle"
@@ -608,8 +686,64 @@ export class SessionCoordinator {
     segment.replayBytes += bytes
   }
 
+  #rememberJournal(segment: Segment, value: SequencedRunEvent) {
+    const journal = segment.journal
+    if (!journal) return
+    const previous = journal.replay.at(-1)
+    const compacted = previous
+      ? compactedEvent(previous.value.event, value.event)
+      : undefined
+    const bytes = safeEventBytes(compacted ?? value.event)
+    const nextBytes = compacted
+      ? journal.replayBytes - previous!.bytes + bytes
+      : journal.replayBytes + bytes
+    if (
+      !Number.isSafeInteger(bytes) ||
+      bytes > this.options.maxReplayBytes ||
+      nextBytes > this.options.maxReplayBytes
+    ) {
+      segment.journal = undefined
+      this.#journals.delete(segment.cacheKey)
+      return
+    }
+    if (compacted && previous) {
+      previous.value = { sequence: value.sequence, event: compacted }
+      previous.bytes = bytes
+    } else journal.replay.push({ value, bytes })
+    journal.replayBytes = nextBytes
+    this.#touchJournal(segment)
+  }
+
+  #trackJournal(segment: Segment) {
+    if (!segment.journal) return
+    const previous = this.#journals.get(segment.cacheKey)
+    if (previous && previous !== segment) previous.journal = undefined
+    this.#journals.delete(segment.cacheKey)
+    this.#journals.set(segment.cacheKey, segment)
+    while (this.#journals.size > MAX_ACTIVE_RUN_JOURNALS) {
+      const oldestKey = this.#journals.keys().next().value
+      if (oldestKey === undefined) break
+      const oldest = this.#journals.get(oldestKey)
+      this.#journals.delete(oldestKey)
+      if (oldest) oldest.journal = undefined
+    }
+  }
+
+  #touchJournal(segment: Segment) {
+    if (this.#journals.get(segment.cacheKey) !== segment) return
+    this.#journals.delete(segment.cacheKey)
+    this.#journals.set(segment.cacheKey, segment)
+  }
+
+  #forgetJournal(segment: Segment) {
+    if (this.#journals.get(segment.cacheKey) === segment)
+      this.#journals.delete(segment.cacheKey)
+    segment.journal = undefined
+  }
+
   #publish(segment: Segment, event: AGUIEvent) {
     const sequenced = { sequence: ++segment.nextSequence, event }
+    this.#rememberJournal(segment, sequenced)
     this.#remember(segment, sequenced)
     segment.fanout.publish(sequenced)
   }
@@ -656,6 +790,56 @@ export class SessionCoordinator {
       events,
       close: () => live.close(),
     }
+  }
+
+  #subscribeJournal(segment: Segment, access: CoordinatorAccess) {
+    const project = (value: SequencedRunEvent) => {
+      const event = access.project ? access.project(value.event) : value.event
+      return event ? { sequence: value.sequence, event } : undefined
+    }
+    const live = segment.fanout.subscribe(project, access.onDetach)
+    const barrier = segment.nextSequence
+    const replay = segment.journal?.replay.map(({ value }) => value) ?? []
+    const events: AsyncIterable<SequencedRunEvent> = {
+      [Symbol.asyncIterator]: async function* () {
+        try {
+          for (const value of replay) {
+            const projected = project(value)
+            if (projected) yield projected
+          }
+          for await (const value of live.events) {
+            if (value.sequence > barrier) yield value
+          }
+        } finally {
+          live.close()
+        }
+      },
+    }
+    return {
+      runId: segment.runId,
+      events,
+      close: () => live.close(),
+    }
+  }
+
+  #resetSubscription(segment: Segment, access: CoordinatorAccess) {
+    const candidate: SequencedRunEvent = {
+      sequence: segment.nextSequence + 1,
+      event: {
+        type: EventType.RUN_ERROR,
+        code: "AOS_RESET_REQUIRED",
+        message: "AOS run history must be reloaded before continuing.",
+      },
+    }
+    const event = access.project
+      ? access.project(candidate.event)
+      : candidate.event
+    const events: AsyncIterable<SequencedRunEvent> = {
+      async *[Symbol.asyncIterator]() {
+        if (event) yield { sequence: candidate.sequence, event }
+      },
+    }
+    return { runId: segment.runId, events, close: () => undefined }
   }
 
   #assertCapacity(lane: "operator" | "guest", existing?: Execution) {
