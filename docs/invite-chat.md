@@ -1,44 +1,16 @@
-# Share an invited chat
+# Share an invited conversation
 
-The Hermes V1 proxy can expose a JWT-scoped guest conversation on a separate
-listener. Guests and operators use the same Hermes runtime, transport, and
-Session coordinator, but different routes, authorization, projection, and
-limits.
-
-An invitation grants access only to its declared runtime, Agent, Session, and
-operations. It does not grant access to the trusted operator listener or reveal
-the Hermes token.
+The proxy can expose one runtime-neutral guest conversation on its dedicated
+guest listener. Guests and operators share the same runtime, transport, and
+Session coordinator. The invitation restricts the guest to one Agent and one
+conversation reference.
 
 ## Configure the guest listener
 
-Add `guest` to the private proxy configuration, as shown in
-[`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json):
-
-```json
-{
-  "guest": {
-    "listen": {
-      "host": "0.0.0.0",
-      "port": 3001,
-      "exposure": "private-container"
-    },
-    "publicOrigin": "https://guest.example.com",
-    "invitations": {
-      "keys": [
-        {
-          "id": "current",
-          "secretFile": "/run/secrets/guest-invite-signing-key"
-        }
-      ],
-      "ttlSeconds": 300,
-      "clockSkewSeconds": 0
-    }
-  }
-}
-```
-
-Generate a 32-byte base64url signing key, store it in an owner-only file, and
-mount that file at the configured path:
+Add `guest` to the proxy configuration as shown in
+[`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json).
+The signing key must be a private 32-byte secret file. The default invitation
+lifetime is 72 hours.
 
 ```bash
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' \
@@ -46,104 +18,68 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' \
 chmod 600 /absolute/private/path/guest-invite-signing-key
 ```
 
-The Compose overlay publishes the guest listener separately on loopback port
-`3001` by default. External HTTPS ingress must target only this port, preserve
-SSE and WebSocket behavior, and expose neither `/api/aos/v1` nor native Hermes
-routes. Nginx is optional.
+The guest listener must have its own origin and port. It uses the same selected
+runtime instance as the trusted operator listener; do not configure a second
+provider token or runtime.
 
-The guest lane uses the same `runtime.tokenFile` as the operator lane. Do not
-configure or mount a second Hermes token.
+## Prepare the invited Agent
+
+Use a dedicated Agent for each guest-facing business use case instead of
+inviting guests to a general-purpose or personal Agent. Give it only the
+focused skills required by that workflow. For example, an interview Agent can
+use a skill for one specific interview type that defines its questions,
+workflow, outputs, and guardrails.
+
+Restrict the Agent in the native runtime to the tools, filesystem locations,
+network destinations, credentials, and approval behavior the workflow needs.
+Test it with non-sensitive data before sharing an invitation. Agent visibility
+controls catalog presentation; it does not restrict what the Agent can access.
+Likewise, invitation scope restricts the guest to one Agent and conversation,
+but it does not sandbox the Agent itself.
 
 ## Create an invitation
 
-Create invitations through the trusted operator API. Validate the target Agent
-and Session first; the proxy also verifies both before signing.
+The packaged `aos-invite-link` skill performs the same dedicated-Agent
+preflight before it creates a link.
+
+The proxy CLI signs locally and makes no HTTP request. `--ref` is optional; if
+omitted, the CLI generates a URL-safe conversation reference. The Session is
+created lazily on the guest's first Send, not when the link is opened.
 
 ```bash
-TOKEN="$(
-  curl --fail --silent --show-error \
-    --request POST \
-    --header 'Origin: http://127.0.0.1:3000' \
-    --header 'Content-Type: application/json' \
-    --data '{
-      "principalId": "guest_recipient",
-      "invitationId": "invite_interview_01",
-      "runtimeId": "hermes-default",
-      "agentId": "interviewer",
-      "sessionId": "20260914_084917_21de69",
-      "operations": [
-        "artifacts:read",
-        "attachments:read",
-        "errors:read",
-        "interactions:respond",
-        "messages:create",
-        "messages:read",
-        "messages:stop"
-      ],
-      "capabilities": [
-        "artifact-metadata",
-        "attachment-metadata",
-        "custom-ui",
-        "message-text",
-        "safe-errors"
-      ]
-    }' \
-    http://127.0.0.1:3000/api/aos/v1/guest-invitations \
-  | jq --raw-output .token
-)"
-
-printf 'https://guest.example.com/#invite=%s\n' "$TOKEN"
+AOS_RUNTIME_PROXY_CONFIG=/absolute/path/proxy-config.json \
+  bun run gateway -- invite --agent interviewer
 ```
 
-Use the operator listener's exact configured `publicOrigin` in the `Origin`
-header. Use stable native Agent and Session IDs from the normalized catalog;
-never place a live Hermes Session ID in an invitation.
+Useful presentation options are `--name`, `--logo`, `--accent`, `--title`,
+`--message`, `--prefill`, and `--lang en|he`. Use `--expires-in` to override the
+72-hour default. Use `--instruction` only for non-secret setup text that the
+runtime should receive once when the invited Session is created.
 
-Choose only the operations and capabilities the recipient needs. For example,
-a read-only invitation can grant only `messages:read` and `message-text`.
-Invitation IDs and guest principal IDs are operator-chosen audit identities;
-they must begin with `invite_` and `guest_` respectively.
-
-The link fragment keeps the bearer token out of HTTP requests during initial
-navigation. The browser captures it, removes it from the visible URL, and sends
-it only as guest API authorization. The signed JWT is not encrypted: its
-recipient can read every claim. Do not put secrets or private instructions in
-it.
-
-## Understand expiry and scope
-
-The configured invitation TTL applies when the token is issued and is limited
-to one hour. Expiry fails closed for reads, runs, Stop, interaction responses,
-reconnect, and event observation. Expiring or disconnecting a guest detaches
-only that guest; Hermes work and operator delivery continue.
-
-Guest responses are projected before entering the guest queue. The guest lane
-excludes reasoning, privileged roles, raw tool data, approval internals, native
-metadata and positions, provider paths, and live Session IDs. Guest JWTs cannot
-widen their scope through URLs, request bodies, AG-UI fields, or reconnect
-cursors.
-
-Questions and approvals use standard AG-UI interrupts. An authorized guest can
-answer only when the invitation grants `interactions:respond`. Reopening the
-original invitation link authorizes a fresh browser load; it does not resend a
-prompt.
+The command prints a URL whose fragment contains the invitation. The fragment
+stays in the guest URL so refresh can authenticate again; URL fragments are not
+sent in HTTP requests. The browser sends the token as guest API authorization.
 
 > [!WARNING]
-> Guest filtering is not an Agent sandbox. Configure the invited Agent's native
-> filesystem, network, tools, and permissions for the recipient's trust level.
-> An Agent can repeat runtime context in an ordinary answer.
+> The JWT is signed, not encrypted. Its holder can read the Agent ID,
+> conversation reference, presentation fields, and first-turn instruction.
+> Never place secrets in any invitation option.
 
-## Verify the boundary
+## Runtime behavior
 
-From the guest origin, verify that:
+- Opening a new invitation creates nothing; an existing reference loads its
+  conversation.
+- The first Send atomically reuses or creates the invited Session.
+- Attachments are selected before creation and staged against the resolved
+  Session on first Send.
+- Streaming, Stop, questions, cancellation, reload, and reconnect use the same
+  normalized AG-UI path as operator conversations.
+- Voice transcription and speech are Agent-scoped and do not create a Session.
+- Expiry detaches the guest only; it does not stop provider work.
+- Invalid or expired links ask the guest to request a new invitation.
 
-- the invitation can read only its bound Session;
-- a missing, changed, or expired bearer receives `401` or `403`;
-- `/api/aos/v1`, `/hermes`, `/auth`, and native provider routes return `404`;
-- streaming, Stop, reload, reconnect, and an interrupt response stay within the
-  same Agent and Session; and
-- an operator observing the same run continues receiving events if the guest
-  disconnects or expires.
+Guest output is allowlisted. It excludes reasoning, raw tools, privileged
+roles, provider metadata and positions, filesystem paths, credentials, live
+provider IDs, and Agent-wide approval grants.
 
-Live acceptance requires an approved disposable Session and real credentials.
-Fixture or mocked tests do not establish a live invitation journey.
+Live acceptance requires an approved disposable target and credentials.

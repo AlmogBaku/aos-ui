@@ -105,6 +105,24 @@ The browser talks only to same-origin `/api/aos/v1`; guests use the separate
 `/api/guest/v1` listener. The proxy never exposes Hermes' native `/auth`,
 `/api`, or WebSocket routes.
 
+Create a guest invitation locally from the configured signing key:
+
+```bash
+AOS_RUNTIME_PROXY_CONFIG=/absolute/private/path/proxy-config.json \
+  bun run gateway -- invite --agent default
+```
+
+The command prints a link, defaults to 72 hours, and generates a stable
+conversation reference. Add `--ref`, `--instruction`, `--prefill`, `--title`,
+`--message`, `--lang`, or `--expires-in` only when needed. Creating or opening
+the link does not contact Hermes or create a Session; the first guest Send
+atomically reuses or creates `aos-invite:<reference>`.
+
+Before issuing a link, follow the [invited-chat guide](../invite-chat.md) to
+prepare a dedicated, narrowly skilled Hermes profile and restrict its native
+tools, filesystem, network, credentials, and approval behavior for the guest
+workflow.
+
 Hermes owns native recovery policy, including auto-continue. AOS reattaches
 without submitting a new prompt. Disconnecting a browser does not stop work.
 After a terminal Session has no subscribers or pending interaction, the proxy
@@ -150,7 +168,17 @@ The integration reads this metadata; it does not grant creator authority itself.
 - Native profiles form the AOS Agent catalog and can expose visibility changes.
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity coverage is limited to the active Session.
-- Stop uses native Session interruption.
+- AG-UI starts or resumes a run and carries its server-to-browser event stream.
+  Stop and steering are separate normalized AOS REST controls on that existing
+  run; neither submits a second AG-UI run.
+- Stop uses native `session.interrupt`.
+- Text-only active-turn steering uses native `session.redirect`. Hermes may
+  report the correction as immediately redirected or accepted into its native
+  build-window queue; both outcomes mean AOS must not submit another copy.
+- A steering redirect seals the current assistant generation, preserves
+  completed tool results, presents the visible correction at that boundary,
+  and continues under the same logical AOS run until Hermes is authoritatively
+  idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
 - Voice controls appear only for native STT/TTS interfaces; see [Chat voice](../chat-voice.md).
 

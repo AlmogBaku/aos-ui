@@ -19,7 +19,8 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 ## What AOS provides
 
 - Agent and Session navigation with provider-verified ownership
-- Streaming chat, queued messages, Stop, questions, approvals, and attachments where the selected runtime supports them
+- Streaming chat, queued follow-ups, Stop, active-turn steering, questions,
+  approvals, and attachments where the selected runtime supports them
 - Session-scoped Todos and message-scoped Plans
 - Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
 - Activity history and opt-in browser notifications

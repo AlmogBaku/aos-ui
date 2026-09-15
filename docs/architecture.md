@@ -30,11 +30,19 @@ later without adding provider branches to the browser. Each native adapter
 implements the same normalized server boundary while keeping its own transport,
 credentials, recovery positions, and provider payloads private.
 
-The browser uses AG-UI for active Session runs and the namespaced AOS REST and
-WebSocket workspace protocol for catalogs, history, content, and invalidation.
-Fixture mode remains explicit synthetic data for evaluation and tests; invalid
-real-runtime configuration renders an unavailable screen rather than falling
-back to fixtures.
+The browser uses AG-UI to start or resume Session runs and receive their event
+streams. Namespaced AOS REST operations provide workspace resources and the
+active-run controls that AG-UI does not standardize, including Stop and
+capability-gated steering. The AOS WebSocket carries invalidations, not native
+run events. Fixture mode remains explicit synthetic data for evaluation and
+tests; invalid real-runtime configuration renders an unavailable screen rather
+than falling back to fixtures.
+
+Assistant UI owns queued messages. While a run is busy, an ordinary Send adds
+one FIFO follow-up; a supported text-only steering action targets the existing
+logical run through AOS REST. It does not create another AG-UI run. The proxy
+correlates the acknowledgement into the existing event stream, and provider
+history remains authoritative after settlement or reconnect.
 
 Browser code never imports native filesystem writers or provider implementations. Native packages install presentation tools and, only where the harness exposes the required safe authority, creator support. Agent profiles, worktrees, secrets, and runtime state remain outside the frontend checkout.
 

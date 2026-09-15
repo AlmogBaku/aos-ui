@@ -108,8 +108,6 @@ describe("container orchestration", () => {
       activeExecutions: 256,
       guestActiveExecutions: 32,
       operatorEventPeers: 256,
-      guestEventPeers: 64,
-      guestEventPeersPerInvitation: 4,
     })
     expect(proxy).not.toHaveProperty("operator")
     expect(proxy.guest).not.toHaveProperty("hermes")
