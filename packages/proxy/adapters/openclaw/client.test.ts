@@ -126,6 +126,47 @@ describe("OpenClaw client", () => {
     await expect(started).resolves.toBeUndefined()
   })
 
+  it("retains only validated negotiated attachment limits from HelloOk", async () => {
+    const { client, gateway } = setup()
+    const started = client.start()
+
+    gateway().options.onHelloOk?.({
+      protocol: 4,
+      policy: {
+        maxPayload: 30 * 1024 * 1024,
+        attachments: {
+          maxBytes: 25 * 1024 * 1024,
+          maxImageBytes: 10 * 1024 * 1024,
+        },
+      },
+      providerPrivate: "must-not-escape",
+    } as never)
+
+    await expect(started).resolves.toBeUndefined()
+    expect(client.negotiatedPolicy()).toEqual({
+      maxPayload: 30 * 1024 * 1024,
+      attachments: {
+        maxBytes: 25 * 1024 * 1024,
+        maxImageBytes: 10 * 1024 * 1024,
+      },
+    })
+  })
+
+  it("does not manufacture attachment policy from missing or malformed HelloOk policy", async () => {
+    for (const hello of [
+      { protocol: 4 },
+      { protocol: 4, policy: { maxPayload: -1, attachments: { maxBytes: 1 } } },
+    ]) {
+      const { client, gateway } = setup()
+      const started = client.start()
+
+      gateway().options.onHelloOk?.(hello as never)
+
+      await expect(started).resolves.toBeUndefined()
+      expect(client.negotiatedPolicy()).toBeUndefined()
+    }
+  })
+
   it("fails closed when a Gateway reports a protocol other than v4", async () => {
     const { client, gateway } = setup()
     const started = client.start()

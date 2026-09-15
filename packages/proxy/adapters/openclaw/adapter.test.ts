@@ -2,6 +2,7 @@ import type { AGUIEvent } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import type { ServerRunEngine, ServerRunHandle } from "../../core/runtime"
+import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
   OpenClawAdapterUnavailableError,
   OpenClawServerAdapter,
@@ -170,5 +171,59 @@ describe("OpenClaw ServerRuntime assembly", () => {
     await Promise.all([adapter.close(), adapter.close()])
 
     expect(gateway.stopAndWait).toHaveBeenCalledTimes(1)
+  })
+
+  it("advertises and stages attachments only from negotiated HelloOk policy", async () => {
+    const policy = {
+      maxPayload: 30 * 1024 * 1024,
+      attachments: {
+        maxBytes: 25 * 1024 * 1024,
+        maxImageBytes: 10 * 1024 * 1024,
+      },
+    }
+    const gateway = client({ negotiatedPolicy: () => policy })
+    const adapter = new OpenClawServerAdapter({
+      client: gateway,
+      runs: engine(),
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(
+      adapter.workspaceCapabilities("research", sessionKey)
+    ).resolves.toEqual(
+      expect.objectContaining({
+        content: expect.objectContaining({
+          attachments: expect.objectContaining({
+            maxEncodedRequestBytes: policy.maxPayload,
+            maxImageBytes: policy.attachments.maxImageBytes,
+            maxFileBytes: policy.attachments.maxBytes,
+          }),
+        }),
+      })
+    )
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.parse(
+        await adapter.workspaceCapabilities("research", sessionKey)
+      )
+    ).toBeDefined()
+    await expect(
+      adapter.stageAttachments("research", sessionKey, [
+        { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
+      ])
+    ).resolves.toMatchObject({
+      public: [{ type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" }],
+    })
+
+    const withoutPolicy = new OpenClawServerAdapter({
+      client: client(),
+      runs: engine(),
+      subscribeSession: async () => () => undefined,
+    })
+    await expect(
+      withoutPolicy.workspaceCapabilities("research", sessionKey)
+    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+    await expect(
+      withoutPolicy.stageAttachments("research", sessionKey, [])
+    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
   })
 })

@@ -4,7 +4,10 @@ import type {
   SessionAttachmentStageRequest,
   VisibilityUpdateResponse,
 } from "../../../protocol"
-import { SESSION_CATALOG_MAX_WINDOW } from "../../../protocol"
+import {
+  SESSION_CATALOG_MAX_WINDOW,
+  SessionWorkspaceCapabilitiesResponseSchema,
+} from "../../../protocol"
 import type {
   ServerAttachmentStage,
   ServerRunEngine,
@@ -17,6 +20,8 @@ import {
   type OpenClawGatewayClient,
 } from "./client"
 import { OpenClawContentPublicError } from "./content"
+import { openClawCapabilities } from "./capabilities"
+import { stageOpenClawChatAttachments } from "./content"
 import {
   createOpenClawHistory,
   OpenClawHistoryUnavailableError,
@@ -207,12 +212,65 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   async workspaceCapabilities(
-    _agentId: string,
-    _publicSessionId: string
+    agentId: string,
+    publicSessionId: string
   ): Promise<unknown> {
-    void [_agentId, _publicSessionId]
-    // The shared capability schema still needs the approved native content mapping.
-    throw new OpenClawAdapterUnavailableError()
+    await this.#start()
+    await this.#workspace.getSession(agentId, publicSessionId)
+    const policy = this.#client.negotiatedPolicy?.()
+    if (!policy) throw new OpenClawAdapterUnavailableError()
+    const provider = openClawCapabilities(policy)
+    return SessionWorkspaceCapabilitiesResponseSchema.parse({
+      agent: {
+        identity: { type: "openclaw", provider: "OpenClaw" },
+        transport: { streaming: true, resumable: true },
+        tools: { supported: true, clientProvided: false },
+        reasoning: { supported: true, streaming: true, encrypted: false },
+        multimodal: {
+          input: {
+            image: true,
+            audio: false,
+            video: false,
+            pdf: false,
+            file: true,
+          },
+          output: { image: false, audio: false },
+        },
+        humanInTheLoop: {
+          supported: true,
+          approvals: true,
+          interventions: false,
+          feedback: false,
+          interrupts: true,
+          approveWithEdits: false,
+        },
+        custom: { "aos.planActivityType": "PLAN" },
+      },
+      workspace: {
+        slashCommands: {
+          status: "unavailable",
+          reason: "native-slash-command-catalog-unavailable",
+        },
+        models: {
+          status: "available",
+          scope: "attached-session",
+          selection: "native-session",
+          choices: "provider-reported",
+        },
+        context: {
+          status: "available",
+          scope: "attached-session",
+          source: "provider-usage-or-estimate",
+          breakdown: "provider-categories",
+        },
+        todos: { status: "unavailable", reason: "todo-projection-unavailable" },
+        activity: {
+          status: "unavailable",
+          reason: "activity-projection-unavailable",
+        },
+      },
+      ...provider,
+    })
   }
 
   async models(agentId: string, publicSessionId: string) {
@@ -249,12 +307,15 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   async stageAttachments(
-    _agentId: string,
-    _publicSessionId: string,
-    _attachments: SessionAttachmentStageRequest["attachments"]
+    agentId: string,
+    publicSessionId: string,
+    attachments: SessionAttachmentStageRequest["attachments"]
   ): Promise<ServerAttachmentStage> {
-    void [_agentId, _publicSessionId, _attachments]
-    throw new OpenClawAdapterUnavailableError()
+    await this.#start()
+    await this.#workspace.getSession(agentId, publicSessionId)
+    const policy = this.#client.negotiatedPolicy?.()
+    if (!policy) throw new OpenClawAdapterUnavailableError()
+    return stageOpenClawChatAttachments(attachments, policy)
   }
 
   async artifact(

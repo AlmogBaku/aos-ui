@@ -27,6 +27,15 @@ export type OpenClawRequestOptions = Readonly<{
   onAccepted?: (payload: unknown) => void
 }>
 
+/** The only HelloOk data that later provider leaves may consume. */
+export type OpenClawNegotiatedPolicy = Readonly<{
+  maxPayload: number
+  attachments: Readonly<{
+    maxBytes: number
+    maxImageBytes: number
+  }>
+}>
+
 export type OpenClawGatewayClientOptions = Pick<
   GatewayClientOptions,
   | "caps"
@@ -52,6 +61,7 @@ export type OpenClawGatewayClientOptions = Pick<
 export interface OpenClawGatewayClient {
   start(): void
   stopAndWait(options?: { timeoutMs?: number }): Promise<void>
+  negotiatedPolicy?(): OpenClawNegotiatedPolicy | undefined
   request<T>(
     method: string,
     params?: unknown,
@@ -179,6 +189,29 @@ function validStringList(values: readonly string[], requireValue = false) {
   )
 }
 
+function negotiatedPolicy(
+  hello: HelloOk
+): OpenClawNegotiatedPolicy | undefined {
+  const policy = hello.policy
+  if (
+    !policy?.attachments ||
+    !Number.isSafeInteger(policy.maxPayload) ||
+    policy.maxPayload < 1 ||
+    !Number.isSafeInteger(policy.attachments.maxBytes) ||
+    policy.attachments.maxBytes < 1 ||
+    !Number.isSafeInteger(policy.attachments.maxImageBytes) ||
+    policy.attachments.maxImageBytes < 1
+  )
+    return undefined
+  return Object.freeze({
+    maxPayload: policy.maxPayload,
+    attachments: Object.freeze({
+      maxBytes: policy.attachments.maxBytes,
+      maxImageBytes: policy.attachments.maxImageBytes,
+    }),
+  })
+}
+
 function validateCredentials(
   credentials: OpenClawClientCredentials | undefined
 ): asserts credentials is OpenClawClientCredentials {
@@ -257,6 +290,7 @@ export class OpenClawClient {
   private readonly gateway: OpenClawGatewayClient
   private readonly requestTimeout?: number
   private ready?: Promise<void>
+  private policy?: OpenClawNegotiatedPolicy
   private resolveReady?: () => void
   private rejectReady?: (error: Error) => void
   private stop?: Promise<void>
@@ -367,12 +401,17 @@ export class OpenClawClient {
     return this.stop
   }
 
+  negotiatedPolicy() {
+    return this.policy
+  }
+
   private acceptHello(hello: HelloOk) {
     if (this.state !== "starting") return
     if (hello.protocol !== PROTOCOL_VERSION) {
       this.rejectTerminal(new OpenClawClientConnectionError("authentication"))
       return
     }
+    this.policy = negotiatedPolicy(hello)
     this.state = "ready"
     this.resolveReady?.()
   }
