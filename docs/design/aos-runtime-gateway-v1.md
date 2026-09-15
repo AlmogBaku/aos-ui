@@ -179,9 +179,16 @@ V1 supports:
 - chronological compacted history with stable native message and durable
   Session IDs;
 - rename and delete where the native operation supports them;
-- models, context, Todos, activity, and suggestions where Hermes exposes them;
+- models, context, and suggestions where Hermes exposes them;
+- Session Todos as AG-UI `PLAN` activity snapshots and deltas restored through
+  normalized history;
 - attachments, artifacts, images, and native audio operations where supported;
 - capability-driven unavailable states for unsupported native operations.
+
+Capabilities are cached for the selected Agent and Session scope. Ordinary
+renders and generic Session invalidations do not refetch them. Execution status
+derives from coordinator and AG-UI lifecycle state rather than a separate
+activity request, and audio transforms run only after an explicit user action.
 
 `New Session` creates a browser draft only. On first Send, Assistant UI queues
 the turn while initialization creates one Hermes Session and returns its
@@ -257,7 +264,7 @@ Reconnect performs:
 
 ```text
 authorize scope
-  -> read authoritative history and pending interaction
+  -> read authoritative history and restored interrupt metadata
   -> locate or reconstruct the active run
   -> restore Hermes attachment and event position
   -> replay available events

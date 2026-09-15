@@ -4,7 +4,7 @@ AOS UI is the business-agent workspace and UI companion to the [AOS capability k
 
 ## Ownership model
 
-A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, Todos, activity, and optional capabilities.
+A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, and optional capabilities. Session Todos arrive as AG-UI PLAN activity, and execution status derives from the normalized run lifecycle.
 
 The core relationships are strict:
 

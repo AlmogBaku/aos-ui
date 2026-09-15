@@ -28,3 +28,5 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 - [Architecture and trust boundaries](architecture.md) — understand what AOS owns, what the runtime owns, and where data persists.
 
 Internal product and visual authorities are intentionally separate from this operator set. Contributors and automation Agents should follow [`AGENTS.md`](../AGENTS.md).
+Runtime adapter contributors should start with the
+[development documentation](development/README.md).

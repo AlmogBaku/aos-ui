@@ -283,7 +283,9 @@ The interface covers:
 - typed active-run controls, including Stop and optional steering;
 - questions, approvals, reactions, and feedback;
 - attachments, artifacts, and native audio operations;
-- models, context, Todos, and activity;
+- models and context;
+- Session Todos and structured progress through AG-UI activity and normalized
+  history;
 - scoped invalidation subscriptions;
 - graceful disposal.
 
@@ -454,8 +456,14 @@ Strict versioned REST operations expose:
 - runtime-scoped Agent catalogs and visibility;
 - runtime- and Agent-scoped Session catalogs;
 - Session lifecycle and paginated history;
-- capabilities, models, context, Todos, and activity;
+- capabilities, models, and context;
 - reactions, attachments, artifacts, audio, and invitations.
+
+Session Todos and structured progress use AG-UI Activity Messages. An
+authoritative `PLAN` snapshot and its deltas travel with the Session run and
+are restored through normalized history; they are not a parallel polling
+contract. Session execution status derives from coordinator and AG-UI lifecycle
+state.
 
 Representative resource paths are:
 
@@ -572,7 +580,8 @@ When an interrupt occurs:
 
 1. the adapter validates and emits the normalized interrupt;
 2. the native Session remains retained while waiting;
-3. authoritative pending-interaction state is available during reconnect;
+3. normalized interrupt metadata is restored from authoritative history, with
+   adapter-private native discovery when reconciliation requires it;
 4. an authorized response resumes the same run;
 5. duplicate identical responses are idempotent;
 6. conflicting, expired, or uncertain responses produce distinct normalized
@@ -589,7 +598,7 @@ socket:
 
 ```text
 authenticate and authorize
-  -> read authoritative Session history and pending interactions
+  -> read authoritative Session history and restored interrupt metadata
   -> locate or reconstruct the run
   -> restore native attachment or subscription
   -> replay from the provider position when supported
@@ -615,9 +624,10 @@ Provider message IDs, run IDs, and event sequences are used to deduplicate
 replay. When replay is unavailable or truncated, authoritative history replaces
 incremental state.
 
-Pending questions and approvals are reconstructed from native Session state or
-authoritative native replay. A browser reload therefore presents the same
-interrupt and can resume the same run.
+Pending questions and approvals are reconstructed from normalized history
+metadata, native Session state, or authoritative native replay. A browser
+reload therefore presents the same interrupt and can resume the same run
+without a public pending-interaction polling endpoint.
 
 ## Errors and availability
 
