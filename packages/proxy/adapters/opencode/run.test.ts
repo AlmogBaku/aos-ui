@@ -82,6 +82,7 @@ function controlledStream() {
   const values: OpenCodeDurableEvent[] = []
   const waiters: Array<() => void> = []
   let aborted = false
+  let delivered = 0
   let failure: unknown
   const abort = vi.fn(() => {
     aborted = true
@@ -93,6 +94,7 @@ function controlledStream() {
         if (failure) throw failure
         const value = values.shift()
         if (value) {
+          delivered += 1
           yield value
           continue
         }
@@ -104,6 +106,9 @@ function controlledStream() {
   return {
     source,
     abort,
+    get delivered() {
+      return delivered
+    },
     publish(value: OpenCodeDurableEvent) {
       values.push(value)
       waiters.shift()?.()
@@ -182,6 +187,159 @@ describe("OpenCodeRunEngine", () => {
     ).rejects.toThrow("Session does not belong to this Agent")
     expect(state.sessions.events).not.toHaveBeenCalled()
     expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
+  it("discovers and refreshes an authoritative pending interaction batch", async () => {
+    const first = controlledStream()
+    const second = controlledStream()
+    const sources = [first.source, second.source]
+    const order: string[] = []
+    const interrupt = {
+      id: "question-1",
+      reason: "question",
+      message: "Choose",
+      responseSchema: { type: "string", enum: ["yes", "no"] },
+    }
+    const discover = vi
+      .fn(async () => {
+        order.push("interactions")
+        return [interrupt]
+      })
+      .mockImplementationOnce(async () => {
+        order.push("interactions")
+        return [interrupt]
+      })
+      .mockImplementationOnce(async () => {
+        order.push("interactions")
+        return undefined
+      })
+    const state = client({
+      get: vi.fn(async () => {
+        order.push("ownership")
+        return { data: { id: scope.sessionId, agent: scope.agentId } }
+      }),
+      history: vi.fn(async () => {
+        order.push("history")
+        return { data: [], hasMore: false }
+      }),
+      events: vi.fn(async () => {
+        order.push("observation")
+        return sources.shift()!
+      }),
+    })
+    const engine = new OpenCodeRunEngine(state.native, {
+      resume: {
+        discover,
+        validate: vi.fn(async () => undefined),
+        dispatch: vi.fn(async () => undefined),
+      },
+    })
+
+    const waiting = await engine.discover(scope, "recovered-question")
+
+    expect(waiting?.state).toBe("waiting-for-input")
+    expect(waiting?.interrupts).toEqual([interrupt])
+    const waitingEvents = await collect(waiting!.handle)
+    expect(waitingEvents).toEqual([
+      {
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "recovered-question",
+      },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "recovered-question",
+        outcome: { type: "interrupt", interrupts: [interrupt] },
+      },
+    ])
+    expect(
+      waitingEvents.every((event) => EventSchemas.safeParse(event).success)
+    ).toBe(true)
+
+    await expect(engine.discover(scope, "cleared-question")).resolves.toBe(
+      undefined
+    )
+    expect(order).toEqual([
+      "ownership",
+      "history",
+      "observation",
+      "interactions",
+      "ownership",
+      "history",
+      "observation",
+      "interactions",
+    ])
+    expect(first.abort).toHaveBeenCalledOnce()
+    expect(second.abort).toHaveBeenCalledOnce()
+  })
+
+  it("releases discovery observation when the interaction read fails", async () => {
+    const failure = new Error("interaction authority unavailable")
+    const state = client()
+    const engine = new OpenCodeRunEngine(state.native, {
+      resume: {
+        discover: vi.fn(async () => Promise.reject(failure)),
+        validate: vi.fn(async () => undefined),
+        dispatch: vi.fn(async () => undefined),
+      },
+    })
+
+    await expect(engine.discover(scope, "failed-discovery")).rejects.toBe(
+      failure
+    )
+    expect(state.observation.abort).toHaveBeenCalledOnce()
+  })
+
+  it("repeats interaction discovery when a scoped event overlaps its read", async () => {
+    const firstRead = deferred()
+    const interrupt = {
+      id: "question-current",
+      reason: "question",
+      message: "Current question",
+      responseSchema: { type: "string" },
+    }
+    const discover = vi
+      .fn(async () => [interrupt])
+      .mockImplementationOnce(async () => {
+        await firstRead.promise
+        return [
+          {
+            id: "question-stale",
+            reason: "question",
+            message: "Stale question",
+            responseSchema: { type: "string" },
+          },
+        ]
+      })
+    const state = client()
+    const engine = new OpenCodeRunEngine(state.native, {
+      resume: {
+        discover,
+        validate: vi.fn(async () => undefined),
+        dispatch: vi.fn(async () => undefined),
+      },
+    })
+
+    const discovered = engine.discover(scope, "recovered-current-question")
+    await until(() => expect(discover).toHaveBeenCalledOnce())
+    state.observation.publish(
+      liveEvent(0, "session.next.prompt.admitted", {
+        timestamp: 0,
+        messageID: admission["run-1"],
+        prompt: { text: "Hello OpenCode" },
+        delivery: "queue",
+      })
+    )
+    await until(() => expect(state.observation.delivered).toBe(1))
+    firstRead.resolve()
+
+    await expect(discovered).resolves.toMatchObject({
+      state: "waiting-for-input",
+      interrupts: [interrupt],
+    })
+    expect(discover).toHaveBeenCalledTimes(2)
+    expect(state.observation.abort).toHaveBeenCalledOnce()
   })
 
   it("subscribes before prompt admission and finishes only after wait plus authoritative idle reconciliation", async () => {
@@ -968,6 +1126,90 @@ describe("OpenCodeRunEngine", () => {
       }),
     ])
     expect(first.abort).toHaveBeenCalledOnce()
+    expect(state.sessions.interrupt).toHaveBeenCalledOnce()
+  })
+
+  it("preserves a Stop acknowledged after its observation was replaced", async () => {
+    const first = controlledStream()
+    const second = controlledStream()
+    const interruptAcknowledgement = deferred()
+    const wait = deferred()
+    let subscriptionCount = 0
+    let running = false
+    const state = client({
+      events: vi.fn(async () => {
+        subscriptionCount += 1
+        return subscriptionCount === 1 ? first.source : second.source
+      }),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          running = true
+          return {
+            data: {
+              admittedSeq: 0,
+              id: request.id,
+              sessionID: scope.sessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+      interrupt: vi.fn(async () => interruptAcknowledgement.promise),
+      history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+        data:
+          subscriptionCount > 1 && (options?.after ?? -1) < 0
+            ? [admitted(0, admission["run-1"])]
+            : [],
+        hasMore: false,
+      })),
+      wait: vi.fn(async () => wait.promise),
+    })
+    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const prior = await engine.start(scope, input())
+    first.publish(
+      liveEvent(0, "session.next.prompt.admitted", {
+        timestamp: 0,
+        messageID: admission["run-1"],
+        prompt: { text: "Hello OpenCode" },
+        delivery: "queue",
+      })
+    )
+    await until(() => expect(prior.recoveryPosition().lastSeen).toBe(0))
+    first.fail()
+    await prior.settled
+
+    const stopped = prior.stop()
+    await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
+    const recovered = await engine.recover(scope, {
+      threadId: scope.threadId,
+      runId: "run-1",
+      position: {
+        epoch: `opencode:${scope.sessionId}`,
+        lastSeen: 0,
+      },
+    })
+    const recoveredEventsPromise = collect(recovered)
+
+    interruptAcknowledgement.resolve()
+    await expect(stopped).resolves.toBe("stopping")
+    running = false
+    wait.resolve()
+    await recovered.settled
+    const recoveredEvents = await recoveredEventsPromise
+
+    expect(
+      recoveredEvents.filter((event) => event.type === EventType.RUN_FINISHED)
+    ).toEqual([
+      expect.objectContaining({
+        type: EventType.RUN_FINISHED,
+        result: { stopped: true },
+      }),
+    ])
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 

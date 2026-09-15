@@ -4,6 +4,7 @@ import {
   EventType,
   RunAgentInputSchema,
   type AGUIEvent,
+  type Interrupt,
   type ResumeEntry,
 } from "@ag-ui/core"
 
@@ -37,6 +38,8 @@ const DEFAULT_MAX_BUFFERED_EVENTS = 1_024
 const DEFAULT_WAIT_RETRY_MS = 250
 
 export type OpenCodeBoundResume = Readonly<{
+  /** Reads and binds the complete authoritative pending interaction batch. */
+  discover?(scope: SessionScope): Promise<readonly Interrupt[] | undefined>
   /** Must prove every response is still bound to a pending native interaction. */
   validate(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
   /** Performs exactly one native 204 mutation after observation is attached. */
@@ -337,6 +340,82 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       options.waitRetryMs,
       DEFAULT_WAIT_RETRY_MS
     )
+  }
+
+  async discover(scope: SessionScope, runId: string) {
+    const discover = this.#options.resume?.discover
+    if (!discover) return undefined
+    await this.#verifyOwnership(scope)
+    const history = await this.#readHistory(scope.sessionId)
+    const after = history.at(-1)?.seq ?? -1
+    const controller = new AbortController()
+    let source: OpenCodeSessionEvents | undefined
+    let observation: Promise<void> | undefined
+    let observationFailed = false
+    let observationFailure: unknown
+    let reading = false
+    let dirty = false
+    try {
+      source = await this.#client.sessions.events(scope.sessionId, {
+        ...(after < 0 ? {} : { after: String(after) }),
+        signal: controller.signal,
+      })
+      observation = (async () => {
+        try {
+          for await (const value of source!) {
+            validateOpenCodeLiveEvent(value, scope.sessionId)
+            if (reading) dirty = true
+          }
+          if (!controller.signal.aborted)
+            throw new OpenCodeClientError("connection_interrupted")
+        } catch (error) {
+          if (controller.signal.aborted) return
+          observationFailed = true
+          observationFailure = error
+        }
+      })()
+      let discovered: readonly Interrupt[] | undefined
+      do {
+        dirty = false
+        reading = true
+        try {
+          discovered = await discover(scope)
+        } finally {
+          reading = false
+        }
+        if (observationFailed) throw observationFailure
+      } while (dirty)
+      if (!discovered?.length) return undefined
+      const interrupts = structuredClone([...discovered])
+      const events: AGUIEvent[] = [
+        { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: scope.threadId,
+          runId,
+          outcome: { type: "interrupt", interrupts },
+        },
+      ]
+      return {
+        state: "waiting-for-input" as const,
+        interrupts,
+        handle: {
+          events: (async function* () {
+            yield* events
+          })(),
+          settled: Promise.resolve(),
+          stop: async () => "idle" as const,
+          recoveryPosition: () => ({
+            epoch: "restored-interrupt",
+            lastSeen: 0,
+          }),
+        },
+      }
+    } finally {
+      controller.abort()
+      source?.abort()
+      await observation
+    }
   }
 
   async start(
@@ -877,7 +956,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     await this.#client.sessions.interrupt(run.scope.sessionId)
     run.nativeSettlement.stopRequested = true
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
-    run.projector.markStopping()
+    const current = this.#runs.get(run.key)
+    if (current?.nativeSettlement === run.nativeSettlement)
+      current.projector.markStopping()
+    else run.projector.markStopping()
     try {
       await this.#reconcile(run)
     } catch {
