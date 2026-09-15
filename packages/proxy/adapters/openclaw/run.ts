@@ -1,0 +1,1264 @@
+import {
+  EventType,
+  RunAgentInputSchema,
+  type AGUIEvent,
+  type RunAgentInput,
+  type TokenUsage,
+} from "@ag-ui/core"
+import { readSessionMessageIdentity } from "@openclaw/gateway-client"
+import {
+  validateChatHistoryParams,
+  validateChatSendParams,
+  validateSessionsAbortParams,
+  type EventFrame,
+} from "@openclaw/gateway-protocol"
+
+import {
+  ServerRunConflictError,
+  type RecoveryRequest,
+  type ServerRunEngine,
+  type ServerRunHandle,
+  type SessionScope,
+} from "../../core/runtime"
+import { OpenClawClientRequestError } from "./client"
+import {
+  OpenClawSessionSubscriptions,
+  type OpenClawSessionLease,
+} from "./subscriptions"
+
+const MAX_TURN_BYTES = 1_048_576
+const MAX_TEXT_BYTES = 2_000_000
+const MAX_QUEUE_EVENTS = 4_096
+const MAX_QUEUE_BYTES = 8_000_000
+const encoder = new TextEncoder()
+
+export type OpenClawRunRequestOptions = Readonly<{
+  signal?: AbortSignal
+  timeoutMs?: number | null
+  expectFinal?: boolean
+  onSent?: () => void
+  onAccepted?: (payload: unknown) => void
+}>
+
+export interface OpenClawRunRequestClient {
+  request<T>(
+    method: string,
+    params: Record<string, unknown>,
+    options?: OpenClawRunRequestOptions
+  ): Promise<T>
+}
+
+export class OpenClawRunPublicError extends Error {
+  constructor(
+    readonly code:
+      "AOS_PROVIDER_UNAVAILABLE" | "AOS_SEND_UNCERTAIN" | "AOS_STOP_UNCERTAIN",
+    message: string
+  ) {
+    super(message)
+    this.name = "OpenClawRunPublicError"
+  }
+}
+
+type QueueWaiter = (value: IteratorResult<AGUIEvent>) => void
+
+class EventQueue implements AsyncIterable<AGUIEvent> {
+  readonly #events: Array<{ event: AGUIEvent; bytes: number }> = []
+  readonly #waiters: QueueWaiter[] = []
+  readonly #onOverflow?: () => void
+  #bytes = 0
+  #closed = false
+
+  constructor(onOverflow?: () => void) {
+    this.#onOverflow = onOverflow
+  }
+
+  push(event: AGUIEvent) {
+    if (this.#closed) return false
+    let bytes: number
+    try {
+      bytes = encoder.encode(JSON.stringify(event)).byteLength
+    } catch {
+      this.#onOverflow?.()
+      return false
+    }
+    if (
+      this.#events.length >= MAX_QUEUE_EVENTS ||
+      bytes > MAX_QUEUE_BYTES - this.#bytes
+    ) {
+      this.#onOverflow?.()
+      return false
+    }
+    const waiter = this.#waiters.shift()
+    if (waiter) waiter({ done: false, value: event })
+    else {
+      this.#events.push({ event, bytes })
+      this.#bytes += bytes
+    }
+    return true
+  }
+
+  terminal(event: AGUIEvent) {
+    if (this.#closed) return
+    const waiter = this.#waiters.shift()
+    if (waiter) {
+      waiter({ done: false, value: event })
+      this.#closed = true
+      for (const pending of this.#waiters.splice(0))
+        pending({ done: true, value: undefined })
+      return
+    }
+    try {
+      const bytes = encoder.encode(JSON.stringify(event)).byteLength
+      if (
+        this.#events.length < MAX_QUEUE_EVENTS &&
+        bytes <= MAX_QUEUE_BYTES - this.#bytes
+      ) {
+        this.#events.push({ event, bytes })
+        this.#bytes += bytes
+      } else {
+        const started =
+          this.#events[0]?.event.type === EventType.RUN_STARTED
+            ? this.#events[0]
+            : undefined
+        this.#events.splice(0)
+        this.#bytes = 0
+        if (started) {
+          this.#events.push(started)
+          this.#bytes = started.bytes
+        }
+        if (bytes <= MAX_QUEUE_BYTES - this.#bytes) {
+          this.#events.push({ event, bytes })
+          this.#bytes += bytes
+        }
+      }
+    } catch {
+      // A terminal event is provider-private and constructed from bounded data.
+    }
+    this.#closed = true
+    for (const waiter of this.#waiters.splice(0))
+      waiter({ done: true, value: undefined })
+  }
+
+  close() {
+    if (this.#closed) return
+    this.#closed = true
+    for (const waiter of this.#waiters.splice(0))
+      waiter({ done: true, value: undefined })
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<AGUIEvent> {
+    return {
+      next: () => {
+        const entry = this.#events.shift()
+        if (entry) {
+          this.#bytes -= entry.bytes
+          return Promise.resolve({ done: false, value: entry.event })
+        }
+        if (this.#closed)
+          return Promise.resolve({ done: true, value: undefined })
+        return new Promise((resolve) => this.#waiters.push(resolve))
+      },
+    }
+  }
+}
+
+type OpenTool = { name: string; messageId: string; ended: boolean }
+
+type ActiveRun = {
+  scope: SessionScope
+  runId: string
+  nativeRunId: string
+  queue: EventQueue
+  lease: OpenClawSessionLease
+  terminal: boolean
+  stopping: boolean
+  uncertain: boolean
+  lastSeen: number
+  lastAgentSeq: number
+  lastChatSeq: number
+  gapPending: boolean
+  text: string
+  textGeneration: number
+  textStarted: boolean
+  reasoning: string
+  reasoningStarted: boolean
+  reasoningEnded: boolean
+  tools: Map<string, OpenTool>
+  usage?: TokenUsage[]
+  settled: Promise<void>
+  resolveSettled(): void
+}
+
+type HistorySnapshot = {
+  messages: unknown[]
+  hasActiveRun?: boolean
+  activeRunIds?: string[]
+  inFlightRun?: { runId: string; text?: string }
+}
+
+function settlement() {
+  let resolveSettled = () => {}
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve
+  })
+  return { settled, resolveSettled }
+}
+
+function validId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0
+}
+
+function scopeKey(scope: SessionScope) {
+  return `${scope.agentId}\u0000${scope.sessionId}`
+}
+
+function userText(input: RunAgentInput) {
+  const message = input.messages[0]
+  if (!message || message.role !== "user") return undefined
+  if (typeof message.content === "string") return message.content
+  if (!Array.isArray(message.content)) return undefined
+  let text = ""
+  for (const part of message.content) {
+    if (part.type !== "text") return undefined
+    text += part.text
+  }
+  return text
+}
+
+function boundedText(value: unknown) {
+  if (typeof value !== "string") return undefined
+  return encoder.encode(value).byteLength <= MAX_TEXT_BYTES ? value : undefined
+}
+
+function safeJson(value: unknown, fallback = "{}") {
+  try {
+    const json = JSON.stringify(value)
+    return typeof json === "string" &&
+      encoder.encode(json).byteLength <= 262_144
+      ? json
+      : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function safeClone(value: unknown) {
+  const json = safeJson(value, "")
+  if (!json) return undefined
+  try {
+    return JSON.parse(json) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function nonnegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function tokenUsage(value: unknown): TokenUsage[] | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
+  const outputTokens = nonnegativeInteger(record.outputTokens)
+  const inputTokens = nonnegativeInteger(record.inputTokens)
+  const totalTokens = nonnegativeInteger(record.totalTokens)
+  const reasoningTokens = nonnegativeInteger(record.reasoningTokens)
+  const usage = {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  }
+  return Object.keys(usage).length === 0 ? undefined : [usage]
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function messageText(value: unknown) {
+  const message = record(value)
+  if (!message) return undefined
+  if (typeof message.content === "string") return boundedText(message.content)
+  if (!Array.isArray(message.content)) return undefined
+  let text = ""
+  for (const part of message.content) {
+    const item = record(part)
+    if (item?.type !== "text" || typeof item.text !== "string") continue
+    text += item.text
+    if (encoder.encode(text).byteLength > MAX_TEXT_BYTES) return undefined
+  }
+  return text || undefined
+}
+
+function completedHistoryText(history: HistorySnapshot, runId: string) {
+  for (let index = history.messages.length - 1; index >= 0; index -= 1) {
+    const message = history.messages[index]
+    const identity = readSessionMessageIdentity(message)
+    if (
+      identity?.role !== "assistant" ||
+      identity.runId !== runId ||
+      identity.isImported
+    )
+      continue
+    return messageText(message)
+  }
+  return undefined
+}
+
+function validateHistory(value: unknown): HistorySnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.messages) || record.messages.length > 1_000)
+    return undefined
+  if (!record.sessionInfo || typeof record.sessionInfo !== "object")
+    return undefined
+  const info = record.sessionInfo as Record<string, unknown>
+  const hasActiveRun = info.hasActiveRun
+  if (hasActiveRun !== undefined && typeof hasActiveRun !== "boolean")
+    return undefined
+  const rawIds = info.activeRunIds
+  if (
+    rawIds !== undefined &&
+    (!Array.isArray(rawIds) ||
+      rawIds.length > 100 ||
+      !rawIds.every(validId) ||
+      new Set(rawIds).size !== rawIds.length)
+  )
+    return undefined
+  let inFlightRun: HistorySnapshot["inFlightRun"]
+  if (record.inFlightRun !== undefined) {
+    if (!record.inFlightRun || typeof record.inFlightRun !== "object")
+      return undefined
+    const native = record.inFlightRun as Record<string, unknown>
+    if (!validId(native.runId)) return undefined
+    const text =
+      native.text === undefined ? undefined : boundedText(native.text)
+    if (native.text !== undefined && text === undefined) return undefined
+    inFlightRun = {
+      runId: native.runId,
+      ...(text === undefined ? {} : { text }),
+    }
+  }
+  const activeRunIds = rawIds as string[] | undefined
+  if (
+    (hasActiveRun === false &&
+      (inFlightRun !== undefined || (activeRunIds?.length ?? 0) > 0)) ||
+    (hasActiveRun === true && activeRunIds?.length === 0) ||
+    (inFlightRun !== undefined &&
+      activeRunIds !== undefined &&
+      !activeRunIds.includes(inFlightRun.runId))
+  )
+    return undefined
+  return {
+    messages: record.messages,
+    ...(hasActiveRun === undefined ? {} : { hasActiveRun }),
+    ...(activeRunIds === undefined ? {} : { activeRunIds }),
+    ...(inFlightRun ? { inFlightRun } : {}),
+  }
+}
+
+function acceptedRunId(value: unknown) {
+  if (!value || typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
+  return record.status === "accepted" && validId(record.runId)
+    ? record.runId
+    : undefined
+}
+
+function finalAcknowledgement(value: unknown) {
+  if (!value || typeof value !== "object") return false
+  const record = value as Record<string, unknown>
+  return (
+    record.status === "ok" &&
+    (record.runId === undefined || validId(record.runId))
+  )
+}
+
+function requestWasSent(error: unknown, callbackObserved: boolean) {
+  return (
+    callbackObserved ||
+    (error instanceof OpenClawClientRequestError && error.requestSent)
+  )
+}
+
+function providerUnavailable() {
+  return new OpenClawRunPublicError(
+    "AOS_PROVIDER_UNAVAILABLE",
+    "OpenClaw is temporarily unavailable."
+  )
+}
+
+export class OpenClawRunEngine implements ServerRunEngine {
+  readonly #client: OpenClawRunRequestClient
+  readonly #subscriptions: OpenClawSessionSubscriptions
+  readonly #toolEvents: boolean
+  readonly #active = new Map<string, ActiveRun>()
+  readonly #admissions = new Set<string>()
+
+  constructor(options: {
+    client: OpenClawRunRequestClient
+    subscriptions: OpenClawSessionSubscriptions
+    toolEvents?: boolean
+  }) {
+    this.#client = options.client
+    this.#subscriptions = options.subscriptions
+    this.#toolEvents = options.toolEvents === true
+  }
+
+  async start(
+    scope: SessionScope,
+    candidate: Parameters<ServerRunEngine["start"]>[1]
+  ): Promise<ServerRunHandle> {
+    const input = RunAgentInputSchema.parse(candidate)
+    const text = userText(input)
+    if (
+      !validId(scope.agentId) ||
+      !validId(scope.sessionId) ||
+      input.threadId !== scope.threadId
+    )
+      throw new Error("AOS run scope does not match this Session")
+    if (
+      "resume" in candidate &&
+      candidate.resume !== undefined &&
+      candidate.resume.length > 0
+    )
+      throw new Error("OpenClaw interrupt responses are unavailable")
+    if (
+      input.messages.length !== 1 ||
+      text === undefined ||
+      !text.trim() ||
+      input.tools.length > 0 ||
+      input.context.length > 0 ||
+      Object.keys(input.state).length > 0 ||
+      Object.keys(input.forwardedProps).length > 0 ||
+      ("rewindSourceId" in candidate && candidate.rewindSourceId !== undefined)
+    )
+      throw new Error("AOS runs require exactly one authorized plain-text turn")
+    if (encoder.encode(text).byteLength > MAX_TURN_BYTES)
+      throw new Error("The AOS user turn is too large")
+
+    const key = scopeKey(scope)
+    if (this.#active.has(key) || this.#admissions.has(key))
+      throw new ServerRunConflictError()
+    this.#admissions.add(key)
+
+    let lease: OpenClawSessionLease | undefined
+    try {
+      const holder: { active?: ActiveRun } = {}
+      lease = await this.#subscriptions.acquire(
+        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        (event) => {
+          if (holder.active) this.#accept(holder.active, event)
+        },
+        () => {
+          const current = holder.active
+          if (current) {
+            current.lastSeen = 0
+            current.lastAgentSeq = -1
+            current.lastChatSeq = -1
+            void this.#reconcile(current).catch(() =>
+              this.#markInterrupted(current)
+            )
+          }
+        }
+      )
+      const baseline = await this.#history(scope)
+      if (!this.#authoritativelyIdle(baseline))
+        throw new ServerRunConflictError()
+
+      const queue = new EventQueue(() => {
+        if (holder.active)
+          this.#fail(
+            holder.active,
+            "AOS_RESET_REQUIRED",
+            "OpenClaw produced more live output than AOS can safely buffer."
+          )
+      })
+      queue.push({
+        type: EventType.RUN_STARTED,
+        threadId: input.threadId,
+        runId: input.runId,
+      })
+      const active: ActiveRun = {
+        scope,
+        runId: input.runId,
+        nativeRunId: input.runId,
+        queue,
+        lease,
+        terminal: false,
+        stopping: false,
+        uncertain: false,
+        lastSeen: 0,
+        lastAgentSeq: -1,
+        lastChatSeq: -1,
+        gapPending: false,
+        text: "",
+        textGeneration: 0,
+        textStarted: false,
+        reasoning: "",
+        reasoningStarted: false,
+        reasoningEnded: false,
+        tools: new Map(),
+        ...settlement(),
+      }
+      holder.active = active
+      this.#active.set(key, active)
+
+      const params = {
+        sessionKey: scope.sessionId,
+        agentId: scope.agentId,
+        message: text,
+        idempotencyKey: input.runId,
+      }
+      if (!validateChatSendParams(params))
+        throw new Error("Invalid OpenClaw chat.send request")
+
+      let sent = false
+      let admitted = false
+      let resolveAdmission = () => {}
+      let rejectAdmission: (error: unknown) => void = () => {}
+      const admission = new Promise<void>((resolve, reject) => {
+        resolveAdmission = resolve
+        rejectAdmission = reject
+      })
+      const request = this.#client
+        .request<unknown>("chat.send", params, {
+          expectFinal: true,
+          onSent: () => {
+            sent = true
+          },
+          onAccepted: (payload) => {
+            sent = true
+            const runId = acceptedRunId(payload)
+            if (runId !== active?.nativeRunId) {
+              rejectAdmission(
+                new OpenClawRunPublicError(
+                  "AOS_SEND_UNCERTAIN",
+                  "OpenClaw may have accepted this turn."
+                )
+              )
+              return
+            }
+            admitted = true
+            resolveAdmission()
+          },
+        })
+        .then((result) => {
+          if (!finalAcknowledgement(result))
+            throw new Error("Invalid OpenClaw final acknowledgement")
+          const runId = (result as Record<string, unknown>).runId
+          if (runId !== undefined && runId !== active?.nativeRunId)
+            throw new Error("OpenClaw acknowledged a different run")
+          if (!admitted) {
+            admitted = true
+            resolveAdmission()
+          }
+          if (active && !active.terminal)
+            void this.#reconcile(active).catch(() =>
+              this.#markInterrupted(active)
+            )
+        })
+        .catch((error: unknown) => {
+          if (!admitted) rejectAdmission(error)
+          else if (active && !active.terminal)
+            void this.#reconcile(active).catch(() =>
+              this.#markInterrupted(active)
+            )
+        })
+      void request
+
+      try {
+        await admission
+      } catch (error) {
+        if (requestWasSent(error, sent)) {
+          active.uncertain = true
+          this.#markUncertain(
+            active,
+            "AOS_SEND_UNCERTAIN",
+            "OpenClaw may have accepted this turn."
+          )
+          return this.#handle(active)
+        }
+        this.#active.delete(key)
+        await lease.release().catch(() => {})
+        active.queue.close()
+        active.resolveSettled()
+        throw providerUnavailable()
+      }
+      return this.#handle(active)
+    } catch (error) {
+      if (lease && !this.#active.has(key)) await lease.release().catch(() => {})
+      if (error instanceof ServerRunConflictError) throw error
+      if (error instanceof OpenClawRunPublicError) throw error
+      throw providerUnavailable()
+    } finally {
+      this.#admissions.delete(key)
+    }
+  }
+
+  async recover(
+    scope: SessionScope,
+    request: RecoveryRequest
+  ): Promise<ServerRunHandle> {
+    if (
+      !validId(scope.agentId) ||
+      !validId(scope.sessionId) ||
+      request.threadId !== scope.threadId ||
+      !validId(request.runId)
+    )
+      throw new Error("AOS recovery scope does not match this Session")
+    const key = scopeKey(scope)
+    const existing = this.#active.get(key)
+    if (existing) {
+      if (existing.runId !== request.runId) throw new ServerRunConflictError()
+      existing.queue.close()
+      existing.queue = new EventQueue(() =>
+        this.#fail(
+          existing,
+          "AOS_RESET_REQUIRED",
+          "OpenClaw produced more live output than AOS can safely buffer."
+        )
+      )
+      existing.queue.push({
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: request.runId,
+      })
+      await this.#reconcile(existing).catch(() =>
+        this.#markInterrupted(existing)
+      )
+      return this.#handle(existing)
+    }
+    if (this.#admissions.has(key)) throw new ServerRunConflictError()
+    this.#admissions.add(key)
+    let lease: OpenClawSessionLease | undefined
+    try {
+      const holder: { active?: ActiveRun } = {}
+      lease = await this.#subscriptions.acquire(
+        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        (event) => {
+          if (holder.active) this.#accept(holder.active, event)
+        },
+        () => {
+          const current = holder.active
+          if (current) {
+            current.lastSeen = 0
+            current.lastAgentSeq = -1
+            current.lastChatSeq = -1
+            void this.#reconcile(current).catch(() =>
+              this.#markInterrupted(current)
+            )
+          }
+        }
+      )
+      const queue = new EventQueue(() => {
+        if (holder.active)
+          this.#fail(
+            holder.active,
+            "AOS_RESET_REQUIRED",
+            "OpenClaw produced more live output than AOS can safely buffer."
+          )
+      })
+      queue.push({
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: request.runId,
+      })
+      const active: ActiveRun = {
+        scope,
+        runId: request.runId,
+        nativeRunId: request.runId,
+        queue,
+        lease,
+        terminal: false,
+        stopping: false,
+        uncertain: false,
+        lastSeen: request.position?.lastSeen ?? 0,
+        lastAgentSeq: -1,
+        lastChatSeq: -1,
+        gapPending: false,
+        text: "",
+        textGeneration: 0,
+        textStarted: false,
+        reasoning: "",
+        reasoningStarted: false,
+        reasoningEnded: false,
+        tools: new Map(),
+        ...settlement(),
+      }
+      holder.active = active
+      this.#active.set(key, active)
+      await this.#reconcile(active)
+      return this.#handle(active)
+    } catch (error) {
+      this.#active.delete(key)
+      await lease?.release().catch(() => {})
+      if (error instanceof ServerRunConflictError) throw error
+      throw providerUnavailable()
+    } finally {
+      this.#admissions.delete(key)
+    }
+  }
+
+  async #history(scope: SessionScope) {
+    const params = {
+      sessionKey: scope.sessionId,
+      agentId: scope.agentId,
+      limit: 200,
+      maxBytes: 1_000_000,
+    }
+    if (!validateChatHistoryParams(params))
+      throw new Error("Invalid OpenClaw chat.history request")
+    const history = validateHistory(
+      await this.#client.request<unknown>("chat.history", params)
+    )
+    if (!history) throw new Error("Invalid OpenClaw chat.history response")
+    return history
+  }
+
+  #authoritativelyIdle(history: HistorySnapshot) {
+    return (
+      history.hasActiveRun === false ||
+      (history.activeRunIds !== undefined &&
+        history.activeRunIds.length === 0 &&
+        history.inFlightRun === undefined)
+    )
+  }
+
+  #handle(active: ActiveRun): ServerRunHandle {
+    return {
+      events: active.queue,
+      settled: active.settled,
+      stop: () => this.#stop(active),
+      recoveryPosition: () => ({
+        epoch: String(this.#subscriptions.generation),
+        lastSeen: active.lastSeen,
+      }),
+    }
+  }
+
+  #accept(active: ActiveRun, event: EventFrame) {
+    if (active.terminal) return
+    const payload = record(event.payload)
+    if (!payload || payload.runId !== active.nativeRunId) return
+    if (typeof event.seq === "number") active.lastSeen = event.seq
+
+    const sequence = nonnegativeInteger(payload.seq)
+    if (sequence === undefined) return
+    const previous =
+      event.event === "agent" ? active.lastAgentSeq : active.lastChatSeq
+    if (sequence <= previous) return
+    if (previous >= 0 && sequence > previous + 1) {
+      if (!active.gapPending) {
+        active.gapPending = true
+        void this.#subscriptions
+          .replaceGeneration("gap")
+          .catch(() => this.#markInterrupted(active))
+          .finally(() => {
+            active.gapPending = false
+          })
+      }
+      return
+    }
+    if (event.event === "agent") active.lastAgentSeq = sequence
+    else if (event.event === "chat") active.lastChatSeq = sequence
+    else return
+
+    if (event.event === "chat") {
+      this.#acceptChat(active, payload)
+      return
+    }
+    this.#acceptAgent(active, payload)
+  }
+
+  #acceptChat(active: ActiveRun, payload: Record<string, unknown>) {
+    const usage = tokenUsage(payload.usage)
+    if (usage) active.usage = usage
+    if (payload.state === "status") {
+      const phase = boundedText(payload.phase)
+      if (phase)
+        this.#emitProgress(active, {
+          phase,
+          ...(safeClone(payload.retry) === undefined
+            ? {}
+            : { retry: safeClone(payload.retry) }),
+        })
+      return
+    }
+    if (payload.state === "delta") {
+      const delta = boundedText(payload.deltaText)
+      if (delta) {
+        if (payload.replace === true) this.#replaceText(active, delta)
+        else this.#appendText(active, delta)
+      }
+      return
+    }
+    if (payload.state === "final") {
+      const finalText = messageText(payload.message)
+      if (finalText !== undefined) {
+        const remaining = this.#remaining(active.text, finalText)
+        if (remaining === undefined) this.#replaceText(active, finalText)
+        else this.#appendText(active, remaining)
+      }
+      this.#finish(active)
+      return
+    }
+    if (payload.state === "aborted") {
+      this.#finish(active)
+      return
+    }
+    if (payload.state === "error")
+      this.#fail(
+        active,
+        "AOS_PROVIDER_RUN_FAILED",
+        "OpenClaw could not complete this run."
+      )
+  }
+
+  #acceptAgent(active: ActiveRun, payload: Record<string, unknown>) {
+    const stream = payload.stream
+    const data = record(payload.data)
+    if (typeof stream !== "string" || !data) return
+    if (stream === "thinking") {
+      const delta = boundedText(data.delta)
+      const cumulative = boundedText(data.text)
+      this.#appendReasoning(
+        active,
+        delta ?? this.#remaining(active.reasoning, cumulative)
+      )
+      return
+    }
+    if (stream === "assistant") {
+      const delta = boundedText(data.delta)
+      const cumulative = boundedText(data.text)
+      this.#appendText(
+        active,
+        delta ?? this.#remaining(active.text, cumulative)
+      )
+      return
+    }
+    if (stream === "run_status") {
+      const phase = boundedText(data.phase)
+      if (phase)
+        this.#emitProgress(active, {
+          phase,
+          ...(safeClone(data.retry) === undefined
+            ? {}
+            : { retry: safeClone(data.retry) }),
+        })
+      return
+    }
+    if (stream === "plan") {
+      const phase = boundedText(data.phase)
+      if (phase)
+        active.queue.push({
+          type: EventType.ACTIVITY_SNAPSHOT,
+          messageId: `${active.runId}:plan`,
+          activityType: "PLAN",
+          content: {
+            phase,
+            ...(Array.isArray(data.steps) && safeClone(data.steps) !== undefined
+              ? { steps: safeClone(data.steps) }
+              : {}),
+          },
+          replace: true,
+        })
+      return
+    }
+    if (stream === "item") {
+      const progressText = boundedText(data.progressText)
+      if (progressText) this.#emitProgress(active, { text: progressText })
+      return
+    }
+    if (stream === "usage") {
+      const usage = tokenUsage(data)
+      if (usage) active.usage = usage
+      return
+    }
+    if (stream === "tool") {
+      this.#acceptTool(active, data)
+      return
+    }
+    if (stream !== "lifecycle") return
+    if (data.phase === "end") this.#finish(active)
+    else if (data.phase === "error")
+      this.#fail(
+        active,
+        "AOS_PROVIDER_RUN_FAILED",
+        "OpenClaw could not complete this run."
+      )
+    else if (data.phase === "start" || data.phase === "finishing")
+      this.#emitProgress(active, { phase: data.phase })
+  }
+
+  #remaining(previous: string, cumulative: string | undefined) {
+    if (cumulative === undefined || !cumulative.startsWith(previous))
+      return undefined
+    return cumulative.slice(previous.length)
+  }
+
+  #appendReasoning(active: ActiveRun, delta: string | undefined) {
+    if (!delta) return
+    if (encoder.encode(active.reasoning + delta).byteLength > MAX_TEXT_BYTES) {
+      this.#fail(
+        active,
+        "AOS_RESET_REQUIRED",
+        "OpenClaw reasoning exceeded the safe stream boundary."
+      )
+      return
+    }
+    if (!active.reasoningStarted) {
+      active.reasoningStarted = true
+      const messageId = `${active.runId}:reasoning`
+      active.queue.push({ type: EventType.REASONING_START, messageId })
+      active.queue.push({
+        type: EventType.REASONING_MESSAGE_START,
+        messageId,
+        role: "reasoning",
+      })
+    }
+    active.reasoning += delta
+    active.queue.push({
+      type: EventType.REASONING_MESSAGE_CONTENT,
+      messageId: `${active.runId}:reasoning`,
+      delta,
+    })
+  }
+
+  #endReasoning(active: ActiveRun) {
+    if (!active.reasoningStarted || active.reasoningEnded) return
+    active.reasoningEnded = true
+    const messageId = `${active.runId}:reasoning`
+    active.queue.push({ type: EventType.REASONING_MESSAGE_END, messageId })
+    active.queue.push({ type: EventType.REASONING_END, messageId })
+  }
+
+  #appendText(active: ActiveRun, delta: string | undefined) {
+    if (!delta) return
+    if (encoder.encode(active.text + delta).byteLength > MAX_TEXT_BYTES) {
+      this.#fail(
+        active,
+        "AOS_RESET_REQUIRED",
+        "OpenClaw text exceeded the safe stream boundary."
+      )
+      return
+    }
+    this.#endReasoning(active)
+    const messageId = this.#messageId(active)
+    if (!active.textStarted) {
+      active.textStarted = true
+      active.queue.push({
+        type: EventType.TEXT_MESSAGE_START,
+        messageId,
+        role: "assistant",
+      })
+    }
+    active.text += delta
+    active.queue.push({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId,
+      delta,
+    })
+  }
+
+  #replaceText(active: ActiveRun, text: string) {
+    if (text === active.text) return
+    if (active.textStarted)
+      active.queue.push({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: this.#messageId(active),
+      })
+    active.textGeneration += 1
+    active.text = ""
+    active.textStarted = false
+    this.#appendText(active, text)
+  }
+
+  #messageId(active: ActiveRun) {
+    return active.textGeneration === 0
+      ? `${active.runId}:assistant`
+      : `${active.runId}:assistant:${active.textGeneration + 1}`
+  }
+
+  #emitProgress(active: ActiveRun, content: Record<string, unknown>) {
+    active.queue.push({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: `${active.runId}:progress`,
+      activityType: "OPENCLAW_PROGRESS",
+      content,
+      replace: true,
+    })
+  }
+
+  #acceptTool(active: ActiveRun, data: Record<string, unknown>) {
+    const toolCallId = validId(data.toolCallId) ? data.toolCallId : undefined
+    if (!toolCallId) return
+    if (data.phase === "start") {
+      if (active.tools.has(toolCallId)) return
+      const name = validId(data.name) ? data.name : "tool"
+      const tool = {
+        name,
+        messageId: this.#messageId(active),
+        ended: false,
+      }
+      active.tools.set(toolCallId, tool)
+      active.queue.push({
+        type: EventType.TOOL_CALL_START,
+        toolCallId,
+        toolCallName: name,
+        parentMessageId: tool.messageId,
+      })
+      active.queue.push({
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId,
+        delta: this.#toolEvents ? safeJson(data.args) : "{}",
+      })
+      return
+    }
+    if (
+      data.phase === "input_delta" ||
+      data.phase === "update" ||
+      data.phase === "review"
+    ) {
+      const detail = this.#toolEvents
+        ? safeClone(
+            data.phase === "input_delta"
+              ? data.diff
+              : data.phase === "update"
+                ? data.partialResult
+                : data.review
+          )
+        : undefined
+      active.queue.push({
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: `${active.runId}:tool-progress:${toolCallId}`,
+        activityType: "OPENCLAW_TOOL_PROGRESS",
+        content: {
+          phase: data.phase,
+          toolCallId,
+          ...(validId(data.name) ? { name: data.name } : {}),
+          ...(detail === undefined ? {} : { detail }),
+        },
+        replace: true,
+      })
+      return
+    }
+    if (data.phase !== "result") return
+    let tool = active.tools.get(toolCallId)
+    if (!tool) {
+      const name = validId(data.name) ? data.name : "tool"
+      tool = {
+        name,
+        messageId: this.#messageId(active),
+        ended: false,
+      }
+      active.tools.set(toolCallId, tool)
+      active.queue.push({
+        type: EventType.TOOL_CALL_START,
+        toolCallId,
+        toolCallName: name,
+        parentMessageId: tool.messageId,
+      })
+      active.queue.push({
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId,
+        delta: "{}",
+      })
+    }
+    if (tool.ended) return
+    tool.ended = true
+    active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+    active.queue.push({
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: `${active.runId}:tool:${toolCallId}`,
+      toolCallId,
+      content: this.#toolEvents
+        ? safeJson(data.result)
+        : safeJson({ status: "completed", isError: data.isError === true }),
+      role: "tool",
+    })
+  }
+
+  async #reconcile(active: ActiveRun) {
+    if (active.terminal || this.#active.get(scopeKey(active.scope)) !== active)
+      return
+    const history = await this.#history(active.scope)
+    if (active.terminal) return
+    const exactInFlight = history.inFlightRun?.runId === active.nativeRunId
+    if (exactInFlight) {
+      this.#appendText(
+        active,
+        this.#remaining(active.text, history.inFlightRun?.text)
+      )
+    }
+    if (
+      exactInFlight ||
+      history.activeRunIds?.includes(active.nativeRunId) === true
+    ) {
+      active.uncertain = false
+      return
+    }
+    if (history.hasActiveRun === false || history.activeRunIds !== undefined) {
+      this.#appendText(
+        active,
+        this.#remaining(
+          active.text,
+          completedHistoryText(history, active.nativeRunId)
+        )
+      )
+      this.#finish(active)
+      return
+    }
+    this.#fail(
+      active,
+      "AOS_RESET_REQUIRED",
+      "OpenClaw history could not authoritatively reconcile this run."
+    )
+  }
+
+  async #stop(active: ActiveRun): Promise<"stopping" | "idle"> {
+    if (active.terminal) return "idle"
+    if (active.uncertain)
+      throw new OpenClawRunPublicError(
+        "AOS_STOP_UNCERTAIN",
+        "OpenClaw may have accepted the Stop request."
+      )
+    if (active.stopping) return "stopping"
+    active.stopping = true
+    const params = {
+      key: active.scope.sessionId,
+      agentId: active.scope.agentId,
+      runId: active.nativeRunId,
+    }
+    if (!validateSessionsAbortParams(params))
+      throw new Error("Invalid OpenClaw sessions.abort request")
+    let sent = false
+    try {
+      const result = await this.#client.request<unknown>(
+        "sessions.abort",
+        params,
+        {
+          onSent: () => {
+            sent = true
+          },
+        }
+      )
+      const acknowledgement = record(result)
+      const status = acknowledgement?.status
+      const abortedRunId = acknowledgement?.abortedRunId
+      if (
+        acknowledgement?.ok !== true ||
+        (status !== "aborted" && status !== "no-active-run") ||
+        (status === "aborted" && !validId(abortedRunId)) ||
+        (status === "no-active-run" && abortedRunId !== null)
+      )
+        throw new Error("Invalid OpenClaw sessions.abort acknowledgement")
+      if (status === "no-active-run") {
+        this.#finish(active)
+        return "idle"
+      }
+      if (abortedRunId !== active.nativeRunId)
+        throw new Error("OpenClaw aborted a different run")
+      return "stopping"
+    } catch (error) {
+      if (requestWasSent(error, sent)) {
+        active.uncertain = true
+        throw new OpenClawRunPublicError(
+          "AOS_STOP_UNCERTAIN",
+          "OpenClaw may have accepted the Stop request."
+        )
+      }
+      active.stopping = false
+      throw providerUnavailable()
+    }
+  }
+
+  #markInterrupted(active: ActiveRun) {
+    if (active.terminal || active.uncertain) return
+    this.#markUncertain(
+      active,
+      "AOS_CONNECTION_INTERRUPTED",
+      "OpenClaw connection was interrupted."
+    )
+  }
+
+  #markUncertain(active: ActiveRun, code: string, message: string) {
+    if (active.terminal) return
+    active.uncertain = true
+    active.queue.push({ type: EventType.RUN_ERROR, code, message })
+    active.queue.close()
+  }
+
+  #finish(active: ActiveRun) {
+    if (active.terminal) return
+    active.terminal = true
+    this.#endReasoning(active)
+    for (const [toolCallId, tool] of active.tools) {
+      if (tool.ended) continue
+      tool.ended = true
+      active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+      active.queue.push({
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: `${active.runId}:tool:${toolCallId}`,
+        toolCallId,
+        content: safeJson({
+          status: active.stopping ? "stopped" : "completed",
+        }),
+        role: "tool",
+      })
+    }
+    if (active.textStarted)
+      active.queue.push({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: this.#messageId(active),
+      })
+    active.queue.terminal({
+      type: EventType.RUN_FINISHED,
+      threadId: active.scope.threadId,
+      runId: active.runId,
+      outcome: { type: "success" },
+      ...(active.stopping ? { result: { stopped: true } } : {}),
+      ...(active.usage ? { usage: active.usage } : {}),
+    })
+    this.#active.delete(scopeKey(active.scope))
+    void active.lease.release().catch(() => {})
+    active.resolveSettled()
+  }
+
+  #fail(active: ActiveRun, code: string, message: string) {
+    if (active.terminal) return
+    active.terminal = true
+    this.#endReasoning(active)
+    for (const [toolCallId, tool] of active.tools) {
+      if (tool.ended) continue
+      tool.ended = true
+      active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+      active.queue.push({
+        type: EventType.TOOL_CALL_RESULT,
+        messageId: `${active.runId}:tool:${toolCallId}`,
+        toolCallId,
+        content: safeJson({ status: "error" }),
+        role: "tool",
+      })
+    }
+    if (active.textStarted)
+      active.queue.push({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: this.#messageId(active),
+      })
+    active.queue.terminal({
+      type: EventType.RUN_ERROR,
+      code,
+      message,
+      ...(active.usage ? { usage: active.usage } : {}),
+    })
+    this.#active.delete(scopeKey(active.scope))
+    void active.lease.release().catch(() => {})
+    active.resolveSettled()
+  }
+}
