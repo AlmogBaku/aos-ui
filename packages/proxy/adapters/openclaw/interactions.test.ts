@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import * as GatewayProtocol from "@openclaw/gateway-protocol"
 import {
   OpenClawInteractions,
   OpenClawInteractionPublicError,
@@ -33,6 +34,11 @@ const question = {
       isSecret: true,
     },
   ],
+}
+function withoutCreatedAt(value: typeof question) {
+  const incomplete: Partial<typeof question> = { ...value }
+  delete incomplete.createdAtMs
+  return incomplete
 }
 const approvalRecord = {
   id: "approval-a",
@@ -72,6 +78,74 @@ const resolvedQuestion = [
   },
 ]
 describe("OpenClaw interactions", () => {
+  it.each([
+    ["missing creation time", withoutCreatedAt],
+    [
+      "negative creation time",
+      (value: typeof question) => ({ ...value, createdAtMs: -1 }),
+    ],
+    [
+      "negative expiry",
+      (value: typeof question) => ({ ...value, expiresAtMs: -1 }),
+    ],
+  ])("rejects an impossible question record with %s", (_label, alter) => {
+    const interactions = new OpenClawInteractions({ request: vi.fn() })
+
+    expect(() =>
+      interactions.acceptQuestion(scope, alter(question))
+    ).toThrowError(
+      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    )
+  })
+
+  it("validates the complete question list before applying scope filters", async () => {
+    const impossible = withoutCreatedAt(question)
+    const interactions = new OpenClawInteractions({
+      request: vi.fn(async () => ({
+        questions: [{ ...impossible, agentId: "foreign" }],
+      })),
+    })
+
+    await expect(
+      interactions.discover(
+        { ...resumeScope, nativeRunId: "run-a" },
+        approvalReplay
+      )
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+  })
+
+  it("rejects a malformed authoritative question get result before resolve", async () => {
+    const request = vi.fn(async () => ({
+      question: { ...question, impossible: true },
+    }))
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    await expect(
+      interactions.respond(scope, resolvedQuestion)
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects a malformed question resolve acknowledgement", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question }
+        : {
+            status: "answered",
+            answers: resolvedQuestion[0].payload,
+            impossible: true,
+          }
+    )
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    await expect(
+      interactions.respond(scope, resolvedQuestion)
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
   it("normalizes approval choices without exposing native decisions", () => {
     const interactions = new OpenClawInteractions({ request: vi.fn() })
 
@@ -269,6 +343,11 @@ describe("OpenClaw interactions", () => {
         kind: "plugin",
         decision: native,
       })
+      expect(
+        GatewayProtocol.validateApprovalResolveParams(
+          request.mock.calls.at(-1)?.[1]
+        )
+      ).toBe(true)
     }
   )
 

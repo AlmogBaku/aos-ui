@@ -4,8 +4,13 @@ import {
   type RunFinishedInterruptOutcome,
 } from "@ag-ui/core"
 import {
+  QuestionGetResultSchema,
+  QuestionListResultSchema,
+  QuestionRecordSchema,
+  QuestionResolveResultSchema,
   SessionApprovalReplaySchema,
   validateApprovalGetResult,
+  validateApprovalResolveParams,
   validateApprovalResolveResult,
   validateQuestionResolveParams,
 } from "@openclaw/gateway-protocol"
@@ -123,7 +128,7 @@ function record(
   raw: unknown,
   pendingOnly = true
 ) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) bad()
+  if (!Check(QuestionRecordSchema, raw)) bad()
   const r = raw as Record<string, unknown>,
     requestId = id(r.id)
   if (
@@ -135,6 +140,7 @@ function record(
       r.status as string
     ) ||
     (pendingOnly && r.status !== "pending") ||
+    !Number.isSafeInteger(r.createdAtMs) ||
     !Number.isSafeInteger(r.expiresAtMs) ||
     !Array.isArray(r.questions) ||
     r.questions.length < 1 ||
@@ -296,12 +302,7 @@ export class OpenClawInteractions {
         runId: scope.nativeRunId,
       },
       listed = await this.transport.request("question.list", {})
-    if (
-      !listed ||
-      typeof listed !== "object" ||
-      !Array.isArray((listed as Record<string, unknown>).questions)
-    )
-      bad()
+    if (!Check(QuestionListResultSchema, listed)) bad()
     const candidates: Array<
       | { kind: "question"; value: unknown }
       | { kind: "approval"; value: unknown }
@@ -443,12 +444,7 @@ export class OpenClawInteractions {
   }
   async reconcile(scope: OpenClawInteractionScope) {
     const qs = await this.transport.request("question.list", {})
-    if (
-      !qs ||
-      typeof qs !== "object" ||
-      !Array.isArray((qs as Record<string, unknown>).questions)
-    )
-      bad()
+    if (!Check(QuestionListResultSchema, qs)) bad()
     const outcomes: RunFinishedInterruptOutcome[] = []
     for (const q of (qs as { questions: unknown[] }).questions) {
       if (!q || typeof q !== "object" || Array.isArray(q)) bad()
@@ -595,9 +591,11 @@ export class OpenClawInteractions {
         (candidate) => candidate.normalized === normalized
       )?.native
     if (!decision) invalid()
+    const params = { id: p.id, kind: p.nativeKind, decision }
+    if (!validateApprovalResolveParams(params)) bad()
     return {
       method: "approval.resolve" as const,
-      params: { id: p.id, kind: p.nativeKind, decision },
+      params,
       decision,
     }
   }
@@ -608,19 +606,20 @@ export class OpenClawInteractions {
       p.kind === "question" ? "question.get" : "approval.get",
       { id: p.id }
     )
-    if (!value || typeof value !== "object") bad()
-    const item = (value as Record<string, unknown>)[
-      p.kind === "question" ? "question" : "approval"
-    ] as Record<string, unknown> | undefined
-    if (!item || item.id !== p.id) bad()
     if (p.kind === "question") {
-      const authoritative = record(p.scope, item, false)
+      if (!Check(QuestionGetResultSchema, value)) bad()
+      if (value.question.id !== p.id) bad()
+      const authoritative = record(p.scope, value.question, false)
       return authoritative.status === "pending"
         ? undefined
         : authoritative.status === "expired"
           ? { status: "expired" }
           : { status: "already-resolved" }
     }
+    if (!value || typeof value !== "object") bad()
+    const item = (value as Record<string, unknown>).approval as
+      Record<string, unknown> | undefined
+    if (!item || item.id !== p.id) bad()
     const approval = item!
     if (!validateApprovalGetResult({ approval })) bad()
     const source = approval.source as Record<string, unknown> | undefined
@@ -643,7 +642,7 @@ export class OpenClawInteractions {
     value: unknown,
     expected?: Record<string, string[]>
   ): OpenClawInteractionResult {
-    if (!value || typeof value !== "object") bad()
+    if (!Check(QuestionResolveResultSchema, value)) bad()
     const r = value as Record<string, unknown>
     if (r.status === "cancelled" && expected === undefined)
       return { status: "resolved" }
