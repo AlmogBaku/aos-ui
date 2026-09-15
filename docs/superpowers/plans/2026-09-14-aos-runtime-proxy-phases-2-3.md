@@ -25,12 +25,18 @@ first and then the already-developed OpenClaw adapter.
 
 ## Frozen surfaces and constraints
 
-- Before any provider-adapter work, every provider lead and leaf must load
-  `.agents/skills/aos-runtime-adapter/SKILL.md` and follow its required reading:
-  `AGENTS.md`, the adapter authoring guide, both normative gateway design
-  documents, the selected runtime guide, and its research. Each handoff must
-  include the skill-required native capability/lifecycle matrix, native
-  evidence, changed mappings, verification, and unavailable capabilities.
+- **AOS skill gate:** before changing adapter or shared integration code, the
+  main integration agent, every provider lead, and every provider leaf must
+  load `.agents/skills/aos-runtime-adapter/SKILL.md` from this worktree. The
+  generic assistant-ui `runtime` or `streaming` skills do not satisfy this
+  requirement.
+- Each of those agents must then read `AGENTS.md`,
+  `docs/development/runtime-adapter-authoring.md`, both normative gateway
+  design documents, the selected runtime guide, and the selected runtime
+  research. Before implementation fan-out, the provider lead records the
+  skill-required native capability/lifecycle matrix and freezes the tested
+  client facade. Each handoff reports native evidence, changed mappings,
+  verification, and capabilities intentionally left unavailable.
 - Load `.agents/skills/aos-deploy/SKILL.md` only if the operator separately
   authorizes an actual production deployment. Compose templates and deployment
   tests in this plan are repository implementation, not permission to mutate a
@@ -139,9 +145,10 @@ Each leaf starts from its provider's tested foundation checkpoint in an
 isolated worktree and returns one tested commit. The provider lead integrates
 the leaves and exclusively edits `adapter.ts` and `factory.ts`. A leaf reports
 a missing shared operation to the main agent rather than editing shared files.
-Every dispatch brief repeats the `aos-runtime-adapter` skill path and its
-required evidence contract; inheriting a parent agent's context does not count
-as loading the skill.
+Every dispatch brief repeats the worktree-local `aos-runtime-adapter` skill
+path, required reading, and evidence contract. Inheriting a parent agent's
+context or loading an assistant-ui skill does not count as loading the AOS
+skill.
 
 ## Phase 2: OpenCode
 
