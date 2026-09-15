@@ -206,26 +206,22 @@ describe("OpenClaw interactions", () => {
 
   it.each([
     ["absent", undefined],
+    ["invalid", {}],
+    ["foreign", { ...approvalReplay, sessionKey: "foreign" }],
     ["truncated", { ...approvalReplay, truncated: true }],
   ])(
-    "keeps exact question discovery eligible when approval replay is %s",
+    "requires a complete approval replay before question discovery when replay is %s",
     async (_label, replay) => {
-      const request = vi.fn(async (method: string) =>
-        method === "question.list" ? { questions: [question] } : { question }
-      )
+      const request = vi.fn(async () => ({ questions: [question] }))
       const interactions = new OpenClawInteractions({ request })
 
       await expect(
         interactions.discover({ ...resumeScope, nativeRunId: "run-a" }, replay)
-      ).resolves.toMatchObject({
-        outcome: {
-          type: "interrupt",
-          interrupts: [{ id: "q", reason: "question" }],
-        },
-      })
+      ).resolves.toBeUndefined()
       await expect(
         interactions.validate(resumeScope, resolvedQuestion)
-      ).resolves.toEqual({ runId: "run-a" })
+      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+      expect(request).not.toHaveBeenCalled()
     }
   )
 
@@ -372,13 +368,13 @@ describe("OpenClaw interactions", () => {
       "a truncated replay",
       { ...approvalReplay, truncated: true },
       [] as unknown[],
-      1,
+      0,
     ],
     [
       "a foreign replay",
       { ...approvalReplay, sessionKey: "foreign" },
       [] as unknown[],
-      1,
+      0,
     ],
     [
       "a foreign approval source",
