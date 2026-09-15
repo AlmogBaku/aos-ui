@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeInteractions } from "./interactions"
 
 const scope = {
@@ -188,5 +189,44 @@ describe("OpenCodeInteractions", () => {
       ])
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
     expect(reply).not.toHaveBeenCalled()
+  })
+
+  it("does not redispatch an uncertain response when reconciliation still lists the interaction", async () => {
+    const reply = vi.fn(async () => {
+      throw new OpenCodeMutationUncertainError()
+    })
+    const interactions = new OpenCodeInteractions({
+      questions: { reply, reject: vi.fn(async () => undefined) },
+      permissions: { reply: vi.fn(async () => undefined) },
+    })
+    const question = {
+      id: "question-1",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "A",
+          question: "A?",
+          options: [{ label: "Yes", description: "Y" }],
+        },
+      ],
+    }
+    const response = [
+      {
+        interruptId: "question-1",
+        status: "resolved",
+        payload: [["option-1"]],
+      },
+    ]
+    interactions.acceptQuestion(scope, question)
+
+    await expect(interactions.respond(scope, response)).rejects.toMatchObject({
+      code: "AOS_MUTATION_UNCERTAIN",
+    })
+    interactions.reconcile(scope, { questions: [question], permissions: [] })
+
+    await expect(interactions.respond(scope, response)).resolves.toEqual({
+      status: "in-progress",
+    })
+    expect(reply).toHaveBeenCalledTimes(1)
   })
 })

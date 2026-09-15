@@ -199,11 +199,24 @@ export class OpenCodeInteractions {
     if (!Array.isArray(qs) || !Array.isArray(ps))
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
     const previous = new Map(this.#pending)
+    const dispatching = new Set(
+      [...this.#pending]
+        .filter(
+          ([, pending]) =>
+            identity(pending.scope) === identity(s) &&
+            pending.state === "dispatching"
+        )
+        .map(([k]) => k)
+    )
     try {
       for (const [k, v] of this.#pending)
         if (identity(v.scope) === identity(s)) this.#pending.delete(k)
       for (const q of qs) this.acceptQuestion(scope, q)
       for (const p of ps) this.acceptPermission(scope, p)
+      for (const k of dispatching) {
+        const pending = this.#pending.get(k)
+        if (pending) pending.state = "dispatching"
+      }
     } catch (error) {
       this.#pending.clear()
       for (const [k, value] of previous) this.#pending.set(k, value)
