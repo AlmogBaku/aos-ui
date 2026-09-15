@@ -345,18 +345,24 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
         status: "unavailable",
         reason: "runtime-does-not-advertise-slash-commands",
       }),
-    models: z.strictObject({
-      status: z.literal("available"),
-      scope: z.literal("attached-session"),
-      selection: z.literal("native-session"),
-      choices: z.literal("provider-reported"),
-    }),
-    context: z.strictObject({
-      status: z.literal("available"),
-      scope: z.literal("attached-session"),
-      source: z.literal("provider-usage-or-estimate"),
-      breakdown: z.literal("provider-categories"),
-    }),
+    models: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-session"),
+        selection: z.literal("native-session"),
+        choices: z.literal("provider-reported"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    context: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-session"),
+        source: z.literal("provider-usage-or-estimate"),
+        breakdown: z.literal("provider-categories"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
     todos: z.union([
       z.strictObject({
         status: z.literal("available"),

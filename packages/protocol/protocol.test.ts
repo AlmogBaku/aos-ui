@@ -93,6 +93,32 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
+  it("preserves unavailable model and context operations", () => {
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.shape.workspace
+        .pick({ models: true, context: true })
+        .parse({
+          models: {
+            status: "unavailable",
+            reason: "native-model-selection-unavailable",
+          },
+          context: {
+            status: "unavailable",
+            reason: "native-context-accounting-unavailable",
+          },
+        })
+    ).toEqual({
+      models: {
+        status: "unavailable",
+        reason: "native-model-selection-unavailable",
+      },
+      context: {
+        status: "unavailable",
+        reason: "native-context-accounting-unavailable",
+      },
+    })
+  })
+
   it("preserves negotiated attachment limits without inventing provider policy", () => {
     const parsed =
       SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
