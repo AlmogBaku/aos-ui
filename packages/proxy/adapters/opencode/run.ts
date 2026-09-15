@@ -854,8 +854,6 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     if (run.segmentClosed) {
       run.nativeSettlement.stopRequested = true
       this.#monitorNativeSettlement(run.nativeSettlement)
-      await run.nativeSettlement.settled
-      return "idle"
     }
     return "stopping"
   }

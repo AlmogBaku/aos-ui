@@ -650,12 +650,18 @@ describe("OpenCodeRunEngine", () => {
     ])
   })
 
-  it("keeps a post-reset Stop pending until timer reconciliation proves native idle", async () => {
+  it("returns stopping during an active-read outage and settles later without another interrupt", async () => {
     let running = false
+    let activeUnavailable = false
+    let idleProofReads = 0
     const state = client({
-      active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
-      })),
+      active: vi.fn(async () => {
+        if (activeUnavailable) throw new Error("active unavailable")
+        if (!running) idleProofReads += 1
+        return {
+          data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        }
+      }),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
           running = true
@@ -671,9 +677,7 @@ describe("OpenCodeRunEngine", () => {
           }
         }
       ),
-      wait: vi.fn(async () => {
-        throw new Error("operation unavailable")
-      }),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
     })
     const handle = await new OpenCodeRunEngine(state.native, {
       waitRetryMs: 1,
@@ -690,16 +694,25 @@ describe("OpenCodeRunEngine", () => {
     state.observation.fail()
     await until(() => expect(state.observation.abort).toHaveBeenCalled())
 
+    activeUnavailable = true
     const stopped = handle.stop()
-    let resolved = false
-    void stopped.then(() => {
-      resolved = true
-    })
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    expect(resolved).toBe(false)
-    running = false
+    const immediate = await Promise.race([
+      stopped,
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 100)
+      ),
+    ])
 
-    await expect(stopped).resolves.toBe("idle")
+    idleProofReads = 0
+    activeUnavailable = false
+    running = false
+    await until(() => expect(idleProofReads).toBeGreaterThanOrEqual(2))
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const settled = await handle.stop()
+
+    expect(immediate).toBe("stopping")
+    await expect(stopped).resolves.toBe("stopping")
+    expect(settled).toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
@@ -839,7 +852,7 @@ describe("OpenCodeRunEngine", () => {
 
     const stopped = prior.stop()
     await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
-    await engine.recover(scope, {
+    const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
       runId: "run-1",
       position: {
@@ -849,15 +862,10 @@ describe("OpenCodeRunEngine", () => {
     })
     running = false
     wait.resolve()
+    await recovered.settled
 
-    await expect(
-      Promise.race([
-        stopped,
-        new Promise<"timed-out">((resolve) =>
-          setTimeout(() => resolve("timed-out"), 100)
-        ),
-      ])
-    ).resolves.toBe("idle")
+    await expect(stopped).resolves.toBe("stopping")
+    await expect(recovered.stop()).resolves.toBe("idle")
     expect(first.abort).toHaveBeenCalledOnce()
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
