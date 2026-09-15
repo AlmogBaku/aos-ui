@@ -840,9 +840,11 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   }
 
   async #stop(run: ActiveRun): Promise<"stopping" | "idle"> {
-    if (run.nativeTerminal) return "idle"
+    if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
+    if (run.nativeSettlement.stopRequested) return this.#recheckStop(run)
     await this.#client.sessions.interrupt(run.scope.sessionId)
-    if (run.nativeTerminal) return "idle"
+    run.nativeSettlement.stopRequested = true
+    if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     run.projector.markStopping()
     try {
       await this.#reconcile(run)
@@ -850,11 +852,23 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       // The interrupt acknowledgement is authoritative. A failed read cannot
       // make this Stop safe to retry or prove the native Session idle.
     }
-    if (run.nativeTerminal) return "idle"
-    if (run.segmentClosed) {
-      run.nativeSettlement.stopRequested = true
-      this.#monitorNativeSettlement(run.nativeSettlement)
+    if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
+    this.#monitorNativeSettlement(run.nativeSettlement)
+    return "stopping"
+  }
+
+  async #recheckStop(run: ActiveRun): Promise<"stopping" | "idle"> {
+    if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
+    try {
+      if (!(await this.#active(run.scope.sessionId))) {
+        this.#settleNative(run.nativeSettlement)
+        return "idle"
+      }
+    } catch {
+      // An unavailable status read cannot prove idle or justify another
+      // interrupt after the original mutation was acknowledged.
     }
+    this.#monitorNativeSettlement(run.nativeSettlement)
     return "stopping"
   }
 

@@ -653,11 +653,9 @@ describe("OpenCodeRunEngine", () => {
   it("returns stopping during an active-read outage and settles later without another interrupt", async () => {
     let running = false
     let activeUnavailable = false
-    let idleProofReads = 0
     const state = client({
       active: vi.fn(async () => {
         if (activeUnavailable) throw new Error("active unavailable")
-        if (!running) idleProofReads += 1
         return {
           data: running ? { [scope.sessionId]: { type: "running" } } : {},
         }
@@ -703,11 +701,8 @@ describe("OpenCodeRunEngine", () => {
       ),
     ])
 
-    idleProofReads = 0
     activeUnavailable = false
     running = false
-    await until(() => expect(idleProofReads).toBeGreaterThanOrEqual(2))
-    await new Promise((resolve) => setTimeout(resolve, 5))
     const settled = await handle.stop()
 
     expect(immediate).toBe("stopping")
