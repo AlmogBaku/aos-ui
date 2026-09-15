@@ -11,7 +11,17 @@ function requestClient() {
     async request<T>(method: string, params: Record<string, unknown>) {
       calls.push({ method, params })
       return (
-        method === "sessions.messages.subscribe" ? { key: params.key } : {}
+        method === "sessions.messages.subscribe"
+          ? {
+              key: params.key,
+              approvalReplay: {
+                sessionKey: params.key,
+                updatedAtMs: 1,
+                approvals: [],
+                truncated: false,
+              },
+            }
+          : {}
       ) as T
     },
   }
@@ -35,18 +45,34 @@ describe("OpenClaw Session subscriptions", () => {
     expect(calls).toEqual([
       {
         method: "sessions.messages.subscribe",
-        params: { key: "agent:research:main", agentId: "research" },
+        params: {
+          key: "agent:research:main",
+          agentId: "research",
+          includeApprovals: true,
+        },
+      },
+      {
+        method: "sessions.messages.subscribe",
+        params: {
+          key: "agent:research:main",
+          agentId: "research",
+          includeApprovals: true,
+        },
       },
     ])
 
     await first.release()
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
     await second.release()
     expect(calls).toEqual([
       calls[0],
+      calls[1],
       {
         method: "sessions.messages.unsubscribe",
-        params: { key: "agent:research:main", agentId: "research" },
+        params: {
+          key: "agent:research:main",
+          agentId: "research",
+        },
       },
     ])
   })
@@ -155,11 +181,19 @@ describe("OpenClaw Session subscriptions", () => {
     expect(calls.filter(({ method }) => method.endsWith("subscribe"))).toEqual([
       {
         method: "sessions.messages.subscribe",
-        params: { key: "agent:research:main", agentId: "research" },
+        params: {
+          key: "agent:research:main",
+          agentId: "research",
+          includeApprovals: true,
+        },
       },
       {
         method: "sessions.messages.subscribe",
-        params: { key: "agent:research:main", agentId: "research" },
+        params: {
+          key: "agent:research:main",
+          agentId: "research",
+          includeApprovals: true,
+        },
       },
     ])
     expect(reconcile).toHaveBeenCalledTimes(2)
@@ -176,4 +210,101 @@ describe("OpenClaw Session subscriptions", () => {
     )
     expect(listener).toHaveBeenCalledOnce()
   })
+
+  it("repeats global reconciliation when an earlier Session dirties during a later lease read", async () => {
+    const { client } = requestClient()
+    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const releaseWriting = deferred<void>()
+    const research = vi.fn(async () => {})
+    const writing = vi.fn(async () => {
+      if (writing.mock.calls.length === 1) await releaseWriting.promise
+    })
+    await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:main" },
+      vi.fn(),
+      research
+    )
+    await subscriptions.acquire(
+      { agentId: "writing", sessionKey: "agent:writing:main" },
+      vi.fn(),
+      writing
+    )
+
+    const replacing = subscriptions.replaceGeneration("reconnect")
+    await vi.waitFor(() => expect(writing).toHaveBeenCalledOnce())
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 7,
+        payload: {
+          runId: "research-run",
+          sessionKey: "agent:research:main",
+          agentId: "research",
+          seq: 0,
+          state: "final",
+        },
+      },
+      subscriptions.generation
+    )
+    releaseWriting.resolve(undefined)
+    await replacing
+
+    expect(research).toHaveBeenCalledTimes(2)
+  })
+
+  it("exposes only a validated approval replay from the current socket generation", async () => {
+    const replay = {
+      sessionKey: "agent:research:main",
+      updatedAtMs: 1,
+      approvals: [],
+      truncated: true,
+    }
+    const client: OpenClawSubscriptionRequestClient = {
+      request: vi.fn(async (method, params) =>
+        method === "sessions.messages.subscribe"
+          ? { key: params.key, approvalReplay: replay }
+          : {}
+      ),
+    }
+    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const lease = await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:main" },
+      vi.fn()
+    )
+
+    expect(lease.approvalReplay()).toEqual({
+      generation: subscriptions.generation,
+      replay,
+    })
+
+    const replacing = subscriptions.replaceGeneration("reconnect")
+    expect(lease.approvalReplay()).toBeUndefined()
+    await replacing
+    expect(lease.approvalReplay()).toEqual({
+      generation: subscriptions.generation,
+      replay,
+    })
+
+    const invalid = new OpenClawSessionSubscriptions({
+      request: vi.fn(async () => ({
+        key: "agent:research:main",
+        approvalReplay: { ...replay, sessionKey: "agent:foreign:main" },
+      })),
+    })
+    await expect(
+      invalid.acquire(
+        { agentId: "research", sessionKey: "agent:research:main" },
+        vi.fn()
+      )
+    ).rejects.toThrow("approval replay")
+  })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}

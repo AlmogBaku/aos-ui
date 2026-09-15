@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest"
 
 import { ServerRunStopNotDispatchedError } from "../../core/runtime"
 import { OpenClawClientRequestError } from "./client"
+import { stageOpenClawChatAttachments } from "./content"
+import { OpenClawInteractions } from "./interactions"
 import { OpenClawRunEngine, type OpenClawRunRequestClient } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
 
@@ -19,8 +21,10 @@ class ControlledNative implements OpenClawRunRequestClient {
     sessionInfo: { hasActiveRun: false, activeRunIds: [] },
   }
   historyRequest?: () => Promise<unknown>
+  subscriptionRequest?: (params: Record<string, unknown>) => Promise<unknown>
   abortRequest?: () => Promise<unknown>
   subscriptionKey?: string
+  approvalReplay?: unknown
   abortResult: unknown = {
     ok: true,
     status: "aborted",
@@ -36,7 +40,16 @@ class ControlledNative implements OpenClawRunRequestClient {
   ): Promise<T> {
     this.calls.push({ method, params, options })
     if (method === "sessions.messages.subscribe")
-      return { key: this.subscriptionKey ?? params.key } as T
+      return (
+        this.subscriptionRequest
+          ? await this.subscriptionRequest(params)
+          : {
+              key: this.subscriptionKey ?? params.key,
+              ...(this.approvalReplay === undefined
+                ? {}
+                : { approvalReplay: structuredClone(this.approvalReplay) }),
+            }
+      ) as T
     if (method === "sessions.messages.unsubscribe") return {} as T
     if (method === "chat.history")
       return (
@@ -75,6 +88,51 @@ const scope = {
   agentId: "research",
   sessionId: "agent:research:main",
   threadId: "thread-public",
+}
+
+const pendingQuestion = {
+  id: "question-restored",
+  agentId: scope.agentId,
+  sessionKey: scope.sessionId,
+  runId: "native-original",
+  createdAtMs: 1,
+  expiresAtMs: 1_900_000_000_000,
+  status: "pending",
+  questions: [
+    {
+      questionId: "choice",
+      header: "Choice",
+      question: "Continue?",
+      options: [{ label: "yes" }],
+      isOther: false,
+    },
+  ],
+}
+
+const pendingApproval = {
+  id: "approval-restored",
+  urlPath: "/approvals/approval-restored",
+  createdAtMs: 1,
+  expiresAtMs: 1_900_000_000_000,
+  status: "pending",
+  sourceSessionKey: scope.sessionId,
+  presentation: {
+    kind: "plugin",
+    title: "External action",
+    description: "Allow the plugin action",
+    severity: "warning",
+    agentId: scope.agentId,
+    allowedDecisions: ["allow-once", "deny"],
+  },
+}
+
+function approvalReplay(approvals: unknown[] = [], truncated = false) {
+  return {
+    sessionKey: scope.sessionId,
+    updatedAtMs: 1,
+    approvals,
+    truncated,
+  }
 }
 
 function input(runId = "run-a"): RunAgentInput {
@@ -135,6 +193,142 @@ describe("OpenClaw run engine", () => {
         options: { expectFinal: true },
       },
     ])
+  })
+
+  it("sends one provider-validated staged attachment with the exact native turn", async () => {
+    const native = new ControlledNative()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const stage = stageOpenClawChatAttachments(
+      [
+        {
+          type: "file",
+          dataUrl: "data:text/plain;base64,aGk=",
+          filename: "note.txt",
+        },
+      ],
+      {
+        maxPayload: 1_000_000,
+        attachments: { maxBytes: 10_000, maxImageBytes: 10_000 },
+      }
+    )
+
+    await expect(engine.start(scope, input(), stage)).resolves.toBeDefined()
+    expect(
+      native.calls.filter(({ method }) => method === "chat.send")
+    ).toMatchObject([
+      {
+        params: {
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          message: "Investigate this",
+          idempotencyKey: "run-a",
+          attachments: [
+            {
+              type: "file",
+              content: "data:text/plain;base64,aGk=",
+              mimeType: "text/plain",
+              sizeBytes: 2,
+              fileName: "note.txt",
+            },
+          ],
+        },
+      },
+    ])
+  })
+
+  it("rejects resume attachments and foreign stages before native dispatch", async () => {
+    const native = new ControlledNative()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const validate = vi.fn(async () => ({ runId: "native-original" }))
+    const dispatch = vi.fn(async () => ({ status: "resolved" as const }))
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: { validate, dispatch },
+    })
+    const stage = stageOpenClawChatAttachments(
+      [{ type: "image", dataUrl: "data:image/png;base64,aGk=" }],
+      {
+        maxPayload: 1_000_000,
+        attachments: { maxBytes: 10_000, maxImageBytes: 10_000 },
+      }
+    )
+
+    await expect(
+      engine.start(
+        scope,
+        resumeInput([
+          {
+            interruptId: "question-a",
+            status: "resolved",
+            payload: { answers: { choice: ["yes"] } },
+          },
+        ]),
+        stage
+      )
+    ).rejects.toThrow("cannot include staged attachments")
+    expect(validate).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(native.calls).toEqual([])
+
+    await expect(
+      engine.start(scope, input(), {
+        public: [],
+        appendTo: (message) => message,
+        cleanup: async () => undefined,
+      })
+    ).rejects.toThrow("does not belong to OpenClaw")
+    expect(native.calls).toEqual([])
+  })
+
+  it("does not retry a staged turn after an uncertain native send", async () => {
+    const native = new ControlledNative()
+    native.sendError = new OpenClawClientRequestError("connection closed", true)
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const stage = stageOpenClawChatAttachments(
+      [{ type: "file", dataUrl: "data:text/plain;base64,aGk=" }],
+      {
+        maxPayload: 1_000_000,
+        attachments: { maxBytes: 10_000, maxImageBytes: 10_000 },
+      }
+    )
+
+    const handle = await engine.start(scope, input(), stage)
+    const events: unknown[] = []
+    for await (const event of handle.events) events.push(event)
+
+    expect(events.at(-1)).toMatchObject({
+      type: EventType.RUN_ERROR,
+      code: "AOS_SEND_UNCERTAIN",
+    })
+    expect(
+      native.calls.filter(({ method }) => method === "chat.send")
+    ).toHaveLength(1)
+  })
+
+  it("rejects a staged request that exceeds the negotiated frame before reserving the run", async () => {
+    const native = new ControlledNative()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const stage = stageOpenClawChatAttachments(
+      [{ type: "file", dataUrl: "data:text/plain;base64,aGk=" }],
+      {
+        maxPayload: 10,
+        attachments: { maxBytes: 10_000, maxImageBytes: 10_000 },
+      }
+    )
+
+    await expect(engine.start(scope, input(), stage)).rejects.toMatchObject({
+      name: "OpenClawContentPublicError",
+    })
+    await expect(
+      engine.start(scope, input("run-after-rejection"))
+    ).resolves.toBeDefined()
+    expect(
+      native.calls.filter(({ method }) => method === "chat.send")
+    ).toHaveLength(1)
   })
 
   it("repeats admission history when a subscribed Session changes during the read", async () => {
@@ -241,7 +435,7 @@ describe("OpenClaw run engine", () => {
       {
         interruptId: "approval-a",
         status: "resolved" as const,
-        payload: "allow-once",
+        payload: "once",
       },
     ],
   ])(
@@ -368,6 +562,489 @@ describe("OpenClaw run engine", () => {
       value: { type: EventType.RUN_STARTED, runId: "run-resume" },
     })
     expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it("rediscovers and resumes one exact pending question through a fresh engine", async () => {
+    const native = new ControlledNative()
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "before" },
+    }
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [pendingQuestion] }
+      if (method === "question.get") return { question: pendingQuestion }
+      if (method === "question.resolve")
+        return { status: "answered", answers: { answers: { choice: ["yes"] } } }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    const interactions = new OpenClawInteractions({ request })
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: interactions,
+    })
+
+    const discovered = await engine.discover(scope, "restored-question")
+    expect(discovered?.state).toBe("waiting-for-input")
+    const restoredEvents: unknown[] = []
+    for await (const event of discovered!.handle.events)
+      restoredEvents.push(event)
+    expect(restoredEvents).toEqual([
+      {
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "restored-question",
+      },
+      expect.objectContaining({
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "restored-question",
+        outcome: expect.objectContaining({
+          type: "interrupt",
+          interrupts: [expect.objectContaining({ id: "question-restored" })],
+        }),
+      }),
+    ])
+
+    const resumed = await engine.start(
+      scope,
+      resumeInput(
+        [
+          {
+            interruptId: "question-restored",
+            status: "resolved",
+            payload: { answers: { choice: ["yes"] } },
+          },
+        ],
+        "question-continuation"
+      )
+    )
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 71,
+        payload: {
+          runId: "native-original",
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq: 0,
+          state: "final",
+          message: { content: [{ type: "text", text: "before after" }] },
+        },
+      },
+      subscriptions.generation
+    )
+    const resumedEvents: unknown[] = []
+    for await (const event of resumed.events) resumedEvents.push(event)
+
+    expect(resumedEvents).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "question-continuation:assistant",
+      delta: " after",
+    })
+    expect(resumedEvents.at(-1)).toMatchObject({
+      type: EventType.RUN_FINISHED,
+      runId: "question-continuation",
+    })
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "question.list",
+      "question.get",
+      "question.get",
+      "question.resolve",
+    ])
+    expect(native.calls.filter(({ method }) => method === "chat.send")).toEqual(
+      []
+    )
+  })
+
+  it("rediscovers and resumes one approval against the unique history-proven native run", async () => {
+    const native = new ControlledNative()
+    native.approvalReplay = approvalReplay([pendingApproval])
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "before" },
+    }
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [] }
+      if (method === "approval.get") return { approval: pendingApproval }
+      if (method === "approval.resolve")
+        return {
+          applied: true,
+          approval: {
+            ...pendingApproval,
+            status: "allowed",
+            decision: "allow-once",
+            resolvedAtMs: 2,
+            reason: "user",
+            resolver: { kind: "device", id: "reviewer-a" },
+          },
+        }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    const interactions = new OpenClawInteractions({ request })
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: interactions,
+    })
+
+    const discovered = await engine.discover(scope, "restored-approval")
+    expect(discovered).toMatchObject({
+      state: "waiting-for-input",
+      interrupts: [{ id: "approval-restored", reason: "approval" }],
+    })
+    await expect(
+      engine.start(
+        scope,
+        resumeInput(
+          [
+            {
+              interruptId: "approval-restored",
+              status: "resolved",
+              payload: "once",
+            },
+          ],
+          "approval-continuation"
+        )
+      )
+    ).resolves.toBeDefined()
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "question.list",
+      "approval.get",
+      "approval.get",
+      "approval.resolve",
+    ])
+    expect(native.calls.filter(({ method }) => method === "chat.send")).toEqual(
+      []
+    )
+  })
+
+  it.each([
+    [
+      "a truncated approval replay",
+      approvalReplay([pendingApproval], true),
+      ["native-original"],
+      [] as unknown[],
+    ],
+    [
+      "ambiguous active native runs",
+      approvalReplay(),
+      ["native-original", "native-other"],
+      [pendingQuestion],
+    ],
+    [
+      "no active native run",
+      approvalReplay(),
+      [] as string[],
+      [pendingQuestion],
+    ],
+  ])(
+    "fails closed during discovery with %s",
+    async (_label, replay, activeRunIds, questions) => {
+      const native = new ControlledNative()
+      native.approvalReplay = replay
+      native.history = {
+        sessionKey: scope.sessionId,
+        sessionId: "transcript-a",
+        messages: [],
+        sessionInfo: {
+          hasActiveRun: activeRunIds.length > 0,
+          activeRunIds,
+        },
+        inFlightRun:
+          activeRunIds.length === 1
+            ? { runId: activeRunIds[0], text: "before" }
+            : undefined,
+      }
+      const request = vi.fn(async () => ({ questions }))
+      const interactions = new OpenClawInteractions({ request })
+      const engine = new OpenClawRunEngine({
+        client: native,
+        subscriptions: new OpenClawSessionSubscriptions(native),
+        resume: interactions,
+      })
+
+      await expect(
+        engine.discover(scope, "restored-unsafe")
+      ).resolves.toBeUndefined()
+      expect(
+        native.calls.filter(({ method }) => method === "chat.send")
+      ).toEqual([])
+    }
+  )
+
+  it("restarts discovery after a subscription generation changes without mixing replay state", async () => {
+    const native = new ControlledNative()
+    const firstHistory = deferred<unknown>()
+    let historyReads = 0
+    native.historyRequest = async () => {
+      historyReads += 1
+      if (historyReads === 1) return firstHistory.promise
+      return {
+        sessionKey: scope.sessionId,
+        sessionId: "transcript-b",
+        messages: [],
+        sessionInfo: {
+          hasActiveRun: true,
+          activeRunIds: ["native-original"],
+        },
+        inFlightRun: { runId: "native-original", text: "current" },
+      }
+    }
+    let subscriptionReads = 0
+    native.subscriptionRequest = async (params) => {
+      subscriptionReads += 1
+      return {
+        key: params.key,
+        approvalReplay: {
+          ...approvalReplay(),
+          updatedAtMs: subscriptionReads,
+        },
+      }
+    }
+    const discover = vi.fn(async () => undefined)
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: {
+        validate: vi.fn(),
+        dispatch: vi.fn(),
+        discover,
+      },
+    })
+
+    const discovering = engine.discover(scope, "restored-generation")
+    await vi.waitFor(() => expect(historyReads).toBe(1))
+    await subscriptions.replaceGeneration("reconnect")
+    firstHistory.resolve({
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "retired" },
+    })
+
+    await expect(discovering).resolves.toBeUndefined()
+    expect(historyReads).toBe(2)
+    expect(discover).toHaveBeenCalledExactlyOnceWith(
+      { ...scope, nativeRunId: "native-original" },
+      { ...approvalReplay(), updatedAtMs: 2 }
+    )
+  })
+
+  it("authoritatively binds a cold recovered resume segment to the unique active native run", async () => {
+    const native = new ControlledNative()
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "before interrupt" },
+    }
+    native.abortResult = {
+      ok: true,
+      status: "aborted",
+      abortedRunId: "native-original",
+    }
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+
+    const handle = await engine.recover(scope, {
+      threadId: scope.threadId,
+      runId: "segment-resumed",
+    })
+    await expect(handle.stop()).resolves.toBe("stopping")
+    expect(
+      native.calls.filter(({ method }) => method === "sessions.abort")
+    ).toMatchObject([
+      {
+        params: {
+          key: scope.sessionId,
+          agentId: scope.agentId,
+          runId: "native-original",
+        },
+      },
+    ])
+  })
+
+  it("uses pre-dispatch native state as a private resume baseline and emits only the suffix", async () => {
+    const oldEvents = [
+      {
+        runId: "native-original",
+        seq: 0,
+        stream: "tool",
+        ts: 1_000,
+        data: {
+          phase: "start",
+          name: "old-tool",
+          toolCallId: "old-tool",
+          args: { private: "old-args" },
+        },
+      },
+      {
+        runId: "native-original",
+        seq: 1,
+        stream: "tool",
+        ts: 1_001,
+        data: {
+          phase: "result",
+          name: "old-tool",
+          toolCallId: "old-tool",
+          result: { private: "old-result" },
+          isError: false,
+        },
+      },
+    ]
+    const native = new ControlledNative()
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: {
+        runId: "native-original",
+        text: "before interrupt",
+        plan: { steps: [{ step: "Old plan", status: "completed" }] },
+        events: oldEvents,
+      },
+    }
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const dispatch = vi.fn(async () => {
+      native.history = {
+        sessionKey: scope.sessionId,
+        sessionId: "transcript-a",
+        messages: [],
+        sessionInfo: {
+          hasActiveRun: true,
+          activeRunIds: ["native-original"],
+        },
+        inFlightRun: {
+          runId: "native-original",
+          text: "before interrupt after answer",
+          plan: { steps: [{ step: "New plan", status: "in_progress" }] },
+          events: [
+            ...oldEvents,
+            {
+              runId: "native-original",
+              seq: 2,
+              stream: "tool",
+              ts: 1_002,
+              data: {
+                phase: "start",
+                name: "new-tool",
+                toolCallId: "new-tool",
+                args: { private: "new-args" },
+              },
+            },
+            {
+              runId: "native-original",
+              seq: 3,
+              stream: "tool",
+              ts: 1_003,
+              data: {
+                phase: "result",
+                name: "new-tool",
+                toolCallId: "new-tool",
+                result: { private: "new-result" },
+                isError: false,
+              },
+            },
+          ],
+        },
+      }
+      return { status: "resolved" as const }
+    })
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: {
+        validate: vi.fn(async () => ({ runId: "native-original" })),
+        dispatch,
+      },
+    })
+
+    const handle = await engine.start(
+      scope,
+      resumeInput([
+        {
+          interruptId: "question-a",
+          status: "resolved",
+          payload: { answers: { choice: ["yes"] } },
+        },
+      ])
+    )
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 70,
+        payload: {
+          runId: "native-original",
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq: 0,
+          state: "final",
+          message: {
+            content: [{ type: "text", text: "before interrupt after answer" }],
+          },
+        },
+      },
+      subscriptions.generation
+    )
+
+    const events: unknown[] = []
+    for await (const event of handle.events) events.push(event)
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain("before interrupt")
+    expect(serialized).not.toContain("Old plan")
+    expect(serialized).not.toContain("old-tool")
+    expect(events).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "run-resume:assistant",
+      delta: " after answer",
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: EventType.TOOL_CALL_START,
+        toolCallId: "new-tool",
+      })
+    )
+    expect(events).toContainEqual({
+      type: EventType.ACTIVITY_SNAPSHOT,
+      messageId: "run-resume:plan",
+      activityType: "PLAN",
+      content: {
+        phase: "update",
+        steps: [{ step: "New plan", status: "in_progress" }],
+      },
+      replace: true,
+    })
   })
 
   it("maps validated native reasoning, text, progress, usage, tools, and lifecycle in order", async () => {
@@ -577,6 +1254,21 @@ describe("OpenClaw run engine", () => {
         },
       },
     ])
+
+    await expect(handle.stop()).resolves.toBe("stopping")
+    expect(
+      native.calls.filter(({ method }) => method === "sessions.abort")
+    ).toHaveLength(1)
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+    }
+    await expect(handle.stop()).resolves.toBe("idle")
+    expect(
+      native.calls.filter(({ method }) => method === "sessions.abort")
+    ).toHaveLength(1)
 
     subscriptions.accept(
       {

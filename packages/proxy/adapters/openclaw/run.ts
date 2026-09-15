@@ -4,6 +4,7 @@ import {
   type AGUIEvent,
   type ResumeEntry,
   type RunAgentInput,
+  type RunFinishedInterruptOutcome,
   type TokenUsage,
 } from "@ag-ui/core"
 import { readSessionMessageIdentity } from "@openclaw/gateway-client"
@@ -20,11 +21,17 @@ import {
   ServerRunConflictError,
   ServerRunStopNotDispatchedError,
   type RecoveryRequest,
+  type ServerAttachmentStage,
   type ServerRunEngine,
   type ServerRunHandle,
   type SessionScope,
 } from "../../core/runtime"
 import { OpenClawClientRequestError } from "./client"
+import {
+  OpenClawContentPublicError,
+  prepareOpenClawChatAttachments,
+  readOpenClawChatAttachments,
+} from "./content"
 import {
   OpenClawSessionSubscriptions,
   type OpenClawReconciliationFence,
@@ -69,6 +76,11 @@ export type OpenClawBoundResume = Readonly<{
     scope: SessionScope,
     resume: readonly ResumeEntry[]
   ): Promise<OpenClawBoundResumeResult>
+  /** Reconstructs one exact native wait from current Gateway authority. */
+  discover?(
+    scope: SessionScope & { nativeRunId: string },
+    approvalReplay: unknown
+  ): Promise<{ outcome: RunFinishedInterruptOutcome } | undefined>
 }>
 
 export class OpenClawRunPublicError extends Error {
@@ -206,12 +218,15 @@ type ActiveRun = {
   reconciliationDirty: boolean
   reconciliation?: Promise<void>
   text: string
+  textBaseline?: string
+  projectedText: string
   textGeneration: number
   textStarted: boolean
   reasoning: string
   reasoningStarted: boolean
   reasoningEnded: boolean
   tools: Map<string, OpenTool>
+  planFingerprint?: string
   usage?: TokenUsage[]
   settled: Promise<void>
   resolveSettled(): void
@@ -242,6 +257,18 @@ type NativeAgentEvent = {
   spawnedBy?: string
   isHeartbeat?: boolean
   data: Record<string, unknown>
+}
+
+type NativePlan = NonNullable<HistorySnapshot["inFlightRun"]>["plan"]
+
+type WaitingRun = {
+  scope: SessionScope
+  runId: string
+  nativeRunId: string
+  nativeSessionId: string
+  lease: OpenClawSessionLease
+  stopping: boolean
+  terminal: boolean
 }
 
 function settlement() {
@@ -356,6 +383,60 @@ function completedHistoryText(history: HistorySnapshot, runId: string) {
     return messageText(message)
   }
   return undefined
+}
+
+function hasCompletedHistoryRun(history: HistorySnapshot, runId: string) {
+  return history.messages.some((message) => {
+    const identity = readSessionMessageIdentity(message)
+    return (
+      identity?.role === "assistant" &&
+      identity.runId === runId &&
+      !identity.isImported
+    )
+  })
+}
+
+function authoritativeRecoveryRunId(
+  history: HistorySnapshot,
+  normalizedRunId: string
+) {
+  const active = new Set(history.activeRunIds ?? [])
+  if (history.inFlightRun) active.add(history.inFlightRun.runId)
+  if (active.size === 1) return [...active][0]
+  if (
+    active.size === 0 &&
+    authoritativelyIdle(history) &&
+    hasCompletedHistoryRun(history, normalizedRunId)
+  )
+    return normalizedRunId
+  return undefined
+}
+
+function uniqueActiveRunId(history: HistorySnapshot) {
+  const active = new Set(history.activeRunIds ?? [])
+  if (history.inFlightRun) active.add(history.inFlightRun.runId)
+  return active.size === 1 ? [...active][0] : undefined
+}
+
+function authoritativelyIdle(history: HistorySnapshot) {
+  return (
+    history.hasActiveRun === false ||
+    (history.activeRunIds !== undefined &&
+      history.activeRunIds.length === 0 &&
+      history.inFlightRun === undefined)
+  )
+}
+
+function baselineAgentSequence(history: HistorySnapshot, nativeRunId: string) {
+  if (history.inFlightRun?.runId !== nativeRunId) return -1
+  return Math.max(
+    -1,
+    ...(history.inFlightRun.events ?? []).map(({ seq }) => seq)
+  )
+}
+
+function planFingerprint(plan: NativePlan) {
+  return plan === undefined ? undefined : safeJson(plan, "") || undefined
 }
 
 function validatedPlan(value: unknown) {
@@ -542,6 +623,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
   readonly #toolEvents: boolean
   readonly #resume?: OpenClawBoundResume
   readonly #active = new Map<string, ActiveRun>()
+  readonly #waiting = new Map<string, WaitingRun>()
 
   constructor(options: {
     client: OpenClawRunRequestClient
@@ -557,11 +639,21 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
   async start(
     scope: SessionScope,
-    candidate: Parameters<ServerRunEngine["start"]>[1]
+    candidate: Parameters<ServerRunEngine["start"]>[1],
+    attachmentStage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
     const input = RunAgentInputSchema.parse(candidate)
     const text = userText(input)
     const resume = input.resume?.length ? input.resume : undefined
+    const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
+    if (attachmentStage && !stagedAttachments)
+      throw new Error(
+        "The staged attachment payload does not belong to OpenClaw"
+      )
+    if (resume && stagedAttachments)
+      throw new Error(
+        "OpenClaw interrupt responses cannot include staged attachments"
+      )
     if (
       !validId(scope.agentId) ||
       !validId(scope.sessionId) ||
@@ -598,6 +690,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
     const key = scopeKey(scope)
     if (this.#active.has(key)) throw new ServerRunConflictError()
+    const waiting = this.#waiting.get(key)
+    if (waiting && resumeBinding?.runId !== waiting.nativeRunId)
+      throw new ServerRunConflictError()
 
     let lease: OpenClawSessionLease | undefined
     try {
@@ -642,6 +737,31 @@ export class OpenClawRunEngine implements ServerRunEngine {
         (resume && !boundRunActive && !this.#authoritativelyIdle(baseline))
       )
         throw new ServerRunConflictError()
+      const resumeSnapshot =
+        resume && baseline.inFlightRun?.runId === resumeBinding?.runId
+          ? baseline.inFlightRun
+          : undefined
+      const sendParams = resume
+        ? undefined
+        : stagedAttachments
+          ? prepareOpenClawChatAttachments(
+              {
+                sessionKey: baseline.sessionKey,
+                agentId: scope.agentId,
+                message: text!,
+                idempotencyKey: input.runId,
+                attachments: stagedAttachments.attachments,
+              },
+              stagedAttachments.policy
+            ).native
+          : {
+              sessionKey: baseline.sessionKey,
+              agentId: scope.agentId,
+              message: text!,
+              idempotencyKey: input.runId,
+            }
+      if (sendParams && !validateChatSendParams(sendParams))
+        throw new Error("Invalid OpenClaw chat.send request")
 
       const queue = new EventQueue(() => {
         if (holder.active)
@@ -668,24 +788,37 @@ export class OpenClawRunEngine implements ServerRunEngine {
         stopping: false,
         uncertain: false,
         lastSeen: 0,
-        lastAgentSeq: -1,
+        lastAgentSeq: resumeSnapshot
+          ? baselineAgentSequence(baseline, resumeSnapshot.runId)
+          : -1,
         lastChatSeq: -1,
         gapPending: false,
         reconciling: false,
         reconciliationDirty: false,
-        text: "",
+        text: resumeSnapshot?.text ?? "",
+        ...(resume ? { textBaseline: resumeSnapshot?.text ?? "" } : {}),
+        projectedText: "",
         textGeneration: 0,
         textStarted: false,
         reasoning: "",
         reasoningStarted: false,
         reasoningEnded: false,
         tools: new Map(),
+        ...(resumeSnapshot?.plan
+          ? { planFingerprint: planFingerprint(resumeSnapshot.plan) }
+          : {}),
         ...settlement(),
       }
       holder.active = active
       this.#active.set(key, active)
+      if (waiting) {
+        this.#waiting.delete(key)
+        waiting.terminal = true
+        void waiting.lease.release().catch(() => {})
+      }
 
       if (resume) {
+        if (active.terminal) return this.#handle(active)
         let result: OpenClawBoundResumeResult
         try {
           result = await this.#resume!.dispatch(scope, resume)
@@ -718,15 +851,6 @@ export class OpenClawRunEngine implements ServerRunEngine {
         return this.#handle(active)
       }
 
-      const params = {
-        sessionKey: active.nativeSessionKey,
-        agentId: scope.agentId,
-        message: text!,
-        idempotencyKey: input.runId,
-      }
-      if (!validateChatSendParams(params))
-        throw new Error("Invalid OpenClaw chat.send request")
-
       let sent = false
       let admitted = false
       let resolveAdmission = () => {}
@@ -736,7 +860,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         rejectAdmission = reject
       })
       const request = this.#client
-        .request<unknown>("chat.send", params, {
+        .request<unknown>("chat.send", sendParams!, {
           expectFinal: true,
           onSent: () => {
             sent = true
@@ -804,6 +928,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       if (lease && !this.#active.has(key)) await lease.release().catch(() => {})
       if (error instanceof ServerRunConflictError) throw error
       if (error instanceof OpenClawRunPublicError) throw error
+      if (error instanceof OpenClawContentPublicError) throw error
       throw providerUnavailable()
     }
   }
@@ -875,6 +1000,13 @@ export class OpenClawRunEngine implements ServerRunEngine {
         baseline = await this.#history(scope, lease)
         if (generation !== this.#subscriptions.generation) recoveryDirty = true
       } while (recoveryDirty)
+      const nativeRunId = authoritativeRecoveryRunId(baseline, request.runId)
+      const resumedSnapshot =
+        nativeRunId !== undefined &&
+        nativeRunId !== request.runId &&
+        baseline.inFlightRun?.runId === nativeRunId
+          ? baseline.inFlightRun
+          : undefined
       const queue = new EventQueue(() => {
         if (holder.active)
           this.#fail(
@@ -891,7 +1023,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       const active: ActiveRun = {
         scope,
         runId: request.runId,
-        nativeRunId: request.runId,
+        nativeRunId: nativeRunId ?? "",
         nativeSessionKey: baseline.sessionKey,
         nativeSessionId: baseline.sessionId,
         queue,
@@ -900,28 +1032,142 @@ export class OpenClawRunEngine implements ServerRunEngine {
         stopping: false,
         uncertain: false,
         lastSeen: request.position?.lastSeen ?? 0,
-        lastAgentSeq: -1,
+        lastAgentSeq: resumedSnapshot
+          ? baselineAgentSequence(baseline, resumedSnapshot.runId)
+          : -1,
         lastChatSeq: -1,
         gapPending: false,
         reconciling: false,
         reconciliationDirty: false,
-        text: "",
+        text: resumedSnapshot?.text ?? "",
+        ...(resumedSnapshot ? { textBaseline: resumedSnapshot.text } : {}),
+        projectedText: "",
         textGeneration: 0,
         textStarted: false,
         reasoning: "",
         reasoningStarted: false,
         reasoningEnded: false,
         tools: new Map(),
+        ...(resumedSnapshot?.plan
+          ? { planFingerprint: planFingerprint(resumedSnapshot.plan) }
+          : {}),
         ...settlement(),
       }
       holder.active = active
       this.#active.set(key, active)
-      this.#applyHistory(active, baseline)
+      if (!nativeRunId)
+        this.#fail(
+          active,
+          "AOS_RESET_REQUIRED",
+          "OpenClaw could not authoritatively bind this recovered run."
+        )
+      else this.#applyHistory(active, baseline)
       return this.#handle(active)
     } catch (error) {
       this.#active.delete(key)
       await lease?.release().catch(() => {})
       if (error instanceof ServerRunConflictError) throw error
+      throw providerUnavailable()
+    }
+  }
+
+  async discover(scope: SessionScope, runId: string) {
+    if (
+      !this.#resume?.discover ||
+      !validId(scope.agentId) ||
+      !validId(scope.sessionId) ||
+      !validId(runId) ||
+      this.#active.has(scopeKey(scope)) ||
+      this.#waiting.has(scopeKey(scope))
+    )
+      return undefined
+    let lease: OpenClawSessionLease | undefined
+    const key = scopeKey(scope)
+    let discoveryDirty = false
+    try {
+      const holder: { waiting?: WaitingRun } = {}
+      lease = await this.#subscriptions.acquire(
+        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        (event) => {
+          if (!holder.waiting) discoveryDirty = true
+          else this.#acceptWaiting(holder.waiting, event)
+        },
+        async () => {
+          discoveryDirty = true
+        }
+      )
+      for (;;) {
+        discoveryDirty = false
+        const generation = this.#subscriptions.generation
+        const history = await this.#history(scope, lease)
+        const approvalReplay = lease.approvalReplay()
+        if (
+          discoveryDirty ||
+          generation !== this.#subscriptions.generation ||
+          (approvalReplay !== undefined &&
+            approvalReplay.generation !== generation)
+        )
+          continue
+        const nativeRunId = uniqueActiveRunId(history)
+        if (!nativeRunId) {
+          await lease.release().catch(() => {})
+          return undefined
+        }
+        const discovered = await this.#resume.discover(
+          { ...scope, nativeRunId },
+          approvalReplay?.replay
+        )
+        const currentApprovalReplay = lease.approvalReplay()
+        if (
+          discoveryDirty ||
+          generation !== this.#subscriptions.generation ||
+          (currentApprovalReplay !== undefined &&
+            currentApprovalReplay.generation !== generation)
+        )
+          continue
+        if (!discovered) {
+          await lease.release().catch(() => {})
+          return undefined
+        }
+        const waiting: WaitingRun = {
+          scope,
+          runId,
+          nativeRunId,
+          nativeSessionId: history.sessionId,
+          lease,
+          stopping: false,
+          terminal: false,
+        }
+        holder.waiting = waiting
+        this.#waiting.set(key, waiting)
+        const events: AGUIEvent[] = [
+          { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
+          {
+            type: EventType.RUN_FINISHED,
+            threadId: scope.threadId,
+            runId,
+            outcome: discovered.outcome,
+          },
+        ]
+        return {
+          state: "waiting-for-input" as const,
+          interrupts: discovered.outcome.interrupts,
+          handle: {
+            events: (async function* () {
+              yield* events
+            })(),
+            settled: Promise.resolve(),
+            stop: () => this.#stopWaiting(waiting),
+            recoveryPosition: () => ({
+              epoch: String(generation),
+              lastSeen: 0,
+            }),
+          },
+        }
+      }
+    } catch (error) {
+      await lease?.release().catch(() => {})
+      if (error instanceof OpenClawRunPublicError) throw error
       throw providerUnavailable()
     }
   }
@@ -950,12 +1196,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
   }
 
   #authoritativelyIdle(history: HistorySnapshot) {
-    return (
-      history.hasActiveRun === false ||
-      (history.activeRunIds !== undefined &&
-        history.activeRunIds.length === 0 &&
-        history.inFlightRun === undefined)
-    )
+    return authoritativelyIdle(history)
   }
 
   #handle(active: ActiveRun): ServerRunHandle {
@@ -968,6 +1209,96 @@ export class OpenClawRunEngine implements ServerRunEngine {
         lastSeen: active.lastSeen,
       }),
     }
+  }
+
+  #acceptWaiting(waiting: WaitingRun, event: EventFrame) {
+    if (waiting.terminal || event.event !== "chat") return
+    const payload = record(event.payload)
+    if (
+      payload?.runId !== waiting.nativeRunId ||
+      (payload.sessionId !== undefined &&
+        payload.sessionId !== waiting.nativeSessionId) ||
+      (payload.state !== "final" &&
+        payload.state !== "aborted" &&
+        payload.state !== "error")
+    )
+      return
+    this.#finishWaiting(waiting)
+  }
+
+  #finishWaiting(waiting: WaitingRun) {
+    if (waiting.terminal) return
+    waiting.terminal = true
+    if (this.#waiting.get(scopeKey(waiting.scope)) === waiting)
+      this.#waiting.delete(scopeKey(waiting.scope))
+    void waiting.lease.release().catch(() => {})
+  }
+
+  async #waitingStatus(waiting: WaitingRun): Promise<"stopping" | "idle"> {
+    if (waiting.terminal) return "idle"
+    try {
+      const history = await this.#history(
+        waiting.scope,
+        waiting.lease,
+        waiting.nativeSessionId
+      )
+      if (authoritativelyIdle(history)) {
+        this.#finishWaiting(waiting)
+        return "idle"
+      }
+    } catch {
+      // A failed status read cannot authorize another abort or an idle claim.
+    }
+    return "stopping"
+  }
+
+  async #stopWaiting(waiting: WaitingRun): Promise<"stopping" | "idle"> {
+    if (waiting.terminal) return "idle"
+    if (waiting.stopping) return this.#waitingStatus(waiting)
+    waiting.stopping = true
+    const params = {
+      key: waiting.lease.key,
+      agentId: waiting.scope.agentId,
+      runId: waiting.nativeRunId,
+    }
+    if (!validateSessionsAbortParams(params))
+      throw new Error("Invalid OpenClaw sessions.abort request")
+    let sent = false
+    try {
+      const result = await this.#client.request<unknown>(
+        "sessions.abort",
+        params,
+        {
+          onSent: () => {
+            sent = true
+          },
+        }
+      )
+      const acknowledgement = record(result)
+      if (
+        acknowledgement?.ok !== true ||
+        (acknowledgement.status !== "aborted" &&
+          acknowledgement.status !== "no-active-run") ||
+        (acknowledgement.status === "aborted" &&
+          acknowledgement.abortedRunId !== waiting.nativeRunId) ||
+        (acknowledgement.status === "no-active-run" &&
+          acknowledgement.abortedRunId !== null)
+      )
+        throw new Error("Invalid OpenClaw sessions.abort acknowledgement")
+      if (acknowledgement.status === "no-active-run") {
+        this.#finishWaiting(waiting)
+        return "idle"
+      }
+    } catch (error) {
+      if (requestWasSent(error, sent))
+        throw new OpenClawRunPublicError(
+          "AOS_STOP_UNCERTAIN",
+          "OpenClaw may have accepted the Stop request."
+        )
+      waiting.stopping = false
+      throw new ServerRunStopNotDispatchedError(providerUnavailable())
+    }
+    return this.#waitingStatus(waiting)
   }
 
   #accept(active: ActiveRun, event: EventFrame) {
@@ -1174,6 +1505,11 @@ export class OpenClawRunEngine implements ServerRunEngine {
       )
       return
     }
+    active.text += delta
+    this.#appendProjectedText(active, delta)
+  }
+
+  #appendProjectedText(active: ActiveRun, delta: string) {
     this.#endReasoning(active)
     const messageId = this.#messageId(active)
     if (!active.textStarted) {
@@ -1184,7 +1520,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         role: "assistant",
       })
     }
-    active.text += delta
+    active.projectedText += delta
     active.queue.push({
       type: EventType.TEXT_MESSAGE_CONTENT,
       messageId,
@@ -1194,15 +1530,21 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
   #replaceText(active: ActiveRun, text: string) {
     if (text === active.text) return
+    const projected =
+      active.textBaseline !== undefined && text.startsWith(active.textBaseline)
+        ? text.slice(active.textBaseline.length)
+        : text
+    active.text = text
+    if (projected === active.projectedText) return
     if (active.textStarted)
       active.queue.push({
         type: EventType.TEXT_MESSAGE_END,
         messageId: this.#messageId(active),
       })
-    active.textGeneration += 1
-    active.text = ""
+    if (active.textStarted) active.textGeneration += 1
     active.textStarted = false
-    this.#appendText(active, text)
+    active.projectedText = ""
+    if (projected) this.#appendProjectedText(active, projected)
   }
 
   #messageId(active: ActiveRun) {
@@ -1226,6 +1568,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
     phase: string,
     plan?: NonNullable<HistorySnapshot["inFlightRun"]>["plan"]
   ) {
+    if (plan) {
+      const fingerprint = planFingerprint(plan)
+      if (fingerprint !== undefined && fingerprint === active.planFingerprint)
+        return
+      active.planFingerprint = fingerprint
+    }
     active.queue.push({
       type: EventType.ACTIVITY_SNAPSHOT,
       messageId: `${active.runId}:plan`,
@@ -1424,7 +1772,10 @@ export class OpenClawRunEngine implements ServerRunEngine {
         "AOS_STOP_UNCERTAIN",
         "OpenClaw may have accepted the Stop request."
       )
-    if (active.stopping) return "stopping"
+    if (active.stopping) {
+      await this.#reconcile(active).catch(() => {})
+      return active.terminal ? "idle" : "stopping"
+    }
     active.stopping = true
     const params = {
       key: active.nativeSessionKey,
