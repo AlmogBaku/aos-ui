@@ -11,6 +11,90 @@ const scope = {
 }
 
 describe("OpenCodeInteractions", () => {
+  it("discovers and binds one complete authoritative exact-Session batch", async () => {
+    const questions = vi.fn(async () => ({
+      data: [
+        {
+          id: "question-1",
+          sessionID: "native-session-1",
+          questions: [
+            {
+              header: "Region",
+              question: "Where?",
+              options: [{ label: "Europe", description: "EU" }],
+            },
+          ],
+        },
+      ],
+    }))
+    const permissions = vi.fn(async () => ({
+      data: [
+        {
+          id: "permission-1",
+          sessionID: "native-session-1",
+          action: "write",
+          resources: [],
+        },
+      ],
+    }))
+    const interactions = new OpenCodeInteractions({
+      questions: {
+        list: questions,
+        reply: vi.fn(async () => undefined),
+        reject: vi.fn(async () => undefined),
+      },
+      permissions: { list: permissions, reply: vi.fn(async () => undefined) },
+    })
+
+    await expect(interactions.discover(scope)).resolves.toEqual([
+      expect.objectContaining({ id: "question-1", reason: "question" }),
+      expect.objectContaining({ id: "permission-1", reason: "approval" }),
+    ])
+    expect(questions).toHaveBeenCalledWith("native-session-1")
+    expect(permissions).toHaveBeenCalledWith("native-session-1")
+  })
+
+  it("separates a bound resume validation from its one native dispatch", async () => {
+    const reply = vi.fn(async () => undefined)
+    const interactions = new OpenCodeInteractions({
+      questions: {
+        list: async () => ({ data: [] }),
+        reply,
+        reject: vi.fn(async () => undefined),
+      },
+      permissions: {
+        list: async () => ({ data: [] }),
+        reply: vi.fn(async () => undefined),
+      },
+    })
+    interactions.acceptQuestion(scope, {
+      id: "question-1",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "Region",
+          question: "Where?",
+          options: [{ label: "Europe", description: "EU" }],
+        },
+      ],
+    })
+    const resume = [
+      {
+        interruptId: "question-1",
+        status: "resolved" as const,
+        payload: [["option-1"]],
+      },
+    ]
+
+    await interactions.validate(scope, resume)
+    expect(reply).not.toHaveBeenCalled()
+    await interactions.dispatch(scope, resume)
+    expect(reply).toHaveBeenCalledOnce()
+    await expect(interactions.dispatch(scope, resume)).rejects.toMatchObject({
+      code: "AOS_INTERACTION_NOT_FOUND",
+    })
+  })
+
   it("validates a complete native question batch and maps its ordered response once", async () => {
     const reply = vi.fn(async () => undefined)
     const interactions = new OpenCodeInteractions({

@@ -205,6 +205,104 @@ describe("OpenCode server adapter", () => {
     ).toBe(true)
   })
 
+  it("observes validated exact-Session invalidations and releases the SSE lease once", async () => {
+    const native = client()
+    let releaseStream!: () => void
+    const abort = vi.fn(() => releaseStream())
+    native.sessions.events = vi.fn(async () => ({
+      abort,
+      async *[Symbol.asyncIterator]() {
+        yield {
+          event: "session",
+          id: "0",
+          data: {
+            id: "event-1",
+            type: "session.next.prompt.admitted",
+            durable: { aggregateID: "session-1", seq: 0, version: 1 },
+            data: {
+              sessionID: "session-1",
+              timestamp: 1,
+              messageID: "prompt-1",
+              prompt: { text: "Hello" },
+              delivery: "queue",
+            },
+          },
+        }
+        await new Promise<void>((resolve) => {
+          releaseStream = resolve
+        })
+      },
+    }))
+    const listener = vi.fn()
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      runs: runEngine,
+    })
+
+    const unsubscribe = await adapter.subscribeSessionInvalidation(
+      "research",
+      "session-1",
+      listener
+    )
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce())
+    unsubscribe()
+    unsubscribe()
+    expect(abort).toHaveBeenCalledOnce()
+  })
+
+  it("resets an invalidation observer on a durable SSE sequence gap", async () => {
+    const native = client()
+    native.sessions.events = vi.fn(async () => ({
+      abort: vi.fn(),
+      async *[Symbol.asyncIterator]() {
+        for (const seq of [0, 2]) {
+          yield {
+            event: "session",
+            id: String(seq),
+            data: {
+              id: `event-${seq}`,
+              type: "session.next.prompt.admitted",
+              durable: { aggregateID: "session-1", seq, version: 1 },
+              data: {
+                sessionID: "session-1",
+                timestamp: seq + 1,
+                messageID: `prompt-${seq}`,
+                prompt: { text: "Hello" },
+                delivery: "queue",
+              },
+            },
+          }
+        }
+      },
+    }))
+    const reset = vi.fn()
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      runs: runEngine,
+    })
+
+    await adapter.subscribeSessionInvalidation(
+      "research",
+      "session-1",
+      vi.fn(),
+      reset
+    )
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledOnce())
+  })
+
+  it("refuses attachment staging for a foreign Agent before accepting file data", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      client: client(),
+      runs: runEngine,
+    })
+
+    await expect(
+      adapter.stageAttachments("other-agent", "session-1", [
+        { type: "file", dataUrl: "data:text/plain;base64,SGVsbG8=" },
+      ])
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
+  })
+
   it("closes the provider facade only once", async () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({

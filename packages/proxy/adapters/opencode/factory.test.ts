@@ -8,6 +8,7 @@ import type { RuntimeLimits } from "../../config"
 import type { ServerRunEngine } from "../../core/runtime"
 import type { OpenCodeAdapterClient } from "./adapter"
 import { createOpenCodeRuntime } from "./factory"
+import { OpenCodeRunEngine } from "./run"
 
 const limits: RuntimeLimits = {
   activeExecutions: 4,
@@ -46,6 +47,33 @@ function client(close = vi.fn(async () => {})): OpenCodeAdapterClient {
 }
 
 describe("OpenCode runtime factory", () => {
+  it("builds one native OpenCode run engine without a production test override", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aos-opencode-factory-"))
+    const passwordFile = join(directory, "password")
+    await writeFile(passwordFile, "native-password\n", { mode: 0o600 })
+    await chmod(passwordFile, 0o600)
+
+    try {
+      const runtime = await createOpenCodeRuntime(
+        {
+          kind: "opencode",
+          id: "opencode-local",
+          baseUrl: "http://127.0.0.1:4096",
+          directory: "/workspace/runtime",
+          username: "operator",
+          passwordFile,
+        },
+        limits,
+        { clientFactory: () => client() }
+      )
+
+      expect(runtime.runtime.runs).toBeInstanceOf(OpenCodeRunEngine)
+      await runtime.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it("reads the server-only password once and closes one coordinator/client runtime idempotently", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aos-opencode-factory-"))
     const passwordFile = join(directory, "password")

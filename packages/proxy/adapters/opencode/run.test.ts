@@ -8,6 +8,7 @@ import type {
 } from "./client"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenCodeMutationUncertainError } from "./client"
+import { OpenCodeContent } from "./content"
 import { OpenCodeRunEngine } from "./run"
 
 const scope = {
@@ -175,6 +176,49 @@ async function until(assertion: () => void) {
 }
 
 describe("OpenCodeRunEngine", () => {
+  it("passes one provider-validated staged file batch to the native prompt", async () => {
+    const state = client()
+    const stage = new OpenCodeContent().stage([
+      {
+        type: "file",
+        dataUrl: "data:text/plain;base64,SGVsbG8=",
+        filename: "brief.txt",
+      },
+    ])
+
+    await new OpenCodeRunEngine(state.native).start(scope, input(), stage)
+
+    expect(state.sessions.prompt).toHaveBeenCalledWith(
+      scope.sessionId,
+      expect.objectContaining({
+        prompt: {
+          text: "Hello OpenCode",
+          files: [
+            {
+              uri: "data:text/plain;base64,SGVsbG8=",
+              name: "brief.txt",
+            },
+          ],
+        },
+      })
+    )
+  })
+
+  it("rejects a structurally similar foreign staged-file object before native prompt dispatch", async () => {
+    const state = client()
+    const foreign = {
+      public: [],
+      files: [{ uri: "data:text/plain;base64,SGVsbG8=", name: "brief.txt" }],
+      appendTo: (value: string) => value,
+      cleanup: async () => {},
+    }
+
+    await expect(
+      new OpenCodeRunEngine(state.native).start(scope, input(), foreign)
+    ).rejects.toThrow("attachment stage")
+    expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
   it("rejects a wrong native Agent owner before observation or mutation", async () => {
     const state = client({
       get: vi.fn(async () => ({
@@ -1257,10 +1301,21 @@ describe("OpenCodeRunEngine", () => {
     const promptCase = client({
       prompt: vi.fn(async () => Promise.reject(promptUncertain)),
     })
+    const stage = new OpenCodeContent().stage([
+      { type: "file", dataUrl: "data:text/plain;base64,SGVsbG8=" },
+    ])
     await expect(
-      new OpenCodeRunEngine(promptCase.native).start(scope, input())
+      new OpenCodeRunEngine(promptCase.native).start(scope, input(), stage)
     ).rejects.toBe(promptUncertain)
     expect(promptCase.sessions.prompt).toHaveBeenCalledOnce()
+    expect(promptCase.sessions.prompt).toHaveBeenCalledWith(
+      scope.sessionId,
+      expect.objectContaining({
+        prompt: expect.objectContaining({
+          files: [{ uri: "data:text/plain;base64,SGVsbG8=" }],
+        }),
+      })
+    )
 
     const stopUncertain = new OpenCodeMutationUncertainError()
     const stopCase = client({

@@ -23,6 +23,7 @@ import {
   OpenCodeMutationUncertainError,
   type OpenCodeClient,
   type OpenCodePageOptions,
+  type OpenCodeSessionEvents,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
 import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
@@ -36,6 +37,10 @@ import {
   parseOpenCodeModelCatalog,
   parseOpenCodeSession,
 } from "./native-schemas"
+import {
+  OpenCodeEventValidationError,
+  validateOpenCodeLiveEvent,
+} from "./events"
 import {
   createOpenCodeWorkspaceOperations,
   OpenCodeWorkspaceScopeError,
@@ -57,6 +62,12 @@ export type OpenCodeAdapterClient = Readonly<{
     | "switchModel"
     | "messages"
     | "context"
+    | "events"
+    | "active"
+    | "history"
+    | "prompt"
+    | "interrupt"
+    | "wait"
     | "questions"
     | "permissions"
   >
@@ -67,6 +78,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   client: OpenCodeAdapterClient
   /** Created by the native runs leaf; coordinator admission remains central. */
   runs: ServerRunEngine
+  /** Factory supplies the one shared native-interaction authority. */
+  interactions?: OpenCodeInteractions
   creatorAgentId?: string
 }>
 
@@ -187,6 +200,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   readonly interactions: OpenCodeInteractions
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
+  readonly #invalidations = new Set<() => void>()
   #closePromise: Promise<void> | undefined
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
@@ -195,10 +209,12 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       client: options.client,
       creatorAgentId: options.creatorAgentId,
     })
-    this.interactions = new OpenCodeInteractions({
-      questions: options.client.sessions.questions,
-      permissions: options.client.sessions.permissions,
-    })
+    this.interactions =
+      options.interactions ??
+      new OpenCodeInteractions({
+        questions: options.client.sessions.questions,
+        permissions: options.client.sessions.permissions,
+      })
   }
 
   resolveSessionId(agentId: string, publicSessionId: string) {
@@ -431,9 +447,47 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     reset?: () => void
   ): Promise<() => void> {
     await this.getSession(agentId, publicSessionId)
-    void [listener, reset]
-    // OC2 owns the provider-private SSE attachment and event conversion.
-    throw new OpenCodeWorkspaceUnavailableError()
+    const controller = new AbortController()
+    let source: OpenCodeSessionEvents | undefined
+    let released = false
+    let lastSeen: number | undefined
+    const release = () => {
+      if (released) return
+      released = true
+      this.#invalidations.delete(release)
+      controller.abort()
+      source?.abort()
+    }
+    const fail = () => {
+      if (released) return
+      release()
+      reset?.()
+    }
+    try {
+      source = await this.options.client.sessions.events(publicSessionId, {
+        signal: controller.signal,
+      })
+    } catch (error) {
+      release()
+      throw error
+    }
+    this.#invalidations.add(release)
+    void (async () => {
+      try {
+        for await (const envelope of source!) {
+          if (released) return
+          const event = validateOpenCodeLiveEvent(envelope, publicSessionId)
+          if (lastSeen !== undefined && event.seq !== lastSeen + 1)
+            throw new OpenCodeEventValidationError()
+          lastSeen = event.seq
+          listener()
+        }
+        fail()
+      } catch {
+        fail()
+      }
+    })()
+    return release
   }
 
   async stageAttachments(
@@ -475,7 +529,10 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   close() {
-    this.#closePromise ??= this.options.client.close()
+    this.#closePromise ??= Promise.resolve().then(async () => {
+      for (const release of [...this.#invalidations]) release()
+      await this.options.client.close()
+    })
     return this.#closePromise
   }
 

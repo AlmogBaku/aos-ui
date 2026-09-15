@@ -4,6 +4,8 @@ import type { RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
 import { createOpenCodeClient, type OpenCodeClientOptions } from "./client"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
+import { OpenCodeInteractions } from "./interactions"
+import { OpenCodeRunEngine } from "./run"
 
 /**
  * Provider-local configuration until the central runtime union admits OpenCode.
@@ -20,15 +22,15 @@ export type OpenCodeRuntimeConfig = Readonly<{
 
 export type OpenCodeRuntimeFactoryDependencies = Readonly<{
   clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
-  /** Supplied by OC2; this factory never adds coordinator/run state itself. */
-  runs: ServerRunEngine
+  /** Test-only override; production builds exactly one native run engine. */
+  runs?: ServerRunEngine
   creatorAgentId?: string
 }>
 
 export async function createOpenCodeRuntime(
   config: OpenCodeRuntimeConfig,
   limits: RuntimeLimits,
-  dependencies: OpenCodeRuntimeFactoryDependencies
+  dependencies: OpenCodeRuntimeFactoryDependencies = {}
 ): Promise<RuntimeInstance> {
   const password = await readSecretFile(config.passwordFile)
   const client = (dependencies.clientFactory ?? createOpenCodeClient)({
@@ -37,9 +39,16 @@ export async function createOpenCodeRuntime(
     username: config.username,
     password,
   })
+  const interactions = new OpenCodeInteractions({
+    questions: client.sessions.questions,
+    permissions: client.sessions.permissions,
+  })
+  const runs =
+    dependencies.runs ?? new OpenCodeRunEngine(client, { resume: interactions })
   const runtime = new OpenCodeServerAdapter({
     client,
-    runs: dependencies.runs,
+    runs,
+    interactions,
     creatorAgentId: dependencies.creatorAgentId,
   })
   const sessions = new SessionCoordinator({

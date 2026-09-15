@@ -30,6 +30,7 @@ import {
   validateOpenCodeLiveEvent,
   type ValidatedOpenCodeEvent,
 } from "./events"
+import { openCodePromptFiles } from "./content"
 
 const MAX_HISTORY_PAGES = 1_000
 const MAX_USER_TURN_BYTES = 1024 * 1024
@@ -44,6 +45,13 @@ export type OpenCodeBoundResume = Readonly<{
   validate(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
   /** Performs exactly one native 204 mutation after observation is attached. */
   dispatch(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
+}>
+
+type OpenCodeRunClient = Readonly<{
+  sessions: Pick<
+    OpenCodeClient["sessions"],
+    "get" | "active" | "history" | "events" | "prompt" | "interrupt" | "wait"
+  >
 }>
 
 export type OpenCodeRunEngineOptions = Readonly<{
@@ -207,27 +215,6 @@ function validateInput(
   return { input, resume, text }
 }
 
-function promptFiles(stage: ServerAttachmentStage | undefined) {
-  if (!stage) return undefined
-  const candidate = record(stage)
-  if (!candidate || !Array.isArray(candidate.files) || candidate.files.length > 16)
-    throw new Error("OpenCode attachment stage is invalid")
-  return candidate.files.map((value) => {
-    const file = record(value)
-    if (
-      !file ||
-      typeof file.uri !== "string" ||
-      !file.uri.startsWith("data:") ||
-      (file.name !== undefined && typeof file.name !== "string")
-    )
-      throw new Error("OpenCode attachment stage is invalid")
-    return {
-      uri: file.uri,
-      ...(file.name === undefined ? {} : { name: file.name }),
-    }
-  })
-}
-
 function admissionId(scope: SessionScope, runId: string) {
   const digest = createHash("sha256")
     .update(scope.sessionId)
@@ -317,7 +304,7 @@ function runKey(scope: SessionScope) {
 }
 
 export class OpenCodeRunEngine implements ServerRunEngine {
-  readonly #client: OpenCodeClient
+  readonly #client: OpenCodeRunClient
   readonly #options: OpenCodeRunEngineOptions
   readonly #runs = new Map<string, ActiveRun>()
   readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
@@ -325,7 +312,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   readonly #maxBufferedEvents: number
   readonly #waitRetryMs: number
 
-  constructor(client: OpenCodeClient, options: OpenCodeRunEngineOptions = {}) {
+  constructor(
+    client: OpenCodeRunClient,
+    options: OpenCodeRunEngineOptions = {}
+  ) {
     this.#client = client
     this.#options = options
     this.#maxQueueEvents = positiveInteger(
@@ -424,7 +414,14 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     stage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
     const { input, resume, text } = validateInput(scope, candidate)
-    const files = promptFiles(stage)
+    let files: readonly { uri: string; name?: string }[] | undefined
+    if (stage) {
+      try {
+        files = openCodePromptFiles(stage)
+      } catch {
+        throw new Error("OpenCode attachment stage is invalid")
+      }
+    }
     await this.#verifyOwnership(scope)
 
     if (resume) {
@@ -466,7 +463,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
           scope.sessionId,
           {
             id: expectedAdmission!,
-            prompt: { text: text!, ...(files ? { files } : {}) },
+            prompt: { text: text!, ...(files ? { files: [...files] } : {}) },
             resume: true,
           }
         )

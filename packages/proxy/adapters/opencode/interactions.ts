@@ -10,10 +10,12 @@ export type OpenCodeInteractionScope = {
   agentId: string
   sessionId: string
   threadId: string
-  runId: string
+  /** A normalized segment ID is not native interaction identity. */
+  runId?: string
 }
 export type OpenCodeInteractionTransport = {
   questions: {
+    list(sessionId: string): Promise<unknown>
     reply(
       sessionId: string,
       requestId: string,
@@ -22,6 +24,7 @@ export type OpenCodeInteractionTransport = {
     reject(sessionId: string, requestId: string): Promise<void>
   }
   permissions: {
+    list(sessionId: string): Promise<unknown>
     reply(
       sessionId: string,
       requestId: string,
@@ -64,6 +67,12 @@ type Pending = {
   state: "pending" | "dispatching"
   kind: "question" | "permission"
   questions?: Question[]
+}
+type DispatchEntry = {
+  p: Pending
+  status: "resolved" | "cancelled"
+  payload: unknown
+  answers?: string[][]
 }
 const record = (v: unknown): Record<string, unknown> | undefined =>
   typeof v === "object" && v !== null && !Array.isArray(v)
@@ -116,7 +125,58 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
 }
 export class OpenCodeInteractions {
   readonly #pending = new Map<string, Pending>()
+  readonly #prepared = new Map<
+    string,
+    Readonly<{ fingerprint: string; entries: readonly DispatchEntry[] }>
+  >()
   constructor(private readonly transport: OpenCodeInteractionTransport) {}
+
+  /**
+   * Cold recovery reads both native pending collections before it creates a
+   * normalized wait.  `reconcile` makes the resulting batch the only batch
+   * that a later resume can dispatch.
+   */
+  async discover(scope: OpenCodeInteractionScope) {
+    const [questions, permissions] = await Promise.all([
+      this.transport.questions.list(scope.sessionId),
+      this.transport.permissions.list(scope.sessionId),
+    ])
+    return this.reconcile(scope, { questions, permissions })?.interrupts
+  }
+
+  /** Validates a complete resume without sending a native mutation. */
+  async validate(scope: OpenCodeInteractionScope, resume: unknown) {
+    const { s, entries } = this.#entries(scope, resume)
+    if (entries.some((entry) => entry.p.state === "dispatching"))
+      throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+    this.#prepared.set(identity(s), {
+      fingerprint: this.#fingerprint(resume),
+      entries,
+    })
+  }
+
+  /** Dispatches only the exact complete batch that `validate` bound. */
+  async dispatch(scope: OpenCodeInteractionScope, resume: unknown) {
+    const s: Scope = {
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      threadId: scope.threadId,
+    }
+    const prepared = this.#prepared.get(identity(s))
+    if (
+      !prepared ||
+      prepared.fingerprint !== this.#fingerprint(resume) ||
+      prepared.entries.some(
+        (entry) =>
+          entry.p.state !== "pending" ||
+          this.#pending.get(key(s, entry.p.id)) !== entry.p
+      )
+    )
+      throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+    this.#prepared.delete(identity(s))
+    await this.#dispatch(s, prepared.entries)
+  }
+
   acceptQuestion(
     scope: OpenCodeInteractionScope,
     native: unknown
@@ -199,6 +259,7 @@ export class OpenCodeInteractions {
     if (!Array.isArray(qs) || !Array.isArray(ps))
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
     const previous = new Map(this.#pending)
+    this.#prepared.delete(identity(s))
     const dispatching = new Set(
       [...this.#pending]
         .filter(
@@ -273,6 +334,14 @@ export class OpenCodeInteractions {
     scope: OpenCodeInteractionScope,
     resume: unknown
   ): Promise<{ status: "resolved" | "in-progress" }> {
+    const { s, entries } = this.#entries(scope, resume)
+    if (entries.some((e) => e.p.state === "dispatching"))
+      return { status: "in-progress" }
+    await this.#dispatch(s, entries)
+    return { status: "resolved" }
+  }
+
+  #entries(scope: OpenCodeInteractionScope, resume: unknown) {
     const s: Scope = {
       agentId: scope.agentId,
       sessionId: scope.sessionId,
@@ -287,7 +356,7 @@ export class OpenCodeInteractions {
       resume.length !== pending.length
     )
       throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    const entries = resume.map((raw) => {
+    const entries: DispatchEntry[] = resume.map((raw) => {
       const e = record(raw)
       if (
         !e ||
@@ -310,16 +379,18 @@ export class OpenCodeInteractions {
     })
     if (new Set(entries.map((e) => e.p.id)).size !== entries.length)
       throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-    if (entries.some((e) => e.p.state === "dispatching"))
-      return { status: "in-progress" }
+    return { s, entries }
+  }
+
+  async #dispatch(s: Scope, entries: readonly DispatchEntry[]) {
     for (const e of entries) e.p.state = "dispatching"
     try {
       for (const e of entries) {
         if (e.p.kind === "question") {
           if (e.status === "cancelled")
-            await this.transport.questions.reject(scope.sessionId, e.p.id)
+            await this.transport.questions.reject(s.sessionId, e.p.id)
           else
-            await this.transport.questions.reply(scope.sessionId, e.p.id, {
+            await this.transport.questions.reply(s.sessionId, e.p.id, {
               answers: e.answers!,
             })
         } else {
@@ -327,7 +398,7 @@ export class OpenCodeInteractions {
           if (choice !== "once" && choice !== "always" && choice !== "deny")
             throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
           await this.transport.permissions.reply(
-            scope.sessionId,
+            s.sessionId,
             e.p.id,
             choice === "deny" ? "reject" : choice
           )
@@ -343,7 +414,17 @@ export class OpenCodeInteractions {
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
     }
     for (const e of entries) this.#pending.delete(key(s, e.p.id))
-    return { status: "resolved" }
+  }
+
+  #fingerprint(resume: unknown) {
+    try {
+      const fingerprint = JSON.stringify(resume)
+      if (typeof fingerprint !== "string")
+        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      return fingerprint
+    } catch {
+      throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+    }
   }
   #answers(questions: Question[], input: unknown) {
     if (!Array.isArray(input) || input.length !== questions.length)

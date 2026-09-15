@@ -35,6 +35,23 @@ const RICH_TOOLS = {
   present_plan: { kind: "plan", schema: present_planSchema },
 } as const
 
+const promptFiles = new WeakMap<
+  object,
+  readonly { uri: string; name?: string }[]
+>()
+
+/**
+ * The run leaf accepts only file references produced by this content boundary.
+ * A structural lookalike cannot smuggle unvalidated data URLs into a prompt.
+ */
+export function openCodePromptFiles(stage: unknown) {
+  if (!stage || typeof stage !== "object")
+    throw new OpenCodeContentUnavailableError()
+  const files = promptFiles.get(stage)
+  if (!files) throw new OpenCodeContentUnavailableError()
+  return files.length ? files : undefined
+}
+
 /**
  * Maps only the AOS integration's validated presentation tools. Native tool
  * state, metadata, IDs, and unknown tools deliberately never become rich UI.
@@ -176,7 +193,7 @@ export class OpenCodeContent {
       return { type: attachment.type, filename, mimeType, bytes: parsed.bytes }
     })
     if (total > MAX_TOTAL_BYTES) throw new OpenCodeContentUnavailableError()
-    return {
+    const stage = {
       public: prepared.map((attachment) =>
         attachment.type === "image"
           ? {
@@ -199,6 +216,18 @@ export class OpenCodeContent {
       },
       async cleanup() {},
     }
+    promptFiles.set(
+      stage,
+      Object.freeze(
+        attachments.map((attachment) =>
+          Object.freeze({
+            uri: attachment.dataUrl,
+            ...(attachment.filename ? { name: attachment.filename } : {}),
+          })
+        )
+      )
+    )
+    return stage
   }
 
   artifactReceipt(value: unknown) {
