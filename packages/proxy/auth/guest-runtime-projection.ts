@@ -1,8 +1,21 @@
 import { createHash } from "node:crypto"
 
-import { EventSchemas, EventType, type AGUIEvent } from "@ag-ui/core"
+import {
+  EventSchemas,
+  EventType,
+  type AGUIEvent,
+  type ActivityDeltaEvent,
+  type ActivitySnapshotEvent,
+  type CustomEvent,
+} from "@ag-ui/core"
 
-import type { SessionHistoryResponse } from "../../protocol"
+import {
+  GuestRuntimeCapabilitiesResponseSchema,
+  SessionHistoryResponseSchema,
+  SessionPlanActivityMessageSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
+  type SessionHistoryResponse,
+} from "../../protocol"
 import type {
   GuestAuthorization,
   VerifiedGuestAuthorization,
@@ -16,6 +29,25 @@ import { guestAuthorizationActive, guestControllerId } from "./guest-request"
 import type { SessionScope } from "../core/runtime"
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import { validIdentifier } from "../routes/http"
+
+function isPrivateFirstTurn(content: unknown, instruction: string) {
+  if (!Array.isArray(content) || content.length !== 1) return false
+  const part = content[0]
+  if (part?.type !== "text") return false
+  try {
+    const value = JSON.parse(part.text) as unknown
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as Record<string, unknown>).v === 1 &&
+      (value as Record<string, unknown>).type === "aos.guest.first-turn" &&
+      (value as Record<string, unknown>).instruction === instruction
+    )
+  } catch {
+    return false
+  }
+}
 
 export function projectGuestError(
   authorization: GuestAuthorization,
@@ -37,58 +69,166 @@ export function projectGuestError(
     },
     authorization
   )
-  return projected
-    ? new Response(JSON.stringify(projected), {
-        status,
-        headers: { "content-type": "application/json; charset=UTF-8" },
-      })
+  return projected?.payload.type === "error"
+    ? new Response(
+        JSON.stringify({
+          error: {
+            code:
+              projected.payload.code === "rate_limited"
+                ? "run_capacity_exceeded"
+                : projected.payload.code === "request_failed"
+                  ? "run_conflict"
+                  : projected.payload.code,
+            description:
+              projected.payload.description ??
+              guestErrorDescription(projected.payload.code),
+          },
+        }),
+        {
+          status,
+          headers: { "content-type": "application/json; charset=UTF-8" },
+        }
+      )
     : new Response(null, { status })
 }
 
 export function projectGuestHistory(
   history: SessionHistoryResponse,
-  authorization: GuestAuthorization
+  authorization: GuestAuthorization,
+  publicSessionId = history.sessionId
 ) {
-  return {
-    sessionId: history.sessionId,
-    messages: history.messages.flatMap((message) => {
-      if (message.role === "system" || message.role === "activity") return []
-      const content = message.content.flatMap((part) => {
-        if (part.type !== "text") return []
-        const projected = projectGuestOutbound(
+  const messages: unknown[] = []
+  for (const [index, message] of history.messages.entries()) {
+    if (message.role === "system") continue
+    if (
+      index === 0 &&
+      history.offset === 0 &&
+      message.role === "user" &&
+      authorization.firstTurn?.instruction &&
+      isPrivateFirstTurn(message.content, authorization.firstTurn.instruction)
+    )
+      continue
+    if (message.role === "activity") {
+      messages.push(message)
+      continue
+    }
+    const content = message.content.flatMap((part) => {
+      if (part.type !== "text") return []
+      const projected = projectGuestOutbound(
+        {
+          transport: "rest",
+          agentId: authorization.agentId,
+          sessionId: authorization.sessionId,
+          payload: {
+            type: "message",
+            role: message.role === "user" ? "guest" : "assistant",
+            text: part.text,
+          },
+        },
+        authorization
+      )
+      return projected?.payload.type === "message" &&
+        projected.payload.text !== undefined
+        ? [{ type: "text" as const, text: projected.payload.text }]
+        : []
+    })
+    const interrupts =
+      message.role === "assistant" &&
+      message.metadata?.custom.agui &&
+      typeof message.metadata.custom.agui === "object" &&
+      message.metadata.custom.agui !== null &&
+      !Array.isArray(message.metadata.custom.agui)
+        ? (message.metadata.custom.agui as { interrupts?: unknown }).interrupts
+        : undefined
+    const projectedInterrupts = Array.isArray(interrupts)
+      ? projectGuestOutbound(
           {
             transport: "rest",
             agentId: authorization.agentId,
             sessionId: authorization.sessionId,
-            payload: {
-              type: "message",
-              role: message.role === "user" ? "guest" : "assistant",
-              text: part.text,
-            },
+            payload: { type: "interrupt", interrupts },
           },
           authorization
         )
-        return projected?.payload.type === "message" &&
-          projected.payload.text !== undefined
-          ? [{ type: "text" as const, text: projected.payload.text }]
-          : []
-      })
-      return content.length === 0
-        ? []
-        : [
-            {
-              id: message.id,
-              role: message.role,
-              content,
-              createdAt: message.createdAt,
+      : undefined
+    if (
+      content.length === 0 &&
+      projectedInterrupts?.payload.type !== "interrupt" &&
+      !message.attachments?.length
+    )
+      continue
+    messages.push({
+      id: message.id,
+      role: message.role,
+      content,
+      createdAt: message.createdAt,
+      ...(message.role === "user" && message.attachments?.length
+        ? { attachments: message.attachments }
+        : {}),
+      ...(projectedInterrupts?.payload.type === "interrupt"
+        ? {
+            status: {
+              type: "requires-action" as const,
+              reason: "interrupt" as const,
             },
-          ]
-    }),
+            metadata: {
+              custom: {
+                agui: {
+                  interrupts: projectedInterrupts.payload.interrupts.map(
+                    (interrupt) => ({ ...interrupt })
+                  ),
+                },
+              },
+            },
+          }
+        : {}),
+    })
+  }
+  return SessionHistoryResponseSchema.parse({
+    sessionId: publicSessionId,
+    messages,
     total: history.total,
     limit: history.limit,
     offset: history.offset,
     nextOffset: history.nextOffset,
-  }
+    ...(history.execution === undefined
+      ? {}
+      : {
+          execution: {
+            status: history.execution.status,
+            ...(history.execution.runId === undefined
+              ? {}
+              : { runId: history.execution.runId }),
+          },
+        }),
+  })
+}
+
+export function projectGuestCapabilities(value: unknown) {
+  const parsed = SessionWorkspaceCapabilitiesResponseSchema.safeParse(value)
+  if (!parsed.success) return undefined
+  const { agent, content, interactions } = parsed.data
+  return GuestRuntimeCapabilitiesResponseSchema.parse({
+    agent: {
+      ...(agent.transport ? { transport: agent.transport } : {}),
+      ...(agent.multimodal ? { multimodal: agent.multimodal } : {}),
+      ...(agent.humanInTheLoop ? { humanInTheLoop: agent.humanInTheLoop } : {}),
+    },
+    content,
+    interactions: {
+      ...interactions,
+      steering: {
+        status: "unavailable",
+        reason: "operator-run-control-required",
+      },
+      approvals: {
+        ...interactions.approvals,
+        choices: interactions.approvals.choices.filter(
+          ({ value }) => value !== "always"
+        ),
+      },
+    },
+  })
 }
 
 function publicRunError(code: string | undefined) {
@@ -109,6 +249,111 @@ function guestMessageId(tokenId: string, sourceId: string) {
     .update(sourceId)
     .digest("base64url")
     .slice(0, 24)}`
+}
+
+function projectPlanSnapshot(
+  candidate: ActivitySnapshotEvent
+): ActivitySnapshotEvent | undefined {
+  const parsed = SessionPlanActivityMessageSchema.safeParse({
+    id: candidate.messageId,
+    role: "activity",
+    activityType: candidate.activityType,
+    content: candidate.content,
+  })
+  return parsed.success
+    ? {
+        type: EventType.ACTIVITY_SNAPSHOT,
+        messageId: parsed.data.id,
+        activityType: "PLAN" as const,
+        content: parsed.data.content,
+        replace: candidate.replace,
+      }
+    : undefined
+}
+
+function projectPlanDelta(
+  candidate: ActivityDeltaEvent
+): ActivityDeltaEvent | undefined {
+  const patch = candidate.patch
+  if (
+    candidate.activityType !== "PLAN" ||
+    patch.length !== 1 ||
+    typeof patch[0] !== "object" ||
+    patch[0] === null ||
+    Array.isArray(patch[0])
+  )
+    return undefined
+  const operation = patch[0] as Record<string, unknown>
+  if (
+    operation.op !== "replace" ||
+    operation.path !== "/todos" ||
+    Object.keys(operation).some(
+      (key) => key !== "op" && key !== "path" && key !== "value"
+    )
+  )
+    return undefined
+  const parsed = SessionPlanActivityMessageSchema.safeParse({
+    id: candidate.messageId,
+    role: "activity",
+    activityType: "PLAN",
+    content: { todos: operation.value },
+  })
+  return parsed.success
+    ? {
+        type: EventType.ACTIVITY_DELTA,
+        messageId: parsed.data.id,
+        activityType: "PLAN" as const,
+        patch: [
+          {
+            op: "replace",
+            path: "/todos",
+            value: parsed.data.content.todos,
+          },
+        ],
+      }
+    : undefined
+}
+
+function projectArtifact(candidate: CustomEvent): CustomEvent | undefined {
+  if (
+    candidate.name !== "aos.artifact" ||
+    typeof candidate.value !== "object" ||
+    candidate.value === null ||
+    Array.isArray(candidate.value)
+  )
+    return undefined
+  const value = candidate.value as Record<string, unknown>
+  const source = value.source
+  if (
+    typeof value.id !== "string" ||
+    !validIdentifier(value.id) ||
+    typeof value.filename !== "string" ||
+    value.filename.length === 0 ||
+    value.filename.length > 4_096 ||
+    (value.mimeType !== undefined &&
+      (typeof value.mimeType !== "string" || value.mimeType.length > 256)) ||
+    (value.sizeBytes !== undefined &&
+      (!Number.isSafeInteger(value.sizeBytes) ||
+        (value.sizeBytes as number) < 0)) ||
+    typeof source !== "object" ||
+    source === null ||
+    Array.isArray(source) ||
+    (source as Record<string, unknown>).type !== "provider" ||
+    (source as Record<string, unknown>).reference !== value.id
+  )
+    return undefined
+  const id = value.id
+  return {
+    type: EventType.CUSTOM,
+    name: "aos.artifact",
+    value: {
+      id,
+      filename: value.filename,
+      ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
+      ...(value.sizeBytes === undefined ? {} : { sizeBytes: value.sizeBytes }),
+      source: { type: "provider", reference: id },
+    },
+  } as const
 }
 
 function createRunProjector(
@@ -230,6 +475,11 @@ function createRunProjector(
           }
         : undefined
     }
+    if (candidate.type === EventType.ACTIVITY_SNAPSHOT)
+      return projectPlanSnapshot(candidate)
+    if (candidate.type === EventType.ACTIVITY_DELTA)
+      return projectPlanDelta(candidate)
+    if (candidate.type === EventType.CUSTOM) return projectArtifact(candidate)
     return undefined
   }
 }

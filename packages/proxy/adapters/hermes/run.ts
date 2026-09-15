@@ -9,6 +9,7 @@ import {
 } from "@ag-ui/core"
 import {
   ServerRunConflictError,
+  ServerRunSteerUncertainError,
   type RecoveryRequest,
   type ServerRunHandle,
   type SessionScope,
@@ -18,6 +19,7 @@ import {
   projectHermesQuestionArgs,
   projectHermesQuestionResult,
 } from "./history"
+import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
@@ -78,6 +80,10 @@ export type HermesRunNative = {
       rewindSourceId?: string
     }
   ): Promise<{ acknowledgement: "accepted" | "uncertain" }>
+  redirect(
+    liveSessionId: string,
+    text: string
+  ): Promise<"redirected" | "queued">
   interrupt(liveSessionId: string): Promise<void>
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
   inspectExecution?(scope: HermesRunScope & { runId: string }): Promise<{
@@ -282,12 +288,18 @@ type ActiveRun = {
   epoch: string
   lastSeen: number
   messageId?: string
+  generation: number
+  sealedMessageIds: Set<string>
   textStarted: boolean
   streamedText?: string
   reasoningStarted: boolean
   reasoningEnded: boolean
   streamedReasoning: string
-  tools: Map<string, { name: string; ended: boolean }>
+  tools: Map<string, { name: string; ended: boolean; messageId: string }>
+  redirectChainActive: boolean
+  redirectDispatchPending: boolean
+  redirectBoundaryObserved: boolean
+  redirectIdleObserved: boolean
   stopping: boolean
   uncertain: boolean
   detached: boolean
@@ -521,211 +533,17 @@ function normalizedTool(name: string, value: unknown) {
   }
 }
 
-const TOOL_ARG_FIELDS = new Map<string, ReadonlySet<string>>([
-  ["delegate_subagent", new Set()],
-  ["question", new Set(["multiple", "allowFreeform"])],
-  ["todo", new Set(["status"])],
-  ["search", new Set(["offset", "limit"])],
-  ["read_file", new Set(["offset", "limit", "line", "start", "end"])],
-])
-const DEFAULT_TOOL_ARG_FIELDS = new Set([
-  "end",
-  "limit",
-  "line",
-  "multiple",
-  "offset",
-  "start",
-  "status",
-])
-const DEFAULT_TOOL_RESULT_FIELDS = new Set([
-  "count",
-  "end",
-  "exitCode",
-  "language",
-  "line",
-  "ok",
-  "start",
-  "status",
-])
-
-const SAFE_CREDENTIAL_LIKE_KEYS = new Set([
-  "accesskeyrotation",
-  "authmode",
-  "authorizationmode",
-  "oauth",
-  "oauthmode",
-  "secretary",
-  "tokencount",
-  "tokenlimit",
-  "tokenusage",
-])
-const CREDENTIAL_WRAPPERS = new Set([
-  "b64",
-  "base64",
-  "ciphertext",
-  "digest",
-  "encoded",
-  "encrypted",
-  "file",
-  "hash",
-  "hashed",
-  "path",
-  "salt",
-  "sha256",
-  "value",
-])
-
-function credentialToolKey(key: string) {
-  const words = key
-    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/gu)
-    .filter(Boolean)
-  const normalized = words.join("")
-  if (SAFE_CREDENTIAL_LIKE_KEYS.has(normalized)) return false
-  while (words.length > 1 && CREDENTIAL_WRAPPERS.has(words.at(-1) ?? ""))
-    words.pop()
-  const core = words.join("")
-  const credentialTerms = [
-    "pwd",
-    "pass",
-    "passcode",
-    "password",
-    "passwd",
-    "passphrase",
-    "privatekey",
-    "secret",
-    "secretkey",
-    "token",
-    "apikey",
-    "accesskey",
-    "accesskeyid",
-    "auth",
-    "authorization",
-    "cookie",
-    "cookiejar",
-    "credential",
-    "credentials",
-  ]
-  const prefix = words.slice(0, 2).join("")
-  const suffix = words.slice(-2).join("")
-  return (
-    core === "npmconfiguserconfig" ||
-    credentialTerms.some(
-      (term) =>
-        core === term ||
-        core.endsWith(term) ||
-        words[0] === term ||
-        prefix === term ||
-        suffix === term
-    )
-  )
+function safeToolArgs(_name: string, value: Record<string, unknown>) {
+  const projected = projectHermesToolArgs(value)
+  if (_name !== "present_artifact") return JSON.stringify(projected)
+  const receipt: Record<string, unknown> = {}
+  for (const key of ["id", "title", "filename", "mimeType", "sizeBytes"])
+    if (key in projected) receipt[key] = projected[key]
+  return JSON.stringify(receipt)
 }
 
-function sensitiveToolKey(key: string) {
-  const normalized = key.replace(/[^a-z0-9]/giu, "").toLowerCase()
-  return (
-    credentialToolKey(key) ||
-    normalized.endsWith("sessionid") ||
-    normalized.endsWith("liveid") ||
-    normalized.endsWith("metadata") ||
-    normalized.endsWith("url") ||
-    normalized.endsWith("uri") ||
-    normalized === "origin" ||
-    normalized === "host" ||
-    normalized === "cwd" ||
-    normalized.endsWith("directory") ||
-    normalized.endsWith("directories") ||
-    normalized.includes("filesystem") ||
-    normalized.endsWith("path")
-  )
-}
-
-const SAFE_TOOL_STATUSES = new Set([
-  "cancelled",
-  "canceled",
-  "complete",
-  "completed",
-  "done",
-  "error",
-  "failed",
-  "ok",
-  "pending",
-  "running",
-  "stopped",
-  "success",
-])
-
-function safeToolMetadata(key: string, value: unknown) {
-  if (key === "ok" || key === "multiple" || key === "allowFreeform")
-    return typeof value === "boolean" ? value : undefined
-  if (
-    key === "count" ||
-    key === "end" ||
-    key === "exitCode" ||
-    key === "limit" ||
-    key === "line" ||
-    key === "offset" ||
-    key === "start"
-  )
-    return typeof value === "number" && Number.isSafeInteger(value)
-      ? value
-      : undefined
-  if (key === "status")
-    return typeof value === "string" && SAFE_TOOL_STATUSES.has(value)
-      ? value
-      : undefined
-  if (key === "language")
-    return typeof value === "string" &&
-      /^[a-z0-9][a-z0-9+_.-]{0,31}$/u.test(value)
-      ? value
-      : undefined
-  return undefined
-}
-
-function safeToolArgs(name: string, value: Record<string, unknown>) {
-  const allowed = TOOL_ARG_FIELDS.get(name) ?? DEFAULT_TOOL_ARG_FIELDS
-  const projected: Record<string, unknown> = {}
-  let inspected = 0
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) continue
-    inspected += 1
-    if (inspected > MAX_GRAPH_ENTRIES) break
-    if (!allowed.has(key) || sensitiveToolKey(key)) continue
-    let item: unknown
-    try {
-      item = value[key]
-    } catch {
-      continue
-    }
-    const safe = safeToolMetadata(key, item)
-    if (safe !== undefined) projected[key] = safe
-  }
-  return JSON.stringify(projected)
-}
-
-function resultContent(_name: string, value: unknown) {
-  const projected: Record<string, unknown> = {}
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    let inspected = 0
-    for (const key in value) {
-      if (!Object.hasOwn(value, key)) continue
-      inspected += 1
-      if (inspected > MAX_GRAPH_ENTRIES) break
-      if (!DEFAULT_TOOL_RESULT_FIELDS.has(key) || sensitiveToolKey(key))
-        continue
-      let item: unknown
-      try {
-        item = (value as Record<string, unknown>)[key]
-      } catch {
-        continue
-      }
-      const safe = safeToolMetadata(key, item)
-      if (safe !== undefined) projected[key] = safe
-    }
-  }
-  if (Object.keys(projected).length === 0) projected.status = "completed"
-  return JSON.stringify(projected)
+function resultContent(_name: string, value: unknown, isError = false) {
+  return JSON.stringify(projectHermesToolResult(value, isError))
 }
 
 function boundedText(value: unknown) {
@@ -887,12 +705,18 @@ export class HermesRunEngine {
         unsubscribe,
         epoch: baseline.epoch,
         lastSeen: 0,
+        generation: 0,
+        sealedMessageIds: new Set(),
         textStarted: false,
         streamedText: "",
         reasoningStarted: false,
         reasoningEnded: false,
         streamedReasoning: "",
         tools: new Map(),
+        redirectChainActive: false,
+        redirectDispatchPending: false,
+        redirectBoundaryObserved: false,
+        redirectIdleObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -1078,12 +902,18 @@ export class HermesRunEngine {
         unsubscribe,
         epoch: recovery.epoch,
         lastSeen: request.position?.lastSeen ?? 0,
+        generation: 0,
+        sealedMessageIds: new Set(),
         textStarted: false,
         streamedText: "",
         reasoningStarted: false,
         reasoningEnded: false,
         streamedReasoning: "",
         tools: new Map(),
+        redirectChainActive: false,
+        redirectDispatchPending: false,
+        redirectBoundaryObserved: false,
+        redirectIdleObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -1260,6 +1090,7 @@ export class HermesRunEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => this.#stop(active),
+      steer: (request) => this.#steer(active, request.text),
       recoveryPosition: () => ({
         epoch: active.epoch,
         lastSeen: active.lastSeen,
@@ -1318,9 +1149,9 @@ export class HermesRunEngine {
     }
     if (event.type === "message.start") {
       if (!active.messageId) {
-        active.messageId =
-          stableNativeId(payload.message_id ?? payload.id) ??
-          `${active.runId}:assistant`
+        const messageId = stableNativeId(payload.message_id ?? payload.id)
+        if (messageId && active.sealedMessageIds.has(messageId)) return
+        active.messageId = messageId ?? this.#fallbackMessageId(active)
       }
       return
     }
@@ -1371,7 +1202,7 @@ export class HermesRunEngine {
       if (!tool || tool.ended) return
       tool.ended = true
       const toolCallId = stableNativeId(payload.tool_id)
-      if (!toolCallId || !active.messageId) return
+      if (!toolCallId) return
       const artifact =
         tool.name === "present_artifact"
           ? projectHermesArtifactReceipt(payload.result)
@@ -1383,13 +1214,17 @@ export class HermesRunEngine {
       this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
       this.#emit(active, {
         type: EventType.TOOL_CALL_RESULT,
-        messageId: `${active.messageId}:tool:${toolCallId}`,
+        messageId: `${tool.messageId}:tool:${toolCallId}`,
         toolCallId,
         content: artifact
           ? JSON.stringify(artifact.result)
           : questionResult
             ? JSON.stringify(questionResult)
-            : resultContent(tool.name, payload.result),
+            : resultContent(
+                tool.name,
+                payload.result,
+                payload.is_error === true
+              ),
         role: "tool",
       })
       if (tool.name === "todo") {
@@ -1404,12 +1239,15 @@ export class HermesRunEngine {
         })
       return
     }
-    if (
-      event.type === "session.info" &&
-      (active.stopping || active.uncertain) &&
-      payload.running === false
-    ) {
+    if (event.type === "session.info" && payload.running === false) {
+      if (active.redirectDispatchPending) {
+        active.redirectIdleObserved = true
+        return
+      }
+      if (!active.stopping && !active.uncertain && !active.redirectChainActive)
+        return
       if (active.stopping) this.#finish(active, { stopped: true })
+      else if (active.redirectChainActive) this.#finish(active)
       else this.#settle(active)
       return
     }
@@ -1424,6 +1262,18 @@ export class HermesRunEngine {
     if (event.type === "message.complete") {
       const usage = tokenUsage(payload.usage)
       if (usage) active.usage = usage
+      const completedMessageId = stableNativeId(
+        payload.message_id ?? payload.id
+      )
+      if (
+        (active.redirectChainActive || active.redirectDispatchPending) &&
+        completedMessageId &&
+        active.sealedMessageIds.has(completedMessageId)
+      ) {
+        if (active.redirectDispatchPending)
+          active.redirectBoundaryObserved = true
+        return
+      }
       if (payload.status === "error")
         this.#fail(
           active,
@@ -1431,6 +1281,8 @@ export class HermesRunEngine {
           "Hermes could not complete this run."
         )
       else {
+        if (!active.messageId && completedMessageId)
+          active.messageId = completedMessageId
         const finalText = boundedText(payload.text)
         if (finalText) this.#ensureMessageId(active)
         if (
@@ -1453,7 +1305,11 @@ export class HermesRunEngine {
               this.#appendStreamedText(active, remaining)
           }
         }
-        this.#finish(active)
+        if (active.redirectChainActive || active.redirectDispatchPending) {
+          this.#sealGeneration(active)
+          if (active.redirectDispatchPending)
+            active.redirectBoundaryObserved = true
+        } else this.#finish(active)
       }
     }
   }
@@ -1498,26 +1354,36 @@ export class HermesRunEngine {
   }
 
   #ensureMessageId(active: ActiveRun) {
-    active.messageId ??= `${active.runId}:assistant`
+    active.messageId ??= this.#fallbackMessageId(active)
     return active.messageId
+  }
+
+  #fallbackMessageId(active: ActiveRun) {
+    return active.generation === 0
+      ? `${active.runId}:assistant`
+      : `${active.runId}:assistant:${active.generation + 1}`
   }
 
   #startTool(active: ActiveRun, payload: Record<string, unknown>) {
     const toolCallId = stableNativeId(payload.tool_id)
     if (!toolCallId) return undefined
-    this.#ensureMessageId(active)
     const existing = active.tools.get(toolCallId)
     if (existing) return existing
+    const messageId = this.#ensureMessageId(active)
     const nativeName = stableNativeId(payload.name)
     if (!nativeName) return undefined
     const normalized = normalizedTool(nativeName, payload.args)
-    const tool = { name: canonicalToolName(normalized.name), ended: false }
+    const tool = {
+      name: canonicalToolName(normalized.name),
+      ended: false,
+      messageId,
+    }
     active.tools.set(toolCallId, tool)
     this.#emit(active, {
       type: EventType.TOOL_CALL_START,
       toolCallId,
       toolCallName: tool.name,
-      parentMessageId: active.messageId,
+      parentMessageId: messageId,
     })
     this.#emit(active, {
       type: EventType.TOOL_CALL_ARGS,
@@ -1552,7 +1418,6 @@ export class HermesRunEngine {
   }
 
   #settleOpenTools(active: ActiveRun, status?: "completed" | "stopped") {
-    if (!active.messageId) return
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
@@ -1560,7 +1425,7 @@ export class HermesRunEngine {
       if (status)
         this.#emit(active, {
           type: EventType.TOOL_CALL_RESULT,
-          messageId: `${active.messageId}:tool:${toolCallId}`,
+          messageId: `${tool.messageId}:tool:${toolCallId}`,
           toolCallId,
           content: JSON.stringify({ status }),
           role: "tool",
@@ -1592,6 +1457,71 @@ export class HermesRunEngine {
       active.uncertain = true
       throw stopUncertain()
     }
+  }
+
+  async #steer(active: ActiveRun, text: string) {
+    if (
+      active.terminal ||
+      active.stopping ||
+      active.uncertain ||
+      active.redirectDispatchPending
+    )
+      throw new ServerRunConflictError()
+    const generation = active.generation
+    const previousRedirectChain = active.redirectChainActive
+    active.redirectDispatchPending = true
+    active.redirectBoundaryObserved = false
+    active.redirectIdleObserved = false
+    try {
+      const status = await this.#native.redirect(active.liveSessionId, text)
+      active.redirectDispatchPending = false
+      active.redirectChainActive = true
+      if (active.generation === generation) this.#sealGeneration(active)
+      if (active.redirectIdleObserved)
+        this.#finishAfterSteeringAcknowledgement(active)
+      return status === "redirected"
+        ? ("steered" as const)
+        : ("queued" as const)
+    } catch (error) {
+      active.redirectDispatchPending = false
+      if (error instanceof ServerRunSteerUncertainError) {
+        active.redirectChainActive = true
+        if (active.generation === generation) this.#sealGeneration(active)
+        if (active.redirectIdleObserved)
+          this.#finishAfterSteeringAcknowledgement(active)
+      } else {
+        active.redirectChainActive = previousRedirectChain
+        if (
+          active.redirectIdleObserved ||
+          (!previousRedirectChain && active.redirectBoundaryObserved)
+        )
+          this.#finish(active)
+      }
+      throw error
+    }
+  }
+
+  #finishAfterSteeringAcknowledgement(active: ActiveRun) {
+    setTimeout(() => {
+      if (!active.terminal && active.redirectChainActive) this.#finish(active)
+    }, 0)
+  }
+
+  #sealGeneration(active: ActiveRun) {
+    this.#endReasoning(active)
+    if (active.textStarted && active.messageId)
+      this.#emit(active, {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: active.messageId,
+      })
+    if (active.messageId) active.sealedMessageIds.add(active.messageId)
+    active.messageId = undefined
+    active.generation += 1
+    active.textStarted = false
+    active.streamedText = ""
+    active.reasoningStarted = false
+    active.reasoningEnded = false
+    active.streamedReasoning = ""
   }
 
   #finish(active: ActiveRun, result?: unknown) {

@@ -1,4 +1,5 @@
 import type { SessionMessage } from "../../../protocol"
+import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
 
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -57,153 +58,6 @@ const credentialValue =
   /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
 const privateLocationValue =
   /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
-
-type ToolProjection = {
-  args: readonly string[]
-  results: readonly string[]
-}
-
-const searchProjection: ToolProjection = {
-  args: ["query", "pattern", "glob", "include", "exclude", "filters", "limit"],
-  results: [
-    "ok",
-    "status",
-    "summary",
-    "message",
-    "count",
-    "matches",
-    "items",
-    "results",
-  ],
-}
-const activityProjection: ToolProjection = {
-  args: ["description", "goal", "goals", "prompt", "task", "name", "skill"],
-  results: ["name", "status", "summary", "message", "transcript"],
-}
-const receiptProjection: ToolProjection = {
-  args: ["name", "description", "start", "end", "line", "limit", "offset"],
-  results: ["ok", "status", "count", "exitCode"],
-}
-
-const receiptTools = new Set([
-  "read",
-  "read_file",
-  "write",
-  "write_file",
-  "edit",
-  "apply_patch",
-  "bash",
-  "terminal",
-  "execute_command",
-])
-
-/** Public fields are explicit; every retained nested value is sanitized again. */
-const toolProjections: Readonly<Record<string, ToolProjection>> = {
-  render_chart: {
-    args: ["title", "type", "xKey", "series", "data"],
-    results: [
-      "ok",
-      "status",
-      "message",
-      "title",
-      "type",
-      "xKey",
-      "series",
-      "data",
-    ],
-  },
-  render_map: {
-    args: ["title", "locations"],
-    results: ["ok", "status", "message", "title", "locations"],
-  },
-  render_stats: {
-    args: ["title", "description", "stats"],
-    results: ["ok", "status", "message", "title", "description", "stats"],
-  },
-  present_plan: {
-    args: ["id", "title", "steps"],
-    results: ["ok", "status", "message", "id", "title", "steps"],
-  },
-  present_artifact: {
-    args: ["id", "title", "filename", "mimeType", "sizeBytes"],
-    results: ["ok", "status", "message"],
-  },
-  question: {
-    args: [
-      "question",
-      "questions",
-      "options",
-      "allowFreeform",
-      "multiple",
-    ],
-    results: [
-      "answer",
-      "answers",
-      "selected",
-      "selectedOption",
-      "selectedOptions",
-      "text",
-      "status",
-    ],
-  },
-  ask_user_question: {
-    args: ["question", "options", "allowFreeform", "multiple"],
-    results: [
-      "answer",
-      "answers",
-      "selected",
-      "selectedOption",
-      "selectedOptions",
-      "text",
-      "status",
-    ],
-  },
-  request_permission: {
-    args: ["action", "question", "reason", "description"],
-    results: ["approved", "answer", "status", "message"],
-  },
-  request_approval: {
-    args: ["action", "question", "reason", "description"],
-    results: ["approved", "answer", "status", "message"],
-  },
-  delegate_subagent: activityProjection,
-  run_subagent: activityProjection,
-  task: activityProjection,
-  use_skill: {
-    args: ["skill", "name", "description"],
-    results: ["name", "status", "summary", "message"],
-  },
-  load_skill: {
-    args: ["skill", "name", "description"],
-    results: ["name", "status", "summary", "message"],
-  },
-  todo: {
-    args: ["action", "items", "todos", "title"],
-    results: ["ok", "status", "summary", "message", "items", "todos"],
-  },
-  monty_execute: {
-    args: ["code", "description"],
-    results: ["ok", "status", "summary", "message", "output"],
-  },
-  web_search: searchProjection,
-  search: searchProjection,
-  find: searchProjection,
-  grep: searchProjection,
-  glob: searchProjection,
-  read: receiptProjection,
-  read_file: receiptProjection,
-  write: receiptProjection,
-  write_file: receiptProjection,
-  edit: receiptProjection,
-  apply_patch: receiptProjection,
-  bash: receiptProjection,
-  terminal: receiptProjection,
-  execute_command: receiptProjection,
-  tool_describe: {
-    args: ["tool", "name", "description"],
-    results: ["ok", "status", "summary", "message", "name", "description"],
-  },
-}
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -301,21 +155,13 @@ function publicJsonValue(value: JsonValue, depth = 0): JsonValue | undefined {
   return result
 }
 
-function projectFields(value: unknown, fields: readonly string[]) {
-  const parsed = parseJson(value)
-  if (!isRecord(parsed)) return undefined
-  const projected: JsonRecord = {}
-  for (const field of fields) {
-    if (!(field in parsed)) continue
-    const item = publicJsonValue(parsed[field])
-    if (item !== undefined) projected[field] = item
-  }
-  return projected
-}
-
 function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
-  const projection = toolProjections[canonicalToolName(name)]
-  return projection ? (projectFields(args, projection.args) ?? {}) : {}
+  const projected = projectHermesToolArgs(args)
+  if (canonicalToolName(name) !== "present_artifact") return projected
+  const artifactArgs: JsonRecord = {}
+  for (const key of ["id", "title", "filename", "mimeType", "sizeBytes"])
+    if (key in projected) artifactArgs[key] = projected[key]!
+  return artifactArgs
 }
 
 function publicToolResult(name: string, value: unknown, isError: boolean) {
@@ -324,18 +170,20 @@ function publicToolResult(name: string, value: unknown, isError: boolean) {
     const responses = projectQuestionResponses(value)
     if (responses) return responses
   }
-  const projection = toolProjections[canonicalName]
-  if (!projection) return { status: isError ? "failed" : "completed" }
-  const projected = projectFields(value, projection.results)
-  if (projected && Object.keys(projected).length > 0) return projected
-  if (receiptTools.has(canonicalName))
-    return { status: isError ? "failed" : "completed" }
-  const parsed = parseJson(value)
-  if (typeof parsed === "string") {
-    const text = publicJsonValue(parsed)
-    if (typeof text === "string") return text
-  }
-  return { status: isError ? "failed" : "completed" }
+  const projected = projectHermesToolResult(value, isError)
+  if (
+    canonicalName !== "present_artifact" ||
+    !projected ||
+    typeof projected !== "object" ||
+    Array.isArray(projected)
+  )
+    return projected
+  const receipt: JsonRecord = {}
+  for (const key of ["ok", "status", "message"])
+    if (key in projected) receipt[key] = projected[key]!
+  return Object.keys(receipt).length
+    ? receipt
+    : { status: isError ? "failed" : "completed" }
 }
 
 function timestamp(value: unknown, index: number) {
@@ -550,6 +398,69 @@ function imageSource(value: unknown) {
     : undefined
 }
 
+const HERMES_CONTEXT_MARKER =
+  /(?:^|\n)--- (?:Attached Context|Context Warnings) ---[^\n]*(?:\n|$)/u
+const HERMES_FILE_REFERENCE =
+  /^@file:(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|(\S+))$/u
+const SAFE_MIME =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
+
+function safeAttachmentName(reference: string) {
+  const path = reference.match(HERMES_FILE_REFERENCE)?.slice(1).find(Boolean)
+  const name = path?.split(/[\\/]/u).at(-1)
+  const hasControlCharacter = [...(name ?? "")].some((character) => {
+    const code = character.charCodeAt(0)
+    return code < 32 || code === 127
+  })
+  return name &&
+    Buffer.byteLength(name, "utf8") <= 255 &&
+    !hasControlCharacter &&
+    name !== "." &&
+    name !== ".."
+    ? name
+    : undefined
+}
+
+function attachmentMime(context: string, reference: string) {
+  const line = context
+    .split(/\r?\n/u)
+    .find((candidate) => candidate.includes(reference))
+  const mime = line
+    ?.slice(line.indexOf(reference) + reference.length)
+    .match(/^\s+\(([^,\s()]+),/u)?.[1]
+  return mime && SAFE_MIME.test(mime) ? mime : undefined
+}
+
+function projectHermesUserContent(text: string, messageId: string) {
+  const marker = text.match(HERMES_CONTEXT_MARKER)
+  if (!marker || marker.index === undefined) return { text }
+  const context = text.slice(marker.index)
+  const lines = text.slice(0, marker.index).trimEnd().split(/\r?\n/u)
+  const references: string[] = []
+  while (lines.length > 0) {
+    const candidate = lines.at(-1)?.trim() ?? ""
+    if (!HERMES_FILE_REFERENCE.test(candidate)) break
+    references.unshift(candidate)
+    lines.pop()
+  }
+  const attachments = references.flatMap((reference, index) => {
+    const name = safeAttachmentName(reference)
+    if (!name) return []
+    const contentType = attachmentMime(context, reference)
+    return [
+      {
+        id: `${messageId}:attachment:${index}`,
+        type: "file" as const,
+        name,
+        ...(contentType ? { contentType } : {}),
+        status: { type: "complete" as const },
+        content: [],
+      },
+    ]
+  })
+  return { text: lines.join("\n").trim(), attachments }
+}
+
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[]
@@ -638,13 +549,16 @@ export function projectHermesHistory(
           : rawContent) ??
         ""
     )
+    const userContent =
+      role === "user" ? projectHermesUserContent(text, id) : undefined
+    const visibleText = userContent?.text ?? text
     const content = previousAssistant ? [...previousAssistant.content] : []
     const reasoning =
       role === "assistant"
         ? (stringValue(value.reasoning_content) ?? stringValue(value.reasoning))
         : undefined
     if (reasoning) content.push({ type: "reasoning", text: reasoning })
-    if (text) content.push({ type: "text", text })
+    if (visibleText) content.push({ type: "text", text: visibleText })
     if (role === "user" && Array.isArray(rawContent)) {
       for (const part of rawContent) {
         if (!isRecord(part) || part.type !== "image_url") continue
@@ -684,6 +598,9 @@ export function projectHermesHistory(
         role,
         content,
         createdAt: timestamp(value.timestamp ?? value.created_at, index),
+        ...(userContent?.attachments?.length
+          ? { attachments: userContent.attachments }
+          : {}),
       })
     }
   })

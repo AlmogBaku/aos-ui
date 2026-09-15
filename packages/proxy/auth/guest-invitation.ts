@@ -1,15 +1,18 @@
-import { randomBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 
 import { decodeProtectedHeader, jwtVerify, SignJWT } from "jose"
+import { z } from "zod"
 
 const ALGORITHM = "HS256"
 const TOKEN_TYPE = "aos-guest-invitation+jwt"
-const MAX_TOKEN_BYTES = 4_096
-const MAX_HEADER_BYTES = 256
-const MAX_CLAIMS_BYTES = 2_048
-const TOKEN_ID_BYTES = 32
+const TOKEN_ISSUER = "aos-invite"
+const TOKEN_AUDIENCE = "aos-guest"
+const MAX_TOKEN_BYTES = 3 * 1_024
+const MAX_UNIX_SECONDS = 4_102_444_800
 
 export const guestOperations = [
+  "audio:speak",
+  "audio:transcribe",
   "artifacts:read",
   "attachments:read",
   "errors:read",
@@ -20,6 +23,8 @@ export const guestOperations = [
 ] as const
 
 export const guestCapabilities = [
+  "audio-speech",
+  "audio-transcription",
   "artifact-metadata",
   "attachment-metadata",
   "custom-ui",
@@ -30,110 +35,143 @@ export const guestCapabilities = [
 export type GuestOperation = (typeof guestOperations)[number]
 export type GuestCapability = (typeof guestCapabilities)[number]
 
-export type GuestInvitationKey = {
-  id: string
-  secret: Uint8Array
-}
+const IdentifierSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u)
+const ReferenceSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u)
+const UnixSecondsSchema = z.number().int().min(0).max(MAX_UNIX_SECONDS)
+const PlainTextSchema = (maximum: number) =>
+  z
+    .string()
+    .max(maximum)
+    .refine((value) =>
+      [...value].every((character) => {
+        const code = character.charCodeAt(0)
+        return code !== 127 && (code >= 32 || [9, 10, 13].includes(code))
+      })
+    )
+const SingleLineSchema = (maximum: number) =>
+  z
+    .string()
+    .max(maximum)
+    .refine((value) =>
+      [...value].every((character) => {
+        const code = character.charCodeAt(0)
+        return code >= 32 && code !== 127
+      })
+    )
 
+const FirstTurnSchema = z
+  .strictObject({
+    instruction: PlainTextSchema(2_000).min(1).optional(),
+    prefill: PlainTextSchema(2_000).min(1).optional(),
+  })
+  .refine(
+    (value) => value.instruction !== undefined || value.prefill !== undefined
+  )
+const UiSchema = z
+  .strictObject({
+    lang: z.enum(["en", "he"]).optional(),
+    name: SingleLineSchema(128).optional(),
+    logoUrl: z
+      .string()
+      .max(512)
+      .url()
+      .refine((value) => {
+        const url = new URL(value)
+        return url.protocol === "https:" && !url.username && !url.password
+      })
+      .optional(),
+    accent: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/u)
+      .optional(),
+    title: SingleLineSchema(256).optional(),
+    message: PlainTextSchema(1_500).optional(),
+  })
+  .refine((value) => Object.values(value).some((item) => item !== undefined))
+
+export type GuestFirstTurn = z.infer<typeof FirstTurnSchema>
+export type GuestInvitationUi = z.infer<typeof UiSchema>
+
+export type GuestInvitationKey = { id: string; secret: Uint8Array }
 export type GuestInvitationOptions = {
-  issuer: string
-  audience: string
+  issuer: "aos-invite"
+  audience: "aos-guest"
   deploymentId: string
+  runtimeId: string
   keys: readonly GuestInvitationKey[]
   now?: () => number
   ttlSeconds?: number
   clockSkewSeconds?: number
 }
-
 export type GuestInvitationRequest = {
-  principalId: string
-  invitationId: string
-  runtimeId: string
   agentId: string
-  sessionId?: string
-  operations: readonly GuestOperation[]
-  capabilities: readonly GuestCapability[]
+  ref: string
+  expiresInSeconds?: number
+  firstTurn?: GuestFirstTurn
+  ui?: GuestInvitationUi
 }
 
-export type GuestInvitationTarget = {
-  runtimeId: string
-  agentId: string
-  sessionId?: string
-  operation: GuestOperation
-}
-
-type GuestIdentity = {
+export type GuestIdentity = {
   version: 1
   lane: "guest"
-  issuer: string
-  audience: string
+  issuer: "aos-invite"
+  audience: "aos-guest"
   deploymentId: string
   principalId: string
   invitationId: string
   runtimeId: string
   agentId: string
-  sessionId?: string
+  sessionId: string
+  ref: string
+  firstTurn?: GuestFirstTurn
+  ui?: GuestInvitationUi
   capabilities: readonly GuestCapability[]
   tokenId: string
   issuedAt: number
   notBefore: number
   expiresAt: number
 }
-
 export type GuestInvitationGrant = GuestIdentity & {
   operations: readonly GuestOperation[]
 }
-
-export type GuestAuthorization = GuestIdentity & {
-  operation: GuestOperation
-}
-
+export type GuestAuthorization = GuestIdentity & { operation: GuestOperation }
 export type VerifiedGuestAuthorization = GuestAuthorization & {
-  /** Effective authorization boundary after applying the configured tolerance. */
   authorizationExpiresAt: number
 }
-
+export type VerifiedGuestIdentity = GuestIdentity & {
+  authorizationExpiresAt: number
+}
 export type GuestInvitationService = {
   issue(request: GuestInvitationRequest): Promise<{
     token: string
     grant: GuestInvitationGrant
   }>
-  verify(
-    token: string,
-    target: GuestInvitationTarget
-  ): Promise<VerifiedGuestAuthorization | undefined>
+  verify(token: string): Promise<VerifiedGuestIdentity | undefined>
 }
 
-type EntropySource = (size: number) => Uint8Array
-
-type ParsedOptions = {
-  issuer: string
-  audience: string
-  deploymentId: string
-  keys: readonly GuestInvitationKey[]
-  now: () => number
-  ttlSeconds: number
-  clockSkewSeconds: number
-}
-
-type InvitationClaims = {
-  aud: string
-  agent: string
-  caps: GuestCapability[]
-  dep: string
-  exp: number
-  iat: number
-  inv: string
-  iss: string
-  jti: string
-  lane: "guest"
-  nbf: number
-  ops: GuestOperation[]
-  runtime: string
-  session?: string
-  sub: string
-  v: 1
-}
+const RequestSchema = z.strictObject({
+  agentId: IdentifierSchema,
+  ref: ReferenceSchema,
+  expiresInSeconds: z.number().int().positive().optional(),
+  firstTurn: FirstTurnSchema.optional(),
+  ui: UiSchema.optional(),
+})
+const ClaimsSchema = z.strictObject({
+  v: z.literal(1),
+  iss: z.literal(TOKEN_ISSUER),
+  aud: z.literal(TOKEN_AUDIENCE),
+  dep: IdentifierSchema,
+  runtime: IdentifierSchema,
+  iat: UnixSecondsSchema,
+  exp: UnixSecondsSchema,
+  agent: IdentifierSchema,
+  ref: ReferenceSchema,
+  firstTurn: FirstTurnSchema.optional(),
+  ui: UiSchema.optional(),
+})
+type InvitationClaims = z.infer<typeof ClaimsSchema>
 
 export class GuestInvitationError extends Error {
   constructor() {
@@ -142,435 +180,160 @@ export class GuestInvitationError extends Error {
   }
 }
 
-function utf8Bytes(value: string) {
-  return Buffer.byteLength(value, "utf8")
-}
-
-function validIdentifier(value: unknown, maximumBytes = 256): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    utf8Bytes(value) <= maximumBytes &&
-    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value)
-  )
-}
-
-function validGuestPrincipal(value: unknown): value is string {
-  return validIdentifier(value) && /^guest_[A-Za-z0-9._:-]+$/u.test(value)
-}
-
-function validInvitationId(value: unknown): value is string {
-  return validIdentifier(value) && /^invite_[A-Za-z0-9._:-]+$/u.test(value)
-}
-
-function validIssuer(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || utf8Bytes(value) > 512)
-    return false
-  try {
-    const url = new URL(value)
-    return (
-      url.protocol === "https:" &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === ""
-    )
-  } catch {
-    return false
-  }
-}
-
-function validUnixSeconds(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    value <= 4_102_444_800
-  )
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = []
-) {
-  const allowed = new Set([...required, ...optional])
-  const keys = Object.keys(value)
-  return (
-    required.every((key) => Object.hasOwn(value, key)) &&
-    keys.every((key) => allowed.has(key)) &&
-    keys.length ===
-      required.length + optional.filter((key) => key in value).length
-  )
-}
-
-function canonicalScope<T extends string>(
-  value: unknown,
-  allowed: readonly T[]
-): T[] | undefined {
-  if (
-    !Array.isArray(value) ||
-    value.length < 1 ||
-    value.length > allowed.length ||
-    value.some(
-      (item) => typeof item !== "string" || !allowed.includes(item as T)
-    ) ||
-    new Set(value).size !== value.length
-  )
-    return undefined
-  const sorted = [...value].sort() as T[]
-  return sorted.every((item, index) => item === value[index])
-    ? sorted
-    : undefined
-}
-
-function requestedScope<T extends string>(
-  value: readonly T[],
-  allowed: readonly T[]
-) {
-  if (
-    !Array.isArray(value) ||
-    value.length < 1 ||
-    value.length > allowed.length ||
-    value.some((item) => !allowed.includes(item)) ||
-    new Set(value).size !== value.length
-  )
-    throw new GuestInvitationError()
-  return [...value].sort() as T[]
-}
-
-function parseOptions(options: GuestInvitationOptions): ParsedOptions {
-  const ttlSeconds = options.ttlSeconds ?? 300
-  const clockSkewSeconds = options.clockSkewSeconds ?? 10
-  if (
-    !validIssuer(options.issuer) ||
-    !validIdentifier(options.audience, 128) ||
-    !validIdentifier(options.deploymentId, 128) ||
-    !Array.isArray(options.keys) ||
-    options.keys.length < 1 ||
-    options.keys.length > 3 ||
-    options.keys.some(
-      (key) =>
-        !validIdentifier(key.id, 32) ||
-        !(key.secret instanceof Uint8Array) ||
-        key.secret.byteLength !== 32
-    ) ||
-    new Set(options.keys.map((key) => key.id)).size !== options.keys.length ||
-    !Number.isInteger(ttlSeconds) ||
-    ttlSeconds < 30 ||
-    ttlSeconds > 3_600 ||
-    !Number.isInteger(clockSkewSeconds) ||
-    clockSkewSeconds < 0 ||
-    clockSkewSeconds > 60 ||
-    (options.now !== undefined && typeof options.now !== "function")
-  )
-    throw new GuestInvitationError()
-  return {
-    issuer: options.issuer,
-    audience: options.audience,
-    deploymentId: options.deploymentId,
-    keys: options.keys.map((key) => ({
-      id: key.id,
-      secret: key.secret.slice(),
-    })),
-    now: options.now ?? Date.now,
-    ttlSeconds,
-    clockSkewSeconds,
-  }
-}
-
 function nowSeconds(clock: () => number) {
-  let milliseconds: number
-  try {
-    milliseconds = clock()
-  } catch {
-    throw new GuestInvitationError()
-  }
-  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0)
-    throw new GuestInvitationError()
+  const milliseconds = clock()
   const seconds = Math.floor(milliseconds / 1_000)
-  if (!validUnixSeconds(seconds)) throw new GuestInvitationError()
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    !UnixSecondsSchema.safeParse(seconds).success
+  )
+    throw new GuestInvitationError()
   return seconds
 }
 
-function tokenId(source: EntropySource) {
-  let entropy: Uint8Array
-  try {
-    entropy = source(TOKEN_ID_BYTES)
-  } catch {
-    throw new GuestInvitationError()
-  }
-  if (!(entropy instanceof Uint8Array) || entropy.byteLength !== TOKEN_ID_BYTES)
-    throw new GuestInvitationError()
-  return Buffer.from(entropy).toString("base64url")
-}
-
-function parseRequest(request: GuestInvitationRequest) {
-  if (
-    typeof request !== "object" ||
-    request === null ||
-    !exactKeys(
-      request as unknown as Record<string, unknown>,
-      [
-        "principalId",
-        "invitationId",
-        "runtimeId",
-        "agentId",
-        "operations",
-        "capabilities",
-      ],
-      ["sessionId"]
-    ) ||
-    !validGuestPrincipal(request.principalId) ||
-    !validInvitationId(request.invitationId) ||
-    !validIdentifier(request.runtimeId) ||
-    !validIdentifier(request.agentId) ||
-    (request.sessionId !== undefined && !validIdentifier(request.sessionId))
-  )
-    throw new GuestInvitationError()
-  return {
-    principalId: request.principalId,
-    invitationId: request.invitationId,
-    runtimeId: request.runtimeId,
-    agentId: request.agentId,
-    ...(request.sessionId === undefined
-      ? {}
-      : { sessionId: request.sessionId }),
-    operations: requestedScope(request.operations, guestOperations),
-    capabilities: requestedScope(request.capabilities, guestCapabilities),
-  }
-}
-
-function parseClaims(
-  value: unknown,
-  options: ParsedOptions
-): InvitationClaims | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return undefined
-  const claims = value as Record<string, unknown>
-  if (
-    !exactKeys(
-      claims,
-      [
-        "aud",
-        "agent",
-        "caps",
-        "dep",
-        "exp",
-        "iat",
-        "inv",
-        "iss",
-        "jti",
-        "lane",
-        "nbf",
-        "ops",
-        "runtime",
-        "sub",
-        "v",
-      ],
-      ["session"]
-    ) ||
-    claims.v !== 1 ||
-    claims.lane !== "guest" ||
-    claims.iss !== options.issuer ||
-    claims.aud !== options.audience ||
-    claims.dep !== options.deploymentId ||
-    !validIdentifier(claims.runtime) ||
-    !validGuestPrincipal(claims.sub) ||
-    !validInvitationId(claims.inv) ||
-    !validIdentifier(claims.agent) ||
-    (claims.session !== undefined && !validIdentifier(claims.session)) ||
-    !validIdentifier(claims.jti, 64) ||
-    !/^[A-Za-z0-9_-]{43}$/u.test(claims.jti) ||
-    !validUnixSeconds(claims.iat) ||
-    !validUnixSeconds(claims.nbf) ||
-    !validUnixSeconds(claims.exp) ||
-    claims.nbf !== claims.iat ||
-    claims.exp - claims.iat !== options.ttlSeconds
-  )
-    return undefined
-  const operations = canonicalScope(claims.ops, guestOperations)
-  const capabilities = canonicalScope(claims.caps, guestCapabilities)
-  if (!operations || !capabilities) return undefined
-  return {
-    aud: claims.aud,
-    agent: claims.agent,
-    caps: capabilities,
-    dep: claims.dep,
-    exp: claims.exp,
-    iat: claims.iat,
-    inv: claims.inv,
-    iss: claims.iss,
-    jti: claims.jti,
-    lane: "guest",
-    nbf: claims.nbf,
-    ops: operations,
-    runtime: claims.runtime,
-    ...(claims.session === undefined ? {} : { session: claims.session }),
-    sub: claims.sub,
-    v: 1,
-  }
-}
-
-function identity(claims: InvitationClaims): GuestIdentity {
+function identity(
+  claims: InvitationClaims,
+  deploymentId: string,
+  runtimeId: string,
+  token: string
+): GuestIdentity {
   return {
     version: 1,
     lane: "guest",
-    issuer: claims.iss,
-    audience: claims.aud,
-    deploymentId: claims.dep,
-    principalId: claims.sub,
-    invitationId: claims.inv,
-    runtimeId: claims.runtime,
+    issuer: TOKEN_ISSUER,
+    audience: TOKEN_AUDIENCE,
+    deploymentId,
+    principalId: `guest_${claims.ref}`,
+    invitationId: `invite_${claims.ref}`,
+    runtimeId,
     agentId: claims.agent,
-    ...(claims.session === undefined ? {} : { sessionId: claims.session }),
-    capabilities: claims.caps,
-    tokenId: claims.jti,
+    sessionId: claims.ref,
+    ref: claims.ref,
+    ...(claims.firstTurn ? { firstTurn: claims.firstTurn } : {}),
+    ...(claims.ui ? { ui: claims.ui } : {}),
+    capabilities: guestCapabilities,
+    tokenId: createHash("sha256").update(token).digest("base64url"),
     issuedAt: claims.iat,
-    notBefore: claims.nbf,
+    notBefore: claims.iat,
     expiresAt: claims.exp,
   }
 }
 
-function grant(claims: InvitationClaims): GuestInvitationGrant {
-  return { ...identity(claims), operations: claims.ops }
-}
-
-function authorization(
-  claims: InvitationClaims,
-  operation: GuestOperation,
-  clockSkewSeconds: number
-): VerifiedGuestAuthorization {
-  return {
-    ...identity(claims),
-    operation,
-    authorizationExpiresAt: claims.exp + clockSkewSeconds,
-  }
-}
-
-function makeService(
-  rawOptions: GuestInvitationOptions,
-  entropy: EntropySource
+export function createGuestInvitationService(
+  raw: GuestInvitationOptions
 ): GuestInvitationService {
-  const options = parseOptions(rawOptions)
+  const ttlSeconds = raw.ttlSeconds ?? 259_200
+  const clockSkewSeconds = raw.clockSkewSeconds ?? 0
+  const validOptions =
+    raw.issuer === TOKEN_ISSUER &&
+    raw.audience === TOKEN_AUDIENCE &&
+    IdentifierSchema.safeParse(raw.deploymentId).success &&
+    IdentifierSchema.safeParse(raw.runtimeId).success &&
+    raw.keys.length >= 1 &&
+    raw.keys.length <= 3 &&
+    raw.keys.every(
+      ({ id, secret }) =>
+        /^[A-Za-z0-9_-]{1,32}$/u.test(id) &&
+        secret instanceof Uint8Array &&
+        secret.byteLength === 32
+    ) &&
+    new Set(raw.keys.map(({ id }) => id)).size === raw.keys.length &&
+    Number.isInteger(ttlSeconds) &&
+    ttlSeconds >= 60 &&
+    ttlSeconds <= 2_592_000 &&
+    Number.isInteger(clockSkewSeconds) &&
+    clockSkewSeconds >= 0 &&
+    clockSkewSeconds <= 60
+  if (!validOptions) throw new GuestInvitationError()
+
+  const keys = raw.keys.map(({ id, secret }) => ({
+    id,
+    secret: secret.slice(),
+  }))
+  const clock = raw.now ?? Date.now
   return {
-    async issue(rawRequest) {
-      const request = parseRequest(rawRequest)
-      const issuedAt = nowSeconds(options.now)
-      const claims: InvitationClaims = {
-        aud: options.audience,
-        agent: request.agentId,
-        caps: request.capabilities,
-        dep: options.deploymentId,
-        exp: issuedAt + options.ttlSeconds,
-        iat: issuedAt,
-        inv: request.invitationId,
-        iss: options.issuer,
-        jti: tokenId(entropy),
-        lane: "guest",
-        nbf: issuedAt,
-        ops: request.operations,
-        runtime: request.runtimeId,
-        ...(request.sessionId === undefined
-          ? {}
-          : { session: request.sessionId }),
-        sub: request.principalId,
+    async issue(candidate) {
+      const parsed = RequestSchema.safeParse(candidate)
+      if (!parsed.success) throw new GuestInvitationError()
+      const issuedAt = nowSeconds(clock)
+      const expiresInSeconds = parsed.data.expiresInSeconds ?? ttlSeconds
+      if (expiresInSeconds > ttlSeconds) throw new GuestInvitationError()
+      const claims = ClaimsSchema.parse({
         v: 1,
-      }
-      if (!validUnixSeconds(claims.exp)) throw new GuestInvitationError()
+        iss: TOKEN_ISSUER,
+        aud: TOKEN_AUDIENCE,
+        dep: raw.deploymentId,
+        runtime: raw.runtimeId,
+        iat: issuedAt,
+        exp: issuedAt + expiresInSeconds,
+        agent: parsed.data.agentId,
+        ref: parsed.data.ref,
+        ...(parsed.data.firstTurn ? { firstTurn: parsed.data.firstTurn } : {}),
+        ...(parsed.data.ui ? { ui: parsed.data.ui } : {}),
+      })
       const token = await new SignJWT(claims)
         .setProtectedHeader({
           alg: ALGORITHM,
-          kid: options.keys[0].id,
+          kid: keys[0].id,
           typ: TOKEN_TYPE,
         })
-        .sign(options.keys[0].secret)
-      if (utf8Bytes(token) > MAX_TOKEN_BYTES) throw new GuestInvitationError()
-      return { token, grant: grant(claims) }
+        .sign(keys[0].secret)
+      if (Buffer.byteLength(token, "utf8") > MAX_TOKEN_BYTES)
+        throw new GuestInvitationError()
+      return {
+        token,
+        grant: {
+          ...identity(claims, raw.deploymentId, raw.runtimeId, token),
+          operations: guestOperations,
+        },
+      }
     },
 
-    async verify(token, target) {
+    async verify(token) {
       if (
         typeof token !== "string" ||
-        utf8Bytes(token) > MAX_TOKEN_BYTES ||
-        typeof target !== "object" ||
-        target === null ||
-        !exactKeys(
-          target as unknown as Record<string, unknown>,
-          ["runtimeId", "agentId", "operation"],
-          ["sessionId"]
-        ) ||
-        !validIdentifier(target.runtimeId) ||
-        !validIdentifier(target.agentId) ||
-        !guestOperations.includes(target.operation) ||
-        (target.sessionId !== undefined && !validIdentifier(target.sessionId))
+        Buffer.byteLength(token, "utf8") > MAX_TOKEN_BYTES
       )
         return undefined
       try {
-        const segments = token.split(".")
-        if (
-          segments.length !== 3 ||
-          Buffer.from(segments[0], "base64url").byteLength > MAX_HEADER_BYTES ||
-          Buffer.from(segments[1], "base64url").byteLength > MAX_CLAIMS_BYTES
-        )
-          return undefined
         const header = decodeProtectedHeader(token)
         if (
-          !exactKeys(header as Record<string, unknown>, [
-            "alg",
-            "kid",
-            "typ",
-          ]) ||
+          Object.keys(header).length !== 3 ||
           header.alg !== ALGORITHM ||
           header.typ !== TOKEN_TYPE ||
-          !validIdentifier(header.kid, 32)
+          typeof header.kid !== "string"
         )
           return undefined
-        const key = options.keys.find(
-          (candidate) => candidate.id === header.kid
-        )
+        const key = keys.find(({ id }) => id === header.kid)
         if (!key) return undefined
-        const current = nowSeconds(options.now)
-        const result = await jwtVerify(token, key.secret, {
+        const current = nowSeconds(clock)
+        const verified = await jwtVerify(token, key.secret, {
           algorithms: [ALGORITHM],
-          audience: options.audience,
-          issuer: options.issuer,
+          audience: TOKEN_AUDIENCE,
+          issuer: TOKEN_ISSUER,
           typ: TOKEN_TYPE,
-          clockTolerance: options.clockSkewSeconds,
+          clockTolerance: clockSkewSeconds,
           currentDate: new Date(current * 1_000),
-          requiredClaims: ["iat", "nbf", "exp", "jti", "sub"],
+          requiredClaims: ["iat", "exp"],
         })
-        const claims = parseClaims(result.payload, options)
+        const parsed = ClaimsSchema.safeParse(verified.payload)
         if (
-          !claims ||
-          Buffer.from(JSON.stringify(claims), "utf8").toString("base64url") !==
-            segments[1] ||
-          claims.runtime !== target.runtimeId ||
-          claims.agent !== target.agentId ||
-          !claims.ops.includes(target.operation) ||
-          (claims.session !== undefined &&
-            claims.session !== target.sessionId) ||
-          current < claims.nbf - options.clockSkewSeconds ||
-          current > claims.exp + options.clockSkewSeconds
+          !parsed.success ||
+          parsed.data.dep !== raw.deploymentId ||
+          parsed.data.runtime !== raw.runtimeId ||
+          parsed.data.exp <= parsed.data.iat ||
+          parsed.data.exp - parsed.data.iat > ttlSeconds ||
+          current < parsed.data.iat - clockSkewSeconds ||
+          current > parsed.data.exp + clockSkewSeconds
         )
           return undefined
-        return authorization(claims, target.operation, options.clockSkewSeconds)
+        return {
+          ...identity(parsed.data, raw.deploymentId, raw.runtimeId, token),
+          authorizationExpiresAt: parsed.data.exp + clockSkewSeconds,
+        }
       } catch {
         return undefined
       }
     },
   }
-}
-
-export function createGuestInvitationService(
-  options: GuestInvitationOptions
-): GuestInvitationService {
-  return makeService(options, randomBytes)
-}
-
-export function createGuestInvitationServiceForTest(
-  options: GuestInvitationOptions,
-  entropy: EntropySource
-): GuestInvitationService {
-  return makeService(options, entropy)
 }

@@ -49,6 +49,22 @@ export class HermesHttpError extends Error {
   }
 }
 
+/** The JSON-RPC mutation was written to the socket but no result was known. */
+export class HermesRpcUncertainError extends Error {
+  constructor() {
+    super("Hermes connection failed")
+    this.name = "HermesRpcUncertainError"
+  }
+}
+
+/** Hermes authoritatively rejected a dispatched JSON-RPC request. */
+export class HermesRpcRejectedError extends Error {
+  constructor() {
+    super("Hermes RPC request was rejected")
+    this.name = "HermesRpcRejectedError"
+  }
+}
+
 function normalizeBaseUrl(value: string) {
   try {
     const url = new URL(value)
@@ -340,7 +356,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.#pending.delete(id)) return
-        reject(new Error("Hermes request timed out"))
+        reject(new HermesRpcUncertainError())
       }, this.#timeoutMs)
       this.#pending.set(id, { maxResponseBytes, timer, resolve, reject })
       try {
@@ -350,7 +366,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         if (!pending) return
         this.#pending.delete(id)
         clearTimeout(pending.timer)
-        reject(new Error("Hermes connection failed"))
+        reject(new HermesRpcUncertainError())
       }
     })
   }
@@ -458,7 +474,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
         this.#pending.delete(frame.id)
         clearTimeout(pending.timer)
         if ("error" in frame && frame.error)
-          pending.reject(new Error("Hermes RPC failed"))
+          pending.reject(new HermesRpcRejectedError())
         else pending.resolve("result" in frame ? frame.result : undefined)
       })
       .catch(() => this.#lost(socket))
@@ -478,7 +494,7 @@ export class HermesWebSocketRpcTransport implements HermesRpcTransport {
     for (const [id, pending] of this.#pending) {
       this.#pending.delete(id)
       clearTimeout(pending.timer)
-      pending.reject(new Error("Hermes connection failed"))
+      pending.reject(new HermesRpcUncertainError())
     }
     if (notify) this.#disconnectObservers()
   }

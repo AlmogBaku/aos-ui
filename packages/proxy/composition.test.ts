@@ -58,8 +58,6 @@ async function configuration(withGuest = false) {
       activeExecutions: 256,
       guestActiveExecutions: 32,
       operatorEventPeers: 256,
-      guestEventPeers: 64,
-      guestEventPeersPerInvitation: 4,
       subscriberEvents: 512,
       subscriberBytes: 2_097_152,
     },
@@ -191,7 +189,7 @@ describe("configured proxy composition", () => {
     expect(transportClose).toHaveBeenCalledOnce()
   })
 
-  it("validates an invitation runtime before accessing Hermes", async () => {
+  it("does not expose invitation signing through operator HTTP", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
@@ -200,15 +198,6 @@ describe("configured proxy composition", () => {
       logger: { info: vi.fn(), error: vi.fn() },
       clock: () => 1_700_000_000_000,
     })
-    const body = {
-      principalId: "guest_recipient",
-      invitationId: "invite_public",
-      runtimeId: "another-runtime",
-      agentId: "researcher",
-      operations: ["messages:read"],
-      capabilities: ["message-text"],
-    }
-
     const response = await configured.app.request(
       "https://aos.example.test/api/aos/v1/guest-invitations",
       {
@@ -217,7 +206,7 @@ describe("configured proxy composition", () => {
           origin: "https://aos.example.test",
           "content-type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
       }
     )
 

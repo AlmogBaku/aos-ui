@@ -2,7 +2,11 @@ import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import type { Context } from "hono"
 
-import { RunStopResponseSchema } from "../../protocol"
+import {
+  RunSteerRequestSchema,
+  RunSteerResponseSchema,
+  RunStopResponseSchema,
+} from "../../protocol"
 import type { ProxyAppOptions } from "../app"
 import type {
   NewTurnRunInput,
@@ -46,6 +50,89 @@ function runText(candidate: unknown) {
   )
     return undefined
   return content.map((part) => (part as { text: string }).text).join("\n")
+}
+
+export async function prepareRunInput(
+  candidate: unknown,
+  options: {
+    agentId: string
+    threadId: string
+    attachmentStages: ServerAttachmentStages
+    allowRewind?: boolean
+  }
+) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return undefined
+  const inputRecord = candidate as Record<string, unknown>
+  const forwarded = inputRecord.forwardedProps
+  const forwardedRecord =
+    forwarded && typeof forwarded === "object" && !Array.isArray(forwarded)
+      ? (forwarded as Record<string, unknown>)
+      : undefined
+  const stageId = forwardedRecord?.aosAttachmentStageId
+  const rewindSourceId = forwardedRecord?.["aos.rewindSourceId"]
+  if (
+    (forwardedRecord &&
+      Object.keys(forwardedRecord).some(
+        (key) =>
+          key !== "aosAttachmentStageId" &&
+          (!options.allowRewind || key !== "aos.rewindSourceId")
+      )) ||
+    (stageId !== undefined &&
+      (typeof stageId !== "string" || !validIdentifier(stageId))) ||
+    (rewindSourceId !== undefined &&
+      (!options.allowRewind ||
+        typeof rewindSourceId !== "string" ||
+        !validIdentifier(rewindSourceId)))
+  )
+    return undefined
+  const stage =
+    typeof stageId === "string"
+      ? options.attachmentStages.take(
+          options.agentId,
+          options.threadId,
+          stageId
+        )
+      : undefined
+  if (typeof stageId === "string" && !stage) return undefined
+  let projected: unknown = candidate
+  if (stage) {
+    const text = runText(candidate)
+    if (text === undefined || !Array.isArray(inputRecord.messages)) {
+      await stage.cleanup().catch(() => undefined)
+      return undefined
+    }
+    projected = {
+      ...inputRecord,
+      messages: [
+        {
+          ...(inputRecord.messages[0] as Record<string, unknown>),
+          content: await stage.appendTo(text),
+        },
+      ],
+      forwardedProps:
+        options.allowRewind && typeof rewindSourceId === "string"
+          ? { "aos.rewindSourceId": rewindSourceId }
+          : {},
+    }
+  }
+  const parsed = RunAgentInputSchema.safeParse(projected)
+  if (!parsed.success) {
+    await stage?.cleanup().catch(() => undefined)
+    return undefined
+  }
+  const input = normalizeRunInput(
+    parsed.data,
+    options.threadId,
+    options.allowRewind && typeof rewindSourceId === "string"
+      ? rewindSourceId
+      : undefined
+  )
+  if (!input) {
+    await stage?.cleanup().catch(() => undefined)
+    return undefined
+  }
+  return { input, stage }
 }
 
 export function normalizeRunInput(
@@ -92,6 +179,7 @@ type RunStreamOptions = {
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
   cancel?: (timer: unknown) => void
+  onClose?: () => void
 }
 
 export function createRunStreamResponse(
@@ -115,6 +203,7 @@ export function createRunStreamResponse(
     if (timer !== undefined) cancel(timer)
     options.signal?.removeEventListener("abort", close)
     subscription.close()
+    options.onClose?.()
   }
   options.signal?.addEventListener("abort", close, { once: true })
   if (options.expiresAt !== undefined)
@@ -184,73 +273,15 @@ export function registerRunRoutes(
     if (!sessionId) return errorResponse("not_found", 404)
 
     const candidate = await boundedJson(context.req.raw, 1_100_000)
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
-      return errorResponse("invalid_request", 400)
-    const inputRecord = candidate as Record<string, unknown>
-    const forwarded = inputRecord.forwardedProps
-    const forwardedRecord =
-      forwarded && typeof forwarded === "object" && !Array.isArray(forwarded)
-        ? (forwarded as Record<string, unknown>)
-        : undefined
-    const stageId = forwardedRecord?.aosAttachmentStageId
-    const rewindSourceId = forwardedRecord?.["aos.rewindSourceId"]
-    if (
-      (forwardedRecord &&
-        Object.keys(forwardedRecord).some(
-          (key) =>
-            key !== "aosAttachmentStageId" && key !== "aos.rewindSourceId"
-        )) ||
-      (stageId !== undefined &&
-        (typeof stageId !== "string" || !validIdentifier(stageId))) ||
-      (rewindSourceId !== undefined &&
-        (typeof rewindSourceId !== "string" ||
-          !validIdentifier(rewindSourceId)))
-    )
-      return errorResponse("invalid_request", 400)
-
     await runtime.getSession(agentId, sessionId)
-    const stage =
-      typeof stageId === "string"
-        ? attachmentStages.take(agentId, threadId, stageId)
-        : undefined
-    if (typeof stageId === "string" && !stage)
-      return errorResponse("invalid_request", 400)
-
-    let projected: unknown = candidate
-    if (stage) {
-      const text = runText(candidate)
-      if (text === undefined || !Array.isArray(inputRecord.messages)) {
-        await stage.cleanup().catch(() => undefined)
-        return errorResponse("invalid_request", 400)
-      }
-      projected = {
-        ...inputRecord,
-        messages: [
-          {
-            ...(inputRecord.messages[0] as Record<string, unknown>),
-            content: stage.appendTo(text),
-          },
-        ],
-        forwardedProps:
-          rewindSourceId === undefined
-            ? {}
-            : { "aos.rewindSourceId": rewindSourceId },
-      }
-    }
-    const parsed = RunAgentInputSchema.safeParse(projected)
-    if (!parsed.success) {
-      await stage?.cleanup().catch(() => undefined)
-      return errorResponse("invalid_request", 400)
-    }
-    const input = normalizeRunInput(
-      parsed.data,
+    const prepared = await prepareRunInput(candidate, {
+      agentId,
       threadId,
-      rewindSourceId as string | undefined
-    )
-    if (!input) {
-      await stage?.cleanup().catch(() => undefined)
-      return errorResponse("invalid_request", 400)
-    }
+      attachmentStages,
+      allowRewind: true,
+    })
+    if (!prepared) return errorResponse("invalid_request", 400)
+    const { input, stage } = prepared
 
     try {
       const subscription = await options.runtimeInstance.sessions.start(
@@ -337,6 +368,36 @@ export function registerRunRoutes(
         JSON.stringify(RunStopResponseSchema.parse({ status })),
         {
           status: status === "stopping" ? 202 : 200,
+          headers: { "content-type": "application/json; charset=UTF-8" },
+        }
+      )
+    }
+  )
+
+  app.post(
+    "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs/steer",
+    async (context) => {
+      const { runtime, principalId } = await requireRuntime(context.req.raw)
+      if (context.req.header("origin") !== options.publicOrigin)
+        return errorResponse("forbidden", 403)
+      const agentId = context.req.param("agentId")
+      const threadId = context.req.param("sessionId")
+      if (!agentId || !threadId) return errorResponse("not_found", 404)
+      const sessionId = runtime.resolveSessionId(agentId, threadId)
+      if (!sessionId) return errorResponse("not_found", 404)
+      await runtime.getSession(agentId, sessionId)
+      const candidate = await boundedJson(context.req.raw, 6_300_000)
+      const parsed = RunSteerRequestSchema.safeParse(candidate)
+      if (!parsed.success) return errorResponse("invalid_request", 400)
+      const response = await options.runtimeInstance.sessions.steer(
+        { agentId, sessionId },
+        parsed.data,
+        principalId
+      )
+      return new Response(
+        JSON.stringify(RunSteerResponseSchema.parse(response)),
+        {
+          status: response.status === "queued" ? 202 : 200,
           headers: { "content-type": "application/json; charset=UTF-8" },
         }
       )

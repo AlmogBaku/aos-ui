@@ -55,8 +55,6 @@ async function proxyConfig() {
         activeExecutions: 256,
         guestActiveExecutions: 32,
         operatorEventPeers: 256,
-        guestEventPeers: 64,
-        guestEventPeersPerInvitation: 4,
         subscriberEvents: 512,
         subscriberBytes: 2_097_152,
       },
@@ -65,7 +63,7 @@ async function proxyConfig() {
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "current", secretFile: invitationKey }],
-          ttlSeconds: 300,
+          ttlSeconds: 259_200,
           clockSkewSeconds: 0,
         },
       },
@@ -97,7 +95,7 @@ describe("proxy executable", () => {
       return { server: { stop: vi.fn() }, shutdown }
     })
     const lifecycle = await runProxyCli(
-      ["bun", "proxy", "--config", await proxyConfig()],
+      ["bun", "proxy", "serve", "--config", await proxyConfig()],
       {
         runtimeFactory: (config, limits) =>
           createHermesRuntime(config, limits, {
@@ -123,12 +121,12 @@ describe("proxy executable", () => {
     expect(start).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        eventsPath: "/api/guest/v1/events",
         host: "127.0.0.1",
         port: 4101,
-        maxEventPeers: 64,
       })
     )
+    expect(start.mock.calls[1]![0]).not.toHaveProperty("events")
+    expect(start.mock.calls[1]![0]).not.toHaveProperty("eventsPath")
     expect(start.mock.calls[0]![0].close).toBeUndefined()
     expect(start.mock.calls[1]![0].close).toBeUndefined()
     const guestApp = start.mock.calls[1]![0].app
@@ -143,6 +141,16 @@ describe("proxy executable", () => {
       basePath: "/api/guest/v1",
       lane: "guest",
     })
+    const guestDocument = await guestApp.fetch(
+      new Request("https://guest.example.test/")
+    )
+    expect(guestDocument?.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'none'"
+    )
+    expect(guestDocument?.headers.get("content-security-policy")).toContain(
+      "img-src 'self' https: data: blob:"
+    )
+    expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
 
     await lifecycle!.shutdown()
     await lifecycle!.shutdown()
@@ -150,5 +158,174 @@ describe("proxy executable", () => {
     expect(shutdowns[0]).toHaveBeenCalledOnce()
     expect(shutdowns[1]).toHaveBeenCalledOnce()
     expect(transportClose).toHaveBeenCalledOnce()
+  })
+
+  it("documents the Go-compatible invite command and flags", async () => {
+    let output = ""
+
+    await expect(
+      runProxyCli(["bun", "proxy", "invite", "--help"], {
+        logger: { info: vi.fn(), error: vi.fn() },
+        writeOut: (value) => {
+          output += value
+        },
+      })
+    ).resolves.toBeUndefined()
+
+    expect(output).toContain("invite --agent NAME [flags]")
+    for (const flag of [
+      "--agent",
+      "--ref",
+      "--expires-in",
+      "--prefill",
+      "--instruction",
+      "--lang",
+      "--name",
+      "--logo",
+      "--accent",
+      "--title",
+      "--message",
+    ])
+      expect(output).toContain(flag)
+  })
+
+  it("generates a stable conversation reference when --ref is omitted", async () => {
+    const configFile = await proxyConfig()
+    let output = ""
+    let entropyCall = 0
+
+    await expect(
+      runProxyCli(
+        [
+          "bun",
+          "proxy",
+          "invite",
+          "--agent",
+          "default",
+          "--expires-in",
+          "1h",
+          "--prefill",
+          "Hello",
+          "--name",
+          "AOS Interview",
+          "--logo",
+          "https://example.test/brand.png",
+          "--accent",
+          "#2563eb",
+          "--instruction",
+          "Start a fresh conversation.",
+          "--lang",
+          "en",
+        ],
+        {
+          logger: { info: vi.fn(), error: vi.fn() },
+          getenv: (name) =>
+            name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+          randomBytes: (size) => {
+            entropyCall += 1
+            return Buffer.alloc(size, entropyCall === 1 ? 0xab : 0xcd)
+          },
+          clock: () => Date.UTC(2026, 8, 15, 8),
+          writeOut: (value) => {
+            output += value
+          },
+        }
+      )
+    ).resolves.toBeUndefined()
+
+    const url = new URL(output.trim())
+    expect(url.origin).toBe("https://guest.example.test")
+    expect(url.pathname).toBe("/")
+    expect(url.search).toBe("")
+    const token = new URLSearchParams(url.hash.slice(1)).get("invite")!
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")
+    ) as Record<string, unknown>
+    expect(payload).toEqual({
+      v: 1,
+      iss: "aos-invite",
+      aud: "aos-guest",
+      dep: "test-deployment",
+      runtime: "hermes-main",
+      iat: Date.UTC(2026, 8, 15, 8) / 1_000,
+      exp: Date.UTC(2026, 8, 15, 9) / 1_000,
+      agent: "default",
+      ref: "q6urq6urq6urq6urq6urqw",
+      firstTurn: {
+        instruction: "Start a fresh conversation.",
+        prefill: "Hello",
+      },
+      ui: {
+        lang: "en",
+        name: "AOS Interview",
+        logoUrl: "https://example.test/brand.png",
+        accent: "#2563eb",
+      },
+    })
+  })
+
+  it("preserves an explicit trimmed --ref without generating one", async () => {
+    const configFile = await proxyConfig()
+    let output = ""
+
+    await expect(
+      runProxyCli(
+        [
+          "bun",
+          "proxy",
+          "invite",
+          "--agent",
+          "default",
+          "--ref",
+          " returning-guest ",
+          "--instruction",
+          "Continue.",
+        ],
+        {
+          logger: { info: vi.fn(), error: vi.fn() },
+          getenv: (name) =>
+            name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+          randomBytes: () => {
+            throw new Error("reference randomness was read")
+          },
+          writeOut: (value) => {
+            output += value
+          },
+        }
+      )
+    ).resolves.toBeUndefined()
+
+    const token = new URLSearchParams(new URL(output.trim()).hash.slice(1)).get(
+      "invite"
+    )!
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")
+    ) as Record<string, unknown>
+    expect(payload.ref).toBe("returning-guest")
+    expect(payload.exp - payload.iat).toBe(72 * 60 * 60)
+  })
+
+  it("defaults to 72 hours and does not require a first-turn instruction", async () => {
+    const configFile = await proxyConfig()
+    let output = ""
+    await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
+      logger: { info: vi.fn(), error: vi.fn() },
+      getenv: (name) =>
+        name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+      randomBytes: (size) => Buffer.alloc(size, 1),
+      clock: () => Date.UTC(2026, 8, 15, 8),
+      writeOut: (value) => {
+        output += value
+      },
+    })
+
+    const token = new URLSearchParams(new URL(output.trim()).hash.slice(1)).get(
+      "invite"
+    )!
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")
+    ) as Record<string, unknown>
+    expect(payload.exp).toBe(Date.UTC(2026, 8, 18, 8) / 1_000)
+    expect(payload).not.toHaveProperty("firstTurn")
   })
 })

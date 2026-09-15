@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest"
 
 import {
   GuestInvitationError,
-  createGuestInvitationServiceForTest,
+  createGuestInvitationService,
+  guestCapabilities,
   guestOperations,
-  type GuestOperation,
 } from "./guest-invitation"
 
 const currentKey = new Uint8Array(32).fill(7)
@@ -13,54 +13,38 @@ const previousKey = new Uint8Array(32).fill(8)
 
 function service(overrides?: {
   deploymentId?: string
-  issuer?: string
-  audience?: string
+  runtimeId?: string
+  issuer?: "aos-invite"
+  audience?: "aos-guest"
   keys?: readonly { id: string; secret: Uint8Array }[]
   now?: () => number
   ttlSeconds?: number
   clockSkewSeconds?: number
 }) {
-  let sequence = 0
-  return createGuestInvitationServiceForTest(
-    {
-      deploymentId: overrides?.deploymentId ?? "aos-prod-il1",
-      issuer: overrides?.issuer ?? "https://aos.example.test",
-      audience: overrides?.audience ?? "aos-guest-listener",
-      keys: overrides?.keys ?? [{ id: "2026-09", secret: currentKey }],
-      now: overrides?.now ?? (() => 1_700_000_000_000),
-      ttlSeconds: overrides?.ttlSeconds ?? 300,
-      clockSkewSeconds: overrides?.clockSkewSeconds ?? 10,
-    },
-    (size) => new Uint8Array(size).fill(++sequence)
-  )
+  return createGuestInvitationService({
+    deploymentId: overrides?.deploymentId ?? "aos-prod-il1",
+    runtimeId: overrides?.runtimeId ?? "hermes-primary",
+    issuer: overrides?.issuer ?? "aos-invite",
+    audience: overrides?.audience ?? "aos-guest",
+    keys: overrides?.keys ?? [{ id: "2026-09", secret: currentKey }],
+    now: overrides?.now ?? (() => 1_700_000_000_000),
+    ttlSeconds: overrides?.ttlSeconds ?? 300,
+    clockSkewSeconds: overrides?.clockSkewSeconds ?? 10,
+  })
 }
 
 const invitation = {
-  principalId: "guest_4Ez4k6W5",
-  invitationId: "invite_Q9mZ2",
-  runtimeId: "hermes-primary",
   agentId: "agent_planner",
-  sessionId: "session_launch",
-  operations: ["messages:create", "messages:read"] as const,
-  capabilities: ["message-text", "custom-ui"] as const,
-}
-
-function target(operation: GuestOperation = "messages:read") {
-  return {
-    runtimeId: "hermes-primary",
-    agentId: "agent_planner",
-    sessionId: "session_launch",
-    operation,
-  }
+  ref: "conversation_ref",
 }
 
 async function rogueToken(
   claims: Record<string, unknown>,
-  overrides?: { key?: Uint8Array; alg?: "HS256"; kid?: string; typ?: string }
+  overrides?: { key?: Uint8Array; kid?: string; typ?: string }
 ) {
   return new SignJWT(claims)
     .setProtectedHeader({
-      alg: overrides?.alg ?? "HS256",
+      alg: "HS256",
       kid: overrides?.kid ?? "2026-09",
       typ: overrides?.typ ?? "aos-guest-invitation+jwt",
     })
@@ -68,14 +52,8 @@ async function rogueToken(
 }
 
 describe("guest invitation", () => {
-  it("issues canonical, short-lived claims and verifies an exact authorization", async () => {
-    const invitations = service()
-
-    const issued = await invitations.issue({
-      ...invitation,
-      operations: ["messages:read", "messages:create"],
-      capabilities: ["custom-ui", "message-text"],
-    })
+  it("issues only the Go-compatible invitation claims", async () => {
+    const issued = await service().issue(invitation)
 
     expect(decodeProtectedHeader(issued.token)).toEqual({
       alg: "HS256",
@@ -83,275 +61,153 @@ describe("guest invitation", () => {
       typ: "aos-guest-invitation+jwt",
     })
     expect(decodeJwt(issued.token)).toEqual({
-      aud: "aos-guest-listener",
-      agent: "agent_planner",
-      caps: ["custom-ui", "message-text"],
-      dep: "aos-prod-il1",
-      exp: 1_700_000_300,
-      iat: 1_700_000_000,
-      inv: "invite_Q9mZ2",
-      iss: "https://aos.example.test",
-      jti: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
-      lane: "guest",
-      nbf: 1_700_000_000,
-      ops: ["messages:create", "messages:read"],
-      runtime: "hermes-primary",
-      session: "session_launch",
-      sub: "guest_4Ez4k6W5",
       v: 1,
+      iss: "aos-invite",
+      aud: "aos-guest",
+      dep: "aos-prod-il1",
+      runtime: "hermes-primary",
+      iat: 1_700_000_000,
+      exp: 1_700_000_300,
+      agent: "agent_planner",
+      ref: "conversation_ref",
     })
-    expect(issued.grant).toEqual({
-      version: 1,
-      lane: "guest",
-      issuer: "https://aos.example.test",
-      audience: "aos-guest-listener",
-      deploymentId: "aos-prod-il1",
-      principalId: "guest_4Ez4k6W5",
-      invitationId: "invite_Q9mZ2",
+    expect(issued.grant).toMatchObject({
       runtimeId: "hermes-primary",
       agentId: "agent_planner",
-      sessionId: "session_launch",
-      operations: ["messages:create", "messages:read"],
-      capabilities: ["custom-ui", "message-text"],
-      tokenId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
-      issuedAt: 1_700_000_000,
-      notBefore: 1_700_000_000,
-      expiresAt: 1_700_000_300,
-    })
-    await expect(invitations.verify(issued.token, target())).resolves.toEqual({
-      version: 1,
-      lane: "guest",
-      issuer: "https://aos.example.test",
-      audience: "aos-guest-listener",
-      deploymentId: "aos-prod-il1",
-      principalId: "guest_4Ez4k6W5",
-      invitationId: "invite_Q9mZ2",
-      runtimeId: "hermes-primary",
-      agentId: "agent_planner",
-      sessionId: "session_launch",
-      operation: "messages:read",
-      capabilities: ["custom-ui", "message-text"],
-      tokenId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
-      issuedAt: 1_700_000_000,
-      notBefore: 1_700_000_000,
-      expiresAt: 1_700_000_300,
-      authorizationExpiresAt: 1_700_000_310,
-    })
-  })
-
-  it("rejects tampering, alg confusion, unknown keys, and the wrong token type", async () => {
-    const invitations = service()
-    const issued = await invitations.issue(invitation)
-    const tampered = `${issued.token.slice(0, -1)}${issued.token.endsWith("A") ? "B" : "A"}`
-    const [header, payload] = issued.token.split(".")
-    const unsecured = `${Buffer.from(
-      JSON.stringify({
-        alg: "none",
-        kid: "2026-09",
-        typ: "aos-guest-invitation+jwt",
-      })
-    ).toString("base64url")}.${payload}.`
-
-    await expect(
-      invitations.verify(tampered, target())
-    ).resolves.toBeUndefined()
-    await expect(
-      invitations.verify(unsecured, target())
-    ).resolves.toBeUndefined()
-    await expect(
-      invitations.verify(
-        await rogueToken(decodeJwt(issued.token), { kid: "retired" }),
-        target()
-      )
-    ).resolves.toBeUndefined()
-    await expect(
-      invitations.verify(`${header}.${payload}.bad`, target())
-    ).resolves.toBeUndefined()
-    await expect(
-      invitations.verify(
-        await rogueToken(decodeJwt(issued.token), { typ: "JWT" }),
-        target()
-      )
-    ).resolves.toBeUndefined()
-  })
-
-  it("binds issuer, audience, deployment, lane, and version", async () => {
-    const issued = await service().issue(invitation)
-    const claims = decodeJwt(issued.token)
-    const mutations = [
-      { ...claims, iss: "https://attacker.example" },
-      { ...claims, aud: "operator-listener" },
-      { ...claims, dep: "aos-prod-us1" },
-      { ...claims, runtime: "hermes-secondary" },
-      { ...claims, lane: "operator" },
-      { ...claims, v: 2 },
-    ]
-
-    for (const mutated of mutations) {
-      await expect(
-        service().verify(await rogueToken(mutated), target())
-      ).resolves.toBeUndefined()
-    }
-  })
-
-  it("enforces not-before, expiry, and only the configured clock skew", async () => {
-    const issued = await service().issue(invitation)
-
-    await expect(
-      service({ now: () => 1_699_999_989_000 }).verify(issued.token, target())
-    ).resolves.toBeUndefined()
-    await expect(
-      service({ now: () => 1_699_999_990_000 }).verify(issued.token, target())
-    ).resolves.toMatchObject({
-      operation: "messages:read",
-      tokenId: issued.grant.tokenId,
-    })
-    await expect(
-      service({ now: () => 1_700_000_311_000 }).verify(issued.token, target())
-    ).resolves.toBeUndefined()
-  })
-
-  it("rejects wildcard, duplicate, unknown, and empty authorization scope", async () => {
-    const invalidInputs = [
-      { ...invitation, operations: [] },
-      { ...invitation, operations: ["*"] },
-      { ...invitation, operations: ["messages:read", "messages:read"] },
-      { ...invitation, capabilities: [] },
-      { ...invitation, capabilities: ["operator"] },
-    ]
-
-    for (const input of invalidInputs) {
-      await expect(service().issue(input as never)).rejects.toBeInstanceOf(
-        GuestInvitationError
-      )
-    }
-  })
-
-  it("rejects non-canonical or expanded signed claims", async () => {
-    const issued = await service().issue(invitation)
-    const claims = decodeJwt(issued.token)
-    const mutations = [
-      { ...claims, ops: ["messages:read", "*"] },
-      { ...claims, ops: ["messages:read", "messages:create"] },
-      { ...claims, caps: ["message-text", "message-text"] },
-      { ...claims, operator: true },
-    ]
-
-    for (const mutated of mutations) {
-      await expect(
-        service().verify(await rogueToken(mutated), target())
-      ).resolves.toBeUndefined()
-    }
-  })
-
-  it("cannot issue or verify an operator identity or malformed invitation identity", async () => {
-    await expect(
-      service().issue({ ...invitation, principalId: "operator_root" })
-    ).rejects.toBeInstanceOf(GuestInvitationError)
-    await expect(
-      service().issue({ ...invitation, invitationId: "operator_grant" })
-    ).rejects.toBeInstanceOf(GuestInvitationError)
-
-    const issued = await service().issue(invitation)
-    await expect(
-      service().verify(
-        await rogueToken({ ...decodeJwt(issued.token), sub: "operator_root" }),
-        target()
-      )
-    ).resolves.toBeUndefined()
-  })
-
-  it("rejects a valid signature over a non-canonical claim encoding", async () => {
-    const issued = await service().issue(invitation)
-    const reversedClaims = Object.fromEntries(
-      Object.entries(decodeJwt(issued.token)).reverse()
-    )
-
-    await expect(
-      service().verify(await rogueToken(reversedClaims), target())
-    ).resolves.toBeUndefined()
-  })
-
-  it("binds use to the requested Agent and optional Session", async () => {
-    const issued = await service().issue(invitation)
-
-    await expect(
-      service().verify(issued.token, {
-        ...target(),
-        runtimeId: "hermes-secondary",
-      })
-    ).resolves.toBeUndefined()
-    await expect(
-      service().verify(issued.token, {
-        ...target(),
-        agentId: "agent_other",
-      })
-    ).resolves.toBeUndefined()
-    await expect(
-      service().verify(issued.token, {
-        runtimeId: "hermes-primary",
-        agentId: "agent_planner",
-        sessionId: "session_other",
-        operation: "messages:read",
-      })
-    ).resolves.toBeUndefined()
-    await expect(
-      service().verify(issued.token, target())
-    ).resolves.toMatchObject({ operation: "messages:read" })
-  })
-
-  it("requires one exact requested operation and returns only that bound operation", async () => {
-    const issued = await service().issue({
-      ...invitation,
+      sessionId: "conversation_ref",
+      ref: "conversation_ref",
       operations: guestOperations,
+      capabilities: guestCapabilities,
     })
-
-    for (const operation of guestOperations) {
-      const verified = await service().verify(issued.token, target(operation))
-      expect(verified?.operation).toBe(operation)
-      expect(verified).not.toHaveProperty("operations")
-    }
-    await expect(
-      service().verify(issued.token, {
-        runtimeId: "hermes-primary",
-        agentId: "agent_planner",
-        sessionId: "session_launch",
-      } as never)
-    ).resolves.toBeUndefined()
-    await expect(
-      service().verify(issued.token, {
-        ...target(),
-        operation: "operator:admin",
-      } as never)
-    ).resolves.toBeUndefined()
   })
 
-  it("rejects an exact operation that the invitation did not grant", async () => {
+  it("preserves first-turn presentation and a requested shorter lifetime", async () => {
+    const issued = await service({ ttlSeconds: 86_400 }).issue({
+      ...invitation,
+      expiresInSeconds: 3_600,
+      firstTurn: {
+        instruction: "Load the interview skill for Dan.",
+        prefill: "Hey, Almog sent me here!",
+      },
+      ui: {
+        lang: "he",
+        name: "Almog",
+        logoUrl: "https://example.test/almog.png",
+        accent: "#2563eb",
+        title: "Interview",
+        message: "Welcome.",
+      },
+    })
+
+    expect(decodeJwt(issued.token)).toEqual({
+      v: 1,
+      iss: "aos-invite",
+      aud: "aos-guest",
+      dep: "aos-prod-il1",
+      runtime: "hermes-primary",
+      iat: 1_700_000_000,
+      exp: 1_700_003_600,
+      agent: "agent_planner",
+      ref: "conversation_ref",
+      firstTurn: {
+        instruction: "Load the interview skill for Dan.",
+        prefill: "Hey, Almog sent me here!",
+      },
+      ui: {
+        lang: "he",
+        name: "Almog",
+        logoUrl: "https://example.test/almog.png",
+        accent: "#2563eb",
+        title: "Interview",
+        message: "Welcome.",
+      },
+    })
+  })
+
+  it("derives gateway policy and identities instead of storing them in the JWT", async () => {
+    const issued = await service().issue(invitation)
+    const verified = await service().verify(issued.token)
+
+    expect(verified).toMatchObject({
+      deploymentId: "aos-prod-il1",
+      runtimeId: "hermes-primary",
+      principalId: "guest_conversation_ref",
+      invitationId: "invite_conversation_ref",
+      capabilities: guestCapabilities,
+    })
+    expect(decodeJwt(issued.token)).toMatchObject({
+      dep: "aos-prod-il1",
+      runtime: "hermes-primary",
+    })
+    expect(decodeJwt(issued.token)).not.toHaveProperty("ops")
+    expect(decodeJwt(issued.token)).not.toHaveProperty("caps")
+  })
+
+  it("binds access to the configured deployment and runtime", async () => {
     const issued = await service().issue(invitation)
 
     await expect(
-      service().verify(issued.token, target("artifacts:read"))
+      service({ deploymentId: "other" }).verify(issued.token)
     ).resolves.toBeUndefined()
+    await expect(
+      service({ runtimeId: "other" }).verify(issued.token)
+    ).resolves.toBeUndefined()
+    await expect(service().verify(issued.token)).resolves.toMatchObject({
+      agentId: "agent_planner",
+      ref: "conversation_ref",
+    })
   })
 
-  it("issues independent Stop and interaction-response grants", async () => {
-    const issued = await service().issue({
-      ...invitation,
-      operations: ["interactions:respond", "messages:stop"],
+  it("defaults invitation lifetime to 72 hours", async () => {
+    const invitations = createGuestInvitationService({
+      deploymentId: "aos-prod-il1",
+      runtimeId: "hermes-primary",
+      issuer: "aos-invite",
+      audience: "aos-guest",
+      keys: [{ id: "2026-09", secret: currentKey }],
+      now: () => 1_700_000_000_000,
     })
 
+    const issued = await invitations.issue(invitation)
+
+    expect(decodeJwt(issued.token).exp).toBe(1_700_259_200)
+  })
+
+  it("rejects tampering, unknown keys, wrong token types, and extra claims", async () => {
+    const issued = await service().issue(invitation)
+    const claims = decodeJwt(issued.token)
+    const tampered = `${issued.token.slice(0, -1)}${issued.token.endsWith("A") ? "B" : "A"}`
+
+    await expect(service().verify(tampered)).resolves.toBeUndefined()
     await expect(
-      service().verify(issued.token, target("messages:stop"))
-    ).resolves.toMatchObject({ operation: "messages:stop" })
+      service().verify(await rogueToken(claims, { kid: "retired" }))
+    ).resolves.toBeUndefined()
     await expect(
-      service().verify(issued.token, target("interactions:respond"))
-    ).resolves.toMatchObject({ operation: "interactions:respond" })
+      service().verify(await rogueToken(claims, { typ: "JWT" }))
+    ).resolves.toBeUndefined()
     await expect(
-      service().verify(issued.token, target("messages:create"))
+      service().verify(await rogueToken({ ...claims, admin: true }))
     ).resolves.toBeUndefined()
   })
 
-  it("supports explicit verification-only key rotation and issues with the first key", async () => {
+  it("enforces issue time, expiry, configured maximum lifetime, and clock skew", async () => {
+    const issued = await service().issue(invitation)
+
+    await expect(
+      service({ now: () => 1_699_999_989_000 }).verify(issued.token)
+    ).resolves.toBeUndefined()
+    await expect(
+      service({ now: () => 1_699_999_990_000 }).verify(issued.token)
+    ).resolves.toBeDefined()
+    await expect(
+      service({ now: () => 1_700_000_311_000 }).verify(issued.token)
+    ).resolves.toBeUndefined()
+    await expect(
+      service().issue({ ...invitation, expiresInSeconds: 301 })
+    ).rejects.toBeInstanceOf(GuestInvitationError)
+  })
+
+  it("supports verification-only key rotation and stable token identity", async () => {
     const old = await service({
       keys: [{ id: "2026-08", secret: previousKey }],
     }).issue(invitation)
@@ -362,53 +218,36 @@ describe("guest invitation", () => {
       ],
     })
 
-    await expect(rotated.verify(old.token, target())).resolves.toMatchObject({
-      operation: "messages:read",
-      tokenId: old.grant.tokenId,
-    })
+    const first = await rotated.verify(old.token)
+    const second = await rotated.verify(old.token)
+    expect(first?.tokenId).toBe(second?.tokenId)
     expect(
       decodeProtectedHeader((await rotated.issue(invitation)).token).kid
     ).toBe("2026-09")
   })
 
-  it("returns the same token identity on stateless repeated verification", async () => {
-    const issued = await service().issue(invitation)
-
-    const first = await service().verify(issued.token, target())
-    const retry = await service().verify(issued.token, target())
-
-    expect(first).toEqual(retry)
-    expect(first?.tokenId).toBe(issued.grant.tokenId)
-  })
-
-  it("rejects oversized tokens and malformed claim or target identifiers", async () => {
+  it("rejects malformed requests, targets, tokens, and configuration", async () => {
     await expect(
-      service().verify(`a.${"a".repeat(4_097)}.a`, target())
-    ).resolves.toBeUndefined()
-    await expect(
-      service().verify("not-a-jwt", target())
-    ).resolves.toBeUndefined()
-    await expect(
-      service().issue({ ...invitation, agentId: `agent_${"é".repeat(200)}` })
+      service().issue({ ...invitation, ref: "spaces are invalid" })
     ).rejects.toBeInstanceOf(GuestInvitationError)
-    const issued = await service().issue(invitation)
     await expect(
-      service().verify(issued.token, { ...target(), agentId: "agent\nother" })
+      service().issue({ ...invitation, ui: { lang: "fr" } as never })
+    ).rejects.toBeInstanceOf(GuestInvitationError)
+    await expect(service().verify("not-a-jwt")).resolves.toBeUndefined()
+    await expect(
+      service().verify(`a.${"a".repeat(4_000)}.a`)
     ).resolves.toBeUndefined()
-  })
-
-  it("rejects unsafe key, lifetime, issuer, audience, and deployment configuration", () => {
-    const invalid = [
-      { keys: [{ id: "2026-09", secret: new Uint8Array(31) }] },
-      { ttlSeconds: 3_601 },
-      { clockSkewSeconds: 61 },
-      { issuer: "not a URL" },
-      { audience: "guest audience" },
-      { deploymentId: "production\nother" },
-    ]
-
-    for (const overrides of invalid) {
-      expect(() => service(overrides as never)).toThrow(GuestInvitationError)
-    }
+    expect(() => service({ issuer: "wrong" as never })).toThrow(
+      GuestInvitationError
+    )
+    expect(() =>
+      service({ audience: "https://guest.example.test/path" as never })
+    ).toThrow(GuestInvitationError)
+    expect(() => service({ runtimeId: "runtime\nother" })).toThrow(
+      GuestInvitationError
+    )
+    expect(() =>
+      service({ keys: [{ id: "bad", secret: new Uint8Array(31) }] })
+    ).toThrow(GuestInvitationError)
   })
 })

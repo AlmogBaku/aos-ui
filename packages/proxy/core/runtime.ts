@@ -41,6 +41,9 @@ export type ServerRunHandle = {
   /** Resolves only when the provider segment is terminal. */
   settled: Promise<void>
   stop(): Promise<"stopping" | "idle">
+  steer?(
+    request: Readonly<{ requestId: string; text: string }>
+  ): Promise<"steered" | "queued">
   recoveryPosition(): { epoch: string; lastSeen: number }
 }
 
@@ -102,6 +105,20 @@ export class ServerRunControlError extends Error {
   }
 }
 
+export class ServerRunSteerUnavailableError extends Error {
+  constructor() {
+    super("Active-turn steering is unavailable")
+    this.name = "ServerRunSteerUnavailableError"
+  }
+}
+
+export class ServerRunSteerUncertainError extends Error {
+  constructor() {
+    super("The steering request may have been accepted")
+    this.name = "ServerRunSteerUncertainError"
+  }
+}
+
 export class ServerSessionNotFoundError extends Error {
   constructor() {
     super("Session not found")
@@ -111,7 +128,7 @@ export class ServerSessionNotFoundError extends Error {
 
 export type ServerAttachmentStage = {
   public: Readonly<SessionAttachmentStageResponse["attachments"]>
-  appendTo(text: string): string
+  appendTo(text: string): string | Promise<string>
   cleanup(): Promise<void>
 }
 
@@ -119,7 +136,8 @@ export type ServerAttachmentStages = {
   create(
     agentId: string,
     sessionId: string,
-    stage: ServerAttachmentStage
+    stage: ServerAttachmentStage,
+    sizeBytes?: number
   ): string | undefined
   take(
     agentId: string,
@@ -143,6 +161,11 @@ export type ServerRuntimePublicError = {
 /** Provider-neutral operations consumed by normalized HTTP and event routes. */
 export interface ServerRuntime {
   readonly runs: ServerRunEngine
+  resolveInvitedSession(
+    agentId: string,
+    ref: string,
+    create?: { firstTurnInstruction?: string }
+  ): Promise<{ sessionId: string; created: boolean } | undefined>
   resolveSessionId(agentId: string, publicSessionId: string): string | undefined
   publicError(cause: unknown): ServerRuntimePublicError | undefined
   authState(): Promise<RuntimeAuthState>
@@ -202,14 +225,12 @@ export interface ServerRuntime {
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }>
   transcribe(
     agentId: string,
-    publicSessionId: string,
     bytes: Uint8Array,
     mimeType: string,
     signal?: AbortSignal
   ): Promise<string>
   speak(
     agentId: string,
-    publicSessionId: string,
     text: string,
     signal?: AbortSignal
   ): Promise<{ bytes: Uint8Array; mimeType: string }>

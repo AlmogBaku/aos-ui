@@ -22,7 +22,7 @@ export async function loadSessionArtifact(
   return runtime.artifact(agentId, publicSessionId, artifactId)
 }
 
-function recordingBytes(dataUrl: string, mimeType: string) {
+export function recordingBytes(dataUrl: string, mimeType: string) {
   const prefix = `data:${mimeType};base64,`
   if (!dataUrl.startsWith(prefix)) return undefined
   const encoded = dataUrl.slice(prefix.length)
@@ -101,7 +101,7 @@ export function registerContentRoutes(
     })
   })
 
-  app.post(`${sessionContentPath}/audio/transcribe`, async (context) => {
+  app.post("/api/aos/v1/agents/:agentId/audio/transcribe", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
@@ -111,16 +111,10 @@ export function registerContentRoutes(
     if (!body.success) return errorResponse("invalid_request", 400)
     const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
     if (!bytes) return errorResponse("invalid_request", 400)
-    await requireScopedSession(
-      runtime,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
     return context.json(
       SessionTranscriptionResponseSchema.parse({
         transcript: await runtime.transcribe(
           context.req.param("agentId"),
-          context.req.param("sessionId"),
           bytes,
           body.data.mimeType,
           context.req.raw.signal
@@ -129,7 +123,7 @@ export function registerContentRoutes(
     )
   })
 
-  app.post(`${sessionContentPath}/audio/speak`, async (context) => {
+  app.post("/api/aos/v1/agents/:agentId/audio/speak", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
@@ -137,14 +131,8 @@ export function registerContentRoutes(
       await boundedJson(context.req.raw, 40_000)
     )
     if (!body.success) return errorResponse("invalid_request", 400)
-    await requireScopedSession(
-      runtime,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
     const speech = await runtime.speak(
       context.req.param("agentId"),
-      context.req.param("sessionId"),
       body.data.text,
       context.req.raw.signal
     )

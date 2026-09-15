@@ -67,8 +67,6 @@ const LimitsSchema = z.strictObject({
   activeExecutions: z.number().int().min(1).max(4096),
   guestActiveExecutions: z.number().int().min(1).max(4096),
   operatorEventPeers: z.number().int().min(1).max(4096),
-  guestEventPeers: z.number().int().min(1).max(4096),
-  guestEventPeersPerInvitation: z.number().int().min(1).max(256),
   subscriberEvents: z.number().int().min(1).max(16_384),
   subscriberBytes: z
     .number()
@@ -101,7 +99,7 @@ const ProxyConfigSchema = z
         publicOrigin: PublicOriginSchema,
         invitations: z.strictObject({
           keys: UniqueSecretKeysSchema,
-          ttlSeconds: z.number().int().min(60).max(3_600).default(300),
+          ttlSeconds: z.number().int().min(60).max(2_592_000).default(259_200),
           clockSkewSeconds: z.number().int().min(0).max(60).default(0),
         }),
       })
@@ -120,14 +118,6 @@ const ProxyConfigSchema = z
         code: "custom",
         path: ["limits", "guestActiveExecutions"],
         message: "Guest limit exceeds global limit",
-      })
-    if (
-      config.limits.guestEventPeersPerInvitation > config.limits.guestEventPeers
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["limits", "guestEventPeersPerInvitation"],
-        message: "Invitation peer limit exceeds guest peer limit",
       })
     if (
       config.guest &&

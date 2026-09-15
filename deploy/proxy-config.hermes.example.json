@@ -37,7 +37,7 @@
           "secretFile": "/run/secrets/guest-invite-signing-key"
         }
       ],
-      "ttlSeconds": 300,
+      "ttlSeconds": 259200,
       "clockSkewSeconds": 0
     }
   },
@@ -45,8 +45,6 @@
     "activeExecutions": 256,
     "guestActiveExecutions": 32,
     "operatorEventPeers": 256,
-    "guestEventPeers": 64,
-    "guestEventPeersPerInvitation": 4,
     "subscriberEvents": 512,
     "subscriberBytes": 2097152
   },

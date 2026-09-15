@@ -5,6 +5,8 @@ import {
   ErrorResponseSchema,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
+  RunSteerRequestSchema,
+  RunSteerResponseSchema,
   RunStopResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
@@ -59,6 +61,13 @@ describe("AOS v1 normalized protocol", () => {
           },
         },
         interactions: {
+          steering: {
+            status: "available",
+            scope: "active-run",
+            semantics: "visible-user-message",
+            input: "text",
+            fallback: "provider-queue",
+          },
           approvals: {
             status: "available",
             protocol: "ag-ui-interrupt",
@@ -217,6 +226,48 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
+  it("validates strict active-turn steering envelopes and their UTF-8 limit", () => {
+    expect(
+      RunSteerRequestSchema.parse({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "Please use the newer API",
+      })
+    ).toEqual({
+      requestId: "queue-item-1",
+      expectedRunId: "run-1",
+      text: "Please use the newer API",
+    })
+    expect(RunSteerResponseSchema.parse({ status: "steered" })).toEqual({
+      status: "steered",
+    })
+    expect(RunSteerResponseSchema.parse({ status: "queued" })).toEqual({
+      status: "queued",
+    })
+    expect(() =>
+      RunSteerRequestSchema.parse({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "",
+      })
+    ).toThrow()
+    expect(() =>
+      RunSteerRequestSchema.parse({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "😀".repeat(262_145),
+      })
+    ).toThrow()
+    expect(() =>
+      RunSteerRequestSchema.parse({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "valid",
+        nativeSessionId: "private",
+      })
+    ).toThrow()
+  })
+
   it("keeps runtime authentication provider-neutral and server-only", () => {
     expect(
       RuntimeAuthStateSchema.parse({
@@ -268,6 +319,7 @@ describe("AOS v1 normalized protocol", () => {
           sessionDeletion: { status: "available" },
           sessionRun: { status: "available" },
           sessionStop: { status: "available" },
+          sessionSteer: { status: "available" },
         },
       }).status
     ).toBe("ready")

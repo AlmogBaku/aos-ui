@@ -7,7 +7,7 @@ const authorization: GuestAuthorization = {
   version: 1,
   lane: "guest",
   issuer: "https://aos.example.test",
-  audience: "aos-guest-listener",
+  audience: "aos-guest",
   deploymentId: "aos-prod-il1",
   principalId: "guest_4Ez4k6W5",
   invitationId: "invite_Q9mZ2",
@@ -397,7 +397,7 @@ describe("guest outbound projection", () => {
                 message: "Allow deployment?",
                 responseSchema: {
                   type: "string",
-                  enum: ["deny", "once"],
+                  enum: ["deny", "once", "always"],
                 },
                 metadata: {
                   "aos.kind": "approval",

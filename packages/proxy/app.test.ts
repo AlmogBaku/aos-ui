@@ -2,7 +2,6 @@ import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import { createProxyApp } from "./app"
-import type { GuestInvitationService } from "./auth/guest-invitation"
 import {
   HermesAuthenticationError,
   HermesHttpError,
@@ -17,6 +16,7 @@ import type {
   ServerRunEngine,
   ServerRunHandle,
 } from "./core/runtime"
+import { ServerRunSteerUncertainError } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 
 const origin = "http://127.0.0.1:3000"
@@ -78,22 +78,155 @@ function runtimeInstance(
 
 function app(
   runtime: HermesServerAdapter,
-  options: {
-    engine?: ServerRunEngine
-    guestInvitations?: GuestInvitationService
-  } = {}
+  options: { engine?: ServerRunEngine } = {}
 ) {
   return createProxyApp({
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime, options.engine),
-    ...(options.guestInvitations
-      ? { guestInvitations: options.guestInvitations }
-      : {}),
     logger: { info: vi.fn(), error: vi.fn() },
   })
 }
 
 describe("AOS V1 proxy", () => {
+  it("accepts strict active-turn steering and preserves the current run", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(runtime, "getSession").mockResolvedValue(session())
+    const steer = vi.fn(async () => "steered" as const)
+    const handle: ServerRunHandle = {
+      events: (async function* () {
+        yield await new Promise<AGUIEvent>(() => undefined)
+      })(),
+      settled: new Promise(() => undefined),
+      stop: vi.fn(async () => "stopping" as const),
+      steer,
+      recoveryPosition: () => ({ epoch: "epoch-1", lastSeen: 0 }),
+    }
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => handle),
+      recover: vi.fn(async () => handle),
+    }
+    const instance = runtimeInstance(runtime, engine)
+    await instance.sessions.start(
+      { agentId: "researcher", sessionId: "stored", threadId: "stored" },
+      {
+        threadId: "stored",
+        runId: "run-1",
+        state: {},
+        messages: [{ id: "user-1", role: "user", content: "Ask" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      },
+      {
+        subscriberId: "browser",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    const proxy = createProxyApp({
+      publicOrigin: origin,
+      runtimeInstance: instance,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    const response = await proxy.request(
+      `${origin}/api/aos/v1/agents/researcher/sessions/stored/runs/steer`,
+      {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          requestId: "queue-item-1",
+          expectedRunId: "run-1",
+          text: "Use the newer API",
+        }),
+      }
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: "steered" })
+    expect(steer).toHaveBeenCalledOnce()
+    expect(
+      instance.sessions.snapshot({ agentId: "researcher", sessionId: "stored" })
+    ).toMatchObject({
+      state: "running",
+      runId: "run-1",
+    })
+  })
+
+  it("rejects malformed steering and maps uncertain dispatch without retrying", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(runtime, "getSession").mockResolvedValue(session())
+    const steer = vi.fn(async () => {
+      throw new ServerRunSteerUncertainError()
+    })
+    const handle: ServerRunHandle = {
+      events: (async function* () {
+        yield await new Promise<AGUIEvent>(() => undefined)
+      })(),
+      settled: new Promise(() => undefined),
+      stop: vi.fn(async () => "stopping" as const),
+      steer,
+      recoveryPosition: () => ({ epoch: "epoch-1", lastSeen: 0 }),
+    }
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => handle),
+      recover: vi.fn(async () => handle),
+    }
+    const instance = runtimeInstance(runtime, engine)
+    await instance.sessions.start(
+      { agentId: "researcher", sessionId: "stored", threadId: "stored" },
+      {
+        threadId: "stored",
+        runId: "run-1",
+        state: {},
+        messages: [{ id: "user-1", role: "user", content: "Ask" }],
+        tools: [],
+        context: [],
+        forwardedProps: {},
+      },
+      {
+        subscriberId: "browser",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    const proxy = createProxyApp({
+      publicOrigin: origin,
+      runtimeInstance: instance,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const url = `${origin}/api/aos/v1/agents/researcher/sessions/stored/runs/steer`
+
+    const malformed = await proxy.request(url, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "Correction",
+        native: true,
+      }),
+    })
+    expect(malformed.status).toBe(400)
+
+    const uncertain = await proxy.request(url, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: "queue-item-1",
+        expectedRunId: "run-1",
+        text: "Correction",
+      }),
+    })
+    expect(uncertain.status).toBe(409)
+    await expect(uncertain.json()).resolves.toMatchObject({
+      error: { code: "uncertain_mutation" },
+    })
+    expect(steer).toHaveBeenCalledOnce()
+  })
+
   it("allows trusted operator reads without application authentication", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [nativeProfile()] } : undefined
@@ -196,52 +329,20 @@ describe("AOS V1 proxy", () => {
     expect(runtime.updateAgentVisibility).not.toHaveBeenCalled()
   })
 
-  it("validates runtime, Agent, and Session before signing an invitation", async () => {
+  it("does not expose an HTTP invitation signing endpoint", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
-    vi.spyOn(runtime, "listAgents").mockResolvedValue({
-      revision: "catalog-1",
-      agents: [
-        {
-          summary: {
-            id: "researcher",
-            name: "Researcher",
-            role: "agent",
-          },
-          visibility: "visible",
-          editable: true,
-          revision: "hermes-bots:1",
-        },
-      ],
-    })
-    vi.spyOn(runtime, "getSession").mockResolvedValue(session())
-    const issue = vi.fn(async (grant) => ({ token: "guest.jwt", grant }))
-    const invitations = {
-      issue,
-      verify: vi.fn(),
-    } as unknown as GuestInvitationService
-    const proxy = app(runtime, { guestInvitations: invitations })
-    const grant = {
-      principalId: "guest_recipient",
-      invitationId: "invite_public",
-      runtimeId: "hermes-main",
-      agentId: "researcher",
-      sessionId: "stored",
-      operations: ["messages:read"],
-      capabilities: ["message-text"],
-    }
+    const proxy = app(runtime)
 
     const response = await proxy.request(
       `${origin}/api/aos/v1/guest-invitations`,
       {
         method: "POST",
         headers: { origin, "content-type": "application/json" },
-        body: JSON.stringify(grant),
+        body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
       }
     )
 
-    expect(response.status).toBe(201)
-    expect(issue).toHaveBeenCalledWith(grant)
-    expect(runtime.getSession).toHaveBeenCalledWith("researcher", "stored")
+    expect(response.status).toBe(404)
   })
 
   it("streams the terminal assistant response over normalized AG-UI SSE", async () => {

@@ -1,5 +1,5 @@
 import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { HermesRunEngine, type HermesRunNative } from "./run"
 
@@ -28,6 +28,7 @@ function native(overrides: Partial<HermesRunNative> = {}): HermesRunNative {
     observe: async () => () => undefined,
     recover: async () => ({ epoch: "epoch-1", lastSeen: 0, events: [] }),
     submit: async () => ({ acknowledgement: "accepted" }),
+    redirect: async () => "redirected",
     interrupt: async () => undefined,
     status: async () => "idle",
     ...overrides,
@@ -41,6 +42,159 @@ async function collect(handle: { events: AsyncIterable<unknown> }) {
 }
 
 describe("HermesRunEngine", () => {
+  it("keeps one AOS run while redirecting into a distinct assistant generation", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const redirect = vi.fn(async () => "redirected" as const)
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        redirect,
+      })
+    )
+    const handle = await engine.start(scope, input())
+    publish?.({
+      type: "message.start",
+      session_id: "live-secret",
+      seq: 1,
+      payload: { message_id: "reply-before" },
+    })
+    publish?.({
+      type: "message.delta",
+      session_id: "live-secret",
+      seq: 2,
+      payload: { text: "Before" },
+    })
+    publish?.({
+      type: "tool.start",
+      session_id: "live-secret",
+      seq: 3,
+      payload: { tool_id: "tool-1", name: "read_file", args: {} },
+    })
+
+    await expect(
+      handle.steer?.({ requestId: "queue-item-1", text: "Correction" })
+    ).resolves.toBe("steered")
+    publish?.({
+      type: "message.complete",
+      session_id: "live-secret",
+      seq: 4,
+      payload: { message_id: "reply-before", text: "Before" },
+    })
+    publish?.({
+      type: "tool.complete",
+      session_id: "live-secret",
+      seq: 5,
+      payload: {
+        tool_id: "tool-1",
+        name: "read_file",
+        args: {},
+        result: "contents",
+      },
+    })
+    publish?.({
+      type: "message.start",
+      session_id: "live-secret",
+      seq: 6,
+      payload: { message_id: "reply-after" },
+    })
+    publish?.({
+      type: "message.delta",
+      session_id: "live-secret",
+      seq: 7,
+      payload: { text: "After" },
+    })
+    publish?.({
+      type: "message.complete",
+      session_id: "live-secret",
+      seq: 8,
+      payload: { message_id: "reply-after", text: "After" },
+    })
+    publish?.({
+      type: "session.info",
+      session_id: "live-secret",
+      seq: 9,
+      payload: { running: false },
+    })
+
+    const events = await collect(handle)
+    expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
+    expect(
+      events.filter(
+        (event) => (event as { type?: unknown }).type === EventType.RUN_STARTED
+      )
+    ).toHaveLength(1)
+    expect(
+      events.filter(
+        (event) => (event as { type?: unknown }).type === EventType.RUN_FINISHED
+      )
+    ).toHaveLength(1)
+    expect(
+      events
+        .filter(
+          (event) =>
+            (event as { type?: unknown }).type === EventType.TEXT_MESSAGE_START
+        )
+        .map((event) => (event as { messageId: string }).messageId)
+    ).toEqual(["reply-before", "reply-after"])
+    expect(
+      events.find(
+        (event) =>
+          (event as { type?: unknown }).type === EventType.TOOL_CALL_RESULT
+      )
+    ).toMatchObject({
+      messageId: "reply-before:tool:tool-1",
+      toolCallId: "tool-1",
+    })
+  })
+  it("holds an early native idle boundary until redirect acknowledgement", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        redirect: async () => {
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { message_id: "reply-before", text: "Before" },
+          })
+          publish?.({
+            type: "session.info",
+            session_id: "live-secret",
+            seq: 3,
+            payload: { running: false },
+          })
+          return "redirected"
+        },
+      })
+    )
+    const handle = await engine.start(scope, input())
+    publish?.({
+      type: "message.delta",
+      session_id: "live-secret",
+      seq: 1,
+      payload: { text: "Before" },
+    })
+    let settled = false
+    void handle.settled.then(() => {
+      settled = true
+    })
+
+    await expect(
+      handle.steer?.({ requestId: "queue-item-race", text: "Correction" })
+    ).resolves.toBe("steered")
+    expect(settled).toBe(false)
+
+    const events = await collect(handle)
+    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+  })
+
   it("settles a run when its native turn later completes", async () => {
     let listener: ((event: unknown) => void) | undefined
     let observing = false
@@ -803,7 +957,7 @@ describe("HermesRunEngine", () => {
       {
         type: EventType.TOOL_CALL_ARGS,
         toolCallId: "call-7",
-        delta: "{}",
+        delta: '{"goal":"Inspect"}',
       },
       { type: EventType.TOOL_CALL_END, toolCallId: "call-7" },
       {
@@ -1746,12 +1900,12 @@ describe("HermesRunEngine", () => {
       type: EventType.TOOL_CALL_RESULT,
       messageId: "message-42:tool:call-7",
       toolCallId: "call-7",
-      content: '{"status":"completed"}',
+      content: '"contents"',
       role: "tool",
     })
   })
 
-  it("projects bounded useful tool data without provider paths, URLs, tokens, or metadata", async () => {
+  it("projects bounded inspectable tool data while redacting credentials and provider metadata", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
       native({
@@ -1799,25 +1953,32 @@ describe("HermesRunEngine", () => {
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_ARGS,
       toolCallId: "call-7",
-      delta: "{}",
+      delta: JSON.stringify({
+        query: "[REDACTED]",
+        pattern:
+          "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
+        path: "/srv/private/workspace",
+        apiToken: "[REDACTED]",
+      }),
     })
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_RESULT,
       messageId: "message-42:tool:call-7",
       toolCallId: "call-7",
-      content: '{"status":"ok"}',
+      content: JSON.stringify({
+        status: "ok",
+        sourceUrl: "https://provider.invalid/private",
+        filesystem_path: "/srv/private/result.txt",
+        access_token: "[REDACTED]",
+        summary: "[REDACTED]",
+      }),
       role: "tool",
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
     expect(JSON.stringify(events)).not.toContain("bearer-secret")
-    expect(JSON.stringify(events)).not.toContain("provider.invalid")
-    expect(JSON.stringify(events)).not.toContain("/srv/private")
     expect(JSON.stringify(events)).not.toContain("sk-query-secret")
     expect(JSON.stringify(events)).not.toContain("summary-secret")
-    expect(JSON.stringify(events)).not.toContain("../relative")
-    expect(JSON.stringify(events)).not.toContain("~/home")
-    expect(JSON.stringify(events)).not.toContain("C:\\")
-    expect(JSON.stringify(events)).not.toContain("\\\\server")
+    expect(JSON.stringify(events)).toContain("[REDACTED]")
   })
 
   it("redacts credential environment assignments without hiding safe lookalike keys", async () => {
@@ -1832,10 +1993,9 @@ describe("HermesRunEngine", () => {
       "MYSQL_PWD=ordinary-value",
       "PASSWORD_HASH=ordinary-value",
       "SSH_PRIVATE_KEY_B64=ordinary-value",
-      "C:drive-relative-secret",
     ]
     const safe =
-      "type x:string; variant A:control; ratio x:y; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
+      "type x:string; variant A:control; ratio x:y; C:drive-relative; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
       native({
@@ -1884,7 +2044,10 @@ describe("HermesRunEngine", () => {
         : []
     )
 
-    expect(argumentDeltas).toEqual([...credentials, safe].map(() => "{}"))
+    expect(argumentDeltas).toEqual([
+      ...credentials.map(() => '{"query":"[REDACTED]"}'),
+      JSON.stringify({ query: safe }),
+    ])
     for (const credential of credentials)
       expect(JSON.stringify(events)).not.toContain(credential)
   })
@@ -1938,9 +2101,10 @@ describe("HermesRunEngine", () => {
 
     expect(args?.type).toBe(EventType.TOOL_CALL_ARGS)
     if (args?.type !== EventType.TOOL_CALL_ARGS) throw new Error("missing args")
-    expect(args.delta).toBe("{}")
+    expect(args.delta).toContain("[Truncated]")
+    expect(args.delta).not.toContain("\\ud83d")
     expect(result).toMatchObject({
-      content: '{"status":"completed"}',
+      content: expect.stringContaining("[Truncated]"),
     })
   })
 
@@ -2211,7 +2375,7 @@ describe("HermesRunEngine", () => {
     expect(events).toContainEqual({
       type: EventType.TOOL_CALL_ARGS,
       toolCallId: "call-7",
-      delta: "{}",
+      delta: '{"path":"report.txt"}',
     })
   })
 

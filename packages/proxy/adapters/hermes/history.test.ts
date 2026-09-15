@@ -3,6 +3,57 @@ import { describe, expect, it } from "vitest"
 import { projectHermesHistory } from "./history"
 
 describe("server-side Hermes history projection", () => {
+  it("restores file attachments without exposing Hermes context or paths", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "warning-row",
+        role: "user",
+        content:
+          "what do you see?\n@file:/home/alice/.hermes/attachments/click-2.mov\n\n--- Context Warnings ---\n- @file:/home/alice/.hermes/attachments/click-2.mov: path is outside the allowed workspace",
+      },
+      {
+        id: "context-row",
+        role: "user",
+        content:
+          "what do u c?\n@file:.hermes/attachments/click.mov\n\n--- Attached Context ---\n\n📎 @file:.hermes/attachments/click.mov (video/quicktime, 38.5 KB) — binary file, not inlined as text. It is available on disk at `/home/alice/.hermes/attachments/click.mov`.",
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        content: [{ type: "text", text: "what do you see?" }],
+        attachments: [
+          {
+            id: "warning-row:attachment:0",
+            type: "file",
+            name: "click-2.mov",
+            status: { type: "complete" },
+            content: [],
+          },
+        ],
+      },
+      {
+        content: [{ type: "text", text: "what do u c?" }],
+        attachments: [
+          {
+            id: "context-row:attachment:0",
+            type: "file",
+            name: "click.mov",
+            contentType: "video/quicktime",
+            status: { type: "complete" },
+            content: [],
+          },
+        ],
+      },
+    ])
+    const serialized = JSON.stringify(messages)
+    expect(serialized).not.toContain("Attached Context")
+    expect(serialized).not.toContain("Context Warnings")
+    expect(serialized).not.toContain("@file:")
+    expect(serialized).not.toContain("/home/")
+    expect(serialized).not.toContain(".hermes/attachments")
+  })
+
   it("omits native bookkeeping rows with a display kind", () => {
     const messages = projectHermesHistory([
       {
@@ -315,9 +366,7 @@ describe("server-side Hermes history projection", () => {
         },
         result: {
           status: "cancelled",
-          responses: [
-            { question: "Answer whichever apply.", answers: [] },
-          ],
+          responses: [{ question: "Answer whichever apply.", answers: [] }],
         },
       },
     ])
@@ -332,7 +381,7 @@ describe("server-side Hermes history projection", () => {
     "https://public.example.test/private",
     "wss://public.example.test/private",
   ])(
-    "makes receipt text opaque instead of guessing whether %s is private",
+    "keeps operator-visible receipt text inspectable for %s",
     (privateText) => {
       const messages = projectHermesHistory([
         {
@@ -368,11 +417,15 @@ describe("server-side Hermes history projection", () => {
         {
           type: "tool-call",
           toolName: "execute_command",
-          args: { description: "Run a command" },
-          result: { ok: true },
+          args: { command: privateText, description: "Run a command" },
+          result: {
+            ok: true,
+            command: privateText,
+            summary: privateText,
+            message: privateText,
+          },
         },
       ])
-      expect(JSON.stringify(messages)).not.toContain(privateText)
 
       const plain = projectHermesHistory([
         {
@@ -393,13 +446,12 @@ describe("server-side Hermes history projection", () => {
         },
       ])
       expect(plain[0]?.content).toMatchObject([
-        { type: "tool-call", result: { status: "completed" } },
+        { type: "tool-call", result: privateText },
       ])
-      expect(JSON.stringify(plain)).not.toContain(privateText)
     }
   )
 
-  it("allowlists useful supported tool data and makes unsupported results opaque", () => {
+  it("preserves inspectable tool data while redacting credentials and provider metadata", () => {
     const messages = projectHermesHistory([
       {
         id: "assistant-1",
@@ -469,48 +521,63 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
-    expect(messages[0]?.content).toEqual([
+    expect(messages[0]?.content).toMatchObject([
       {
         type: "tool-call",
         toolCallId: "search-1",
         toolName: "web_search",
         args: {
           query: "useful query",
-          filters: { language: "en", details: { language: "en" } },
+          filters: {
+            language: "en",
+            path: "/srv/hermes/private",
+            privatePath: "workspace-relative/private.txt",
+            provider_url: "http://127.0.0.1:9000/native",
+            details: {
+              language: "en",
+              authorization: "[REDACTED]",
+            },
+          },
+          credentials: "[REDACTED]",
         },
-        argsText: JSON.stringify({
-          query: "useful query",
-          filters: { language: "en", details: { language: "en" } },
-        }),
         result: {
           ok: true,
-          matches: [{ title: "Public title", snippet: "Useful summary" }],
+          matches: [
+            {
+              title: "Public title",
+              snippet: "Useful summary",
+              provider_url: "http://hermes.internal/result/1",
+            },
+          ],
+          credential: "[REDACTED]",
         },
       },
       {
         type: "tool-call",
         toolCallId: "unknown-1",
         toolName: "provider_private_tool",
-        args: {},
-        argsText: "{}",
-        result: { status: "completed" },
+        args: {
+          description: "native-only",
+          path: "/srv/private/input",
+        },
+        result: {
+          answer: "native payload",
+          path: "/srv/private/output",
+          nested: { token: "[REDACTED]" },
+        },
       },
     ])
     const serialized = JSON.stringify(messages)
     for (const leak of [
-      "/srv/",
-      "hermes.internal",
-      "127.0.0.1",
       "live-session-secret",
       "private-token",
       "stored-session-secret",
       "private-password",
-      "workspace-relative",
       "native_position",
       "metadata",
-      "credentials",
     ])
       expect(serialized).not.toContain(leak)
+    expect(serialized).toContain("[REDACTED]")
   })
 
   it("does not turn path-shaped artifact identity into a public descriptor", () => {

@@ -289,6 +289,7 @@ describe("Hermes content operations", () => {
         maxBytes: 26_214_400,
       },
       transcription: {
+        scope: "agent",
         maxRecordingBytes: 5_242_880,
         maxTranscriptBytes: 1_000_000,
         acceptedMimeTypes: [
@@ -317,7 +318,11 @@ describe("Hermes content operations", () => {
           "vorbis",
         ],
       },
-      speech: { maxTextBytes: 32_000, maxAudioBytes: 20_971_520 },
+      speech: {
+        scope: "agent",
+        maxTextBytes: 32_000,
+        maxAudioBytes: 20_971_520,
+      },
     })
     const operations = createHermesContentOperations({
       authority: { requireSession: h.requireSession } as never,
@@ -566,13 +571,12 @@ describe("Hermes content operations", () => {
     await expect(
       h.operations.transcribe(
         "research",
-        "session-public-1",
         Uint8Array.of(1, 2, 3),
         "audio/webm;codecs=opus"
       )
     ).resolves.toBe("transcript")
     expect(h.transcribe).toHaveBeenCalledWith(
-      scope,
+      { agentId: "research" },
       {
         data_url: "data:audio/webm;codecs=opus;base64,AQID",
         mime_type: "audio/webm;codecs=opus",
@@ -585,17 +589,11 @@ describe("Hermes content operations", () => {
   it("rejects unsupported and oversized recordings before forwarding", async () => {
     const h = harness()
     await expect(
-      h.operations.transcribe(
-        "research",
-        "session-public-1",
-        Uint8Array.of(1),
-        "text/plain"
-      )
+      h.operations.transcribe("research", Uint8Array.of(1), "text/plain")
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
     await expect(
       h.operations.transcribe(
         "research",
-        "session-public-1",
         new Uint8Array(5_242_881),
         "audio/webm"
       )
@@ -614,12 +612,7 @@ describe("Hermes content operations", () => {
       `audio/webm;codecs=${"a".repeat(129)}`,
     ])
       await expect(
-        h.operations.transcribe(
-          "research",
-          "session-public-1",
-          Uint8Array.of(1),
-          mimeType
-        )
+        h.operations.transcribe("research", Uint8Array.of(1), mimeType)
       ).rejects.toBeInstanceOf(HermesContentUnavailableError)
     expect(h.transcribe).not.toHaveBeenCalled()
   })
@@ -632,7 +625,7 @@ describe("Hermes content operations", () => {
       ])
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
     await expect(
-      h.operations.speak("research", "session-public-1", "🙂".repeat(8_001))
+      h.operations.speak("research", "🙂".repeat(8_001))
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
     expect(h.request).not.toHaveBeenCalled()
     expect(h.speak).not.toHaveBeenCalled()
@@ -643,12 +636,7 @@ describe("Hermes content operations", () => {
       transcribe: { ok: true, transcript: "🙂".repeat(250_001) },
     })
     await expect(
-      h.operations.transcribe(
-        "research",
-        "session-public-1",
-        Uint8Array.of(1),
-        "audio/webm"
-      )
+      h.operations.transcribe("research", Uint8Array.of(1), "audio/webm")
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
   })
 
@@ -659,19 +647,13 @@ describe("Hermes content operations", () => {
     await expect(
       h.operations.transcribe(
         "research",
-        "session-public-1",
         Uint8Array.of(1),
         "audio/webm",
         controller.signal
       )
     ).rejects.toMatchObject({ name: "AbortError" })
     await expect(
-      h.operations.speak(
-        "research",
-        "session-public-1",
-        "hello",
-        controller.signal
-      )
+      h.operations.speak("research", "hello", controller.signal)
     ).rejects.toMatchObject({ name: "AbortError" })
     expect(h.requireSession).not.toHaveBeenCalled()
     expect(h.transcribe).not.toHaveBeenCalled()
@@ -690,7 +672,6 @@ describe("Hermes content operations", () => {
     const controller = new AbortController()
     const pending = h.operations.transcribe(
       "research",
-      "session-public-1",
       Uint8Array.of(1),
       "audio/webm",
       controller.signal
@@ -711,12 +692,7 @@ describe("Hermes content operations", () => {
         })
     )
     const controller = new AbortController()
-    const pending = h.operations.speak(
-      "research",
-      "session-public-1",
-      "hello",
-      controller.signal
-    )
+    const pending = h.operations.speak("research", "hello", controller.signal)
     await vi.waitFor(() => expect(h.speak).toHaveBeenCalledOnce())
     controller.abort()
     resolve?.({
@@ -729,22 +705,18 @@ describe("Hermes content operations", () => {
 
   it("accepts only bounded valid native speech and removes provider metadata", async () => {
     const h = harness()
-    await expect(
-      h.operations.speak("research", "session-public-1", "hello")
-    ).resolves.toEqual({
+    await expect(h.operations.speak("research", "hello")).resolves.toEqual({
       bytes: Uint8Array.of(1, 2, 3),
       mimeType: "audio/mpeg",
     })
-    await expect(
-      h.operations.speak("research", "session-public-1", " ")
-    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+    await expect(h.operations.speak("research", " ")).rejects.toBeInstanceOf(
+      HermesContentUnavailableError
+    )
     expect(
-      JSON.stringify(
-        await h.operations.speak("research", "session-public-1", "again")
-      )
+      JSON.stringify(await h.operations.speak("research", "again"))
     ).not.toContain("private")
     expect(h.speak).toHaveBeenLastCalledWith(
-      scope,
+      { agentId: "research" },
       "again",
       undefined,
       27_962_540
