@@ -202,6 +202,13 @@ describe("container orchestration", () => {
     )
     expect(config.services.web.secrets).toEqual([
       expect.objectContaining({
+        source: "opencode-password",
+        target: "opencode-password",
+        mode: "0400",
+        uid: "1000",
+        gid: "1000",
+      }),
+      expect.objectContaining({
         source: "reconnect-cursor-key",
         target: "reconnect-cursor-key",
         mode: "0400",
