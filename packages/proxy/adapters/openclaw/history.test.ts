@@ -148,6 +148,9 @@ describe("OpenClaw authoritative history", () => {
     await expect(
       history.history("analyst", "agent:analyst:main", 1, 0)
     ).rejects.toMatchObject({ name: "OpenClawHistoryUnavailableError" })
+    await expect(
+      history.activity("analyst", "agent:analyst:main")
+    ).rejects.toMatchObject({ name: "OpenClawHistoryUnavailableError" })
   })
 
   it("[CL1-HISTORY-004] advances by native rows when tool records are not browser history", async () => {
@@ -238,5 +241,36 @@ describe("OpenClaw authoritative history", () => {
     expect(JSON.stringify(result)).not.toMatch(
       /secret|\/private|thinking|toolCall|system/u
     )
+  })
+
+  it("[CL1-HISTORY-006] retries an activity read that overlaps a scoped Session event", async () => {
+    let changed: (() => void) | undefined
+    let reads = 0
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: async () => {
+          reads++
+          if (reads === 1) changed?.()
+          return reads === 1
+            ? { messages: [], sessionInfo: { activeRunIds: [] } }
+            : {
+                messages: [],
+                sessionInfo: { activeRunIds: ["native-run"] },
+              }
+        },
+      },
+      subscribeSession: async (_agentId, _sessionKey, listener) => {
+        changed = listener
+        return () => {
+          changed = undefined
+        }
+      },
+    })
+
+    await expect(
+      history.activity("analyst", "agent:analyst:main")
+    ).resolves.toEqual({ state: "running" })
+    expect(reads).toBe(2)
   })
 })

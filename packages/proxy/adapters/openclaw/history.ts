@@ -197,6 +197,38 @@ export function createOpenClawHistory(input: {
     verifyRowOwnership(agentId, sessionKey, matches[0]!)
     return matches[0]!
   }
+  const authoritativeHistory = async (
+    agentId: string,
+    sessionKey: string,
+    limit: number,
+    offset: number
+  ) => {
+    await requireScope(agentId, sessionKey)
+    if (!input.subscribeSession) throw new OpenClawHistoryUnavailableError()
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let dirty = false
+      const unsubscribe = await input.subscribeSession(
+        agentId,
+        sessionKey,
+        () => {
+          dirty = true
+        }
+      )
+      try {
+        const native = parseOpenClawHistory(
+          await input.client.request(
+            "chat.history",
+            openClawHistoryParams(agentId, sessionKey, limit, offset)
+          ),
+          limit
+        )
+        if (!dirty) return native
+      } finally {
+        unsubscribe()
+      }
+    }
+    throw new OpenClawHistoryUnavailableError()
+  }
   return {
     async history(
       agentId,
@@ -208,42 +240,23 @@ export function createOpenClawHistory(input: {
         throw new OpenClawHistoryUnavailableError()
       if (!Number.isInteger(offset) || offset < 0)
         throw new OpenClawHistoryUnavailableError()
-      await requireScope(agentId, sessionKey)
-      if (!input.subscribeSession) throw new OpenClawHistoryUnavailableError()
-      for (let attempt = 0; attempt < 2; attempt++) {
-        let dirty = false
-        const unsubscribe = await input.subscribeSession(
-          agentId,
-          sessionKey,
-          () => {
-            dirty = true
-          }
-        )
-        try {
-          const native = parseOpenClawHistory(
-            await input.client.request(
-              "chat.history",
-              openClawHistoryParams(agentId, sessionKey, limit, offset)
-            ),
-            limit
-          )
-          if (dirty) continue
-          const messages = projectMessages(native.messages)
-          const rawCount = native.messages.length
-          return {
-            sessionId: sessionKey,
-            messages,
-            total: offset + rawCount + (rawCount === limit ? 1 : 0),
-            limit,
-            offset,
-            nextOffset: offset + rawCount,
-            execution: execution(native),
-          }
-        } finally {
-          unsubscribe()
-        }
+      const native = await authoritativeHistory(
+        agentId,
+        sessionKey,
+        limit,
+        offset
+      )
+      const messages = projectMessages(native.messages)
+      const rawCount = native.messages.length
+      return {
+        sessionId: sessionKey,
+        messages,
+        total: offset + rawCount + (rawCount === limit ? 1 : 0),
+        limit,
+        offset,
+        nextOffset: offset + rawCount,
+        execution: execution(native),
       }
-      throw new OpenClawHistoryUnavailableError()
     },
     async models(agentId, sessionKey) {
       await requireScope(agentId, sessionKey)
@@ -282,14 +295,7 @@ export function createOpenClawHistory(input: {
       }
     },
     async activity(agentId, sessionKey) {
-      await requireScope(agentId, sessionKey)
-      const history = parseOpenClawHistory(
-        await input.client.request(
-          "chat.history",
-          openClawHistoryParams(agentId, sessionKey, 1, 0)
-        ),
-        1
-      )
+      const history = await authoritativeHistory(agentId, sessionKey, 1, 0)
       return {
         state: execution(history).status === "running" ? "running" : "idle",
       }

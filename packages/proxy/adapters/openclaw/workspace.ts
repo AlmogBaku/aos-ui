@@ -17,6 +17,7 @@ import {
 
 const INVITATION_REFERENCE = /^[A-Za-z0-9_-]{1,128}$/u
 const MAX_SESSION_PAGE = 100
+const MAX_SESSION_KEY_LENGTH = 4_096
 
 export interface OpenClawWorkspaceClient {
   request<T>(method: string, params?: unknown): Promise<T>
@@ -58,6 +59,17 @@ function isVisiblePrimaryAgent(
 
 function verifyOwnership(agentId: string, row: OpenClawSession) {
   if (row.agentId !== agentId) throw new OpenClawWorkspaceOwnershipError()
+}
+
+function isBoundedSessionKey(value: string) {
+  return (
+    value.length > 0 &&
+    value.length <= MAX_SESSION_KEY_LENGTH &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || code === 127
+    })
+  )
 }
 
 function updatedAt(row: OpenClawSession) {
@@ -118,7 +130,6 @@ export function createOpenClawWorkspace(input: {
   hiddenAgentIds?: readonly string[]
 }): OpenClawWorkspace {
   const hidden = new Set(input.hiddenAgentIds ?? [])
-  const verifiedSessions = new Map<string, string>()
   const listNativeAgents = async () =>
     parseOpenClawAgents(
       await input.client.request("agents.list", openClawAgentsParams())
@@ -152,7 +163,6 @@ export function createOpenClawWorkspace(input: {
   ) => {
     const page = await rows(agentId, limit, offset)
     const sessions = page.map((row) => projectSession(agentId, row))
-    for (const session of sessions) verifiedSessions.set(session.id, agentId)
     return {
       sessions,
       total: offset + sessions.length + (page.length === limit ? 1 : 0),
@@ -244,14 +254,10 @@ export function createOpenClawWorkspace(input: {
       )
       const matches = page.filter((row) => row.key === sessionKey)
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
-      const session = projectSession(agentId, matches[0]!)
-      verifiedSessions.set(session.id, agentId)
-      return session
+      return projectSession(agentId, matches[0]!)
     },
-    resolveSessionId(agentId, publicSessionId) {
-      return verifiedSessions.get(publicSessionId) === agentId
-        ? publicSessionId
-        : undefined
+    resolveSessionId(_agentId, publicSessionId) {
+      return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined
     },
     async resolveInvitedSession(agentId, ref) {
       const sessionKey = invitedOpenClawSessionKey(agentId, ref)
@@ -267,7 +273,6 @@ export function createOpenClawWorkspace(input: {
       if (!matches.length) return undefined
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
       verifyOwnership(agentId, matches[0]!)
-      verifiedSessions.set(sessionKey, agentId)
       return { sessionId: sessionKey, created: false }
     },
   }

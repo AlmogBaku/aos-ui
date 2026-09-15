@@ -245,4 +245,61 @@ describe("OpenClaw workspace reads", () => {
       created: false,
     })
   })
+
+  it("[CL1-WORKSPACE-007] opens a Session returned by the global catalog without prior verification", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "team.alpha",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "team.alpha", name: "Alpha", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: [
+          {
+            key: "agent:team.alpha:main",
+            agentId: "team.alpha",
+            label: "Global catalog Session",
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const catalog = await workspace.listAllSessions(1, 0)
+    const sessionId = catalog.sessions[0]!.id
+
+    expect(workspace.resolveSessionId("team.alpha", sessionId)).toBe(sessionId)
+    await expect(
+      workspace.getSession("team.alpha", sessionId)
+    ).resolves.toMatchObject({
+      id: sessionId,
+      agentId: "team.alpha",
+    })
+  })
+
+  it("[CL1-WORKSPACE-008] resolves a cold direct URL as an opaque key before exact native ownership verification", async () => {
+    const agentId = "team:alpha.beta"
+    const sessionId = "agent:team:alpha.beta:main"
+    const native = gateway({
+      "agents.list": {
+        defaultId: agentId,
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: agentId, name: "Alpha", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: [{ key: sessionId, agentId, label: "Direct Session" }],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    expect(workspace.resolveSessionId(agentId, sessionId)).toBe(sessionId)
+    await expect(
+      workspace.getSession(agentId, sessionId)
+    ).resolves.toMatchObject({
+      id: sessionId,
+      agentId,
+    })
+  })
 })
