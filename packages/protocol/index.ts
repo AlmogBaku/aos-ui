@@ -282,6 +282,7 @@ export const SlashCommandSchema = z.strictObject({
   description: z.string().max(4096).optional(),
 })
 export type SlashCommand = z.infer<typeof SlashCommandSchema>
+export const MAX_SLASH_COMMANDS = 4_096
 export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
   agent: AgentCapabilitiesSchema,
   workspace: z.strictObject({
@@ -289,7 +290,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       z.strictObject({
         status: z.literal("available"),
         scope: z.literal("attached-session"),
-        commands: z.array(SlashCommandSchema).max(256),
+        commands: z.array(SlashCommandSchema).max(MAX_SLASH_COMMANDS),
       }),
       CapabilityUnavailableSchema,
     ]),

@@ -1,4 +1,8 @@
-import { SlashCommandSchema, type SlashCommand } from "../../../protocol"
+import {
+  MAX_SLASH_COMMANDS,
+  SlashCommandSchema,
+  type SlashCommand,
+} from "../../../protocol"
 import type { HermesRpcTransport } from "./adapter"
 
 const MAX_CATALOG_RESPONSE_BYTES = 2_097_152
@@ -59,7 +63,7 @@ export async function nativeSlashCommands(
     if (!parsed.success || seen.has(parsed.data.name)) continue
     seen.add(parsed.data.name)
     commands.push(parsed.data)
-    if (commands.length === 256) break
+    if (commands.length === MAX_SLASH_COMMANDS) break
   }
   return commands
 }

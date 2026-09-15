@@ -496,12 +496,18 @@ describe("AOS V1 proxy", () => {
     expect(history).toHaveBeenCalledWith("researcher", "stored", 200, 200)
   })
 
-  it("includes the runtime slash-command catalog in Session capabilities", async () => {
+  it("includes the complete runtime slash-command catalog in Session capabilities", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(runtime, "getSession").mockResolvedValue(session())
+    const commands = [
+      ...Array.from({ length: 256 }, (_, index) => ({
+        name: `native-${index}`,
+      })),
+      { name: "writing-plans", description: "Write an implementation plan" },
+    ]
     const slashCommands = vi
       .spyOn(runtime, "slashCommands")
-      .mockResolvedValue([{ name: "help", description: "Show help" }])
+      .mockResolvedValue(commands)
 
     const response = await app(runtime).request(
       `${origin}/api/aos/v1/agents/researcher/sessions/stored/workspace/capabilities`
@@ -516,7 +522,12 @@ describe("AOS V1 proxy", () => {
         slashCommands: {
           status: "available",
           scope: "attached-session",
-          commands: [{ name: "help", description: "Show help" }],
+          commands: expect.arrayContaining([
+            {
+              name: "writing-plans",
+              description: "Write an implementation plan",
+            },
+          ]),
         },
       },
     })

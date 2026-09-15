@@ -41,6 +41,24 @@ it("projects native slash catalog names in order without duplicate or malformed 
   )
 })
 
+it("includes skill commands that follow the first 256 catalog entries", async () => {
+  const pairs = [
+    ...Array.from({ length: 256 }, (_, index) => [
+      `/native-${index}`,
+      `Native ${index}`,
+    ]),
+    ["/writing-plans", "Write an implementation plan"],
+  ]
+  const transport = {
+    request: vi.fn(async () => ({ pairs })),
+  }
+
+  await expect(nativeSlashCommands(transport, {})).resolves.toContainEqual({
+    name: "writing-plans",
+    description: "Write an implementation plan",
+  })
+})
+
 it("keeps the capability response usable when the native catalog is unavailable", async () => {
   const adapter = new HermesServerAdapter({
     request: vi.fn(async () => {
@@ -131,7 +149,7 @@ it("preserves native prefill results for commands such as undo", async () => {
   })
 })
 
-it("recognizes typed commands beyond the bounded public catalog", async () => {
+it("recognizes typed commands from the full native catalog", async () => {
   const pairs = Array.from({ length: 257 }, (_, index) => [
     `/command-${index}`,
     `Command ${index}`,
