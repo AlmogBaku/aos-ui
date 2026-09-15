@@ -10,7 +10,7 @@ import {
   ComposerVoiceButton,
 } from "../elements/composer-voice"
 import { TooltipIconButton } from "../elements/tooltip-icon-button"
-import { MicModePicker } from "./mic-mode-picker"
+import { MicModeButton } from "./mic-mode-button"
 import {
   useVoiceCaptureActive,
   useVoiceContext,
@@ -231,7 +231,7 @@ export function VoiceComposerControl() {
       </>
     )
   return (
-    <MicModePicker
+    <MicModeButton
       mode={mode}
       onModeChange={(value) => media.setMode(value)}
       onRecord={start}
@@ -256,7 +256,7 @@ export function VoiceComposerNotice() {
   return (
     <p
       role={capture?.error || playbackError ? "alert" : "status"}
-      className="px-2 pt-1 text-xs text-muted-foreground @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:w-full @min-[64rem]/workspace:max-w-[45rem]"
+      className="px-2 pt-1 text-xs text-muted-foreground @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:w-full @min-[64rem]/workspace:max-w-(--thread-content-max-width)"
     >
       {text}
     </p>

@@ -18,13 +18,51 @@ describe("composer keyboard decisions", () => {
     expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe("send")
   })
 
+  it("submits the steering shortcut normally while idle", () => {
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter", metaKey: true, shiftKey: true },
+        state()
+      )
+    ).toBe("send")
+  })
+
   it("queues a non-empty draft on busy Enter without steering", () => {
     expect(
       resolveComposerEnterAction(
         { key: "Enter" },
         state({ isRunning: true, hasQueue: true })
       )
-    ).toBe("send")
+    ).toBe("queue")
+  })
+
+  it("steers a text-only draft into the active turn", () => {
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter", ctrlKey: true, shiftKey: true },
+        state({ isRunning: true, canSteer: true })
+      )
+    ).toBe("steer")
+  })
+
+  it("queues steering shortcuts when steering or text-only delivery is unavailable", () => {
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter", metaKey: true, shiftKey: true },
+        state({ isRunning: true, hasQueue: true, canSteer: false })
+      )
+    ).toBe("queue")
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter", ctrlKey: true, shiftKey: true },
+        state({
+          isRunning: true,
+          hasQueue: true,
+          canSteer: true,
+          hasAttachments: true,
+        })
+      )
+    ).toBe("queue")
   })
 
   it("keeps Shift+Enter as a native newline", () => {

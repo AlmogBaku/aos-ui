@@ -47,6 +47,12 @@ export function composerUsageFromTokens({
 }
 
 export type ComposerFeatureViewModel = {
+  readonly steer?:
+    | ((request: {
+        readonly requestId: string
+        readonly text: string
+      }) => Promise<{ status: "steered" | "queued" }>)
+    | undefined
   readonly model?:
     | {
         readonly options: readonly ComposerModelOption[]

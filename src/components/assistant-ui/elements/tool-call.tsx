@@ -6,6 +6,7 @@ import {
   CircleXIcon,
   type LucideIcon,
 } from "lucide-react"
+import type { ReactNode } from "react"
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,6 +30,7 @@ export interface ToolCallProps {
   query: string
   request: string
   result: string
+  details?: ReactNode
   running: boolean
   state: "complete" | "attention" | "failed" | "cancelled" | "running"
   collapsible?: boolean
@@ -46,6 +48,7 @@ export function ToolCall({
   query,
   request,
   result,
+  details,
   running,
   state,
   collapsible = true,
@@ -90,7 +93,7 @@ export function ToolCall({
       ) : null}
     </>
   )
-  const details = (
+  const defaultDetails = (
     <div
       className={cn(
         field,
@@ -138,7 +141,7 @@ export function ToolCall({
         {header}
       </CollapsibleTrigger>
       <CollapsibleContent className={cn(collapsePanel, "outline-none")}>
-        {details}
+        {details ?? defaultDetails}
       </CollapsibleContent>
     </Collapsible>
   )
