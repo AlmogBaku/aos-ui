@@ -22,6 +22,7 @@ import {
   HermesRpcUncertainError,
 } from "./transport"
 import { projectHermesHistory } from "./history"
+import { projectHermesMediaArtifacts } from "./media-artifacts"
 import {
   HermesRunRewindConflictError,
   HermesRunEngine,
@@ -388,6 +389,21 @@ function publishedArtifact(rows: readonly unknown[], artifactId: string) {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]
     if (!isRecord(row)) continue
+    if (row.role === "tool") {
+      const toolCallId = nonEmptyString(row.tool_call_id ?? row.toolCallId)
+      const toolName = nonEmptyString(row.tool_name ?? row.toolName)
+      if (toolCallId && toolName)
+        for (const media of projectHermesMediaArtifacts(
+          toolCallId,
+          toolName,
+          row.content ?? row.result
+        ))
+          if (media.descriptor.id === artifactId)
+            return {
+              reference: media.reference,
+              filename: media.descriptor.filename,
+            }
+    }
     const value = parsedJson(row.content ?? row.result)
     if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
       continue

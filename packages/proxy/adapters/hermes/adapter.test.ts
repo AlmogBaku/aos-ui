@@ -172,6 +172,78 @@ describe("Hermes server adapter", () => {
     })
   })
 
+  it("resolves trusted TTS media through its opaque Session artifact", async () => {
+    const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
+    const messages = [
+      {
+        id: "assistant-tts",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "tts-call",
+            function: {
+              name: "text_to_speech",
+              arguments: '{"text":"Quarterly update"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "tts-call",
+        tool_name: "text_to_speech",
+        content: JSON.stringify({
+          success: true,
+          file_path: audioPath,
+          file_paths: [audioPath],
+          media_tag: `MEDIA:${audioPath}`,
+          provider: "edge",
+        }),
+      },
+      {
+        id: "assistant-final",
+        role: "assistant",
+        content: `MEDIA:${audioPath}`,
+      },
+    ]
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return { session_id: "live-secret", running: false, status: "idle" }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      if (path.includes("/messages?")) return { session_id: "stored", messages }
+      if (path.startsWith("/api/fs/read-data-url?"))
+        return { dataUrl: "data:audio/mpeg;base64,aGVsbG8=" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const history = await adapter.history("researcher", "stored", 200, 0)
+    const descriptor = history.messages
+      .flatMap((message) =>
+        message.role === "assistant" ? message.content : []
+      )
+      .find((part) => part.type === "data" && part.name === "aos.artifact")
+
+    expect(descriptor?.type).toBe("data")
+    if (descriptor?.type !== "data" || typeof descriptor.data.id !== "string")
+      throw new Error("Expected a projected TTS artifact")
+
+    await expect(
+      adapter.artifact("researcher", "stored", descriptor.data.id)
+    ).resolves.toEqual({
+      bytes: Uint8Array.from([104, 101, 108, 108, 111]),
+      filename: "quick-brief.mp3",
+      mimeType: "audio/mpeg",
+    })
+    expect(http.mock.calls.at(-1)?.[0]).toContain(
+      `path=${encodeURIComponent(audioPath)}&profile=researcher&session_id=stored`
+    )
+    expect(JSON.stringify(history)).not.toContain(audioPath)
+  })
+
   it("restores pending interactions from authoritative owned Session state", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "session.resume")

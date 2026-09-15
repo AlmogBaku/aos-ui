@@ -1,4 +1,8 @@
 import type { SessionMessage } from "../../../protocol"
+import {
+  projectHermesMediaArtifacts,
+  projectHermesMediaText,
+} from "./media-artifacts"
 import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
 
 type JsonValue =
@@ -166,6 +170,8 @@ function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
 
 function publicToolResult(name: string, value: unknown, isError: boolean) {
   const canonicalName = canonicalToolName(name)
+  if (canonicalName === "text_to_speech")
+    return { status: isError ? "failed" : "completed" }
   if (canonicalName === "question") {
     const responses = projectQuestionResponses(value)
     if (responses) return responses
@@ -467,6 +473,7 @@ export function projectHermesHistory(
 ): SessionMessage[] {
   const messages: SessionMessage[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
+  const mediaReferences = new Map<number, Set<string>>()
 
   rows.forEach((value, index) => {
     if (!isRecord(value) || stringValue(value.display_kind)) return
@@ -474,7 +481,7 @@ export function projectHermesHistory(
     if (role === "tool") {
       const toolCallId = stringValue(value.tool_call_id ?? value.toolCallId)
       const target = toolCallId ? calls.get(toolCallId) : undefined
-      if (!target) return
+      if (!toolCallId || !target) return
       const message = messages[target.messageIndex]
       const part = message?.content[target.partIndex]
       if (
@@ -491,6 +498,14 @@ export function projectHermesHistory(
         toolName === "present_artifact" && value.is_error !== true
           ? projectHermesArtifactReceipt(value.content ?? value.result)
           : undefined
+      const mediaArtifacts =
+        value.is_error !== true
+          ? projectHermesMediaArtifacts(
+              toolCallId,
+              toolName,
+              value.content ?? value.result
+            )
+          : []
       const content = [...message.content]
       content[target.partIndex] = {
         ...part,
@@ -505,6 +520,18 @@ export function projectHermesHistory(
         ...(value.is_error === true ? { isError: true } : {}),
       }
       if (artifact) content.push(artifact.part)
+      if (mediaArtifacts.length) {
+        const trusted = mediaReferences.get(target.messageIndex) ?? new Set()
+        for (const media of mediaArtifacts) {
+          trusted.add(media.reference)
+          content.push({
+            type: "data",
+            name: "aos.artifact",
+            data: media.descriptor,
+          })
+        }
+        mediaReferences.set(target.messageIndex, trusted)
+      }
       messages[target.messageIndex] = { ...message, content }
       return
     }
@@ -551,7 +578,10 @@ export function projectHermesHistory(
     )
     const userContent =
       role === "user" ? projectHermesUserContent(text, id) : undefined
-    const visibleText = userContent?.text ?? text
+    const visibleText =
+      role === "assistant"
+        ? projectHermesMediaText(text, mediaReferences.get(messageIndex) ?? [])
+        : (userContent?.text ?? text)
     const content = previousAssistant ? [...previousAssistant.content] : []
     const reasoning =
       role === "assistant"

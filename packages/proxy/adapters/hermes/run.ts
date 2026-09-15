@@ -19,6 +19,10 @@ import {
   projectHermesQuestionArgs,
   projectHermesQuestionResult,
 } from "./history"
+import {
+  HermesMediaTextFilter,
+  projectHermesMediaArtifacts,
+} from "./media-artifacts"
 import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
 
@@ -296,6 +300,7 @@ type ActiveRun = {
   sealedMessageIds: Set<string>
   textStarted: boolean
   streamedText?: string
+  mediaFilter: HermesMediaTextFilter
   reasoningStarted: boolean
   reasoningEnded: boolean
   streamedReasoning: string
@@ -713,6 +718,7 @@ export class HermesRunEngine {
         sealedMessageIds: new Set(),
         textStarted: false,
         streamedText: "",
+        mediaFilter: new HermesMediaTextFilter(),
         reasoningStarted: false,
         reasoningEnded: false,
         streamedReasoning: "",
@@ -943,6 +949,7 @@ export class HermesRunEngine {
         sealedMessageIds: new Set(),
         textStarted: false,
         streamedText: "",
+        mediaFilter: new HermesMediaTextFilter(),
         reasoningStarted: false,
         reasoningEnded: false,
         streamedReasoning: "",
@@ -1195,17 +1202,8 @@ export class HermesRunEngine {
     const textDelta = boundedText(payload.text)
     if (event.type === "message.delta" && textDelta !== undefined) {
       if (textDelta.length === 0) return
-      const messageId = this.#ensureMessageId(active)
-      this.#endReasoning(active)
-      this.#startText(active)
-      if (
-        this.#emit(active, {
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId,
-          delta: textDelta,
-        })
-      )
-        this.#appendStreamedText(active, textDelta)
+      this.#appendStreamedText(active, textDelta)
+      this.#emitMediaFilteredText(active, active.mediaFilter.write(textDelta))
       return
     }
     // Hermes uses thinking.delta for transient spinner/status copy. It is not
@@ -1244,6 +1242,11 @@ export class HermesRunEngine {
         tool.name === "present_artifact"
           ? projectHermesArtifactReceipt(payload.result)
           : undefined
+      const mediaArtifacts = projectHermesMediaArtifacts(
+        toolCallId,
+        tool.name,
+        payload.result
+      )
       const questionResult =
         tool.name === "question"
           ? projectHermesQuestionResult(payload.result)
@@ -1255,13 +1258,17 @@ export class HermesRunEngine {
         toolCallId,
         content: artifact
           ? JSON.stringify(artifact.result)
-          : questionResult
-            ? JSON.stringify(questionResult)
-            : resultContent(
-                tool.name,
-                payload.result,
-                payload.is_error === true
-              ),
+          : tool.name === "text_to_speech"
+            ? JSON.stringify({
+                status: payload.is_error === true ? "failed" : "completed",
+              })
+            : questionResult
+              ? JSON.stringify(questionResult)
+              : resultContent(
+                  tool.name,
+                  payload.result,
+                  payload.is_error === true
+                ),
         role: "tool",
       })
       if (tool.name === "todo") {
@@ -1274,6 +1281,14 @@ export class HermesRunEngine {
           name: artifact.part.name,
           value: artifact.part.data,
         })
+      for (const media of mediaArtifacts) {
+        active.mediaFilter.trust(media.reference)
+        this.#emit(active, {
+          type: EventType.CUSTOM,
+          name: "aos.artifact",
+          value: media.descriptor,
+        })
+      }
       return
     }
     if (event.type === "session.info" && payload.running === false) {
@@ -1330,16 +1345,11 @@ export class HermesRunEngine {
         ) {
           const remaining = finalText.slice(active.streamedText.length)
           if (remaining) {
-            this.#endReasoning(active)
-            this.#startText(active)
-            if (
-              this.#emit(active, {
-                type: EventType.TEXT_MESSAGE_CONTENT,
-                messageId: active.messageId,
-                delta: remaining,
-              })
+            this.#appendStreamedText(active, remaining)
+            this.#emitMediaFilteredText(
+              active,
+              active.mediaFilter.write(remaining)
             )
-              this.#appendStreamedText(active, remaining)
           }
         }
         if (active.redirectChainActive || active.redirectDispatchPending) {
@@ -1354,6 +1364,22 @@ export class HermesRunEngine {
   #appendStreamedText(active: ActiveRun, delta: string) {
     if (active.streamedText === undefined) return
     active.streamedText = boundedText(active.streamedText + delta)
+  }
+
+  #emitMediaFilteredText(active: ActiveRun, delta: string) {
+    if (!delta) return
+    const messageId = this.#ensureMessageId(active)
+    this.#endReasoning(active)
+    this.#startText(active)
+    this.#emit(active, {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId,
+      delta,
+    })
+  }
+
+  #flushMediaText(active: ActiveRun) {
+    this.#emitMediaFilteredText(active, active.mediaFilter.finish())
   }
 
   #emitPlan(active: ActiveRun, todos: HermesTodo[]) {
@@ -1545,6 +1571,7 @@ export class HermesRunEngine {
   }
 
   #sealGeneration(active: ActiveRun) {
+    this.#flushMediaText(active)
     this.#endReasoning(active)
     if (active.textStarted && active.messageId)
       this.#emit(active, {
@@ -1556,6 +1583,7 @@ export class HermesRunEngine {
     active.generation += 1
     active.textStarted = false
     active.streamedText = ""
+    active.mediaFilter = new HermesMediaTextFilter()
     active.reasoningStarted = false
     active.reasoningEnded = false
     active.streamedReasoning = ""
@@ -1563,6 +1591,7 @@ export class HermesRunEngine {
 
   #finish(active: ActiveRun, result?: unknown) {
     if (active.terminal) return
+    this.#flushMediaText(active)
     this.#endReasoning(active)
     this.#settleOpenTools(
       active,

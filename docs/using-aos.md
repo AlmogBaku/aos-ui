@@ -37,7 +37,7 @@ the runtime adapter; it never transfers a queue to another Agent.
 
 ## Open published Artifacts
 
-An Artifact appears only after an Agent explicitly publishes it. Ordinary files in a runtime worktree are not automatically exposed.
+An Artifact appears only after an Agent explicitly publishes it. This includes a trusted provider-native delivery receipt, such as a successful Hermes text-to-speech result. Ordinary files, assistant-authored paths, and unmatched `MEDIA:` references are not automatically exposed.
 
 AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy and an inspectable Source view. Operators may allow selected HTTPS asset origins through public configuration; see [Configuration](configuration.md#artifact-html-assets).
 

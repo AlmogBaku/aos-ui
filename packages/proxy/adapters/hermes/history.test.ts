@@ -3,6 +3,91 @@ import { describe, expect, it } from "vitest"
 import { projectHermesHistory } from "./history"
 
 describe("server-side Hermes history projection", () => {
+  it("restores trusted TTS media and suppresses a redundant copied marker", () => {
+    const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
+    const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-tts",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "tts-call",
+            function: {
+              name: "text_to_speech",
+              arguments: '{"text":"Quarterly update"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "tts-call",
+        tool_name: "text_to_speech",
+        content: JSON.stringify({
+          success: true,
+          file_path: audioPath,
+          file_paths: [audioPath],
+          media_tag: `MEDIA:${audioPath}`,
+          provider: "edge",
+        }),
+      },
+      {
+        id: "assistant-final",
+        role: "assistant",
+        content: `Your brief is ready.\nMEDIA:${copiedPath}`,
+      },
+    ])
+
+    expect(messages).toHaveLength(1)
+    const artifact = messages[0]?.content.find(
+      (part) => part.type === "data" && part.name === "aos.artifact"
+    )
+    expect(artifact).toMatchObject({
+      type: "data",
+      name: "aos.artifact",
+      data: {
+        filename: "quick-brief.mp3",
+        mimeType: "audio/mpeg",
+      },
+    })
+    expect(
+      artifact?.type === "data" ? artifact.data.source : undefined
+    ).toEqual({
+      type: "provider",
+      reference:
+        artifact?.type === "data" && typeof artifact.data.id === "string"
+          ? artifact.data.id
+          : undefined,
+    })
+    expect(messages[0]?.content).toContainEqual({
+      type: "text",
+      text: "Your brief is ready.",
+    })
+    expect(JSON.stringify(messages)).not.toContain("MEDIA:")
+    expect(JSON.stringify(messages)).not.toContain(audioPath)
+    expect(JSON.stringify(messages)).not.toContain(copiedPath)
+    expect(JSON.stringify(messages)).not.toContain("Media unavailable")
+  })
+
+  it("redacts an assistant MEDIA path that has no trusted tool receipt", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-forged-media",
+        role: "assistant",
+        content: "MEDIA:/home/alice/private/credentials.txt",
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        content: [{ type: "text", text: "[Media unavailable]" }],
+      },
+    ])
+    expect(JSON.stringify(messages)).not.toContain("/home/")
+    expect(JSON.stringify(messages)).not.toContain("aos.artifact")
+  })
+
   it("restores file attachments without exposing Hermes context or paths", () => {
     const messages = projectHermesHistory([
       {

@@ -9,7 +9,7 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 3. Remove unknown fields and credentials.
 4. Provider-specific server adapters are not browser runtime modes; confirm the
    normalized AOS proxy is configured and reachable.
-6. OpenClaw is unavailable on the current normalized deployment path; its retained runtime example intentionally renders unavailable.
+5. OpenClaw is unavailable on the current normalized deployment path; its retained runtime example intentionally renders unavailable.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
 
@@ -81,7 +81,8 @@ Voice requires Hermes plus the relevant native STT/TTS configuration. Microphone
 
 ## A published Artifact cannot load
 
-- Confirm the active conversation branch contains an explicit `present_artifact` result.
+- Confirm the active conversation branch contains an explicit `present_artifact` result or a successful trusted provider-native delivery receipt, such as Hermes text-to-speech.
+- For Hermes media, confirm the tool result's `file_path` or `file_paths` entry exactly matches its `MEDIA:` delivery tag. AOS rejects unmatched assistant-authored paths.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
 - For HTML dependencies, add only the required credential-free HTTPS origins to `artifactHtmlAssetOrigins`.
 - Inspect the Source or textual fallback when preview rendering is unavailable.

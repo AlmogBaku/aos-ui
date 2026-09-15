@@ -1231,6 +1231,84 @@ describe("HermesRunEngine", () => {
     expect(JSON.stringify(events)).not.toContain("/srv/hermes/private")
   })
 
+  it("streams trusted TTS media and suppresses a redundant copied marker", async () => {
+    const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
+    const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          for (const [seq, type, payload] of [
+            [1, "message.start", { message_id: "message-media" }],
+            [
+              2,
+              "tool.start",
+              {
+                tool_id: "tts-call",
+                name: "text_to_speech",
+                args: { text: "Quarterly update" },
+              },
+            ],
+            [
+              3,
+              "tool.complete",
+              {
+                tool_id: "tts-call",
+                name: "text_to_speech",
+                result: {
+                  success: true,
+                  file_path: audioPath,
+                  file_paths: [audioPath],
+                  media_tag: `MEDIA:${audioPath}`,
+                  provider: "edge",
+                },
+              },
+            ],
+            [4, "message.delta", { text: "Your brief is ready.\nME" }],
+            [5, "message.delta", { text: "DIA:" }],
+            [6, "message.delta", { text: copiedPath }],
+            [7, "message.complete", {}],
+          ] as const)
+            publish?.({ type, session_id: "live-secret", seq, payload })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+    const artifact = events.find(
+      (event) =>
+        !!event &&
+        typeof event === "object" &&
+        "type" in event &&
+        event.type === EventType.CUSTOM &&
+        "name" in event &&
+        event.name === "aos.artifact"
+    )
+
+    expect(artifact).toMatchObject({
+      type: EventType.CUSTOM,
+      name: "aos.artifact",
+      value: {
+        filename: "quick-brief.mp3",
+        mimeType: "audio/mpeg",
+      },
+    })
+    expect(events).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "message-media",
+      delta: "Your brief is ready.\n",
+    })
+    expect(JSON.stringify(events)).not.toContain("MEDIA:")
+    expect(JSON.stringify(events)).not.toContain(audioPath)
+    expect(JSON.stringify(events)).not.toContain(copiedPath)
+    expect(JSON.stringify(events)).not.toContain("Media unavailable")
+  })
+
   it("settles a tool before the run when Hermes loses its completion event", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
