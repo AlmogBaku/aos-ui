@@ -31,7 +31,11 @@ import {
   OpenCodeInteractionPublicError,
   OpenCodeInteractions,
 } from "./interactions"
-import { parseOpenCodeMessageCatalog } from "./native-schemas"
+import {
+  parseOpenCodeMessageCatalog,
+  parseOpenCodeModelCatalog,
+  parseOpenCodeSession,
+} from "./native-schemas"
 import {
   createOpenCodeWorkspaceOperations,
   OpenCodeWorkspaceScopeError,
@@ -44,10 +48,17 @@ const MAX_HISTORY_PAGES = 100
 
 /** The assembly seam deliberately excludes coordinator-owned run state. */
 export type OpenCodeAdapterClient = Readonly<{
-  catalog: Pick<OpenCodeClient["catalog"], "agents">
+  catalog: Pick<OpenCodeClient["catalog"], "agents" | "models">
   sessions: Pick<
     OpenCodeClient["sessions"],
-    "list" | "get" | "create" | "messages" | "questions" | "permissions"
+    | "list"
+    | "get"
+    | "create"
+    | "switchModel"
+    | "messages"
+    | "context"
+    | "questions"
+    | "permissions"
   >
   close(): Promise<void>
 }>
@@ -387,8 +398,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   async models(agentId: string, publicSessionId: string) {
-    await this.getSession(agentId, publicSessionId)
-    throw new OpenCodeWorkspaceUnavailableError()
+    const { selectedId, options } = await this.#models(agentId, publicSessionId)
+    return { selectedId, options }
   }
 
   async selectModel(
@@ -396,13 +407,17 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     publicSessionId: string,
     selectedId: string
   ) {
-    await this.getSession(agentId, publicSessionId)
-    void selectedId
-    throw new OpenCodeWorkspaceUnavailableError()
+    const options = await this.#models(agentId, publicSessionId)
+    const selected = options.native.get(selectedId)
+    if (!selected) throw new OpenCodeWorkspaceUnavailableError()
+    await this.options.client.sessions.switchModel(publicSessionId, selected)
+    return { selectedId }
   }
 
   async context(agentId: string, publicSessionId: string) {
     await this.getSession(agentId, publicSessionId)
+    // The pinned SDK's session.context response is `data: SessionMessage[]`,
+    // not a provider token/accounting metric. Do not invent an estimate.
     throw new OpenCodeWorkspaceUnavailableError()
   }
 
@@ -489,5 +504,41 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       cursor = next
     }
     throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async #models(agentId: string, sessionId: string) {
+    await this.getSession(agentId, sessionId)
+    const session = parseOpenCodeSession(
+      await this.options.client.sessions.get(sessionId)
+    )
+    if (
+      !session.success ||
+      session.data.agent !== agentId ||
+      !session.data.model
+    )
+      throw new OpenCodeWorkspaceUnavailableError()
+    const catalog = parseOpenCodeModelCatalog(
+      await this.options.client.catalog.models()
+    )
+    if (!catalog.success) throw new OpenCodeWorkspaceUnavailableError()
+    const native = new Map<
+      string,
+      { providerID: string; id: string; variant?: string }
+    >()
+    const options = catalog.data.data.flatMap((model) => {
+      if (!model.enabled) return []
+      const id = JSON.stringify([model.providerID, model.id])
+      if (!identifier(id) || native.has(id))
+        throw new OpenCodeWorkspaceUnavailableError()
+      native.set(id, { providerID: model.providerID, id: model.id })
+      return [{ id, label: model.name, group: model.providerID }]
+    })
+    const selectedId = JSON.stringify([
+      session.data.model.providerID,
+      session.data.model.id,
+    ])
+    if (!identifier(selectedId) || !native.has(selectedId))
+      throw new OpenCodeWorkspaceUnavailableError()
+    return { selectedId, options, native }
   }
 }

@@ -36,6 +36,18 @@ function client(): OpenCodeAdapterClient {
           },
         ],
       }),
+      models: async () => ({
+        data: [
+          {
+            id: "gpt-5",
+            providerID: "openai",
+            name: "GPT-5",
+            enabled: true,
+            status: "active",
+            limit: { context: 128_000, output: 16_000 },
+          },
+        ],
+      }),
     },
     sessions: {
       list: async () => ({
@@ -52,6 +64,7 @@ function client(): OpenCodeAdapterClient {
       get: async () => ({
         id: "session-1",
         agent: "research",
+        model: { providerID: "openai", modelID: "gpt-5" },
         title: "Research notes",
         time: { created: 1_000, updated: 2_000 },
       }),
@@ -69,6 +82,8 @@ function client(): OpenCodeAdapterClient {
           cursor: { next: "second" },
         }
       }),
+      switchModel: vi.fn(async () => {}),
+      context: async () => ({ data: [] }),
       questions: { reply: async () => {}, reject: async () => {} },
       permissions: { reply: async () => {} },
     },
@@ -77,6 +92,31 @@ function client(): OpenCodeAdapterClient {
 }
 
 describe("OpenCode server adapter", () => {
+  it("projects native enabled models and switches only an exact owned Session model", async () => {
+    const native = client()
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      runs: runEngine,
+    })
+
+    await expect(adapter.models("research", "session-1")).resolves.toEqual({
+      selectedId: '["openai","gpt-5"]',
+      options: [{ id: '["openai","gpt-5"]', label: "GPT-5", group: "openai" }],
+    })
+    await expect(
+      adapter.selectModel("research", "session-1", '["openai","gpt-5"]')
+    ).resolves.toEqual({ selectedId: '["openai","gpt-5"]' })
+    expect(native.sessions.switchModel).toHaveBeenCalledWith("session-1", {
+      providerID: "openai",
+      id: "gpt-5",
+    })
+    await expect(
+      adapter.context("research", "session-1")
+    ).rejects.toMatchObject({
+      name: "OpenCodeWorkspaceUnavailableError",
+    })
+  })
+
   it("uses ascending native message pages for exact-Agent authoritative history", async () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({

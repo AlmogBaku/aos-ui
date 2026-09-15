@@ -96,6 +96,11 @@ export type OpenCodeClient = Readonly<{
       }>,
       signal?: AbortSignal
     ): Promise<unknown>
+    switchModel(
+      sessionId: string,
+      model: ModelRef,
+      signal?: AbortSignal
+    ): Promise<void>
     active(signal?: AbortSignal): Promise<unknown>
     messages(sessionId: string, options?: OpenCodePageOptions): Promise<unknown>
     history(
@@ -178,6 +183,27 @@ function identifier(value: string, name: string) {
   if (!text(value) || hasControl(value))
     throw new OpenCodeClientError("invalid_request")
   return value
+}
+
+function modelReference(value: unknown): ModelRef {
+  const candidate = record(value)
+  const providerID =
+    typeof candidate?.providerID === "string"
+      ? identifier(candidate.providerID, "provider")
+      : undefined
+  const id =
+    typeof candidate?.id === "string"
+      ? identifier(candidate.id, "model")
+      : undefined
+  const variant =
+    candidate?.variant === undefined
+      ? undefined
+      : typeof candidate.variant === "string"
+        ? identifier(candidate.variant, "variant")
+        : undefined
+  if (!providerID || !id || (candidate?.variant !== undefined && !variant))
+    throw new OpenCodeClientError("invalid_request")
+  return { providerID, id, ...(variant === undefined ? {} : { variant }) }
 }
 
 function hasControl(value: string) {
@@ -392,6 +418,18 @@ class Facade implements OpenCodeClient {
             { signal: requestSignal }
           ),
         providerEnvelope,
+        signal
+      ),
+    switchModel: (sessionId, model, signal) =>
+      this.#voidMutation(
+        (requestSignal) =>
+          this.#sdk.v2.session.switchModel(
+            {
+              sessionID: identifier(sessionId, "session"),
+              model: modelReference(model),
+            },
+            { signal: requestSignal }
+          ),
         signal
       ),
     active: (signal?: AbortSignal) =>

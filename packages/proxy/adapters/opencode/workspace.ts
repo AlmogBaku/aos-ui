@@ -158,12 +158,14 @@ export function createOpenCodeWorkspaceOperations(input: {
   return {
     capabilities: () => ({
       models: {
-        status: "unavailable" as const,
-        reason: "native-model-read-unwired",
+        status: "available" as const,
+        scope: "attached-session" as const,
+        selection: "native-session" as const,
+        choices: "provider-reported" as const,
       },
       context: {
         status: "unavailable" as const,
-        reason: "native-context-read-unwired",
+        reason: "native-context-accounting-unavailable",
       },
       todos: {
         status: "unavailable" as const,

@@ -10,7 +10,7 @@ describe("OpenCode history projection", () => {
           id: "assistant-1",
           type: "assistant",
           agent: "research",
-          model: { providerID: "openai", modelID: "gpt" },
+          model: { providerID: "openai", id: "gpt" },
           time: { created: 2_000 },
           content: [
             { id: "text", type: "text", text: "Answer" },

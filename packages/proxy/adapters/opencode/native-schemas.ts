@@ -30,10 +30,41 @@ export const OpenCodeAgentCatalogSchema = z.object({
   data: z.array(OpenCodeAgentSchema).max(1_000),
 })
 
-export const OpenCodeModelRefSchema = z.object({
-  providerID: IdentifierSchema,
-  modelID: IdentifierSchema,
-  variant: z.string().min(1).max(256).optional(),
+export const OpenCodeModelRefSchema = z
+  .union([
+    z.object({
+      providerID: IdentifierSchema,
+      id: IdentifierSchema,
+      variant: z.string().min(1).max(256).optional(),
+    }),
+    z.object({
+      providerID: IdentifierSchema,
+      modelID: IdentifierSchema,
+      variant: z.string().min(1).max(256).optional(),
+    }),
+  ])
+  .transform((value) => ({
+    providerID: value.providerID,
+    id: "id" in value ? value.id : value.modelID,
+    ...(value.variant === undefined ? {} : { variant: value.variant }),
+  }))
+
+export const OpenCodeModelCatalogSchema = z.object({
+  data: z
+    .array(
+      z.object({
+        id: IdentifierSchema,
+        providerID: IdentifierSchema,
+        name: z.string().min(1).max(256),
+        enabled: z.boolean(),
+        status: z.enum(["alpha", "beta", "deprecated", "active"]),
+        limit: z.object({
+          context: z.number().int().positive(),
+          output: z.number().int().positive(),
+        }),
+      })
+    )
+    .max(4_096),
 })
 
 export const OpenCodeSessionSchema = z.object({
@@ -189,6 +220,10 @@ export function parseOpenCodeSessionCatalog(value: unknown) {
 
 export function parseOpenCodeSession(value: unknown) {
   return OpenCodeSessionSchema.safeParse(value)
+}
+
+export function parseOpenCodeModelCatalog(value: unknown) {
+  return OpenCodeModelCatalogSchema.safeParse(value)
 }
 
 export function parseOpenCodeMessageCatalog(value: unknown) {

@@ -188,7 +188,7 @@ describe("OpenCode workspace operations", () => {
     expect(operations).not.toHaveProperty("mutateSession")
   })
 
-  it("does not advertise models, context, or Todos before this leaf exposes their validated reads", () => {
+  it("advertises native models while retaining only token-accounting context and Todos as unavailable", () => {
     const operations = createOpenCodeWorkspaceOperations({
       client: {
         catalog: { agents: async () => ({ data: [] }) },
@@ -201,10 +201,15 @@ describe("OpenCode workspace operations", () => {
     })
 
     expect(operations.capabilities()).toMatchObject({
-      models: { status: "unavailable", reason: "native-model-read-unwired" },
+      models: {
+        status: "available",
+        scope: "attached-session",
+        selection: "native-session",
+        choices: "provider-reported",
+      },
       context: {
         status: "unavailable",
-        reason: "native-context-read-unwired",
+        reason: "native-context-accounting-unavailable",
       },
       todos: { status: "unavailable", reason: "native-todo-read-unavailable" },
     })

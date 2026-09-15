@@ -13,6 +13,7 @@ type NativeRequest = {
   url: URL
   authorization: string | null
   directory: string | null
+  body: string
   signal: AbortSignal
 }
 
@@ -28,12 +29,15 @@ async function nativeServer(
       if (!response.writableEnded) controller.abort()
     })
     const url = new URL(request.url ?? "/", "http://127.0.0.1")
+    const chunks: Uint8Array[] = []
+    for await (const chunk of request) chunks.push(chunk)
     const result = await handler({
       url,
       authorization: request.headers.authorization ?? null,
       directory:
         request.headers["x-opencode-directory"] ??
         url.searchParams.get("directory"),
+      body: Buffer.concat(chunks).toString("utf8"),
       signal: controller.signal,
     })
     if ("drop" in result) {
@@ -105,6 +109,29 @@ describe("OpenCodeClient", () => {
       await expect(
         subject.sessions.messages("session-1", { limit: 20, order: "asc" })
       ).resolves.toEqual({ data: [], cursor: {} })
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it("switches an exact native model with the same uncertain acknowledgement fence", async () => {
+    const server = await nativeServer(async (request) => {
+      expect(request.url.pathname).toBe("/api/session/session-1/model")
+      expect(JSON.parse(request.body)).toEqual({
+        model: { providerID: "openai", id: "gpt-5" },
+      })
+      return new Response(null, { status: 204 })
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.sessions.switchModel("session-1", {
+          providerID: "openai",
+          id: "gpt-5",
+        })
+      ).resolves.toBeUndefined()
     } finally {
       await subject.close()
       await server.close()
