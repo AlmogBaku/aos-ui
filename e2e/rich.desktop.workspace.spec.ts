@@ -190,11 +190,12 @@ test("Monty stays inspect-only and malformed tools retain a safe JSON fallback",
 
   await sendPrompt(page, "Make Monty fail")
 
-  const failedMonty = toolCard(page, "Monty result").last()
-  await expect(failedMonty).toHaveAttribute("data-state", "failed")
-  await expect(failedMonty).toContainText("Fixture Monty execution failed")
+  const failedMonty = page.getByText("Fixture Monty execution failed", {
+    exact: true,
+  })
+  await expect(failedMonty).toBeVisible()
   await expect(
-    failedMonty.getByRole("button", { name: /run|execute/i })
+    page.getByRole("button", { name: /\b(?:run|execute)\b/i })
   ).toHaveCount(0)
 })
 

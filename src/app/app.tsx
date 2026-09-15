@@ -27,7 +27,6 @@ import { getDictionary } from "@/lib/i18n/get-dictionary"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { stripLocaleFromPathname } from "@/lib/i18n/routing"
 import { captureInviteToken } from "@/lib/invite-fragment"
-import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import { HarnessRuntimeProvider } from "@/runtime-adapters/registry"
 import { createRuntimeClock } from "@shared/runtime-modes"
 import {
@@ -35,6 +34,13 @@ import {
   type ApplicationConfiguration,
   type RuntimeConfiguration,
 } from "@shared/runtime-config"
+
+const loadAosUiWorkspace = () =>
+  import("@/components/aos-ui-workspace").then(({ AosUiWorkspace }) => ({
+    default: AosUiWorkspace,
+  }))
+
+const AosUiWorkspace = lazy(loadAosUiWorkspace)
 
 const GuestAosSurface = lazy(() =>
   import("@/runtime-adapters/aos").then(({ GuestAosSurface }) => ({
@@ -238,6 +244,15 @@ function Application() {
   useEffect(() => {
     if (dictionary) document.title = dictionary.productName
   }, [dictionary])
+
+  useEffect(() => {
+    if (config?.status !== "ready" || "surface" in config) return
+    // Load the operator workspace alongside its selected runtime. Suspense
+    // keeps the conversation and composer together until both are ready.
+    void loadAosUiWorkspace().catch(() => {
+      // Rendering the lazy component reports failure to RuntimeErrorBoundary.
+    })
+  }, [config])
 
   if (!config) return <LoadingWorkspace locale={locale} />
 

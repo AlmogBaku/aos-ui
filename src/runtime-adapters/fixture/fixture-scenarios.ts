@@ -330,7 +330,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           "monty_execute",
           { code: "fetch_market()" },
           { error: "Fixture Monty execution failed" },
-          { isError: true }
+          { isError: true, toolCallId: "fixture-monty_execute-failure" }
         ),
       ],
     }
@@ -343,7 +343,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
         toolPart(
           "monty_execute",
           { code: "market.total_by_quarter()" },
-          { stdout: "Q1’25: 365", receipt: "fixture-monty-001" }
+          { stdout: "Q1’25: 365", receipt: "fixture-monty-001" },
+          { toolCallId: "fixture-monty_execute-success" }
         ),
       ],
     }
