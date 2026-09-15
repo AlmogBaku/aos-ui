@@ -9,6 +9,7 @@ import {
   type NewTurnRunInput,
   type RecoveryRequest,
   type ResumeRunInput,
+  type ServerAttachmentStage,
   type ServerRunEngine,
   type ServerRunHandle,
   type SessionScope,
@@ -241,7 +242,8 @@ export class SessionCoordinator {
   async start(
     scope: SessionScope,
     input: NewTurnRunInput | ResumeRunInput,
-    access: CoordinatorAccess
+    access: CoordinatorAccess,
+    attachments?: ServerAttachmentStage
   ): Promise<CoordinatedRunSubscription> {
     if (this.#closed) throw new Error("Session coordinator is closed")
     const key = scopeKey(scope)
@@ -272,7 +274,11 @@ export class SessionCoordinator {
     if (this.#admissions.has(key)) throw new ServerRunConflictError()
     this.#admissions.add(key)
     try {
-      const handle = await this.options.engine.start(scope, input)
+      const handle = await this.options.engine.start(
+        scope,
+        input,
+        ...(attachments ? [attachments] : [])
+      )
       const execution: Execution = {
         scope,
         state: "running",

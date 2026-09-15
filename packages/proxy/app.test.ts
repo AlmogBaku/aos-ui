@@ -475,7 +475,16 @@ describe("AOS V1 proxy", () => {
     expect(response.status).toBe(200)
     expect(engine.start).toHaveBeenCalledWith(
       expect.objectContaining({ hasAttachments: true }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({
+        public: [
+          expect.objectContaining({
+            type: "file",
+            filename: "notes.txt",
+            mimeType: "text/plain",
+          }),
+        ],
+      })
     )
   })
 

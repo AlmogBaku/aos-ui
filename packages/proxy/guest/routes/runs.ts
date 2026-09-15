@@ -122,7 +122,8 @@ export function registerGuestRunRoutes(app: Hono, routes: GuestRoutes) {
             input.runId,
             routes.now,
             routes.nextSubscriberId(grants.read.tokenId)
-          )
+          ),
+          stage
         )
         return createRunStreamResponse(subscription, {
           signal: context.req.raw.signal,

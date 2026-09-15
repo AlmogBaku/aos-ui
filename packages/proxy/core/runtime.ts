@@ -60,7 +60,9 @@ export type ServerReconnectRequest = RecoveryRequest
 export type ServerRunEngine = {
   start(
     scope: SessionScope,
-    input: NewTurnRunInput | ResumeRunInput
+    input: NewTurnRunInput | ResumeRunInput,
+    /** One-shot server-owned content staged for this native admission. */
+    attachments?: ServerAttachmentStage
   ): Promise<ServerRunHandle>
   recover(
     scope: SessionScope,

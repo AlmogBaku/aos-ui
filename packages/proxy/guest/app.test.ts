@@ -565,6 +565,15 @@ describe("guest app", () => {
         messages: [
           expect.objectContaining({ content: "Review\n@file:note.txt" }),
         ],
+      }),
+      expect.objectContaining({
+        public: [
+          expect.objectContaining({
+            type: "file",
+            filename: "note.txt",
+            mimeType: "text/plain",
+          }),
+        ],
       })
     )
   })

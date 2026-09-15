@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   ServerRunStopNotDispatchedError,
   type ServerRunEngine,
+  type ServerAttachmentStage,
   type ServerRunHandle,
   type SessionScope,
 } from "./runtime"
@@ -115,6 +116,25 @@ function coordinator(engine: ServerRunEngine) {
 }
 
 describe("SessionCoordinator", () => {
+  it("passes one server-side attachment stage only to the admitted native turn", async () => {
+    const source = new EventSource()
+    const start = vi.fn(async () => source)
+    const engine: ServerRunEngine = {
+      start,
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const stage: ServerAttachmentStage = {
+      public: [{ type: "file", filename: "notes.txt", mimeType: "text/plain" }],
+      appendTo: (text) => text,
+      cleanup: vi.fn(async () => undefined),
+    }
+
+    await sessions.start(scope, input("run-1"), access("one"), stage)
+
+    expect(start).toHaveBeenCalledWith(scope, input("run-1"), stage)
+  })
+
   it("fans one provider stream out to multiple reconnecting browsers", async () => {
     const source = new EventSource()
     const engine: ServerRunEngine = {

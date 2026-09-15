@@ -305,7 +305,8 @@ export function registerRunRoutes(
                 },
               }
             : {}),
-        }
+        },
+        stage
       )
       return createRunStreamResponse(subscription, {
         signal: context.req.raw.signal,
