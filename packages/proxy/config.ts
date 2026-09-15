@@ -7,6 +7,12 @@ const AbsoluteSecretFileSchema = z
   .max(4096)
   .refine((value) => isAbsolute(value) && !value.includes("\0"))
 
+const AbsoluteDirectorySchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((value) => isAbsolute(value) && !value.includes("\0"))
+
 const HttpUrlSchema = z
   .string()
   .max(2048)
@@ -39,6 +45,29 @@ const PublicOriginSchema = HttpUrlSchema.refine((value) => {
         ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)))
   )
 })
+
+const WebSocketUrlSchema = z
+  .string()
+  .max(2048)
+  .transform((value, context) => {
+    try {
+      const url = new URL(value)
+      if (
+        !["ws:", "wss:"].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash
+      ) {
+        context.addIssue({ code: "custom", message: "Invalid URL" })
+        return z.NEVER
+      }
+      return url.href.replace(/\/$/u, "")
+    } catch {
+      context.addIssue({ code: "custom", message: "Invalid URL" })
+      return z.NEVER
+    }
+  })
 
 const ListenerSchema = z.union([
   z.strictObject({
@@ -75,19 +104,46 @@ const LimitsSchema = z.strictObject({
     .max(64 * 1024 * 1024),
 })
 
+const RuntimeIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u)
+
+const RuntimeSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    id: RuntimeIdSchema,
+    kind: z.literal("hermes"),
+    baseUrl: HttpUrlSchema,
+    tokenFile: AbsoluteSecretFileSchema,
+    sessionIdleMs: z.number().int().min(1_000).max(86_400_000),
+  }),
+  z.strictObject({
+    id: RuntimeIdSchema,
+    kind: z.literal("opencode"),
+    baseUrl: HttpUrlSchema,
+    directory: AbsoluteDirectorySchema,
+    username: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^[^:\u0000-\u001F\u007F]+$/u),
+    passwordFile: AbsoluteSecretFileSchema,
+  }),
+  z.strictObject({
+    id: RuntimeIdSchema,
+    kind: z.literal("openclaw"),
+    baseUrl: WebSocketUrlSchema,
+    deviceIdentityFile: AbsoluteSecretFileSchema,
+    deviceTokenFile: AbsoluteSecretFileSchema,
+  }),
+])
+
 const ProxyConfigSchema = z
   .strictObject({
     version: z.literal(1),
     deploymentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
     listen: ListenerSchema,
     publicOrigin: PublicOriginSchema,
-    runtime: z.strictObject({
-      id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
-      kind: z.literal("hermes"),
-      baseUrl: HttpUrlSchema,
-      tokenFile: AbsoluteSecretFileSchema,
-      sessionIdleMs: z.number().int().min(1_000).max(86_400_000),
-    }),
+    runtime: RuntimeSchema,
     events: z.strictObject({
       activeKeyId: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
       keys: UniqueSecretKeysSchema,

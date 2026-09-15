@@ -68,6 +68,73 @@ describe("proxy configuration and secret boundary", () => {
     expect(parseProxyConfig(validConfig())).toEqual(validConfig())
   })
 
+  it("accepts the exact private OpenCode runtime configuration", () => {
+    const input = {
+      ...validConfig(),
+      runtime: {
+        id: "opencode-main",
+        kind: "opencode" as const,
+        baseUrl: "http://127.0.0.1:4096/",
+        directory: "/workspace",
+        username: "opencode",
+        passwordFile: "/run/secrets/opencode-password",
+      },
+    }
+
+    expect(parseProxyConfig(input).runtime).toEqual({
+      ...input.runtime,
+      baseUrl: "http://127.0.0.1:4096",
+    })
+  })
+
+  it("accepts the exact private OpenClaw runtime configuration", () => {
+    const input = {
+      ...validConfig(),
+      runtime: {
+        id: "openclaw-main",
+        kind: "openclaw" as const,
+        baseUrl: "wss://gateway.example.test/",
+        deviceIdentityFile: "/run/secrets/openclaw-device",
+        deviceTokenFile: "/run/secrets/openclaw-token",
+      },
+    }
+
+    expect(parseProxyConfig(input).runtime).toEqual({
+      ...input.runtime,
+      baseUrl: "wss://gateway.example.test",
+    })
+  })
+
+  it("rejects unsafe OpenCode and OpenClaw runtime configuration", () => {
+    for (const runtime of [
+      {
+        id: "opencode-main",
+        kind: "opencode",
+        baseUrl: "http://secret@example.test",
+        directory: "relative",
+        username: "operator:admin",
+        passwordFile: "password",
+      },
+      {
+        id: "openclaw-main",
+        kind: "openclaw",
+        baseUrl: "https://gateway.example.test",
+        deviceIdentityFile: "device.json",
+        deviceTokenFile: "/run/secrets/openclaw-token",
+      },
+      {
+        id: "openclaw-main",
+        kind: "openclaw",
+        baseUrl: "wss://token@gateway.example.test",
+        deviceIdentityFile: "/run/secrets/openclaw-device",
+        deviceTokenFile: "/run/secrets/openclaw-token",
+      },
+    ])
+      expect(() => parseProxyConfig({ ...validConfig(), runtime })).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+
   it("rejects legacy operator, OIDC, and Hermes browser-broker fields", () => {
     for (const legacy of [
       { operator: { issuer: "https://identity.example.test" } },
