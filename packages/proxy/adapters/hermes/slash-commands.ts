@@ -72,7 +72,11 @@ export async function nativeSlashInvocation(
   const invocation = parsedSlashInvocation(text)
   if (!invocation) return undefined
   const { pairs, canon } = await nativeCommandPairs(transport, params)
-  const canonicalValue = canon?.[`/${invocation.name}`.toLowerCase()]
+  const canonicalKey = `/${invocation.name}`.toLowerCase()
+  const canonicalValue =
+    canon && Object.hasOwn(canon, canonicalKey)
+      ? canon[canonicalKey]
+      : undefined
   if (canonicalValue !== undefined) {
     const canonical = SlashCommandSchema.safeParse({
       name:

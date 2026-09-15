@@ -190,12 +190,12 @@ it("keeps commands whose native descriptions exceed the public limit", async () 
   expect(commands).toEqual([{ name: "long", description: "x".repeat(4_096) }])
 })
 
-it.each(["/unknown", " /help", "/helpful", "normal text"])(
+it.each(["/unknown", "/constructor", " /help", "/helpful", "normal text"])(
   "sends unmatched text normally: %s",
   async (text) => {
     const request = vi.fn(async (method: string) =>
       method === "commands.catalog"
-        ? { pairs: [["/help", "Help"]] }
+        ? { pairs: [["/help", "Help"]], canon: { "/help": "/help" } }
         : { status: "streaming" }
     )
     const adapter = new HermesServerAdapter({ request })

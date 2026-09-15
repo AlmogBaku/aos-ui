@@ -335,6 +335,44 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).toHaveBeenCalledOnce()
   })
 
+  it("preserves terminal resource ownership across uncertain recovery", async () => {
+    const initial = new EventSource()
+    const recovered = new EventSource()
+    const onTerminal = vi.fn(async () => undefined)
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => initial),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), {
+      ...access("operator"),
+      onTerminal,
+    })
+    initial.emit({
+      type: EventType.RUN_ERROR,
+      message: "Delivery uncertain",
+      code: "AOS_SEND_UNCERTAIN",
+    })
+    initial.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+
+    await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("operator")
+    )
+    const terminal = {
+      type: EventType.RUN_ERROR,
+      message: "Slash commands cannot be sent with attachments.",
+      code: "AOS_COMMAND_WITH_ATTACHMENTS",
+    } as const
+    recovered.emit(terminal)
+    recovered.finish()
+
+    await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(2))
+    expect(onTerminal).toHaveBeenLastCalledWith(terminal)
+  })
+
   it("discovers one provider execution after a coordinator restart", async () => {
     const source = new EventSource()
     const engine: ServerRunEngine = {

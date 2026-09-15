@@ -337,7 +337,11 @@ export class SessionCoordinator {
           : {}),
       }
       const handle = await this.options.engine.recover(scope, providerRequest)
-      const segment = this.#segment(request.runId, handle)
+      const segment = this.#segment(
+        request.runId,
+        handle,
+        existing?.segment.onTerminal
+      )
       const execution: Execution = existing
         ? existing
         : {
