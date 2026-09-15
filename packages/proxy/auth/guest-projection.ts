@@ -70,6 +70,7 @@ const interruptKeys = [
   "id",
   "reason",
   "message",
+  "expiresAt",
   "responseSchema",
   "metadata",
 ] as const
@@ -551,7 +552,13 @@ function projectInterrupt(
       !exactKnownKeys(candidate, interruptKeys) ||
       !validIdentifier(candidate.id) ||
       !validText(candidate.reason, 128) ||
-      (candidate.message !== undefined && !validText(candidate.message, 4_096))
+      (candidate.message !== undefined &&
+        !validText(candidate.message, 4_096)) ||
+      (candidate.expiresAt !== undefined &&
+        (!validText(candidate.expiresAt, 64) ||
+          !Number.isFinite(Date.parse(candidate.expiresAt as string)) ||
+          new Date(candidate.expiresAt as string).toISOString() !==
+            candidate.expiresAt))
     )
       return undefined
     const responseSchema = projectJsonSchema(candidate.responseSchema)

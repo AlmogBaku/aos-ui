@@ -395,6 +395,7 @@ describe("guest outbound projection", () => {
                 id: "approval-1",
                 reason: "approval",
                 message: "Allow deployment?",
+                expiresAt: "2026-09-15T20:00:00.000Z",
                 responseSchema: {
                   type: "string",
                   enum: ["deny", "once", "always"],
