@@ -41,7 +41,12 @@ describe("OpenClaw content", () => {
   it("keeps the actual plugin's unsupported publication as text only", () => {
     expect(
       projectOpenClawRichPresentation({
-        text: "Validated brief.pdf, but it was not published.",
+        content: [
+          {
+            type: "text",
+            text: "Validated brief.pdf, but it was not published.",
+          },
+        ],
         details: {
           type: "aos.artifact-publication",
           status: "unsupported",
@@ -50,6 +55,8 @@ describe("OpenClaw content", () => {
         },
       })
     ).toEqual({ text: "Validated brief.pdf, but it was not published." })
-    expect(projectOpenClawRichPresentation({ path: "/secret" })).toBeUndefined()
+    expect(
+      projectOpenClawRichPresentation({ content: [], details: {} })
+    ).toBeUndefined()
   })
 })

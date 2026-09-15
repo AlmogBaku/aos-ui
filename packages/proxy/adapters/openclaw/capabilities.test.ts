@@ -3,12 +3,21 @@ import { openClawCapabilities } from "./capabilities"
 describe("OpenClaw capabilities", () =>
   it("keeps only proven operations available", () =>
     expect(openClawCapabilities()).toMatchObject({
-      questions: { status: "available", protocol: "ag-ui-interrupt" },
+      questions: {
+        status: "available",
+        protocol: "ag-ui-interrupt",
+        maxQuestions: 3,
+        maxOptionsPerQuestion: 4,
+      },
       approvals: { allowedDecisions: "native-request" },
       attachments: { operation: "chat.send" },
       artifacts: {
         status: "unavailable",
         reason: "native-scoped-download-not-yet-proven",
+      },
+      richPresentation: {
+        status: "unavailable",
+        reason: "plugin-supports-text-fallback-only",
       },
       audio: { status: "unavailable" },
       visibility: { status: "unavailable" },

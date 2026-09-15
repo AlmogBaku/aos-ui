@@ -4,6 +4,7 @@ import {
   validateApprovalResolveResult,
   validateQuestionResolveParams,
 } from "@openclaw/gateway-protocol"
+import { OpenClawClientRequestError } from "./client"
 
 export type OpenClawInteractionScope = Readonly<{
   agentId: string
@@ -82,7 +83,11 @@ const encoder = new TextEncoder(),
   bad = (): never => {
     throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
   }
-function record(scope: OpenClawInteractionScope, raw: unknown) {
+function record(
+  scope: OpenClawInteractionScope,
+  raw: unknown,
+  pendingOnly = true
+) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) bad()
   const r = raw as Record<string, unknown>,
     requestId = id(r.id)
@@ -91,7 +96,10 @@ function record(scope: OpenClawInteractionScope, raw: unknown) {
     r.agentId !== scope.agentId ||
     r.sessionKey !== scope.sessionId ||
     r.runId !== scope.runId ||
-    r.status !== "pending" ||
+    !["pending", "answered", "cancelled", "expired"].includes(
+      r.status as string
+    ) ||
+    (pendingOnly && r.status !== "pending") ||
     !Number.isSafeInteger(r.expiresAtMs) ||
     !Array.isArray(r.questions) ||
     r.questions.length < 1 ||
@@ -139,7 +147,12 @@ function record(scope: OpenClawInteractionScope, raw: unknown) {
   })
   if (new Set(questions.map((q) => q.questionId)).size !== questions.length)
     bad()
-  return { id: requestId, questions, expiresAtMs: r.expiresAtMs as number }
+  return {
+    id: requestId,
+    questions,
+    expiresAtMs: r.expiresAtMs as number,
+    status: r.status as "pending" | "answered" | "cancelled" | "expired",
+  }
 }
 function resume(raw: unknown) {
   if (
@@ -311,26 +324,27 @@ export class OpenClawInteractions {
       bad()
     const outcomes: RunFinishedInterruptOutcome[] = []
     for (const q of (qs as { questions: unknown[] }).questions) {
-      try {
-        outcomes.push(this.acceptQuestion(scope, q))
-      } catch (e) {
-        if (
-          !(e instanceof OpenClawInteractionPublicError) ||
-          e.code !== "AOS_PROVIDER_INVALID_RESPONSE"
-        )
-          throw e
-      }
+      if (!q || typeof q !== "object" || Array.isArray(q)) bad()
+      const row = q as Record<string, unknown>
+      if (
+        row.agentId !== scope.agentId ||
+        row.sessionKey !== scope.sessionId ||
+        row.runId !== scope.runId
+      )
+        continue
+      outcomes.push(this.acceptQuestion(scope, row))
     }
     for (const a of (as as { approvals: unknown[] }).approvals) {
-      try {
-        outcomes.push(this.acceptApproval(scope, a))
-      } catch (e) {
-        if (
-          !(e instanceof OpenClawInteractionPublicError) ||
-          e.code !== "AOS_PROVIDER_INVALID_RESPONSE"
-        )
-          throw e
-      }
+      if (!a || typeof a !== "object" || Array.isArray(a)) bad()
+      const row = a as Record<string, unknown>
+      const presentation = row.presentation as
+        Record<string, unknown> | undefined
+      if (
+        row.sourceSessionKey !== scope.sessionId ||
+        presentation?.agentId !== scope.agentId
+      )
+        continue
+      outcomes.push(this.acceptApproval(scope, row))
     }
     return outcomes
   }
@@ -379,6 +393,7 @@ export class OpenClawInteractions {
       return this.complete(k, fingerprint, result)
     } catch (e) {
       if (e instanceof OpenClawInteractionPublicError) throw e
+      if (e instanceof OpenClawClientRequestError && !e.uncertain) bad()
       return this.complete(k, fingerprint, { status: "uncertain" })
     }
   }
@@ -394,7 +409,26 @@ export class OpenClawInteractions {
       p.kind === "question" ? "question" : "approval"
     ] as Record<string, unknown> | undefined
     if (!item || item.id !== p.id) bad()
-    const established = item!
+    if (p.kind === "question") {
+      const authoritative = record(p.scope, item, false)
+      return authoritative.status === "pending"
+        ? undefined
+        : authoritative.status === "expired"
+          ? { status: "expired" }
+          : { status: "already-resolved" }
+    }
+    const approval = item!
+    if (!validateApprovalGetResult({ approval })) bad()
+    const source = approval.source as Record<string, unknown> | undefined
+    const presentation = approval.presentation as
+      Record<string, unknown> | undefined
+    if (
+      approval.sourceSessionKey !== p.scope.sessionId &&
+      source?.sessionKey !== p.scope.sessionId
+    )
+      bad()
+    if (presentation?.agentId !== p.scope.agentId) bad()
+    const established = approval
     return established.status === "pending"
       ? undefined
       : established.status === "expired"
@@ -423,23 +457,26 @@ export class OpenClawInteractions {
     p: Extract<Pending, { kind: "approval" }>,
     params: { decision: string }
   ): OpenClawInteractionResult {
-    if (validateApprovalResolveResult(value)) {
-      const r = value as {
-        applied: boolean
-        approval: { id: string; decision: string; status: string }
-      }
-      if (r.approval.id !== p.id || r.approval.decision !== params.decision)
-        bad()
-      return r.applied && r.approval.status === "allowed"
-        ? { status: "resolved" }
-        : { status: "already-resolved" }
+    if (!value || typeof value !== "object" || Array.isArray(value)) bad()
+    const r = value as {
+      applied?: unknown
+      approval?: { id?: unknown; decision?: unknown; status?: unknown }
     }
+    if (!r.approval || r.approval.id !== p.id) bad()
+    const approval = r.approval!
+    if (approval.status === "expired") return { status: "expired" }
     if (
-      value &&
-      typeof value === "object" &&
-      (value as Record<string, unknown>).status === "expired"
+      r.applied === true &&
+      (approval.status === "allowed" || approval.status === "denied") &&
+      approval.decision === params.decision
     )
-      return { status: "expired" }
+      return { status: "resolved" }
+    if (
+      r.applied === false &&
+      (approval.status === "allowed" || approval.status === "denied")
+    )
+      return { status: "already-resolved" }
+    if (validateApprovalResolveResult(value)) bad()
     return bad()
   }
   private complete(

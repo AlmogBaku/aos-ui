@@ -110,9 +110,16 @@ export function prepareOpenClawChatAttachments(
 export function projectOpenClawRichPresentation(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
   const v = raw as Record<string, unknown>,
-    details = v.details
+    details = v.details,
+    content = v.content
   if (
-    !text(v.text, 8192) ||
+    !Array.isArray(content) ||
+    content.length !== 1 ||
+    !content[0] ||
+    typeof content[0] !== "object" ||
+    Array.isArray(content[0]) ||
+    (content[0] as Record<string, unknown>).type !== "text" ||
+    !text((content[0] as Record<string, unknown>).text, 8192) ||
     !details ||
     typeof details !== "object" ||
     Array.isArray(details)
@@ -125,5 +132,5 @@ export function projectOpenClawRichPresentation(raw: unknown) {
     result.published !== false
   )
     return undefined
-  return { text: text(v.text, 8192)! }
+  return { text: text((content[0] as Record<string, unknown>).text, 8192)! }
 }

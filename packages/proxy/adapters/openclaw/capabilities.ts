@@ -15,8 +15,8 @@ export function openClawCapabilities() {
       response: "complete-native-batch" as const,
       expiry: "native-request" as const,
       uncertainty: "never-replay" as const,
-      maxQuestions: 32,
-      maxOptionsPerQuestion: 64,
+      maxQuestions: 3,
+      maxOptionsPerQuestion: 4,
     },
     approvals: {
       status: "available" as const,
@@ -39,9 +39,8 @@ export function openClawCapabilities() {
       reason: "native-scoped-download-not-yet-proven" as const,
     },
     richPresentation: {
-      status: "available" as const,
-      source: "optional-aos-plugin-unsupported-receipt" as const,
-      fallback: "inspectable-text-only" as const,
+      status: "unavailable" as const,
+      reason: "plugin-supports-text-fallback-only" as const,
     },
     audio: {
       status: "unavailable" as const,
