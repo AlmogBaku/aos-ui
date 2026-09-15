@@ -1,28 +1,19 @@
-import type { AGUIEvent } from "@ag-ui/core"
+import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import type { Context } from "hono"
 
 import { RunStopResponseSchema } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
 import type {
+  NewTurnRunInput,
+  ResumeRunInput,
   ServerAttachmentStages,
-  ServerReconnectRequest,
-  ServerRunEngine,
-  ServerRunHandle,
-  ServerRunScope,
   ServerRuntime,
-} from "../runtime"
-import { ServerRunConflictError } from "../runtime"
+} from "../core/runtime"
+import type { CoordinatedRunSubscription } from "../core/session-coordinator"
 import { redactForLog } from "../redaction"
 import { boundedJson, errorResponse, validIdentifier } from "./http"
 import type { ProxyRouteApp } from "./types"
-
-type OperatorActiveRun = {
-  handle: ServerRunHandle
-  runId: string
-  engine: ServerRunEngine
-  principalId: string
-}
 
 type RuntimeBinding = {
   runtime: ServerRuntime
@@ -57,143 +48,129 @@ function runText(candidate: unknown) {
   return content.map((part) => (part as { text: string }).text).join("\n")
 }
 
-function interactionResponse(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
+export function normalizeRunInput(
+  candidate: RunAgentInput,
+  threadId: string,
+  rewindSourceId?: string
+): NewTurnRunInput | ResumeRunInput | undefined {
+  if (candidate.threadId !== threadId || !validIdentifier(candidate.runId))
     return undefined
-  const input = value as Record<string, unknown>
-  if (
-    Object.keys(input).length !== 3 ||
-    typeof input.runId !== "string" ||
-    !validIdentifier(input.runId) ||
-    typeof input.requestId !== "string" ||
-    !validIdentifier(input.requestId) ||
-    !input.response ||
-    typeof input.response !== "object" ||
-    Array.isArray(input.response)
-  )
-    return undefined
-  const response = input.response as Record<string, unknown>
-  if (response.kind === "reject" && Object.keys(response).length === 1)
+  const base = {
+    threadId,
+    runId: candidate.runId,
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {},
+  }
+  if (candidate.resume !== undefined) {
+    if (candidate.messages.length !== 0 || candidate.resume.length === 0)
+      return undefined
     return {
-      runId: input.runId as string,
-      requestId: input.requestId as string,
-      response: { kind: "reject" as const },
+      ...base,
+      messages: [],
+      resume: candidate.resume.map(({ interruptId, status, payload }) => ({
+        interruptId,
+        status,
+        ...(payload === undefined ? {} : { payload }),
+      })),
     }
-  if (
-    response.kind !== "question" ||
-    Object.keys(response).length !== 2 ||
-    !Array.isArray(response.answers)
-  )
+  }
+  const message = candidate.messages[0]
+  if (candidate.messages.length !== 1 || message?.role !== "user")
     return undefined
   return {
-    runId: input.runId as string,
-    requestId: input.requestId as string,
-    response: {
-      kind: "question" as const,
-      answers: response.answers,
-    },
+    ...base,
+    messages: [{ id: message.id, role: "user", content: message.content }],
+    ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
   }
 }
 
-function runStream(
-  context: Context<{ Variables: { requestId: string } }>,
-  key: string,
-  active: OperatorActiveRun,
-  activeRuns: Map<string, OperatorActiveRun>
+type RunStreamOptions = {
+  signal?: AbortSignal
+  expiresAt?: number
+  now?: () => number
+  schedule?: (delayMs: number, task: () => void) => unknown
+  cancel?: (timer: unknown) => void
+}
+
+export function createRunStreamResponse(
+  subscription: CoordinatedRunSubscription,
+  options: RunStreamOptions = {}
 ) {
-  const { handle } = active
   const encoder = new EventEncoder({ accept: "text/event-stream" })
   const textEncoder = new TextEncoder()
-  let detached = false
-  let state: "open" | "terminal" | "closed" | "cancelled" = "open"
-  let readInFlight: Promise<IteratorResult<AGUIEvent>> | undefined
-  let iteratorClose: Promise<void> | undefined
-  const iterator = handle.events[Symbol.asyncIterator]()
-  const disconnect = () => {
-    if (detached) return
-    detached = true
-    handle.disconnect()
+  const iterator = subscription.events[Symbol.asyncIterator]()
+  const now = options.now ?? Date.now
+  const schedule =
+    options.schedule ??
+    ((delayMs: number, task: () => void) => setTimeout(task, delayMs))
+  const cancel =
+    options.cancel ?? ((timer: unknown) => clearTimeout(timer as number))
+  let closed = false
+  let timer: unknown
+  const close = () => {
+    if (closed) return
+    closed = true
+    if (timer !== undefined) cancel(timer)
+    options.signal?.removeEventListener("abort", close)
+    subscription.close()
   }
-  const removeAbortListener = () =>
-    context.req.raw.signal.removeEventListener("abort", disconnect)
-  const closeIterator = () => {
-    if (iteratorClose) return iteratorClose
-    iteratorClose = Promise.resolve(iterator.return?.()).then(
-      () => undefined,
-      () => undefined
-    )
-    return iteratorClose
-  }
-  context.req.raw.signal.addEventListener("abort", disconnect, { once: true })
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (state !== "open" || readInFlight) return
-      readInFlight = Promise.resolve(iterator.next())
-      try {
-        const result = await readInFlight
-        if (state !== "open") return
-        if (result.done) {
-          state = "closed"
-          removeAbortListener()
-          controller.close()
-          return
-        }
-        const event = result.value
-        const terminal =
-          event.type === "RUN_FINISHED" ||
-          (event.type === "RUN_ERROR" &&
-            event.code !== "AOS_SEND_UNCERTAIN" &&
-            event.code !== "AOS_CONNECTION_INTERRUPTED")
-        controller.enqueue(textEncoder.encode(encoder.encodeSSE(event)))
-        if (terminal) {
-          state = "terminal"
-          removeAbortListener()
-          if (activeRuns.get(key) === active) activeRuns.delete(key)
-          await closeIterator()
-          if (state === "terminal") {
-            state = "closed"
+  options.signal?.addEventListener("abort", close, { once: true })
+  if (options.expiresAt !== undefined)
+    timer = schedule(Math.max(0, options.expiresAt - now()), close)
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (closed) return
+        try {
+          const result = await iterator.next()
+          if (result.done) {
+            close()
+            controller.close()
+            return
+          }
+          const { sequence, event } = result.value
+          controller.enqueue(
+            textEncoder.encode(`id: ${sequence}\n${encoder.encodeSSE(event)}`)
+          )
+          if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+            close()
+            await iterator.return?.()
             controller.close()
           }
-        }
-      } catch {
-        if (state === "open") {
-          state = "closed"
-          removeAbortListener()
-          await closeIterator()
+        } catch {
+          close()
           controller.error(new Error("AOS run stream failed"))
         }
-      } finally {
-        readInFlight = undefined
-      }
-    },
-    async cancel() {
-      if (state === "closed" || state === "cancelled") return
-      state = "cancelled"
-      removeAbortListener()
-      disconnect()
-      const pendingRead = readInFlight
-      await Promise.allSettled([
-        closeIterator(),
-        ...(pendingRead ? [pendingRead] : []),
-      ])
-    },
-  })
-  return new Response(stream, {
-    headers: { "content-type": encoder.getContentType() },
-  })
+      },
+      async cancel() {
+        close()
+        await iterator.return?.()
+      },
+    }),
+    { headers: { "content-type": encoder.getContentType() } }
+  )
+}
+
+function access(
+  context: Context<{ Variables: { requestId: string } }>,
+  principalId: string
+) {
+  return {
+    subscriberId: context.get("requestId"),
+    controllerId: principalId,
+    lane: "operator" as const,
+    canControl: true,
+  }
 }
 
 export function registerRunRoutes(
   app: ProxyRouteApp,
   options: ProxyAppOptions,
-  activeRuns: Map<string, OperatorActiveRun>,
-  runAdmissions: Set<string>,
   attachmentStages: ServerAttachmentStages,
-  maxActiveRuns: number,
   requireRuntime: (request: Request) => Promise<RuntimeBinding>
 ) {
-  const runKey = (scope: Pick<ServerRunScope, "agentId" | "sessionId">) =>
-    `${scope.agentId}\u0000${scope.sessionId}`
   const runHandler = async (
     context: Context<{ Variables: { requestId: string } }>
   ) => {
@@ -205,75 +182,90 @@ export function registerRunRoutes(
     if (!agentId || !threadId) return errorResponse("not_found", 404)
     const sessionId = runtime.resolveSessionId(agentId, threadId)
     if (!sessionId) return errorResponse("not_found", 404)
-    const input = await boundedJson(context.req.raw, 1_100_000)
-    if (input === undefined) return errorResponse("invalid_request", 400)
-    const inputRecord =
-      input && typeof input === "object" && !Array.isArray(input)
-        ? (input as Record<string, unknown>)
-        : undefined
-    const forwarded = inputRecord?.forwardedProps
-    const stageId =
+
+    const candidate = await boundedJson(context.req.raw, 1_100_000)
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      return errorResponse("invalid_request", 400)
+    const inputRecord = candidate as Record<string, unknown>
+    const forwarded = inputRecord.forwardedProps
+    const forwardedRecord =
       forwarded && typeof forwarded === "object" && !Array.isArray(forwarded)
-        ? (forwarded as Record<string, unknown>).aosAttachmentStageId
+        ? (forwarded as Record<string, unknown>)
         : undefined
+    const stageId = forwardedRecord?.aosAttachmentStageId
+    const rewindSourceId = forwardedRecord?.["aos.rewindSourceId"]
     if (
-      stageId !== undefined &&
-      (typeof stageId !== "string" ||
-        !validIdentifier(stageId) ||
-        !forwarded ||
-        Object.keys(forwarded).length !== 1)
+      (forwardedRecord &&
+        Object.keys(forwardedRecord).some(
+          (key) =>
+            key !== "aosAttachmentStageId" && key !== "aos.rewindSourceId"
+        )) ||
+      (stageId !== undefined &&
+        (typeof stageId !== "string" || !validIdentifier(stageId))) ||
+      (rewindSourceId !== undefined &&
+        (typeof rewindSourceId !== "string" ||
+          !validIdentifier(rewindSourceId)))
     )
       return errorResponse("invalid_request", 400)
-    const scope = { agentId, sessionId, threadId }
-    const key = runKey(scope)
-    if (activeRuns.has(key) || runAdmissions.has(key))
-      return errorResponse("run_conflict", 409)
-    if (activeRuns.size + runAdmissions.size >= maxActiveRuns)
-      return errorResponse("run_capacity_exceeded", 503)
-    runAdmissions.add(key)
-    try {
-      await runtime.getSession(agentId, sessionId)
-    } catch (cause) {
-      runAdmissions.delete(key)
-      throw cause
-    }
+
+    await runtime.getSession(agentId, sessionId)
     const stage =
       typeof stageId === "string"
         ? attachmentStages.take(agentId, threadId, stageId)
         : undefined
-
-    if (typeof stageId === "string" && !stage) {
-      runAdmissions.delete(key)
+    if (typeof stageId === "string" && !stage)
       return errorResponse("invalid_request", 400)
-    }
-    let runInput = input
-    if (stage && inputRecord) {
-      const text = runText(input)
-      const messages = inputRecord.messages
-      if (text === undefined || !Array.isArray(messages)) {
-        runAdmissions.delete(key)
+
+    let projected: unknown = candidate
+    if (stage) {
+      const text = runText(candidate)
+      if (text === undefined || !Array.isArray(inputRecord.messages)) {
         await stage.cleanup().catch(() => undefined)
         return errorResponse("invalid_request", 400)
       }
-      runInput = {
+      projected = {
         ...inputRecord,
         messages: [
           {
-            ...(messages[0] as Record<string, unknown>),
+            ...(inputRecord.messages[0] as Record<string, unknown>),
             content: stage.appendTo(text),
           },
         ],
-        forwardedProps: {},
+        forwardedProps:
+          rewindSourceId === undefined
+            ? {}
+            : { "aos.rewindSourceId": rewindSourceId },
       }
     }
-    let handle: ServerRunHandle
-    let runEngine: ServerRunEngine
+    const parsed = RunAgentInputSchema.safeParse(projected)
+    if (!parsed.success) {
+      await stage?.cleanup().catch(() => undefined)
+      return errorResponse("invalid_request", 400)
+    }
+    const input = normalizeRunInput(
+      parsed.data,
+      threadId,
+      rewindSourceId as string | undefined
+    )
+    if (!input) {
+      await stage?.cleanup().catch(() => undefined)
+      return errorResponse("invalid_request", 400)
+    }
+
     try {
-      runEngine = options.runEngine ?? runtime.runs
-      handle = await runEngine.start(
-        stage ? { ...scope, hasAttachments: true } : scope,
-        runInput
+      const subscription = await options.runtimeInstance.sessions.start(
+        {
+          agentId,
+          sessionId,
+          threadId,
+          ...(stage ? { hasAttachments: true } : {}),
+        },
+        input,
+        access(context, principalId)
       )
+      return createRunStreamResponse(subscription, {
+        signal: context.req.raw.signal,
+      })
     } catch (cause) {
       await stage?.cleanup().catch(() => undefined)
       options.logger.error(
@@ -283,71 +275,11 @@ export function registerRunRoutes(
           error: cause,
         })
       )
-      const publicError = runtime.publicError(cause)
-      return cause instanceof ServerRunConflictError
-        ? errorResponse("run_conflict", 409)
-        : publicError
-          ? errorResponse(publicError.code, publicError.status)
-          : errorResponse("invalid_request", 400)
-    } finally {
-      runAdmissions.delete(key)
+      throw cause
     }
-    const active = {
-      handle,
-      runId: typeof inputRecord?.runId === "string" ? inputRecord.runId : "",
-      engine: runEngine,
-      principalId,
-    }
-    activeRuns.set(key, active)
-    return runStream(context, key, active, activeRuns)
   }
 
   app.post("/api/aos/v1/agents/:agentId/sessions/:sessionId/runs", runHandler)
-  app.post(
-    "/api/aos/v1/agents/:agentId/sessions/:sessionId/interactions/respond",
-    async (context) => {
-      const { runtime } = await requireRuntime(context.req.raw)
-      if (context.req.header("origin") !== options.publicOrigin)
-        return errorResponse("forbidden", 403)
-      const agentId = context.req.param("agentId")
-      const threadId = context.req.param("sessionId")
-      const sessionId = runtime.resolveSessionId(agentId, threadId)
-      if (!sessionId) return errorResponse("not_found", 404)
-      const input = interactionResponse(
-        await boundedJson(context.req.raw, 65_536)
-      )
-      if (!input) return errorResponse("invalid_request", 400)
-      const scope = {
-        agentId,
-        sessionId,
-        threadId,
-        runId: input.runId,
-      }
-      const snapshot = await runtime.pendingInteractions(
-        agentId,
-        threadId,
-        input.runId
-      )
-      const interrupt = snapshot.outcome?.interrupts.find(
-        ({ id }) => id === input.requestId
-      )
-      const resume =
-        input.response.kind === "reject"
-          ? {
-              interruptId: input.requestId,
-              status: "cancelled" as const,
-            }
-          : {
-              interruptId: input.requestId,
-              status: "resolved" as const,
-              payload:
-                interrupt?.reason === "approval"
-                  ? input.response.answers[0]?.[0]
-                  : { answers: input.response.answers },
-            }
-      return context.json(await runtime.respondInteraction(scope, resume))
-    }
-  )
 
   app.post(
     "/api/aos/v1/agents/:agentId/sessions/:sessionId/runs/reconnect",
@@ -359,42 +291,35 @@ export function registerRunRoutes(
       const threadId = context.req.param("sessionId")
       const sessionId = runtime.resolveSessionId(agentId, threadId)
       if (!sessionId) return errorResponse("not_found", 404)
+      await runtime.getSession(agentId, sessionId)
       const input = await boundedJson(context.req.raw)
+      if (!input || typeof input !== "object" || Array.isArray(input))
+        return errorResponse("invalid_request", 400)
+      const value = input as Record<string, unknown>
       if (
-        !input ||
-        typeof input !== "object" ||
-        Array.isArray(input) ||
-        Object.keys(input).length !== 2 ||
-        (input as { threadId?: unknown }).threadId !== threadId ||
-        typeof (input as { runId?: unknown }).runId !== "string" ||
-        !validIdentifier((input as { runId: string }).runId)
+        Object.keys(value).some(
+          (key) => !["threadId", "runId", "after"].includes(key)
+        ) ||
+        value.threadId !== threadId ||
+        typeof value.runId !== "string" ||
+        !validIdentifier(value.runId) ||
+        (value.after !== undefined &&
+          (!Number.isSafeInteger(value.after) || (value.after as number) < 0))
       )
         return errorResponse("invalid_request", 400)
-      const runId = (input as { runId: string }).runId
-      const scope = { agentId, sessionId, threadId }
-      const key = runKey(scope)
-      const active = activeRuns.get(key)
-      if (
-        active &&
-        (active.principalId !== principalId || active.runId !== runId)
-      )
-        return errorResponse("not_found", 404)
-      let handle: ServerRunHandle
-      const engine = active?.engine ?? options.runEngine ?? runtime.runs
-      try {
-        const request: ServerReconnectRequest = {
+
+      const subscription = await options.runtimeInstance.sessions.recover(
+        { agentId, sessionId, threadId },
+        {
           threadId,
-          runId,
-          ...(active ? { position: active.handle.recoveryPosition() } : {}),
-        }
-        active?.handle.disconnect()
-        handle = await engine.reconnect(scope, request)
-      } catch {
-        return errorResponse("temporarily_unavailable", 503)
-      }
-      const reconnected = { handle, runId, engine, principalId }
-      activeRuns.set(key, reconnected)
-      return runStream(context, key, reconnected, activeRuns)
+          runId: value.runId,
+          ...(typeof value.after === "number" ? { after: value.after } : {}),
+        },
+        access(context, principalId)
+      )
+      return createRunStreamResponse(subscription, {
+        signal: context.req.raw.signal,
+      })
     }
   )
 
@@ -405,23 +330,14 @@ export function registerRunRoutes(
       if (context.req.header("origin") !== options.publicOrigin)
         return errorResponse("forbidden", 403)
       const agentId = context.req.param("agentId")
-      const sessionId = runtime.resolveSessionId(
-        agentId,
-        context.req.param("sessionId")
-      )
+      const threadId = context.req.param("sessionId")
+      const sessionId = runtime.resolveSessionId(agentId, threadId)
       if (!sessionId) return errorResponse("not_found", 404)
-      const key = runKey({ agentId, sessionId })
-      const active = activeRuns.get(key)
-      if (!active || active.principalId !== principalId)
-        return errorResponse("not_found", 404)
-      let status: "stopping" | "idle"
-      try {
-        status = await active.handle.stop()
-      } catch {
-        return errorResponse("temporarily_unavailable", 503)
-      }
-      if (status === "idle" && activeRuns.get(key) === active)
-        activeRuns.delete(key)
+      await runtime.getSession(agentId, sessionId)
+      const status = await options.runtimeInstance.sessions.stop(
+        { agentId, sessionId },
+        principalId
+      )
       return new Response(
         JSON.stringify(RunStopResponseSchema.parse({ status })),
         {

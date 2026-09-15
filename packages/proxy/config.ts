@@ -30,22 +30,6 @@ const HttpUrlSchema = z
     }
   })
 
-const SecretKeySchema = z.strictObject({
-  id: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
-  secretFile: AbsoluteSecretFileSchema,
-})
-
-const UniqueSecretKeysSchema = z
-  .array(SecretKeySchema)
-  .min(1)
-  .max(2)
-  .refine((keys) => new Set(keys.map(({ id }) => id)).size === keys.length)
-
-const HttpsOriginSchema = HttpUrlSchema.refine((value) => {
-  const url = new URL(value)
-  return url.protocol === "https:" && value === url.origin
-})
-
 const PublicOriginSchema = HttpUrlSchema.refine((value) => {
   const url = new URL(value)
   return (
@@ -68,59 +52,53 @@ const ListenerSchema = z.union([
   }),
 ])
 
+const SecretKeySchema = z.strictObject({
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
+  secretFile: AbsoluteSecretFileSchema,
+})
+
+const UniqueSecretKeysSchema = z
+  .array(SecretKeySchema)
+  .min(1)
+  .max(3)
+  .refine((keys) => new Set(keys.map(({ id }) => id)).size === keys.length)
+
+const LimitsSchema = z.strictObject({
+  activeExecutions: z.number().int().min(1).max(4096),
+  guestActiveExecutions: z.number().int().min(1).max(4096),
+  operatorEventPeers: z.number().int().min(1).max(4096),
+  guestEventPeers: z.number().int().min(1).max(4096),
+  guestEventPeersPerInvitation: z.number().int().min(1).max(256),
+  subscriberEvents: z.number().int().min(1).max(16_384),
+  subscriberBytes: z
+    .number()
+    .int()
+    .min(1_024)
+    .max(64 * 1024 * 1024),
+})
+
 const ProxyConfigSchema = z
   .strictObject({
     version: z.literal(1),
+    deploymentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
     listen: ListenerSchema,
     publicOrigin: PublicOriginSchema,
-    operator: z.strictObject({
-      issuer: HttpsOriginSchema,
-      clientId: z.string().min(1).max(256),
-      clientSecretFile: AbsoluteSecretFileSchema,
-      principalHmacKeyFile: AbsoluteSecretFileSchema,
-      redirectUri: HttpUrlSchema,
-      allowedSubjects: z
-        .array(z.string().min(1).max(256))
-        .min(1)
-        .max(256)
-        .refine((values) => new Set(values).size === values.length),
-      session: z.strictObject({
-        deploymentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
-        keys: UniqueSecretKeysSchema.max(2),
-        ttlSeconds: z.number().int().min(60).max(86_400).default(900),
-      }),
-    }),
-    hermes: z.strictObject({
+    runtime: z.strictObject({
+      id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
+      kind: z.literal("hermes"),
       baseUrl: HttpUrlSchema,
-      auth: z.discriminatedUnion("mode", [
-        z.strictObject({
-          mode: z.literal("static-token"),
-          tokenFile: AbsoluteSecretFileSchema,
-        }),
-        z.strictObject({
-          mode: z.literal("browser-broker"),
-          callbackUrl: HttpUrlSchema,
-          allowedIdentityOrigins: z
-            .array(HttpsOriginSchema)
-            .min(1)
-            .max(64)
-            .refine((values) => new Set(values).size === values.length),
-          provider: z.string().min(1).max(128).optional(),
-        }),
-      ]),
+      tokenFile: AbsoluteSecretFileSchema,
+      sessionIdleMs: z.number().int().min(1_000).max(86_400_000),
     }),
     events: z.strictObject({
       activeKeyId: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
       keys: UniqueSecretKeysSchema,
     }),
+    limits: LimitsSchema,
     guest: z
       .strictObject({
         listen: ListenerSchema,
-        publicOrigin: HttpsOriginSchema,
-        hermes: z.strictObject({
-          baseUrl: HttpUrlSchema,
-          tokenFile: AbsoluteSecretFileSchema,
-        }),
+        publicOrigin: PublicOriginSchema,
         invitations: z.strictObject({
           keys: UniqueSecretKeysSchema,
           ttlSeconds: z.number().int().min(60).max(3_600).default(300),
@@ -131,28 +109,25 @@ const ProxyConfigSchema = z
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
-    const expectedOperatorCallback = `${config.publicOrigin}/api/aos/v1/auth/operator/callback`
-    if (config.operator.redirectUri !== expectedOperatorCallback)
-      context.addIssue({
-        code: "custom",
-        path: ["operator", "redirectUri"],
-        message: "Invalid callback URL",
-      })
-    if (
-      config.hermes.auth.mode === "browser-broker" &&
-      config.hermes.auth.callbackUrl !==
-        `${config.publicOrigin}/api/aos/v1/auth/runtime/upstream/auth/callback`
-    )
-      context.addIssue({
-        code: "custom",
-        path: ["hermes", "auth", "callbackUrl"],
-        message: "Invalid callback URL",
-      })
     if (!config.events.keys.some(({ id }) => id === config.events.activeKeyId))
       context.addIssue({
         code: "custom",
         path: ["events", "activeKeyId"],
         message: "Unknown active key",
+      })
+    if (config.limits.guestActiveExecutions > config.limits.activeExecutions)
+      context.addIssue({
+        code: "custom",
+        path: ["limits", "guestActiveExecutions"],
+        message: "Guest limit exceeds global limit",
+      })
+    if (
+      config.limits.guestEventPeersPerInvitation > config.limits.guestEventPeers
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["limits", "guestEventPeersPerInvitation"],
+        message: "Invitation peer limit exceeds guest peer limit",
       })
     if (
       config.guest &&
@@ -168,15 +143,16 @@ const ProxyConfigSchema = z
   })
 
 export type ProxyConfig = z.infer<typeof ProxyConfigSchema>
+export type RuntimeConfig = ProxyConfig["runtime"]
+export type RuntimeLimits = ProxyConfig["limits"]
 
-/** Guest composer discovery is opt-in; this does not control runtime commands. */
 export function parseGuestComposerSlashCommandsEnabled(
-  value?: string
-): boolean {
+  value: string | undefined
+) {
   return value?.trim().toLowerCase() === "true"
 }
 
-/** Parser issues are deliberately hidden because rejected input may contain secrets. */
+/** Parser issues are hidden because rejected input may contain secrets. */
 export function parseProxyConfig(input: unknown): ProxyConfig {
   const result = ProxyConfigSchema.safeParse(input)
   if (!result.success) throw new Error("Invalid proxy configuration")

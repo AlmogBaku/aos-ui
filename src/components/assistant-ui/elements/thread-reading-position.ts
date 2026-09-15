@@ -121,7 +121,11 @@ export class ThreadReadingPositionController {
   }
 
   restore(threadId: string, viewport: HTMLElement) {
-    const bookmark = this.#bookmarks.get(threadId) ?? { mode: "follow" }
+    let bookmark = this.#bookmarks.get(threadId)
+    if (!bookmark) {
+      bookmark = { mode: "follow" }
+      this.#bookmarks.set(threadId, bookmark)
+    }
     restoreThreadReadingBookmark(viewport, bookmark)
     return bookmark
   }
@@ -163,10 +167,10 @@ function createRuntimeScopedController(runtimeKey: unknown) {
  * 4. pass the selected Assistant runtime instance as `runtimeKey`.
  *
  * Set `autoScroll={false}`, `scrollToBottomOnInitialize={false}`, and
- * `scrollToBottomOnThreadSwitch={false}` on the viewport because this hook owns
- * instant restoration and follow mode. The listener keeps a historical anchor
- * fixed as streamed content changes height, while unseen Sessions and followed
- * Sessions open at the latest content.
+ * `scrollToBottomOnThreadSwitch={false}` with `turnAnchor="bottom"` on the
+ * viewport because this hook owns instant restoration and follow mode. The
+ * listener keeps a historical anchor fixed as streamed content changes height,
+ * while unseen Sessions and followed Sessions open at the latest content.
  */
 export function useThreadReadingPosition({
   threadId,

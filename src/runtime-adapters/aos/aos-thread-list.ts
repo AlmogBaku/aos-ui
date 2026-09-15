@@ -11,7 +11,8 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
   type Session,
 } from "../../../packages/protocol"
-import { AosClientError, type AosRemoteClient } from "./aos-client"
+import type { AosRemoteClient } from "./aos-client"
+import { AosDraftRegistry } from "./aos-drafts"
 
 const PAGE_SIZE = 50
 type RemoteThreadMetadata = Awaited<
@@ -47,19 +48,11 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
   ) {}
 
   async load() {
-    const [history, active] = await Promise.all([
-      this.client.loadHistory(this.threadId),
-      this.client.pendingInteraction(this.threadId).catch((error: unknown) => {
-        if (
-          error instanceof AosClientError &&
-          (error.kind === "aos-auth-required" ||
-            error.kind === "runtime-auth-required")
-        )
-          throw error
-        return undefined
-      }),
-    ])
-    this.#activeRunId = active?.running ? active.runId : undefined
+    const history = await this.client.loadHistory(this.threadId)
+    this.#activeRunId =
+      history.execution?.status === "running"
+        ? history.execution.runId
+        : undefined
     const repository = ExportedMessageRepository.fromArray(
       history.messages.map((message): ThreadMessageLike => ({
         ...message,
@@ -137,6 +130,16 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
         return
       }
       if (event.type === "RUN_FINISHED") {
+        if (event.outcome?.type === "interrupt") {
+          yield {
+            content: [...content],
+            status: { type: "requires-action", reason: "interrupt" },
+            metadata: {
+              custom: { agui: { interrupts: event.outcome.interrupts } },
+            },
+          }
+          return
+        }
         yield {
           content: [...content],
           status: { type: "complete", reason: "stop" },
@@ -162,8 +165,16 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
 /** Public assistant-ui adapters over the normalized AOS REST surface. */
 export class AosThreadListAdapter implements RemoteThreadListAdapter {
   readonly #histories = new Map<string, ThreadHistoryAdapter>()
+  readonly #agents = new Map<string, string>()
+  readonly #initializations = new Map<
+    string,
+    Promise<{ remoteId: string; externalId: string }>
+  >()
 
-  constructor(readonly client: AosRemoteClient) {}
+  constructor(
+    readonly client: AosRemoteClient,
+    readonly drafts?: AosDraftRegistry
+  ) {}
 
   async list({ after }: { after?: string } = {}) {
     const offset = cursorOffset(after)
@@ -176,6 +187,8 @@ export class AosThreadListAdapter implements RemoteThreadListAdapter {
     const nextOffset = page.offset + page.sessions.length
     const hasMore =
       nextOffset < page.total && nextOffset < SESSION_CATALOG_MAX_WINDOW
+    for (const session of sessions)
+      this.#agents.set(session.id, session.agentId)
     return {
       threads: sessions.map(metadata),
       ...(hasMore
@@ -187,12 +200,33 @@ export class AosThreadListAdapter implements RemoteThreadListAdapter {
   }
 
   async fetch(threadId: string) {
-    return metadata(await this.client.getSession(threadId))
+    const session = await this.client.getSession(threadId)
+    this.#agents.set(session.id, session.agentId)
+    return metadata(session)
   }
 
   async initialize(threadId: string) {
+    const draftAgentId = this.drafts?.agentFor(threadId)
+    if (draftAgentId) {
+      let initialization = this.#initializations.get(threadId)
+      if (!initialization) {
+        initialization = this.client
+          .createSession(draftAgentId)
+          .then(({ threadId: remoteId }) => {
+            this.#agents.set(remoteId, draftAgentId)
+            return { remoteId, externalId: remoteId }
+          })
+          .finally(() => this.#initializations.delete(threadId))
+        this.#initializations.set(threadId, initialization)
+      }
+      return initialization
+    }
     const session = await this.fetch(threadId)
     return { remoteId: session.remoteId, externalId: session.externalId }
+  }
+
+  agentFor(threadId: string) {
+    return this.#agents.get(threadId)
   }
 
   rename(threadId: string, title: string) {

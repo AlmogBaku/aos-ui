@@ -311,7 +311,7 @@ export function ConversationSearch({
         type="search"
         role="searchbox"
         aria-label={labels.search}
-        className="min-w-0 flex-1 rounded-sm bg-transparent px-1 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="min-w-0 flex-1 appearance-none border-0 bg-transparent px-1 py-1 text-sm shadow-none outline-none"
         placeholder={labels.placeholder}
         value={query}
         onChange={(event) => {

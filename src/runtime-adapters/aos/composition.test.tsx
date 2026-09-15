@@ -1,9 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { StrictMode } from "react"
 
 import type { HarnessRuntime } from "../contracts"
-import { AosReconciler } from "./aos-reconciliation"
 import { runtimeAdapter } from "./composition"
 
 afterEach(() => {
@@ -13,18 +11,10 @@ afterEach(() => {
 
 describe("provider-neutral AOS runtime composition", () => {
   it("mounts the existing workspace runtime with normalized Agents and no provider URL", async () => {
-    const close = vi.spyOn(AosReconciler.prototype, "close")
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const path = String(input)
-        if (path === "/api/aos/v1/auth/operator")
-          return Response.json({
-            status: "authenticated",
-            operator: { id: "principal" },
-          })
-        if (path === "/api/aos/v1/auth/runtime")
-          return Response.json({ status: "authenticated" })
         if (path === "/api/aos/v1/runtime")
           return Response.json({
             runtime: { id: "hermes", name: "Hermes" },
@@ -91,25 +81,23 @@ describe("provider-neutral AOS runtime composition", () => {
     )
     let supplied: HarnessRuntime | undefined
     const Provider = runtimeAdapter.Provider
-    const view = render(
-      <StrictMode>
-        <Provider
-          config={{
-            status: "ready",
-            mode: "aos",
-            composerFeatures: {
-              modelSelectorEnabled: true,
-              contextEnabled: true,
-            },
-          }}
-          locale="en"
-        >
-          {(runtime) => {
-            supplied = runtime
-            return <main>Workspace mounted</main>
-          }}
-        </Provider>
-      </StrictMode>
+    render(
+      <Provider
+        config={{
+          status: "ready",
+          mode: "aos",
+          composerFeatures: {
+            modelSelectorEnabled: true,
+            contextEnabled: true,
+          },
+        }}
+        locale="en"
+      >
+        {(runtime) => {
+          supplied = runtime
+          return <main>Workspace mounted</main>
+        }}
+      </Provider>
     )
 
     expect(await screen.findByRole("main")).toHaveTextContent(
@@ -119,11 +107,8 @@ describe("provider-neutral AOS runtime composition", () => {
       { id: "researcher", name: "Researcher" },
     ])
     expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([])
-    expect(supplied!.activityCoverage).toBe("workspace")
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(close).not.toHaveBeenCalled()
-
-    view.unmount()
-    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce())
+    expect(supplied!.interactions).toBeUndefined()
+    expect(supplied!.agUiInterrupts).toBe(true)
+    expect(supplied!.activityCoverage).toBe("active-session")
   })
 })

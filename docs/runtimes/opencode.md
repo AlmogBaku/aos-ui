@@ -72,10 +72,9 @@ The native container sees the worktree as `/workspace`. On Linux, set
 `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` when the defaults do not match host
 files.
 
-The image includes `aos-gateway`. To let an Agent create guest invitations, set
-`AOS_GATEWAY_INVITE_SIGNING_KEY` in `.env`; the skill asks for the deployed
-guest origin for each invitation. See [Invited chat](../invite-chat.md) for the
-workflow and trust model.
+The image contains only OpenCode and the optional native AOS integration. Guest
+invitations belong to the TypeScript proxy and become available for OpenCode
+after its server adapter is implemented.
 
 ## Operational limits
 

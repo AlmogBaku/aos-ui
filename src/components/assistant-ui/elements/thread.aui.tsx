@@ -82,6 +82,7 @@ import {
   useAuiState,
   unstable_useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
+import { useAgUiInterrupts } from "@assistant-ui/react-ag-ui"
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -97,6 +98,7 @@ import {
 } from "lucide-react"
 import {
   createContext,
+  useEffect,
   useContext,
   useMemo,
   useCallback,
@@ -141,6 +143,14 @@ export type ThreadProps = {
   labels?: Partial<ThreadLabels> | undefined
   direction?: LocaleDirection | undefined
   composerFeatures?: ComposerFeatureViewModel | undefined
+  messageRewind?:
+    | false
+    | {
+        runConfig(sourceUserId: string): {
+          custom: Record<string, unknown>
+        }
+      }
+    | undefined
 }
 
 export type ThreadLabels = {
@@ -161,6 +171,7 @@ export type ThreadLabels = {
   more: string
   exportMarkdown: string
   edit: string
+  pendingInteractionAction: string
   cancel: string
   update: string
   historySearch?: string | undefined
@@ -202,6 +213,8 @@ const DEFAULT_LABELS: ThreadLabels = {
   more: "More",
   exportMarkdown: "Export as Markdown",
   edit: "Edit",
+  pendingInteractionAction:
+    "Answer the pending question before changing this conversation",
   cancel: "Cancel",
   update: "Update",
   historySearch: "Search conversation history",
@@ -229,6 +242,7 @@ export const THREAD_VIEWPORT_SCROLL_BEHAVIOR = {
   autoScroll: false,
   scrollToBottomOnInitialize: false,
   scrollToBottomOnThreadSwitch: false,
+  turnAnchor: "bottom",
 } as const
 
 const EMPTY_COMPONENTS: ThreadComponents = {}
@@ -236,6 +250,15 @@ const EMPTY_COMPONENTS: ThreadComponents = {}
 const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS)
 const ThreadLabelsContext = createContext<ThreadLabels>(DEFAULT_LABELS)
+const MessageRewindContext = createContext<
+  | false
+  | {
+      runConfig(sourceUserId: string): {
+        custom: Record<string, unknown>
+      }
+    }
+  | undefined
+>(undefined)
 const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
   {}
 )
@@ -292,6 +315,7 @@ export const Thread: FC<ThreadProps> = ({
   labels,
   direction = "ltr",
   composerFeatures = {},
+  messageRewind,
 }) => {
   const isEmpty = useAuiState(isNewChatView)
   const localizedLabels = useMemo(
@@ -306,15 +330,17 @@ export const Thread: FC<ThreadProps> = ({
   return (
     <ThreadLabelsContext.Provider value={localizedLabels}>
       <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
-        <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
-          <ThreadComponentsContext.Provider value={components}>
-            <ThreadRoot
-              isEmpty={isEmpty}
-              autoFocus={autoFocus}
-              direction={direction}
-            />
-          </ThreadComponentsContext.Provider>
-        </ThreadComposerFeaturesContext.Provider>
+        <MessageRewindContext.Provider value={messageRewind}>
+          <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
+            <ThreadComponentsContext.Provider value={components}>
+              <ThreadRoot
+                isEmpty={isEmpty}
+                autoFocus={autoFocus}
+                direction={direction}
+              />
+            </ThreadComponentsContext.Provider>
+          </ThreadComposerFeaturesContext.Provider>
+        </MessageRewindContext.Provider>
       </AttachmentLabelsContext.Provider>
     </ThreadLabelsContext.Provider>
   )
@@ -380,7 +406,6 @@ const ThreadRoot: FC<{
       <ThreadPrimitive.Viewport
         ref={viewportRef}
         {...THREAD_VIEWPORT_SCROLL_BEHAVIOR}
-        turnAnchor="top"
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}
@@ -1196,6 +1221,11 @@ const MessageError: FC = () => {
 const AssistantMessage: FC = () => {
   const reading = useVoiceMessageReading()
   const messageParts = useAuiState((state) => state.message.parts)
+  const completedWithoutContent = useAuiState(
+    (state) =>
+      state.message.status?.type === "complete" &&
+      state.message.content.length === 0
+  )
   const labels = useContext(ThreadLabelsContext)
   const {
     AssistantIdentity,
@@ -1205,6 +1235,8 @@ const AssistantMessage: FC = () => {
   const ACTION_BAR_PT = "pt-1.5"
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`
+
+  if (completedWithoutContent) return null
 
   return (
     <MessagePrimitive.Root
@@ -1322,6 +1354,10 @@ const AssistantMessage: FC = () => {
 
 const AssistantActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
+  const messageRewind = useContext(MessageRewindContext)
+  const retrySourceId = useAuiState((state) => state.message.parentId)
+  const hasPendingInteraction = useAgUiInterrupts().length > 0
+  const aui = useAui()
   const voice = useVoiceContext()
   const reading = useVoiceMessageReading()
   return (
@@ -1340,15 +1376,33 @@ const AssistantActionBar: FC = () => {
           <CopyIcon className="animate-in duration-150 zoom-in-75 fade-in motion-reduce:animate-none" />
         </AuiIf>
       </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload
-        onClick={() => {
-          voice?.media.stopSpeech()
-          voice?.media.disarm()
-        }}
-        render={<TooltipIconButton tooltip={labels.refresh} />}
-      >
-        <RefreshCwIcon />
-      </ActionBarPrimitive.Reload>
+      {messageRewind !== false ? (
+        <ActionBarPrimitive.Reload
+          disabled={hasPendingInteraction}
+          onClick={(event) => {
+            if (messageRewind) {
+              event.preventDefault()
+              if (retrySourceId)
+                void aui.message.reload({
+                  runConfig: messageRewind.runConfig(retrySourceId),
+                })
+            }
+            voice?.media.stopSpeech()
+            voice?.media.disarm()
+          }}
+          render={
+            <TooltipIconButton
+              tooltip={
+                hasPendingInteraction
+                  ? labels.pendingInteractionAction
+                  : labels.refresh
+              }
+            />
+          }
+        >
+          <RefreshCwIcon />
+        </ActionBarPrimitive.Reload>
+      ) : null}
       <VoiceMessageActions />
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger
@@ -1430,6 +1484,9 @@ const UserMessage: FC = () => {
 
 const UserActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
+  const messageRewind = useContext(MessageRewindContext)
+  const hasPendingInteraction = useAgUiInterrupts().length > 0
+  if (messageRewind === false) return null
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
@@ -1437,9 +1494,14 @@ const UserActionBar: FC = () => {
       className="aui-user-action-bar-root flex flex-col items-end"
     >
       <ActionBarPrimitive.Edit
+        disabled={hasPendingInteraction}
         render={
           <TooltipIconButton
-            tooltip={labels.edit}
+            tooltip={
+              hasPendingInteraction
+                ? labels.pendingInteractionAction
+                : labels.edit
+            }
             className="aui-user-action-edit"
           />
         }
@@ -1452,6 +1514,13 @@ const UserActionBar: FC = () => {
 
 const EditComposer: FC = () => {
   const labels = useContext(ThreadLabelsContext)
+  const messageRewind = useContext(MessageRewindContext)
+  const sourceId = useAuiState((state) => state.message.id)
+  const aui = useAui()
+  useEffect(() => {
+    if (!messageRewind) return
+    aui.composer.setRunConfig(messageRewind.runConfig(sourceId))
+  }, [aui, messageRewind, sourceId])
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"

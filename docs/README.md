@@ -10,12 +10,12 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 ## Run
 
 - [Hermes](runtimes/hermes.md) — operate Hermes behind the AOS proxy.
-- [Deployment](deployment.md) — run the proxy and static assets or operate private systemd services.
+- [Deployment](deployment.md) — run the Bun proxy and static assets, with optional external TLS termination.
 
 ## Operate
 
 - [Chat voice](chat-voice.md) — configure transcription, voice turns, and read-aloud with Hermes.
-- [Invited chat](invite-chat.md) — run the optional gateway and issue restricted guest links.
+- [Invited chat](invite-chat.md) — issue scoped JWT links through the proxy's separate guest listener.
 - [Troubleshooting](troubleshooting.md) — diagnose configuration, connectivity, authentication, browser, and container problems.
 
 ## Reference

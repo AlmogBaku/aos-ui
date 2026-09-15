@@ -54,6 +54,7 @@ const metadataKeys = [
 const errorKeys = [
   "type",
   "code",
+  "description",
   "message",
   "retryable",
   "stack",
@@ -64,10 +65,20 @@ const errorKeys = [
   "nativePosition",
 ] as const
 
+const interruptPayloadKeys = ["type", "interrupts"] as const
+const interruptKeys = [
+  "id",
+  "reason",
+  "message",
+  "responseSchema",
+  "metadata",
+] as const
+
 type Transport = "rest" | "ag-ui" | "ws" | "artifact" | "error"
 
 const publicErrorCodes = [
   "AOS_CONNECTION_INTERRUPTED",
+  "AOS_INTERACTION_UNCERTAIN",
   "AOS_SEND_UNCERTAIN",
   "forbidden",
   "not_found",
@@ -75,6 +86,27 @@ const publicErrorCodes = [
   "request_failed",
   "temporarily_unavailable",
 ] as const
+
+export type GuestPublicErrorCode = (typeof publicErrorCodes)[number]
+
+const publicErrorDescriptions: Record<GuestPublicErrorCode, string> = {
+  AOS_CONNECTION_INTERRUPTED:
+    "The connection was interrupted. Reconnect to continue.",
+  AOS_INTERACTION_UNCERTAIN:
+    "The response may have been accepted. Reconnect to confirm.",
+  AOS_SEND_UNCERTAIN:
+    "The message may have been accepted. Reconnect to confirm.",
+  forbidden: "You do not have permission to do that.",
+  not_found: "The requested item was not found.",
+  rate_limited: "Too many requests. Please try again shortly.",
+  request_failed: "The request could not be completed.",
+  temporarily_unavailable:
+    "The service is temporarily unavailable. Please try again.",
+}
+
+export function guestErrorDescription(code: GuestPublicErrorCode) {
+  return publicErrorDescriptions[code]
+}
 
 export type GuestSafeMetadata = {
   name: string
@@ -88,6 +120,13 @@ export type GuestSafeCustomUi = {
   title?: string
   text?: string
   items?: readonly string[]
+}
+
+export type GuestSafeInterrupt = {
+  id: string
+  reason: string
+  message?: string
+  responseSchema: Record<string, unknown>
 }
 
 export type GuestOutboundProjection = {
@@ -105,8 +144,13 @@ export type GuestOutboundProjection = {
       }
     | ({ type: "artifact" } & GuestSafeMetadata)
     | {
+        type: "interrupt"
+        interrupts: readonly GuestSafeInterrupt[]
+      }
+    | {
         type: "error"
-        code: (typeof publicErrorCodes)[number]
+        code: GuestPublicErrorCode
+        description?: string
         retryable: boolean
       }
 }
@@ -222,6 +266,7 @@ function validAuthorization(authorization: GuestAuthorization) {
     plainRecord(authorization) &&
     authorization.version === 1 &&
     authorization.lane === "guest" &&
+    validIdentifier(authorization.runtimeId) &&
     validIdentifier(authorization.agentId) &&
     (authorization.sessionId === undefined ||
       validIdentifier(authorization.sessionId)) &&
@@ -374,6 +419,155 @@ function projectArtifact(
   return { type: "artifact", ...metadata }
 }
 
+function projectJsonSchema(
+  value: unknown,
+  depth = 0
+): Record<string, unknown> | undefined {
+  if (!plainRecord(value) || depth > 6) return undefined
+  const allowed = [
+    "type",
+    "title",
+    "enum",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "minLength",
+    "maxLength",
+  ] as const
+  if (!exactKnownKeys(value, allowed)) return undefined
+  if (
+    typeof value.type !== "string" ||
+    ![
+      "array",
+      "boolean",
+      "integer",
+      "null",
+      "number",
+      "object",
+      "string",
+    ].includes(value.type)
+  )
+    return undefined
+  const output: Record<string, unknown> = { type: value.type }
+  if (value.title !== undefined) {
+    if (!validText(value.title, 2_048)) return undefined
+    output.title = value.title
+  }
+  if (value.enum !== undefined) {
+    if (
+      !Array.isArray(value.enum) ||
+      value.enum.length < 1 ||
+      value.enum.length > 32 ||
+      value.enum.some((item) => !validText(item, 2_048))
+    )
+      return undefined
+    output.enum = [...value.enum]
+  }
+  if (value.properties !== undefined) {
+    if (!plainRecord(value.properties)) return undefined
+    const entries = Object.entries(value.properties)
+    if (entries.length > 32 || entries.some(([key]) => !validIdentifier(key)))
+      return undefined
+    const properties: Record<string, unknown> = {}
+    for (const [key, schema] of entries) {
+      const projected = projectJsonSchema(schema, depth + 1)
+      if (!projected) return undefined
+      properties[key] = projected
+    }
+    output.properties = properties
+  }
+  if (value.required !== undefined) {
+    if (
+      !Array.isArray(value.required) ||
+      value.required.length > 32 ||
+      value.required.some((item) => !validIdentifier(item))
+    )
+      return undefined
+    output.required = [...value.required]
+  }
+  if (value.additionalProperties !== undefined) {
+    if (value.additionalProperties !== false) return undefined
+    output.additionalProperties = false
+  }
+  if (value.items !== undefined) {
+    const items = projectJsonSchema(value.items, depth + 1)
+    if (!items) return undefined
+    output.items = items
+  }
+  if (value.prefixItems !== undefined) {
+    if (!Array.isArray(value.prefixItems) || value.prefixItems.length > 32)
+      return undefined
+    const prefixItems = value.prefixItems.map((item) =>
+      projectJsonSchema(item, depth + 1)
+    )
+    if (prefixItems.some((item) => item === undefined)) return undefined
+    output.prefixItems = prefixItems
+  }
+  for (const key of [
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+  ] as const) {
+    if (value[key] === undefined) continue
+    if (
+      typeof value[key] !== "number" ||
+      !Number.isSafeInteger(value[key]) ||
+      value[key] < 0 ||
+      value[key] > 1_000_000
+    )
+      return undefined
+    output[key] = value[key]
+  }
+  if (value.uniqueItems !== undefined) {
+    if (typeof value.uniqueItems !== "boolean") return undefined
+    output.uniqueItems = value.uniqueItems
+  }
+  return output
+}
+
+function projectInterrupt(
+  value: Record<string, unknown>,
+  authorization: GuestAuthorization
+): GuestOutboundProjection["payload"] | undefined {
+  if (
+    authorization.operation !== "messages:read" ||
+    !exactKnownKeys(value, interruptPayloadKeys) ||
+    value.type !== "interrupt" ||
+    !Array.isArray(value.interrupts) ||
+    value.interrupts.length < 1 ||
+    value.interrupts.length > 32
+  )
+    return undefined
+  const interrupts: GuestSafeInterrupt[] = []
+  for (const candidate of value.interrupts) {
+    if (
+      !plainRecord(candidate) ||
+      !exactKnownKeys(candidate, interruptKeys) ||
+      !validIdentifier(candidate.id) ||
+      !validText(candidate.reason, 128) ||
+      (candidate.message !== undefined && !validText(candidate.message, 4_096))
+    )
+      return undefined
+    const responseSchema = projectJsonSchema(candidate.responseSchema)
+    if (!responseSchema) return undefined
+    interrupts.push({
+      id: candidate.id,
+      reason: candidate.reason,
+      ...(candidate.message === undefined
+        ? {}
+        : { message: candidate.message as string }),
+      responseSchema,
+    })
+  }
+  return { type: "interrupt", interrupts }
+}
+
 function projectError(
   value: Record<string, unknown>,
   authorization: GuestAuthorization
@@ -385,12 +579,18 @@ function projectError(
     !hasCapability(authorization, "safe-errors") ||
     !publicErrorCodes.includes(value.code as never) ||
     typeof value.retryable !== "boolean" ||
+    (value.description !== undefined &&
+      value.description !==
+        publicErrorDescriptions[value.code as GuestPublicErrorCode]) ||
     (value.message !== undefined && !validText(value.message, 4_096))
   )
     return undefined
   return {
     type: "error",
-    code: value.code as (typeof publicErrorCodes)[number],
+    code: value.code as GuestPublicErrorCode,
+    ...(value.description === undefined
+      ? {}
+      : { description: value.description }),
     retryable: value.retryable,
   }
 }
@@ -423,7 +623,10 @@ export function projectGuestOutbound(
     input.transport === "ag-ui" ||
     input.transport === "ws"
   ) {
-    payload = projectMessage(input.payload, authorization)
+    payload =
+      input.payload.type === "interrupt"
+        ? projectInterrupt(input.payload, authorization)
+        : projectMessage(input.payload, authorization)
   } else if (input.transport === "artifact") {
     payload = projectArtifact(input.payload, authorization)
   } else {

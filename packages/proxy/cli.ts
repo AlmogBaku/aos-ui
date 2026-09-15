@@ -83,7 +83,7 @@ export async function runProxyCli(
     host: configured.config.listen.host,
     port: configured.config.listen.port,
     shutdownGraceMs: configured.config.shutdownGraceMs,
-    close: () => configured.hermes.close(),
+    maxEventPeers: configured.config.limits.operatorEventPeers,
   })
   const guestLifecycle = configured.guest
     ? start({
@@ -108,7 +108,7 @@ export async function runProxyCli(
         host: configured.config.guest!.listen.host,
         port: configured.config.guest!.listen.port,
         shutdownGraceMs: configured.config.shutdownGraceMs,
-        close: () => configured.guest!.hermes.close(),
+        maxEventPeers: configured.config.limits.guestEventPeers,
       })
     : undefined
   dependencies.logger.info({
@@ -127,10 +127,16 @@ export async function runProxyCli(
     server: lifecycle.server,
     ...(guestLifecycle ? { guestServer: guestLifecycle.server } : {}),
     shutdown() {
-      shutdownPromise ??= Promise.all([
-        lifecycle.shutdown(),
-        ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
-      ]).then(() => undefined)
+      shutdownPromise ??= (async () => {
+        try {
+          await Promise.all([
+            lifecycle.shutdown(),
+            ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
+          ])
+        } finally {
+          await configured.runtimeInstance.close()
+        }
+      })()
       return shutdownPromise
     },
   }

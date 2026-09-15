@@ -57,7 +57,7 @@ export interface EventAuthorization {
   /** Complete cursor binding for the exact authenticated principal and lane. */
   binding: ReconnectCursorBinding
   /** Epoch milliseconds after which this exact authorization must not remain open. */
-  expiresAt: number
+  expiresAt?: number
 }
 
 export interface InvalidationConnectionOptions {
@@ -242,18 +242,20 @@ export function createInvalidationConnection(
       stopStream(stream)
       return
     }
-    const remaining = authorization.expiresAt - now()
-    if (remaining <= 0) {
-      expire(stream)
-      return
+    if (authorization.expiresAt !== undefined) {
+      const remaining = authorization.expiresAt - now()
+      if (remaining <= 0) {
+        expire(stream)
+        return
+      }
+      stream.expiryTimer = schedule(
+        Math.min(remaining, MAX_AUTHORIZATION_DELAY_MS),
+        () => expire(stream)
+      )
     }
-    stream.expiryTimer = schedule(
-      Math.min(remaining, MAX_AUTHORIZATION_DELAY_MS),
-      () => expire(stream)
-    )
     const cursorClaims = cursorClaimsFor(
       binding,
-      authorization.expiresAt,
+      authorization.expiresAt ?? now() + MAX_CURSOR_LIFETIME_SECONDS * 1_000,
       now()
     )
     let cursor: string | undefined
@@ -382,11 +384,16 @@ function isValidAuthorization(
   streamId: string,
   currentTime: number
 ): authorization is EventAuthorization {
-  if (authorization === null || !Number.isSafeInteger(authorization.expiresAt))
+  if (
+    authorization === null ||
+    (authorization.expiresAt !== undefined &&
+      !Number.isSafeInteger(authorization.expiresAt))
+  )
     return false
   const binding = authorization.binding
   return (
-    authorization.expiresAt > currentTime &&
+    (authorization.expiresAt === undefined ||
+      authorization.expiresAt > currentTime) &&
     binding.agentId === scope.agentId &&
     binding.sessionId === scope.sessionId &&
     binding.streamId === streamId &&

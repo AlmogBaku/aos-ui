@@ -1,30 +1,38 @@
 import { z } from "zod"
 import {
+  ActivityDeltaEventSchema,
+  ActivitySnapshotEventSchema,
   HttpAgent,
   RunAgentInputSchema,
   type HttpAgentFetchFn,
 } from "@ag-ui/client"
-import type { AGUIEvent } from "@ag-ui/core"
+import {
+  RunErrorEventSchema,
+  RunFinishedEventSchema,
+  RunStartedEventSchema,
+  StepFinishedEventSchema,
+  StepStartedEventSchema,
+  type ActivityDeltaEvent,
+  type ActivitySnapshotEvent,
+  type AgentCapabilities,
+  type AGUIEvent,
+  type RunFinishedEvent,
+} from "@ag-ui/core"
 
 import {
   AgentCatalogResponseSchema,
   ErrorResponseSchema,
-  OperatorAuthStateSchema,
-  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
-  SessionActivityResponseSchema,
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
-  SessionAudioResponseSchema,
   SessionCatalogResponseSchema,
+  SessionCommandsResponseSchema,
   SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
-  SessionInteractionSnapshotResponseSchema,
   SessionModelSelectRequestSchema,
   SessionModelsResponseSchema,
-  SessionCommandsResponseSchema,
   SessionSchema,
   SessionSpeechRequestSchema,
   SessionTodosResponseSchema,
@@ -33,32 +41,54 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateResponseSchema,
 } from "@aos/protocol"
-import type { Session, SessionHistoryResponse } from "@aos/protocol"
+import type {
+  Session,
+  SessionHistoryResponse,
+  SessionMessage,
+} from "@aos/protocol"
 import type {
   AgentCatalogEntry,
   AgentVisibility,
   TodoItem,
   WorkspaceAdapter,
+  WorkspaceActivityEvent,
 } from "../contracts"
 import type { AosEventScope } from "./aos-reconciliation"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
-const InteractionResponseSchema = z.strictObject({
-  status: z.enum(["resolved", "expired", "already-resolved"]),
-})
-export type AosWorkspaceCapabilities = z.infer<
-  typeof SessionWorkspaceCapabilitiesResponseSchema
->
+export type AosWorkspaceCapabilities = Omit<
+  z.infer<typeof SessionWorkspaceCapabilitiesResponseSchema>,
+  "agent"
+> & { agent: AgentCapabilities }
 export type AosModelChoices = z.infer<typeof SessionModelsResponseSchema>
 export type AosContext = z.infer<typeof SessionContextResponseSchema>
-export type AosSessionActivity = z.infer<typeof SessionActivityResponseSchema>
+export type AosLoadedHistory = Omit<SessionHistoryResponse, "messages"> & {
+  messages: SessionMessage[]
+}
 export type AosStagedAttachment = z.infer<
   typeof SessionAttachmentStageResponseSchema
 >
-export type AosPendingInteraction = z.infer<
-  typeof SessionInteractionSnapshotResponseSchema
->
+
+async function normalizedError(response: Response) {
+  const parsed = ErrorResponseSchema.safeParse(
+    await response.json().catch(() => undefined)
+  )
+  return parsed.success ? parsed.data.error : undefined
+}
+
+async function friendlyErrorResponse(response: Response) {
+  if (response.ok) return response
+  const error = await normalizedError(response.clone())
+  if (!error) return response
+  const headers = new Headers(response.headers)
+  headers.set("content-type", "text/plain; charset=UTF-8")
+  return new Response(error.description, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
 
 async function dataUrl(blob: Blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -69,11 +99,7 @@ async function dataUrl(blob: Blob) {
 }
 
 export type AosClientFailure =
-  | "aos-auth-required"
-  | "runtime-auth-required"
-  | "connection-interrupted"
-  | "provider-unavailable"
-  | "proxy-failure"
+  "connection-interrupted" | "provider-unavailable" | "proxy-failure"
 
 export class AosClientError extends Error {
   constructor(
@@ -94,7 +120,6 @@ export type AosRemoteClientOptions = {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
     subscribe?(scope: AosEventScope, listener: () => void): () => void
   }
-  onAuthRequired?: (kind: "aos-auth-required" | "runtime-auth-required") => void
 }
 
 type StagedRunAttachment = {
@@ -102,6 +127,38 @@ type StagedRunAttachment = {
   dataUrl: string
   filename?: string
   mimeType: string
+}
+
+type RewindReplacement = {
+  localMessageId: string
+  text: string
+}
+
+const MAX_REWIND_REPLACEMENTS_PER_SESSION = 32
+
+type SessionStatus = Session["status"]
+type AosSessionSignalEvent =
+  AGUIEvent | ActivitySnapshotEvent | ActivityDeltaEvent
+type SessionMetadataSubscription = {
+  threadIds: ReadonlySet<string>
+  listener: Parameters<
+    NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
+  >[1]
+}
+
+function messageText(content: unknown) {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content
+    .flatMap((part) =>
+      part &&
+      typeof part === "object" &&
+      (part as { type?: unknown }).type === "text" &&
+      typeof (part as { text?: unknown }).text === "string"
+        ? [(part as { text: string }).text]
+        : []
+    )
+    .join("")
 }
 
 function attachmentsForStage(value: unknown): StagedRunAttachment[] {
@@ -173,14 +230,54 @@ function sseEvent(frame: string) {
   }
 }
 
+function sessionSignalEvent(value: unknown): AosSessionSignalEvent | undefined {
+  const type =
+    value && typeof value === "object" && "type" in value
+      ? (value as { type?: unknown }).type
+      : undefined
+  const schema =
+    type === "ACTIVITY_SNAPSHOT"
+      ? ActivitySnapshotEventSchema
+      : type === "ACTIVITY_DELTA"
+        ? ActivityDeltaEventSchema
+        : type === "RUN_STARTED"
+          ? RunStartedEventSchema
+          : type === "RUN_FINISHED"
+            ? RunFinishedEventSchema
+            : type === "RUN_ERROR"
+              ? RunErrorEventSchema
+              : type === "STEP_STARTED"
+                ? StepStartedEventSchema
+                : type === "STEP_FINISHED"
+                  ? StepFinishedEventSchema
+                  : undefined
+  if (!schema) return undefined
+  const result = schema.safeParse(value)
+  return result.success ? (result.data as AosSessionSignalEvent) : undefined
+}
+
+function ssePosition(frame: string) {
+  const id = frame
+    .split(/\r?\n|\r/u)
+    .find((line) => line.startsWith("id:"))
+    ?.slice(3)
+    .trim()
+  if (!id || !/^\d+$/u.test(id)) return undefined
+  const position = Number(id)
+  return Number.isSafeInteger(position) ? position : undefined
+}
+
 async function* reconnectingSse(
   initial: Response,
-  reconnect: () => Promise<Response>,
-  signal: AbortSignal | null | undefined
+  reconnect: (after?: number) => Promise<Response>,
+  signal: AbortSignal | null | undefined,
+  onRunFinished?: (event: RunFinishedEvent) => Promise<void>,
+  onEvent?: (event: AosSessionSignalEvent) => void
 ) {
   let response = initial
   let reconnected = false
   let terminal = false
+  let after: number | undefined
   while (true) {
     if (!response.ok || !response.body)
       throw new Error(`AOS run request failed (${response.status})`)
@@ -198,44 +295,60 @@ async function* reconnectingSse(
           const frame = buffered.slice(0, boundary.index)
           buffered = buffered.slice(boundary.index + boundary.separator.length)
           const event = sseEvent(frame)
+          const position = ssePosition(frame)
+          if (position !== undefined) after = position
           if (
             event?.type === "RUN_ERROR" &&
             event.code === "AOS_CONNECTION_INTERRUPTED" &&
-            !reconnected
+            !signal?.aborted
           ) {
             interrupted = true
             break
           }
           if (reconnected && event?.type === "RUN_STARTED") continue
+          const signalEvent = sessionSignalEvent(event)
+          if (signalEvent) onEvent?.(signalEvent)
           terminal =
             event?.type === "RUN_FINISHED" || event?.type === "RUN_ERROR"
+          if (event?.type === "RUN_FINISHED" && onRunFinished)
+            await onRunFinished(event as RunFinishedEvent).catch(
+              () => undefined
+            )
           yield new TextEncoder().encode(`${frame}${boundary.separator}`)
         }
         if (interrupted || done) break
       }
     } catch (error) {
-      if (reconnected || signal?.aborted) throw error
+      if (signal?.aborted) throw error
       interrupted = true
     } finally {
       if (interrupted) await reader.cancel().catch(() => undefined)
       reader.releaseLock()
     }
-    if (terminal || reconnected || signal?.aborted) {
+    if (terminal || signal?.aborted) {
       if (buffered) yield new TextEncoder().encode(buffered)
       return
     }
     reconnected = true
-    response = await reconnect()
+    response = await reconnect(after)
   }
 }
 
 function reconnectingResponse(
   initial: Response,
-  reconnect: () => Promise<Response>,
-  signal: AbortSignal | null | undefined
+  reconnect: (after?: number) => Promise<Response>,
+  signal: AbortSignal | null | undefined,
+  onRunFinished?: (event: RunFinishedEvent) => Promise<void>,
+  onEvent?: (event: AosSessionSignalEvent) => void
 ) {
   if (!initial.ok || !initial.body) return initial
-  const events = reconnectingSse(initial, reconnect, signal)
+  const events = reconnectingSse(
+    initial,
+    reconnect,
+    signal,
+    onRunFinished,
+    onEvent
+  )
   return new Response(
     new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -262,6 +375,10 @@ export function createAosRunAgent({
   stageAttachments,
   basePath = "/api/aos/v1",
   authorization,
+  resolveRewindSourceId,
+  onRewindCompleted,
+  onEvent,
+  getCapabilities,
 }: {
   agentId: string
   threadId: string
@@ -272,6 +389,13 @@ export function createAosRunAgent({
   ) => Promise<{ stageId: string }>
   basePath?: string
   authorization?: string
+  resolveRewindSourceId?: (
+    sourceId: string,
+    replacement: RewindReplacement
+  ) => string | Promise<string>
+  onRewindCompleted?: (replacement: RewindReplacement) => Promise<void>
+  onEvent?: (event: AosSessionSignalEvent) => void
+  getCapabilities?: () => Promise<AgentCapabilities>
 }) {
   const url = `${basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
   const runFetch: HttpAgentFetchFn = async (requestUrl, init) => {
@@ -284,26 +408,51 @@ export function createAosRunAgent({
       throw new Error("Invalid AOS run request")
     }
     const input = RunAgentInputSchema.parse(candidate)
+    const resume = input.resume?.length ? input.resume : undefined
     const message = input.messages.at(-1)
-    if (!message || message.role !== "user")
+    if (!resume && (!message || message.role !== "user"))
       throw new Error("AOS runs require a trailing user turn")
     const rawMessages =
       candidate && typeof candidate === "object" && "messages" in candidate
         ? (candidate as { messages?: unknown }).messages
         : undefined
-    const rawMessage = Array.isArray(rawMessages)
-      ? rawMessages.at(-1)
-      : undefined
+    const rawMessage =
+      Array.isArray(rawMessages) && !resume ? rawMessages.at(-1) : undefined
     const staged = attachmentsForStage(rawMessage)
     const stage = staged.length
       ? await stageAttachments?.(threadId, staged)
       : undefined
     if (staged.length && !stage)
       throw new Error("AOS attachment staging is unavailable")
-    const messageWithoutAttachments = {
-      ...(message as Record<string, unknown>),
-    }
-    delete messageWithoutAttachments.attachments
+    const messageWithoutAttachments = message
+      ? { ...(message as Record<string, unknown>) }
+      : undefined
+    delete messageWithoutAttachments?.attachments
+    const forwardedProps =
+      candidate && typeof candidate === "object"
+        ? (candidate as { forwardedProps?: unknown }).forwardedProps
+        : undefined
+    const runConfig =
+      forwardedProps && typeof forwardedProps === "object"
+        ? (forwardedProps as { runConfig?: unknown }).runConfig
+        : undefined
+    const requestedRewindSourceId =
+      !resume && runConfig && typeof runConfig === "object"
+        ? (runConfig as Record<string, unknown>)["aos.rewindSourceId"]
+        : undefined
+    const rewindReplacement =
+      typeof requestedRewindSourceId === "string" && message
+        ? {
+            localMessageId: message.id,
+            text: messageText(message.content),
+          }
+        : undefined
+    const rewindSourceId = rewindReplacement
+      ? await (resolveRewindSourceId?.(
+          requestedRewindSourceId as string,
+          rewindReplacement
+        ) ?? requestedRewindSourceId)
+      : undefined
     const headers = new Headers(init.headers)
     if (authorization) headers.set("authorization", authorization)
     const request = {
@@ -315,33 +464,57 @@ export function createAosRunAgent({
         runId: input.runId,
         ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
         state: {},
-        messages: [messageWithoutAttachments],
+        messages: resume
+          ? []
+          : messageWithoutAttachments
+            ? [messageWithoutAttachments]
+            : [],
         tools: [],
         context: [],
-        forwardedProps: stage ? { aosAttachmentStageId: stage.stageId } : {},
+        forwardedProps: resume
+          ? {}
+          : {
+              ...(typeof rewindSourceId === "string"
+                ? { "aos.rewindSourceId": rewindSourceId }
+                : {}),
+              ...(stage ? { aosAttachmentStageId: stage.stageId } : {}),
+            },
+        ...(resume ? { resume } : {}),
       }),
     } satisfies RequestInit
-    const response = await fetcher(url, request)
+    const response = await friendlyErrorResponse(await fetcher(url, request))
     const reconnectUrl = `${url}/reconnect`
     return reconnectingResponse(
       response,
-      () =>
-        fetcher(reconnectUrl, {
-          ...request,
-          body: JSON.stringify({
-            threadId: input.threadId,
-            runId: input.runId,
-          }),
-        }),
-      init.signal
+      async (after) =>
+        friendlyErrorResponse(
+          await fetcher(reconnectUrl, {
+            ...request,
+            body: JSON.stringify({
+              threadId: input.threadId,
+              runId: input.runId,
+              ...(after === undefined ? {} : { after }),
+            }),
+          })
+        ),
+      init.signal,
+      typeof rewindSourceId === "string" && rewindReplacement
+        ? (event) =>
+            event.outcome?.type === "success"
+              ? (onRewindCompleted?.(rewindReplacement) ?? Promise.resolve())
+              : Promise.resolve()
+        : undefined,
+      onEvent
     )
   }
-  return new HttpAgent({
+  const agent = new HttpAgent({
     url,
     agentId,
     threadId,
     fetch: runFetch,
   })
+  if (getCapabilities) agent.getCapabilities = getCapabilities
+  return agent
 }
 
 export class AosRemoteClient implements WorkspaceAdapter {
@@ -350,10 +523,22 @@ export class AosRemoteClient implements WorkspaceAdapter {
   readonly #authorization?: string
   readonly #scope?: AosEventScope
   readonly #reconciler?: AosRemoteClientOptions["reconciler"]
-  readonly #onAuthRequired?: AosRemoteClientOptions["onAuthRequired"]
   readonly #revisions = new Map<string, string>()
   readonly #sessions = new Map<string, Session>()
+  readonly #sessionStatuses = new Map<string, Session["status"]>()
   readonly #sessionOwners = new Map<string, string>()
+  readonly #rewindReplacements = new Map<
+    string,
+    Map<string, RewindReplacement & { durableMessageId?: string }>
+  >()
+  readonly #capabilities = new Map<string, Promise<AosWorkspaceCapabilities>>()
+  readonly #plans = new Map<string, { messageId: string; todos: TodoItem[] }>()
+  readonly #todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
+  readonly #metadataSubscriptions = new Set<SessionMetadataSubscription>()
+  readonly #activityListeners = new Set<
+    (event: WorkspaceActivityEvent) => void
+  >()
+  readonly #runIds = new Map<string, string>()
 
   constructor(options: AosRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
@@ -361,7 +546,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     this.#authorization = options.authorization
     this.#scope = options.scope
     this.#reconciler = options.reconciler
-    this.#onAuthRequired = options.onAuthRequired
     if (options.scope)
       this.#sessionOwners.set(options.scope.sessionId, options.scope.agentId)
   }
@@ -397,25 +581,10 @@ export class AosRemoteClient implements WorkspaceAdapter {
       throw new AosClientError("connection-interrupted")
     }
     if (!response.ok) {
-      if (response.status === 401) {
-        const error = ErrorResponseSchema.safeParse(
-          await response.json().catch(() => undefined)
-        )
-        if (error.success) {
-          const kind =
-            error.data.error.code === "unauthenticated"
-              ? "aos-auth-required"
-              : error.data.error.code === "runtime_authentication_required"
-                ? "runtime-auth-required"
-                : undefined
-          if (kind) {
-            this.#onAuthRequired?.(kind)
-            throw new AosClientError(kind)
-          }
-        }
-      }
+      const error = await normalizedError(response)
       throw new AosClientError(
-        response.status === 503 ? "provider-unavailable" : "proxy-failure"
+        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        error?.description
       )
     }
     let payload: unknown
@@ -428,14 +597,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     if (!parsed.success)
       throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
     return parsed.data
-  }
-
-  operatorAuth(signal?: AbortSignal) {
-    return this.#read("/auth/operator", OperatorAuthStateSchema, { signal })
-  }
-
-  runtimeAuth(signal?: AbortSignal) {
-    return this.#read("/auth/runtime", RuntimeAuthStateSchema, { signal })
   }
 
   runtimeInfo(signal?: AbortSignal) {
@@ -545,6 +706,147 @@ export class AosRemoteClient implements WorkspaceAdapter {
     })
   }
 
+  subscribeSessionMetadata(
+    threadIds: readonly string[],
+    listener: SessionMetadataSubscription["listener"]
+  ) {
+    const subscription = { threadIds: new Set(threadIds), listener }
+    this.#metadataSubscriptions.add(subscription)
+    queueMicrotask(() => {
+      if (this.#metadataSubscriptions.has(subscription))
+        listener(this.#metadataFor(subscription.threadIds))
+    })
+    return () => this.#metadataSubscriptions.delete(subscription)
+  }
+
+  subscribeActivity(listener: (event: WorkspaceActivityEvent) => void) {
+    this.#activityListeners.add(listener)
+    return () => this.#activityListeners.delete(listener)
+  }
+
+  sessionStatus(threadId: string): SessionStatus {
+    return this.#sessionStatuses.get(threadId) ?? "unknown"
+  }
+
+  subscribeSessionStatus(threadId: string, listener: () => void) {
+    const subscription: SessionMetadataSubscription = {
+      threadIds: new Set([threadId]),
+      listener: () => listener(),
+    }
+    this.#metadataSubscriptions.add(subscription)
+    return () => this.#metadataSubscriptions.delete(subscription)
+  }
+
+  acceptRunEvent(threadId: string, event: AosSessionSignalEvent) {
+    if (!this.#sessionOwners.has(threadId)) return
+    if (
+      (event.type === "RUN_STARTED" || event.type === "RUN_FINISHED") &&
+      event.threadId !== threadId
+    )
+      return
+    if (event.type === "ACTIVITY_SNAPSHOT" && event.activityType === "PLAN") {
+      const parsed = SessionTodosResponseSchema.safeParse(event.content)
+      if (parsed.success)
+        this.#setPlan(threadId, event.messageId, parsed.data.todos)
+      return
+    }
+    if (event.type === "ACTIVITY_DELTA" && event.activityType === "PLAN") {
+      const current = this.#plans.get(threadId)
+      if (!current || current.messageId !== event.messageId) return
+      let todos = current.todos
+      for (const operation of event.patch) {
+        if (
+          !operation ||
+          typeof operation !== "object" ||
+          !("op" in operation) ||
+          !("path" in operation) ||
+          operation.op !== "replace" ||
+          operation.path !== "/todos" ||
+          !("value" in operation)
+        )
+          return
+        const parsed = SessionTodosResponseSchema.safeParse({
+          todos: operation.value,
+        })
+        if (!parsed.success) return
+        todos = parsed.data.todos
+      }
+      this.#setPlan(threadId, event.messageId, todos)
+      return
+    }
+
+    const runId =
+      event.type === "RUN_STARTED" || event.type === "RUN_FINISHED"
+        ? event.runId
+        : this.#runIds.get(threadId)
+    const occurredAt = new Date(
+      typeof event.timestamp === "number" ? event.timestamp : Date.now()
+    ).toISOString()
+    const session = this.#sessions.get(threadId)
+    const agentId = session?.agentId ?? this.#sessionOwners.get(threadId)
+    if (!agentId) return
+    if (event.type === "RUN_STARTED") {
+      this.#runIds.set(threadId, event.runId)
+      this.#setSessionStatus(threadId, "running")
+      this.#emitActivity({
+        id: `${threadId}:${event.runId}:started`,
+        type: "run-started",
+        lifecycleId: event.runId,
+        agentId,
+        threadId,
+        occurredAt,
+      })
+    } else if (event.type === "RUN_FINISHED") {
+      const outcome = event.outcome
+      const waiting = outcome?.type === "interrupt"
+      this.#setSessionStatus(threadId, waiting ? "waiting-for-input" : "idle")
+      if (outcome?.type === "interrupt")
+        for (const interrupt of outcome.interrupts)
+          this.#emitActivity({
+            id: `${threadId}:${interrupt.id}:attention`,
+            type: "attention-requested",
+            attentionKind:
+              interrupt.reason === "confirmation" ? "permission" : "question",
+            requestId: interrupt.id,
+            agentId,
+            threadId,
+            occurredAt,
+          })
+      else if (runId)
+        this.#emitActivity({
+          id: `${threadId}:${runId}:finished`,
+          type: "run-finished",
+          lifecycleId: runId,
+          agentId,
+          threadId,
+          occurredAt,
+        })
+      this.#runIds.delete(threadId)
+    } else if (event.type === "RUN_ERROR") {
+      this.#setSessionStatus(threadId, "failed")
+      if (runId)
+        this.#emitActivity({
+          id: `${threadId}:${runId}:failed`,
+          type: "run-failed",
+          lifecycleId: runId,
+          agentId,
+          threadId,
+          occurredAt,
+        })
+      this.#runIds.delete(threadId)
+    }
+  }
+
+  /** Rehydrates immutable ownership from normalized Assistant UI thread metadata. */
+  adoptSessionOwnership(threadId: string, agentId: string) {
+    if (!threadId || !agentId)
+      throw new Error("Invalid Session ownership metadata")
+    const current = this.#sessionOwners.get(threadId)
+    if (current && current !== agentId)
+      throw new Error("Conflicting Session ownership metadata")
+    this.#sessionOwners.set(threadId, agentId)
+  }
+
   async createSession(
     agentId: string,
     options?: { title: string }
@@ -561,45 +863,98 @@ export class AosRemoteClient implements WorkspaceAdapter {
     if (result.session.agentId !== agentId)
       throw new Error("Invalid AOS proxy response")
     this.#sessionOwners.set(result.session.id, agentId)
+    this.#sessionStatuses.set(result.session.id, "idle")
     return { threadId: result.session.id }
   }
 
-  async loadHistory(threadId: string): Promise<SessionHistoryResponse> {
+  async loadHistory(threadId: string): Promise<AosLoadedHistory> {
     const agentId = this.#owner(threadId)
-    const messages: SessionHistoryResponse["messages"] = []
+    const messages: SessionMessage[] = []
     const seen = new Set<string>()
-    let offset = 0
-    let total = 0
-    do {
-      const page = await this.#read(
-        `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/history?limit=200&offset=${offset}`,
-        SessionHistoryResponseSchema,
-        undefined,
-        this.#eventScope(agentId, threadId)
-      )
-      if (
-        page.sessionId !== threadId ||
-        page.offset !== offset ||
-        page.nextOffset < offset ||
-        (page.nextOffset === offset && page.nextOffset < page.total)
-      )
-        throw new Error("Invalid AOS proxy response")
-      for (const message of page.messages) {
-        if (seen.has(message.id)) throw new Error("Invalid AOS proxy response")
-        seen.add(message.id)
-        messages.push(message)
+    const page = await this.#read(
+      `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/history?limit=200&offset=0`,
+      SessionHistoryResponseSchema,
+      undefined,
+      this.#eventScope(agentId, threadId)
+    )
+    if (
+      page.sessionId !== threadId ||
+      page.offset !== 0 ||
+      page.nextOffset < 0 ||
+      (page.nextOffset === 0 && page.nextOffset < page.total)
+    )
+      throw new Error("Invalid AOS proxy response")
+    for (const message of page.messages) {
+      if (message.role === "activity") {
+        this.#setPlan(threadId, message.id, message.content.todos)
+        continue
       }
-      total = page.total
-      offset = page.nextOffset
-    } while (offset < total)
+      if (seen.has(message.id)) throw new Error("Invalid AOS proxy response")
+      seen.add(message.id)
+      messages.push(message)
+    }
+    if (page.execution) this.#setSessionStatus(threadId, page.execution.status)
     return {
       sessionId: threadId,
       messages,
-      total,
-      limit: 200,
-      offset: 0,
-      nextOffset: offset,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+      nextOffset: page.nextOffset,
+      ...(page.execution ? { execution: page.execution } : {}),
     }
+  }
+
+  async resolveRewindSourceId(
+    threadId: string,
+    sourceId: string,
+    replacement: RewindReplacement
+  ) {
+    this.#owner(threadId)
+    const previous = this.#rewindReplacements.get(threadId)?.get(sourceId)
+    if (previous) await this.reconcileRewindReplacement(threadId, previous)
+    const durableSourceId =
+      this.#rewindReplacements.get(threadId)?.get(sourceId)?.durableMessageId ??
+      sourceId
+    this.#rememberRewindReplacement(threadId, replacement)
+    return durableSourceId
+  }
+
+  async reconcileRewindReplacement(
+    threadId: string,
+    replacement: RewindReplacement
+  ) {
+    const history = await this.loadHistory(threadId)
+    const replacements = this.#rewindReplacements.get(threadId)
+    const current = replacements?.get(replacement.localMessageId)
+    if (!current || current.text !== replacement.text) return history
+    const users = history.messages.filter((message) => message.role === "user")
+    const durable =
+      users.find((message) => message.id === current.durableMessageId) ??
+      users.findLast(
+        (message) =>
+          messageText(message.content).trim() === replacement.text.trim()
+      )
+    replacements!.set(
+      replacement.localMessageId,
+      durable
+        ? { ...replacement, durableMessageId: durable.id }
+        : { ...replacement }
+    )
+    return history
+  }
+
+  #rememberRewindReplacement(threadId: string, replacement: RewindReplacement) {
+    let replacements = this.#rewindReplacements.get(threadId)
+    if (!replacements) {
+      replacements = new Map()
+      this.#rewindReplacements.set(threadId, replacements)
+    }
+    replacements.delete(replacement.localMessageId)
+    replacements.set(replacement.localMessageId, replacement)
+    if (replacements.size <= MAX_REWIND_REPLACEMENTS_PER_SESSION) return
+    const oldest = replacements.keys().next().value
+    if (oldest !== undefined) replacements.delete(oldest)
   }
 
   renameSession(threadId: string, title: string) {
@@ -621,23 +976,48 @@ export class AosRemoteClient implements WorkspaceAdapter {
       { method: "DELETE" }
     )
     this.#sessions.delete(threadId)
+    this.#sessionStatuses.delete(threadId)
     this.#sessionOwners.delete(threadId)
+    this.#rewindReplacements.delete(threadId)
+    this.#capabilities.delete(threadId)
+    this.#plans.delete(threadId)
   }
 
-  stopRun(threadId: string) {
+  async stopRun(threadId: string) {
     const agentId = this.#owner(threadId)
-    return this.#read(
+    const result = await this.#read(
       `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/stop`,
       RunStopResponseSchema,
       { method: "POST" }
     )
+    this.#setSessionStatus(
+      threadId,
+      result.status === "stopping" ? "running" : "idle"
+    )
+    return result
   }
 
   workspaceCapabilities(threadId: string) {
-    return this.#sessionRead(
+    this.#owner(threadId)
+    const cached = this.#capabilities.get(threadId)
+    if (cached) return cached
+    const request = this.#sessionRead(
       threadId,
       "/workspace/capabilities",
-      SessionWorkspaceCapabilitiesResponseSchema
+      SessionWorkspaceCapabilitiesResponseSchema as unknown as Schema<AosWorkspaceCapabilities>
+    ).catch((error) => {
+      this.#capabilities.delete(threadId)
+      throw error
+    })
+    this.#capabilities.set(threadId, request)
+    return request
+  }
+
+  commands(threadId: string) {
+    return this.#sessionRead(
+      threadId,
+      "/commands",
+      SessionCommandsResponseSchema
     )
   }
 
@@ -646,14 +1026,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
       threadId,
       "/workspace/models",
       SessionModelsResponseSchema
-    )
-  }
-
-  commands(threadId: string) {
-    return this.#sessionRead(
-      threadId,
-      "/commands",
-      SessionCommandsResponseSchema
     )
   }
 
@@ -681,47 +1053,23 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
   }
 
-  async todos(threadId: string) {
-    return (
-      await this.#sessionRead(
-        threadId,
-        "/workspace/todos",
-        SessionTodosResponseSchema
-      )
-    ).todos
-  }
-
-  activity(threadId: string) {
-    return this.#sessionRead(
-      threadId,
-      "/workspace/activity",
-      SessionActivityResponseSchema
-    )
-  }
-
   subscribeTodos(
     threadId: string,
     listener: (todos: TodoItem[]) => void,
     onError?: (error: Error) => void
   ) {
+    void onError
     if (!this.#sessionOwners.has(threadId)) return () => {}
-    const { scope } = this.#sessionPath(threadId, "")
-    let active = true
-    const refresh = () => {
-      void this.todos(threadId).then(
-        (todos) => active && listener(todos),
-        (reason) =>
-          active &&
-          onError?.(
-            reason instanceof Error ? reason : new Error(String(reason))
-          )
-      )
-    }
-    refresh()
-    const unsubscribe = this.#reconciler?.subscribe?.(scope, refresh)
+    const listeners = this.#todoListeners.get(threadId) ?? new Set()
+    listeners.add(listener)
+    this.#todoListeners.set(threadId, listeners)
+    queueMicrotask(() => {
+      if (listeners.has(listener))
+        listener(structuredClone(this.#plans.get(threadId)?.todos ?? []))
+    })
     return () => {
-      active = false
-      unsubscribe?.()
+      listeners.delete(listener)
+      if (!listeners.size) this.#todoListeners.delete(threadId)
     }
   }
 
@@ -729,48 +1077,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     if (!this.#sessionOwners.has(threadId)) return () => {}
     const { scope } = this.#sessionPath(threadId, "")
     return this.#reconciler?.subscribe?.(scope, listener) ?? (() => {})
-  }
-
-  async respondToInteraction(
-    threadId: string,
-    runId: string,
-    requestId: string,
-    response: { kind: "question"; answers: string[][] } | { kind: "reject" }
-  ) {
-    if (
-      !runId.trim() ||
-      runId.length > 512 ||
-      !requestId.trim() ||
-      requestId.length > 512
-    )
-      throw new AosClientError("proxy-failure", "Invalid interaction request")
-    const result = await this.#sessionRead(
-      threadId,
-      "/interactions/respond",
-      InteractionResponseSchema,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ runId, requestId, response }),
-      }
-    )
-    if (result.status === "expired" || result.status === "already-resolved")
-      throw new AosClientError(
-        "proxy-failure",
-        "Interaction is no longer pending"
-      )
-  }
-
-  pendingInteraction(threadId: string, runId?: string) {
-    if (runId !== undefined && (!runId.trim() || runId.length > 512))
-      throw new AosClientError("proxy-failure", "Invalid interaction run")
-    return this.#sessionRead(
-      threadId,
-      `/interactions/pending${
-        runId === undefined ? "" : `?runId=${encodeURIComponent(runId)}`
-      }`,
-      SessionInteractionSnapshotResponseSchema
-    )
   }
 
   async *reconnectRun(
@@ -785,17 +1091,26 @@ export class AosRemoteClient implements WorkspaceAdapter {
       agentId,
       threadId,
       fetch: async (_url, init) => {
-        const headers = new Headers(init.headers)
-        headers.set("content-type", "application/json")
-        if (this.#authorization)
-          headers.set("authorization", this.#authorization)
-        return this.#fetch(url, {
-          ...init,
-          signal,
-          credentials: "same-origin",
-          headers,
-          body: JSON.stringify({ threadId, runId }),
-        })
+        const reconnect = async (after?: number) => {
+          const headers = new Headers(init.headers)
+          headers.set("content-type", "application/json")
+          if (this.#authorization)
+            headers.set("authorization", this.#authorization)
+          return friendlyErrorResponse(
+            await this.#fetch(url, {
+              ...init,
+              signal,
+              credentials: "same-origin",
+              headers,
+              body: JSON.stringify({
+                threadId,
+                runId,
+                ...(after === undefined ? {} : { after }),
+              }),
+            })
+          )
+        }
+        return reconnectingResponse(await reconnect(), reconnect, signal)
       },
     })
     const events: AGUIEvent[] = []
@@ -814,7 +1129,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
       })
       .subscribe({
         next: (event) => {
-          events.push(event as AGUIEvent)
+          const normalized = event as AGUIEvent
+          this.acceptRunEvent(threadId, normalized)
+          events.push(normalized)
           wake?.()
           wake = undefined
         },
@@ -891,17 +1208,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.#readBlob(path, { signal }, scope)
   }
 
-  audioAvailability(threadId: string) {
-    return this.#sessionRead(
-      threadId,
-      "/audio",
-      SessionAudioResponseSchema
-    ).then(({ speech, transcription }) => ({
-      transcription: transcription.status,
-      speech: speech.status,
-    }))
-  }
-
   async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
     if (!audio.size || !audio.type)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
@@ -974,8 +1280,13 @@ export class AosRemoteClient implements WorkspaceAdapter {
     } catch {
       throw new Error("AOS proxy request failed")
     }
-    if (!response.ok)
-      throw new Error(`AOS proxy request failed (${response.status})`)
+    if (!response.ok) {
+      const error = await normalizedError(response)
+      throw new AosClientError(
+        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        error?.description
+      )
+    }
   }
 
   #sessionPath(threadId: string, suffix: string) {
@@ -1020,10 +1331,13 @@ export class AosRemoteClient implements WorkspaceAdapter {
       } catch {
         throw new AosClientError("connection-interrupted")
       }
-      if (!response.ok)
+      if (!response.ok) {
+        const error = await normalizedError(response)
         throw new AosClientError(
-          response.status === 503 ? "provider-unavailable" : "proxy-failure"
+          response.status === 503 ? "provider-unavailable" : "proxy-failure",
+          error?.description
         )
+      }
       const contentType = response.headers.get("content-type")
       if (!contentType || /[\r\n]/u.test(contentType))
         throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
@@ -1039,8 +1353,56 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   #rememberSession(session: Session) {
-    this.#sessions.set(session.id, structuredClone(session))
+    const status = this.#sessionStatuses.get(session.id) ?? session.status
+    this.#sessions.set(session.id, structuredClone({ ...session, status }))
+    this.#sessionStatuses.set(session.id, status)
     this.#sessionOwners.set(session.id, session.agentId)
+    this.#notifySessionMetadata(session.id)
+  }
+
+  #metadataFor(threadIds: ReadonlySet<string>) {
+    return [...threadIds].flatMap((threadId) => {
+      const session = this.#sessions.get(threadId)
+      return session
+        ? [
+            {
+              threadId: session.id,
+              agentId: session.agentId,
+              updatedAt: session.updatedAt,
+              status: session.status,
+            },
+          ]
+        : []
+    })
+  }
+
+  #notifySessionMetadata(threadId: string) {
+    for (const subscription of this.#metadataSubscriptions)
+      if (subscription.threadIds.has(threadId))
+        subscription.listener(this.#metadataFor(subscription.threadIds))
+  }
+
+  #setSessionStatus(threadId: string, status: SessionStatus) {
+    this.#sessionStatuses.set(threadId, status)
+    const current = this.#sessions.get(threadId)
+    if (!current || current.status === status) return
+    this.#sessions.set(threadId, {
+      ...current,
+      status,
+    })
+    this.#notifySessionMetadata(threadId)
+  }
+
+  #setPlan(threadId: string, messageId: string, todos: TodoItem[]) {
+    const next = structuredClone(todos)
+    this.#plans.set(threadId, { messageId, todos: next })
+    for (const listener of this.#todoListeners.get(threadId) ?? [])
+      listener(structuredClone(next))
+  }
+
+  #emitActivity(event: WorkspaceActivityEvent) {
+    for (const listener of this.#activityListeners)
+      listener(structuredClone(event))
   }
 
   #owner(threadId: string) {

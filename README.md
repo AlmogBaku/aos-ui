@@ -34,7 +34,7 @@ AOS UI is not an agent harness. Run the AOS proxy against an authenticated harne
 
 ### Prerequisites
 
-- The AOS proxy and an authenticated Hermes server
+- An authenticated Hermes server and a server token stored in a private file
 - [Bun](https://bun.sh/)
 - A current desktop browser
 
@@ -50,15 +50,21 @@ For local proxy development (the browser supports only `aos` and explicit
 `fixture` mode):
 
 ```bash
+# Terminal 1: use a private copy of deploy/proxy-config.hermes.example.json
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+
+# Terminal 2
 AOS_UI_RUNTIME_MODE=aos \
 AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
 Open <http://localhost:3000>. The browser sends only normalized AOS requests;
-the proxy owns Hermes authentication and all native communication. See [Run
-AOS with Hermes](docs/runtimes/hermes.md) for private proxy configuration;
-Hermes is selected by the server-side proxy, not by a browser runtime mode.
+the proxy owns the Hermes server token and all native communication. Configure
+the private proxy copy to listen on `127.0.0.1:4100`, use
+`http://localhost:3000` as its public origin, and point its runtime at Hermes.
+See [Run AOS with Hermes](docs/runtimes/hermes.md) for the complete private
+configuration; Hermes is selected server-side, not by a browser runtime mode.
 
 ### Preview without a harness
 
@@ -83,7 +89,10 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 ```
 
 > [!IMPORTANT]
-> Compose binds to loopback by default. AOS does not provide TLS or public multi-user authentication. Expose it more widely only behind controls appropriate for a trusted private network.
+> Compose binds to loopback by default. The operator listener has no
+> application login: anyone who can reach it can operate every visible Agent
+> and Session. Expose it only on a trusted private network or behind your own
+> TLS and access-control layer.
 
 See [Deployment](docs/deployment.md) for native-runtime overlays, networking, health checks, and persistence.
 

@@ -11,6 +11,7 @@ const authorization: GuestAuthorization = {
   deploymentId: "aos-prod-il1",
   principalId: "guest_4Ez4k6W5",
   invitationId: "invite_Q9mZ2",
+  runtimeId: "hermes-primary",
   agentId: "agent_planner",
   sessionId: "session_launch",
   operation: "messages:read",
@@ -334,6 +335,100 @@ describe("guest outbound projection", () => {
         { ...authorization, operation: "errors:read" }
       )
     ).toBeUndefined()
+  })
+
+  it("retains only canonical friendly error descriptions", () => {
+    expect(
+      projectGuestOutbound(
+        {
+          transport: "error",
+          agentId: "agent_planner",
+          sessionId: "session_launch",
+          payload: {
+            type: "error",
+            code: "temporarily_unavailable",
+            description:
+              "The service is temporarily unavailable. Please try again.",
+            retryable: true,
+            message: "Bearer native-secret at /srv/hermes/private",
+          },
+        },
+        { ...authorization, operation: "errors:read" }
+      )
+    ).toMatchObject({
+      payload: {
+        code: "temporarily_unavailable",
+        description:
+          "The service is temporarily unavailable. Please try again.",
+      },
+    })
+
+    expect(
+      projectGuestOutbound(
+        {
+          transport: "error",
+          agentId: "agent_planner",
+          sessionId: "session_launch",
+          payload: {
+            type: "error",
+            code: "temporarily_unavailable",
+            description: "Retry via https://private.example/token",
+            retryable: true,
+          },
+        },
+        { ...authorization, operation: "errors:read" }
+      )
+    ).toBeUndefined()
+  })
+
+  it("projects public interrupt fields without approval internals", () => {
+    expect(
+      projectGuestOutbound(
+        {
+          transport: "ag-ui",
+          agentId: "agent_planner",
+          sessionId: "session_launch",
+          payload: {
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "approval-1",
+                reason: "approval",
+                message: "Allow deployment?",
+                responseSchema: {
+                  type: "string",
+                  enum: ["deny", "once"],
+                },
+                metadata: {
+                  "aos.kind": "approval",
+                  nativeRequestId: "live-private",
+                  providerPath: "/srv/hermes/private",
+                },
+              },
+            ],
+          },
+        },
+        authorization
+      )
+    ).toEqual({
+      transport: "ag-ui",
+      agentId: "agent_planner",
+      sessionId: "session_launch",
+      payload: {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: "approval-1",
+            reason: "approval",
+            message: "Allow deployment?",
+            responseSchema: {
+              type: "string",
+              enum: ["deny", "once"],
+            },
+          },
+        ],
+      },
+    })
   })
 
   it("rejects cross-Agent and cross-Session projection", () => {

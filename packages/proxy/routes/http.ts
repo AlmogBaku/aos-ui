@@ -10,11 +10,36 @@ export type ErrorCode =
   | "run_capacity_exceeded"
   | "runtime_authentication_required"
   | "temporarily_unavailable"
+  | "connection_interrupted"
+  | "uncertain_mutation"
   | "internal_error"
+
+const errorDescriptions: Record<ErrorCode, string> = {
+  unauthenticated: "Sign in to AOS to continue.",
+  forbidden: "You do not have permission to do that.",
+  invalid_request: "The request could not be processed.",
+  not_found: "The requested item was not found.",
+  revision_conflict: "This item changed. Refresh and try again.",
+  run_conflict: "A run is already active for this session.",
+  run_capacity_exceeded: "AOS is at capacity. Please try again shortly.",
+  runtime_authentication_required:
+    "The configured runtime credentials were rejected. Check the gateway configuration.",
+  temporarily_unavailable:
+    "The service is temporarily unavailable. Please try again.",
+  connection_interrupted:
+    "The connection was interrupted. AOS will reconcile before continuing.",
+  uncertain_mutation:
+    "The runtime may have accepted the request. Refresh to reconcile before trying again.",
+  internal_error: "Something went wrong. Please try again.",
+}
 
 export function errorResponse(code: ErrorCode, status: number) {
   return new Response(
-    JSON.stringify(ErrorResponseSchema.parse({ error: { code } })),
+    JSON.stringify(
+      ErrorResponseSchema.parse({
+        error: { code, description: errorDescriptions[code] },
+      })
+    ),
     {
       status,
       headers: { "content-type": "application/json; charset=UTF-8" },

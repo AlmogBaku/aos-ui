@@ -5,15 +5,18 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { OidcProvider } from "./auth/oidc"
-import { createConfiguredProxy } from "./composition"
-import type { HermesRpcTransport } from "./runtimes/hermes/adapter"
+import type { HermesRpcTransport } from "./adapters/hermes/adapter"
+import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
   HermesAuthenticationError,
   type HermesWebSocketRpcTransportOptions,
-} from "./runtimes/hermes/transport"
+} from "./adapters/hermes/transport"
+import { createConfiguredProxy } from "./composition"
+import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
+import type { RuntimeFactory } from "./adapters/create-runtime"
 
 const directories: string[] = []
+
 afterEach(async () => {
   await Promise.all(
     directories.splice(0).map((path) => rm(path, { recursive: true }))
@@ -28,319 +31,223 @@ async function secretFile(name: string, contents: string) {
   return path
 }
 
-async function secrets() {
-  const encodedKey = Buffer.alloc(32, 7).toString("base64url")
-  return {
-    clientSecretFile: await secretFile("oidc", "oidc-secret"),
-    principalHmacKeyFile: await secretFile("principal", encodedKey),
-    sessionKeyFile: await secretFile("session", encodedKey),
-    cursorKeyFile: await secretFile("cursor", encodedKey),
-  }
-}
-
-function config(files: Awaited<ReturnType<typeof secrets>>, auth: unknown) {
+async function configuration(withGuest = false) {
+  const key = Buffer.alloc(32, 7).toString("base64url")
+  const tokenFile = await secretFile("hermes-token", "hermes-secret")
+  const cursorKey = await secretFile("cursor-key", key)
+  const invitationKey = withGuest
+    ? await secretFile("invitation-key", key)
+    : undefined
   return {
     version: 1,
+    deploymentId: "test-deployment",
     listen: { host: "127.0.0.1", port: 4100 },
     publicOrigin: "https://aos.example.test",
-    operator: {
-      issuer: "https://identity.example.test",
-      clientId: "aos-ui",
-      clientSecretFile: files.clientSecretFile,
-      principalHmacKeyFile: files.principalHmacKeyFile,
-      redirectUri: "https://aos.example.test/api/aos/v1/auth/operator/callback",
-      allowedSubjects: ["operator@example.test"],
-      session: {
-        deploymentId: "test-deployment",
-        keys: [{ id: "current", secretFile: files.sessionKeyFile }],
-        ttlSeconds: 900,
-      },
+    runtime: {
+      id: "hermes-main",
+      kind: "hermes",
+      baseUrl: "http://127.0.0.1:9119",
+      tokenFile,
+      sessionIdleMs: 300_000,
     },
-    hermes: { baseUrl: "http://127.0.0.1:9119", auth },
     events: {
       activeKeyId: "current",
-      keys: [{ id: "current", secretFile: files.cursorKeyFile }],
+      keys: [{ id: "current", secretFile: cursorKey }],
     },
+    limits: {
+      activeExecutions: 256,
+      guestActiveExecutions: 32,
+      operatorEventPeers: 256,
+      guestEventPeers: 64,
+      guestEventPeersPerInvitation: 4,
+      subscriberEvents: 512,
+      subscriberBytes: 2_097_152,
+    },
+    ...(withGuest
+      ? {
+          guest: {
+            listen: { host: "127.0.0.1", port: 4101 },
+            publicOrigin: "https://guest.example.test",
+            invitations: {
+              keys: [{ id: "guest-current", secretFile: invitationKey! }],
+              ttlSeconds: 300,
+              clockSkewSeconds: 0,
+            },
+          },
+        }
+      : {}),
     shutdownGraceMs: 5_000,
   }
 }
 
-const provider: OidcProvider = {
-  buildAuthorizationUrl(parameters) {
-    const url = new URL("https://identity.example.test/authorize")
-    for (const [key, value] of Object.entries(parameters))
-      url.searchParams.set(key, value)
-    return url
-  },
-  authorizationCodeGrant: vi.fn(async () => ({
-    issuer: "https://identity.example.test",
-    subject: "operator@example.test",
-  })),
+function profile() {
+  return {
+    name: "researcher",
+    display_name: "Researcher",
+    ui_meta: { "hermes-bots": { hidden: false } },
+    ui_meta_revisions: { "hermes-bots": 1 },
+  }
+}
+
+function hermesRuntimeFactory(
+  transportFactory: NonNullable<
+    Parameters<typeof createHermesRuntime>[2]
+  >["transportFactory"]
+): RuntimeFactory {
+  return (config, limits) =>
+    createHermesRuntime(config, limits, { transportFactory })
 }
 
 describe("configured proxy composition", () => {
-  it("constructs an isolated guest listener and Hermes transport from separate secrets", async () => {
-    const files = await secrets()
-    const operatorTokenFile = await secretFile(
-      "hermes-operator",
-      "operator-token"
-    )
-    const guestTokenFile = await secretFile("hermes-guest", "guest-token")
-    const guestKeyFile = await secretFile(
-      "guest-invitation",
-      Buffer.alloc(32, 8).toString("base64url")
-    )
-    const transportFactory = vi.fn(
-      (options: HermesWebSocketRpcTransportOptions) =>
-        ({
-          request: vi.fn(),
-          credentials: options.credentials,
-        }) as HermesRpcTransport & { credentials: typeof options.credentials }
-    )
-    const input = {
-      ...config(files, { mode: "static-token", tokenFile: operatorTokenFile }),
-      guest: {
-        listen: { host: "127.0.0.1", port: 4101 },
-        publicOrigin: "https://guest.example.test",
-        hermes: {
-          baseUrl: "http://127.0.0.1:9120",
-          tokenFile: guestTokenFile,
-        },
-        invitations: {
-          keys: [{ id: "guest-current", secretFile: guestKeyFile }],
-          ttlSeconds: 300,
-          clockSkewSeconds: 0,
-        },
-      },
-    }
+  it("uses an injected provider-neutral runtime factory without reading adapter secrets", async () => {
+    const input = await configuration(true)
+    input.runtime.tokenFile = "/missing/provider-private-secret"
+    const listAgents = vi.fn(async () => ({
+      revision: "test-catalog-1",
+      agents: [],
+    }))
+    const runtime = {
+      runtimeInfo: vi.fn(async () => ({
+        id: "test-runtime",
+        kind: "test",
+        status: "ready",
+        capabilities: {},
+      })),
+      listAgents,
+    } as unknown as ServerRuntime
+    const runtimeInstance = {
+      id: "test-runtime",
+      runtime,
+      sessions: {},
+      close: vi.fn(async () => undefined),
+    } as unknown as RuntimeInstance
+    const runtimeFactory = vi.fn(async () => runtimeInstance)
 
     const configured = await createConfiguredProxy(input, {
-      oidcProvider: provider,
-      transportFactory,
+      runtimeFactory,
       logger: { info: vi.fn(), error: vi.fn() },
-      clock: () => 1_700_000_000_000,
     })
 
-    expect(transportFactory).toHaveBeenCalledTimes(2)
-    expect(transportFactory.mock.calls[1]?.[0]).toMatchObject({
-      baseUrl: "http://127.0.0.1:9120",
-    })
-    await expect(
-      transportFactory.mock.results[1]?.value.credentials()
-    ).resolves.toEqual({ "X-Hermes-Session-Token": "guest-token" })
-    expect(configured.guest?.hermes).not.toBe(configured.hermes)
-    expect(
-      (
-        await configured.guest!.service.app.request(
-          "https://guest.example.test/api/aos/v1/runtime"
-        )
-      ).status
-    ).toBe(404)
-
-    const session = await configured.operatorSessions.issue({
-      principalId: "aos_principal_test",
-    })
-    const invitation = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/guest-invitations",
-      {
-        method: "POST",
-        headers: {
-          cookie: session.cookie,
-          origin: "https://aos.example.test",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          principalId: "guest_recipient",
-          invitationId: "invite_public",
-          agentId: "researcher",
-          sessionId: "hermes:researcher:stored",
-          operations: ["messages:create", "messages:read"],
-          capabilities: ["message-text"],
-        }),
-      }
+    expect(runtimeFactory).toHaveBeenCalledOnce()
+    expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits)
+    expect(configured.runtimeInstance).toBe(runtimeInstance)
+    expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/agents"
     )
-    expect(invitation.status).toBe(201)
-    expect(await invitation.json()).toMatchObject({
-      token: expect.any(String),
-      grant: { agentId: "researcher", sessionId: "hermes:researcher:stored" },
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      revision: "test-catalog-1",
+      agents: [],
     })
+    expect(listAgents).toHaveBeenCalledOnce()
   })
 
-  it("loads sealed-session keys and completes real OIDC PKCE before allowing operator requests", async () => {
-    const files = await secrets()
-    const tokenFile = await secretFile("hermes", "hermes-secret")
-    const transportFactory = vi.fn(
-      (options: {
-        credentials: () => Promise<Readonly<Record<string, string>>>
-      }) =>
-        ({
-          request: vi.fn(async () => ({ profiles: [] })),
-          credentials: options.credentials,
-        }) as HermesRpcTransport & { credentials: typeof options.credentials }
+  it("starts a trusted operator app without OIDC or operator cookies", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "profiles.list" ? { profiles: [] } : undefined
     )
-
-    const configured = await createConfiguredProxy(
-      config(files, { mode: "static-token", tokenFile }),
-      {
-        oidcProvider: provider,
-        transportFactory,
-        logger: { info: vi.fn(), error: vi.fn() },
-        clock: () => 1_000,
-      }
-    )
-
-    const start = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/auth/operator/start?return=%2Fresearcher"
-    )
-    expect(start.status).toBe(302)
-    expect(start.headers.get("location")).toContain(
-      "https://identity.example.test/authorize"
-    )
-    const flowCookie = start.headers.get("set-cookie")!
-    const callback = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/auth/operator/callback?code=code&state=state",
-      { headers: { cookie: flowCookie } }
-    )
-    expect(callback.status).toBe(302)
-    expect(callback.headers.get("location")).toBe("/researcher")
-    const sessionCookie = (
-      callback.headers as Headers & { getSetCookie(): string[] }
-    )
-      .getSetCookie()
-      .find((value) => value.startsWith("__Host-aos-session="))!
-    const operator = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/auth/operator",
-      { headers: { cookie: sessionCookie } }
-    )
-    expect(await operator.json()).toEqual({
-      status: "authenticated",
-      operator: {
-        id: expect.stringMatching(/^aos_principal_[A-Za-z0-9_-]+$/u),
-      },
-    })
-
-    const transport = transportFactory.mock.results[0].value
-    await expect(transport.credentials()).resolves.toEqual({
-      "X-Hermes-Session-Token": "hermes-secret",
-    })
-  })
-
-  it("probes static-token credentials and reports rejected tokens as runtime authentication required", async () => {
-    const files = await secrets()
-    const tokenFile = await secretFile("hermes", "expired-token")
-    const request = vi.fn(async () => {
-      throw new HermesAuthenticationError()
-    })
-    const configured = await createConfiguredProxy(
-      config(files, { mode: "static-token", tokenFile }),
-      {
-        oidcProvider: provider,
-        transportFactory: vi.fn(() => ({ request })),
-        logger: { info: vi.fn(), error: vi.fn() },
-      }
-    )
-    const session = await configured.operatorSessions.issue({
-      principalId: "aos_principal_test",
+    const configured = await createConfiguredProxy(await configuration(), {
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+      logger: { info: vi.fn(), error: vi.fn() },
     })
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/auth/runtime",
-      { headers: { cookie: session.cookie } }
+      "https://aos.example.test/api/aos/v1/agents"
     )
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({
-      status: "authentication-required",
-    })
     expect(request).toHaveBeenCalledWith("profiles.list", {
       include_sessions: false,
     })
   })
 
-  it("constructs the Hermes browser broker and reports normalized runtime auth", async () => {
-    const files = await secrets()
-    const state = vi.fn(() => ({ status: "authentication-required" as const }))
-    const credentials = vi.fn(async () => ({ authorization: "Bearer native" }))
-    const browserAuthBrokerFactory = vi.fn(() => ({
-      authState: state,
-      begin: vi.fn(),
-      complete: vi.fn(),
-      credentials,
-      invalidate: vi.fn(),
-    }))
+  it("loads one server token and shares one runtime and transport across both lanes", async () => {
+    const transportClose = vi.fn(async () => undefined)
     const transportFactory = vi.fn(
       (options: HermesWebSocketRpcTransportOptions) =>
         ({
-          request: vi.fn(async () => ({ profiles: [] })),
+          request: vi.fn(async (method: string) =>
+            method === "profiles.list" ? { profiles: [profile()] } : undefined
+          ),
+          close: transportClose,
           credentials: options.credentials,
         }) as HermesRpcTransport & { credentials: typeof options.credentials }
     )
-    const configured = await createConfiguredProxy(
-      config(files, {
-        mode: "browser-broker",
-        callbackUrl:
-          "https://aos.example.test/api/aos/v1/auth/runtime/upstream/auth/callback",
-        allowedIdentityOrigins: ["https://identity.example.test"],
-        provider: "example",
-      }),
+    const configured = await createConfiguredProxy(await configuration(true), {
+      runtimeFactory: hermesRuntimeFactory(transportFactory),
+      logger: { info: vi.fn(), error: vi.fn() },
+      clock: () => 1_700_000_000_000,
+    })
+
+    expect(transportFactory).toHaveBeenCalledOnce()
+    expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
+    await expect(
+      transportFactory.mock.results[0]?.value.credentials()
+    ).resolves.toEqual({ "X-Hermes-Session-Token": "hermes-secret" })
+
+    await configured.runtimeInstance.close()
+    await configured.runtimeInstance.close()
+    expect(transportClose).toHaveBeenCalledOnce()
+  })
+
+  it("validates an invitation runtime before accessing Hermes", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "profiles.list" ? { profiles: [profile()] } : undefined
+    )
+    const configured = await createConfiguredProxy(await configuration(true), {
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+      logger: { info: vi.fn(), error: vi.fn() },
+      clock: () => 1_700_000_000_000,
+    })
+    const body = {
+      principalId: "guest_recipient",
+      invitationId: "invite_public",
+      runtimeId: "another-runtime",
+      agentId: "researcher",
+      operations: ["messages:read"],
+      capabilities: ["message-text"],
+    }
+
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/guest-invitations",
       {
-        oidcProvider: provider,
-        browserAuthBrokerFactory,
-        transportFactory,
-        logger: { info: vi.fn(), error: vi.fn() },
+        method: "POST",
+        headers: {
+          origin: "https://aos.example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
       }
     )
 
-    expect(browserAuthBrokerFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://127.0.0.1:9119",
-        publicOrigin: "https://aos.example.test",
-        callbackUrl:
-          "https://aos.example.test/api/aos/v1/auth/runtime/upstream/auth/callback",
-        allowedIdentityOrigins: ["https://identity.example.test"],
-        provider: "example",
-      })
-    )
-    const issued = await configured.operatorSessions.issue({
-      principalId: "aos_principal_test",
-    })
-    const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/auth/runtime",
-      { headers: { cookie: issued.cookie } }
-    )
-    expect(await response.json()).toEqual({
-      status: "authentication-required",
-    })
-    expect(state).toHaveBeenCalledWith({
-      principalId: "aos_principal_test",
-      lane: "operator",
+    expect(response.status).toBe(404)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {
+    const configured = await createConfiguredProxy(await configuration(), {
+      runtimeFactory: hermesRuntimeFactory(() => ({
+        request: vi.fn(async () => {
+          throw new HermesAuthenticationError()
+        }),
+      })),
+      logger: { info: vi.fn(), error: vi.fn() },
     })
 
-    const ready = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/readyz"
-    )
-    expect(ready.status).toBe(200)
-    expect(await ready.json()).toMatchObject({ status: "ready" })
-
-    state.mockReturnValue({ status: "authenticated" })
-    const agents = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/agents",
-      { headers: { cookie: issued.cookie } }
-    )
-    expect(agents.status).toBe(200)
-    expect(transportFactory).toHaveBeenCalledTimes(1)
-    const transport = transportFactory.mock.results[0].value
-    await expect(transport.credentials()).resolves.toEqual({
-      authorization: "Bearer native",
-    })
-    expect(credentials).toHaveBeenCalledWith({
-      principalId: "aos_principal_test",
-      lane: "operator",
-    })
-
-    await configured.app.request("https://aos.example.test/api/aos/v1/agents", {
-      headers: { cookie: issued.cookie },
-    })
-    expect(transportFactory).toHaveBeenCalledTimes(2)
+    expect(
+      (
+        await configured.app.request(
+          "https://aos.example.test/api/aos/v1/healthz"
+        )
+      ).status
+    ).toBe(200)
+    expect(
+      (
+        await configured.app.request(
+          "https://aos.example.test/api/aos/v1/readyz"
+        )
+      ).status
+    ).toBe(503)
   })
 })

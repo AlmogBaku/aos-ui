@@ -11,7 +11,7 @@ import type {
   ActivityView,
 } from "./use-activity-coordinator"
 import { useId, useState } from "react"
-import { Bell, BellDot, CircleAlert, X } from "lucide-react"
+import { Bell, BellDot, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   needsAttention,
@@ -77,6 +77,16 @@ export function activityLabel(record: ActivityRecord, dictionary: Dictionary) {
   }
 }
 
+export function AttentionDot({ label }: { label: string }) {
+  return (
+    <span
+      className={styles.attentionDot}
+      title={label}
+      aria-hidden="true"
+    />
+  )
+}
+
 export function ActivityMarker({
   unread,
   attention,
@@ -90,7 +100,7 @@ export function ActivityMarker({
   return (
     <span className={styles.marker}>
       {attention ? (
-        <CircleAlert aria-hidden="true" />
+        <AttentionDot label={dictionary.activity.needsAttention} />
       ) : (
         <BellDot aria-hidden="true" />
       )}

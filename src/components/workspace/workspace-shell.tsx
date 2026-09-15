@@ -496,8 +496,8 @@ function AgentsPanel({
               />
               <span className={styles.agentText}>
                 <span className={cn(styles.agentName, "text-sm leading-5")}>
-                  <bdi>{agent.name}</bdi>
                   {indicator.marker}
+                  <bdi>{agent.name}</bdi>
                 </span>
                 {agent.description ? (
                   <bdi
@@ -507,7 +507,9 @@ function AgentsPanel({
                   </bdi>
                 ) : null}
               </span>
-              {agent.status && agent.status !== "idle" ? (
+              {agent.status &&
+              agent.status !== "idle" &&
+              !indicator.attention ? (
                 <span
                   className={styles.statusDot}
                   data-status={agent.status}
@@ -727,10 +729,10 @@ function SessionTabs({
                     onBlur={() => setFocusedThreadId(null)}
                   >
                     <span className={styles.tabLabel}>
+                      {indicator.marker}
                       <bdi>
                         <SessionThreadListTitle fallback={session.title} />
                       </bdi>
-                      {indicator.marker}
                     </span>
                   </SessionThreadListTrigger>
                 </SessionThreadListItem>
@@ -1754,6 +1756,7 @@ function navigationActivity(
     .filter(Boolean)
     .join(", ")
   return {
+    attention,
     label,
     marker: (
       <ActivityMarker

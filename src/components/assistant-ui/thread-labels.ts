@@ -20,6 +20,8 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     more: "More actions",
     exportMarkdown: "Export as Markdown",
     edit: "Edit message",
+    pendingInteractionAction:
+      "Answer the pending question before changing this conversation",
     cancel: "Cancel",
     update: "Update",
     historySearch: "Search conversation history",
@@ -76,6 +78,7 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     more: "פעולות נוספות",
     exportMarkdown: "ייצוא כ-Markdown",
     edit: "עריכת ההודעה",
+    pendingInteractionAction: "יש לענות על השאלה הממתינה לפני שינוי השיחה",
     cancel: "ביטול",
     update: "עדכון",
     historySearch: "חיפוש בהיסטוריית השיחה",

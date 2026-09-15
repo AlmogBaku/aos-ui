@@ -456,6 +456,64 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
   })
 
+  it("labels attention indicators in Agent, history, and tab navigation", () => {
+    renderShell({
+      agents: [
+        { ...agents[0]!, status: "attention" },
+        agents[1]!,
+      ],
+      activity: {
+        items: [
+          {
+            id: "question",
+            type: "attention-requested",
+            attentionKind: "question",
+            requestId: "question-1",
+            agentId: "agent-aster",
+            threadId: "thread-scan",
+            occurredAt: "2026-09-05T12:00:00Z",
+            read: true,
+            resolved: false,
+            browserDeliveredAt: null,
+            available: true,
+          },
+        ],
+        notice: null,
+        error: false,
+        supported: true,
+        openActivity: async () => true,
+        markAllRead: () => {},
+        dismissNotice: () => {},
+      },
+    })
+
+    const agentButton = screen.getByRole("button", {
+      name: /^Aster, Status: Needs attention/,
+    })
+    expect(within(agentButton).getAllByTitle("Needs attention")).toHaveLength(
+      1
+    )
+
+    const inspector = screen.getByRole("complementary", {
+      name: "Agent details",
+    })
+    const sessionButton = within(inspector).getByRole("button", {
+      name: /Open session: Competitive scan/,
+    })
+    expect(within(sessionButton).getByTitle("Needs attention")).toBeVisible()
+    expect(
+      within(sessionButton).queryByTitle("Waiting for input")
+    ).not.toBeInTheDocument()
+
+    expect(
+      within(
+        screen.getByRole("tab", {
+          name: /Competitive scan.*Needs attention/,
+        })
+      ).getByTitle("Needs attention")
+    ).toBeVisible()
+  })
+
   it("localizes the Activity drawer in Hebrew and inherits RTL", async () => {
     const user = userEvent.setup()
     renderShell({ locale: "he", dictionary: he })

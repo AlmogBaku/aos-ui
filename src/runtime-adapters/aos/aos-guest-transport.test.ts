@@ -66,17 +66,43 @@ describe("AOS guest transport configuration", () => {
     expect(historyHeaders.get("authorization")).toBe("Bearer invitation.jwt")
   })
 
-  it("streams runs through the configured guest path with the same bearer", async () => {
+  it("loads commands through the guest lane with the invitation bearer", async () => {
     const fetcher = vi.fn<typeof fetch>(async () =>
-      new Response(
-        `data: ${JSON.stringify({
-          type: "RUN_FINISHED",
-          threadId: scope.sessionId,
-          runId: "run-1",
-          outcome: { type: "success" },
-        })}\n\n`,
-        { headers: { "content-type": "text/event-stream" } }
-      )
+      Response.json({
+        commands: [{ name: "help", description: "Show help" }],
+      })
+    )
+    const client = new AosRemoteClient({
+      fetcher,
+      basePath: "/api/guest/v1",
+      authorization: "Bearer invitation.jwt",
+      scope,
+    })
+
+    await expect(client.commands(scope.sessionId)).resolves.toEqual({
+      commands: [{ name: "help", description: "Show help" }],
+    })
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/guest/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored-session/commands",
+      expect.objectContaining({ credentials: "same-origin" })
+    )
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers)
+    expect(headers.get("authorization")).toBe("Bearer invitation.jwt")
+  })
+
+  it("streams runs through the configured guest path with the same bearer", async () => {
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "RUN_FINISHED",
+            threadId: scope.sessionId,
+            runId: "run-1",
+            outcome: { type: "success" },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } }
+        )
     )
     const agent = createAosRunAgent({
       agentId: scope.agentId,

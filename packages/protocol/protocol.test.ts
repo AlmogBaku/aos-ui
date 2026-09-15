@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import {
   AgentCatalogResponseSchema,
   ErrorResponseSchema,
-  OperatorAuthStateSchema,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunStopResponseSchema,
@@ -27,6 +26,19 @@ describe("AOS v1 normalized protocol", () => {
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
     expect(
       SessionWorkspaceCapabilitiesResponseSchema.parse({
+        agent: {
+          transport: { streaming: true, resumable: true },
+          reasoning: { supported: true, streaming: true },
+          multimodal: {
+            input: { image: true, audio: false, file: true },
+            output: { audio: false },
+          },
+          humanInTheLoop: {
+            supported: true,
+            approvals: true,
+            interrupts: true,
+          },
+        },
         workspace: {
           models: {
             status: "available",
@@ -205,24 +217,6 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
-  it("accepts only the public operator authentication states", () => {
-    expect(
-      OperatorAuthStateSchema.parse({
-        status: "authenticated",
-        operator: { id: "operator@example.test", displayName: "Operator" },
-      })
-    ).toEqual({
-      status: "authenticated",
-      operator: { id: "operator@example.test", displayName: "Operator" },
-    })
-    expect(() =>
-      OperatorAuthStateSchema.parse({
-        status: "authenticated",
-        operator: { id: "operator@example.test", accessToken: "secret" },
-      })
-    ).toThrow()
-  })
-
   it("keeps runtime authentication provider-neutral and server-only", () => {
     expect(
       RuntimeAuthStateSchema.parse({
@@ -288,18 +282,44 @@ describe("AOS v1 normalized protocol", () => {
 
   it("exposes a provider-neutral run admission conflict", () => {
     expect(
-      ErrorResponseSchema.parse({ error: { code: "run_conflict" } })
-    ).toEqual({ error: { code: "run_conflict" } })
+      ErrorResponseSchema.parse({
+        error: {
+          code: "run_conflict",
+          description: "A run is already active for this session.",
+        },
+      })
+    ).toEqual({
+      error: {
+        code: "run_conflict",
+        description: "A run is already active for this session.",
+      },
+    })
     expect(
       ErrorResponseSchema.parse({
-        error: { code: "run_capacity_exceeded" },
+        error: {
+          code: "run_capacity_exceeded",
+          description: "AOS is at capacity. Please try again shortly.",
+        },
       })
-    ).toEqual({ error: { code: "run_capacity_exceeded" } })
+    ).toEqual({
+      error: {
+        code: "run_capacity_exceeded",
+        description: "AOS is at capacity. Please try again shortly.",
+      },
+    })
     expect(
       ErrorResponseSchema.parse({
-        error: { code: "runtime_authentication_required" },
+        error: {
+          code: "runtime_authentication_required",
+          description: "Connect the configured runtime to continue.",
+        },
       })
-    ).toEqual({ error: { code: "runtime_authentication_required" } })
+    ).toEqual({
+      error: {
+        code: "runtime_authentication_required",
+        description: "Connect the configured runtime to continue.",
+      },
+    })
   })
 
   it("validates normalized Agent entries and rejects native profile metadata", () => {

@@ -20,6 +20,13 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type {
+  AgentSubscriber,
+  AgentSubscriberParams,
+  HttpAgent,
+} from "@ag-ui/client"
+import { EventType } from "@ag-ui/core"
+import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
 
 import {
   createComposerHistorySelector,
@@ -220,11 +227,12 @@ describe("assistant tool timeline", () => {
 })
 
 describe("thread scroll ownership", () => {
-  it("leaves automatic scrolling to the reading-position controller", () => {
+  it("follows new turns at the bottom through the reading-position controller", () => {
     expect(THREAD_VIEWPORT_SCROLL_BEHAVIOR).toEqual({
       autoScroll: false,
       scrollToBottomOnInitialize: false,
       scrollToBottomOnThreadSwitch: false,
+      turnAnchor: "bottom",
     })
   })
 })
@@ -355,6 +363,7 @@ function LocalThread({
   composerFeatures,
   enableMessageQueue = false,
   attachmentAdapter,
+  messageRewind,
 }: {
   labels?: Partial<ThreadLabels>
   direction?: "ltr" | "rtl"
@@ -377,6 +386,13 @@ function LocalThread({
   }
   enableMessageQueue?: boolean
   attachmentAdapter?: AttachmentAdapter
+  messageRewind?:
+    | false
+    | {
+        runConfig(sourceUserId: string): {
+          custom: Record<string, unknown>
+        }
+      }
 }) {
   const runtime = useLocalRuntime(model, {
     initialMessages,
@@ -396,6 +412,7 @@ function LocalThread({
         autoFocus={false}
         composerFeatures={composerFeatures}
         components={{ ToolFallback: toolFallback, Composer: composer }}
+        messageRewind={messageRewind}
       />
     </AssistantRuntimeProvider>
   )
@@ -612,6 +629,28 @@ describe("Thread accessibility", () => {
     expect(screen.getByText("The reference is ready.")).toBeVisible()
   })
 
+  it("does not render a completed assistant turn with no content", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-user",
+            role: "user",
+            content: [{ type: "text", text: "Continue?" }],
+          },
+          {
+            id: "discard-resume",
+            role: "assistant",
+            content: [],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByText("Continue?")).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Copy" })).toBeNull()
+  })
+
   it("allows a provider interaction to replace the normal composer", async () => {
     render(
       <LocalThread
@@ -752,6 +791,111 @@ describe("Thread accessibility", () => {
 
     await user.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("The refreshed answer.")).toBeInTheDocument()
+  })
+
+  it("carries the source user turn in the retry run config", async () => {
+    const user = userEvent.setup()
+    const runConfig = vi.fn((sourceUserId: string) => ({
+      custom: { "aos.rewindSourceId": sourceUserId },
+    }))
+    const run = vi.fn(async () => ({ content: [] }))
+
+    render(<LocalThread messageRewind={{ runConfig }} model={{ run }} />)
+
+    await user.click(await screen.findByRole("button", { name: "Refresh" }))
+
+    expect(runConfig).toHaveBeenCalledOnce()
+    expect(runConfig).toHaveBeenCalledWith("message-user")
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runConfig: {
+          custom: { "aos.rewindSourceId": "message-user" },
+        },
+      })
+    )
+  })
+
+  it("disables run-changing message actions while an AG-UI question is pending", async () => {
+    const user = userEvent.setup()
+    const runAgent = vi.fn(
+      async (_input: unknown, subscriber: AgentSubscriber) => {
+        const subscriberParams = {} as AgentSubscriberParams
+        const interrupts = [
+          {
+            id: "question-1",
+            reason: "input_required",
+            message: "Choose one",
+          },
+        ]
+        subscriber.onTextMessageStartEvent?.({
+          ...subscriberParams,
+          event: {
+            type: EventType.TEXT_MESSAGE_START,
+            messageId: "assistant-question",
+            role: "assistant",
+          },
+        })
+        subscriber.onTextMessageContentEvent?.({
+          ...subscriberParams,
+          textMessageBuffer: "I need your answer.",
+          event: {
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId: "assistant-question",
+            delta: "I need your answer.",
+          },
+        })
+        subscriber.onTextMessageEndEvent?.({
+          ...subscriberParams,
+          textMessageBuffer: "I need your answer.",
+          event: {
+            type: EventType.TEXT_MESSAGE_END,
+            messageId: "assistant-question",
+          },
+        })
+        subscriber.onRunFinishedEvent?.({
+          ...subscriberParams,
+          outcome: "interrupt",
+          interrupts,
+          event: {
+            type: EventType.RUN_FINISHED,
+            threadId: "thread-question",
+            runId: "question-run",
+            outcome: {
+              type: "interrupt",
+              interrupts,
+            },
+          },
+        })
+        subscriber.onRunFinalized?.(subscriberParams)
+      }
+    )
+    const agent = {
+      runAgent,
+      abortRun: vi.fn(),
+    } as unknown as HttpAgent
+    function PendingQuestionThread() {
+      const runtime = useAgUiRuntime({ agent })
+      return (
+        <AssistantRuntimeProvider runtime={runtime}>
+          <Thread autoFocus={false} />
+        </AssistantRuntimeProvider>
+      )
+    }
+
+    render(<PendingQuestionThread />)
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message input" }),
+      "Start"
+    )
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    await screen.findByText("I need your answer.")
+
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+    expect(
+      screen.getByRole("button", {
+        name: "Answer the pending question before changing this conversation",
+      })
+    ).toBeDisabled()
   })
 
   it("cancels a streaming response while preserving its partial content", async () => {

@@ -184,6 +184,7 @@ function GuestConversationShell({
           composerFeatures={composerFeatures}
           autoFocus={false}
           labels={threadLabels[locale]}
+          messageRewind={false}
           components={{ ToolFallback: AosToolPresentation }}
         />
       </ToolUiLocaleProvider>

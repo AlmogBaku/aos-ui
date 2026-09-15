@@ -19,6 +19,7 @@ import {
 } from "./session-thread-list-item"
 import type { WorkspaceSession } from "./workspace-shell"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
+import { AttentionDot } from "./activity"
 import styles from "./agent-session-history.module.css"
 
 export type AgentSessionHistoryCopy = {
@@ -92,7 +93,7 @@ function ActivityMarker({
   return (
     <span className={styles.activity} aria-hidden="true">
       {activity.needsAttention ? (
-        <span className={styles.attentionDot} title={copy.needsAttention} />
+        <AttentionDot label={copy.needsAttention} />
       ) : null}
       {activity.unreadCount > 0 ? (
         <span className={styles.unreadCount}>{activity.unreadCount}</span>
@@ -201,7 +202,8 @@ function SessionSection({
               >
                 <span className={cn(styles.rowText, "gap-0.5")}>
                   <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
-                    {session.status !== "idle" ? (
+                    {session.status !== "idle" &&
+                    !activity?.needsAttention ? (
                       <span
                         className={styles.statusDot}
                         data-status={session.status}
@@ -209,10 +211,10 @@ function SessionSection({
                         aria-hidden="true"
                       />
                     ) : null}
+                    <ActivityMarker activity={activity} copy={copy} />
                     <bdi className={cn(styles.rowTitle, "text-sm")}>
                       <SessionThreadListTitle fallback={session.title} />
                     </bdi>
-                    <ActivityMarker activity={activity} copy={copy} />
                   </span>
                   {Number.isFinite(parsedDate.getTime()) ? (
                     <time className="text-xs" dateTime={session.updatedAt}>
