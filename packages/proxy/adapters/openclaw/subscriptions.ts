@@ -79,11 +79,18 @@ function approvalReplayMatchesRequest(
     return false
   const requested = requestedKey as string
   const agentId = expectedAgentId as string
-  if (requested === "global" || acknowledgementKey === "global")
+  const mainAlias =
+    requested === "main" || requested === `agent:${agentId}:main`
+  if (acknowledgementKey === "global")
     return (
-      requested === "global" &&
-      acknowledgementKey === "global" &&
+      (requested === "global" || mainAlias) &&
       replay.sessionKey === `agent:${agentId}:global`
+    )
+  if (requested === "global") return false
+  if (mainAlias)
+    return (
+      scopedSessionAgentId(acknowledgementKey) === agentId &&
+      replay.sessionKey === acknowledgementKey
     )
   return (
     acknowledgementKey === requested &&

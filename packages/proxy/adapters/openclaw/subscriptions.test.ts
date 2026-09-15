@@ -439,10 +439,58 @@ describe("OpenClaw Session subscriptions", () => {
 
     await expect(
       subscriptions.acquire(
-        { agentId: "research", sessionKey: "agent:research:main" },
+        { agentId: "research", sessionKey: "agent:research:child" },
         vi.fn()
       )
     ).rejects.toThrow("approval replay")
+  })
+
+  it("accepts the Gateway canonical key for a bare main alias", async () => {
+    const replay = {
+      sessionKey: "agent:research:work",
+      updatedAtMs: 1,
+      approvals: [],
+      truncated: false,
+    }
+    const subscriptions = new OpenClawSessionSubscriptions({
+      request: vi.fn(async () => ({
+        key: "agent:research:work",
+        approvalReplay: replay,
+      })),
+    })
+
+    const lease = await subscriptions.acquire(
+      { agentId: "research", sessionKey: "main" },
+      vi.fn()
+    )
+
+    expect(lease.key).toBe("agent:research:work")
+    expect(lease.approvalReplayKey).toBe("agent:research:work")
+    expect(lease.approvalReplay()?.replay).toEqual(replay)
+  })
+
+  it("accepts the Gateway global key for an Agent-scoped main alias", async () => {
+    const replay = {
+      sessionKey: "agent:research:global",
+      updatedAtMs: 1,
+      approvals: [],
+      truncated: false,
+    }
+    const subscriptions = new OpenClawSessionSubscriptions({
+      request: vi.fn(async () => ({
+        key: "global",
+        approvalReplay: replay,
+      })),
+    })
+
+    const lease = await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:main" },
+      vi.fn()
+    )
+
+    expect(lease.key).toBe("global")
+    expect(lease.approvalReplayKey).toBe("agent:research:global")
+    expect(lease.approvalReplay()?.replay).toEqual(replay)
   })
 })
 
