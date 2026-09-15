@@ -40,6 +40,11 @@ describe("AOS v1 normalized protocol", () => {
           },
         },
         workspace: {
+          slashCommands: {
+            status: "available",
+            scope: "attached-session",
+            commands: [{ name: "help", description: "Show help" }],
+          },
           models: {
             status: "available",
             scope: "attached-session",

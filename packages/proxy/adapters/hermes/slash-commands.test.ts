@@ -30,17 +30,35 @@ it("projects native slash catalog names in order without duplicate or malformed 
     request,
     http: async () => ({ id: "stored", profile: "writer", title: "Work" }),
   })
-  await expect(adapter.slashCommands("writer", "stored")).resolves.toEqual({
-    commands: [
-      { name: "help", description: "Help" },
-      { name: "skill", description: "Skill" },
-    ],
-  })
+  await expect(adapter.slashCommands("writer", "stored")).resolves.toEqual([
+    { name: "help", description: "Help" },
+    { name: "skill", description: "Skill" },
+  ])
   expect(request).toHaveBeenCalledWith(
     "commands.catalog",
     { session_id: "live", profile: "writer" },
     expect.any(Number)
   )
+})
+
+it("keeps the capability response usable when the native catalog is unavailable", async () => {
+  const adapter = new HermesServerAdapter({
+    request: vi.fn(async () => {
+      throw new Error("catalog offline")
+    }),
+  })
+
+  await expect(
+    adapter.workspaceCapabilities("writer", "stored")
+  ).resolves.toMatchObject({
+    workspace: {
+      slashCommands: {
+        status: "unavailable",
+        reason: "command-catalog-unavailable",
+      },
+      models: { status: "available" },
+    },
+  })
 })
 
 it("rejects a malformed catalog instead of treating it as an authoritative miss", async () => {

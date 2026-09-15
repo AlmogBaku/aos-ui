@@ -58,7 +58,7 @@ export function registerWorkspaceRoutes(
     await requireScopedSession(runtime, agentId, sessionId)
     return context.json(
       SessionWorkspaceCapabilitiesResponseSchema.parse(
-        runtime.workspaceCapabilities()
+        await runtime.workspaceCapabilities(agentId, sessionId)
       )
     )
   })

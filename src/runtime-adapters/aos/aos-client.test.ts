@@ -117,6 +117,11 @@ describe("provider-neutral AOS browser client", () => {
               },
             },
             workspace: {
+              slashCommands: {
+                status: "available",
+                scope: "attached-session",
+                commands: [{ name: "help", description: "Show help" }],
+              },
               models: {
                 status: "available",
                 scope: "attached-session",
@@ -214,10 +219,6 @@ describe("provider-neutral AOS browser client", () => {
               messageTokens: 900,
             },
           })
-        if (path.endsWith("/commands"))
-          return Response.json({
-            commands: [{ name: "help", description: "Show help" }],
-          })
         if (path.endsWith("/attachments/stage")) {
           expect(init?.method).toBe("POST")
           expect(JSON.parse(String(init?.body))).toEqual({
@@ -261,7 +262,15 @@ describe("provider-neutral AOS browser client", () => {
 
     await expect(
       client.workspaceCapabilities(session.id)
-    ).resolves.toMatchObject({ workspace: { models: { status: "available" } } })
+    ).resolves.toMatchObject({
+      workspace: {
+        slashCommands: {
+          status: "available",
+          commands: [{ name: "help", description: "Show help" }],
+        },
+        models: { status: "available" },
+      },
+    })
     await client.workspaceCapabilities(session.id)
     await expect(client.models(session.id)).resolves.toMatchObject({
       selectedId: "native/small",
@@ -271,9 +280,6 @@ describe("provider-neutral AOS browser client", () => {
     ).resolves.toEqual({ selectedId: "native/small" })
     await expect(client.context(session.id)).resolves.toMatchObject({
       usedTokens: 1200,
-    })
-    await expect(client.commands(session.id)).resolves.toEqual({
-      commands: [{ name: "help", description: "Show help" }],
     })
     await expect(
       client.stageAttachments(session.id, [

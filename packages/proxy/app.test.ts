@@ -496,21 +496,31 @@ describe("AOS V1 proxy", () => {
     expect(history).toHaveBeenCalledWith("researcher", "stored", 200, 200)
   })
 
-  it("returns the runtime slash-command catalog for the requested Session", async () => {
+  it("includes the runtime slash-command catalog in Session capabilities", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(runtime, "getSession").mockResolvedValue(session())
-    const slashCommands = vi.spyOn(runtime, "slashCommands").mockResolvedValue({
-      commands: [{ name: "help", description: "Show help" }],
-    })
+    const slashCommands = vi
+      .spyOn(runtime, "slashCommands")
+      .mockResolvedValue([{ name: "help", description: "Show help" }])
 
     const response = await app(runtime).request(
+      `${origin}/api/aos/v1/agents/researcher/sessions/stored/workspace/capabilities`
+    )
+    const removedRoute = await app(runtime).request(
       `${origin}/api/aos/v1/agents/researcher/sessions/stored/commands`
     )
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      commands: [{ name: "help", description: "Show help" }],
+    await expect(response.json()).resolves.toMatchObject({
+      workspace: {
+        slashCommands: {
+          status: "available",
+          scope: "attached-session",
+          commands: [{ name: "help", description: "Show help" }],
+        },
+      },
     })
+    expect(removedRoute.status).toBe(404)
     expect(slashCommands).toHaveBeenCalledWith("researcher", "stored")
   })
 

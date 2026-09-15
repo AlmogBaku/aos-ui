@@ -38,7 +38,10 @@ import {
   type AosEventSocket,
 } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
-import { useAosSlashCommands } from "./aos-composer-features"
+import {
+  useAosSessionCapabilities,
+  useAosSlashCommands,
+} from "./aos-composer-features"
 import { useAosReconcilerLifecycle } from "./use-reconciler-lifecycle"
 
 const dictionaries = { en, he } as const
@@ -267,9 +270,9 @@ function ReadyGuestAosSurface({
     ]
   )
   const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
+  const capabilities = useAosSessionCapabilities(client, scope.sessionId)
   const slashCommands = useAosSlashCommands(
-    client,
-    scope.sessionId,
+    capabilities,
     config.composerSlashCommandsEnabled
   )
   const composerFeatures = useMemo(() => ({ slashCommands }), [slashCommands])

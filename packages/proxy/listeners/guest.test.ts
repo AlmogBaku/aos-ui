@@ -3,6 +3,7 @@
 import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
+import { HermesServerAdapter } from "../adapters/hermes/adapter"
 import {
   createGuestInvitationServiceForTest,
   type GuestInvitationService,
@@ -191,9 +192,17 @@ function harness(
     offset: 0,
     nextOffset: 2,
   }))
-  const slashCommands = vi.fn(async () => ({
-    commands: [{ name: "help", description: "Show help" }],
-  }))
+  const capabilityAdapter = new HermesServerAdapter({ request: vi.fn() })
+  vi.spyOn(capabilityAdapter, "slashCommands").mockResolvedValue([
+    { name: "help", description: "Show help" },
+  ])
+  const workspaceCapabilities = vi.fn(
+    async (requestedAgentId: string, requestedSessionId: string) =>
+      capabilityAdapter.workspaceCapabilities(
+        requestedAgentId,
+        requestedSessionId
+      )
+  )
   let invalidate: (() => void) | undefined
   const subscribeSessionInvalidation = vi.fn(
     async (
@@ -217,7 +226,7 @@ function harness(
     publicError: vi.fn(() => undefined),
     getSession,
     history,
-    slashCommands,
+    workspaceCapabilities,
     artifact: vi.fn(async () => ({
       bytes: new TextEncoder().encode("public artifact"),
       mimeType: "text/plain",
@@ -384,10 +393,10 @@ describe("shared-runtime guest listener", () => {
     expect(harnessed.runtime.getSession).not.toHaveBeenCalled()
   })
 
-  it("serves commands through the exact invited Session without a guest feature gate", async () => {
+  it("includes commands in capabilities for the exact invited Session", async () => {
     const harnessed = harness()
     const exact = await issue(harnessed.invitationService, ["messages:read"])
-    const path = runRoute("commands")
+    const path = runRoute("workspace/capabilities")
 
     const response = await harnessed.service.app.request(path, {
       headers: requestHeaders(exact.token),
@@ -400,15 +409,27 @@ describe("shared-runtime guest listener", () => {
     })
 
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      commands: [{ name: "help", description: "Show help" }],
+    await expect(response.json()).resolves.toMatchObject({
+      workspace: {
+        slashCommands: {
+          status: "available",
+          commands: [{ name: "help", description: "Show help" }],
+        },
+      },
     })
     expect(denied.status).toBe(401)
-    expect(harnessed.runtime.slashCommands).toHaveBeenCalledWith(
+    expect(harnessed.runtime.workspaceCapabilities).toHaveBeenCalledWith(
       agentId,
       sessionId
     )
-    expect(harnessed.runtime.slashCommands).toHaveBeenCalledOnce()
+    expect(harnessed.runtime.workspaceCapabilities).toHaveBeenCalledOnce()
+    expect(
+      (
+        await harnessed.service.app.request(runRoute("commands"), {
+          headers: requestHeaders(exact.token),
+        })
+      ).status
+    ).toBe(404)
   })
 
   it("detaches only the guest subscriber at expiry and then denies reconnect and Stop", async () => {

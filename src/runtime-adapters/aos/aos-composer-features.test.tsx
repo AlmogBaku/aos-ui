@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from "@testing-library/react"
+import { renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import type { AosWorkspaceCapabilities } from "./aos-client"
@@ -24,6 +24,11 @@ function capabilities(): AosWorkspaceCapabilities {
       },
     },
     workspace: {
+      slashCommands: {
+        status: "available",
+        scope: "attached-session",
+        commands: [{ name: "help" }],
+      },
       models: {
         status: "available",
         scope: "attached-session",
@@ -88,60 +93,25 @@ function capabilities(): AosWorkspaceCapabilities {
 
 describe("AOS composer features", () => {
   it("guest completion is hidden until explicitly enabled while operator defaults to enabled", async () => {
-    const client = {
-      commands: vi.fn(async () => ({ commands: [{ name: "help" }] })),
-    }
     const guest = renderHook(
-      ({ enabled }) => useAosSlashCommands(client, "session", enabled),
+      ({ enabled }) => useAosSlashCommands(capabilities(), enabled),
       { initialProps: { enabled: false } }
     )
     expect(guest.result.current).toBeUndefined()
-    expect(client.commands).not.toHaveBeenCalled()
     guest.rerender({ enabled: true })
-    await waitFor(() =>
-      expect(guest.result.current).toEqual([{ name: "help" }])
-    )
+    expect(guest.result.current).toEqual([{ name: "help" }])
     guest.unmount()
-    const operator = renderHook(() => useAosSlashCommands(client, "session"))
-    await waitFor(() =>
-      expect(operator.result.current).toEqual([{ name: "help" }])
-    )
-  })
-  it("scopes slash catalogs to the current Session and hides only the guest presentation", async () => {
-    let resolveFirst!: (value: { commands: { name: string }[] }) => void
-    const commands = vi.fn((threadId: string) =>
-      threadId === "first"
-        ? new Promise<{ commands: { name: string }[] }>((resolve) => {
-            resolveFirst = resolve
-          })
-        : Promise.resolve({ commands: [{ name: "second-command" }] })
-    )
-    const client = { commands }
-    const { result, rerender } = renderHook(
-      ({ threadId, enabled }) => useAosSlashCommands(client, threadId, enabled),
-      { initialProps: { threadId: "first", enabled: true } }
-    )
-    expect(result.current).toEqual([])
-    rerender({ threadId: "second", enabled: true })
-    await waitFor(() =>
-      expect(result.current).toEqual([{ name: "second-command" }])
-    )
-    await act(async () => resolveFirst({ commands: [{ name: "stale" }] }))
-    expect(result.current).toEqual([{ name: "second-command" }])
-    rerender({ threadId: "second", enabled: false })
-    expect(result.current).toBeUndefined()
+    const operator = renderHook(() => useAosSlashCommands(capabilities()))
+    expect(operator.result.current).toEqual([{ name: "help" }])
   })
 
-  it("catalog failures leave an empty completion list without failing the composer", async () => {
-    const client = {
-      commands: vi.fn(async () => {
-        throw new Error("catalog unavailable")
-      }),
+  it("an unavailable catalog leaves an empty completion list", () => {
+    const unavailable = capabilities()
+    unavailable.workspace.slashCommands = {
+      status: "unavailable",
+      reason: "command-catalog-unavailable",
     }
-    const { result } = renderHook(() =>
-      useAosSlashCommands(client, "session", true)
-    )
-    await act(async () => {})
+    const { result } = renderHook(() => useAosSlashCommands(unavailable))
     expect(result.current).toEqual([])
   })
   it("reads the selected Session capability projection even when presentation policy hides composer features", async () => {

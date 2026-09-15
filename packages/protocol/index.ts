@@ -273,9 +273,26 @@ const CapabilityUnavailableSchema = z.strictObject({
 const AgentCapabilitiesSchema = z.custom<AgentCapabilities>(
   (value) => AgUiAgentCapabilitiesSchema.safeParse(value).success
 )
+export const SlashCommandSchema = z.strictObject({
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[^\s/]+$/u),
+  description: z.string().max(4096).optional(),
+})
+export type SlashCommand = z.infer<typeof SlashCommandSchema>
 export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
   agent: AgentCapabilitiesSchema,
   workspace: z.strictObject({
+    slashCommands: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("attached-session"),
+        commands: z.array(SlashCommandSchema).max(256),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
     models: z.strictObject({
       status: z.literal("available"),
       scope: z.literal("attached-session"),
@@ -395,23 +412,6 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     ]),
   }),
 })
-
-export const SlashCommandSchema = z.strictObject({
-  name: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[^\s/]+$/u),
-  description: z.string().max(4096).optional(),
-})
-export type SlashCommand = z.infer<typeof SlashCommandSchema>
-export const SessionCommandsResponseSchema = z.strictObject({
-  commands: z.array(SlashCommandSchema).max(256),
-})
-export type SessionCommandsResponse = z.infer<
-  typeof SessionCommandsResponseSchema
->
-
 export const SessionModelsResponseSchema = z.strictObject({
   selectedId: IdentifierSchema,
   options: z

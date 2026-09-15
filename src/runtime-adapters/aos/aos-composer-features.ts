@@ -19,7 +19,6 @@ type SessionCapabilityClient = {
 }
 
 type ComposerClient = SessionCapabilityClient & {
-  commands?: (threadId: string) => Promise<{ commands: SlashCommand[] }>
   models(threadId: string): Promise<AosModelChoices>
   context(threadId: string): Promise<AosContext>
   selectModel(
@@ -31,42 +30,14 @@ type ComposerClient = SessionCapabilityClient & {
 const EMPTY_SLASH_COMMANDS: readonly SlashCommand[] = []
 
 export function useAosSlashCommands(
-  client: Pick<ComposerClient, "commands">,
-  threadId: string | undefined,
+  capabilities: AosWorkspaceCapabilities | undefined,
   enabled = true
 ): readonly SlashCommand[] | undefined {
-  const [snapshot, setSnapshot] = useState<{
-    client: typeof client
-    threadId: string
-    commands: readonly SlashCommand[]
-  }>()
-  useEffect(() => {
-    if (!threadId || !enabled || !client.commands) return
-    let active = true
-    let revision = 0
-    const refresh = () => {
-      const request = ++revision
-      void client.commands!(threadId).then(
-        ({ commands }) => {
-          if (active && request === revision)
-            setSnapshot({ client, threadId, commands })
-        },
-        () => {
-          if (active && request === revision)
-            setSnapshot({ client, threadId, commands: [] })
-        }
-      )
-    }
-    refresh()
-    return () => {
-      active = false
-    }
-  }, [client, threadId, enabled])
-  return enabled
-    ? snapshot?.client === client && snapshot.threadId === threadId
-      ? snapshot.commands
-      : EMPTY_SLASH_COMMANDS
-    : undefined
+  if (!enabled) return undefined
+  const capability = capabilities?.workspace.slashCommands
+  return capability?.status === "available"
+    ? capability.commands
+    : EMPTY_SLASH_COMMANDS
 }
 
 /** Reads one authoritative capability projection for the selected Session. */
@@ -114,7 +85,7 @@ export function useAosComposerFeatures(
   capabilities: AosWorkspaceCapabilities | undefined,
   onError?: (error: Error) => void
 ): ComposerFeatureViewModel {
-  const slashCommands = useAosSlashCommands(client, threadId)
+  const slashCommands = useAosSlashCommands(capabilities)
   const [models, setModels] = useState<AosModelChoices>()
   const [context, setContext] = useState<AosContext>()
   const [selection, setSelection] = useState<

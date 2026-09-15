@@ -645,7 +645,20 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     return value.messages
   }
 
-  workspaceCapabilities() {
+  async workspaceCapabilities(agentId: string, publicSessionId: string) {
+    let slashCommands
+    try {
+      slashCommands = {
+        status: "available" as const,
+        scope: "attached-session" as const,
+        commands: await this.slashCommands(agentId, publicSessionId),
+      }
+    } catch {
+      slashCommands = {
+        status: "unavailable" as const,
+        reason: "command-catalog-unavailable",
+      }
+    }
     return {
       agent: {
         identity: { type: "hermes", provider: "NousResearch" },
@@ -672,7 +685,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         },
         custom: { "aos.planActivityType": "PLAN" },
       },
-      workspace: this.#workspace.capabilities(),
+      workspace: { ...this.#workspace.capabilities(), slashCommands },
       interactions: this.interactions.capabilities(),
       content: this.#content.capabilities(),
     }
@@ -1120,12 +1133,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   async slashCommands(agentId: string, publicSessionId: string) {
     const scope = await this.#requireAttachedSession(agentId, publicSessionId)
     try {
-      return {
-        commands: await nativeSlashCommands(this.transport, {
-          session_id: scope.liveSessionId,
-          profile: agentId,
-        }),
-      }
+      return await nativeSlashCommands(this.transport, {
+        session_id: scope.liveSessionId,
+        profile: agentId,
+      })
     } catch (error) {
       throwUnavailable(error)
     }

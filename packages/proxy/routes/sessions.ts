@@ -1,5 +1,4 @@
 import {
-  SessionCommandsResponseSchema,
   SessionCreateRequestSchema,
   SessionPatchRequestSchema,
   SESSION_CATALOG_MAX_WINDOW,
@@ -147,23 +146,6 @@ export function registerSessionRoutes(
       }
       return context.json(
         await loadSessionHistory(options.runtimeInstance, runtime, scope, page)
-      )
-    }
-  )
-
-  app.get(
-    "/api/aos/v1/agents/:agentId/sessions/:sessionId/commands",
-    async (context) => {
-      const runtime = await requireRuntime(context.req.raw)
-      const agentId = context.req.param("agentId")
-      const sessionId = context.req.param("sessionId")
-      const storedId = runtime.resolveSessionId(agentId, sessionId)
-      if (!storedId) return errorResponse("not_found", 404)
-      await runtime.getSession(agentId, storedId)
-      return context.json(
-        SessionCommandsResponseSchema.parse(
-          await runtime.slashCommands(agentId, sessionId)
-        )
       )
     }
   )

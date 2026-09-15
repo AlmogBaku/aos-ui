@@ -2,8 +2,8 @@ import { RunAgentInputSchema } from "@ag-ui/core"
 import { Hono } from "hono"
 
 import {
-  SessionCommandsResponseSchema,
   SessionHistoryResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
 import type {
   GuestInvitationService,
@@ -226,7 +226,7 @@ export function createGuestListenerService(
   )
 
   app.get(
-    "/api/guest/v1/agents/:agentId/sessions/:sessionId/commands",
+    "/api/guest/v1/agents/:agentId/sessions/:sessionId/workspace/capabilities",
     async (context) => {
       const agentId = context.req.param("agentId")
       const sessionId = context.req.param("sessionId")
@@ -242,10 +242,12 @@ export function createGuestListenerService(
       )
       if (!storedSessionId) return emptyError(404)
       try {
-        await options.runtime.runtime.getSession(agentId, storedSessionId)
         return context.json(
-          SessionCommandsResponseSchema.parse(
-            await options.runtime.runtime.slashCommands(agentId, sessionId)
+          SessionWorkspaceCapabilitiesResponseSchema.parse(
+            await options.runtime.runtime.workspaceCapabilities(
+              agentId,
+              sessionId
+            )
           )
         )
       } catch {

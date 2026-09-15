@@ -10,7 +10,6 @@ import type {
   RuntimeInfo,
   Session,
   SessionCatalogResponse,
-  SessionCommandsResponse,
   SessionHistoryResponse,
   SessionAttachmentStageRequest,
   SessionAttachmentStageResponse,
@@ -179,11 +178,10 @@ export interface ServerRuntime {
     method: "PATCH" | "DELETE",
     body?: unknown
   ): Promise<void>
-  workspaceCapabilities(): unknown
-  slashCommands(
+  workspaceCapabilities(
     agentId: string,
     publicSessionId: string
-  ): Promise<SessionCommandsResponse>
+  ): Promise<unknown>
   models(agentId: string, publicSessionId: string): Promise<unknown>
   selectModel(
     agentId: string,

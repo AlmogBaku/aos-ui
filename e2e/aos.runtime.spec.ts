@@ -42,7 +42,28 @@ const runtime = {
 }
 
 const sessionCapabilities = {
+  agent: {
+    transport: { streaming: true, resumable: true },
+    reasoning: { supported: true, streaming: true },
+    multimodal: {
+      input: { image: true, audio: false, file: true },
+      output: { audio: false },
+    },
+    humanInTheLoop: {
+      supported: true,
+      approvals: true,
+      interrupts: true,
+    },
+  },
   workspace: {
+    slashCommands: {
+      status: "available",
+      scope: "attached-session",
+      commands: Array.from({ length: 30 }, (_, index) => ({
+        name: `command-${index}`,
+        description: `Command ${index}`,
+      })),
+    },
     models: {
       status: "available",
       scope: "attached-session",
@@ -206,15 +227,6 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
           limit: 200,
           offset: 0,
           nextOffset: 1,
-        },
-      })
-    if (path.endsWith("/commands"))
-      return route.fulfill({
-        json: {
-          commands: Array.from({ length: 30 }, (_, index) => ({
-            name: `command-${index}`,
-            description: `Command ${index}`,
-          })),
         },
       })
     if (path.endsWith("/workspace/capabilities"))

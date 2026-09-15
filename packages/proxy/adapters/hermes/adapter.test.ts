@@ -95,9 +95,12 @@ describe("Hermes server adapter", () => {
       coverage: "active-session-only",
       state: "running",
     })
-    expect(JSON.stringify(await adapter.workspaceCapabilities())).not.toContain(
-      "live-secret"
-    )
+    vi.spyOn(adapter, "slashCommands").mockResolvedValue([])
+    expect(
+      JSON.stringify(
+        await adapter.workspaceCapabilities("researcher", threadId)
+      )
+    ).not.toContain("live-secret")
   })
 
   it("stages owned attachments and reads only a published same-Session artifact", async () => {

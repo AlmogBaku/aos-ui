@@ -27,7 +27,6 @@ import {
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
   SessionCatalogResponseSchema,
-  SessionCommandsResponseSchema,
   SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
@@ -1026,14 +1025,6 @@ export class AosRemoteClient implements WorkspaceAdapter {
     })
     this.#capabilities.set(threadId, request)
     return request
-  }
-
-  commands(threadId: string) {
-    return this.#sessionRead(
-      threadId,
-      "/commands",
-      SessionCommandsResponseSchema
-    )
   }
 
   models(threadId: string) {
