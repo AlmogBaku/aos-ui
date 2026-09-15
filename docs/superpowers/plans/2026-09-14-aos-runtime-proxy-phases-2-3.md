@@ -25,6 +25,16 @@ first and then the already-developed OpenClaw adapter.
 
 ## Frozen surfaces and constraints
 
+- Before any provider-adapter work, every provider lead and leaf must load
+  `.agents/skills/aos-runtime-adapter/SKILL.md` and follow its required reading:
+  `AGENTS.md`, the adapter authoring guide, both normative gateway design
+  documents, the selected runtime guide, and its research. Each handoff must
+  include the skill-required native capability/lifecycle matrix, native
+  evidence, changed mappings, verification, and unavailable capabilities.
+- Load `.agents/skills/aos-deploy/SKILL.md` only if the operator separately
+  authorizes an actual production deployment. Compose templates and deployment
+  tests in this plan are repository implementation, not permission to mutate a
+  live service.
 - Continue from this clean worktree's current `HEAD`; leave dirty `main`
   untouched.
 - Preserve the completed Hermes adapter, `ServerRuntime`,
@@ -129,6 +139,9 @@ Each leaf starts from its provider's tested foundation checkpoint in an
 isolated worktree and returns one tested commit. The provider lead integrates
 the leaves and exclusively edits `adapter.ts` and `factory.ts`. A leaf reports
 a missing shared operation to the main agent rather than editing shared files.
+Every dispatch brief repeats the `aos-runtime-adapter` skill path and its
+required evidence contract; inheriting a parent agent's context does not count
+as loading the skill.
 
 ## Phase 2: OpenCode
 
