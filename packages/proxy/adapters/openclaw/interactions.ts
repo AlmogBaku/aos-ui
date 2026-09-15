@@ -74,8 +74,9 @@ const encoder = new TextEncoder(),
     const x = text(v, 256)
     return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
   },
-  key = (s: OpenClawInteractionScope, i: string) =>
-    `${s.agentId}\0${s.sessionId}\0${s.runId}\0${i}`,
+  scopeKey = (s: OpenClawInteractionScope) =>
+    `${s.agentId}\0${s.sessionId}\0${s.threadId}\0${s.runId}`,
+  key = (s: OpenClawInteractionScope, i: string) => `${scopeKey(s)}\0${i}`,
   invalid = (): never => {
     throw new OpenClawInteractionPublicError("AOS_INVALID_INTERACTION")
   },
@@ -203,7 +204,7 @@ export class OpenClawInteractions {
   readonly #pending = new Map<string, Pending>()
   readonly #done = new Map<
     string,
-    { fingerprint: string; result: OpenClawInteractionResult }
+    { fingerprint?: string; result: OpenClawInteractionResult }
   >()
   constructor(private readonly transport: OpenClawInteractionTransport) {}
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
@@ -327,9 +328,14 @@ export class OpenClawInteractions {
         continue
       outcomes.push(this.acceptQuestion(scope, row))
     }
-    for (const pending of this.#pending.values())
-      if (pending.kind === "approval" && pending.scope === scope)
-        await this.current(pending)
+    for (const [k, pending] of this.#pending)
+      if (
+        pending.kind === "approval" &&
+        scopeKey(pending.scope) === scopeKey(scope)
+      ) {
+        const current = await this.current(pending)
+        if (current) this.complete(k, undefined, current)
+      }
     return outcomes
   }
   async respond(
@@ -341,7 +347,8 @@ export class OpenClawInteractions {
       fingerprint = JSON.stringify(r),
       done = this.#done.get(k)
     if (done) {
-      if (done.fingerprint !== fingerprint) invalid()
+      if (done.fingerprint !== undefined && done.fingerprint !== fingerprint)
+        invalid()
       return done.result
     }
     const p = this.#pending.get(k)
@@ -467,7 +474,7 @@ export class OpenClawInteractions {
   }
   private complete(
     k: string,
-    fingerprint: string,
+    fingerprint: string | undefined,
     result: OpenClawInteractionResult
   ) {
     this.#pending.delete(k)
