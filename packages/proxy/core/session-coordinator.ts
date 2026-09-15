@@ -193,10 +193,14 @@ export class SessionCoordinator {
   async discover(scope: SessionScope) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
-    if (existing || !this.options.engine.discover) return existing
+    if (
+      !this.options.engine.discover ||
+      (existing && existing.state !== "waiting-for-input")
+    )
+      return existing
     const inFlight = this.#discoveries.get(key)
     if (inFlight) return inFlight
-    const discovery = this.#discover(scope, key)
+    const discovery = this.#discover(scope, key, existing)
     this.#discoveries.set(key, discovery)
     void discovery
       .finally(() => {
@@ -207,17 +211,28 @@ export class SessionCoordinator {
     return discovery
   }
 
-  async #discover(scope: SessionScope, key: string) {
+  async #discover(
+    scope: SessionScope,
+    key: string,
+    existing: Execution | undefined
+  ) {
     if (this.#admissions.has(key)) throw new ServerRunConflictError()
-    this.#assertCapacity("operator")
+    if (!existing) this.#assertCapacity("operator")
     this.#admissions.add(key)
     try {
-      const runId = `aos-recovered-${crypto.randomUUID()}`
+      const runId =
+        existing?.segment.runId ?? `aos-recovered-${crypto.randomUUID()}`
       const discovered = await this.options.engine.discover!(scope, runId)
-      if (!discovered) return undefined
+      if (!discovered) {
+        if (existing && this.#executions.get(key) === existing) {
+          existing.segment.fanout.close()
+          this.#executions.delete(key)
+        }
+        return undefined
+      }
       const segment = this.#segment(runId, discovered.handle)
       segment.interrupts = structuredClone(discovered.interrupts ?? [])
-      const execution: Execution = {
+      const execution: Execution = existing ?? {
         scope,
         state: discovered.state,
         admissionId: runId,
@@ -230,6 +245,11 @@ export class SessionCoordinator {
         segment,
         control: Promise.resolve(),
         steeringRequests: new Map(),
+      }
+      if (existing) {
+        existing.segment.fanout.close()
+        execution.state = discovered.state
+        execution.segment = segment
       }
       this.#executions.set(key, execution)
       this.#consume(execution, segment)

@@ -69,6 +69,11 @@ export type ServerRunEngine = {
     scope: SessionScope,
     request: RecoveryRequest
   ): Promise<ServerRunHandle>
+  /**
+   * Reconstructs provider-authoritative execution state after process loss.
+   * A repeated call refreshes an existing waiting execution; `undefined`
+   * authoritatively clears that recovered wait.
+   */
   discover?(
     scope: SessionScope,
     runId: string

@@ -38,9 +38,10 @@ export async function loadSessionHistory(
   scope: { agentId: string; sessionId: string; threadId: string },
   page: { limit: number; offset: number }
 ) {
-  if (runtimeInstance.sessions.state(scope) === "idle") {
+  const executionState = runtimeInstance.sessions.state(scope)
+  if (executionState === "idle" || executionState === "waiting-for-input") {
     const session = await runtime.getSession(scope.agentId, scope.sessionId)
-    if (session.status === "running")
+    if (executionState === "waiting-for-input" || session.status === "running")
       await runtimeInstance.sessions.discover(scope)
   }
   const history = await runtime.history(

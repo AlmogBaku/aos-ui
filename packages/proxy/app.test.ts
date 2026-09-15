@@ -723,6 +723,68 @@ describe("AOS V1 proxy", () => {
     })
   })
 
+  it("refreshes a restored interrupt when the provider becomes idle", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(runtime, "getSession")
+      .mockResolvedValueOnce({ ...session(), status: "running" })
+      .mockResolvedValueOnce(session())
+    vi.spyOn(runtime, "history").mockResolvedValue({
+      sessionId: "stored",
+      messages: [],
+      total: 0,
+      limit: 200,
+      offset: 0,
+      nextOffset: 0,
+    })
+    const interrupt = {
+      id: "question-1",
+      reason: "question",
+      responseSchema: { type: "string" },
+    }
+    let discoveries = 0
+    const engine: ServerRunEngine = {
+      start: vi.fn(),
+      recover: vi.fn(),
+      discover: vi.fn<NonNullable<ServerRunEngine["discover"]>>(
+        async (_scope, runId) => {
+          if (++discoveries > 1) return undefined
+          return {
+            state: "waiting-for-input",
+            interrupts: [interrupt],
+            handle: terminalHandle([
+              {
+                type: EventType.RUN_STARTED,
+                threadId: "stored",
+                runId,
+              },
+              {
+                type: EventType.RUN_FINISHED,
+                threadId: "stored",
+                runId,
+                outcome: { type: "interrupt", interrupts: [interrupt] },
+              },
+            ]),
+          }
+        }
+      ),
+    }
+    const proxy = app(runtime, { engine })
+    const url = `${origin}/api/aos/v1/agents/researcher/sessions/stored/history?limit=200&offset=0`
+
+    const first = await proxy.request(url)
+    expect(first.status).toBe(200)
+    await expect(first.json()).resolves.toMatchObject({
+      execution: { status: "waiting-for-input" },
+    })
+
+    const second = await proxy.request(url)
+    expect(second.status).toBe(200)
+    await expect(second.json()).resolves.toMatchObject({
+      execution: { status: "idle" },
+    })
+    expect(engine.discover).toHaveBeenCalledTimes(2)
+  })
+
   it("does not expose the replaced polling endpoints", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)

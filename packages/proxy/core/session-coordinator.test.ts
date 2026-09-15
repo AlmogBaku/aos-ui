@@ -552,6 +552,39 @@ describe("SessionCoordinator", () => {
     expect(engine.start).not.toHaveBeenCalled()
   })
 
+  it("refreshes a discovered waiting execution from provider authority", async () => {
+    const source = new EventSource()
+    const interrupt = {
+      id: "question-1",
+      reason: "question",
+      responseSchema: { type: "string" },
+    }
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+      discover: vi
+        .fn<NonNullable<ServerRunEngine["discover"]>>()
+        .mockResolvedValueOnce({
+          handle: source,
+          state: "waiting-for-input",
+          interrupts: [interrupt],
+        })
+        .mockResolvedValueOnce(undefined),
+    }
+    const sessions = coordinator(engine)
+
+    const discovered = await sessions.discover(scope)
+    expect(discovered?.state).toBe("waiting-for-input")
+    expect(sessions.snapshot(scope)).toMatchObject({
+      state: "waiting-for-input",
+      interrupts: [interrupt],
+    })
+
+    await expect(sessions.discover(scope)).resolves.toBeUndefined()
+    expect(engine.discover).toHaveBeenCalledTimes(2)
+    expect(sessions.state(scope)).toBe("idle")
+  })
+
   it("admits a new turn after authoritative terminal settlement", async () => {
     const first = new EventSource()
     const second = new EventSource()
