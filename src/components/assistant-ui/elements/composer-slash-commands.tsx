@@ -76,7 +76,7 @@ export function ComposerSlashCommands({
         return { query, offset: 0, endOffset: cursor }
       }}
       aria-label={label}
-      className="absolute inset-x-0 bottom-full z-20 mb-2 max-h-64 overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-sm"
+      className="absolute inset-x-0 bottom-full z-20 mb-2 max-h-64 overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-sm"
     >
       <KeepHighlightedCommandVisible menuRef={menuRef} />
       <ComposerPrimitive.Unstable_TriggerPopover.Directive
@@ -90,15 +90,21 @@ export function ComposerSlashCommands({
               item={item}
               index={index}
               onMouseDown={(event) => event.preventDefault()}
-              className="flex w-full flex-col gap-1 rounded-lg px-3 py-2 text-start text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring data-highlighted:bg-accent"
+              className="block w-full rounded-md px-2.5 py-1.5 text-start text-sm leading-tight outline-none focus-visible:ring-2 focus-visible:ring-ring data-highlighted:bg-accent"
             >
               <span dir="auto" className="font-medium">
                 {item.label}
               </span>
               {item.description && (
-                <span dir="auto" className="text-muted-foreground">
-                  {item.description}
-                </span>
+                <>
+                  {" "}
+                  <span
+                    dir="auto"
+                    className="ms-2 text-xs text-muted-foreground"
+                  >
+                    {item.description}
+                  </span>
+                </>
               )}
             </ComposerPrimitive.Unstable_TriggerPopoverItem>
           ))
