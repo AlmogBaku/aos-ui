@@ -494,15 +494,17 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       this.#nativeSettlements.set(key, nativeSettlement)
     }
     queue.push({ type: EventType.RUN_STARTED, threadId: scope.threadId, runId })
+    const projector = new OpenCodeEventProjector(
+      { sessionId: scope.sessionId, threadId: scope.threadId, runId },
+      after,
+      { admissionId: expectedAdmission }
+    )
+    if (nativeSettlement.stopRequested) projector.markStopping()
     return {
       key,
       scope,
       runId,
-      projector: new OpenCodeEventProjector(
-        { sessionId: scope.sessionId, threadId: scope.threadId, runId },
-        after,
-        { admissionId: expectedAdmission }
-      ),
+      projector,
       queue,
       controller: new AbortController(),
       sourceAborted: false,
@@ -524,7 +526,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   }
 
   #projector(run: ActiveRun, after: number, expectedAdmission?: string) {
-    return new OpenCodeEventProjector(
+    const projector = new OpenCodeEventProjector(
       {
         sessionId: run.scope.sessionId,
         threadId: run.scope.threadId,
@@ -533,6 +535,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       after,
       { admissionId: expectedAdmission }
     )
+    if (run.nativeSettlement.stopRequested) projector.markStopping()
+    return projector
   }
 
   async #attach(run: ActiveRun, after: number) {

@@ -951,12 +951,22 @@ describe("OpenCodeRunEngine", () => {
         lastSeen: 0,
       },
     })
+    const recoveredEventsPromise = collect(recovered)
     running = false
     wait.resolve()
     await recovered.settled
+    const recoveredEvents = await recoveredEventsPromise
 
     await expect(stopped).resolves.toBe("stopping")
     await expect(recovered.stop()).resolves.toBe("idle")
+    expect(
+      recoveredEvents.filter((event) => event.type === EventType.RUN_FINISHED)
+    ).toEqual([
+      expect.objectContaining({
+        type: EventType.RUN_FINISHED,
+        result: { stopped: true },
+      }),
+    ])
     expect(first.abort).toHaveBeenCalledOnce()
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
