@@ -54,16 +54,50 @@ export function mapOpenCodeRichTool(value: unknown) {
     return undefined
   const parsed = descriptor.schema.safeParse(state.input)
   if (!parsed.success) return undefined
+  const safe = safeRichValue(parsed.data)
+  if (safe === undefined)
+    return {
+      kind: descriptor.kind,
+      fallback: "Presentation is ready for display.",
+    }
   return {
     kind: descriptor.kind,
-    data: JSON.parse(
-      JSON.stringify(parsed.data).replace(
-        /(?:https?|wss?|file):\/\/[^\s"'<>]+|(?:^|\s)(?:\/(?!\/)|[A-Za-z]:[\\/])[^\s"'<>]*|\b(?:token|password|secret|api[-_]?key)\s*[=:]\s*[^\s,;]+/giu,
-        "[redacted]"
-      )
-    ),
+    data: safe,
     fallback: "Presentation is ready for display.",
   }
+}
+
+function safeRichValue(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  )
+    return value
+  if (typeof value === "string") {
+    if (
+      value.length > 512 ||
+      !/^[\p{L}\p{N}][\p{L}\p{N} .,;:!?()%'“”‘’+-]*$/u.test(value) ||
+      /(?:authorization|bearer|token|password|secret|key|data:|https?:|wss?:|file:)/iu.test(
+        value
+      )
+    )
+      return
+    return value
+  }
+  if (Array.isArray(value)) {
+    const result = value.map(safeRichValue)
+    return result.some((item) => item === undefined) ? undefined : result
+  }
+  if (!value || typeof value !== "object") return
+  const result: Record<string, unknown> = {}
+  for (const [name, item] of Object.entries(value)) {
+    if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(name)) return
+    const safe = safeRichValue(item)
+    if (safe === undefined) return
+    result[name] = safe
+  }
+  return result
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

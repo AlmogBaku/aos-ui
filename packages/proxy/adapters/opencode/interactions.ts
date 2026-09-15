@@ -134,6 +134,7 @@ export class OpenCodeInteractions {
     const existing = this.#pending.get(key(s, id))
     if (existing && existing.kind !== "question")
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    if (existing) return this.snapshot(scope)!
     this.#pending.set(key(s, id), {
       id,
       scope: s,
@@ -171,6 +172,7 @@ export class OpenCodeInteractions {
       throw new OpenCodeInteractionPublicError(
         existing ? "AOS_PROVIDER_INVALID_RESPONSE" : "AOS_LIMIT_EXCEEDED"
       )
+    if (existing) return this.snapshot(scope)!
     this.#pending.set(key(s, id), {
       id,
       scope: s,
@@ -196,10 +198,17 @@ export class OpenCodeInteractions {
       : record(native.permissions)?.data
     if (!Array.isArray(qs) || !Array.isArray(ps))
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    for (const [k, v] of this.#pending)
-      if (identity(v.scope) === identity(s)) this.#pending.delete(k)
-    for (const q of qs) this.acceptQuestion(scope, q)
-    for (const p of ps) this.acceptPermission(scope, p)
+    const previous = new Map(this.#pending)
+    try {
+      for (const [k, v] of this.#pending)
+        if (identity(v.scope) === identity(s)) this.#pending.delete(k)
+      for (const q of qs) this.acceptQuestion(scope, q)
+      for (const p of ps) this.acceptPermission(scope, p)
+    } catch (error) {
+      this.#pending.clear()
+      for (const [k, value] of previous) this.#pending.set(k, value)
+      throw error
+    }
     return this.snapshot(scope)
   }
   snapshot(
