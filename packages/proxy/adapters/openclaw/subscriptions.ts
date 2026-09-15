@@ -32,6 +32,7 @@ export type OpenClawSessionLease = Readonly<{
   readonly key: string
   approvalReplay():
     Readonly<{ generation: number; replay: SessionApprovalReplay }> | undefined
+  refreshApprovalReplay(): Promise<void>
   release(): Promise<void>
 }>
 
@@ -46,7 +47,7 @@ type LogicalLease = {
     reason: "gap" | "reconnect",
     fence: OpenClawReconciliationFence
   ) => void | Promise<void>
-  native: GatewaySessionMessageSubscription
+  native?: GatewaySessionMessageSubscription
   nativeGeneration: number
   released: boolean
   dirty: boolean
@@ -84,6 +85,18 @@ function validNativeEvent(frame: unknown): frame is EventFrame {
   )
 }
 
+function eventMatchesScope(
+  frame: EventFrame,
+  scope: OpenClawSubscriptionScope
+) {
+  const payload = frame.payload as Record<string, unknown>
+  if (frame.event !== "session.approval")
+    return payload.agentId === undefined || payload.agentId === scope.agentId
+  const approval = payload.approval as Record<string, unknown>
+  const presentation = approval.presentation as Record<string, unknown>
+  return presentation.agentId === scope.agentId
+}
+
 export class OpenClawSessionSubscriptions {
   readonly #client: OpenClawSubscriptionRequestClient
   #coordinator: GatewaySessionMessageSubscriptionCoordinator
@@ -113,21 +126,28 @@ export class OpenClawSessionSubscriptions {
     if (!validIdentity(scope.agentId) || !validIdentity(scope.sessionKey))
       throw new Error("Invalid OpenClaw Session subscription scope")
     return this.#enqueue(async () => {
-      const native = await this.#coordinator.acquire(scope.sessionKey, {
-        agentId: scope.agentId,
-        includeApprovals: true,
-      })
+      const generation = this.#generation
       const logical: LogicalLease = {
         scope,
         listener,
         ...(reconcile ? { reconcile } : {}),
-        native,
-        nativeGeneration: this.#generation,
+        nativeGeneration: generation,
         released: false,
         dirty: false,
       }
       this.#leases.add(logical)
-      return this.#lease(logical)
+      try {
+        logical.native = await this.#coordinator.acquire(scope.sessionKey, {
+          agentId: scope.agentId,
+          includeApprovals: true,
+        })
+        logical.nativeGeneration = generation
+        return this.#lease(logical)
+      } catch (error) {
+        logical.released = true
+        this.#leases.delete(logical)
+        throw error
+      }
     })
   }
 
@@ -135,14 +155,12 @@ export class OpenClawSessionSubscriptions {
     if (generation !== this.#generation || !validNativeEvent(candidate)) return
     const payload = candidate.payload as Record<string, unknown>
     const sessionKey = payload.sessionKey as string
-    const agentId =
-      typeof payload.agentId === "string" ? payload.agentId : undefined
     const matching = [...this.#leases].filter(
       (lease) =>
         !lease.released &&
         (lease.scope.sessionKey === sessionKey ||
-          lease.native.key === sessionKey) &&
-        (agentId === undefined || agentId === lease.scope.agentId)
+          lease.native?.key === sessionKey) &&
+        eventMatchesScope(candidate, lease.scope)
     )
     if (this.#paused) {
       for (const lease of matching) lease.dirty = true
@@ -242,13 +260,13 @@ export class OpenClawSessionSubscriptions {
   #lease(logical: LogicalLease): OpenClawSessionLease {
     return {
       get key() {
-        return logical.native.key
+        return logical.native?.key ?? logical.scope.sessionKey
       },
       approvalReplay: () => {
         if (
           logical.released ||
           logical.nativeGeneration !== this.#generation ||
-          !Check(SessionApprovalReplaySchema, logical.native.approvalReplay)
+          !Check(SessionApprovalReplaySchema, logical.native?.approvalReplay)
         )
           return undefined
         return {
@@ -256,12 +274,28 @@ export class OpenClawSessionSubscriptions {
           replay: structuredClone(logical.native.approvalReplay),
         }
       },
+      refreshApprovalReplay: () =>
+        this.#enqueue(async () => {
+          if (logical.released) return
+          const previous = logical.native
+          const generation = this.#generation
+          const native = await this.#coordinator.acquire(
+            logical.scope.sessionKey,
+            {
+              agentId: logical.scope.agentId,
+              includeApprovals: true,
+            }
+          )
+          logical.native = native
+          logical.nativeGeneration = generation
+          if (previous) await this.#coordinator.release(previous)
+        }),
       release: async () => {
         await this.#enqueue(async () => {
           if (logical.released) return
           logical.released = true
           this.#leases.delete(logical)
-          await this.#coordinator.release(logical.native)
+          if (logical.native) await this.#coordinator.release(logical.native)
         })
       },
     }

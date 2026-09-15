@@ -2,6 +2,7 @@ import { EventType, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import { ServerRunStopNotDispatchedError } from "../../core/runtime"
+import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenClawClientRequestError } from "./client"
 import { stageOpenClawChatAttachments } from "./content"
 import { OpenClawInteractions } from "./interactions"
@@ -160,6 +161,25 @@ function deferred<T>() {
     resolve = done
   })
   return { promise, resolve }
+}
+
+function coordinator(engine: OpenClawRunEngine) {
+  return new SessionCoordinator({
+    engine,
+    maxActiveExecutions: 8,
+    maxGuestActiveExecutions: 2,
+    maxSubscriberEvents: 8,
+    maxSubscriberBytes: 64 * 1024,
+    maxReplayEvents: 32,
+    maxReplayBytes: 256 * 1024,
+  })
+}
+
+const operatorAccess = {
+  subscriberId: "operator",
+  controllerId: "operator",
+  lane: "operator" as const,
+  canControl: true,
 }
 
 describe("OpenClaw run engine", () => {
@@ -566,6 +586,7 @@ describe("OpenClaw run engine", () => {
 
   it("rediscovers and resumes one exact pending question through a fresh engine", async () => {
     const native = new ControlledNative()
+    native.approvalReplay = approvalReplay()
     native.history = {
       sessionKey: scope.sessionId,
       sessionId: "transcript-a",
@@ -735,6 +756,55 @@ describe("OpenClaw run engine", () => {
     )
   })
 
+  it("refreshes a coordinator-retained wait from native authority and admits a new turn after external resolution", async () => {
+    const native = new ControlledNative()
+    native.approvalReplay = approvalReplay([pendingApproval])
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "before" },
+    }
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [] }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    const sessions = coordinator(
+      new OpenClawRunEngine({
+        client: native,
+        subscriptions: new OpenClawSessionSubscriptions(native),
+        resume: new OpenClawInteractions({ request }),
+      })
+    )
+
+    await expect(sessions.discover(scope)).resolves.toMatchObject({
+      state: "waiting-for-input",
+    })
+    const recoveredRunId = sessions.snapshot(scope).runId
+
+    native.approvalReplay = approvalReplay()
+    native.history = {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+    }
+    await expect(sessions.discover(scope)).resolves.toBeUndefined()
+    expect(sessions.snapshot(scope)).toEqual({ state: "idle", interrupts: [] })
+
+    await expect(
+      sessions.start(scope, input("after-external-resolution"), operatorAccess)
+    ).resolves.toBeDefined()
+    expect(recoveredRunId).toMatch(/^aos-recovered-/)
+    expect(
+      native.calls.filter(({ method }) => method === "chat.send")
+    ).toHaveLength(1)
+  })
+
   it.each([
     [
       "a truncated approval replay",
@@ -848,9 +918,91 @@ describe("OpenClaw run engine", () => {
     expect(historyReads).toBe(2)
     expect(discover).toHaveBeenCalledExactlyOnceWith(
       { ...scope, nativeRunId: "native-original" },
-      { ...approvalReplay(), updatedAtMs: 2 }
+      { ...approvalReplay(), updatedAtMs: 3 }
     )
   })
+
+  it.each([
+    ["discovers", approvalReplay([pendingApproval]), true],
+    ["refuses", approvalReplay([pendingApproval], true), false],
+  ])(
+    "%s an approval from a refreshed replay when it arrives during the authoritative history read",
+    async (_label, refreshedReplay, expectedDiscovery) => {
+      const native = new ControlledNative()
+      const firstHistory = deferred<unknown>()
+      let historyReads = 0
+      native.historyRequest = async () => {
+        historyReads += 1
+        if (historyReads === 1) return firstHistory.promise
+        return {
+          sessionKey: scope.sessionId,
+          sessionId: "transcript-a",
+          messages: [],
+          sessionInfo: {
+            hasActiveRun: true,
+            activeRunIds: ["native-original"],
+          },
+          inFlightRun: { runId: "native-original", text: "before" },
+        }
+      }
+      let subscriptionReads = 0
+      native.subscriptionRequest = async (params) => {
+        subscriptionReads += 1
+        return {
+          key: params.key,
+          approvalReplay:
+            subscriptionReads === 1 ? approvalReplay() : refreshedReplay,
+        }
+      }
+      const request = vi.fn(async (method: string) => {
+        if (method === "question.list") return { questions: [] }
+        throw new Error(`Unexpected interaction method ${method}`)
+      })
+      const subscriptions = new OpenClawSessionSubscriptions(native)
+      const engine = new OpenClawRunEngine({
+        client: native,
+        subscriptions,
+        resume: new OpenClawInteractions({ request }),
+      })
+
+      const discovering = engine.discover(scope, "approval-during-history")
+      await vi.waitFor(() => expect(historyReads).toBe(1))
+      subscriptions.accept(
+        {
+          type: "event",
+          event: "session.approval",
+          seq: 91,
+          payload: {
+            sessionKey: scope.sessionId,
+            sourceSessionKey: scope.sessionId,
+            updatedAtMs: 2,
+            phase: "pending",
+            approval: pendingApproval,
+          },
+        },
+        subscriptions.generation
+      )
+      firstHistory.resolve({
+        sessionKey: scope.sessionId,
+        sessionId: "transcript-a",
+        messages: [],
+        sessionInfo: {
+          hasActiveRun: true,
+          activeRunIds: ["native-original"],
+        },
+        inFlightRun: { runId: "native-original", text: "before" },
+      })
+
+      const discovered = await discovering
+      expect(discovered?.state === "waiting-for-input").toBe(expectedDiscovery)
+      expect(subscriptionReads).toBe(2)
+      expect(historyReads).toBe(2)
+      expect(request).toHaveBeenCalledTimes(expectedDiscovery ? 1 : 0)
+      expect(
+        native.calls.filter(({ method }) => method === "chat.send")
+      ).toEqual([])
+    }
+  )
 
   it("authoritatively binds a cold recovered resume segment to the unique active native run", async () => {
     const native = new ControlledNative()

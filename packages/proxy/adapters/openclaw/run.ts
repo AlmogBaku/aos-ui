@@ -1072,19 +1072,34 @@ export class OpenClawRunEngine implements ServerRunEngine {
   }
 
   async discover(scope: SessionScope, runId: string) {
+    const key = scopeKey(scope)
+    const existingWaiting = this.#waiting.get(key)
     if (
       !this.#resume?.discover ||
       !validId(scope.agentId) ||
       !validId(scope.sessionId) ||
       !validId(runId) ||
-      this.#active.has(scopeKey(scope)) ||
-      this.#waiting.has(scopeKey(scope))
+      this.#active.has(key)
     )
       return undefined
+    if (existingWaiting && existingWaiting.runId !== runId)
+      throw new ServerRunConflictError()
     let lease: OpenClawSessionLease | undefined
-    const key = scopeKey(scope)
     let discoveryDirty = false
     try {
+      const retireExisting = async () => {
+        if (!existingWaiting) return
+        existingWaiting.terminal = true
+        if (this.#waiting.get(key) === existingWaiting)
+          this.#waiting.delete(key)
+        await existingWaiting.lease.release().catch(() => {})
+      }
+      const notDiscovered = async () => {
+        await lease?.release().catch(() => {})
+        lease = undefined
+        await retireExisting()
+        return undefined
+      }
       const holder: { waiting?: WaitingRun } = {}
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.sessionId },
@@ -1096,39 +1111,42 @@ export class OpenClawRunEngine implements ServerRunEngine {
           discoveryDirty = true
         }
       )
+      let refreshApprovalReplay = discoveryDirty
       for (;;) {
         discoveryDirty = false
         const generation = this.#subscriptions.generation
+        if (refreshApprovalReplay) await lease.refreshApprovalReplay()
+        if (discoveryDirty || generation !== this.#subscriptions.generation) {
+          refreshApprovalReplay = true
+          continue
+        }
         const history = await this.#history(scope, lease)
         const approvalReplay = lease.approvalReplay()
-        if (
-          discoveryDirty ||
-          generation !== this.#subscriptions.generation ||
-          (approvalReplay !== undefined &&
-            approvalReplay.generation !== generation)
-        )
+        if (discoveryDirty || generation !== this.#subscriptions.generation) {
+          refreshApprovalReplay = true
           continue
-        const nativeRunId = uniqueActiveRunId(history)
-        if (!nativeRunId) {
-          await lease.release().catch(() => {})
-          return undefined
         }
+        if (!approvalReplay || approvalReplay.generation !== generation) {
+          return notDiscovered()
+        }
+        const nativeRunId = uniqueActiveRunId(history)
+        if (!nativeRunId) return notDiscovered()
         const discovered = await this.#resume.discover(
           { ...scope, nativeRunId },
           approvalReplay?.replay
         )
         const currentApprovalReplay = lease.approvalReplay()
-        if (
-          discoveryDirty ||
-          generation !== this.#subscriptions.generation ||
-          (currentApprovalReplay !== undefined &&
-            currentApprovalReplay.generation !== generation)
-        )
+        if (discoveryDirty || generation !== this.#subscriptions.generation) {
+          refreshApprovalReplay = true
           continue
-        if (!discovered) {
-          await lease.release().catch(() => {})
-          return undefined
         }
+        if (
+          !currentApprovalReplay ||
+          currentApprovalReplay.generation !== generation
+        ) {
+          return notDiscovered()
+        }
+        if (!discovered) return notDiscovered()
         const waiting: WaitingRun = {
           scope,
           runId,
@@ -1140,6 +1158,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
         }
         holder.waiting = waiting
         this.#waiting.set(key, waiting)
+        await retireExisting()
+        lease = undefined
         const events: AGUIEvent[] = [
           { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
           {
