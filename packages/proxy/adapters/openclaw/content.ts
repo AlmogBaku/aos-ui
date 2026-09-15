@@ -155,6 +155,7 @@ function prepareAttachments(
 /** Validates the entire official chat.send request, including encoded attachment content. */
 export function prepareOpenClawChatAttachments(
   input: Readonly<{
+    agentId: string
     sessionKey: string
     message: string
     idempotencyKey: string
@@ -163,6 +164,7 @@ export function prepareOpenClawChatAttachments(
   policy: OpenClawGatewayPolicy
 ) {
   if (
+    !id(input.agentId) ||
     !id(input.sessionKey) ||
     !text(input.message, 1_000_000) ||
     !id(input.idempotencyKey)
@@ -170,6 +172,7 @@ export function prepareOpenClawChatAttachments(
     throw new OpenClawContentPublicError()
   const attachments = prepareAttachments(input.attachments, policy)
   const native = {
+    agentId: input.agentId,
     sessionKey: input.sessionKey,
     message: input.message,
     idempotencyKey: input.idempotencyKey,

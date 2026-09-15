@@ -18,6 +18,7 @@ describe("OpenClaw content", () => {
     expect(
       prepareOpenClawChatAttachments(
         {
+          agentId: "agent-a",
           sessionKey: "session-a",
           message: "review",
           idempotencyKey: "turn-a",
@@ -33,11 +34,15 @@ describe("OpenClaw content", () => {
         policy
       )
     ).toMatchObject({
-      native: { attachments: [{ fileName: "brief.pdf", sizeBytes: 3 }] },
+      native: {
+        agentId: "agent-a",
+        attachments: [{ fileName: "brief.pdf", sizeBytes: 3 }],
+      },
     })
     expect(() =>
       prepareOpenClawChatAttachments(
         {
+          agentId: "agent-a",
           sessionKey: "session-a",
           message: "review",
           idempotencyKey: "turn-a",
@@ -91,6 +96,7 @@ describe("OpenClaw content", () => {
     expect(() =>
       prepareOpenClawChatAttachments(
         {
+          agentId: "agent-a",
           sessionKey: "session-a",
           message: "review",
           idempotencyKey: "turn-a",
