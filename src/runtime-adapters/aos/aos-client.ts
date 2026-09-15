@@ -10,6 +10,7 @@ import {
   RunErrorEventSchema,
   RunFinishedEventSchema,
   RunStartedEventSchema,
+  CustomEventSchema,
   StepFinishedEventSchema,
   StepStartedEventSchema,
   type ActivityDeltaEvent,
@@ -23,6 +24,8 @@ import {
   AgentCatalogResponseSchema,
   ErrorResponseSchema,
   RuntimeInfoSchema,
+  RunSteerRequestSchema,
+  RunSteerResponseSchema,
   RunStopResponseSchema,
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
@@ -103,7 +106,8 @@ export type AosClientFailure =
 export class AosClientError extends Error {
   constructor(
     readonly kind: AosClientFailure,
-    message = "AOS proxy request failed"
+    message = "AOS proxy request failed",
+    readonly code?: string
   ) {
     super(message)
     this.name = "AosClientError"
@@ -161,44 +165,39 @@ function messageText(content: unknown) {
 }
 
 function attachmentsForStage(value: unknown): StagedRunAttachment[] {
-  if (!value || typeof value !== "object" || !("attachments" in value))
-    return []
-  const attachments = (value as { attachments?: unknown }).attachments
-  if (!Array.isArray(attachments)) return []
+  if (!value || typeof value !== "object" || !("content" in value)) return []
+  const content = (value as { content?: unknown }).content
+  if (!Array.isArray(content)) return []
   const staged: StagedRunAttachment[] = []
-  for (const attachment of attachments) {
-    if (!attachment || typeof attachment !== "object")
-      throw new Error("Invalid AOS attachment")
-    const row = attachment as Record<string, unknown>
-    if (!Array.isArray(row.content)) throw new Error("Invalid AOS attachment")
-    const part = row.content.find(
-      (candidate): candidate is Record<string, unknown> =>
-        Boolean(candidate) &&
-        typeof candidate === "object" &&
-        ((candidate as { type?: unknown }).type === "image" ||
-          (candidate as { type?: unknown }).type === "file")
-    )
-    if (!part) throw new Error("Invalid AOS attachment")
-    const type = part.type
-    const dataUrl = type === "image" ? part.image : part.data
-    const filename =
-      typeof part.filename === "string"
-        ? part.filename
-        : typeof row.name === "string"
-          ? row.name
-          : undefined
-    const mimeType =
-      type === "file" && typeof part.mimeType === "string"
-        ? part.mimeType
-        : typeof row.contentType === "string"
-          ? row.contentType
-          : undefined
+  for (const candidate of content) {
     if (
-      (type !== "image" && type !== "file") ||
-      typeof dataUrl !== "string" ||
-      !mimeType
+      !candidate ||
+      typeof candidate !== "object" ||
+      (candidate as { type?: unknown }).type === "text"
+    )
+      continue
+    const part = candidate as Record<string, unknown>
+    const type = part.type === "image" ? "image" : "file"
+    const source = part.source
+    if (
+      !source ||
+      typeof source !== "object" ||
+      (source as { type?: unknown }).type !== "data"
     )
       throw new Error("Invalid AOS attachment")
+    const sourceRecord = source as Record<string, unknown>
+    const mimeType = sourceRecord.mimeType
+    const data = sourceRecord.value
+    const metadata = part.metadata
+    const filename =
+      metadata &&
+      typeof metadata === "object" &&
+      typeof (metadata as { filename?: unknown }).filename === "string"
+        ? String((metadata as { filename: string }).filename)
+        : undefined
+    if (typeof data !== "string" || typeof mimeType !== "string")
+      throw new Error("Invalid AOS attachment")
+    const dataUrl = `data:${mimeType};base64,${data}`
     staged.push({ type, dataUrl, ...(filename ? { filename } : {}), mimeType })
   }
   return staged
@@ -241,15 +240,17 @@ function sessionSignalEvent(value: unknown): AosSessionSignalEvent | undefined {
         ? ActivityDeltaEventSchema
         : type === "RUN_STARTED"
           ? RunStartedEventSchema
-          : type === "RUN_FINISHED"
-            ? RunFinishedEventSchema
-            : type === "RUN_ERROR"
-              ? RunErrorEventSchema
-              : type === "STEP_STARTED"
-                ? StepStartedEventSchema
-                : type === "STEP_FINISHED"
-                  ? StepFinishedEventSchema
-                  : undefined
+          : type === "CUSTOM"
+            ? CustomEventSchema
+            : type === "RUN_FINISHED"
+              ? RunFinishedEventSchema
+              : type === "RUN_ERROR"
+                ? RunErrorEventSchema
+                : type === "STEP_STARTED"
+                  ? StepStartedEventSchema
+                  : type === "STEP_FINISHED"
+                    ? StepFinishedEventSchema
+                    : undefined
   if (!schema) return undefined
   const result = schema.safeParse(value)
   return result.success ? (result.data as AosSessionSignalEvent) : undefined
@@ -376,6 +377,7 @@ export function createAosRunAgent({
   authorization,
   resolveRewindSourceId,
   onRewindCompleted,
+  onRunFinished,
   onEvent,
   getCapabilities,
 }: {
@@ -390,9 +392,11 @@ export function createAosRunAgent({
   authorization?: string
   resolveRewindSourceId?: (
     sourceId: string,
-    replacement: RewindReplacement
-  ) => string | Promise<string>
+    replacement: RewindReplacement,
+    sourceText?: string
+  ) => string | undefined | Promise<string | undefined>
   onRewindCompleted?: (replacement: RewindReplacement) => Promise<void>
+  onRunFinished?: (event: RunFinishedEvent) => Promise<void>
   onEvent?: (event: AosSessionSignalEvent) => void
   getCapabilities?: () => Promise<AgentCapabilities>
 }) {
@@ -411,22 +415,18 @@ export function createAosRunAgent({
     const message = input.messages.at(-1)
     if (!resume && (!message || message.role !== "user"))
       throw new Error("AOS runs require a trailing user turn")
-    const rawMessages =
-      candidate && typeof candidate === "object" && "messages" in candidate
-        ? (candidate as { messages?: unknown }).messages
-        : undefined
-    const rawMessage =
-      Array.isArray(rawMessages) && !resume ? rawMessages.at(-1) : undefined
-    const staged = attachmentsForStage(rawMessage)
+    const staged = attachmentsForStage(!resume ? message : undefined)
     const stage = staged.length
       ? await stageAttachments?.(threadId, staged)
       : undefined
     if (staged.length && !stage)
       throw new Error("AOS attachment staging is unavailable")
     const messageWithoutAttachments = message
-      ? { ...(message as Record<string, unknown>) }
+      ? {
+          ...(message as Record<string, unknown>),
+          ...(staged.length ? { content: messageText(message.content) } : {}),
+        }
       : undefined
-    delete messageWithoutAttachments?.attachments
     const forwardedProps =
       candidate && typeof candidate === "object"
         ? (candidate as { forwardedProps?: unknown }).forwardedProps
@@ -439,6 +439,10 @@ export function createAosRunAgent({
       !resume && runConfig && typeof runConfig === "object"
         ? (runConfig as Record<string, unknown>)["aos.rewindSourceId"]
         : undefined
+    const requestedRewindSourceText =
+      !resume && runConfig && typeof runConfig === "object"
+        ? (runConfig as Record<string, unknown>)["aos.rewindSourceText"]
+        : undefined
     const rewindReplacement =
       typeof requestedRewindSourceId === "string" && message
         ? {
@@ -447,10 +451,15 @@ export function createAosRunAgent({
           }
         : undefined
     const rewindSourceId = rewindReplacement
-      ? await (resolveRewindSourceId?.(
-          requestedRewindSourceId as string,
-          rewindReplacement
-        ) ?? requestedRewindSourceId)
+      ? resolveRewindSourceId
+        ? await resolveRewindSourceId(
+            requestedRewindSourceId as string,
+            rewindReplacement,
+            typeof requestedRewindSourceText === "string"
+              ? requestedRewindSourceText
+              : undefined
+          )
+        : requestedRewindSourceId
       : undefined
     const headers = new Headers(init.headers)
     if (authorization) headers.set("authorization", authorization)
@@ -498,11 +507,12 @@ export function createAosRunAgent({
         ),
       init.signal,
       typeof rewindSourceId === "string" && rewindReplacement
-        ? (event) =>
-            event.outcome?.type === "success"
-              ? (onRewindCompleted?.(rewindReplacement) ?? Promise.resolve())
-              : Promise.resolve()
-        : undefined,
+        ? async (event) => {
+            if (event.outcome?.type === "success")
+              await onRewindCompleted?.(rewindReplacement)
+            await onRunFinished?.(event)
+          }
+        : onRunFinished,
       onEvent
     )
   }
@@ -532,6 +542,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
   >()
   readonly #capabilities = new Map<string, Promise<AosWorkspaceCapabilities>>()
   readonly #plans = new Map<string, { messageId: string; todos: TodoItem[] }>()
+  readonly #steeringReconciliations = new Set<string>()
   readonly #todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   readonly #metadataSubscriptions = new Set<SessionMetadataSubscription>()
   readonly #activityListeners = new Set<
@@ -583,7 +594,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
       const error = await normalizedError(response)
       throw new AosClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure",
-        error?.description
+        error?.description,
+        error?.code
       )
     }
     let payload: unknown
@@ -739,6 +751,19 @@ export class AosRemoteClient implements WorkspaceAdapter {
   acceptRunEvent(threadId: string, event: AosSessionSignalEvent) {
     if (!this.#sessionOwners.has(threadId)) return
     if (
+      event.type === "CUSTOM" &&
+      event.name === "aos.steer.accepted" &&
+      event.value &&
+      typeof event.value === "object" &&
+      typeof (event.value as { requestId?: unknown }).requestId === "string" &&
+      typeof (event.value as { text?: unknown }).text === "string" &&
+      ((event.value as { delivery?: unknown }).delivery === "steered" ||
+        (event.value as { delivery?: unknown }).delivery === "queued")
+    ) {
+      this.#steeringReconciliations.add(threadId)
+      return
+    }
+    if (
       (event.type === "RUN_STARTED" || event.type === "RUN_FINISHED") &&
       event.threadId !== threadId
     )
@@ -892,7 +917,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
       seen.add(message.id)
       messages.push(message)
     }
-    if (page.execution) this.#setSessionStatus(threadId, page.execution.status)
+    if (page.execution) {
+      this.#setSessionStatus(threadId, page.execution.status)
+      if (page.execution.status === "running" && page.execution.runId)
+        this.#runIds.set(threadId, page.execution.runId)
+      else this.#runIds.delete(threadId)
+    } else this.#runIds.delete(threadId)
     return {
       sessionId: threadId,
       messages,
@@ -907,14 +937,33 @@ export class AosRemoteClient implements WorkspaceAdapter {
   async resolveRewindSourceId(
     threadId: string,
     sourceId: string,
-    replacement: RewindReplacement
+    replacement: RewindReplacement,
+    sourceText?: string
   ) {
     this.#owner(threadId)
     const previous = this.#rewindReplacements.get(threadId)?.get(sourceId)
     if (previous) await this.reconcileRewindReplacement(threadId, previous)
-    const durableSourceId =
+    let durableSourceId: string | undefined =
       this.#rewindReplacements.get(threadId)?.get(sourceId)?.durableMessageId ??
       sourceId
+    if (!previous && sourceText !== undefined) {
+      const history = await this.loadHistory(threadId)
+      const users = history.messages.filter(
+        (message) => message.role === "user"
+      )
+      const durable =
+        users.find((message) => message.id === sourceId) ??
+        (messageText(users.at(-1)?.content).trim() === sourceText.trim()
+          ? users.at(-1)
+          : undefined)
+      durableSourceId = durable?.id
+      if (durable)
+        this.#rememberRewindReplacement(threadId, {
+          localMessageId: sourceId,
+          text: sourceText,
+          durableMessageId: durable.id,
+        })
+    }
     this.#rememberRewindReplacement(threadId, replacement)
     return durableSourceId
   }
@@ -943,7 +992,10 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return history
   }
 
-  #rememberRewindReplacement(threadId: string, replacement: RewindReplacement) {
+  #rememberRewindReplacement(
+    threadId: string,
+    replacement: RewindReplacement & { durableMessageId?: string }
+  ) {
     let replacements = this.#rewindReplacements.get(threadId)
     if (!replacements) {
       replacements = new Map()
@@ -980,6 +1032,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
     this.#rewindReplacements.delete(threadId)
     this.#capabilities.delete(threadId)
     this.#plans.delete(threadId)
+    this.#runIds.delete(threadId)
+    this.#steeringReconciliations.delete(threadId)
   }
 
   async stopRun(threadId: string) {
@@ -994,6 +1048,40 @@ export class AosRemoteClient implements WorkspaceAdapter {
       result.status === "stopping" ? "running" : "idle"
     )
     return result
+  }
+
+  async steerRun(
+    threadId: string,
+    request: { requestId: string; text: string }
+  ) {
+    const agentId = this.#owner(threadId)
+    const expectedRunId = this.#runIds.get(threadId)
+    if (!expectedRunId)
+      throw new AosClientError(
+        "proxy-failure",
+        "The active run changed.",
+        "run_conflict"
+      )
+    const body = RunSteerRequestSchema.parse({ ...request, expectedRunId })
+    const response = await this.#read(
+      `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/steer`,
+      RunSteerResponseSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    )
+    this.#steeringReconciliations.add(threadId)
+    return response
+  }
+
+  needsSteeringReconciliation(threadId: string) {
+    return this.#steeringReconciliations.has(threadId)
+  }
+
+  completeSteeringReconciliation(threadId: string) {
+    this.#steeringReconciliations.delete(threadId)
   }
 
   workspaceCapabilities(threadId: string) {
@@ -1208,7 +1296,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
     })
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
-    const { path, scope } = this.#sessionPath(threadId, "/audio/transcribe")
+    const agentId = this.#owner(threadId)
+    const path = `/agents/${encodeURIComponent(agentId)}/audio/transcribe`
+    const scope = this.#eventScope(agentId, threadId)
     const response = await this.#read(
       path,
       SessionTranscriptionResponseSchema,
@@ -1227,7 +1317,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
     const request = SessionSpeechRequestSchema.safeParse({ text })
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid speech input")
-    const { path, scope } = this.#sessionPath(threadId, "/audio/speak")
+    const agentId = this.#owner(threadId)
+    const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
+    const scope = this.#eventScope(agentId, threadId)
     return this.#readBlob(
       path,
       {

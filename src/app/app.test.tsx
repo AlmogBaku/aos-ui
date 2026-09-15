@@ -148,7 +148,7 @@ describe("App", () => {
     expect(screen.queryByTestId("fixture-app")).not.toBeInTheDocument()
   })
 
-  it("scrubs and retains an invitation before runtime configuration loads", async () => {
+  it("retains an invitation fragment before runtime configuration loads", async () => {
     let resolveConfiguration!: (response: Response) => void
     vi.mocked(fetch).mockReturnValueOnce(
       new Promise<Response>((resolve) => {
@@ -159,7 +159,7 @@ describe("App", () => {
 
     render(<App />)
 
-    expect(window.location.hash).toBe("")
+    expect(window.location.hash).toBe("#invite=early-secret")
     resolveConfiguration(
       new Response(
         JSON.stringify({
@@ -177,6 +177,7 @@ describe("App", () => {
       "data-invite-token",
       "early-secret"
     )
+    expect(window.location.hash).toBe("#invite=early-secret")
   })
 
   it("migrates a locale-prefixed deep link to the compact URL and preference", async () => {

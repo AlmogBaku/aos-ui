@@ -87,8 +87,13 @@ function ReadyAosRuntimeProvider({
             threadId: remoteId ?? "",
             stageAttachments: client.stageAttachments.bind(client),
             resolveRewindSourceId: remoteId
-              ? (sourceId, replacement) =>
-                  client.resolveRewindSourceId(remoteId, sourceId, replacement)
+              ? (sourceId, replacement, sourceText) =>
+                  client.resolveRewindSourceId(
+                    remoteId,
+                    sourceId,
+                    replacement,
+                    sourceText
+                  )
               : undefined,
             onRewindCompleted: remoteId
               ? async (replacement) => {
@@ -122,6 +127,31 @@ function ReadyAosRuntimeProvider({
                   queueMicrotask(resetWhenIdle)
                 }
               : undefined,
+            onRunFinished:
+              remoteId && localId
+                ? async () => {
+                    if (!client.needsSteeringReconciliation(remoteId)) return
+                    const history = await client.loadHistory(remoteId)
+                    const runtime = assistantRuntimeRef.current
+                    if (!runtime) return
+                    const messages: ThreadMessageLike[] = history.messages.map(
+                      (message) => ({
+                        ...message,
+                        createdAt: new Date(message.createdAt),
+                      })
+                    )
+                    const target = runtime.threads.getById(localId)
+                    let unsubscribe: () => void = () => undefined
+                    const resetWhenIdle = () => {
+                      if (target.getState().isRunning) return
+                      unsubscribe()
+                      target.reset(messages)
+                      client.completeSteeringReconciliation(remoteId)
+                    }
+                    unsubscribe = target.subscribe(resetWhenIdle)
+                    queueMicrotask(resetWhenIdle)
+                  }
+                : undefined,
             onEvent: remoteId
               ? (event) => client.acceptRunEvent(remoteId, event)
               : undefined,
@@ -133,7 +163,7 @@ function ReadyAosRuntimeProvider({
                       .then((value) => value.agent)
                 : undefined,
           }),
-        [agentId, remoteId]
+        [agentId, localId, remoteId]
       )
       const history = useMemo(
         () =>
@@ -225,12 +255,26 @@ function ReadyAosRuntimeProvider({
   const messageRewind = useMemo(
     () => ({
       runConfig(sourceUserId: string) {
+        const source = assistantRuntime.thread
+          .getMessageById(sourceUserId)
+          .getState()
+        const sourceText =
+          source?.role === "user"
+            ? source.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n")
+            : undefined
         return {
-          custom: { "aos.rewindSourceId": sourceUserId },
+          custom: {
+            "aos.rewindSourceId": sourceUserId,
+            ...(sourceText === undefined
+              ? {}
+              : { "aos.rewindSourceText": sourceText }),
+          },
         }
       },
     }),
-    []
+    [assistantRuntime]
   )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =

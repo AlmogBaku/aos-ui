@@ -1,19 +1,12 @@
 import type { RunAgentInput } from "@ag-ui/client"
+import { toAgUiMessages } from "@assistant-ui/react-ag-ui"
 import { describe, expect, it, vi } from "vitest"
 
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 
-type AosRunInput = RunAgentInput & {
-  messages: Array<
-    RunAgentInput["messages"][number] & {
-      attachments?: unknown
-    }
-  >
-}
-
 function collect(
   agent: ReturnType<typeof createAosRunAgent>,
-  input: AosRunInput
+  input: RunAgentInput
 ) {
   return new Promise<unknown[]>((resolve, reject) => {
     const events: unknown[] = []
@@ -336,7 +329,7 @@ describe("AOS normalized HttpAgent transport", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
-  it("stages browser attachments and forwards only the opaque stage id to the normalized run", async () => {
+  it("stages AG-UI attachment content and forwards only text with the opaque stage id", async () => {
     const stageAttachments = vi.fn(async () => ({
       stageId: "stage-1",
       attachments: [],
@@ -358,33 +351,34 @@ describe("AOS normalized HttpAgent transport", () => {
       stageAttachments,
     })
 
+    const messages = toAgUiMessages([
+      {
+        id: "new-user",
+        role: "user",
+        content: [{ type: "text", text: "Please read this" }],
+        attachments: [
+          {
+            name: "brief.txt",
+            contentType: "text/plain",
+            content: [
+              {
+                type: "file",
+                data: "data:text/plain;base64,SGk=",
+                filename: "brief.txt",
+                mimeType: "text/plain",
+              },
+            ],
+          },
+        ],
+        metadata: { custom: {} },
+      },
+    ])
+
     await collect(agent, {
       threadId: "opaque-session-1",
       runId: "run-1",
       state: {},
-      messages: [
-        {
-          id: "new-user",
-          role: "user",
-          content: "Please read this",
-          attachments: [
-            {
-              id: "draft",
-              type: "file",
-              name: "brief.txt",
-              contentType: "text/plain",
-              content: [
-                {
-                  type: "file",
-                  data: "data:text/plain;base64,SGk=",
-                  filename: "brief.txt",
-                  mimeType: "text/plain",
-                },
-              ],
-            },
-          ],
-        },
-      ],
+      messages,
       tools: [],
       context: [],
       forwardedProps: {},
@@ -505,6 +499,143 @@ describe("AOS normalized HttpAgent transport", () => {
       context: [],
       forwardedProps: { "aos.rewindSourceId": "hermes-row-3" },
     })
+  })
+
+  it("does not forward an unpersisted stopped turn as a Hermes rewind source", async () => {
+    const resolveRewindSourceId = vi.fn(async () => undefined)
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          'data: {"type":"RUN_FINISHED","threadId":"stored","runId":"edit-run","outcome":{"type":"success"}}\n\n',
+          { headers: { "content-type": "text/event-stream" } }
+        )
+    )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: "stored",
+      fetcher,
+      resolveRewindSourceId,
+    })
+
+    await collect(agent, {
+      threadId: "stored",
+      runId: "edit-run",
+      state: {},
+      messages: [{ id: "replacement", role: "user", content: "Edited turn" }],
+      tools: [],
+      context: [],
+      forwardedProps: {
+        runConfig: {
+          "aos.rewindSourceId": "local-stopped-turn",
+          "aos.rewindSourceText": "Original stopped turn",
+        },
+      },
+    })
+
+    expect(resolveRewindSourceId).toHaveBeenCalledWith(
+      "local-stopped-turn",
+      { localMessageId: "replacement", text: "Edited turn" },
+      "Original stopped turn"
+    )
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+      messages: [{ id: "replacement", content: "Edited turn" }],
+      forwardedProps: {},
+    })
+  })
+
+  it("resolves a live local turn to its authoritative Hermes row by original text", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith("/history?limit=200&offset=0"))
+        return Response.json({
+          sessionId: "stored",
+          messages: [
+            {
+              id: "hermes-row-7",
+              role: "user",
+              content: [{ type: "text", text: "Original live turn" }],
+              createdAt: "2026-09-15T08:00:00.000Z",
+            },
+          ],
+          total: 1,
+          limit: 200,
+          offset: 0,
+          nextOffset: 1,
+        })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership("stored", "researcher")
+
+    await expect(
+      client.resolveRewindSourceId(
+        "stored",
+        "local-live-turn",
+        { localMessageId: "replacement", text: "Edited turn" },
+        "Original live turn"
+      )
+    ).resolves.toBe("hermes-row-7")
+  })
+
+  it("treats a stopped local turn absent from Hermes history as unpersisted", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        sessionId: "stored",
+        messages: [],
+        total: 0,
+        limit: 200,
+        offset: 0,
+        nextOffset: 0,
+      })
+    )
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership("stored", "researcher")
+
+    await expect(
+      client.resolveRewindSourceId(
+        "stored",
+        "local-stopped-turn",
+        { localMessageId: "replacement", text: "Edited turn" },
+        "Original stopped turn"
+      )
+    ).resolves.toBeUndefined()
+  })
+
+  it("does not mistake an older identical turn for an unpersisted stopped turn", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        sessionId: "stored",
+        messages: [
+          {
+            id: "older-identical",
+            role: "user",
+            content: [{ type: "text", text: "Repeated text" }],
+            createdAt: "2026-09-15T07:00:00.000Z",
+          },
+          {
+            id: "latest-durable",
+            role: "user",
+            content: [{ type: "text", text: "Different durable turn" }],
+            createdAt: "2026-09-15T08:00:00.000Z",
+          },
+        ],
+        total: 2,
+        limit: 200,
+        offset: 0,
+        nextOffset: 2,
+      })
+    )
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership("stored", "researcher")
+
+    await expect(
+      client.resolveRewindSourceId(
+        "stored",
+        "local-stopped-turn",
+        { localMessageId: "replacement", text: "Edited turn" },
+        "Repeated text"
+      )
+    ).resolves.toBeUndefined()
   })
 
   it("keeps the live question when an edited run pauses for an interrupt", async () => {

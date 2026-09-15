@@ -24,6 +24,10 @@ type ComposerClient = SessionCapabilityClient & {
     threadId: string,
     selectedId: string
   ): Promise<{ selectedId: string }>
+  steerRun(
+    threadId: string,
+    request: { requestId: string; text: string }
+  ): Promise<{ status: "steered" | "queued" }>
 }
 
 /** Reads one authoritative capability projection for the selected Session. */
@@ -81,6 +85,8 @@ export function useAosComposerFeatures(
   const modelsAvailable = capabilities?.workspace.models.status === "available"
   const contextAvailable =
     capabilities?.workspace.context.status === "available"
+  const steeringAvailable =
+    capabilities?.interactions.steering.status === "available"
 
   useEffect(() => {
     let active = true
@@ -121,6 +127,11 @@ export function useAosComposerFeatures(
 
   return useMemo(
     () => ({
+      steer:
+        steeringAvailable && threadId
+          ? (request: { requestId: string; text: string }) =>
+              client.steerRun(threadId, request)
+          : undefined,
       model:
         config.modelSelectorEnabled && modelsAvailable && models && threadId
           ? {
@@ -177,6 +188,7 @@ export function useAosComposerFeatures(
       modelsAvailable,
       onError,
       selection,
+      steeringAvailable,
       threadId,
     ]
   )

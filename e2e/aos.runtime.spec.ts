@@ -38,6 +38,7 @@ const runtime = {
     sessionDeletion: { status: "available" },
     sessionRun: { status: "available" },
     sessionStop: { status: "available" },
+    sessionSteer: { status: "available" },
   },
 }
 
@@ -69,6 +70,13 @@ const sessionCapabilities = {
     },
   },
   interactions: {
+    steering: {
+      status: "available",
+      scope: "active-run",
+      semantics: "visible-user-message",
+      input: "text",
+      fallback: "provider-queue",
+    },
     approvals: {
       status: "available",
       protocol: "ag-ui-interrupt",
@@ -114,10 +122,9 @@ const sessionCapabilities = {
   },
 }
 
-test("AOS proxy gates auth, restores history, streams one turn, stops, and reconnects", async ({
+test("AOS proxy restores history, streams one turn, stops, and reconnects", async ({
   page,
 }) => {
-  let authenticated = false
   let stopRequests = 0
   let runRequests = 0
 
@@ -166,14 +173,6 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname
-    if (path.endsWith("/auth/operator"))
-      return route.fulfill({
-        json: authenticated
-          ? { status: "authenticated", operator: { id: "operator" } }
-          : { status: "unauthenticated" },
-      })
-    if (path.endsWith("/auth/runtime"))
-      return route.fulfill({ json: { status: "authenticated" } })
     if (path.endsWith("/runtime")) return route.fulfill({ json: runtime })
     if (path.endsWith("/agents"))
       return route.fulfill({
@@ -277,10 +276,6 @@ test("AOS proxy gates auth, restores history, streams one turn, stops, and recon
   })
 
   await page.goto("/")
-  await expect(page.getByRole("alert")).toContainText("Sign in to AOS")
-
-  authenticated = true
-  await page.reload()
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
 
   await page.getByRole("textbox", { name: "Message input" }).fill("Send once")

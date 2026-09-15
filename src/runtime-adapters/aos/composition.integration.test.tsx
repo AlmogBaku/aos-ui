@@ -370,6 +370,14 @@ describe("AOS normalized Session browser integration", () => {
         },
       ]
     )
+    const messageRewind = supplied!.messageRewind
+    if (!messageRewind) throw new Error("Expected message rewind support")
+    expect(messageRewind.runConfig("native-user-1")).toEqual({
+      custom: {
+        "aos.rewindSourceId": "native-user-1",
+        "aos.rewindSourceText": "Open it",
+      },
+    })
 
     const browserState = JSON.stringify({
       threads: supplied!.assistantRuntime.threads.getState(),

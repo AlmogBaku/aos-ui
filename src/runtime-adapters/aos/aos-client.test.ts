@@ -143,6 +143,13 @@ describe("provider-neutral AOS browser client", () => {
               },
             },
             interactions: {
+              steering: {
+                status: "available",
+                scope: "active-run",
+                semantics: "visible-user-message",
+                input: "text",
+                fallback: "provider-queue",
+              },
               approvals: {
                 status: "available",
                 protocol: "ag-ui-interrupt",
@@ -458,6 +465,7 @@ describe("provider-neutral AOS browser client", () => {
               sessionDeletion: { status: "available" },
               sessionRun: { status: "available" },
               sessionStop: { status: "available" },
+              sessionSteer: { status: "available" },
             },
           }
         : catalog
@@ -513,6 +521,7 @@ describe("provider-neutral AOS browser client", () => {
             sessionDeletion: { status: "unavailable", reason: "offline" },
             sessionRun: { status: "unavailable", reason: "offline" },
             sessionStop: { status: "unavailable", reason: "offline" },
+            sessionSteer: { status: "unavailable", reason: "offline" },
           },
         })
       if (path.endsWith("/sessions?limit=50&offset=0"))
@@ -851,5 +860,91 @@ describe("provider-neutral AOS browser client", () => {
       "/api/aos/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored/runs/stop",
       expect.objectContaining({ method: "POST", credentials: "same-origin" })
     )
+  })
+
+  it("steers with the internally tracked active run and preserves normalized conflicts", async () => {
+    const session = {
+      id: "stored",
+      agentId: "researcher",
+      title: "Research",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "running" as const,
+    }
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+          return Response.json({
+            sessions: [session],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          })
+        if (path.endsWith("/agents/researcher/sessions/stored/runs/steer")) {
+          expect(JSON.parse(String(init?.body))).toEqual({
+            requestId: "queue-item-1",
+            expectedRunId: "run-1",
+            text: "Use the newer API",
+          })
+          return Response.json({ status: "queued" }, { status: 202 })
+        }
+        throw new Error(`Unexpected normalized request: ${path}`)
+      }
+    )
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+    client.acceptRunEvent("stored", {
+      type: EventType.RUN_STARTED,
+      threadId: "stored",
+      runId: "run-1",
+    })
+
+    await expect(
+      client.steerRun("stored", {
+        requestId: "queue-item-1",
+        text: "Use the newer API",
+      })
+    ).resolves.toEqual({ status: "queued" })
+    expect(client.needsSteeringReconciliation("stored")).toBe(true)
+    client.completeSteeringReconciliation("stored")
+    expect(client.needsSteeringReconciliation("stored")).toBe(false)
+
+    client.acceptRunEvent("stored", {
+      type: EventType.CUSTOM,
+      name: "aos.steer.accepted",
+      value: {
+        requestId: "queue-item-replayed",
+        text: "Replay survived the lost HTTP acknowledgement",
+        delivery: "steered",
+      },
+    })
+    expect(client.needsSteeringReconciliation("stored")).toBe(true)
+
+    const conflictClient = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              code: "run_conflict",
+              description: "The active run changed.",
+            },
+          },
+          { status: 409 }
+        )
+      ),
+    })
+    conflictClient.adoptSessionOwnership("stored", "researcher")
+    conflictClient.acceptRunEvent("stored", {
+      type: EventType.RUN_STARTED,
+      threadId: "stored",
+      runId: "run-1",
+    })
+    await expect(
+      conflictClient.steerRun("stored", {
+        requestId: "queue-item-2",
+        text: "Correction",
+      })
+    ).rejects.toMatchObject({ code: "run_conflict" })
   })
 })
