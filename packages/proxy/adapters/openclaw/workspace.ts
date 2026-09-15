@@ -56,23 +56,8 @@ function isVisiblePrimaryAgent(
   )
 }
 
-function ownerFromKey(sessionKey: string) {
-  const match = /^agent:([^:]+):/u.exec(sessionKey)
-  return match?.[1]
-}
-
 function verifyOwnership(agentId: string, row: OpenClawSession) {
-  const embedded = ownerFromKey(row.key)
-  if (
-    (embedded !== undefined && embedded !== agentId) ||
-    (row.agentId !== undefined && row.agentId !== agentId) ||
-    (embedded !== undefined &&
-      row.agentId !== undefined &&
-      embedded !== row.agentId)
-  )
-    throw new OpenClawWorkspaceOwnershipError()
-  if (embedded === undefined && row.agentId === undefined)
-    throw new OpenClawWorkspaceOwnershipError()
+  if (row.agentId !== agentId) throw new OpenClawWorkspaceOwnershipError()
 }
 
 function updatedAt(row: OpenClawSession) {
@@ -99,7 +84,12 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
 }
 
 export function invitedOpenClawSessionKey(agentId: string, ref: string) {
-  if (!INVITATION_REFERENCE.test(agentId) || !INVITATION_REFERENCE.test(ref))
+  if (
+    typeof agentId !== "string" ||
+    agentId.length === 0 ||
+    agentId.length > 4_096 ||
+    !INVITATION_REFERENCE.test(ref)
+  )
     throw new OpenClawWorkspaceOwnershipError()
   return `agent:${agentId}:aos-invite:${ref}`
 }
@@ -128,6 +118,7 @@ export function createOpenClawWorkspace(input: {
   hiddenAgentIds?: readonly string[]
 }): OpenClawWorkspace {
   const hidden = new Set(input.hiddenAgentIds ?? [])
+  const verifiedSessions = new Map<string, string>()
   const listNativeAgents = async () =>
     parseOpenClawAgents(
       await input.client.request("agents.list", openClawAgentsParams())
@@ -150,7 +141,8 @@ export function createOpenClawWorkspace(input: {
       await input.client.request(
         "sessions.list",
         openClawSessionsParams(agentId, limit, offset)
-      )
+      ),
+      limit
     )
   }
   const listSessions = async (
@@ -160,7 +152,13 @@ export function createOpenClawWorkspace(input: {
   ) => {
     const page = await rows(agentId, limit, offset)
     const sessions = page.map((row) => projectSession(agentId, row))
-    return { sessions, total: offset + sessions.length, limit, offset }
+    for (const session of sessions) verifiedSessions.set(session.id, agentId)
+    return {
+      sessions,
+      total: offset + sessions.length + (page.length === limit ? 1 : 0),
+      limit,
+      offset,
+    }
   }
 
   return {
@@ -192,19 +190,37 @@ export function createOpenClawWorkspace(input: {
       const agents = (await listNativeAgents())
         .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
         .sort((left, right) => left.id.localeCompare(right.id))
-      const pages = await Promise.all(
-        agents.map(async (agent) => {
+      const prefix = offset + limit
+      const fetchPrefix = async (agentId: string) => {
+        const sessions: Session[] = []
+        let pageOffset = 0
+        let hasMore = false
+        while (sessions.length < prefix) {
+          const pageLimit = Math.min(MAX_SESSION_PAGE, prefix - sessions.length)
           const native = parseOpenClawSessions(
             await input.client.request(
               "sessions.list",
-              openClawSessionsParams(agent.id, MAX_SESSION_PAGE, 0)
-            )
+              openClawSessionsParams(agentId, pageLimit, pageOffset)
+            ),
+            pageLimit
           )
-          return native.map((row) => projectSession(agent.id, row))
-        })
-      )
+          sessions.push(...native.map((row) => projectSession(agentId, row)))
+          if (native.length < pageLimit) break
+          pageOffset += native.length
+          hasMore = true
+        }
+        return { sessions, hasMore }
+      }
+      const pages: Array<{ sessions: Session[]; hasMore: boolean }> = []
+      for (let start = 0; start < agents.length; start += 8)
+        pages.push(
+          ...(await Promise.all(
+            agents.slice(start, start + 8).map((agent) => fetchPrefix(agent.id))
+          ))
+        )
       const sessions = pages
         .flat()
+        .flatMap((page) => page.sessions)
         .sort(
           (left, right) =>
             Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
@@ -212,19 +228,28 @@ export function createOpenClawWorkspace(input: {
         )
       return {
         sessions: sessions.slice(offset, offset + limit),
-        total: sessions.length,
+        total: sessions.length + (pages.some((page) => page.hasMore) ? 1 : 0),
         limit,
         offset,
       }
     },
     async getSession(agentId, sessionKey) {
-      const page = await rows(agentId, MAX_SESSION_PAGE, 0)
+      await requireVisibleAgent(agentId)
+      const page = parseOpenClawSessions(
+        await input.client.request(
+          "sessions.list",
+          openClawInvitedSessionsParams(agentId, sessionKey)
+        ),
+        MAX_SESSION_PAGE
+      )
       const matches = page.filter((row) => row.key === sessionKey)
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
-      return projectSession(agentId, matches[0]!)
+      const session = projectSession(agentId, matches[0]!)
+      verifiedSessions.set(session.id, agentId)
+      return session
     },
     resolveSessionId(agentId, publicSessionId) {
-      return ownerFromKey(publicSessionId) === agentId
+      return verifiedSessions.get(publicSessionId) === agentId
         ? publicSessionId
         : undefined
     },
@@ -235,12 +260,14 @@ export function createOpenClawWorkspace(input: {
         await input.client.request(
           "sessions.list",
           openClawInvitedSessionsParams(agentId, sessionKey)
-        )
+        ),
+        MAX_SESSION_PAGE
       )
       const matches = page.filter((row) => row.key === sessionKey)
       if (!matches.length) return undefined
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
       verifyOwnership(agentId, matches[0]!)
+      verifiedSessions.set(sessionKey, agentId)
       return { sessionId: sessionKey, created: false }
     },
   }

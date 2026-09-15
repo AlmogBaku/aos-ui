@@ -119,4 +119,130 @@ describe("OpenClaw workspace reads", () => {
       },
     })
   })
+
+  it("[CL1-WORKSPACE-004] advertises a continuation for a full native page", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "analyst",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "analyst", name: "Analyst", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: Array.from({ length: 50 }, (_, index) => ({
+          key: `agent:analyst:${index}`,
+          agentId: "analyst",
+          label: `Session ${index}`,
+        })),
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(
+      workspace.listSessions("analyst", 50, 0)
+    ).resolves.toMatchObject({
+      total: 51,
+      limit: 50,
+      offset: 0,
+    })
+  })
+
+  it("[CL1-WORKSPACE-005] globally pages beyond each Agent's first 100 Sessions", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "team.alpha",
+        mainKey: "main",
+        scope: "global",
+        agents: [
+          { id: "team.alpha", name: "Alpha", kind: "agent" },
+          { id: "team:beta", name: "Beta", kind: "agent" },
+        ],
+      },
+    })
+    native.request = async (method: string, params: unknown) => {
+      native.requests.push({ method, params })
+      if (method === "agents.list")
+        return {
+          defaultId: "team.alpha",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "team.alpha", name: "Alpha", kind: "agent" },
+            { id: "team:beta", name: "Beta", kind: "agent" },
+          ],
+        }
+      if (
+        !params ||
+        typeof params !== "object" ||
+        !("offset" in params) ||
+        !("limit" in params) ||
+        !("agentId" in params)
+      )
+        throw new Error("expected scoped OpenClaw Session params")
+      const {
+        offset: start,
+        limit,
+        agentId,
+      } = params as {
+        offset: number
+        limit: number
+        agentId: string
+      }
+      return {
+        sessions: Array.from(
+          { length: Math.min(limit, 150 - start) },
+          (_, index) => ({
+            key: `agent:${agentId}:session-${start + index}`,
+            agentId,
+            label: `${agentId}-${start + index}`,
+            updatedAt: 1_000_000 - start - index,
+          })
+        ),
+      }
+    }
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const result = await workspace.listAllSessions(10, 210)
+
+    expect(result.sessions).toHaveLength(10)
+    expect(
+      result.sessions.some((session) => session.id.endsWith("session-105"))
+    ).toBe(true)
+    expect(native.requests).toContainEqual({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId: "team.alpha", offset: 100 }),
+    })
+    expect(native.requests).toContainEqual({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId: "team:beta", offset: 100 }),
+    })
+  })
+
+  it("[CL1-WORKSPACE-006] retains exact dotted and colon Agent IDs in invitation keys and ownership checks", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "team:alpha",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "team:alpha", name: "Alpha", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: [
+          {
+            key: "agent:team:alpha:aos-invite:guest_1",
+            agentId: "team:alpha",
+            label: "Guest",
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(
+      workspace.resolveInvitedSession("team:alpha", "guest_1")
+    ).resolves.toEqual({
+      sessionId: "agent:team:alpha:aos-invite:guest_1",
+      created: false,
+    })
+  })
 })

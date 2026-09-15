@@ -7,8 +7,11 @@ import {
 } from "@openclaw/gateway-protocol"
 import { Value } from "typebox/value"
 
-const MAX_NATIVE_COLLECTION = 10_000
+const MAX_NATIVE_COLLECTION = 1_000
 const MAX_NATIVE_STRING = 1_000_000
+const MAX_NATIVE_BYTES = 2_000_000
+const MAX_NATIVE_NODES = 20_000
+const MAX_NATIVE_DEPTH = 32
 
 export class OpenClawNativePayloadError extends Error {
   constructor() {
@@ -92,6 +95,38 @@ function official<T>(schema: object, value: T): T {
   return value
 }
 
+function boundedNativeValue(value: unknown, maxRows: number) {
+  if (!Number.isInteger(maxRows) || maxRows < 1)
+    throw new OpenClawNativePayloadError()
+  let bytes = 0
+  let nodes = 0
+  const seen = new WeakSet<object>()
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > MAX_NATIVE_DEPTH || ++nodes > MAX_NATIVE_NODES)
+      throw new OpenClawNativePayloadError()
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value, "utf8")
+      if (bytes > MAX_NATIVE_BYTES) throw new OpenClawNativePayloadError()
+      return
+    }
+    if (value === null || typeof value !== "object") return
+    if (seen.has(value)) throw new OpenClawNativePayloadError()
+    seen.add(value)
+    if (Array.isArray(value)) {
+      if (value.length > Math.max(maxRows, MAX_NATIVE_COLLECTION))
+        throw new OpenClawNativePayloadError()
+      for (const item of value) visit(item, depth + 1)
+      return
+    }
+    for (const [key, item] of Object.entries(value)) {
+      bytes += Buffer.byteLength(key, "utf8")
+      if (bytes > MAX_NATIVE_BYTES) throw new OpenClawNativePayloadError()
+      visit(item, depth + 1)
+    }
+  }
+  visit(value, 0)
+}
+
 export function openClawAgentsParams() {
   return official(AgentsListParamsSchema, {})
 }
@@ -145,6 +180,7 @@ export function openClawModelsParams(agentId: string, sessionKey: string) {
 }
 
 export function parseOpenClawAgents(value: unknown): readonly OpenClawAgent[] {
+  boundedNativeValue(value, MAX_NATIVE_COLLECTION)
   official(AgentsListResultSchema, value)
   const agents = (value as { agents: readonly OpenClawAgent[] }).agents
   if (agents.length > MAX_NATIVE_COLLECTION)
@@ -153,12 +189,13 @@ export function parseOpenClawAgents(value: unknown): readonly OpenClawAgent[] {
 }
 
 export function parseOpenClawSessions(
-  value: unknown
+  value: unknown,
+  maxRows: number
 ): readonly OpenClawSession[] {
+  boundedNativeValue(value, maxRows)
   if (!isRecord(value) || !Array.isArray(value.sessions))
     throw new OpenClawNativePayloadError()
-  if (value.sessions.length > MAX_NATIVE_COLLECTION)
-    throw new OpenClawNativePayloadError()
+  if (value.sessions.length > maxRows) throw new OpenClawNativePayloadError()
   return value.sessions.map((value) => {
     if (!isRecord(value)) throw new OpenClawNativePayloadError()
     const key = string(value.key)
@@ -227,11 +264,14 @@ export function parseOpenClawSessions(
   })
 }
 
-export function parseOpenClawHistory(value: unknown): OpenClawHistory {
+export function parseOpenClawHistory(
+  value: unknown,
+  maxRows: number
+): OpenClawHistory {
+  boundedNativeValue(value, maxRows)
   if (!isRecord(value) || !Array.isArray(value.messages))
     throw new OpenClawNativePayloadError()
-  if (value.messages.length > MAX_NATIVE_COLLECTION)
-    throw new OpenClawNativePayloadError()
+  if (value.messages.length > maxRows) throw new OpenClawNativePayloadError()
   let inFlightRun: OpenClawHistory["inFlightRun"]
   if (value.inFlightRun !== undefined && value.inFlightRun !== null) {
     if (!isRecord(value.inFlightRun)) throw new OpenClawNativePayloadError()
@@ -276,6 +316,7 @@ export function parseOpenClawHistory(value: unknown): OpenClawHistory {
 }
 
 export function parseOpenClawModels(value: unknown): OpenClawModels {
+  boundedNativeValue(value, MAX_NATIVE_COLLECTION)
   if (!isRecord(value) || !Array.isArray(value.models))
     throw new OpenClawNativePayloadError()
   if (value.models.length > MAX_NATIVE_COLLECTION)

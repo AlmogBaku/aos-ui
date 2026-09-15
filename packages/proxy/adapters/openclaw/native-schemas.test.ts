@@ -5,6 +5,8 @@ import {
   openClawHistoryParams,
   openClawModelsParams,
   openClawSessionsParams,
+  parseOpenClawHistory,
+  parseOpenClawSessions,
 } from "./native-schemas"
 
 describe("OpenClaw native workspace schemas", () => {
@@ -37,5 +39,31 @@ describe("OpenClaw native workspace schemas", () => {
     expect(() => openClawHistoryParams("researcher", "", 200, 0)).toThrow(
       OpenClawNativePayloadError
     )
+  })
+
+  it("[CL1-SCHEMA-003] rejects a native page that exceeds its requested bound", () => {
+    expect(() =>
+      parseOpenClawSessions(
+        { sessions: [{ key: "agent:a:one" }, { key: "agent:a:two" }] },
+        1
+      )
+    ).toThrow(OpenClawNativePayloadError)
+    expect(() =>
+      parseOpenClawHistory({ messages: [{ id: "one" }, { id: "two" }] }, 1)
+    ).toThrow(OpenClawNativePayloadError)
+  })
+
+  it("[CL1-SCHEMA-004] rejects oversized and deeply nested native history before projection", () => {
+    expect(() =>
+      parseOpenClawHistory(
+        { messages: [{ id: "one", content: "x".repeat(4_000_001) }] },
+        1
+      )
+    ).toThrow(OpenClawNativePayloadError)
+    let deep: unknown = "leaf"
+    for (let index = 0; index < 40; index++) deep = { deep }
+    expect(() =>
+      parseOpenClawHistory({ messages: [{ id: "one", content: deep }] }, 1)
+    ).toThrow(OpenClawNativePayloadError)
   })
 })

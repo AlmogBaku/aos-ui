@@ -17,7 +17,6 @@ import type { OpenClawWorkspaceClient } from "./workspace"
 
 const HISTORY_DEFAULT_PAGE = 200
 const HISTORY_MAX_PAGE = 500
-const MAX_MESSAGE_PARTS = 2_000
 
 export interface OpenClawHistoryAuthority {
   getSession(agentId: string, sessionKey: string): Promise<Session>
@@ -85,73 +84,15 @@ function nativeSequence(row: Record<string, unknown>, index: number) {
     : index
 }
 
-interface JsonObject {
-  readonly [key: string]: JsonValue
-}
-
-interface JsonArray extends ReadonlyArray<JsonValue> {
-  readonly __jsonArray?: never
-}
-
-type JsonValue = null | boolean | number | string | JsonArray | JsonObject
-
-function jsonValue(value: unknown): JsonValue | undefined {
-  if (value === null || typeof value === "boolean" || typeof value === "string")
-    return value
-  if (typeof value === "number")
-    return Number.isFinite(value) ? value : undefined
-  if (Array.isArray(value)) {
-    const items = value.map(jsonValue)
-    return items.some((item) => item === undefined)
-      ? undefined
-      : (items as JsonValue[])
-  }
-  if (!record(value)) return undefined
-  const result: Record<string, JsonValue> = {}
-  for (const [key, item] of Object.entries(value)) {
-    const parsed = jsonValue(item)
-    if (parsed === undefined) return undefined
-    result[key] = parsed
-  }
-  return result
-}
-
-type ToolCall = Extract<
-  SessionMessage["content"][number],
-  { type: "tool-call" }
->
-
-function jsonRecord(value: unknown): ToolCall["args"] {
-  const parsed = jsonValue(value)
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as ToolCall["args"])
-    : {}
-}
-
 function messageParts(value: unknown): SessionMessage["content"] {
   if (typeof value === "string") return [{ type: "text", text: value }]
-  if (!Array.isArray(value) || value.length > MAX_MESSAGE_PARTS) return []
+  if (!Array.isArray(value)) return []
   const parts: SessionMessage["content"] = []
   for (const part of value) {
-    if (!record(part)) return []
+    if (!record(part)) continue
     if (part.type === "text") {
       const text = boundedString(part.text)
       if (text !== undefined) parts.push({ type: "text", text })
-      continue
-    }
-    if (part.type === "thinking") {
-      const text = boundedString(part.thinking)
-      if (text !== undefined) parts.push({ type: "reasoning", text })
-      continue
-    }
-    if (part.type === "toolCall") {
-      const toolCallId = identifier(part.id)
-      const toolName = identifier(part.name)
-      if (!toolCallId || !toolName) continue
-      const args = jsonRecord(part.arguments)
-      const argsText = JSON.stringify(args)
-      if (argsText.length <= 1_000_000)
-        parts.push({ type: "tool-call", toolCallId, toolName, args, argsText })
     }
   }
   return parts
@@ -163,31 +104,9 @@ function projectMessages(rows: readonly unknown[]): SessionMessage[] {
     sequence: number
     index: number
   }> = []
-  const toolCalls = new Map<
-    string,
-    { message: SessionMessage; index: number }
-  >()
   for (const [index, raw] of rows.entries()) {
     if (!record(raw)) continue
-    if (raw.role === "toolResult") {
-      const toolCallId = identifier(raw.toolCallId)
-      const target = toolCallId ? toolCalls.get(toolCallId) : undefined
-      if (!target) continue
-      const part = target.message.content[target.index]
-      if (part?.type !== "tool-call") continue
-      target.message.content[target.index] = {
-        ...part,
-        result: typeof raw.content === "string" ? raw.content : null,
-        ...(raw.isError === true ? { isError: true } : {}),
-      }
-      continue
-    }
-    if (
-      raw.role !== "user" &&
-      raw.role !== "assistant" &&
-      raw.role !== "system"
-    )
-      continue
+    if (raw.role !== "user" && raw.role !== "assistant") continue
     const id = nativeMessageId(raw)
     if (!id) continue
     const message: SessionMessage = {
@@ -196,9 +115,6 @@ function projectMessages(rows: readonly unknown[]): SessionMessage[] {
       content: messageParts(raw.content),
       createdAt: timestamp(raw, index),
     }
-    for (const [partIndex, part] of message.content.entries())
-      if (part.type === "tool-call")
-        toolCalls.set(part.toolCallId, { message, index: partIndex })
     messages.push({ message, sequence: nativeSequence(raw, index), index })
   }
   return messages
@@ -214,12 +130,7 @@ function verifyRowOwnership(
   sessionKey: string,
   row: OpenClawSession
 ) {
-  const embedded = /^agent:([^:]+):/u.exec(row.key)?.[1]
-  if (
-    row.key !== sessionKey ||
-    (embedded !== undefined && embedded !== agentId) ||
-    (row.agentId !== undefined && row.agentId !== agentId)
-  )
+  if (row.key !== sessionKey || row.agentId !== agentId)
     throw new OpenClawHistoryUnavailableError()
 }
 
@@ -278,7 +189,8 @@ export function createOpenClawHistory(input: {
       await input.client.request(
         "sessions.list",
         openClawSessionsParams(agentId, 100, 0)
-      )
+      ),
+      100
     )
     const matches = rows.filter((row) => row.key === sessionKey)
     if (matches.length !== 1) throw new OpenClawHistoryUnavailableError()
@@ -297,9 +209,10 @@ export function createOpenClawHistory(input: {
       if (!Number.isInteger(offset) || offset < 0)
         throw new OpenClawHistoryUnavailableError()
       await requireScope(agentId, sessionKey)
+      if (!input.subscribeSession) throw new OpenClawHistoryUnavailableError()
       for (let attempt = 0; attempt < 2; attempt++) {
         let dirty = false
-        const unsubscribe = await input.subscribeSession?.(
+        const unsubscribe = await input.subscribeSession(
           agentId,
           sessionKey,
           () => {
@@ -311,21 +224,23 @@ export function createOpenClawHistory(input: {
             await input.client.request(
               "chat.history",
               openClawHistoryParams(agentId, sessionKey, limit, offset)
-            )
+            ),
+            limit
           )
           if (dirty) continue
           const messages = projectMessages(native.messages)
+          const rawCount = native.messages.length
           return {
             sessionId: sessionKey,
             messages,
-            total: offset + messages.length,
+            total: offset + rawCount + (rawCount === limit ? 1 : 0),
             limit,
             offset,
-            nextOffset: offset + messages.length,
+            nextOffset: offset + rawCount,
             execution: execution(native),
           }
         } finally {
-          unsubscribe?.()
+          unsubscribe()
         }
       }
       throw new OpenClawHistoryUnavailableError()
@@ -372,7 +287,8 @@ export function createOpenClawHistory(input: {
         await input.client.request(
           "chat.history",
           openClawHistoryParams(agentId, sessionKey, 1, 0)
-        )
+        ),
+        1
       )
       return {
         state: execution(history).status === "running" ? "running" : "idle",

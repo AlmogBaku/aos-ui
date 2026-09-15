@@ -119,6 +119,7 @@ describe("OpenClaw authoritative history", () => {
           }
         },
       },
+      subscribeSession: async () => () => undefined,
     })
 
     await expect(
@@ -136,5 +137,106 @@ describe("OpenClaw authoritative history", () => {
       maxTokens: 200_000,
       source: "provider-usage",
     })
+  })
+
+  it("[CL1-HISTORY-003] fails closed when the official scoped subscription is unavailable", async () => {
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: { request: async () => ({ messages: [] }) },
+    })
+
+    await expect(
+      history.history("analyst", "agent:analyst:main", 1, 0)
+    ).rejects.toMatchObject({ name: "OpenClawHistoryUnavailableError" })
+  })
+
+  it("[CL1-HISTORY-004] advances by native rows when tool records are not browser history", async () => {
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: async () => ({
+          messages: [
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "tool-1",
+                  name: "read",
+                  arguments: { path: "/private" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "tool-1",
+              content: "token=secret",
+            },
+            { id: "user-2", role: "user", content: "Continue" },
+          ],
+        }),
+      },
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(
+      history.history("analyst", "agent:analyst:main", 3, 7)
+    ).resolves.toMatchObject({
+      messages: [{ id: "assistant-1", content: [] }, { id: "user-2" }],
+      total: 11,
+      nextOffset: 10,
+    })
+  })
+
+  it("[CL1-HISTORY-005] never projects native system, thinking, tool arguments, or tool results", async () => {
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: async () => ({
+          messages: [
+            {
+              id: "system",
+              role: "system",
+              content: "token=secret /private/system",
+            },
+            {
+              id: "assistant",
+              role: "assistant",
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "token=secret /private/reasoning",
+                },
+                {
+                  type: "toolCall",
+                  id: "tool",
+                  name: "read",
+                  arguments: { path: "/private/tool", token: "secret" },
+                },
+                { type: "text", text: "Safe final answer" },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "tool",
+              content: "token=secret /private/result",
+            },
+          ],
+        }),
+      },
+      subscribeSession: async () => () => undefined,
+    })
+
+    const result = await history.history("analyst", "agent:analyst:main", 3, 0)
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        id: "assistant",
+        content: [{ type: "text", text: "Safe final answer" }],
+      }),
+    ])
+    expect(JSON.stringify(result)).not.toMatch(
+      /secret|\/private|thinking|toolCall|system/u
+    )
   })
 })
