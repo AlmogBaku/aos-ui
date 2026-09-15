@@ -443,14 +443,22 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       status: z.literal("available"),
       scope: z.literal("attached-session"),
       inputs: z.tuple([z.literal("image"), z.literal("file")]),
-      imageMimeTypes: z.array(z.string().min(1).max(256)).max(32),
-      fileMimeTypes: z.literal("valid-type/subtype"),
+      imageMimeTypes: z.union([
+        z.array(z.string().min(1).max(256)).max(32),
+        z.literal("provider-dependent"),
+      ]),
+      fileMimeTypes: z.enum(["valid-type/subtype", "provider-dependent"]),
       maxMimeTypeBytes: z.number().int().positive(),
       maxFilenameBytes: z.number().int().positive(),
       maxCount: z.number().int().positive(),
       maxImageBytes: z.number().int().positive(),
       maxFileBytes: z.number().int().positive(),
-      maxTotalBytes: z.number().int().positive(),
+      maxTotalBytes: z.union([
+        z.number().int().positive(),
+        z.literal("complete-request"),
+      ]),
+      maxEncodedRequestBytes: z.number().int().positive().optional(),
+      completeRequestValidation: z.literal("native-run-input").optional(),
     }),
     artifacts: z.union([
       z.strictObject({

@@ -71,6 +71,34 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
+  it("preserves negotiated attachment limits without inventing provider policy", () => {
+    const parsed =
+      SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
+        {
+          status: "available",
+          scope: "attached-session",
+          inputs: ["image", "file"],
+          imageMimeTypes: "provider-dependent",
+          fileMimeTypes: "provider-dependent",
+          maxMimeTypeBytes: 256,
+          maxFilenameBytes: 255,
+          maxCount: 16,
+          maxImageBytes: 10_000_000,
+          maxFileBytes: 25_000_000,
+          maxTotalBytes: "complete-request",
+          maxEncodedRequestBytes: 26_214_400,
+          completeRequestValidation: "native-run-input",
+        }
+      )
+
+    expect(parsed).toMatchObject({
+      imageMimeTypes: "provider-dependent",
+      maxTotalBytes: "complete-request",
+      maxEncodedRequestBytes: 26_214_400,
+      completeRequestValidation: "native-run-input",
+    })
+  })
+
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
     expect(
       SessionWorkspaceCapabilitiesResponseSchema.parse({
