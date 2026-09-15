@@ -1210,7 +1210,7 @@ const Composer: FC<{
               className="aui-composer-input max-h-36 min-w-0 flex-1 resize-none bg-transparent text-base leading-5 text-foreground/85 caret-primary outline-none placeholder:text-muted-foreground @min-[64rem]/workspace:max-h-48 @min-[64rem]/workspace:min-h-11 @min-[64rem]/workspace:w-full @min-[64rem]/workspace:px-3 @min-[64rem]/workspace:text-[15px] @min-[64rem]/workspace:leading-6"
               rows={1}
               autoFocus={autoFocus}
-              enterKeyHint="send"
+              enterKeyHint="enter"
               submitMode="none"
               ref={inputRef}
               cancelOnEscape={false}
@@ -1691,6 +1691,8 @@ const EditComposer: FC = () => {
         <ComposerPrimitive.Input
           className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base text-foreground outline-none"
           autoFocus
+          enterKeyHint="enter"
+          submitMode="ctrlEnter"
         />
         <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
           <ComposerPrimitive.Cancel

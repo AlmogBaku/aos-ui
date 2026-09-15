@@ -395,6 +395,25 @@ test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
   await expect.poll(() => activeRegion(page)).toBe("transcript")
 })
 
+test("mobile Return inserts a newline until Send is tapped", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  const input = page.getByRole("textbox", { name: "Message input" })
+
+  await input.focus()
+  await page.keyboard.type("First line")
+  await page.keyboard.press("Enter")
+  await page.keyboard.type("Second line")
+
+  await expect(input).toHaveValue("First line\nSecond line")
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(input).toHaveValue("")
+  await expect(
+    page.getByText("First line\nSecond line", { exact: true })
+  ).toBeVisible()
+})
+
 test("F6 reaches the remounted composer after a question resolves", async ({
   page,
 }) => {
@@ -402,7 +421,7 @@ test("F6 reaches the remounted composer after a question resolves", async ({
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
   await page.keyboard.type("Ask me a question")
-  await page.keyboard.press("Enter")
+  await page.getByRole("button", { name: "Send message" }).click()
 
   const question = page.locator('[data-slot="tool-chrome"]').filter({
     has: page.getByRole("heading", {

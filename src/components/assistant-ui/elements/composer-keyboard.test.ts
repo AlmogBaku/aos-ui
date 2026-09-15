@@ -14,8 +14,19 @@ const state = (overrides: Partial<ComposerEnterState> = {}) => ({
 })
 
 describe("composer keyboard decisions", () => {
-  it("submits a non-empty draft on idle Enter", () => {
-    expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe("send")
+  it("keeps plain Enter as a native newline on every platform", () => {
+    expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe(
+      "newline"
+    )
+  })
+
+  it("submits a non-empty draft on idle Command/Ctrl+Enter", () => {
+    expect(
+      resolveComposerEnterAction({ key: "Enter", metaKey: true }, state())
+    ).toBe("send")
+    expect(
+      resolveComposerEnterAction({ key: "Enter", ctrlKey: true }, state())
+    ).toBe("send")
   })
 
   it("submits the steering shortcut normally while idle", () => {
@@ -27,10 +38,10 @@ describe("composer keyboard decisions", () => {
     ).toBe("send")
   })
 
-  it("queues a non-empty draft on busy Enter without steering", () => {
+  it("queues a non-empty draft on busy Command/Ctrl+Enter without steering", () => {
     expect(
       resolveComposerEnterAction(
-        { key: "Enter" },
+        { key: "Enter", ctrlKey: true },
         state({ isRunning: true, hasQueue: true })
       )
     ).toBe("queue")
@@ -71,13 +82,13 @@ describe("composer keyboard decisions", () => {
     ).toBe("newline")
   })
 
-  it("does not submit an empty draft or a busy thread without queue support", () => {
+  it("does not submit an empty draft or a busy send shortcut without queue support", () => {
     expect(
       resolveComposerEnterAction({ key: "Enter" }, state({ isEmpty: true }))
     ).toBe("noop")
     expect(
       resolveComposerEnterAction(
-        { key: "Enter" },
+        { key: "Enter", ctrlKey: true },
         state({ isRunning: true, hasQueue: false })
       )
     ).toBe("noop")

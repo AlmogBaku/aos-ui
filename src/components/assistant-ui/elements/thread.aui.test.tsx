@@ -485,6 +485,28 @@ function useMultiSessionRuntime() {
 }
 
 describe("Thread accessibility", () => {
+  it("uses Enter for newlines and Ctrl+Enter to send the composer draft", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Done" }],
+    }))
+    render(<LocalThread model={{ run }} initialMessages={[]} />)
+
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    expect(input).toHaveAttribute("enterkeyhint", "enter")
+
+    await user.type(input, "First line")
+    await user.keyboard("{Enter}")
+    await user.type(input, "Second line")
+
+    expect(input).toHaveValue("First line\nSecond line")
+    expect(run).not.toHaveBeenCalled()
+
+    await user.keyboard("{Control>}{Enter}{/Control}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    expect(input).toHaveValue("")
+  })
+
   it("renders the welcome state accessibly", () => {
     render(<LocalThread initialMessages={[]} />)
 
@@ -774,7 +796,7 @@ describe("Thread accessibility", () => {
 
     const input = screen.getByRole("textbox", { name: "Message input" })
     await user.type(input, "Follow up")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     expect(
       await screen.findByRole("region", { name: "Queued messages" })
     ).toBeVisible()
@@ -1187,6 +1209,43 @@ describe("Thread accessibility", () => {
     )
   })
 
+  it("uses Enter for newlines and Ctrl+Enter to submit message edits", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
+      content: [{ type: "text", text: "Updated" }],
+    })
+    const view = render(
+      <LocalThread
+        model={{ run }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await screen.findByText("The reference is ready.")
+
+    act(() => {
+      runtime!.thread.getMessageById("message-user").composer.beginEdit()
+    })
+    const editor = view.container.querySelector<HTMLTextAreaElement>(
+      ".aui-edit-composer-input"
+    )
+    expect(editor).not.toBeNull()
+    expect(editor).toHaveAttribute("enterkeyhint", "enter")
+
+    await user.clear(editor!)
+    await user.type(editor!, "First line")
+    await user.keyboard("{Enter}")
+    await user.type(editor!, "Second line")
+
+    expect(editor).toHaveValue("First line\nSecond line")
+    expect(run).not.toHaveBeenCalled()
+
+    await user.keyboard("{Control>}{Enter}{/Control}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+  })
+
   it("opens current-session history search with Ctrl+R without sending the draft", async () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined
@@ -1341,7 +1400,7 @@ describe("Thread accessibility", () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it("queues busy Enter exactly once in the queue lane", async () => {
+  it("queues busy Ctrl+Enter exactly once in the queue lane", async () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined
     let release: (() => void) | undefined
@@ -1367,11 +1426,11 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "first")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
 
     await user.type(input, "second")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() =>
       expect(
         screen.getByRole("region", { name: "Queued messages" })
@@ -1399,7 +1458,7 @@ describe("Thread accessibility", () => {
       screen.queryByRole("button", { name: "Resume queued message" })
     ).not.toBeInTheDocument()
     await user.type(input, "third")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2))
     expect(screen.getByText("second")).toBeInTheDocument()
     await act(async () => release?.())
@@ -1426,12 +1485,12 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "running")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
     await user.type(input, "steer this")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await user.type(input, "keep this")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
 
     const rows = await screen.findAllByRole("listitem")
     expect(rows).toHaveLength(2)
@@ -1474,10 +1533,10 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "running")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
     await user.type(input, "keep on failure")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
 
     const steerButton = await screen.findByRole("button", {
       name: "Steer queued message",
@@ -1520,10 +1579,10 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "running")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
     await user.type(input, "maybe delivered")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await user.click(
       await screen.findByRole("button", { name: "Steer queued message" })
     )
@@ -1571,7 +1630,7 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "running")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
     await user.type(input, "correct now")
     fireEvent.keyDown(input, {
@@ -1618,10 +1677,10 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "first")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
     await user.type(input, "park me")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await screen.findByText("park me")
 
     const viewport = document.querySelector('[data-slot="aui_thread-viewport"]')
@@ -1818,10 +1877,10 @@ describe("Thread accessibility", () => {
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "first")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
     await user.type(input, "queued")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Control>}{Enter}{/Control}")
     expect(
       await screen.findByRole("region", { name: "הודעות בתור" })
     ).toBeVisible()

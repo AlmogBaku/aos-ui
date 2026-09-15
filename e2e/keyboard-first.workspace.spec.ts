@@ -108,7 +108,7 @@ test("a captured shortcut drives its new behavior and Reset restores the default
   await expect(page.getByRole("dialog", { name: "Commands" })).toBeVisible()
 })
 
-test("Shift+Enter inserts a newline while Enter sends the draft", async ({
+test("Enter inserts a newline while Ctrl+Enter sends the draft", async ({
   page,
 }) => {
   await openWorkspace(page)
@@ -116,11 +116,11 @@ test("Shift+Enter inserts a newline while Enter sends the draft", async ({
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
   await page.keyboard.type("Keyboard draft")
-  await page.keyboard.press("Shift+Enter")
+  await page.keyboard.press("Enter")
   await page.keyboard.type("continued")
   await expect(input).toHaveValue("Keyboard draft\ncontinued")
 
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Control+Enter")
   await expect(input).toHaveValue("")
   await expect(
     page.getByText("Keyboard draft\ncontinued", { exact: true })
@@ -244,14 +244,14 @@ test("Escape cancels a busy run without dropping queued work, which re-arms on a
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
   await page.keyboard.type("Start a long fixture run")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Control+Enter")
   await expect(
     page.getByRole("button", { name: "Stop generating" })
   ).toBeVisible()
 
   await input.focus()
   await page.keyboard.type("Queued follow-up")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Control+Enter")
   const queued = page.getByRole("region", { name: "Queued messages" })
   await expect(queued).toContainText("Queued follow-up")
 
@@ -272,7 +272,7 @@ test("Escape cancels a busy run without dropping queued work, which re-arms on a
 
   await input.focus()
   await page.keyboard.type("Explicit follow-up")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Control+Enter")
   await expect(queued).not.toContainText("Queued follow-up")
   await expect(queued).toContainText("Explicit follow-up")
   await expect(

@@ -128,9 +128,9 @@ export function resolveComposerEnterAction(
     return "noop"
   }
   if (state.isEmpty) return "noop"
-  const steeringShortcut =
-    event.shiftKey && (event.metaKey === true || event.ctrlKey === true)
-  if (!steeringShortcut && event.shiftKey) return "newline"
+  const sendShortcut = event.metaKey === true || event.ctrlKey === true
+  const steeringShortcut = event.shiftKey && sendShortcut
+  if (!sendShortcut) return "newline"
   if (!state.isRunning) return "send"
   if (steeringShortcut) {
     if (state.canSteer && !state.hasAttachments) return "steer"

@@ -17,13 +17,14 @@ displays streaming state and provider questions or approvals in the
 conversation. Stop acts on the selected native run when the runtime exposes
 that operation.
 
-When the Session is idle, `Enter` sends immediately and no queue is shown.
-While a run is active, `Enter` adds a FIFO follow-up and
-`Command/Ctrl+Shift+Enter` steers the active turn when the runtime exposes
-text-only steering. Attachments always queue. A queued row can be steered
-individually without changing the order of the remaining rows. Waiting for a
-question or approval is not an active model turn, so new messages queue and the
-Steer action is unavailable.
+`Enter` inserts a newline on every platform. Use the Send button or
+`Command/Ctrl+Enter` to submit. When the Session is idle, submission sends
+immediately and no queue is shown. While a run is active, submission adds a
+FIFO follow-up and `Command/Ctrl+Shift+Enter` steers the active turn when the
+runtime exposes text-only steering. Attachments always queue. A queued row can
+be steered individually without changing the order of the remaining rows.
+Waiting for a question or approval is not an active model turn, so new messages
+queue and the Steer action is unavailable.
 
 Queued messages stay with their Session. Stop parks queued follow-ups until the
 next explicit send. Switching away detaches or parks browser work according to
