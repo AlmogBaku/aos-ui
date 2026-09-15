@@ -30,7 +30,7 @@ export type OpenClawRequestOptions = Readonly<{
 /** The only HelloOk data that later provider leaves may consume. */
 export type OpenClawNegotiatedPolicy = Readonly<{
   maxPayload: number
-  attachments: Readonly<{
+  attachments?: Readonly<{
     maxBytes: number
     maxImageBytes: number
   }>
@@ -194,20 +194,25 @@ function negotiatedPolicy(
 ): OpenClawNegotiatedPolicy | undefined {
   const policy = hello.policy
   if (
-    !policy?.attachments ||
+    !policy ||
     !Number.isSafeInteger(policy.maxPayload) ||
-    policy.maxPayload < 1 ||
-    !Number.isSafeInteger(policy.attachments.maxBytes) ||
-    policy.attachments.maxBytes < 1 ||
-    !Number.isSafeInteger(policy.attachments.maxImageBytes) ||
-    policy.attachments.maxImageBytes < 1
+    policy.maxPayload < 1
   )
     return undefined
+  const attachments = policy.attachments
+  if (
+    !attachments ||
+    !Number.isSafeInteger(attachments.maxBytes) ||
+    attachments.maxBytes < 1 ||
+    !Number.isSafeInteger(attachments.maxImageBytes) ||
+    attachments.maxImageBytes < 1
+  )
+    return Object.freeze({ maxPayload: policy.maxPayload })
   return Object.freeze({
     maxPayload: policy.maxPayload,
     attachments: Object.freeze({
-      maxBytes: policy.attachments.maxBytes,
-      maxImageBytes: policy.attachments.maxImageBytes,
+      maxBytes: attachments.maxBytes,
+      maxImageBytes: attachments.maxImageBytes,
     }),
   })
 }

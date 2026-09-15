@@ -1,22 +1,15 @@
-import {
-  OPENCLAW_ATTACHMENT_PROXY_LIMITS,
-  type OpenClawGatewayPolicy,
-} from "./content"
+import { OPENCLAW_ATTACHMENT_PROXY_LIMITS } from "./content"
+import type { OpenClawNegotiatedPolicy } from "./client"
 import { OPENCLAW_MAX_PENDING_INTERACTIONS } from "./interactions"
 
-export type OpenClawCapabilityPolicy = OpenClawGatewayPolicy
+export type OpenClawCapabilityPolicy = OpenClawNegotiatedPolicy
 
 /** Provider-neutral capability fragments built from the negotiated Gateway policy. */
 export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
   if (
     !policy ||
-    !policy.attachments ||
     !Number.isSafeInteger(policy.maxPayload) ||
-    policy.maxPayload < 1 ||
-    !Number.isSafeInteger(policy.attachments.maxBytes) ||
-    policy.attachments.maxBytes < 1 ||
-    !Number.isSafeInteger(policy.attachments.maxImageBytes) ||
-    policy.attachments.maxImageBytes < 1
+    policy.maxPayload < 1
   )
     throw new Error("Invalid OpenClaw capability policy")
   return {
@@ -53,19 +46,24 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
       },
     },
     content: {
-      attachments: {
-        status: "available" as const,
-        scope: "attached-session" as const,
-        inputs: ["image", "file"] as const,
-        imageMimeTypes: "provider-dependent" as const,
-        fileMimeTypes: "provider-dependent" as const,
-        ...OPENCLAW_ATTACHMENT_PROXY_LIMITS,
-        maxImageBytes: policy.attachments.maxImageBytes,
-        maxFileBytes: policy.attachments.maxBytes,
-        maxTotalBytes: "complete-request" as const,
-        maxEncodedRequestBytes: policy.maxPayload,
-        completeRequestValidation: "native-run-input" as const,
-      },
+      attachments: policy.attachments
+        ? {
+            status: "available" as const,
+            scope: "attached-session" as const,
+            inputs: ["image", "file"] as const,
+            imageMimeTypes: "provider-dependent" as const,
+            fileMimeTypes: "provider-dependent" as const,
+            ...OPENCLAW_ATTACHMENT_PROXY_LIMITS,
+            maxImageBytes: policy.attachments.maxImageBytes,
+            maxFileBytes: policy.attachments.maxBytes,
+            maxTotalBytes: "complete-request" as const,
+            maxEncodedRequestBytes: policy.maxPayload,
+            completeRequestValidation: "native-run-input" as const,
+          }
+        : {
+            status: "unavailable" as const,
+            reason: "negotiated-attachment-policy-unavailable",
+          },
       artifacts: {
         status: "unavailable" as const,
         reason: "artifact-publication-unavailable" as const,

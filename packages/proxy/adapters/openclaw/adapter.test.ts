@@ -214,16 +214,25 @@ describe("OpenClaw ServerRuntime assembly", () => {
       public: [{ type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" }],
     })
 
-    const withoutPolicy = new OpenClawServerAdapter({
-      client: client(),
+    const withoutAttachments = new OpenClawServerAdapter({
+      client: client({
+        negotiatedPolicy: () => ({ maxPayload: policy.maxPayload }),
+      }),
       runs: engine(),
       subscribeSession: async () => () => undefined,
     })
     await expect(
-      withoutPolicy.workspaceCapabilities("research", sessionKey)
-    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+      withoutAttachments.workspaceCapabilities("research", sessionKey)
+    ).resolves.toMatchObject({
+      content: {
+        attachments: {
+          status: "unavailable",
+          reason: "negotiated-attachment-policy-unavailable",
+        },
+      },
+    })
     await expect(
-      withoutPolicy.stageAttachments("research", sessionKey, [])
+      withoutAttachments.stageAttachments("research", sessionKey, [])
     ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
   })
 })

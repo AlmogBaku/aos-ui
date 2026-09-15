@@ -314,8 +314,11 @@ export class OpenClawServerAdapter implements ServerRuntime {
     await this.#start()
     await this.#workspace.getSession(agentId, publicSessionId)
     const policy = this.#client.negotiatedPolicy?.()
-    if (!policy) throw new OpenClawAdapterUnavailableError()
-    return stageOpenClawChatAttachments(attachments, policy)
+    if (!policy?.attachments) throw new OpenClawAdapterUnavailableError()
+    return stageOpenClawChatAttachments(attachments, {
+      maxPayload: policy.maxPayload,
+      attachments: policy.attachments,
+    })
   }
 
   async artifact(
