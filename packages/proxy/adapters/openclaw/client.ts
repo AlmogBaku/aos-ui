@@ -22,6 +22,7 @@ import {
 export type OpenClawRequestOptions = Readonly<{
   signal?: AbortSignal
   timeoutMs?: number | null
+  expectFinal?: boolean
   onSent?: () => void
   onAccepted?: (payload: unknown) => void
 }>
@@ -345,6 +346,7 @@ export class OpenClawClient {
       return await this.gateway.request<T>(method, params, {
         signal: options.signal,
         timeoutMs: options.timeoutMs ?? this.requestTimeout,
+        expectFinal: options.expectFinal,
         onSent: () => {
           dispatch.requestSent = true
           options.onSent?.()

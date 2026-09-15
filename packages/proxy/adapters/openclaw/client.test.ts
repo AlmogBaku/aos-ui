@@ -336,6 +336,43 @@ describe("OpenClaw client", () => {
     expect(onAccepted).toHaveBeenCalledWith({ id: "native-ack" })
   })
 
+  it("keeps an accepted request pending until its final response when a leaf requires it", async () => {
+    const { client, gateway } = setup()
+    const started = client.start()
+    gateway().options.onHelloOk?.({ protocol: 4 } as never)
+    await started
+    const onAccepted = vi.fn()
+    let deliverFinal: ((payload: { status: "final" }) => void) | undefined
+    gateway().requestHandler = (options) =>
+      new Promise((resolve) => {
+        options?.onSent?.()
+        if (options?.expectFinal) {
+          options.onAccepted?.({ status: "accepted" })
+          deliverFinal = (payload) => resolve(payload)
+          return
+        }
+        resolve({ status: "accepted" })
+      })
+
+    const request = client.request(
+      "chat.send",
+      { text: "once" },
+      { expectFinal: true, onAccepted }
+    )
+    await vi.waitFor(() =>
+      expect(onAccepted).toHaveBeenCalledWith({ status: "accepted" })
+    )
+    let settled = false
+    void request.then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    deliverFinal?.({ status: "final" })
+    await expect(request).resolves.toEqual({ status: "final" })
+  })
+
   it("forwards paused and closed transport state without native close detail", async () => {
     const onReconnectPaused = vi.fn()
     const onClose = vi.fn()
