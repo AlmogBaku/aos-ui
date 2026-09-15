@@ -23,7 +23,10 @@ export type OpenClawResumeScope = Pick<
   "agentId" | "sessionId" | "threadId"
 >
 export type OpenClawInteractionDiscoveryScope = OpenClawResumeScope &
-  Readonly<{ nativeRunId: string }>
+  Readonly<{
+    /** Caller-proven unique active native run from authoritative history. */
+    nativeRunId: string
+  }>
 export type OpenClawInteractionTransport = Readonly<{
   request(
     method:
@@ -74,9 +77,13 @@ type Pending = {
   | {
       kind: "approval"
       nativeKind: "plugin" | "system-agent" | "exec"
-      decisions: string[]
+      decisions: ApprovalDecision[]
     }
 )
+type ApprovalDecision = Readonly<{
+  normalized: "once" | "always" | "deny"
+  native: "allow-once" | "allow-always" | "deny"
+}>
 type Done = {
   pending: Pending
   fingerprint?: string
@@ -257,6 +264,20 @@ function answerMap(value: unknown, questions: Question[]) {
   }
   return answers
 }
+function approvalDecisions(values: readonly string[]): ApprovalDecision[] {
+  const decisions = values.map((native): ApprovalDecision => {
+    if (native === "allow-once") return { normalized: "once", native }
+    if (native === "allow-always") return { normalized: "always", native }
+    if (native === "deny") return { normalized: "deny", native }
+    return bad()
+  })
+  if (
+    new Set(decisions.map(({ normalized }) => normalized)).size !==
+    decisions.length
+  )
+    bad()
+  return decisions
+}
 
 /** Maps exact pinned V4 records; pending interactions are rediscovered before resume. */
 export class OpenClawInteractions {
@@ -383,6 +404,8 @@ export class OpenClawInteractions {
       !Number.isSafeInteger(r.expiresAtMs)
     )
       bad()
+    const decisions = approvalDecisions(r.presentation.allowedDecisions),
+      normalizedDecisions = decisions.map(({ normalized }) => normalized)
     const outcome: RunFinishedInterruptOutcome = {
       type: "interrupt",
       interrupts: [
@@ -398,12 +421,12 @@ export class OpenClawInteractions {
           expiresAt: new Date(r.expiresAtMs).toISOString(),
           responseSchema: {
             type: "string",
-            enum: r.presentation.allowedDecisions,
+            enum: normalizedDecisions,
           },
           metadata: {
             "aos.kind": "openclaw-approval",
             "aos.scope": "run",
-            "aos.allowedDecisions": r.presentation.allowedDecisions,
+            "aos.allowedDecisions": normalizedDecisions,
           },
         },
       ],
@@ -413,7 +436,7 @@ export class OpenClawInteractions {
       scope,
       id: r.id!,
       nativeKind: r.presentation.kind,
-      decisions: r.presentation.allowedDecisions,
+      decisions,
       expiresAtMs: r.expiresAtMs,
       outcome,
     })
@@ -567,9 +590,11 @@ export class OpenClawInteractions {
       if (!validateQuestionResolveParams(params)) invalid()
       return { method: "question.resolve" as const, params, expected }
     }
-    const decision = r.status === "cancelled" ? "deny" : r.payload
-    if (typeof decision !== "string" || !p.decisions.includes(decision))
-      invalid()
+    const normalized = r.status === "cancelled" ? "deny" : r.payload,
+      decision = p.decisions.find(
+        (candidate) => candidate.normalized === normalized
+      )?.native
+    if (!decision) invalid()
     return {
       method: "approval.resolve" as const,
       params: { id: p.id, kind: p.nativeKind, decision },

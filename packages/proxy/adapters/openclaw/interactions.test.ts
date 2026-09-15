@@ -45,7 +45,7 @@ const approvalRecord = {
     description: "Allow the plugin action",
     severity: "warning",
     agentId: "agent-a",
-    allowedDecisions: ["allow-once", "deny"],
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
   },
 }
 const approval = {
@@ -72,6 +72,28 @@ const resolvedQuestion = [
   },
 ]
 describe("OpenClaw interactions", () => {
+  it("normalizes approval choices without exposing native decisions", () => {
+    const interactions = new OpenClawInteractions({ request: vi.fn() })
+
+    const outcome = interactions.acceptApproval(scope, approval)
+
+    expect(outcome).toMatchObject({
+      interrupts: [
+        {
+          responseSchema: {
+            type: "string",
+            enum: ["once", "always", "deny"],
+          },
+          metadata: {
+            "aos.allowedDecisions": ["once", "always", "deny"],
+          },
+        },
+      ],
+    })
+    expect(JSON.stringify(outcome)).not.toContain("allow-once")
+    expect(JSON.stringify(outcome)).not.toContain("allow-always")
+  })
+
   it("rediscovers and binds one exact pending question after restart", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "question.list") return { questions: [question] }
@@ -154,7 +176,7 @@ describe("OpenClaw interactions", () => {
       {
         interruptId: "approval-a",
         status: "resolved" as const,
-        payload: "allow-once",
+        payload: "once",
       },
     ]
 
@@ -181,6 +203,89 @@ describe("OpenClaw interactions", () => {
       "approval.get",
       "approval.resolve",
     ])
+    expect(request).toHaveBeenLastCalledWith("approval.resolve", {
+      id: "approval-a",
+      kind: "plugin",
+      decision: "allow-once",
+    })
+  })
+
+  it.each(["allow-once", "allow-always"])(
+    "rejects native approval decision %s as normalized resume input",
+    async (nativeDecision) => {
+      const request = vi.fn()
+      const interactions = new OpenClawInteractions({ request })
+      interactions.acceptApproval(scope, approval)
+
+      await expect(
+        interactions.respond(scope, [
+          {
+            interruptId: "approval-a",
+            status: "resolved",
+            payload: nativeDecision,
+          },
+        ])
+      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+      expect(request).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    ["once", "allow-once", "allowed"],
+    ["always", "allow-always", "allowed"],
+    ["deny", "deny", "denied"],
+  ] as const)(
+    "maps normalized %s to native %s only at resolve dispatch",
+    async (normalized, native, status) => {
+      const request = vi.fn(async (method: string) =>
+        method === "approval.get"
+          ? { approval }
+          : {
+              applied: true,
+              approval: {
+                ...approvalRecord,
+                status,
+                decision: native,
+                resolvedAtMs: 2,
+                reason: "user",
+                resolver: { kind: "device", id: "reviewer-a" },
+              },
+            }
+      )
+      const interactions = new OpenClawInteractions({ request })
+      interactions.acceptApproval(scope, approval)
+
+      await expect(
+        interactions.respond(scope, [
+          {
+            interruptId: "approval-a",
+            status: "resolved",
+            payload: normalized,
+          },
+        ])
+      ).resolves.toEqual({ status: "resolved" })
+      expect(request).toHaveBeenLastCalledWith("approval.resolve", {
+        id: "approval-a",
+        kind: "plugin",
+        decision: native,
+      })
+    }
+  )
+
+  it("fails closed on an unsupported native approval decision", () => {
+    const interactions = new OpenClawInteractions({ request: vi.fn() })
+
+    expect(() =>
+      interactions.acceptApproval(scope, {
+        ...approval,
+        presentation: {
+          ...approval.presentation,
+          allowedDecisions: ["allow-session"],
+        },
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    )
   })
 
   it.each([
@@ -310,7 +415,7 @@ describe("OpenClaw interactions", () => {
       {
         interruptId: "approval-a",
         status: "resolved" as const,
-        payload: "allow-once",
+        payload: "once",
       },
     ]
 
@@ -555,7 +660,7 @@ describe("OpenClaw interactions", () => {
           {
             interruptId: "approval-a",
             status: "resolved",
-            payload: "allow-once",
+            payload: "once",
           },
         ])
       ).resolves.toEqual({ status: expectedStatus })
