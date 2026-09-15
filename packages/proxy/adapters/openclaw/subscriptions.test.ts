@@ -148,7 +148,7 @@ describe("OpenClaw Session subscriptions", () => {
     const subscriptions = new OpenClawSessionSubscriptions({ request })
     const listener = vi.fn()
     const acquiring = subscriptions.acquire(
-      { agentId: "research", sessionKey: "agent:research:main" },
+      { agentId: "research", sessionKey: "global" },
       listener
     )
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce())
@@ -159,7 +159,7 @@ describe("OpenClaw Session subscriptions", () => {
       createdAtMs: 1,
       expiresAtMs: 1_900_000_000_000,
       status: "pending",
-      sourceSessionKey: "agent:research:main",
+      sourceSessionKey: "agent:research:global",
       presentation: {
         kind: "plugin",
         title: "External action",
@@ -175,8 +175,8 @@ describe("OpenClaw Session subscriptions", () => {
         event: "session.approval",
         seq: 3,
         payload: {
-          sessionKey: "agent:research:main",
-          sourceSessionKey: "agent:research:main",
+          sessionKey: "agent:research:global",
+          sourceSessionKey: "agent:research:global",
           updatedAtMs: 2,
           phase: "pending",
           approval,
@@ -190,8 +190,8 @@ describe("OpenClaw Session subscriptions", () => {
         event: "session.approval",
         seq: 4,
         payload: {
-          sessionKey: "agent:research:main",
-          sourceSessionKey: "agent:research:main",
+          sessionKey: "agent:research:global",
+          sourceSessionKey: "agent:research:global",
           updatedAtMs: 3,
           phase: "pending",
           approval: {
@@ -208,7 +208,7 @@ describe("OpenClaw Session subscriptions", () => {
         event: "session.approval",
         seq: 5,
         payload: {
-          sessionKey: "agent:research:main",
+          sessionKey: "agent:research:global",
           updatedAtMs: 4,
           phase: "terminal",
           approval: {
@@ -227,30 +227,36 @@ describe("OpenClaw Session subscriptions", () => {
       subscriptions.generation
     )
 
-    expect(listener).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        event: "session.approval",
-        payload: expect.objectContaining({ updatedAtMs: 2 }),
-      })
-    )
-    expect(listener).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        event: "session.approval",
-        payload: expect.objectContaining({ updatedAtMs: 4 }),
-      })
-    )
+    expect(listener).not.toHaveBeenCalled()
     acknowledgement.resolve({
-      key: "agent:research:main",
+      key: "global",
       approvalReplay: {
-        sessionKey: "agent:research:main",
+        sessionKey: "agent:research:global",
         updatedAtMs: 4,
         approvals: [],
         truncated: false,
       },
     })
-    await acquiring
+    const lease = await acquiring
+    expect(lease.approvalReplayKey).toBe("agent:research:global")
+    expect(lease.takeApprovalDirty()).toBe(true)
+    expect(lease.takeApprovalDirty()).toBe(false)
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "session.approval",
+        seq: 6,
+        payload: {
+          sessionKey: "agent:research:global",
+          sourceSessionKey: "agent:research:global",
+          updatedAtMs: 5,
+          phase: "pending",
+          approval,
+        },
+      },
+      subscriptions.generation
+    )
+    expect(listener).toHaveBeenCalledOnce()
   })
 
   it("retires stale socket generations, resubscribes demand, and requests authoritative reconciliation", async () => {
@@ -402,18 +408,20 @@ describe("OpenClaw Session subscriptions", () => {
       replay,
     })
 
-    const invalid = new OpenClawSessionSubscriptions({
-      request: vi.fn(async () => ({
-        key: "agent:research:main",
-        approvalReplay: { ...replay, sessionKey: "agent:foreign:main" },
-      })),
-    })
-    await expect(
-      invalid.acquire(
-        { agentId: "research", sessionKey: "agent:research:main" },
-        vi.fn()
-      )
-    ).rejects.toThrow("approval replay")
+    for (const sessionKey of ["agent:foreign:main", "agent:research:other"]) {
+      const invalid = new OpenClawSessionSubscriptions({
+        request: vi.fn(async () => ({
+          key: "agent:research:main",
+          approvalReplay: { ...replay, sessionKey },
+        })),
+      })
+      await expect(
+        invalid.acquire(
+          { agentId: "research", sessionKey: "agent:research:main" },
+          vi.fn()
+        )
+      ).rejects.toThrow("approval replay")
+    }
   })
 })
 

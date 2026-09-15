@@ -265,6 +265,7 @@ type WaitingRun = {
   scope: SessionScope
   runId: string
   nativeRunId: string
+  nativeInteractionSessionKey: string
   nativeSessionId: string
   lease: OpenClawSessionLease
   stopping: boolean
@@ -682,15 +683,18 @@ export class OpenClawRunEngine implements ServerRunEngine {
     if (text !== undefined && encoder.encode(text).byteLength > MAX_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
+    const key = scopeKey(scope)
+    const waiting = this.#waiting.get(key)
+    const interactionScope = waiting
+      ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
+      : scope
     const resumeBinding = resume
-      ? await this.#resume!.validate(scope, resume)
+      ? await this.#resume!.validate(interactionScope, resume)
       : undefined
     if (resumeBinding && !validId(resumeBinding.runId))
       throw new Error("OpenClaw returned an invalid interaction binding")
 
-    const key = scopeKey(scope)
     if (this.#active.has(key)) throw new ServerRunConflictError()
-    const waiting = this.#waiting.get(key)
     if (waiting && resumeBinding?.runId !== waiting.nativeRunId)
       throw new ServerRunConflictError()
 
@@ -821,7 +825,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         if (active.terminal) return this.#handle(active)
         let result: OpenClawBoundResumeResult
         try {
-          result = await this.#resume!.dispatch(scope, resume)
+          result = await this.#resume!.dispatch(interactionScope, resume)
         } catch {
           this.#fail(
             active,
@@ -1111,7 +1115,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           discoveryDirty = true
         }
       )
-      let refreshApprovalReplay = discoveryDirty
+      let refreshApprovalReplay = discoveryDirty || lease.takeApprovalDirty()
       for (;;) {
         discoveryDirty = false
         const generation = this.#subscriptions.generation
@@ -1126,23 +1130,35 @@ export class OpenClawRunEngine implements ServerRunEngine {
           refreshApprovalReplay = true
           continue
         }
-        if (!approvalReplay || approvalReplay.generation !== generation) {
+        const approvalReplayKey = lease.approvalReplayKey
+        if (
+          !approvalReplay ||
+          approvalReplay.generation !== generation ||
+          approvalReplayKey !== approvalReplay.replay.sessionKey
+        ) {
           return notDiscovered()
         }
         const nativeRunId = uniqueActiveRunId(history)
         if (!nativeRunId) return notDiscovered()
         const discovered = await this.#resume.discover(
-          { ...scope, nativeRunId },
-          approvalReplay?.replay
+          {
+            ...scope,
+            sessionId: approvalReplayKey,
+            nativeRunId,
+          },
+          approvalReplay.replay
         )
         const currentApprovalReplay = lease.approvalReplay()
+        const currentApprovalReplayKey = lease.approvalReplayKey
         if (discoveryDirty || generation !== this.#subscriptions.generation) {
           refreshApprovalReplay = true
           continue
         }
         if (
           !currentApprovalReplay ||
-          currentApprovalReplay.generation !== generation
+          currentApprovalReplay.generation !== generation ||
+          currentApprovalReplayKey !== approvalReplayKey ||
+          currentApprovalReplayKey !== currentApprovalReplay.replay.sessionKey
         ) {
           return notDiscovered()
         }
@@ -1151,6 +1167,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           scope,
           runId,
           nativeRunId,
+          nativeInteractionSessionKey: approvalReplayKey,
           nativeSessionId: history.sessionId,
           lease,
           stopping: false,

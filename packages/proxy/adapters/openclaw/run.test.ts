@@ -756,6 +756,118 @@ describe("OpenClaw run engine", () => {
     )
   })
 
+  it("uses an acknowledged approval replay key to recover and resume a canonical Session alias", async () => {
+    const publicScope = { ...scope, sessionId: "global" }
+    const replayKey = "agent:research:global"
+    const approval = {
+      ...pendingApproval,
+      sourceSessionKey: replayKey,
+    }
+    const native = new ControlledNative()
+    native.history = {
+      sessionKey: publicScope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: {
+        hasActiveRun: true,
+        activeRunIds: ["native-original"],
+      },
+      inFlightRun: { runId: "native-original", text: "before" },
+    }
+    const firstAcknowledgement = deferred<unknown>()
+    let subscriptionReads = 0
+    native.subscriptionRequest = async () => {
+      subscriptionReads += 1
+      if (subscriptionReads === 1) return firstAcknowledgement.promise
+      return {
+        key: publicScope.sessionId,
+        approvalReplay: {
+          ...approvalReplay([approval]),
+          sessionKey: replayKey,
+        },
+      }
+    }
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [] }
+      if (method === "approval.get") return { approval }
+      if (method === "approval.resolve")
+        return {
+          applied: true,
+          approval: {
+            ...approval,
+            status: "allowed",
+            decision: "allow-once",
+            resolvedAtMs: 2,
+            reason: "user",
+            resolver: { kind: "device", id: "reviewer-a" },
+          },
+        }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      resume: new OpenClawInteractions({ request }),
+    })
+
+    const discovering = engine.discover(publicScope, "restored-alias")
+    await vi.waitFor(() => expect(subscriptionReads).toBe(1))
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "session.approval",
+        seq: 72,
+        payload: {
+          sessionKey: replayKey,
+          sourceSessionKey: replayKey,
+          updatedAtMs: 2,
+          phase: "pending",
+          approval,
+        },
+      },
+      subscriptions.generation
+    )
+    firstAcknowledgement.resolve({
+      key: publicScope.sessionId,
+      approvalReplay: {
+        ...approvalReplay(),
+        sessionKey: replayKey,
+      },
+    })
+
+    await expect(discovering).resolves.toMatchObject({
+      state: "waiting-for-input",
+      interrupts: [{ id: approval.id, reason: "approval" }],
+    })
+    await expect(
+      engine.start(
+        publicScope,
+        resumeInput(
+          [
+            {
+              interruptId: approval.id,
+              status: "resolved",
+              payload: "once",
+            },
+          ],
+          "alias-continuation"
+        )
+      )
+    ).resolves.toBeDefined()
+
+    expect(subscriptionReads).toBe(3)
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "question.list",
+      "approval.get",
+      "approval.get",
+      "approval.resolve",
+    ])
+    expect(native.calls.filter(({ method }) => method === "chat.send")).toEqual(
+      []
+    )
+  })
+
   it("refreshes a coordinator-retained wait from native authority and admits a new turn after external resolution", async () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay([pendingApproval])

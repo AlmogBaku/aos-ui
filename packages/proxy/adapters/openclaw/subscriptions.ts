@@ -30,8 +30,10 @@ export type OpenClawSubscriptionScope = Readonly<{
 
 export type OpenClawSessionLease = Readonly<{
   readonly key: string
+  readonly approvalReplayKey: string | undefined
   approvalReplay():
     Readonly<{ generation: number; replay: SessionApprovalReplay }> | undefined
+  takeApprovalDirty(): boolean
   refreshApprovalReplay(): Promise<void>
   release(): Promise<void>
 }>
@@ -49,12 +51,45 @@ type LogicalLease = {
   ) => void | Promise<void>
   native?: GatewaySessionMessageSubscription
   nativeGeneration: number
+  approvalReplayKey?: string
+  approvalDirty: boolean
   released: boolean
   dirty: boolean
 }
 
 function validIdentity(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
+}
+
+function scopedSessionAgentId(key: string) {
+  return /^agent:([^:]+):/i.exec(key)?.[1]
+}
+
+function approvalReplayMatchesRequest(
+  replay: SessionApprovalReplay,
+  acknowledgementKey: string,
+  requestedKey: unknown,
+  expectedAgentId: unknown
+) {
+  if (
+    !validIdentity(requestedKey) ||
+    !validIdentity(expectedAgentId) ||
+    !validIdentity(replay.sessionKey)
+  )
+    return false
+  const requestedAgentId = scopedSessionAgentId(requestedKey as string)
+  const acknowledgementAgentId = scopedSessionAgentId(acknowledgementKey)
+  const normalizedAgentId = (expectedAgentId as string).trim().toLowerCase()
+  const expectedReplayKey =
+    acknowledgementKey.trim().toLowerCase() === "global"
+      ? `agent:${normalizedAgentId}:global`
+      : acknowledgementKey
+  return (
+    (requestedAgentId === undefined || requestedAgentId === expectedAgentId) &&
+    (acknowledgementAgentId === undefined ||
+      acknowledgementAgentId === expectedAgentId) &&
+    replay.sessionKey === expectedReplayKey
+  )
 }
 
 function validNativeEvent(frame: unknown): frame is EventFrame {
@@ -132,6 +167,7 @@ export class OpenClawSessionSubscriptions {
         listener,
         ...(reconcile ? { reconcile } : {}),
         nativeGeneration: generation,
+        approvalDirty: false,
         released: false,
         dirty: false,
       }
@@ -142,6 +178,12 @@ export class OpenClawSessionSubscriptions {
           includeApprovals: true,
         })
         logical.nativeGeneration = generation
+        logical.approvalReplayKey = Check(
+          SessionApprovalReplaySchema,
+          logical.native.approvalReplay
+        )
+          ? logical.native.approvalReplay.sessionKey
+          : undefined
         return this.#lease(logical)
       } catch (error) {
         logical.released = true
@@ -155,11 +197,20 @@ export class OpenClawSessionSubscriptions {
     if (generation !== this.#generation || !validNativeEvent(candidate)) return
     const payload = candidate.payload as Record<string, unknown>
     const sessionKey = payload.sessionKey as string
+    if (candidate.event === "session.approval")
+      for (const lease of this.#leases)
+        if (
+          !lease.released &&
+          lease.native === undefined &&
+          eventMatchesScope(candidate, lease.scope)
+        )
+          lease.approvalDirty = true
     const matching = [...this.#leases].filter(
       (lease) =>
         !lease.released &&
         (lease.scope.sessionKey === sessionKey ||
-          lease.native?.key === sessionKey) &&
+          lease.native?.key === sessionKey ||
+          lease.approvalReplayKey === sessionKey) &&
         eventMatchesScope(candidate, lease.scope)
     )
     if (this.#paused) {
@@ -192,6 +243,12 @@ export class OpenClawSessionSubscriptions {
           includeApprovals: true,
         })
         lease.nativeGeneration = generation
+        lease.approvalReplayKey = Check(
+          SessionApprovalReplaySchema,
+          lease.native.approvalReplay
+        )
+          ? lease.native.approvalReplay.sessionKey
+          : undefined
       }
       let dirty: boolean
       do {
@@ -247,8 +304,12 @@ export class OpenClawSessionSubscriptions {
               SessionApprovalReplaySchema,
               acknowledgement.approvalReplay
             ) ||
-              (acknowledgement.approvalReplay as SessionApprovalReplay)
-                .sessionKey !== acknowledgement.key)
+              !approvalReplayMatchesRequest(
+                acknowledgement.approvalReplay as SessionApprovalReplay,
+                acknowledgement.key as string,
+                params.key,
+                params.agentId
+              ))
           )
             throw new Error("Invalid OpenClaw approval replay")
         }
@@ -258,9 +319,16 @@ export class OpenClawSessionSubscriptions {
   }
 
   #lease(logical: LogicalLease): OpenClawSessionLease {
+    const subscriptions = this
     return {
       get key() {
         return logical.native?.key ?? logical.scope.sessionKey
+      },
+      get approvalReplayKey() {
+        return !logical.released &&
+          logical.nativeGeneration === subscriptions.#generation
+          ? logical.approvalReplayKey
+          : undefined
       },
       approvalReplay: () => {
         if (
@@ -273,6 +341,11 @@ export class OpenClawSessionSubscriptions {
           generation: logical.nativeGeneration,
           replay: structuredClone(logical.native.approvalReplay),
         }
+      },
+      takeApprovalDirty: () => {
+        const dirty = logical.approvalDirty
+        logical.approvalDirty = false
+        return dirty
       },
       refreshApprovalReplay: () =>
         this.#enqueue(async () => {
@@ -288,6 +361,12 @@ export class OpenClawSessionSubscriptions {
           )
           logical.native = native
           logical.nativeGeneration = generation
+          logical.approvalReplayKey = Check(
+            SessionApprovalReplaySchema,
+            native.approvalReplay
+          )
+            ? native.approvalReplay.sessionKey
+            : undefined
           if (previous) await this.#coordinator.release(previous)
         }),
       release: async () => {
