@@ -1,6 +1,7 @@
 import type { RuntimeConfig, RuntimeLimits } from "../config"
 import type { RuntimeInstance } from "../core/runtime"
 import { createHermesRuntime } from "./hermes/factory"
+import { createOpenClawRuntime } from "./openclaw/factory"
 import { createOpenCodeRuntime } from "./opencode/factory"
 
 export type RuntimeFactory = (
@@ -15,6 +16,6 @@ export const createRuntimeInstance: RuntimeFactory = (config, limits) => {
     case "opencode":
       return createOpenCodeRuntime(config, limits)
     case "openclaw":
-      throw new Error("OpenClaw runtime is not available")
+      return createOpenClawRuntime(config, limits)
   }
 }

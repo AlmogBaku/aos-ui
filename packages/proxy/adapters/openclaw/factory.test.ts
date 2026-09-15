@@ -1,52 +1,127 @@
-import type { AGUIEvent } from "@ag-ui/core"
-import { describe, expect, it, vi } from "vitest"
+import { generateKeyPairSync } from "node:crypto"
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
-import type { ServerRunEngine, ServerRunHandle } from "../../core/runtime"
-import { OpenClawServerAdapter } from "./adapter"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import type { RuntimeLimits } from "../../config"
+import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
 
-function handle(): ServerRunHandle {
-  return {
-    events: (async function* (): AsyncIterable<AGUIEvent> {})(),
-    settled: Promise.resolve(),
-    stop: async () => "idle",
-    recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),
-  }
+const temporaryDirectories: string[] = []
+const limits: RuntimeLimits = {
+  activeExecutions: 4,
+  guestActiveExecutions: 2,
+  operatorEventPeers: 4,
+  subscriberEvents: 20,
+  subscriberBytes: 4096,
 }
 
-const runs: ServerRunEngine = {
-  start: async () => handle(),
-  recover: async () => handle(),
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true }))
+  )
+})
+
+async function credentials() {
+  const directory = await mkdtemp(join(tmpdir(), "aos-openclaw-factory-"))
+  temporaryDirectories.push(directory)
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+  const identityFile = join(directory, "identity.json")
+  const tokenFile = join(directory, "token")
+  await writeFile(
+    identityFile,
+    JSON.stringify({
+      deviceId: "device-a",
+      privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
+      publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
+    }),
+    { mode: 0o600 }
+  )
+  await writeFile(tokenFile, "device-token\n", { mode: 0o600 })
+  await Promise.all([chmod(identityFile, 0o600), chmod(tokenFile, 0o600)])
+  return { identityFile, tokenFile }
 }
 
 describe("OpenClaw runtime factory", () => {
-  it("owns one coordinator and disposes the provider adapter idempotently", async () => {
+  it("loads server credentials and owns one configured official client", async () => {
+    const files = await credentials()
+    let options: OpenClawClientOptions | undefined
     const client = {
-      start: vi.fn(),
+      start: vi.fn(async () => undefined),
       stopAndWait: vi.fn(async () => undefined),
       request: vi.fn(),
+      negotiatedPolicy: vi.fn(() => ({ maxPayload: 1024 })),
     }
-    const adapter = new OpenClawServerAdapter({
-      client,
-      runs,
-      subscribeSession: async () => () => undefined,
-    })
-
-    const instance = await createOpenClawRuntime({
-      id: "openclaw-local",
-      adapter,
-      limits: {
-        activeExecutions: 4,
-        guestActiveExecutions: 2,
-        operatorEventPeers: 4,
-        subscriberEvents: 20,
-        subscriberBytes: 4096,
+    const instance = await createOpenClawRuntime(
+      {
+        kind: "openclaw",
+        id: "openclaw-local",
+        baseUrl: "ws://127.0.0.1:18789",
+        deviceIdentityFile: files.identityFile,
+        deviceTokenFile: files.tokenFile,
       },
-    })
+      limits,
+      {
+        clientFactory: (input) => {
+          options = input
+          return client
+        },
+      }
+    )
 
     expect(instance.id).toBe("openclaw-local")
-    expect(instance.runtime).toBe(adapter)
+    expect(options).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      role: "operator",
+      scopes: [
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.questions",
+      ],
+      credentials: {
+        deviceIdentity: { deviceId: "device-a" },
+        deviceToken: "device-token",
+      },
+    })
+    expect(options?.caps).toEqual(
+      expect.arrayContaining([
+        "approvals",
+        "session-scoped-events",
+        "tool-events",
+      ])
+    )
+    expect(options?.onEvent).toEqual(expect.any(Function))
+    expect(options?.onGap).toEqual(expect.any(Function))
+    expect(options?.onClose).toEqual(expect.any(Function))
+
     await Promise.all([instance.close(), instance.close()])
     expect(client.stopAndWait).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects an invalid pre-provisioned device identity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aos-openclaw-factory-"))
+    temporaryDirectories.push(directory)
+    const identityFile = join(directory, "identity.json")
+    const tokenFile = join(directory, "token")
+    await writeFile(identityFile, '{"deviceId":"device-a"}', { mode: 0o600 })
+    await writeFile(tokenFile, "device-token", { mode: 0o600 })
+
+    await expect(
+      createOpenClawRuntime(
+        {
+          kind: "openclaw",
+          id: "openclaw-local",
+          baseUrl: "ws://127.0.0.1:18789",
+          deviceIdentityFile: identityFile,
+          deviceTokenFile: tokenFile,
+        },
+        limits
+      )
+    ).rejects.toThrow("Invalid OpenClaw device identity")
   })
 })
