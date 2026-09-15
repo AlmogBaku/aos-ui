@@ -60,6 +60,8 @@ export type OpenCodeClientOptions = Readonly<{
 export type OpenCodePageOptions = Readonly<{
   limit?: number
   cursor?: string
+  /** The pinned SDK forbids combining an order with an opaque cursor. */
+  order?: "asc" | "desc"
   signal?: AbortSignal
 }>
 
@@ -195,8 +197,17 @@ function page(options: OpenCodePageOptions | undefined) {
       options.limit > MAX_PAGE_LIMIT)
   )
     throw new OpenCodeClientError("invalid_request")
+  if (
+    options.order !== undefined &&
+    options.order !== "asc" &&
+    options.order !== "desc"
+  )
+    throw new OpenCodeClientError("invalid_request")
+  if (options.cursor !== undefined && options.order !== undefined)
+    throw new OpenCodeClientError("invalid_request")
   return {
     ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.order === undefined ? {} : { order: options.order }),
     ...(options.cursor === undefined
       ? {}
       : { cursor: identifier(options.cursor, "cursor") }),

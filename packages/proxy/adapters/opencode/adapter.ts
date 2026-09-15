@@ -1,0 +1,493 @@
+import {
+  RuntimeAuthStateSchema,
+  RuntimeInfoSchema,
+  SessionHistoryResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
+  type AgentCatalogResponse,
+  type RuntimeAuthState,
+  type RuntimeInfo,
+  type Session,
+  type SessionAttachmentStageRequest,
+  type SessionCatalogResponse,
+  type SessionHistoryResponse,
+  type VisibilityUpdateResponse,
+} from "../../../protocol"
+import type {
+  ServerAttachmentStage,
+  ServerRunEngine,
+  ServerRuntime,
+} from "../../core/runtime"
+import {
+  OpenCodeClientAbortError,
+  OpenCodeClientError,
+  OpenCodeMutationUncertainError,
+  type OpenCodeClient,
+  type OpenCodePageOptions,
+} from "./client"
+import { openCodeCapabilities } from "./capabilities"
+import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
+import { projectOpenCodeHistory } from "./history"
+import {
+  OpenCodeInteractionPublicError,
+  OpenCodeInteractions,
+} from "./interactions"
+import { parseOpenCodeMessageCatalog } from "./native-schemas"
+import {
+  createOpenCodeWorkspaceOperations,
+  OpenCodeWorkspaceScopeError,
+  OpenCodeWorkspaceUnavailableError,
+  type OpenCodeWorkspaceOperations,
+} from "./workspace"
+
+const MAX_HISTORY_PAGE_SIZE = 100
+const MAX_HISTORY_PAGES = 100
+
+/** The assembly seam deliberately excludes coordinator-owned run state. */
+export type OpenCodeAdapterClient = Readonly<{
+  catalog: Pick<OpenCodeClient["catalog"], "agents">
+  sessions: Pick<
+    OpenCodeClient["sessions"],
+    "list" | "get" | "create" | "messages" | "questions" | "permissions"
+  >
+  close(): Promise<void>
+}>
+
+export type OpenCodeServerAdapterOptions = Readonly<{
+  client: OpenCodeAdapterClient
+  /** Created by the native runs leaf; coordinator admission remains central. */
+  runs: ServerRunEngine
+  creatorAgentId?: string
+}>
+
+function identifier(value: string) {
+  return (
+    value.length > 0 &&
+    value.length <= 256 &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+  )
+}
+
+function unavailableRuntimeInfo(): RuntimeInfo {
+  return RuntimeInfoSchema.parse({
+    runtime: { id: "opencode", name: "OpenCode" },
+    status: "unavailable",
+    capabilities: {
+      agentCatalog: {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      },
+      agentVisibility: {
+        status: "unavailable",
+        reason: "native-agent-catalog-read-only",
+      },
+      sessionCatalog: {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      },
+      sessionHistory: {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      },
+      sessionDetail: {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      },
+      sessionCreation: {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      },
+      sessionTitle: {
+        status: "unavailable",
+        reason: "native-session-title-unavailable",
+      },
+      sessionArchival: {
+        status: "unavailable",
+        reason: "native-session-title-unavailable",
+      },
+      sessionDeletion: {
+        status: "unavailable",
+        reason: "native-session-delete-unavailable",
+      },
+      sessionRun: { status: "unavailable", reason: "temporarily-unavailable" },
+      sessionStop: { status: "unavailable", reason: "temporarily-unavailable" },
+      sessionSteer: {
+        status: "unavailable",
+        reason: "native-steering-unproven",
+      },
+    },
+  })
+}
+
+function readyRuntimeInfo(): RuntimeInfo {
+  return RuntimeInfoSchema.parse({
+    runtime: { id: "opencode", name: "OpenCode" },
+    status: "ready",
+    capabilities: {
+      agentCatalog: { status: "available" },
+      agentVisibility: {
+        status: "unavailable",
+        reason: "native-agent-catalog-read-only",
+      },
+      sessionCatalog: {
+        status: "available",
+        scope: "workspace",
+        order: "recent",
+        defaultPageSize: 50,
+        maxPageSize: 100,
+        maxWindow: 1_000,
+      },
+      sessionHistory: {
+        status: "available",
+        order: "chronological",
+        compacted: true,
+        loading: "on-open",
+        defaultPageSize: 200,
+        maxPageSize: 500,
+      },
+      sessionDetail: { status: "available" },
+      sessionCreation: { status: "available" },
+      sessionTitle: {
+        status: "unavailable",
+        reason: "native-session-title-unavailable",
+      },
+      sessionArchival: {
+        status: "unavailable",
+        reason: "native-session-title-unavailable",
+      },
+      sessionDeletion: {
+        status: "unavailable",
+        reason: "native-session-delete-unavailable",
+      },
+      sessionRun: { status: "available" },
+      sessionStop: { status: "available" },
+      sessionSteer: {
+        status: "unavailable",
+        reason: "native-steering-unproven",
+      },
+    },
+  })
+}
+
+export class OpenCodeServerAdapter implements ServerRuntime {
+  readonly runs: ServerRunEngine
+  readonly interactions: OpenCodeInteractions
+  readonly #workspace: OpenCodeWorkspaceOperations
+  readonly #content = new OpenCodeContent()
+  #closePromise: Promise<void> | undefined
+
+  constructor(private readonly options: OpenCodeServerAdapterOptions) {
+    this.runs = options.runs
+    this.#workspace = createOpenCodeWorkspaceOperations({
+      client: options.client,
+      creatorAgentId: options.creatorAgentId,
+    })
+    this.interactions = new OpenCodeInteractions({
+      questions: options.client.sessions.questions,
+      permissions: options.client.sessions.permissions,
+    })
+  }
+
+  resolveSessionId(agentId: string, publicSessionId: string) {
+    return identifier(agentId) && identifier(publicSessionId)
+      ? publicSessionId
+      : undefined
+  }
+
+  resolveInvitedSession(
+    agentId: string,
+    ref: string,
+    create?: { firstTurnInstruction?: string }
+  ) {
+    return this.#workspace.resolveInvitedSession(agentId, ref, create)
+  }
+
+  publicError(cause: unknown) {
+    if (cause instanceof OpenCodeMutationUncertainError)
+      return { code: "uncertain_mutation", status: 503 } as const
+    if (
+      cause instanceof OpenCodeClientAbortError ||
+      (cause instanceof OpenCodeClientError &&
+        cause.code === "connection_interrupted")
+    )
+      return { code: "connection_interrupted", status: 503 } as const
+    if (cause instanceof OpenCodeClientError) {
+      if (cause.code === "authentication")
+        return { code: "runtime_authentication_required", status: 401 } as const
+      if (cause.code === "invalid_request")
+        return { code: "invalid_request", status: 400 } as const
+      if (cause.code === "not_found")
+        return { code: "not_found", status: 404 } as const
+      if (cause.code === "conflict")
+        return { code: "revision_conflict", status: 409 } as const
+      return { code: "temporarily_unavailable", status: 503 } as const
+    }
+    if (cause instanceof OpenCodeWorkspaceScopeError)
+      return { code: "not_found", status: 404 } as const
+    if (cause instanceof OpenCodeWorkspaceUnavailableError)
+      return { code: "temporarily_unavailable", status: 503 } as const
+    if (cause instanceof OpenCodeContentUnavailableError)
+      return { code: "temporarily_unavailable", status: 503 } as const
+    if (cause instanceof OpenCodeInteractionPublicError) {
+      if (cause.code === "AOS_INTERACTION_NOT_FOUND")
+        return { code: "not_found", status: 404 } as const
+      if (cause.code === "AOS_MUTATION_UNCERTAIN")
+        return { code: "uncertain_mutation", status: 503 } as const
+      if (
+        cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
+        cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
+      )
+        return { code: "temporarily_unavailable", status: 503 } as const
+      return { code: "invalid_request", status: 400 } as const
+    }
+    return undefined
+  }
+
+  async authState(): Promise<RuntimeAuthState> {
+    try {
+      await this.listAgents()
+      return RuntimeAuthStateSchema.parse({ status: "authenticated" })
+    } catch (error) {
+      if (this.publicError(error)?.code === "runtime_authentication_required")
+        return RuntimeAuthStateSchema.parse({
+          status: "authentication-required",
+        })
+      return RuntimeAuthStateSchema.parse({
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      })
+    }
+  }
+
+  async runtimeInfo(): Promise<RuntimeInfo> {
+    try {
+      await this.listAgents()
+      return readyRuntimeInfo()
+    } catch (error) {
+      if (this.publicError(error)?.code === "runtime_authentication_required")
+        throw error
+      return unavailableRuntimeInfo()
+    }
+  }
+
+  listAgents(): Promise<AgentCatalogResponse> {
+    return this.#workspace.listAgents()
+  }
+
+  async updateAgentVisibility(
+    agentId: string,
+    visibility: "visible" | "hidden",
+    observedRevision: string
+  ): Promise<VisibilityUpdateResponse> {
+    void [agentId, visibility, observedRevision]
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  listAllSessions(
+    limit: number,
+    offset: number
+  ): Promise<SessionCatalogResponse> {
+    return this.#workspace.listAllSessions(limit, offset)
+  }
+
+  listSessions(
+    agentId: string,
+    limit: number,
+    offset: number
+  ): Promise<SessionCatalogResponse> {
+    return this.#workspace.listSessions(agentId, limit, offset)
+  }
+
+  async history(
+    agentId: string,
+    sessionId: string,
+    limit: number,
+    offset: number
+  ): Promise<SessionHistoryResponse> {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 500 ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0
+    )
+      throw new OpenCodeClientError("invalid_request")
+    await this.getSession(agentId, sessionId)
+    const required = offset + limit + 1
+    if (!Number.isSafeInteger(required))
+      throw new OpenCodeClientError("invalid_request")
+    const { messages, hasMore } = await this.#readHistory(sessionId, required)
+    const page = messages.slice(offset, offset + limit)
+    const nextOffset = offset + page.length
+    const total = hasMore
+      ? Math.max(messages.length, nextOffset + 1)
+      : messages.length
+    return SessionHistoryResponseSchema.parse({
+      sessionId,
+      messages: page,
+      total,
+      limit,
+      offset,
+      nextOffset,
+    })
+  }
+
+  getSession(agentId: string, sessionId: string): Promise<Session> {
+    return this.#workspace.getSession(agentId, sessionId)
+  }
+
+  async createSession(agentId: string, title?: string) {
+    if (title !== undefined) throw new OpenCodeWorkspaceUnavailableError()
+    return this.#workspace.createSession(agentId)
+  }
+
+  async mutateSession(
+    agentId: string,
+    sessionId: string,
+    method: "PATCH" | "DELETE",
+    body?: unknown
+  ) {
+    await this.getSession(agentId, sessionId)
+    void [method, body]
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async workspaceCapabilities(agentId: string, publicSessionId: string) {
+    await this.getSession(agentId, publicSessionId)
+    return SessionWorkspaceCapabilitiesResponseSchema.parse({
+      agent: {
+        identity: { type: "opencode", provider: "OpenCode" },
+        transport: { streaming: true, resumable: true },
+        tools: { supported: true, clientProvided: false },
+        reasoning: { supported: true, streaming: true, encrypted: false },
+        multimodal: {
+          input: {
+            image: true,
+            audio: false,
+            video: false,
+            pdf: false,
+            file: true,
+          },
+          output: { image: false, audio: false },
+        },
+        humanInTheLoop: {
+          supported: true,
+          approvals: true,
+          interventions: false,
+          feedback: false,
+          interrupts: true,
+          approveWithEdits: false,
+        },
+      },
+      workspace: this.#workspace.capabilities(),
+      ...openCodeCapabilities(),
+    })
+  }
+
+  async models(agentId: string, publicSessionId: string) {
+    await this.getSession(agentId, publicSessionId)
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async selectModel(
+    agentId: string,
+    publicSessionId: string,
+    selectedId: string
+  ) {
+    await this.getSession(agentId, publicSessionId)
+    void selectedId
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async context(agentId: string, publicSessionId: string) {
+    await this.getSession(agentId, publicSessionId)
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async subscribeSessionInvalidation(
+    agentId: string,
+    publicSessionId: string,
+    listener: () => void,
+    reset?: () => void
+  ): Promise<() => void> {
+    await this.getSession(agentId, publicSessionId)
+    void [listener, reset]
+    // OC2 owns the provider-private SSE attachment and event conversion.
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
+  async stageAttachments(
+    agentId: string,
+    publicSessionId: string,
+    attachments: SessionAttachmentStageRequest["attachments"]
+  ): Promise<ServerAttachmentStage> {
+    await this.getSession(agentId, publicSessionId)
+    return this.#content.stage(attachments)
+  }
+
+  async artifact(
+    agentId: string,
+    publicSessionId: string,
+    artifactId: string
+  ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
+    await this.getSession(agentId, publicSessionId)
+    void artifactId
+    throw new OpenCodeContentUnavailableError()
+  }
+
+  async transcribe(
+    agentId: string,
+    bytes: Uint8Array,
+    mimeType: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    void [agentId, bytes, mimeType, signal]
+    throw new OpenCodeContentUnavailableError()
+  }
+
+  async speak(
+    agentId: string,
+    text: string,
+    signal?: AbortSignal
+  ): Promise<{ bytes: Uint8Array; mimeType: string }> {
+    void [agentId, text, signal]
+    throw new OpenCodeContentUnavailableError()
+  }
+
+  close() {
+    this.#closePromise ??= this.options.client.close()
+    return this.#closePromise
+  }
+
+  async #readHistory(sessionId: string, required: number) {
+    const raw: unknown[] = []
+    const seenMessages = new Set<string>()
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+      const options: OpenCodePageOptions = cursor
+        ? { limit: MAX_HISTORY_PAGE_SIZE, cursor }
+        : { limit: MAX_HISTORY_PAGE_SIZE, order: "asc" }
+      const parsed = parseOpenCodeMessageCatalog(
+        await this.options.client.sessions.messages(sessionId, options)
+      )
+      if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
+      for (const message of parsed.data.data) {
+        if (seenMessages.has(message.id))
+          throw new OpenCodeWorkspaceUnavailableError()
+        seenMessages.add(message.id)
+        raw.push(message)
+      }
+      const messages = projectOpenCodeHistory({ messages: raw, sessionId })
+      const next = parsed.data.cursor.next
+      if (!next) return { messages, hasMore: false }
+      if (messages.length >= required) return { messages, hasMore: true }
+      if (seenCursors.has(next)) throw new OpenCodeWorkspaceUnavailableError()
+      seenCursors.add(next)
+      cursor = next
+    }
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+}

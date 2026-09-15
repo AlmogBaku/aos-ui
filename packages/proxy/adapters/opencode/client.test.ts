@@ -91,6 +91,26 @@ describe("OpenCodeClient", () => {
     }
   })
 
+  it("preserves the native ascending message order before cursor pagination", async () => {
+    const server = await nativeServer((request) => {
+      expect(request.url.pathname).toBe("/api/session/session-1/message")
+      expect(request.url.searchParams.get("limit")).toBe("20")
+      expect(request.url.searchParams.get("order")).toBe("asc")
+      expect(request.url.searchParams.get("cursor")).toBeNull()
+      return Response.json({ data: [], cursor: {} })
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.sessions.messages("session-1", { limit: 20, order: "asc" })
+      ).resolves.toEqual({ data: [], cursor: {} })
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
   it("returns a bounded public error instead of an upstream error body", async () => {
     const server = await nativeServer(() =>
       Response.json(
