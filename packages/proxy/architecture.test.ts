@@ -22,7 +22,7 @@ async function productionFiles(root: string): Promise<string[]> {
 }
 
 describe("runtime adapter boundary", () => {
-  it("keeps Hermes native code out of common proxy and browser modules", async () => {
+  it("keeps provider-native code out of common proxy and browser modules", async () => {
     const proxyRoot = import.meta.dirname
     const repositoryRoot = join(proxyRoot, "../..")
     const commonProxyFiles = (
@@ -32,29 +32,30 @@ describe("runtime adapter boundary", () => {
         )
       )
     ).flat()
-    const browserFiles = await productionFiles(
-      join(repositoryRoot, "src/runtime-adapters/aos")
-    )
+    const browserFiles = await productionFiles(join(repositoryRoot, "src"))
 
     for (const path of [...commonProxyFiles, ...browserFiles]) {
       const source = await readFile(path, "utf8")
       expect(source, path).not.toMatch(
-        /(?:from\s+|import\s*\()["'][^"']*hermes[^"']*["']/iu
+        /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
       )
       expect(source, path).not.toMatch(/\bHermes(?:Rpc|Http|Server|Session)/u)
     }
   })
 
-  it("selects the V1 adapter in exactly one production module", async () => {
+  it("selects every server adapter in exactly one production module", async () => {
     const proxyRoot = import.meta.dirname
     const files = await productionFiles(proxyRoot)
-    const selectors: string[] = []
+    const selector = join(proxyRoot, "adapters/create-runtime.ts")
 
-    for (const path of files) {
-      const source = await readFile(path, "utf8")
-      if (/case\s+["']hermes["']/u.test(source)) selectors.push(path)
+    for (const provider of ["hermes", "opencode", "openclaw"]) {
+      const selectors: string[] = []
+      for (const path of files) {
+        const source = await readFile(path, "utf8")
+        if (new RegExp(`case\\s+["']${provider}["']`, "u").test(source))
+          selectors.push(path)
+      }
+      expect(selectors, provider).toEqual([selector])
     }
-
-    expect(selectors).toEqual([join(proxyRoot, "adapters/create-runtime.ts")])
   })
 })

@@ -86,8 +86,8 @@ services:
     secrets:
       - source: opencode-password
         target: opencode-password
-        uid: "1000"
-        gid: "1000"
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
     volumes:
       - type: bind

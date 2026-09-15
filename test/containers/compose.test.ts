@@ -168,6 +168,8 @@ describe("container orchestration", () => {
       AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
+      AOS_UI_HOST_UID: "1234",
+      AOS_UI_HOST_GID: "2345",
     })
 
     expect(Object.keys(config.services).sort()).toEqual(["opencode", "web"])
@@ -241,8 +243,8 @@ describe("container orchestration", () => {
         source: "opencode-password",
         target: "opencode-password",
         mode: "0400",
-        uid: "1000",
-        gid: "1000",
+        uid: "1234",
+        gid: "2345",
       }),
     ])
     expect(config.secrets?.["opencode-password"]?.file).toBe(
