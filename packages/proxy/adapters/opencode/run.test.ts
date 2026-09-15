@@ -360,6 +360,122 @@ describe("OpenCodeRunEngine", () => {
     expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
   })
 
+  it.each([
+    {
+      name: "text",
+      prefix: historyEvent(1, "session.next.text.started", {
+        timestamp: 1,
+        assistantMessageID: "assistant-open",
+        textID: "text-open",
+      }),
+      suffix: [
+        historyEvent(2, "session.next.text.ended", {
+          timestamp: 2,
+          assistantMessageID: "assistant-open",
+          textID: "text-open",
+          text: "continued text",
+        }),
+      ],
+      expected: [
+        EventType.RUN_STARTED,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.RUN_FINISHED,
+      ],
+    },
+    {
+      name: "reasoning",
+      prefix: historyEvent(1, "session.next.reasoning.started", {
+        timestamp: 1,
+        assistantMessageID: "assistant-open",
+        reasoningID: "reasoning-open",
+      }),
+      suffix: [
+        historyEvent(2, "session.next.reasoning.ended", {
+          timestamp: 2,
+          assistantMessageID: "assistant-open",
+          reasoningID: "reasoning-open",
+          text: "continued reasoning",
+        }),
+      ],
+      expected: [
+        EventType.RUN_STARTED,
+        EventType.REASONING_MESSAGE_CONTENT,
+        EventType.REASONING_MESSAGE_END,
+        EventType.RUN_FINISHED,
+      ],
+    },
+    {
+      name: "tool",
+      prefix: historyEvent(1, "session.next.tool.input.started", {
+        timestamp: 1,
+        assistantMessageID: "assistant-open",
+        callID: "call-open",
+        name: "read",
+      }),
+      suffix: [
+        historyEvent(2, "session.next.tool.input.ended", {
+          timestamp: 2,
+          assistantMessageID: "assistant-open",
+          callID: "call-open",
+          text: '{"path":"README.md"}',
+        }),
+        historyEvent(3, "session.next.tool.success", {
+          timestamp: 3,
+          assistantMessageID: "assistant-open",
+          callID: "call-open",
+          structured: {},
+          content: [{ type: "text", text: "contents" }],
+          provider: { executed: true },
+        }),
+      ],
+      expected: [
+        EventType.RUN_STARTED,
+        EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_END,
+        EventType.TOOL_CALL_RESULT,
+        EventType.RUN_FINISHED,
+      ],
+    },
+  ])(
+    "reconstructs the admitted $name lifecycle before emitting only a cursor suffix",
+    async ({ prefix, suffix, expected }) => {
+      const nextAdmissionSeq = suffix.at(-1)!.durable.seq + 1
+      const all = [
+        admitted(0, admission["run-recovered"]),
+        prefix,
+        ...suffix,
+        admitted(nextAdmissionSeq, "newer-run"),
+      ]
+      const state = client({
+        history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+          data: all.filter(
+            (event) => event.durable.seq > (options?.after ?? -1)
+          ),
+          hasMore: false,
+        })),
+      })
+
+      const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+        threadId: scope.threadId,
+        runId: "run-recovered",
+        position: {
+          epoch: `opencode:${scope.sessionId}`,
+          lastSeen: 1,
+        },
+      })
+      const events = await collect(handle)
+
+      expect(events.map((event) => (event as { type: string }).type)).toEqual(
+        expected
+      )
+      expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {
+        after: "1",
+      })
+      expect(state.sessions.prompt).not.toHaveBeenCalled()
+    }
+  )
+
   it("rejects recovery when the stable admission cannot be verified", async () => {
     const state = client({
       history: vi.fn(async () => ({
@@ -423,14 +539,15 @@ describe("OpenCodeRunEngine", () => {
 
   it("keeps native lifecycle nonterminal after transport loss so Stop still interrupts", async () => {
     const wait = deferred()
+    let running = true
     const state = client({
       wait: vi.fn(async () => wait.promise),
       active: vi
         .fn()
         .mockResolvedValueOnce({ data: {} })
-        .mockResolvedValue({
-          data: { [scope.sessionId]: { type: "running" } },
-        }),
+        .mockImplementation(async () => ({
+          data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        })),
     })
     const handle = await new OpenCodeRunEngine(state.native).start(
       scope,
@@ -439,10 +556,110 @@ describe("OpenCodeRunEngine", () => {
     state.observation.fail()
     await until(() => expect(state.observation.abort).toHaveBeenCalled())
 
-    await expect(handle.stop()).resolves.toBe("stopping")
+    const stopped = handle.stop()
+    await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
+    running = false
+    wait.resolve()
+
+    await expect(stopped).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     const events = await collect(handle)
     expect(events.at(-1)).toMatchObject({ type: EventType.RUN_ERROR })
+  })
+
+  it("emits valid open-lifecycle closures before transport RUN_ERROR", async () => {
+    const state = client({
+      active: vi
+        .fn()
+        .mockResolvedValueOnce({ data: {} })
+        .mockResolvedValue({
+          data: { [scope.sessionId]: { type: "running" } },
+        }),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
+    })
+    const handle = await new OpenCodeRunEngine(state.native).start(
+      scope,
+      input()
+    )
+    state.observation.publish(
+      liveEvent(0, "session.next.prompt.admitted", {
+        timestamp: 0,
+        messageID: admission["run-1"],
+        prompt: { text: "Hello OpenCode" },
+        delivery: "queue",
+      })
+    )
+    state.observation.publish(
+      liveEvent(1, "session.next.reasoning.started", {
+        timestamp: 1,
+        assistantMessageID: "assistant-open",
+        reasoningID: "reasoning-open",
+      })
+    )
+    await until(() => expect(handle.recoveryPosition().lastSeen).toBe(1))
+    state.observation.fail()
+
+    expect(
+      (await collect(handle)).map((event) => (event as { type: string }).type)
+    ).toEqual([
+      EventType.RUN_STARTED,
+      EventType.REASONING_MESSAGE_START,
+      EventType.REASONING_MESSAGE_END,
+      EventType.RUN_ERROR,
+    ])
+  })
+
+  it("keeps a post-reset Stop pending until timer reconciliation proves native idle", async () => {
+    let running = false
+    const state = client({
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          running = true
+          return {
+            data: {
+              admittedSeq: 0,
+              id: request.id,
+              sessionID: scope.sessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+      wait: vi.fn(async () => {
+        throw new Error("operation unavailable")
+      }),
+    })
+    const handle = await new OpenCodeRunEngine(state.native, {
+      waitRetryMs: 1,
+    }).start(scope, input())
+    state.observation.publish(
+      liveEvent(0, "session.next.prompt.admitted", {
+        timestamp: 0,
+        messageID: admission["run-1"],
+        prompt: { text: "Hello OpenCode" },
+        delivery: "queue",
+      })
+    )
+    await until(() => expect(handle.recoveryPosition().lastSeen).toBe(0))
+    state.observation.fail()
+    await until(() => expect(state.observation.abort).toHaveBeenCalled())
+
+    const stopped = handle.stop()
+    let resolved = false
+    void stopped.then(() => {
+      resolved = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(resolved).toBe(false)
+    running = false
+
+    await expect(stopped).resolves.toBe("idle")
+    expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
   it("marks Stop idle only after the interrupt is acknowledged and active state is authoritatively empty", async () => {

@@ -71,6 +71,8 @@ type ActiveRun = {
   admissionObserved: boolean
   settle(): void
   settled: Promise<void>
+  settleNative(): void
+  nativeSettled: Promise<void>
 }
 
 class EventQueue implements AsyncIterable<AGUIEvent> {
@@ -420,12 +422,16 @@ export class OpenCodeRunEngine implements ServerRunEngine {
 
       run.projector = this.#projector(
         run,
-        projectionStart,
-        projectionStart < admissionEvent.seq ? expectedAdmission : undefined
+        admissionEvent.seq - 1,
+        expectedAdmission
       )
       run.admissionObserved = projectionStart >= admissionEvent.seq
       for (const event of all) {
-        if (event.seq <= projectionStart || event.seq > intervalEnd) continue
+        if (event.seq < admissionEvent.seq || event.seq > intervalEnd) continue
+        if (event.seq <= projectionStart) {
+          run.projector.reconstructValidated(event)
+          continue
+        }
         this.#publish(run, run.projector.acceptValidated(event))
       }
       this.#discardBufferedThrough(run, intervalEnd)
@@ -451,6 +457,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     expectedAdmission?: string
   ): ActiveRun {
     const queue = new EventQueue(this.#maxQueueEvents)
+    const segmentSettlement = settlement()
+    const nativeSettlement = settlement()
     queue.push({ type: EventType.RUN_STARTED, threadId: scope.threadId, runId })
     return {
       key: runKey(scope),
@@ -475,7 +483,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       waitFailures: 0,
       expectedAdmission,
       admissionObserved: expectedAdmission === undefined,
-      ...settlement(),
+      settled: segmentSettlement.settled,
+      settle: segmentSettlement.settle,
+      nativeSettled: nativeSettlement.settled,
+      settleNative: nativeSettlement.settle,
     }
   }
 
@@ -733,6 +744,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   #finish(run: ActiveRun) {
     if (run.nativeTerminal) return
     run.nativeTerminal = true
+    run.settleNative()
     run.controller.abort()
     this.#abortSource(run)
     if (!run.admissionObserved) {
@@ -756,11 +768,17 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   #segmentFail(run: ActiveRun, code: string, message: string, reset = false) {
     if (run.segmentClosed) return
     this.#abortSource(run)
-    const failure = run.projector.fail(code, message).events.at(-1)!
-    if (reset) run.queue.resetWith(failure)
-    else {
-      if (!run.queue.push(failure)) run.queue.resetWith(failure)
-      else run.queue.close()
+    const events = run.projector.fail(code, message).events
+    const failure = events.at(-1)!
+    if (reset) {
+      run.queue.resetWith(failure)
+    } else {
+      for (const event of events) {
+        if (run.queue.push(event)) continue
+        run.queue.resetWith(failure)
+        break
+      }
+      run.queue.close()
     }
     run.segmentClosed = true
     run.settle()
@@ -778,6 +796,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     this.#abortSource(run)
     run.queue.close()
     run.settle()
+    run.settleNative()
     if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
   }
 
@@ -797,7 +816,13 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       // The interrupt acknowledgement is authoritative. A failed read cannot
       // make this Stop safe to retry or prove the native Session idle.
     }
-    return run.nativeTerminal ? "idle" : "stopping"
+    if (run.nativeTerminal) return "idle"
+    if (run.segmentClosed) {
+      this.#watchWait(run)
+      await run.nativeSettled
+      return "idle"
+    }
+    return "stopping"
   }
 
   async #verifyOwnership(scope: SessionScope) {

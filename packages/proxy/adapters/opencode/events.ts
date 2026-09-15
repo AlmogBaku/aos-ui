@@ -1,4 +1,9 @@
-import { EventType, type AGUIEvent, type TokenUsage } from "@ag-ui/core"
+import {
+  EventType,
+  aggregateTokenUsage,
+  type AGUIEvent,
+  type TokenUsage,
+} from "@ag-ui/core"
 
 import type { OpenCodeDurableEvent } from "./client"
 
@@ -508,7 +513,7 @@ export class OpenCodeEventProjector {
   #textOpen = false
   #reasoningId?: string
   #reasoningOpen = false
-  #usage?: TokenUsage[]
+  readonly #usage: TokenUsage[] = []
 
   constructor(
     scope: ProjectorScope,
@@ -551,6 +556,17 @@ export class OpenCodeEventProjector {
   }
 
   acceptValidated(event: ValidatedOpenCodeEvent): Projection {
+    return this.#acceptValidated(event, false)
+  }
+
+  reconstructValidated(event: ValidatedOpenCodeEvent) {
+    this.#acceptValidated(event, true)
+  }
+
+  #acceptValidated(
+    event: ValidatedOpenCodeEvent,
+    suppressEvents: boolean
+  ): Projection {
     const prior = this.#fingerprints.get(event.seq)
     if (prior !== undefined) {
       if (prior !== event.fingerprint) throw new OpenCodeEventValidationError()
@@ -566,7 +582,7 @@ export class OpenCodeEventProjector {
       const oldest = this.#fingerprints.keys().next().value
       if (oldest !== undefined) this.#fingerprints.delete(oldest)
     }
-    return projection
+    return suppressEvents ? { events: [] } : projection
   }
 
   finish(): Projection {
@@ -580,7 +596,9 @@ export class OpenCodeEventProjector {
       threadId: this.#scope.threadId,
       runId: this.#scope.runId,
       ...(this.#stopping ? { result: { stopped: true } } : {}),
-      ...(this.#usage ? { usage: this.#usage } : {}),
+      ...(this.#usage.length
+        ? { usage: aggregateTokenUsage(this.#usage) }
+        : {}),
       outcome: { type: "success" },
     })
     return { events, terminal: "finished" }
@@ -709,7 +727,7 @@ export class OpenCodeEventProjector {
         role: "tool",
       })
     } else if (type === "session.next.step.ended") {
-      this.#usage = tokenUsage(data.tokens)
+      this.#usage.push(...tokenUsage(data.tokens))
     } else if (type === "session.next.step.failed") {
       return this.fail(
         "AOS_PROVIDER_RUN_FAILED",

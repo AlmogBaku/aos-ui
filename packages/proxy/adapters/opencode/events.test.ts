@@ -302,4 +302,39 @@ describe("OpenCodeEventProjector", () => {
       { type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
     ])
   })
+
+  it("aggregates usage across every durable provider step in a tool-continuation run", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    for (const [seq, input, output] of [
+      [1, 10, 4],
+      [2, 20, 6],
+    ] as const)
+      projector.accept(
+        live(seq, "session.next.step.ended", {
+          assistantMessageID: `assistant-${seq}`,
+          finish: seq === 1 ? "tool-calls" : "stop",
+          cost: 0,
+          tokens: {
+            input,
+            output,
+            reasoning: 2,
+            cache: { read: 3, write: 1 },
+          },
+          timestamp: seq,
+        })
+      )
+
+    expect(projector.finish().events.at(-1)).toMatchObject({
+      type: EventType.RUN_FINISHED,
+      usage: [
+        {
+          inputTokens: 30,
+          outputTokens: 10,
+          reasoningTokens: 4,
+          cachedInputTokens: 6,
+          totalTokens: 44,
+        },
+      ],
+    })
+  })
 })
