@@ -5,7 +5,6 @@ import type { CaptureError } from "./voice-capture"
 export type VoiceLabels = {
   transcription: string
   voiceTurn: string
-  modePicker: string
   record: string
   modeHint: string
   finish: string
@@ -37,10 +36,8 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
   en: {
     transcription: "Transcription",
     voiceTurn: "Voice turn",
-    modePicker: "Microphone mode",
     record: "Record",
-    modeHint:
-      "Tap to record. Hold, press Arrow Down, or Shift+F10 to change mode.",
+    modeHint: "Press to record. Hold to switch mode.",
     finish: "Finish",
     send: "Send",
     discard: "Discard recording",
@@ -93,9 +90,8 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
   he: {
     transcription: "תמלול",
     voiceTurn: "תור קולי",
-    modePicker: "מצב המיקרופון",
     record: "הקלטה",
-    modeHint: "לחיצה להקלטה. לחיצה ארוכה, חץ למטה או Shift+F10 לשינוי מצב.",
+    modeHint: "לחיצה להקלטה. לחיצה ארוכה להחלפת מצב.",
     finish: "סיום",
     send: "שליחה",
     discard: "ביטול ההקלטה",

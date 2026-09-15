@@ -12,7 +12,7 @@ V1 provides one working Hermes-backed AOS workspace:
 ```text
 React + assistant-ui
         |
-        | AOS REST + events WebSocket + AG-UI runs
+        | AOS REST/run control + events WebSocket + AG-UI run streams
         v
 TypeScript gateway
         |
@@ -196,11 +196,41 @@ not encoded into Session IDs for URL formatting.
 
 ## Runs and interactions
 
-Standard AG-UI represents messages, streaming, reasoning, tool calls, custom
-UI, usage, lifecycle, and run interruption. The gateway accepts exactly one
-authorized new user turn or one response bound to an existing interrupt.
-Browser history, state, tools, and context are not authoritative provider
-input.
+Standard AG-UI represents run input, messages, streaming, reasoning, tool
+calls, custom UI, usage, lifecycle, and run interruption. It does not define a
+browser command that mutates an already active model turn. The gateway accepts
+exactly one authorized new user turn or one response bound to an existing
+interrupt. Browser history, state, tools, and context are not authoritative
+provider input.
+
+Stop and active-turn steering are typed AOS REST controls alongside the AG-UI
+stream. They target the coordinator's existing logical run; neither submits a
+second AG-UI run nor emits another `RUN_STARTED`. Both require the existing
+controller identity and serialize through the coordinator so Stop cannot race
+with steering.
+
+The V1 run transport is:
+
+| Method | Path                                                               | Contract                                    |
+| ------ | ------------------------------------------------------------------ | ------------------------------------------- |
+| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs`           | AG-UI `RunAgentInput`; SSE event response   |
+| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/reconnect` | Reattach to the named run position; SSE     |
+| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/stop`      | AOS control; `idle` or `stopping`           |
+| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/steer`     | AOS control; `steered` or provider `queued` |
+
+The strict steering body is
+`{ requestId, expectedRunId, text }`. `requestId` provides mutation
+idempotency, `expectedRunId` prevents stale UI from controlling a newer run,
+and `text` is non-empty UTF-8 limited to 1 MiB. `steered` returns HTTP `200`;
+provider-accepted `queued` returns `202`.
+
+Steering is optional and capability-gated. It accepts non-empty text only,
+requires the browser's expected active `runId`, and deduplicates a bounded set
+of request IDs for that execution. A successful provider acknowledgement emits
+the replayable `aos.steer.accepted` custom event into the current stream. A
+provider-queued acknowledgement is already accepted and must not be submitted
+again. Definite conflicts preserve the queued copy; uncertain dispatch is never
+retried automatically.
 
 Questions and approvals remain part of the same logical Hermes execution. An
 interrupted AG-UI segment ends with `RUN_FINISHED` and an interrupt outcome. An
@@ -209,9 +239,16 @@ coordinator retains the logical execution and streams the eventual final
 assistant response. Operator and guest lanes share admission state but retain
 distinct control permissions.
 
+The Hermes adapter maps Stop to `session.interrupt` and steering to
+`session.redirect`; those native method names do not cross the adapter seam. A
+redirect seals the current assistant generation, preserves completed tool
+results, and begins subsequent assistant output at a distinct message boundary
+under the same logical run. Redirect-induced native completion events are
+intermediate until the complete chain is authoritatively idle.
+
 Stop remains `stopping` until a terminal native event or authoritative idle
-read proves settlement. Lost acknowledgement produces `uncertain`, not a false
-success or automatic retry.
+read proves settlement. Lost Stop or steering acknowledgement produces
+`uncertain`, not a false success or automatic retry.
 
 ## Reconnect
 
@@ -229,10 +266,11 @@ authorize scope
 ```
 
 The coordinator preserves one logical execution across start, interrupt,
-response, Stop, and reconnect while each AG-UI segment keeps its own stable
-`runId`. Pending questions and approvals reappear after reload and remain
-answerable. Completed output that arrived while disconnected is recovered
-without resending the prompt.
+response, steering, Stop, and reconnect while each AG-UI segment keeps its own
+stable `runId`. Steering does not create a segment. Pending questions and
+approvals reappear after reload and remain answerable. Completed output and
+steering acknowledgements that arrived while disconnected are recovered without
+resending the prompt or correction.
 
 Workspace invalidations use the normalized events WebSocket. REST remains
 authoritative: subscribe before reading, mark overlapping reads dirty, reject
@@ -276,6 +314,7 @@ open operator workspace
   -> create a draft Session
   -> send the first turn
   -> stream reasoning, tools, and final response
+  -> steer an active text turn without starting another run
   -> answer a question or approval
   -> Stop an active run
   -> reload during active and needs-input states
@@ -286,10 +325,10 @@ open operator workspace
 Tests must cover protocol validation, capability fidelity, ownership,
 operator/guest cross-lane admission, guest projection, native payload and
 credential non-disclosure, lazy creation, pagination, history ordering,
-streaming, terminal delivery, Stop settlement, questions and approvals,
-attachments and artifacts, malformed and oversized inputs, uncertain sends,
-connection loss, idle Session release, native reconnect, and deployment port
-isolation.
+streaming, terminal delivery, Stop settlement, active-turn steering and its
+generation boundaries, questions and approvals, attachments and artifacts,
+malformed and oversized inputs, uncertain sends and steering, connection loss,
+idle Session release, native reconnect, and deployment port isolation.
 
 Acceptance also requires:
 

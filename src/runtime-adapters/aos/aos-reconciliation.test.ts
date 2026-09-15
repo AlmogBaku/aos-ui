@@ -65,7 +65,7 @@ function deferred<T>() {
 }
 
 describe("AOS authoritative browser reconciliation", () => {
-  it("authorizes the scoped guest socket before browser WebSocket construction", async () => {
+  it("authorizes a scoped event connection before browser WebSocket construction", async () => {
     let release!: () => void
     const authorized = new Promise<void>((resolve) => {
       release = resolve

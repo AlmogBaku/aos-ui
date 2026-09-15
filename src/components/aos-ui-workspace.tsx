@@ -242,7 +242,7 @@ function TodoDock({
 
   return (
     <details
-      className="group border-y border-border/70 bg-background @md:rounded-2xl @md:border @md:bg-card/90 @md:shadow-sm"
+      className="group border-y border-border/60 bg-background @md:rounded-[24px] @md:border @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:w-full @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
       data-slot="todo-dock"
       role="region"
       aria-label={copy.tasks}

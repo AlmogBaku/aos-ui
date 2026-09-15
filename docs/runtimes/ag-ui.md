@@ -36,6 +36,13 @@ Capabilities outside the generic contract remain unavailable. There is no shared
 
 Navigating away from a running Session detaches its cloned HTTP stream and parks its frontend queue. It does not call an arbitrary provider-native cancellation callback. Do not use this composition with a custom Agent whose `abortRun` performs wider native cancellation as a side effect.
 
+Core AG-UI accepts input that starts or resumes a run and streams events back to
+the client. It does not currently define a command that changes an already
+active model turn. Assistant UI's queue Steer action only prioritizes a queued
+item unless the selected AOS runtime exposes the separate provider-neutral
+active-run steering capability. Generic AG-UI therefore reports active-turn
+steering unavailable by default.
+
 ## Verify
 
 ```bash

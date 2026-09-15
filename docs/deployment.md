@@ -67,7 +67,8 @@ AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing
 Hermes remains independently operated. The overlay runs one Bun process that
 serves static assets and the private TypeScript proxy on separate operator and
 guest listeners. External ingress owns TLS; the browser uses the normalized
-`/api/aos/v1` API for catalogs, history, AG-UI/SSE runs, Stop, and reconnect.
+`/api/aos/v1` API for catalogs and history, AG-UI/SSE run streams, and separate
+AOS REST controls such as Stop and capability-gated steering.
 The operator listener has no application authentication: anyone who can reach
 it has full operator access. The operator listener has no guest API route, and
 the guest listener has no operator API route.

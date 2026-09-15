@@ -12,9 +12,22 @@ Creating a Session always creates it for the selected Agent. Provider events rem
 
 ## Send and control work
 
-Use the composer to send messages and attachments supported by the runtime. AOS displays streaming state and provider questions or approvals in the conversation. Stop acts on the selected native run when the runtime exposes that operation.
+Use the composer to send messages and attachments supported by the runtime. AOS
+displays streaming state and provider questions or approvals in the
+conversation. Stop acts on the selected native run when the runtime exposes
+that operation.
 
-Queued messages stay with their Session. Switching away detaches or parks browser work according to the runtime adapter; it never transfers a queue to another Agent.
+When the Session is idle, `Enter` sends immediately and no queue is shown.
+While a run is active, `Enter` adds a FIFO follow-up and
+`Command/Ctrl+Shift+Enter` steers the active turn when the runtime exposes
+text-only steering. Attachments always queue. A queued row can be steered
+individually without changing the order of the remaining rows. Waiting for a
+question or approval is not an active model turn, so new messages queue and the
+Steer action is unavailable.
+
+Queued messages stay with their Session. Stop parks queued follow-ups until the
+next explicit send. Switching away detaches or parks browser work according to
+the runtime adapter; it never transfers a queue to another Agent.
 
 ## Read Plans, Todos, and Subagents
 

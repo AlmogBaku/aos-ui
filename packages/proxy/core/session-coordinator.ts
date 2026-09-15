@@ -4,6 +4,7 @@ import {
   ServerRunConflictError,
   ServerRunCapacityError,
   ServerRunControlError,
+  ServerRunSteerUnavailableError,
   type NewTurnRunInput,
   type RecoveryRequest,
   type ResumeRunInput,
@@ -11,6 +12,7 @@ import {
   type ServerRunHandle,
   type SessionScope,
 } from "./runtime"
+import type { RunSteerRequest, RunSteerResponse } from "../../protocol"
 import { SubscriberFanout } from "./subscriber-fanout"
 
 export type SessionExecutionState =
@@ -76,7 +78,14 @@ type Execution = {
   startedByLane: "operator" | "guest"
   controllers: Set<string>
   segment: Segment
+  control: Promise<void>
+  steeringRequests: Map<
+    string,
+    { fingerprint: string; result: Promise<RunSteerResponse> }
+  >
 }
+
+const MAX_STEERING_REQUESTS_PER_EXECUTION = 256
 
 function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\u0000${scope.sessionId}`
@@ -217,6 +226,8 @@ export class SessionCoordinator {
         startedByLane: "operator",
         controllers: new Set(),
         segment,
+        control: Promise.resolve(),
+        steeringRequests: new Map(),
       }
       this.#executions.set(key, execution)
       this.#consume(execution, segment)
@@ -269,6 +280,8 @@ export class SessionCoordinator {
         startedByLane: access.lane,
         controllers: new Set(access.canControl ? [access.controllerId] : []),
         segment: this.#segment(input.runId, handle, access.onTerminal),
+        control: Promise.resolve(),
+        steeringRequests: new Map(),
       }
       this.#executions.set(key, execution)
       this.#consume(execution, execution.segment)
@@ -352,6 +365,8 @@ export class SessionCoordinator {
             startedByLane: access.lane,
             controllers: new Set<string>(),
             segment,
+            control: Promise.resolve(),
+            steeringRequests: new Map(),
           }
       if (existing) existing.segment.fanout.close()
       execution.state = "running"
@@ -371,17 +386,76 @@ export class SessionCoordinator {
   ) {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution || execution.state === "idle") return "idle" as const
+    return this.#withControl(execution, async () => {
+      if (!execution.controllers.has(controllerId))
+        throw new ServerRunControlError()
+      if (execution.state === "stopping") return "stopping" as const
+      try {
+        const status = await execution.segment.handle.stop()
+        execution.state = status === "idle" ? "idle" : "stopping"
+        return status
+      } catch (error) {
+        execution.state = "uncertain"
+        throw error
+      }
+    })
+  }
+
+  async steer(
+    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    request: RunSteerRequest,
+    controllerId: string
+  ): Promise<RunSteerResponse> {
+    const execution = this.#executions.get(scopeKey(scope))
+    if (
+      !execution ||
+      execution.state !== "running" ||
+      execution.segment.runId !== request.expectedRunId
+    )
+      throw new ServerRunConflictError()
     if (!execution.controllers.has(controllerId))
       throw new ServerRunControlError()
-    if (execution.state === "stopping") return "stopping" as const
-    try {
-      const status = await execution.segment.handle.stop()
-      execution.state = status === "idle" ? "idle" : "stopping"
-      return status
-    } catch (error) {
-      execution.state = "uncertain"
-      throw error
+
+    const fingerprint = admissionFingerprint({
+      expectedRunId: request.expectedRunId,
+      text: request.text,
+    })
+    const existing = execution.steeringRequests.get(request.requestId)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint)
+        throw new ServerRunConflictError()
+      return existing.result
     }
+
+    const result = this.#withControl(execution, async () => {
+      if (
+        execution.state !== "running" ||
+        execution.segment.runId !== request.expectedRunId
+      )
+        throw new ServerRunConflictError()
+      const steer = execution.segment.handle.steer
+      if (!steer) throw new ServerRunSteerUnavailableError()
+      const delivery = await steer({
+        requestId: request.requestId,
+        text: request.text,
+      })
+      this.#publish(execution.segment, {
+        type: EventType.CUSTOM,
+        name: "aos.steer.accepted",
+        value: {
+          requestId: request.requestId,
+          text: request.text,
+          delivery,
+        },
+      })
+      return { status: delivery }
+    })
+    execution.steeringRequests.set(request.requestId, { fingerprint, result })
+    if (execution.steeringRequests.size > MAX_STEERING_REQUESTS_PER_EXECUTION) {
+      const oldest = execution.steeringRequests.keys().next().value
+      if (oldest !== undefined) execution.steeringRequests.delete(oldest)
+    }
+    return result
   }
 
   close() {
@@ -403,6 +477,8 @@ export class SessionCoordinator {
       const handle = await this.options.engine.start(execution.scope, input)
       const segment = this.#segment(input.runId, handle)
       execution.segment = segment
+      execution.control = Promise.resolve()
+      execution.steeringRequests = new Map()
       execution.admissionId = input.runId
       execution.admissionFingerprint = admissionFingerprint(input)
       execution.state = "running"
@@ -500,6 +576,21 @@ export class SessionCoordinator {
     }
     segment.replay.push({ value, bytes })
     segment.replayBytes += bytes
+  }
+
+  #publish(segment: Segment, event: AGUIEvent) {
+    const sequenced = { sequence: ++segment.nextSequence, event }
+    this.#remember(segment, sequenced)
+    segment.fanout.publish(sequenced)
+  }
+
+  #withControl<T>(execution: Execution, operation: () => Promise<T>) {
+    const result = execution.control.then(operation, operation)
+    execution.control = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
   }
 
   #subscribe(segment: Segment, after: number, access: CoordinatorAccess) {

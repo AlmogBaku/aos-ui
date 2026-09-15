@@ -10,7 +10,8 @@ import {
   type HermesRpcTransport,
 } from "./adapter"
 import { HermesAuthenticationError } from "./transport"
-import { HermesHttpError } from "./transport"
+import { HermesHttpError, HermesRpcUncertainError } from "./transport"
+import { ServerRunSteerUncertainError } from "../../core/runtime"
 import { HermesRunRewindConflictError } from "./run"
 
 function profile(hidden = false, revision: number | null = 7) {
@@ -222,6 +223,8 @@ describe("Hermes server adapter", () => {
           events: [],
         }
       if (method === "prompt.submit") return { accepted: true }
+      if (method === "session.redirect")
+        return { status: "redirected", text: "Use the newer API" }
       if (method === "session.interrupt") return { interrupted: true }
       if (method === "session.active_list")
         return { sessions: [{ id: "live-secret", status: "working" }] }
@@ -251,6 +254,9 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
     ).resolves.toEqual({ acknowledgement: "accepted" })
+    await expect(
+      adapter.redirect("live-secret", "Use the newer API")
+    ).resolves.toBe("redirected")
     await expect(adapter.interrupt("live-secret")).resolves.toBeUndefined()
     await expect(adapter.status("live-secret")).resolves.toBe("running")
     expect(request.mock.calls).toEqual([
@@ -260,10 +266,45 @@ describe("Hermes server adapter", () => {
       ],
       ["session.events.since", { session_id: "live-secret", last_seen: 2 }],
       ["prompt.submit", { session_id: "live-secret", text: "Hello" }],
+      [
+        "session.redirect",
+        { session_id: "live-secret", text: "Use the newer API" },
+      ],
       ["session.interrupt", { session_id: "live-secret" }],
       ["session.active_list", {}],
     ])
     expect(observeEvents).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["redirected", "queued"] as const)(
+    "accepts only the native %s redirect acknowledgement",
+    async (status) => {
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(async () => ({ status, text: "Correction" })),
+      })
+
+      await expect(adapter.redirect("live-secret", "Correction")).resolves.toBe(
+        status
+      )
+    }
+  )
+
+  it("rejects malformed redirect acknowledgements and classifies a lost response as uncertain", async () => {
+    const malformed = new HermesServerAdapter({
+      request: vi.fn(async () => ({ status: "accepted" })),
+    })
+    await expect(
+      malformed.redirect("live-secret", "Correction")
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+
+    const uncertain = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesRpcUncertainError()
+      }),
+    })
+    await expect(
+      uncertain.redirect("live-secret", "Correction")
+    ).rejects.toBeInstanceOf(ServerRunSteerUncertainError)
   })
 
   it("rewinds Edit or Retry at the authoritative durable user row", async () => {
@@ -500,6 +541,196 @@ describe("Hermes server adapter", () => {
       HermesAgentNotFoundError
     )
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("resolves an invited Session without creating when creation is absent", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.list") return { sessions: [] }
+      throw new Error(`unexpected ${method}`)
+    })
+    const adapter = new HermesServerAdapter({ request })
+
+    await expect(
+      adapter.resolveInvitedSession("researcher", "guest_ref")
+    ).resolves.toBeUndefined()
+    expect(request).toHaveBeenCalledWith("session.list", {
+      profile: "researcher",
+      title: "aos-invite:guest_ref",
+      include_hidden: true,
+    })
+  })
+
+  it("creates one missing invited Session lazily with its first-turn instruction", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let created = false
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.list") {
+        await gate
+        return {
+          sessions: created
+            ? [
+                {
+                  id: "stored-1",
+                  resolved_id: "stored-1",
+                  title: "aos-invite:guest_ref",
+                },
+              ]
+            : [],
+        }
+      }
+      if (method === "session.create") {
+        created = true
+        return { session_id: "live-private", stored_session_id: "stored-1" }
+      }
+      if (method === "session.title") return { ok: true }
+      throw new Error(`unexpected ${method}`)
+    })
+    const adapter = new HermesServerAdapter({ request })
+    const create = {
+      firstTurnInstruction: "Load the interview skill.",
+    }
+    const first = adapter.resolveInvitedSession(
+      "researcher",
+      "guest_ref",
+      create
+    )
+    const second = adapter.resolveInvitedSession(
+      "researcher",
+      "guest_ref",
+      create
+    )
+    release()
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { sessionId: "stored-1", created: true },
+      { sessionId: "stored-1", created: true },
+    ])
+    expect(request.mock.calls).toEqual([
+      [
+        "session.list",
+        {
+          profile: "researcher",
+          title: "aos-invite:guest_ref",
+          include_hidden: true,
+        },
+      ],
+      [
+        "session.create",
+        {
+          profile: "researcher",
+          title: "aos-invite:guest_ref",
+          close_on_disconnect: false,
+          messages: [
+            {
+              role: "user",
+              content: JSON.stringify({
+                v: 1,
+                type: "aos.guest.first-turn",
+                instruction: "Load the interview skill.",
+              }),
+            },
+          ],
+        },
+      ],
+      [
+        "session.title",
+        {
+          session_id: "live-private",
+          title: "aos-invite:guest_ref",
+        },
+      ],
+      [
+        "session.list",
+        {
+          profile: "researcher",
+          title: "aos-invite:guest_ref",
+          include_hidden: true,
+        },
+      ],
+    ])
+  })
+
+  it("reuses only an exact invited Session and rejects duplicate matches", async () => {
+    const exactRequest = vi.fn(async () => ({
+      sessions: [
+        {
+          id: "stored-1",
+          resolved_id: "resolved-1",
+          profile: "researcher",
+          title: "aos-invite:guest_ref",
+        },
+      ],
+    }))
+    const exact = new HermesServerAdapter({ request: exactRequest })
+    await expect(
+      exact.resolveInvitedSession("researcher", "guest_ref", {})
+    ).resolves.toEqual({ sessionId: "resolved-1", created: false })
+    expect(exactRequest).toHaveBeenCalledOnce()
+
+    const nativeListShape = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        sessions: [
+          {
+            id: "stored-2",
+            resolved_id: "stored-2",
+            title: "aos-invite:guest_ref",
+            preview: "Hello",
+            message_count: 1,
+            source: "dashboard",
+          },
+        ],
+      })),
+    })
+    await expect(
+      nativeListShape.resolveInvitedSession("researcher", "guest_ref")
+    ).resolves.toEqual({ sessionId: "stored-2", created: false })
+
+    const ambiguous = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        sessions: [
+          { id: "one", profile: "researcher", title: "aos-invite:guest_ref" },
+          { id: "two", profile: "researcher", title: "aos-invite:guest_ref" },
+        ],
+      })),
+    })
+    await expect(
+      ambiguous.resolveInvitedSession("researcher", "guest_ref")
+    ).rejects.toBeInstanceOf(HermesSessionConflictError)
+  })
+
+  it("fails closed when Hermes does not return the exact invited profile and title", async () => {
+    const wrongProfile = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        sessions: [
+          {
+            id: "stored-1",
+            profile: "other",
+            title: "aos-invite:guest_ref",
+          },
+        ],
+      })),
+    })
+    await expect(
+      wrongProfile.resolveInvitedSession("researcher", "guest_ref")
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+
+    const wrongTitle = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        sessions: [
+          {
+            id: "stored-1",
+            profile: "researcher",
+            title: "aos-invite:other_ref",
+          },
+        ],
+      })),
+    })
+    await expect(
+      wrongTitle.resolveInvitedSession("researcher", "guest_ref")
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
   it("projects an unpersisted lazy Session from its native resume snapshot", async () => {

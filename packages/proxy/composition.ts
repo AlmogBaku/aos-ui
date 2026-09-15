@@ -12,7 +12,7 @@ import {
 import { parseProxyConfig } from "./config"
 import { createReconnectCursorCodec } from "./events/cursor"
 import { createOperatorEventService } from "./events/service"
-import { createGuestListenerService } from "./listeners/guest"
+import { createGuestApp } from "./guest/app"
 import { readSecretKeyFile } from "./secrets"
 
 export type ConfiguredProxyDependencies = {
@@ -59,9 +59,10 @@ export async function createConfiguredProxy(
   const invitations =
     config.guest && invitationKeys
       ? createGuestInvitationService({
-          issuer: config.guest.publicOrigin,
-          audience: "aos-guest-listener",
+          issuer: "aos-invite",
+          audience: "aos-guest",
           deploymentId: config.deploymentId,
+          runtimeId: config.runtime.id,
           keys: invitationKeys,
           ttlSeconds: config.guest.invitations.ttlSeconds,
           clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
@@ -75,16 +76,10 @@ export async function createConfiguredProxy(
       ? {
           runtimeInstance,
           invitations,
-          service: createGuestListenerService({
+          app: createGuestApp({
             publicOrigin: config.guest.publicOrigin,
-            deploymentId: config.deploymentId,
-            bootEpoch: randomUUID(),
             runtime: runtimeInstance,
             invitations,
-            cursor,
-            maxEventPeers: config.limits.guestEventPeers,
-            maxEventPeersPerInvitation:
-              config.limits.guestEventPeersPerInvitation,
             ...(dependencies.clock === undefined
               ? {}
               : { now: dependencies.clock }),
@@ -102,7 +97,6 @@ export async function createConfiguredProxy(
   const app = createProxyApp({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
-    ...(invitations === undefined ? {} : { guestInvitations: invitations }),
     readiness: async () => {
       try {
         return (await runtimeInstance.runtime.runtimeInfo()).status ===

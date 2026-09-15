@@ -144,7 +144,7 @@ test("published artifacts open from Outputs and close cleanly", async ({
   await outputs.locator("summary").click()
   const markdownOutput = outputs.locator("article").first()
   await expect(markdownOutput).toBeVisible()
-  const open = markdownOutput.getByRole("button", { name: "Open" })
+  const open = markdownOutput.getByRole("button", { name: /^Open:/ })
   await open.click()
 
   const viewer = page.getByRole("region", { name: "Output preview" })

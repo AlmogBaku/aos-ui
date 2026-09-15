@@ -21,6 +21,7 @@ integration require that optional integration to be installed in the runtime.
 | Execution approvals             | Demo flows   | Native                   | Native                                   | Unavailable (cutover) | Provider-dependent messages |
 | Attachments                     | Demo flows   | Native                   | Native                                   | Unavailable (cutover) | Agent-dependent             |
 | Edit/regenerate                 | Demo flows   | Native                   | Native truncate/resubmit                 | Unavailable (cutover) | Provider-dependent          |
+| Active-turn steering            | No           | Unavailable              | Native visible redirect                  | Unavailable (cutover) | Not standardized by AG-UI   |
 | Published Artifacts             | Demo data    | Optional AOS integration | Optional AOS integration                 | Unavailable (cutover) | Shared presentation tools   |
 | Rich presentation tools         | Demo data    | Optional AOS integration | Optional AOS integration                 | Unavailable (cutover) | Shared presentation tools   |
 | Voice                           | No           | No                       | Native STT/TTS                           | Unavailable (cutover) | No                          |
@@ -35,7 +36,12 @@ OpenCode owns Agent definitions, Sessions, execution, model credentials, and per
 
 ## Hermes
 
-Hermes owns profiles, Sessions, authentication, speech providers, tools, and persistence. AOS connects directly to the native HTTP/WebSocket API. Profile visibility is native. The optional integration can provide a creator interview, but automated profile creation fails closed until Hermes provides an atomic no-overwrite create operation.
+Hermes owns profiles, Sessions, authentication, speech providers, tools, and
+persistence. AOS connects directly to the native HTTP/WebSocket API. Native
+active-turn steering records a visible user correction and can fall back to
+Hermes's provider queue. Profile visibility is native. The optional integration
+can provide a creator interview, but automated profile creation fails closed
+until Hermes provides an atomic no-overwrite create operation.
 
 ## OpenClaw
 
@@ -45,7 +51,13 @@ not make `/openclaw` or a browser Gateway route deployable.
 
 ## Generic AG-UI
 
-Generic AG-UI requires a run endpoint and a separate workspace service for Agent and Session discovery. The shared workspace contract covers listing Agents, listing/loading/creating Sessions, and optionally changing visibility. Native capabilities that are not represented by those services remain unavailable.
+Generic AG-UI requires a run endpoint and a separate workspace service for
+Agent and Session discovery. The shared workspace contract covers listing
+Agents, listing/loading/creating Sessions, and optionally changing visibility.
+Core AG-UI does not define a same-run steering command; a future adapter must
+implement the optional normalized AOS steering operation before the UI exposes
+it. Native capabilities that are not represented by those services remain
+unavailable.
 
 ## Optional Monty integration
 

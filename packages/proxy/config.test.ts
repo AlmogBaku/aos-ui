@@ -56,8 +56,6 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
       activeExecutions: 256,
       guestActiveExecutions: 32,
       operatorEventPeers: 256,
-      guestEventPeers: 64,
-      guestEventPeersPerInvitation: 4,
       subscriberEvents: 512,
       subscriberBytes: 2_097_152,
     },
@@ -169,10 +167,6 @@ describe("proxy configuration and secret boundary", () => {
       {
         ...validConfig(),
         limits: { ...validConfig().limits, guestActiveExecutions: 257 },
-      },
-      {
-        ...validConfig(),
-        limits: { ...validConfig().limits, guestEventPeersPerInvitation: 65 },
       },
     ])
       expect(() => parseProxyConfig(candidate)).toThrow(

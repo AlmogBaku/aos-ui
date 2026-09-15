@@ -32,7 +32,7 @@ interactions, and durable history.
 ```text
 React + assistant-ui
         |
-        | AOS REST + events WebSocket + AG-UI runs
+        | AOS REST/run control + events WebSocket + AG-UI run streams
         v
 +---------------------------------------------------------------+
 | AOS gateway                                                   |
@@ -279,7 +279,8 @@ The interface covers:
 - runtime status and capability values;
 - Agent catalog and visibility;
 - Session catalog, lifecycle, and history;
-- AG-UI run start, stream, reconnect, and Stop;
+- AG-UI run start, stream, and reconnect;
+- typed active-run controls, including Stop and optional steering;
 - questions, approvals, reactions, and feedback;
 - attachments, artifacts, and native audio operations;
 - models, context, Todos, and activity;
@@ -327,7 +328,10 @@ responses correlate by request ID; events route by live `session_id` and
 per-Session sequence.
 
 Hermes durable stored Session IDs remain distinct from process-local live
-Session IDs. Live IDs never cross the normalized protocol.
+Session IDs. Live IDs never cross the normalized protocol. The adapter maps
+normalized Stop to native `session.interrupt` and optional active-turn steering
+to native `session.redirect`; no shared proxy module uses those native method
+names.
 
 A live Hermes Session is retained while it is running, stopping, waiting for a
 question or approval, reconciling, or within a bounded warm-idle grace period.
@@ -485,7 +489,7 @@ Standard AG-UI concepts represent:
 - tool calls and custom UI;
 - usage;
 - run interruption, questions, and approvals;
-- Stop and terminal outcomes.
+- terminal outcomes.
 
 The gateway accepts exactly one authorized new user turn or one bound interrupt
 response for a run. Browser history, tools, state, and context are never treated
@@ -493,6 +497,24 @@ as authoritative provider input.
 
 Minimal namespaced `aos.*` extensions are permitted only for run-adjacent
 behavior absent from AG-UI. Raw provider events are rejected.
+
+### Active-run control plane
+
+AG-UI defines the input that starts or resumes a run and the event stream it
+produces. It does not define client-to-server mutations for an already active
+model turn. AOS therefore exposes typed, versioned REST controls alongside the
+AG-UI stream:
+
+- Stop asks the selected adapter to terminate the current native execution;
+- steering delivers a text correction to that same execution when the
+  capability is available.
+
+These controls use the same authorization, Session scope, active-run identity,
+and coordinator as the stream. They do not create another AG-UI run or emit a
+second `RUN_STARTED`. The provider-neutral run handle exposes optional steering;
+only a concrete adapter translates it into a native operation. A server-to-
+browser `aos.steer.accepted` custom event makes a successful acknowledgement
+replayable without treating raw provider events as protocol.
 
 ### Invalidation plane
 
@@ -521,9 +543,15 @@ the same idempotency identity return the known run state. A different turn while
 the Session is active returns a normalized conflict.
 
 Each run records its initiating Principal. Observation and control are distinct
-permissions. Authorized collaborators may observe a run; Stop or interaction
-responses require the run-control grant. Tenant policy determines whether
-operators other than the initiator receive that grant.
+permissions. Authorized collaborators may observe a run; Stop, steering, or
+interaction responses require the run-control grant. Tenant policy determines
+whether operators other than the initiator receive that grant.
+
+Steering requires an active running execution and an exact expected run ID. It
+is unavailable while the execution is stopping, uncertain, idle, or waiting
+for input. Request IDs are deduplicated per execution; identical retries return
+the recorded result and conflicting reuse fails. Steering and Stop serialize
+through the same control lane.
 
 Disconnecting a browser stream detaches only that downstream consumer. It does
 not stop the native run, release a pending question, or dispose the Runtime
@@ -531,8 +559,9 @@ instance. The run coordinator retains terminal settlement independently of the
 browser connection.
 
 Stop remains `stopping` until a native terminal event or authoritative idle
-result proves settlement. Lost acknowledgement produces an uncertain state
-rather than a false terminal state.
+result proves settlement. A provider-queued steering result is already accepted
+and is never resubmitted. Lost control acknowledgement produces an uncertain
+state rather than a false result or automatic retry.
 
 ## Questions and approvals
 
@@ -729,12 +758,15 @@ remain true:
 9. Browser disconnect never implies native Stop or Session deletion.
 10. Pending questions and approvals remain reconnectable and resume the same
     run.
-11. Uncertain sends and interaction responses are never retried automatically.
-12. REST and provider state remain authoritative after reconnect.
-13. Capabilities preserve native choices, limits, scopes, and reasons.
-14. Provider payloads, credentials, URLs, and private metadata never cross the
+11. Active-turn control is a typed AOS extension, never a synthetic second
+    AG-UI run; provider-specific control methods remain adapter-private.
+12. Uncertain sends, steering, and interaction responses are never retried
+    automatically.
+13. REST and provider state remain authoritative after reconnect.
+14. Capabilities preserve native choices, limits, scopes, and reasons.
+15. Provider payloads, credentials, URLs, and private metadata never cross the
     normalized protocol.
-15. The gateway does not become a second provider workspace or conversation
+16. The gateway does not become a second provider workspace or conversation
     database.
 
 ## Research basis

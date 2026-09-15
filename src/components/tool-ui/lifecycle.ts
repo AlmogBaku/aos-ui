@@ -28,7 +28,8 @@ export function normalizeRichToolState(
 
   if (
     part.isError ||
-    (part.status.type === "incomplete" && part.status.reason === "error")
+    (part.status.type === "incomplete" && part.status.reason === "error") ||
+    toolResultSignalsFailure(part.result)
   ) {
     return createState("failed")
   }
@@ -57,6 +58,34 @@ export function normalizeRichToolState(
   if (part.status.reason === "cancelled") return createState("cancelled")
 
   return createState("failed")
+}
+
+export function toolResultSignalsFailure(value: unknown): boolean {
+  if (typeof value === "string") {
+    try {
+      return toolResultSignalsFailure(JSON.parse(value) as unknown)
+    } catch {
+      return /^\s*(?:error|failed|failure)\b/iu.test(value)
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const result = value as Record<string, unknown>
+  if (
+    result.isError === true ||
+    result.success === false ||
+    result.ok === false
+  )
+    return true
+  const exitCode = result.exit_code ?? result.exitCode
+  if (typeof exitCode === "number" && exitCode !== 0) return true
+  if (
+    typeof result.status === "string" &&
+    /^(?:error|failed|failure)$/iu.test(result.status)
+  )
+    return true
+  if (typeof result.error === "string" && result.error.trim()) return true
+  if (result.error && typeof result.error === "object") return true
+  return false
 }
 
 function createState(phase: RichToolPhase): RichToolState {

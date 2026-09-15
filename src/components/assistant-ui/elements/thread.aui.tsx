@@ -46,6 +46,12 @@ import {
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import {
+  isUncertainDelivery,
+  MessageQueue,
+  STEER_ACCEPTED_DATA_NAME,
+  type UnconfirmedDelivery,
+} from "@/components/assistant-ui/elements/message-queue"
 import { useThreadReadingPosition } from "./thread-reading-position"
 import {
   VoiceComposerControl,
@@ -72,7 +78,6 @@ import {
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
-  QueueItemPrimitive,
   type ThreadMessage,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
@@ -80,6 +85,7 @@ import {
   useAui,
   useAuiEvent,
   useAuiState,
+  makeAssistantDataUI,
   unstable_useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
 import { useAgUiInterrupts } from "@assistant-ui/react-ag-ui"
@@ -178,6 +184,13 @@ export type ThreadLabels = {
   historySearchPlaceholder?: string | undefined
   historyCancel?: string | undefined
   queuedMessages?: string | undefined
+  steerQueuedMessage?: string | undefined
+  steerQueuedMessageLabel?: string | undefined
+  removeQueuedMessage?: string | undefined
+  steeringQueuedMessage?: string | undefined
+  steeringFailed?: string | undefined
+  deliveryUnconfirmed?: string | undefined
+  steeredCorrection?: string | undefined
   previous: string
   next: string
   conversationHeading?: string | undefined
@@ -221,6 +234,13 @@ const DEFAULT_LABELS: ThreadLabels = {
   historySearchPlaceholder: "Filter sent messages…",
   historyCancel: "Cancel history search",
   queuedMessages: "Queued messages",
+  steerQueuedMessage: "Steer",
+  steerQueuedMessageLabel: "Steer queued message",
+  removeQueuedMessage: "Remove queued message",
+  steeringQueuedMessage: "Steering queued message",
+  steeringFailed: "Could not steer",
+  deliveryUnconfirmed: "Delivery unconfirmed",
+  steeredCorrection: "Steering correction",
   previous: "Previous",
   next: "Next",
   conversationHeading: "Conversation",
@@ -262,6 +282,38 @@ const MessageRewindContext = createContext<
 const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
   {}
 )
+
+function SteeredCorrectionPart({ data }: { data: unknown }) {
+  const labels = useContext(ThreadLabelsContext)
+  if (!data || typeof data !== "object") return null
+  const value = data as Record<string, unknown>
+  if (
+    typeof value.requestId !== "string" ||
+    typeof value.text !== "string" ||
+    (value.delivery !== "steered" && value.delivery !== "queued")
+  )
+    return null
+  return (
+    <div
+      data-slot="aui_steered-correction"
+      className="my-3 flex justify-end"
+      role="status"
+      aria-label={labels.steeredCorrection}
+    >
+      <div
+        className="max-w-[30rem] rounded-xl bg-muted px-4 py-2 leading-6 wrap-break-word text-foreground"
+        dir="auto"
+      >
+        {value.text}
+      </div>
+    </div>
+  )
+}
+
+export const SteerAcceptedDataUI = makeAssistantDataUI<unknown>({
+  name: STEER_ACCEPTED_DATA_NAME,
+  render: SteeredCorrectionPart,
+})
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -333,6 +385,7 @@ export const Thread: FC<ThreadProps> = ({
         <MessageRewindContext.Provider value={messageRewind}>
           <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
             <ThreadComponentsContext.Provider value={components}>
+              <SteerAcceptedDataUI />
               <ThreadRoot
                 isEmpty={isEmpty}
                 autoFocus={autoFocus}
@@ -388,7 +441,8 @@ const ThreadRoot: FC<{
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background [--composer-padding:0.25rem] [--composer-radius:0.75rem] @md:[--composer-padding:0.5rem] @md:[--composer-radius:1.5rem]"
       style={{
-        ["--thread-max-width" as string]: "56rem",
+        ["--thread-max-width" as string]: "96rem",
+        ["--thread-content-max-width" as string]: "clamp(45rem, 80cqi, 96rem)",
         ["--composer-bg" as string]: "var(--color-card)",
       }}
     >
@@ -436,7 +490,7 @@ const ThreadRoot: FC<{
 
           <div
             data-slot="aui_message-group"
-            className="mx-auto mb-8 flex w-full max-w-[45rem] flex-col gap-y-6 empty:hidden @md:mb-10"
+            className="mx-auto mb-8 flex w-full max-w-(--thread-content-max-width) flex-col gap-y-6 empty:hidden @md:mb-10"
           >
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
@@ -570,6 +624,10 @@ const getMessageText = (message: ComposerHistoryMessage) =>
 
 type ComposerHistoryEntry = { id: string; text: string }
 
+type UnconfirmedDeliveryReceipt = UnconfirmedDelivery & {
+  readonly knownUserMessageIds: readonly string[]
+}
+
 export function createComposerHistorySelector() {
   let previous: readonly ComposerHistoryEntry[] = []
   return (messages: readonly ComposerHistoryMessage[]) => {
@@ -604,6 +662,8 @@ const Composer: FC<{
     labels.historySearchPlaceholder ?? "Filter sent messages…"
   const historyCancelLabel = labels.historyCancel ?? "Cancel history search"
   const queuedMessagesLabel = labels.queuedMessages ?? "Queued messages"
+  const features = useContext(ThreadComposerFeaturesContext)
+  const hasPendingInteraction = useAgUiInterrupts().length > 0
   const aui = useAui()
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const submissionLockRef = useRef(false)
@@ -614,6 +674,10 @@ const Composer: FC<{
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
+  const [steeringError, setSteeringError] = useState<string>()
+  const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
+    UnconfirmedDeliveryReceipt[]
+  >([])
   const selectHistoryEntries = useMemo(
     () => createComposerHistorySelector(),
     []
@@ -624,13 +688,50 @@ const Composer: FC<{
   const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
 
   useAuiEvent("threads.selectionChanged", () => {
+    submissionLockRef.current = false
     clearUndoRef.current = null
     searchSnapshotRef.current = null
     historyBrowseRef.current = null
     setHistorySearchOpen(false)
     setHistorySearchQuery("")
     setHistorySearchIndex(0)
+    setSteeringError(undefined)
+    setUnconfirmedDeliveries([])
   })
+
+  const submitOrdinary = useCallback(() => {
+    if (voice?.media.captureActive || voiceActive) return
+    setSteeringError(undefined)
+    aui.composer.send({ steer: false })
+  }, [aui, voice?.media.captureActive, voiceActive])
+
+  const rememberUnconfirmed = useCallback(
+    (delivery: UnconfirmedDelivery) => {
+      const knownUserMessageIds = aui.thread
+        .getState()
+        .messages.filter((message) => message.role === "user")
+        .map((message) => message.id)
+      setUnconfirmedDeliveries((current) =>
+        current.some(({ requestId }) => requestId === delivery.requestId)
+          ? current
+          : [...current, { ...delivery, knownUserMessageIds }]
+      )
+    },
+    [aui]
+  )
+
+  const visibleUnconfirmedDeliveries = useMemo(
+    () =>
+      unconfirmedDeliveries.filter(
+        (delivery) =>
+          !historyEntries.some(
+            (entry) =>
+              !delivery.knownUserMessageIds.includes(entry.id) &&
+              entry.text === delivery.text
+          )
+      ),
+    [historyEntries, unconfirmedDeliveries]
+  )
 
   const filteredHistory = useMemo(() => {
     const query = historySearchQuery.trim().toLocaleLowerCase()
@@ -887,26 +988,70 @@ const Composer: FC<{
           isRunning: aui.thread.getState().isRunning,
           hasQueue: aui.thread.getState().capabilities.queue === true,
           isEmpty: aui.composer.getState().isEmpty,
+          canSteer: features.steer !== undefined && !hasPendingInteraction,
+          hasAttachments: aui.composer.getState().attachments.length > 0,
         }
       )
-      if (action !== "send") {
-        return
-      }
+      if (action === "noop" || action === "newline") return
 
       event.preventDefault()
       if (submissionLockRef.current) return
       submissionLockRef.current = true
-      event.currentTarget.closest("form")?.requestSubmit()
-      queueMicrotask(() => {
-        submissionLockRef.current = false
-      })
+      if (action === "send" || action === "queue") {
+        submitOrdinary()
+        queueMicrotask(() => {
+          submissionLockRef.current = false
+        })
+        return
+      }
+
+      const snapshot = aui.composer.getState()
+      const text = snapshot.text
+      const requestId = crypto.randomUUID()
+      const originThreadId = aui.threads.getState().mainThreadId
+      setSteeringError(undefined)
+      void features.steer!({ requestId, text })
+        .then(() => {
+          if (aui.threads.getState().mainThreadId !== originThreadId) return
+          const current = aui.composer.getState()
+          if (current.text === text && current.attachments.length === 0)
+            void aui.composer.reset()
+        })
+        .catch((error: unknown) => {
+          if (aui.threads.getState().mainThreadId !== originThreadId) return
+          if (
+            error &&
+            typeof error === "object" &&
+            (error as { code?: unknown }).code === "run_conflict"
+          ) {
+            submitOrdinary()
+            return
+          }
+          if (isUncertainDelivery(error)) {
+            const current = aui.composer.getState()
+            if (current.text === text && current.attachments.length === 0)
+              void aui.composer.reset()
+            rememberUnconfirmed({ requestId, text })
+            return
+          }
+          setSteeringError(labels.steeringFailed ?? "Could not steer")
+        })
+        .finally(() => {
+          if (aui.threads.getState().mainThreadId === originThreadId)
+            submissionLockRef.current = false
+        })
     },
     [
       aui,
       focusInput,
       historyEntries,
       openHistorySearch,
+      features,
+      hasPendingInteraction,
+      labels.steeringFailed,
+      rememberUnconfirmed,
       restoreDraft,
+      submitOrdinary,
       triggerPopover,
     ]
   )
@@ -915,7 +1060,8 @@ const Composer: FC<{
     <ComposerPrimitive.Root
       className="aui-composer-root relative -mx-2 flex w-[calc(100%+1rem)] flex-col @md:-mx-7 @md:w-[calc(100%+3.5rem)] @min-[64rem]/workspace:mx-0 @min-[64rem]/workspace:w-full"
       onSubmit={(event) => {
-        if (voice?.media.captureActive || voiceActive) event.preventDefault()
+        event.preventDefault()
+        submitOrdinary()
       }}
     >
       {historySearchOpen ? (
@@ -1001,38 +1147,51 @@ const Composer: FC<{
           s.thread.capabilities.queue && s.composer.queue.length > 0
         }
       >
-        <div
-          role="region"
-          aria-label={queuedMessagesLabel}
-          className="mb-2 flex flex-col gap-1 rounded-xl border border-border/60 bg-muted/30 p-2"
-        >
-          <ComposerPrimitive.Queue>
-            {() => (
-              <div className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm">
-                <QueueItemPrimitive.Text className="min-w-0 flex-1 truncate" />
-                <QueueItemPrimitive.Remove
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-label={labels.cancel}
-                    />
-                  }
-                >
-                  {labels.cancel}
-                </QueueItemPrimitive.Remove>
-              </div>
-            )}
-          </ComposerPrimitive.Queue>
-        </div>
+        <MessageQueue
+          labels={{
+            region: queuedMessagesLabel,
+            steer: labels.steerQueuedMessage ?? "Steer",
+            steerLabel:
+              labels.steerQueuedMessageLabel ?? "Steer queued message",
+            removeLabel: labels.removeQueuedMessage ?? "Remove queued message",
+            steering: labels.steeringQueuedMessage ?? "Steering queued message",
+            failed: labels.steeringFailed ?? "Could not steer",
+          }}
+          steer={hasPendingInteraction ? undefined : features.steer}
+          onUnconfirmed={rememberUnconfirmed}
+        />
       </AuiIf>
+      {visibleUnconfirmedDeliveries.map((delivery) => (
+        <div
+          key={delivery.requestId}
+          data-slot="aui_delivery-unconfirmed"
+          role="status"
+          aria-live="polite"
+          className="mb-1.5 flex min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <span className="shrink-0 font-medium">
+            {labels.deliveryUnconfirmed ?? "Delivery unconfirmed"}
+          </span>
+          <span className="min-w-0 flex-1 truncate" dir="auto">
+            {delivery.text}
+          </span>
+        </div>
+      ))}
+      {steeringError ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-1.5 px-3 text-sm text-destructive"
+        >
+          {steeringError}
+        </div>
+      ) : null}
       <ComposerPrimitive.AttachmentDropzone
         render={
           <div
             data-slot="aui_composer-shell"
             className={cn(
-              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-[45rem] dark:bg-popover"
+              "relative flex w-full cursor-text flex-col gap-2 rounded-[24px] border border-border/60 bg-background p-2.5 transition-colors focus-within:border-border data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width) dark:bg-popover"
             )}
           />
         }
@@ -1069,7 +1228,7 @@ const Composer: FC<{
             />
           </VoiceComposerField>
         </div>
-        <ComposerToolbar>
+        <ComposerToolbar onSend={submitOrdinary}>
           <ComposerFeatureBar direction={direction} />
         </ComposerToolbar>
       </ComposerPrimitive.AttachmentDropzone>
@@ -1155,10 +1314,14 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   )
 }
 
-const ComposerToolbar: FC<PropsWithChildren> = ({ children }) => {
+const ComposerToolbar: FC<PropsWithChildren<{ onSend(): void }>> = ({
+  children,
+  onSend,
+}) => {
   const labels = useContext(ThreadLabelsContext)
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
+  const canSend = useAuiState((state) => state.composer.canSend)
   return (
     <div
       data-slot="aui_composer-toolbar"
@@ -1171,19 +1334,17 @@ const ComposerToolbar: FC<PropsWithChildren> = ({ children }) => {
         {!voiceActive ? (
           <>
             <AuiIf condition={(s) => !s.thread.isRunning}>
-              <ComposerPrimitive.Send
-                render={
-                  <button
-                    type="button"
-                    className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
-                    aria-label={labels.sendMessage}
-                  />
-                }
+              <button
+                type="button"
+                className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+                aria-label={labels.sendMessage}
+                disabled={!canSend}
+                onClick={onSend}
               >
                 <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents">
                   <ArrowUpIcon className="aui-composer-send-icon size-4" />
                 </span>
-              </ComposerPrimitive.Send>
+              </button>
             </AuiIf>
             <AuiIf condition={(s) => s.thread.isRunning}>
               <ComposerPrimitive.Cancel

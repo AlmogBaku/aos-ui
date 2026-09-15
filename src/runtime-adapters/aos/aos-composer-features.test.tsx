@@ -45,6 +45,13 @@ function capabilities(): AosWorkspaceCapabilities {
       activity: { status: "unavailable", reason: "session-info-unavailable" },
     },
     interactions: {
+      steering: {
+        status: "available",
+        scope: "active-run",
+        semantics: "visible-user-message",
+        input: "text",
+        fallback: "provider-queue",
+      },
       approvals: {
         status: "available",
         protocol: "ag-ui-interrupt",
@@ -123,6 +130,7 @@ describe("AOS composer features", () => {
       models,
       context,
       selectModel: vi.fn(),
+      steerRun: vi.fn(),
     }
 
     renderHook(() => useAosSessionCapabilities(client, "session-1"))
@@ -176,6 +184,7 @@ describe("AOS composer features", () => {
       models,
       context,
       selectModel: vi.fn(),
+      steerRun: vi.fn(),
     }
     const { result } = renderHook(() => {
       const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
@@ -199,5 +208,49 @@ describe("AOS composer features", () => {
     })
     expect(models).toHaveBeenCalledWith("session-1")
     expect(context).toHaveBeenCalledWith("session-1")
+  })
+
+  it("exposes provider-neutral steering only when the Session capability is available", async () => {
+    const steerRun = vi.fn(async () => ({ status: "steered" as const }))
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models: vi.fn(),
+      context: vi.fn(),
+      selectModel: vi.fn(),
+      steerRun,
+    }
+    const { result } = renderHook(() =>
+      useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: false, contextEnabled: false },
+        "session-1",
+        capabilities()
+      )
+    )
+
+    await expect(
+      result.current.steer?.({ requestId: "queue-item-1", text: "Correction" })
+    ).resolves.toEqual({ status: "steered" })
+    expect(steerRun).toHaveBeenCalledWith("session-1", {
+      requestId: "queue-item-1",
+      text: "Correction",
+    })
+
+    const unavailable = {
+      ...capabilities(),
+      interactions: {
+        ...capabilities().interactions,
+        steering: { status: "unavailable" as const, reason: "guest" },
+      },
+    }
+    const { result: hidden } = renderHook(() =>
+      useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: false, contextEnabled: false },
+        "session-1",
+        unavailable
+      )
+    )
+    expect(hidden.current.steer).toBeUndefined()
   })
 })

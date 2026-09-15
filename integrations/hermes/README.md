@@ -33,10 +33,11 @@ hermes -p PROFILE chat --in WORKTREE -c UNIQUE_TITLE --create-if-missing -Q --qu
 The prompt file is mode `0600` and deleted after invocation. A timeout or lost subprocess outcome is reported as uncertain and is never retried automatically.
 
 When a user asks for a guest invite, the plugin points Hermes to
-`aos-integration:aos-invite-link` through `skill_view`. The skill submits an
-explicit scoped grant to the trusted TypeScript proxy, which validates the
-target Agent and Session before signing. Follow the canonical
-[invited-chat guide](../../docs/invite-chat.md).
+`aos-integration:aos-invite-link` through `skill_view`. The skill invokes the
+local TypeScript proxy CLI, which signs the invitation without contacting the
+runtime. It recommends a dedicated, narrowly skilled and restricted Agent
+before signing. The invited Session is created lazily on first Send. Follow the
+canonical [invited-chat guide](../../docs/invite-chat.md).
 
 ## Provision the creator
 

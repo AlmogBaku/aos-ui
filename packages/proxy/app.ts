@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
-import type { GuestInvitationService } from "./auth/guest-invitation"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import {
   ServerRunCapacityError,
   ServerRunConflictError,
   ServerRunControlError,
+  ServerRunSteerUnavailableError,
+  ServerRunSteerUncertainError,
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerRuntime,
 } from "./core/runtime"
 import { redactForLog } from "./redaction"
-import { registerAuthRoutes } from "./routes/auth"
 import { registerContentRoutes } from "./routes/content"
 import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerRunRoutes } from "./routes/runs"
@@ -27,7 +27,6 @@ type Logger = {
 export type ProxyAppOptions = {
   publicOrigin: string
   runtimeInstance: RuntimeInstance
-  guestInvitations?: GuestInvitationService
   readiness?: () => Promise<"ready" | "not-ready">
   logger: Logger
   clock?: () => number
@@ -106,7 +105,6 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   })
 
-  registerAuthRoutes(app, options)
   registerSessionRoutes(app, options, requireRuntime)
   registerWorkspaceRoutes(app, options, requireRuntime, requireScopedSession)
   registerContentRoutes(
@@ -127,11 +125,15 @@ export function createProxyApp(options: ProxyAppOptions) {
           ? ["run_capacity_exceeded", 503]
           : cause instanceof ServerRunControlError
             ? ["not_found", 404]
-            : cause instanceof ServerSessionNotFoundError
-              ? ["not_found", 404]
-              : runtimeError
-                ? [runtimeError.code, runtimeError.status]
-                : ["internal_error", 500]
+            : cause instanceof ServerRunSteerUnavailableError
+              ? ["temporarily_unavailable", 503]
+              : cause instanceof ServerRunSteerUncertainError
+                ? ["uncertain_mutation", 409]
+                : cause instanceof ServerSessionNotFoundError
+                  ? ["not_found", 404]
+                  : runtimeError
+                    ? [runtimeError.code, runtimeError.status]
+                    : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

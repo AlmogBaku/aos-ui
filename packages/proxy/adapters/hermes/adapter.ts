@@ -18,7 +18,8 @@ import {
 import {
   HermesAuthenticationError,
   HermesHttpError,
-  HermesRpcError,
+  HermesRpcRejectedError,
+  HermesRpcUncertainError,
 } from "./transport"
 import { projectHermesHistory } from "./history"
 import {
@@ -48,7 +49,10 @@ import {
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
 import { HermesAttachmentRegistry } from "./attachment-registry"
-import type { ServerRuntime } from "../../core/runtime"
+import {
+  ServerRunSteerUncertainError,
+  type ServerRuntime,
+} from "../../core/runtime"
 import type { ResumeEntry } from "@ag-ui/core"
 import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
 
@@ -72,7 +76,7 @@ async function executeSlashCommand(
     )
   } catch (error) {
     if (
-      !(error instanceof HermesRpcError) ||
+      !(error instanceof HermesRpcRejectedError) ||
       (error.code !== -32601 && error.code !== 4018)
     )
       throw error
@@ -463,6 +467,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
+  readonly #invitedSessionCreates = new Map<
+    string,
+    Promise<{ sessionId: string; created: boolean }>
+  >()
   readonly #pendingInteractionReleases = new Map<string, () => void>()
   readonly interactions: HermesInteractions
   readonly runs: HermesRunEngine
@@ -548,6 +556,117 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
 
   resolveSessionId(agentId: string, publicSessionId: string) {
     return storedSessionIdentity(agentId, publicSessionId)
+  }
+
+  async resolveInvitedSession(
+    agentId: string,
+    ref: string,
+    create?: { readonly firstTurnInstruction?: string }
+  ): Promise<{ sessionId: string; created: boolean } | undefined> {
+    if (
+      Buffer.byteLength(agentId, "utf8") > 256 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(agentId) ||
+      !/^[A-Za-z0-9_-]{1,128}$/u.test(ref)
+    )
+      throw new HermesSessionNotFoundError()
+    const title = `aos-invite:${ref}`
+    if (!create) {
+      const sessionId = await this.#findInvitedSession(agentId, title)
+      return sessionId ? { sessionId, created: false } : undefined
+    }
+
+    const key = `${agentId}\u0000${ref}`
+    const existing = this.#invitedSessionCreates.get(key)
+    if (existing) return existing
+    const pending = this.#reuseOrCreateInvitedSession(agentId, title, create)
+    this.#invitedSessionCreates.set(key, pending)
+    try {
+      return await pending
+    } finally {
+      if (this.#invitedSessionCreates.get(key) === pending)
+        this.#invitedSessionCreates.delete(key)
+    }
+  }
+
+  async #findInvitedSession(agentId: string, title: string) {
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.list", {
+        profile: agentId,
+        title,
+        include_hidden: true,
+      })
+    } catch (error) {
+      throwUnavailable(error)
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.sessions))
+      throw new HermesUnavailableError()
+    if (payload.sessions.length > 1) throw new HermesSessionConflictError()
+    const row = payload.sessions[0]
+    if (row === undefined) return undefined
+    if (
+      !isRecord(row) ||
+      (row.profile !== undefined && row.profile !== agentId) ||
+      row.title !== title ||
+      !validLiveSessionId(row.id) ||
+      (row.resolved_id !== undefined &&
+        row.resolved_id !== "" &&
+        !validLiveSessionId(row.resolved_id))
+    )
+      throw new HermesUnavailableError()
+    return validLiveSessionId(row.resolved_id) ? row.resolved_id : row.id
+  }
+
+  async #reuseOrCreateInvitedSession(
+    agentId: string,
+    title: string,
+    create: { readonly firstTurnInstruction?: string }
+  ) {
+    const existing = await this.#findInvitedSession(agentId, title)
+    if (existing) return { sessionId: existing, created: false }
+
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.create", {
+        profile: agentId,
+        title,
+        close_on_disconnect: false,
+        ...(create.firstTurnInstruction === undefined
+          ? {}
+          : {
+              messages: [
+                {
+                  role: "user",
+                  content: JSON.stringify({
+                    v: 1,
+                    type: "aos.guest.first-turn",
+                    instruction: create.firstTurnInstruction,
+                  }),
+                },
+              ],
+            }),
+      })
+    } catch (error) {
+      throwUnavailable(error)
+    }
+    if (
+      !isRecord(payload) ||
+      !validLiveSessionId(payload.session_id) ||
+      !validLiveSessionId(payload.stored_session_id)
+    )
+      throw new HermesUnavailableError()
+    try {
+      await this.transport.request("session.title", {
+        session_id: payload.session_id,
+        title,
+      })
+    } catch (error) {
+      throwUnavailable(error)
+    }
+    const authoritative = await this.#findInvitedSession(agentId, title)
+    if (!authoritative || authoritative !== payload.stored_session_id)
+      throw new HermesSessionConflictError()
+    return { sessionId: authoritative, created: true }
   }
 
   publicError(cause: unknown) {
@@ -686,7 +805,16 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         custom: { "aos.planActivityType": "PLAN" },
       },
       workspace: { ...this.#workspace.capabilities(), slashCommands },
-      interactions: this.interactions.capabilities(),
+      interactions: {
+        ...this.interactions.capabilities(),
+        steering: {
+          status: "available" as const,
+          scope: "active-run" as const,
+          semantics: "visible-user-message" as const,
+          input: "text" as const,
+          fallback: "provider-queue" as const,
+        },
+      },
       content: this.#content.capabilities(),
     }
   }
@@ -749,21 +877,15 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
 
   transcribe(
     agentId: string,
-    sessionId: string,
     bytes: Uint8Array,
     mimeType: string,
     signal?: AbortSignal
   ) {
-    return this.#content.transcribe(agentId, sessionId, bytes, mimeType, signal)
+    return this.#content.transcribe(agentId, bytes, mimeType, signal)
   }
 
-  speak(
-    agentId: string,
-    sessionId: string,
-    text: string,
-    signal?: AbortSignal
-  ) {
-    return this.#content.speak(agentId, sessionId, text, signal)
+  speak(agentId: string, text: string, signal?: AbortSignal) {
+    return this.#content.speak(agentId, text, signal)
   }
 
   async authState(): Promise<RuntimeAuthState> {
@@ -859,6 +981,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
+          sessionSteer: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
         },
       })
     }
@@ -893,6 +1019,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         sessionDeletion: { status: "available" },
         sessionRun: { status: "available" },
         sessionStop: { status: "available" },
+        sessionSteer: { status: "available" },
       },
     })
   }
@@ -1186,7 +1313,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
             invocation.args
           )
         } catch (error) {
-          if (error instanceof HermesRpcError)
+          if (error instanceof HermesRpcRejectedError)
             return { acknowledgement: "rejected" as const }
           throw error
         }
@@ -1214,6 +1341,27 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
+  }
+
+  async redirect(liveSessionId: string, text: string) {
+    let payload: unknown
+    try {
+      payload = await this.transport.request("session.redirect", {
+        session_id: liveSessionId,
+        text,
+      })
+    } catch (error) {
+      if (error instanceof HermesRpcUncertainError)
+        throw new ServerRunSteerUncertainError()
+      throwUnavailable(error)
+    }
+    if (
+      !isRecord(payload) ||
+      (payload.status !== "redirected" && payload.status !== "queued") ||
+      typeof payload.text !== "string"
+    )
+      throw new HermesUnavailableError()
+    return payload.status
   }
 
   async status(liveSessionId: string) {
@@ -1459,7 +1607,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       !isRecord(payload) ||
       !validLiveSessionId(payload.session_id) ||
       payload.stored_session_id !== storedId ||
-      payload.message_count !== 0 ||
+      (payload.message_count !== 0 && payload.message_count !== 1) ||
       !Array.isArray(payload.messages) ||
       payload.messages.length !== 0 ||
       info?.lazy !== true ||

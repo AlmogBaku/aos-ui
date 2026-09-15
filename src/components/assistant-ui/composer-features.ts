@@ -51,6 +51,12 @@ export type ComposerFeatureViewModel = {
   readonly slashCommands?:
     | readonly { readonly name: string; readonly description?: string }[]
     | undefined
+  readonly steer?:
+    | ((request: {
+        readonly requestId: string
+        readonly text: string
+      }) => Promise<{ status: "steered" | "queued" }>)
+    | undefined
   readonly model?:
     | {
         readonly options: readonly ComposerModelOption[]

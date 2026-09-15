@@ -18,6 +18,11 @@ const IdentifierSchema = z
     })
   )
 
+const Utf8MiBTextSchema = z
+  .string()
+  .min(1)
+  .refine((value) => new TextEncoder().encode(value).byteLength <= 1_048_576)
+
 export const RuntimeAuthStateSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("authenticated") }),
   z.strictObject({ status: z.literal("authentication-required") }),
@@ -83,6 +88,7 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionDeletion: OperationCapabilitySchema,
     sessionRun: OperationCapabilitySchema,
     sessionStop: OperationCapabilitySchema,
+    sessionSteer: OperationCapabilitySchema,
   }),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
@@ -185,10 +191,37 @@ const SessionMessagePartSchema = z.discriminatedUnion("type", [
   }),
 ])
 
+const SessionMessageAttachmentSchema = z.strictObject({
+  id: IdentifierSchema,
+  type: z.literal("file"),
+  name: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine(
+      (value) =>
+        !value.includes("/") &&
+        !value.includes("\\") &&
+        [...value].every((character) => {
+          const code = character.charCodeAt(0)
+          return code > 31 && code !== 127
+        })
+    ),
+  contentType: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
+    )
+    .optional(),
+  status: z.strictObject({ type: z.literal("complete") }),
+  content: z.array(z.never()).max(0),
+})
+
 export const SessionMessageSchema = z.strictObject({
   id: IdentifierSchema,
   role: z.enum(["user", "assistant", "system"]),
   content: z.array(SessionMessagePartSchema).max(2_000),
+  attachments: z.array(SessionMessageAttachmentSchema).max(16).optional(),
   createdAt: z.string().datetime(),
   status: z
     .strictObject({
@@ -264,6 +297,18 @@ export const RunStopResponseSchema = z.strictObject({
 })
 export type RunStopResponse = z.infer<typeof RunStopResponseSchema>
 
+export const RunSteerRequestSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  expectedRunId: IdentifierSchema,
+  text: Utf8MiBTextSchema,
+})
+export type RunSteerRequest = z.infer<typeof RunSteerRequestSchema>
+
+export const RunSteerResponseSchema = z.strictObject({
+  status: z.enum(["steered", "queued"]),
+})
+export type RunSteerResponse = z.infer<typeof RunSteerResponseSchema>
+
 const CapabilityUnavailableSchema = z.strictObject({
   status: z.literal("unavailable"),
   reason: z.string().min(1).max(256),
@@ -279,21 +324,27 @@ export const SlashCommandSchema = z.strictObject({
     .min(1)
     .max(128)
     .regex(/^[^\s/]+$/u),
-  description: z.string().max(4096).optional(),
+  description: z.string().max(4_096).optional(),
 })
 export type SlashCommand = z.infer<typeof SlashCommandSchema>
 export const MAX_SLASH_COMMANDS = 4_096
 export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
   agent: AgentCapabilitiesSchema,
   workspace: z.strictObject({
-    slashCommands: z.union([
-      z.strictObject({
-        status: z.literal("available"),
-        scope: z.literal("attached-session"),
-        commands: z.array(SlashCommandSchema).max(MAX_SLASH_COMMANDS),
+    slashCommands: z
+      .union([
+        z.strictObject({
+          status: z.literal("available"),
+          scope: z.literal("attached-session"),
+          commands: z.array(SlashCommandSchema).max(MAX_SLASH_COMMANDS),
+        }),
+        CapabilityUnavailableSchema,
+      ])
+      .optional()
+      .default({
+        status: "unavailable",
+        reason: "runtime-does-not-advertise-slash-commands",
       }),
-      CapabilityUnavailableSchema,
-    ]),
     models: z.strictObject({
       status: z.literal("available"),
       scope: z.literal("attached-session"),
@@ -326,6 +377,16 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     ]),
   }),
   interactions: z.strictObject({
+    steering: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("active-run"),
+        semantics: z.literal("visible-user-message"),
+        input: z.literal("text"),
+        fallback: z.literal("provider-queue"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
     approvals: z.strictObject({
       status: z.literal("available"),
       protocol: z.literal("ag-ui-interrupt"),
@@ -392,7 +453,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     transcription: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-session"),
+        scope: z.literal("agent"),
         acceptedMimeTypes: z.array(z.string().min(1).max(256)).max(32),
         mimeParameter: z.literal("codecs"),
         codecValues: z.array(z.string().min(1).max(64)).max(32),
@@ -404,7 +465,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     speech: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-session"),
+        scope: z.literal("agent"),
         acceptedMimeTypes: z.array(z.string().min(1).max(256)).max(32),
         maxTextBytes: z.number().int().positive(),
         maxAudioBytes: z.number().int().positive(),
@@ -413,6 +474,45 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     ]),
   }),
 })
+
+export const GuestRuntimeCapabilitiesResponseSchema =
+  SessionWorkspaceCapabilitiesResponseSchema.pick({
+    agent: true,
+    workspace: true,
+    interactions: true,
+    content: true,
+  }).extend({
+    workspace: SessionWorkspaceCapabilitiesResponseSchema.shape.workspace
+      .pick({ slashCommands: true })
+      .optional()
+      .default({
+        slashCommands: {
+          status: "unavailable",
+          reason: "runtime-does-not-advertise-slash-commands",
+        },
+      }),
+    interactions:
+      SessionWorkspaceCapabilitiesResponseSchema.shape.interactions.extend({
+        steering: CapabilityUnavailableSchema,
+        approvals:
+          SessionWorkspaceCapabilitiesResponseSchema.shape.interactions.shape.approvals.extend(
+            {
+              choices: z
+                .array(
+                  z.strictObject({
+                    value: z.enum(["once", "session", "deny"]),
+                    scope: z.enum(["request", "session"]),
+                  })
+                )
+                .max(3),
+            }
+          ),
+      }),
+  })
+export type GuestRuntimeCapabilitiesResponse = z.infer<
+  typeof GuestRuntimeCapabilitiesResponseSchema
+>
+
 export const SessionModelsResponseSchema = z.strictObject({
   selectedId: IdentifierSchema,
   options: z

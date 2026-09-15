@@ -556,6 +556,13 @@ function projectInterrupt(
       return undefined
     const responseSchema = projectJsonSchema(candidate.responseSchema)
     if (!responseSchema) return undefined
+    if (candidate.reason === "approval" && Array.isArray(responseSchema.enum)) {
+      const choices = responseSchema.enum.filter(
+        (choice) => choice !== "always"
+      )
+      if (choices.length === 0) return undefined
+      responseSchema.enum = choices
+    }
     interrupts.push({
       id: candidate.id,
       reason: candidate.reason,

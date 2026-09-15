@@ -31,7 +31,7 @@ export function toolIconKind(toolName: string): ToolUiActionKind {
   if (/(^|_)(search|find|grep|glob)(_|$)/.test(name)) return "search"
   if (/(^|_)(edit|write|patch|create)(_|$)/.test(name)) return "edit"
   if (/(^|_)(read|view)(_|$)/.test(name)) return "read"
-  if (/(^|_)(bash|shell|terminal|command|exec|run)(_|$)/.test(name))
+  if (/(^|_)(bash|shell|terminal|console|command|exec|run)(_|$)/.test(name))
     return "command"
   if (/(^|_)(subagent|delegate|task)(_|$)/.test(name)) return "subagent"
   return "generic"

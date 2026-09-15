@@ -1,5 +1,5 @@
 export { RichToolRenderer, richToolRegistry } from "./registry"
-export { AosToolFallback } from "./aos-tool-fallback"
+export { AosToolError, AosToolFallback } from "./aos-tool-fallback"
 export { AosToolPresentation, isAosRichTool } from "./aos-tool-presentation"
 export type {
   RichToolRegistration,

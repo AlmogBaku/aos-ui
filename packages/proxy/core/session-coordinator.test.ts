@@ -11,6 +11,7 @@ class EventSource implements ServerRunHandle {
   readonly #values: AGUIEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<AGUIEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
+  readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
   #closed = false
@@ -305,6 +306,103 @@ describe("SessionCoordinator", () => {
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
     expect(source.stop).toHaveBeenCalledOnce()
+  })
+
+  it("steers the matching active run once and publishes a replayable acknowledgement", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const subscription = await sessions.start(
+      scope,
+      input("run-1"),
+      access("operator")
+    )
+    const read = reader(subscription)
+
+    await expect(
+      sessions.steer(
+        scope,
+        {
+          requestId: "queue-item-1",
+          expectedRunId: "run-1",
+          text: "Use the newer API",
+        },
+        "operator"
+      )
+    ).resolves.toEqual({ status: "steered" })
+    await expect(read()).resolves.toMatchObject({
+      value: {
+        sequence: 1,
+        event: {
+          type: EventType.CUSTOM,
+          name: "aos.steer.accepted",
+          value: {
+            requestId: "queue-item-1",
+            text: "Use the newer API",
+            delivery: "steered",
+          },
+        },
+      },
+    })
+    expect(source.steer).toHaveBeenCalledWith({
+      requestId: "queue-item-1",
+      text: "Use the newer API",
+    })
+
+    await expect(
+      sessions.steer(
+        scope,
+        {
+          requestId: "queue-item-1",
+          expectedRunId: "run-1",
+          text: "Use the newer API",
+        },
+        "operator"
+      )
+    ).resolves.toEqual({ status: "steered" })
+    expect(source.steer).toHaveBeenCalledOnce()
+  })
+
+  it("rejects stale run identity, conflicting request reuse, and steering after Stop", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("operator"))
+
+    await expect(
+      sessions.steer(
+        scope,
+        { requestId: "one", expectedRunId: "stale", text: "Correction" },
+        "operator"
+      )
+    ).rejects.toThrow("already active")
+    await sessions.steer(
+      scope,
+      { requestId: "one", expectedRunId: "run-1", text: "Correction" },
+      "operator"
+    )
+    await expect(
+      sessions.steer(
+        scope,
+        { requestId: "one", expectedRunId: "run-1", text: "Different" },
+        "operator"
+      )
+    ).rejects.toThrow("already active")
+
+    await sessions.stop(scope, "operator")
+    await expect(
+      sessions.steer(
+        scope,
+        { requestId: "two", expectedRunId: "run-1", text: "Too late" },
+        "operator"
+      )
+    ).rejects.toThrow("already active")
   })
 
   it("coalesces concurrent authoritative recovery", async () => {

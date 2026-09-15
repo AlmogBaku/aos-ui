@@ -59,6 +59,8 @@ export type HermesContentSession = {
   attached: boolean
 }
 
+export type HermesAudioScope = { agentId: string }
+
 export type HermesArtifactAuthority = {
   /** Resolves an already-published opaque artifact ID within this Session only. */
   reference: string
@@ -90,18 +92,18 @@ export interface HermesContentTransport {
     maxResponseBytes: number
   ): Promise<{ bytes: Uint8Array; mimeType?: string }>
   audioConfig?(
-    scope: HermesContentSession,
+    scope: HermesAudioScope,
     kind: "stt" | "tts",
     maxResponseBytes: number
   ): Promise<unknown>
   transcribe?(
-    scope: HermesContentSession,
+    scope: HermesAudioScope,
     request: { data_url: string; mime_type: string },
     signal: AbortSignal | undefined,
     maxResponseBytes: number
   ): Promise<unknown>
   speak?(
-    scope: HermesContentSession,
+    scope: HermesAudioScope,
     text: string,
     signal: AbortSignal | undefined,
     maxResponseBytes: number
@@ -496,7 +498,7 @@ export function createHermesContentOperations(input: {
           input.transport.audioConfig && input.transport.transcribe
             ? {
                 status: "available" as const,
-                scope: "attached-session" as const,
+                scope: "agent" as const,
                 acceptedMimeTypes: [
                   "audio/aac",
                   "audio/flac",
@@ -525,7 +527,7 @@ export function createHermesContentOperations(input: {
           input.transport.audioConfig && input.transport.speak
             ? {
                 status: "available" as const,
-                scope: "attached-session" as const,
+                scope: "agent" as const,
                 acceptedMimeTypes: [
                   "audio/mpeg",
                   "audio/ogg",
@@ -710,13 +712,12 @@ export function createHermesContentOperations(input: {
     },
     async transcribe(
       agentId: string,
-      sessionId: string,
       bytes: Uint8Array,
       mimeType: string,
       signal?: AbortSignal
     ) {
       signal?.throwIfAborted()
-      const scope = await requireScope(agentId, sessionId)
+      const scope = { agentId }
       signal?.throwIfAborted()
       const recordingMime = safeRecordingMime(mimeType)
       if (
@@ -753,14 +754,9 @@ export function createHermesContentOperations(input: {
         throw new HermesContentUnavailableError()
       return result.transcript
     },
-    async speak(
-      agentId: string,
-      sessionId: string,
-      text: string,
-      signal?: AbortSignal
-    ) {
+    async speak(agentId: string, text: string, signal?: AbortSignal) {
       signal?.throwIfAborted()
-      const scope = await requireScope(agentId, sessionId)
+      const scope = { agentId }
       signal?.throwIfAborted()
       const safeText = boundedText(text, MAX_SPEECH_TEXT_BYTES)
       if (!input.transport.speak || !safeText)

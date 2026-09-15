@@ -38,6 +38,7 @@ const runtime = {
     sessionDeletion: { status: "available" },
     sessionRun: { status: "available" },
     sessionStop: { status: "available" },
+    sessionSteer: { status: "available" },
   },
 }
 
@@ -90,6 +91,13 @@ const sessionCapabilities = {
     },
   },
   interactions: {
+    steering: {
+      status: "available",
+      scope: "active-run",
+      semantics: "visible-user-message",
+      input: "text",
+      fallback: "provider-queue",
+    },
     approvals: {
       status: "available",
       protocol: "ag-ui-interrupt",

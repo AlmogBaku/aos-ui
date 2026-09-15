@@ -470,6 +470,7 @@
   min-width: 0;
   flex: 1;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-inline: contain;
   scrollbar-color: var(--muted) transparent;
   scrollbar-width: thin;
@@ -823,6 +824,7 @@
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 26rem)
         ),
+        80cqi,
         calc(100cqi - 35.5rem)
       );
   }
@@ -839,6 +841,7 @@
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 26rem)
         ),
+        80cqi,
         calc(100cqi - 20rem)
       );
   }
@@ -959,25 +962,27 @@
 
   .shell[data-artifact-viewer-open="true"] {
     grid-template-columns:
-      17.5rem minmax(28rem, 1fr)
+      17.5rem minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 30rem)
         ),
-        calc(100cqi - 45.5rem)
+        80cqi,
+        calc(100cqi - 37.5rem)
       );
   }
 
   .shell[data-navigation-hidden="true"][data-artifact-viewer-open="true"] {
     grid-template-columns:
-      minmax(28rem, 1fr)
+      minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 30rem)
         ),
-        calc(100cqi - 28rem)
+        80cqi,
+        calc(100cqi - 20rem)
       );
   }
 }
@@ -993,25 +998,27 @@
 
   .shell[data-artifact-viewer-open="true"] {
     grid-template-columns:
-      19.5rem minmax(36rem, 1fr)
+      19.5rem minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 34rem)
         ),
-        calc(100cqi - 55.5rem)
+        80cqi,
+        calc(100cqi - 39.5rem)
       );
   }
 
   .shell[data-navigation-hidden="true"][data-artifact-viewer-open="true"] {
     grid-template-columns:
-      minmax(36rem, 1fr)
+      minmax(20rem, 1fr)
       min(
         var(
           --workspace-artifact-width,
           var(--workspace-artifact-default-width, 34rem)
         ),
-        calc(100cqi - 36rem)
+        80cqi,
+        calc(100cqi - 20rem)
       );
   }
 }

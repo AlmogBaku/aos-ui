@@ -32,7 +32,6 @@ import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
-import { useAosReconcilerLifecycle } from "./use-reconciler-lifecycle"
 
 function ReadyAosRuntimeProvider({
   children,
@@ -41,7 +40,18 @@ function ReadyAosRuntimeProvider({
 }: RuntimeAdapterProps<"aos">) {
   const reconciler = useMemo(() => new AosReconciler(), [])
   const assistantRuntimeRef = useRef<AssistantRuntime | null>(null)
-  useAosReconcilerLifecycle(reconciler)
+  const reconcilerMounted = useRef(false)
+  useEffect(() => {
+    reconcilerMounted.current = true
+    return () => {
+      reconcilerMounted.current = false
+      // Strict Mode immediately replays effects while preserving hook state.
+      // Dispose only if this instance is still unmounted after that replay.
+      queueMicrotask(() => {
+        if (!reconcilerMounted.current) reconciler.close()
+      })
+    }
+  }, [reconciler])
   const client = useMemo(
     () => new AosRemoteClient({ reconciler }),
     [reconciler]
@@ -81,17 +91,21 @@ function ReadyAosRuntimeProvider({
               ? async (text) => {
                   const runtime = assistantRuntimeRef.current
                   if (!runtime) return
-                  const thread = runtime.threads.getById(localId)
                   await reconcileComposerPrefill(
-                    thread,
+                    runtime.threads.getById(localId),
                     () => client.loadHistory(remoteId),
                     text
                   )
                 }
               : undefined,
             resolveRewindSourceId: remoteId
-              ? (sourceId, replacement) =>
-                  client.resolveRewindSourceId(remoteId, sourceId, replacement)
+              ? (sourceId, replacement, sourceText) =>
+                  client.resolveRewindSourceId(
+                    remoteId,
+                    sourceId,
+                    replacement,
+                    sourceText
+                  )
               : undefined,
             onRewindCompleted: remoteId
               ? async (replacement) => {
@@ -125,6 +139,31 @@ function ReadyAosRuntimeProvider({
                   queueMicrotask(resetWhenIdle)
                 }
               : undefined,
+            onRunFinished:
+              remoteId && localId
+                ? async () => {
+                    if (!client.needsSteeringReconciliation(remoteId)) return
+                    const history = await client.loadHistory(remoteId)
+                    const runtime = assistantRuntimeRef.current
+                    if (!runtime) return
+                    const messages: ThreadMessageLike[] = history.messages.map(
+                      (message) => ({
+                        ...message,
+                        createdAt: new Date(message.createdAt),
+                      })
+                    )
+                    const target = runtime.threads.getById(localId)
+                    let unsubscribe: () => void = () => undefined
+                    const resetWhenIdle = () => {
+                      if (target.getState().isRunning) return
+                      unsubscribe()
+                      target.reset(messages)
+                      client.completeSteeringReconciliation(remoteId)
+                    }
+                    unsubscribe = target.subscribe(resetWhenIdle)
+                    queueMicrotask(resetWhenIdle)
+                  }
+                : undefined,
             onEvent: remoteId
               ? (event) => client.acceptRunEvent(remoteId, event)
               : undefined,
@@ -136,7 +175,7 @@ function ReadyAosRuntimeProvider({
                       .then((value) => value.agent)
                 : undefined,
           }),
-        [agentId, remoteId, localId]
+        [agentId, localId, remoteId]
       )
       const history = useMemo(
         () =>
@@ -228,12 +267,26 @@ function ReadyAosRuntimeProvider({
   const messageRewind = useMemo(
     () => ({
       runConfig(sourceUserId: string) {
+        const source = assistantRuntime.thread
+          .getMessageById(sourceUserId)
+          .getState()
+        const sourceText =
+          source?.role === "user"
+            ? source.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n")
+            : undefined
         return {
-          custom: { "aos.rewindSourceId": sourceUserId },
+          custom: {
+            "aos.rewindSourceId": sourceUserId,
+            ...(sourceText === undefined
+              ? {}
+              : { "aos.rewindSourceText": sourceText }),
+          },
         }
       },
     }),
-    []
+    [assistantRuntime]
   )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =

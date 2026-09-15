@@ -2,6 +2,7 @@ import type { RunAgentInput } from "@ag-ui/client"
 import { describe, expect, it, vi } from "vitest"
 
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
+import { fetchGuestRuntimeContext } from "./guest-composition"
 import type { AosEventScope } from "./aos-reconciliation"
 
 const scope = {
@@ -69,106 +70,58 @@ describe("AOS guest transport configuration", () => {
   it("loads commands within capabilities through the guest lane with the invitation bearer", async () => {
     const fetcher = vi.fn<typeof fetch>(async () =>
       Response.json({
-        agent: {
-          transport: { streaming: true, resumable: true },
-          reasoning: { supported: true, streaming: true },
-          multimodal: {
-            input: { image: true, audio: false, file: true },
-            output: { audio: false },
+        runtimeId: "hermes",
+        agentId: scope.agentId,
+        conversationRef: scope.sessionId,
+        ui: {},
+        expiresAt: "2026-09-18T08:00:00.000Z",
+        capabilities: {
+          agent: {
+            transport: { streaming: true, resumable: true },
+            reasoning: { supported: true, streaming: true },
+            multimodal: {
+              input: { image: true, audio: false, file: true },
+              output: { audio: false },
+            },
+            humanInTheLoop: {
+              supported: true,
+              approvals: true,
+              interrupts: true,
+            },
           },
-          humanInTheLoop: {
-            supported: true,
-            approvals: true,
-            interrupts: true,
+          workspace: {
+            slashCommands: {
+              status: "available",
+              scope: "attached-session",
+              commands: [{ name: "help", description: "Show help" }],
+            },
           },
-        },
-        workspace: {
-          slashCommands: {
-            status: "available",
-            scope: "attached-session",
-            commands: [{ name: "help", description: "Show help" }],
+          interactions: {},
+          content: {
+            attachments: { status: "unavailable" },
+            artifacts: { status: "unavailable" },
+            transcription: { status: "unavailable" },
+            speech: { status: "unavailable" },
           },
-          models: {
-            status: "available",
-            scope: "attached-session",
-            selection: "native-session",
-            choices: "provider-reported",
-          },
-          context: {
-            status: "available",
-            scope: "attached-session",
-            source: "provider-usage-or-estimate",
-            breakdown: "provider-categories",
-          },
-          todos: { status: "unavailable", reason: "not-supported" },
-          activity: { status: "unavailable", reason: "not-supported" },
-        },
-        interactions: {
-          approvals: {
-            status: "available",
-            protocol: "ag-ui-interrupt",
-            scope: "run",
-            choices: [
-              { value: "once", scope: "request" },
-              { value: "session", scope: "session" },
-              { value: "always", scope: "agent" },
-              { value: "deny", scope: "request" },
-            ],
-            maxPending: 1,
-          },
-          questions: {
-            status: "available",
-            protocol: "ag-ui-interrupt",
-            scope: "run",
-            answerModes: ["single", "multiple", "free-text"],
-            cancellation: "native-empty-answer",
-            maxQuestions: 1,
-            maxChoicesPerQuestion: 1,
-            maxAnswerValuesPerQuestion: 1,
-            maxStringBytes: 1,
-          },
-          reactions: { status: "unavailable", reason: "not-supported" },
-        },
-        content: {
-          attachments: {
-            status: "available",
-            scope: "attached-session",
-            inputs: ["image", "file"],
-            imageMimeTypes: ["image/png"],
-            fileMimeTypes: "valid-type/subtype",
-            maxMimeTypeBytes: 1,
-            maxFilenameBytes: 1,
-            maxCount: 1,
-            maxImageBytes: 1,
-            maxFileBytes: 1,
-            maxTotalBytes: 1,
-          },
-          artifacts: { status: "unavailable", reason: "not-supported" },
-          transcription: { status: "unavailable", reason: "not-supported" },
-          speech: { status: "unavailable", reason: "not-supported" },
         },
       })
     )
-    const client = new AosRemoteClient({
-      fetcher,
-      basePath: "/api/guest/v1",
-      authorization: "Bearer invitation.jwt",
-      scope,
-    })
 
     await expect(
-      client.workspaceCapabilities(scope.sessionId)
+      fetchGuestRuntimeContext(fetcher, "/api/guest/v1", "invitation.jwt")
     ).resolves.toMatchObject({
-      workspace: {
-        slashCommands: {
-          status: "available",
-          commands: [{ name: "help", description: "Show help" }],
+      capabilities: {
+        workspace: {
+          slashCommands: {
+            status: "available",
+            commands: [{ name: "help", description: "Show help" }],
+          },
         },
       },
     })
 
     expect(fetcher).toHaveBeenCalledWith(
-      "/api/guest/v1/agents/researcher/sessions/hermes%3Aresearcher%3Astored-session/workspace/capabilities",
+      "/api/guest/v1/runtime",
       expect.objectContaining({ credentials: "same-origin" })
     )
     const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers)
