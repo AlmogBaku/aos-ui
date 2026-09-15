@@ -266,14 +266,8 @@ export class OpenClawInteractions {
   constructor(private readonly transport: OpenClawInteractionTransport) {}
   async discover(
     scope: OpenClawInteractionDiscoveryScope,
-    approvalReplay: unknown
+    approvalReplay?: unknown
   ): Promise<{ outcome: RunFinishedInterruptOutcome } | undefined> {
-    if (
-      !Check(SessionApprovalReplaySchema, approvalReplay) ||
-      approvalReplay.sessionKey !== scope.sessionId ||
-      approvalReplay.truncated
-    )
-      return undefined
     const fullScope: OpenClawInteractionScope = {
         agentId: scope.agentId,
         sessionId: scope.sessionId,
@@ -303,12 +297,17 @@ export class OpenClawInteractions {
       record(fullScope, row)
       candidates.push({ kind: "question", value })
     }
-    for (const value of approvalReplay.approvals)
-      if (
-        value.sourceSessionKey === scope.sessionId &&
-        value.presentation.agentId === scope.agentId
-      )
-        candidates.push({ kind: "approval", value })
+    if (
+      Check(SessionApprovalReplaySchema, approvalReplay) &&
+      approvalReplay.sessionKey === scope.sessionId &&
+      !approvalReplay.truncated
+    )
+      for (const value of approvalReplay.approvals)
+        if (
+          value.sourceSessionKey === scope.sessionId &&
+          value.presentation.agentId === scope.agentId
+        )
+          candidates.push({ kind: "approval", value })
     if (candidates.length !== 1) return undefined
     const candidate = candidates[0]!
     return {

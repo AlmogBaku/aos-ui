@@ -108,6 +108,31 @@ describe("OpenClaw interactions", () => {
     ])
   })
 
+  it.each([
+    ["absent", undefined],
+    ["truncated", { ...approvalReplay, truncated: true }],
+  ])(
+    "keeps exact question discovery eligible when approval replay is %s",
+    async (_label, replay) => {
+      const request = vi.fn(async (method: string) =>
+        method === "question.list" ? { questions: [question] } : { question }
+      )
+      const interactions = new OpenClawInteractions({ request })
+
+      await expect(
+        interactions.discover({ ...resumeScope, nativeRunId: "run-a" }, replay)
+      ).resolves.toMatchObject({
+        outcome: {
+          type: "interrupt",
+          interrupts: [{ id: "q", reason: "question" }],
+        },
+      })
+      await expect(
+        interactions.validate(resumeScope, resolvedQuestion)
+      ).resolves.toEqual({ runId: "run-a" })
+    }
+  )
+
   it("rediscovers a matching replay approval on the proven native run", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "question.list") return { questions: [] }
@@ -162,14 +187,14 @@ describe("OpenClaw interactions", () => {
     [
       "a truncated replay",
       { ...approvalReplay, truncated: true },
-      [question],
-      0,
+      [] as unknown[],
+      1,
     ],
     [
       "a foreign replay",
       { ...approvalReplay, sessionKey: "foreign" },
       [] as unknown[],
-      0,
+      1,
     ],
     [
       "a foreign approval source",
