@@ -52,33 +52,44 @@ export const OpenCodeSessionCatalogSchema = z.object({
   }),
 })
 
-const NativeFileSchema = z.object({
-  mime: z.string().min(1).max(255),
-  filename: z.string().min(1).max(255).optional(),
-  url: z.string().min(1).max(25_000_000),
+const NativePromptFileAttachmentSchema = z.object({
+  uri: z.string().min(1).max(25_000_000),
+  name: z.string().min(1).max(255).optional(),
+  description: z.string().max(4_096).optional(),
+  source: z.unknown().optional(),
+})
+
+const NativeMessageTimeSchema = z.object({
+  created: z.number().finite().nonnegative(),
 })
 
 const NativeToolStateSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("pending"),
-    input: z.record(z.string(), z.unknown()),
-    raw: z.string().max(1_000_000),
+    input: z.string().max(1_000_000),
   }),
   z.object({
     status: z.literal("running"),
     input: z.record(z.string(), z.unknown()),
+    structured: z.record(z.string(), z.unknown()),
+    content: z.array(z.unknown()).max(2_000),
+    time: z.object({ start: z.number().finite().nonnegative() }),
   }),
   z.object({
     status: z.literal("completed"),
     input: z.record(z.string(), z.unknown()),
-    output: z.string().max(1_000_000),
+    attachments: z.array(NativePromptFileAttachmentSchema).max(16).optional(),
+    content: z.array(z.unknown()).max(2_000),
+    outputPaths: z.array(z.string().max(4_096)).max(100).optional(),
+    structured: z.record(z.string(), z.unknown()),
     result: z.unknown().optional(),
   }),
   z.object({
     status: z.literal("error"),
     input: z.record(z.string(), z.unknown()),
-    error: z.string().max(1_000_000),
-    result: z.unknown().optional(),
+    content: z.array(z.unknown()).max(2_000),
+    structured: z.record(z.string(), z.unknown()),
+    error: z.unknown(),
   }),
 ])
 
@@ -96,27 +107,25 @@ const NativeAssistantPartSchema = z.discriminatedUnion("type", [
   z.object({
     id: IdentifierSchema,
     type: z.literal("tool"),
-    callID: IdentifierSchema,
-    tool: IdentifierSchema,
+    name: IdentifierSchema,
     state: NativeToolStateSchema,
+    time: NativeMessageTimeSchema,
   }),
 ])
-
-const NativeMessageTimeSchema = z.object({
-  created: z.number().finite().nonnegative(),
-})
 
 export const OpenCodeNativeMessageSchema = z.discriminatedUnion("type", [
   z.object({
     id: IdentifierSchema,
     type: z.literal("user"),
     text: z.string().max(1_000_000),
-    files: z.array(NativeFileSchema).max(16).optional(),
+    files: z.array(NativePromptFileAttachmentSchema).max(16).optional(),
     time: NativeMessageTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,
     type: z.literal("assistant"),
+    agent: IdentifierSchema,
+    model: OpenCodeModelRefSchema,
     content: z.array(NativeAssistantPartSchema).max(2_000),
     time: NativeMessageTimeSchema,
   }),
@@ -129,28 +138,36 @@ export const OpenCodeNativeMessageSchema = z.discriminatedUnion("type", [
   z.object({
     id: IdentifierSchema,
     type: z.literal("synthetic"),
+    sessionID: IdentifierSchema,
     text: z.string().max(1_000_000),
     time: NativeMessageTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,
     type: z.literal("compaction"),
+    reason: z.enum(["auto", "manual"]),
     summary: z.string().max(1_000_000),
+    recent: z.string().max(1_000_000),
     time: NativeMessageTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,
     type: z.literal("agent-switched"),
+    agent: IdentifierSchema,
     time: NativeMessageTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,
     type: z.literal("model-switched"),
+    model: OpenCodeModelRefSchema,
     time: NativeMessageTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,
     type: z.literal("shell"),
+    callID: IdentifierSchema,
+    command: z.string().max(1_000_000),
+    output: z.string().max(1_000_000),
     time: NativeMessageTimeSchema,
   }),
 ])
@@ -161,12 +178,6 @@ export const OpenCodeMessageCatalogSchema = z.object({
     previous: IdentifierSchema.optional(),
     next: IdentifierSchema.optional(),
   }),
-})
-
-export const OpenCodeTodoSchema = z.object({
-  content: z.string().min(1).max(4_096),
-  status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
-  priority: z.string().max(64),
 })
 
 export function parseOpenCodeAgentCatalog(value: unknown) {
@@ -183,8 +194,4 @@ export function parseOpenCodeSession(value: unknown) {
 
 export function parseOpenCodeMessageCatalog(value: unknown) {
   return OpenCodeMessageCatalogSchema.safeParse(value)
-}
-
-export function parseOpenCodeTodos(value: unknown) {
-  return z.array(OpenCodeTodoSchema).max(10_000).safeParse(value)
 }

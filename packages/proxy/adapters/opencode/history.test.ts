@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { projectOpenCodeHistory } from "./history"
 
 describe("OpenCode history projection", () => {
-  it("maps chronological native messages, reasoning, tools, images, and Todos without private native data", () => {
+  it("accepts pinned-v2 message envelopes including all tool states and data-uri image attachments", () => {
     const result = projectOpenCodeHistory({
       messages: [
         {
@@ -13,21 +13,55 @@ describe("OpenCode history projection", () => {
           model: { providerID: "openai", modelID: "gpt" },
           time: { created: 2_000 },
           content: [
+            { id: "text", type: "text", text: "Answer" },
             { id: "reason", type: "reasoning", text: "Thinking" },
             {
-              id: "tool",
+              id: "pending-tool",
               type: "tool",
-              callID: "call-1",
-              tool: "read",
+              name: "read",
+              time: { created: 2_000 },
+              state: { status: "pending", input: '{"safe":true}' },
+            },
+            {
+              id: "running-tool",
+              type: "tool",
+              name: "search",
+              time: { created: 2_000 },
+              state: {
+                status: "running",
+                input: { safe: true, path: "/private" },
+                structured: {},
+                content: [],
+                time: { start: 2_000 },
+              },
+            },
+            {
+              id: "completed-tool",
+              type: "tool",
+              name: "write",
+              time: { created: 2_000 },
               state: {
                 status: "completed",
                 input: { safe: true, path: "/private" },
-                output: "done",
-                title: "Read",
-                metadata: {},
-                time: { start: 2_000, end: 2_100 },
+                attachments: [],
+                content: [],
+                outputPaths: [],
+                structured: {},
+                result: { ok: true, path: "/private" },
               },
+            },
+            {
+              id: "error-tool",
+              type: "tool",
+              name: "shell",
               time: { created: 2_000 },
+              state: {
+                status: "error",
+                input: { safe: false },
+                content: [],
+                structured: {},
+                error: { name: "PermissionDenied" },
+              },
             },
           ],
         },
@@ -36,17 +70,16 @@ describe("OpenCode history projection", () => {
           type: "user",
           text: "See image",
           time: { created: 1_000 },
-          files: [
-            {
-              mime: "image/png",
-              filename: "plot.png",
-              url: "data:image/png;base64,YQ==",
-            },
-          ],
+          files: [{ uri: "data:image/png;base64,YQ==", name: "plot.png" }],
         },
-      ],
-      todos: [
-        { content: "Check numbers", status: "in_progress", priority: "high" },
+        {
+          id: "compaction-1",
+          type: "compaction",
+          reason: "auto",
+          summary: "Earlier work",
+          recent: "private recent data",
+          time: { created: 3_000 },
+        },
       ],
       sessionId: "session-1",
     })
@@ -70,27 +103,49 @@ describe("OpenCode history projection", () => {
         role: "assistant",
         createdAt: "1970-01-01T00:33:20.000Z",
         content: [
+          { type: "text", text: "Answer" },
           { type: "reasoning", text: "Thinking" },
           {
             type: "tool-call",
-            toolCallId: "call-1",
+            toolCallId: "pending-tool",
             toolName: "read",
             args: { safe: true },
             argsText: '{"safe":true}',
-            result: "done",
+          },
+          {
+            type: "tool-call",
+            toolCallId: "running-tool",
+            toolName: "search",
+            args: { safe: true },
+            argsText: '{"safe":true}',
+          },
+          {
+            type: "tool-call",
+            toolCallId: "completed-tool",
+            toolName: "write",
+            args: { safe: true },
+            argsText: '{"safe":true}',
+            result: { ok: true },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "error-tool",
+            toolName: "shell",
+            args: { safe: false },
+            argsText: '{"safe":false}',
+            isError: true,
           },
         ],
       },
       {
-        id: "aos-plan:session-1",
-        role: "activity",
-        activityType: "PLAN",
-        content: {
-          todos: [{ id: "todo:0", label: "Check numbers", status: "active" }],
-        },
+        id: "compaction-1",
+        role: "system",
+        createdAt: "1970-01-01T00:50:00.000Z",
+        content: [{ type: "text", text: "Earlier work" }],
       },
     ])
     expect(JSON.stringify(result)).not.toContain("/private")
     expect(JSON.stringify(result)).not.toContain("providerID")
+    expect(JSON.stringify(result)).not.toContain("private recent data")
   })
 })

@@ -2,7 +2,6 @@ import {
   AgentCatalogResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
-  SessionPatchRequestSchema,
   SessionSchema,
   type AgentCatalogResponse,
   type Session,
@@ -92,21 +91,6 @@ function projectSession(
 export function createOpenCodeWorkspaceOperations(input: {
   client: OpenCodeWorkspaceClient
   creatorAgentId?: string
-  /**
-   * Optional native integration operation for a title-bearing Session create.
-   * The pinned v2 SDK facade has no title field, so callers without this exact
-   * native acknowledgement leave invite creation unavailable.
-   */
-  createInvitedSession?: (
-    agentId: string,
-    title: string,
-    firstTurnInstruction?: string
-  ) => Promise<void>
-  updateSession?: (
-    sessionId: string,
-    patch: { title?: string; archived?: boolean }
-  ) => Promise<void>
-  deleteSession?: (sessionId: string) => Promise<void>
 }) {
   async function allSessions() {
     const sessions: NonNullable<
@@ -147,22 +131,43 @@ export function createOpenCodeWorkspaceOperations(input: {
       )
   }
 
+  type InviteResolution = { sessionId: string; created: false } | undefined
+  const invitedResolutions = new Map<string, Promise<InviteResolution>>()
+
+  async function resolveInvite(
+    agentId: string,
+    ref: string,
+    create?: { firstTurnInstruction?: string }
+  ): Promise<InviteResolution> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/u.test(ref))
+      throw new OpenCodeWorkspaceUnavailableError()
+    const title = `aos-invite:${ref}`
+    const matches = (await owned(agentId)).filter(
+      (session) => session.title === title
+    )
+    if (matches.length > 1) throw new OpenCodeWorkspaceUnavailableError()
+    if (matches.length === 1)
+      return { sessionId: matches[0]!.id, created: false }
+    if (!create) return undefined
+    // OpenCode v2 creates only an unmarked Session and exposes neither a
+    // title-bearing create nor an update endpoint. AOS cannot safely turn
+    // that into the reserved invitation title, so creation is unavailable.
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
   return {
     capabilities: () => ({
       models: {
-        status: "available" as const,
-        scope: "session",
-        source: "native-session-model" as const,
+        status: "unavailable" as const,
+        reason: "native-model-read-unwired",
       },
       context: {
-        status: "available" as const,
-        scope: "session",
-        source: "native-session-context" as const,
+        status: "unavailable" as const,
+        reason: "native-context-read-unwired",
       },
       todos: {
-        status: "available" as const,
-        scope: "session",
-        mode: "read-only-projection" as const,
+        status: "unavailable" as const,
+        reason: "native-todo-read-unavailable",
       },
       activity: {
         status: "unavailable" as const,
@@ -274,59 +279,22 @@ export function createOpenCodeWorkspaceOperations(input: {
       })
     },
 
-    async mutateSession(
-      agentId: string,
-      sessionId: string,
-      method: "PATCH" | "DELETE",
-      body?: unknown
-    ) {
-      await this.getSession(agentId, sessionId)
-      if (method === "DELETE") {
-        if (!input.deleteSession) throw new OpenCodeWorkspaceUnavailableError()
-        await input.deleteSession(sessionId)
-        return
-      }
-      const patch = SessionPatchRequestSchema.safeParse(body)
-      if (!patch.success || !input.updateSession)
-        throw new OpenCodeWorkspaceUnavailableError()
-      await input.updateSession(sessionId, patch.data)
-      const confirmed = await this.getSession(agentId, sessionId)
-      if (
-        (patch.data.title !== undefined &&
-          confirmed.title !== patch.data.title) ||
-        (patch.data.archived !== undefined &&
-          confirmed.archived !== patch.data.archived)
-      )
-        throw new OpenCodeWorkspaceUnavailableError()
-    },
-
-    async resolveInvitedSession(
+    resolveInvitedSession(
       agentId: string,
       ref: string,
       create?: { firstTurnInstruction?: string }
     ) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/u.test(ref))
-        throw new OpenCodeWorkspaceUnavailableError()
-      const title = `aos-invite:${ref}`
-      const matches = (await owned(agentId)).filter(
-        (session) => session.title === title
-      )
-      if (matches.length > 1) throw new OpenCodeWorkspaceUnavailableError()
-      if (matches.length === 1)
-        return { sessionId: matches[0]!.id, created: false }
-      if (!create) return undefined
-      if (!input.createInvitedSession)
-        throw new OpenCodeWorkspaceUnavailableError()
-      await input.createInvitedSession(
-        agentId,
-        title,
-        create.firstTurnInstruction
-      )
-      const confirmed = (await owned(agentId)).filter(
-        (session) => session.title === title
-      )
-      if (confirmed.length !== 1) throw new OpenCodeWorkspaceUnavailableError()
-      return { sessionId: confirmed[0]!.id, created: true }
+      const key = `${agentId}\u0000${ref}`
+      const existing = invitedResolutions.get(key)
+      if (existing) return existing
+      const pending = resolveInvite(agentId, ref, create)
+      invitedResolutions.set(key, pending)
+      const release = () => {
+        if (invitedResolutions.get(key) === pending)
+          invitedResolutions.delete(key)
+      }
+      void pending.then(release, release)
+      return pending
     },
   }
 }

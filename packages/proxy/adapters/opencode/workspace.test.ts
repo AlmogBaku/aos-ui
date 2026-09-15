@@ -112,7 +112,39 @@ describe("OpenCode workspace operations", () => {
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
   })
 
-  it("creates a missing invite only through a title-capable native operation then rereads and verifies its exact owner", async () => {
+  it("shares an in-flight exact-Agent invite lookup", async () => {
+    let reads = 0
+    let release: (() => void) | undefined
+    const listed = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const operations = createOpenCodeWorkspaceOperations({
+      client: {
+        catalog: { agents: async () => ({ data: [] }) },
+        sessions: {
+          list: async () => {
+            reads += 1
+            await listed
+            return { data: [], cursor: {} }
+          },
+          get: async () => session(),
+          create: async () => session(),
+        },
+      },
+    })
+
+    const first = operations.resolveInvitedSession("research", "guest-3")
+    const second = operations.resolveInvitedSession("research", "guest-3")
+    await Promise.resolve()
+    expect(reads).toBe(1)
+    release?.()
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      undefined,
+      undefined,
+    ])
+  })
+
+  it("fails closed for a missing invite even when an untrusted title-create callback is offered", async () => {
     let created = false
     const operations = createOpenCodeWorkspaceOperations({
       client: {
@@ -137,11 +169,11 @@ describe("OpenCode workspace operations", () => {
       operations.resolveInvitedSession("research", "guest-2", {
         firstTurnInstruction: "Start safely",
       })
-    ).resolves.toEqual({ sessionId: "invited", created: true })
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    expect(created).toBe(false)
   })
 
-  it("does not send a title mutation when the authoritative Session belongs to another Agent", async () => {
-    let mutated = false
+  it("does not expose a generic Session mutation operation", () => {
     const operations = createOpenCodeWorkspaceOperations({
       client: {
         catalog: { agents: async () => ({ data: [] }) },
@@ -151,16 +183,30 @@ describe("OpenCode workspace operations", () => {
           create: async () => session(),
         },
       },
-      updateSession: async () => {
-        mutated = true
+    })
+
+    expect(operations).not.toHaveProperty("mutateSession")
+  })
+
+  it("does not advertise models, context, or Todos before this leaf exposes their validated reads", () => {
+    const operations = createOpenCodeWorkspaceOperations({
+      client: {
+        catalog: { agents: async () => ({ data: [] }) },
+        sessions: {
+          list: async () => ({ data: [], cursor: {} }),
+          get: async () => session(),
+          create: async () => session(),
+        },
       },
     })
 
-    await expect(
-      operations.mutateSession("research", "session-1", "PATCH", {
-        title: "Never applied",
-      })
-    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
-    expect(mutated).toBe(false)
+    expect(operations.capabilities()).toMatchObject({
+      models: { status: "unavailable", reason: "native-model-read-unwired" },
+      context: {
+        status: "unavailable",
+        reason: "native-context-read-unwired",
+      },
+      todos: { status: "unavailable", reason: "native-todo-read-unavailable" },
+    })
   })
 })

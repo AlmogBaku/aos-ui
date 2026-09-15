@@ -1,15 +1,11 @@
-import type {
-  SessionMessage,
-  SessionPlanActivityMessage,
-} from "../../../protocol"
+import type { SessionMessage } from "../../../protocol"
 import {
   parseOpenCodeMessageCatalog,
-  parseOpenCodeTodos,
   type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
 
 type NativeMessage = typeof OpenCodeNativeMessageSchema._output
-type ProjectedHistory = Array<SessionMessage | SessionPlanActivityMessage>
+type ProjectedHistory = SessionMessage[]
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -64,13 +60,13 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
       { type: "text", text: message.text },
     ]
     for (const file of message.files ?? []) {
-      const image = safeImage(file.url)
+      const image = safeImage(file.uri)
       if (image)
         content.push({
           type: "image",
           image,
-          ...(safeFilename(file.filename)
-            ? { filename: safeFilename(file.filename) }
+          ...(safeFilename(file.name)
+            ? { filename: safeFilename(file.name) }
             : {}),
         })
     }
@@ -83,20 +79,24 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
       if (part.type === "reasoning")
         content.push({ type: "reasoning", text: part.text })
       if (part.type === "tool") {
-        const args = publicJson(part.state.input)
+        const args =
+          part.state.status === "pending"
+            ? parseToolInput(part.state.input)
+            : publicJson(part.state.input)
         if (!args || typeof args !== "object" || Array.isArray(args)) continue
         const result =
           part.state.status === "completed"
-            ? publicJson(part.state.result ?? part.state.output)
-            : part.state.status === "error"
-              ? publicJson(part.state.result ?? part.state.error)
-              : undefined
+            ? publicJson(part.state.result)
+            : undefined
         content.push({
           type: "tool-call",
-          toolCallId: part.callID,
-          toolName: part.tool,
+          toolCallId: part.id,
+          toolName: part.name,
           args: args as { [key: string]: JsonValue },
-          argsText: JSON.stringify(args),
+          argsText:
+            part.state.status === "pending"
+              ? part.state.input
+              : JSON.stringify(args),
           ...(result === undefined ? {} : { result }),
           ...(part.state.status === "error" ? { isError: true } : {}),
         })
@@ -123,9 +123,16 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
   return undefined
 }
 
+function parseToolInput(value: string): JsonValue {
+  try {
+    return publicJson(JSON.parse(value) as unknown) ?? {}
+  } catch {
+    return {}
+  }
+}
+
 export function projectOpenCodeHistory(input: {
   messages: unknown
-  todos?: unknown
   sessionId: string
 }): ProjectedHistory {
   const parsedMessages = Array.isArray(input.messages)
@@ -140,24 +147,5 @@ export function projectOpenCodeHistory(input: {
         Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
         left.id.localeCompare(right.id)
     )
-  const todos = parseOpenCodeTodos(input.todos)
-  if (todos?.success && todos.data.length)
-    messages.push({
-      id: `aos-plan:${input.sessionId}`,
-      role: "activity",
-      activityType: "PLAN",
-      content: {
-        todos: todos.data.map((todo, index) => ({
-          id: `todo:${index}`,
-          label: todo.content,
-          status:
-            todo.status === "in_progress"
-              ? "active"
-              : todo.status === "cancelled"
-                ? "failed"
-                : todo.status,
-        })),
-      },
-    })
   return messages
 }
