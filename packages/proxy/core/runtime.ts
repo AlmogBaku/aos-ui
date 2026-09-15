@@ -121,6 +121,14 @@ export class ServerRunSteerUncertainError extends Error {
   }
 }
 
+/** Signals that Stop failed before native dispatch and may be attempted again. */
+export class ServerRunStopNotDispatchedError extends Error {
+  constructor(readonly failure: unknown) {
+    super("Stop was not dispatched")
+    this.name = "ServerRunStopNotDispatchedError"
+  }
+}
+
 export class ServerSessionNotFoundError extends Error {
   constructor() {
     super("Session not found")

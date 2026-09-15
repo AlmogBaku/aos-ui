@@ -1,7 +1,12 @@
 import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
-import type { ServerRunEngine, ServerRunHandle, SessionScope } from "./runtime"
+import {
+  ServerRunStopNotDispatchedError,
+  type ServerRunEngine,
+  type ServerRunHandle,
+  type SessionScope,
+} from "./runtime"
 import {
   SessionCoordinator,
   type CoordinatedRunSubscription,
@@ -306,6 +311,37 @@ describe("SessionCoordinator", () => {
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
     expect(source.stop).toHaveBeenCalledOnce()
+  })
+
+  it("keeps a run active when Stop definitely was not dispatched", async () => {
+    const source = new EventSource()
+    const failure = new Error("Provider unavailable")
+    source.stop.mockRejectedValueOnce(
+      new ServerRunStopNotDispatchedError(failure)
+    )
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+
+    await expect(sessions.stop(scope, "operator")).rejects.toBe(failure)
+    expect(sessions.state(scope)).toBe("running")
+  })
+
+  it("keeps an ambiguous Stop failure uncertain", async () => {
+    const source = new EventSource()
+    source.stop.mockRejectedValueOnce(new Error("Connection lost"))
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+
+    await expect(sessions.stop(scope, "operator")).rejects.toThrow(
+      "Connection lost"
+    )
+    expect(sessions.state(scope)).toBe("uncertain")
   })
 
   it("steers the matching active run once and publishes a replayable acknowledgement", async () => {

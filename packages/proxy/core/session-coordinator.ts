@@ -4,6 +4,7 @@ import {
   ServerRunConflictError,
   ServerRunCapacityError,
   ServerRunControlError,
+  ServerRunStopNotDispatchedError,
   ServerRunSteerUnavailableError,
   type NewTurnRunInput,
   type RecoveryRequest,
@@ -395,6 +396,10 @@ export class SessionCoordinator {
         execution.state = status === "idle" ? "idle" : "stopping"
         return status
       } catch (error) {
+        if (error instanceof ServerRunStopNotDispatchedError) {
+          execution.state = "running"
+          throw error.failure
+        }
         execution.state = "uncertain"
         throw error
       }
