@@ -111,6 +111,192 @@ describe("AOS remote thread-list adapter", () => {
     })
   })
 
+  it("replaces the partial history assistant with the replayed active run", async () => {
+    const loadHistory = vi.fn(async () => ({
+      sessionId: "session-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "Question" }],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "partial-assistant",
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Partial" }],
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+      total: 2,
+      limit: 200,
+      offset: 0,
+      nextOffset: 2,
+      execution: { status: "running" as const, runId: "run-1" },
+    }))
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "TEXT_MESSAGE_CONTENT" as const,
+        messageId: "assistant-1",
+        delta: "Complete answer",
+      }
+      yield {
+        type: "RUN_FINISHED" as const,
+        threadId: "session-1",
+        runId: "run-1",
+        outcome: { type: "success" as const },
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+
+    const loaded = await history.load()
+    expect(loaded.messages.map(({ message }) => message.id)).toEqual(["user-1"])
+    expect(loaded.headId).toBe("user-1")
+    expect(loaded.unstable_resume).toBe(true)
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+    expect(updates.at(-1)).toEqual({
+      content: [{ type: "text", text: "Complete answer" }],
+      status: { type: "complete", reason: "stop" },
+    })
+  })
+
+  it("reloads authoritative history once when the active journal is unavailable", async () => {
+    const historyPage = {
+      sessionId: "session-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "Question" }],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "partial-assistant",
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Partial" }],
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+      total: 2,
+      limit: 200,
+      offset: 0,
+      nextOffset: 2,
+    }
+    const loadHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...historyPage,
+        execution: { status: "running" as const, runId: "run-1" },
+      })
+      .mockResolvedValueOnce({
+        ...historyPage,
+        messages: [
+          historyPage.messages[0],
+          {
+            ...historyPage.messages[1],
+            id: "final-assistant",
+            content: [{ type: "text" as const, text: "Final answer" }],
+          },
+        ],
+        execution: { status: "idle" as const },
+      })
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "RUN_ERROR" as const,
+        code: "AOS_RESET_REQUIRED",
+        message: "Reload history",
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+    await history.load()
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(loadHistory).toHaveBeenCalledTimes(2)
+    expect(reconnectRun).toHaveBeenCalledOnce()
+    expect(updates).toEqual([
+      {
+        content: [{ type: "text", text: "Final answer" }],
+        status: { type: "complete", reason: "stop" },
+      },
+    ])
+  })
+
+  it("stops recovery after one history reload when the provider still reports the run as active", async () => {
+    const historyPage = {
+      sessionId: "session-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "Question" }],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "partial-assistant",
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Still working" }],
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+      total: 2,
+      limit: 200,
+      offset: 0,
+      nextOffset: 2,
+      execution: { status: "running" as const, runId: "run-1" },
+    }
+    const loadHistory = vi.fn(async () => historyPage)
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "RUN_ERROR" as const,
+        code: "AOS_RESET_REQUIRED",
+        message: "Reload history",
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+    await history.load()
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(loadHistory).toHaveBeenCalledTimes(2)
+    expect(reconnectRun).toHaveBeenCalledOnce()
+    expect(updates).toEqual([
+      {
+        content: [{ type: "text", text: "Still working" }],
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error: "Reload history",
+        },
+      },
+    ])
+  })
+
   it("restores waiting AG-UI interrupts from the authoritative Session snapshot", async () => {
     const adapter = new AosThreadListAdapter({
       loadHistory: async () => ({
