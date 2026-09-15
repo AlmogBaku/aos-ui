@@ -10,8 +10,8 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 ## Run
 
 - [Hermes](runtimes/hermes.md) — operate Hermes behind the AOS proxy.
-- [OpenCode](runtimes/opencode.md) — operate an OpenCode server behind the AOS proxy.
 - [OpenClaw](runtimes/openclaw.md) — attach an independently operated OpenClaw Gateway behind the AOS proxy.
+- [OpenCode](runtimes/opencode.md) — operate an OpenCode server behind the AOS proxy.
 - [Deployment](deployment.md) — run the Bun proxy and static assets, with optional external TLS termination.
 
 ## Operate

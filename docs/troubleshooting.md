@@ -10,23 +10,9 @@ Start with the symptom you see. AOS fails closed when runtime configuration or p
 4. Provider-specific server adapters are not browser runtime modes; confirm the
    normalized AOS proxy is configured and reachable.
 5. Confirm the private proxy configuration selects one supported runtime kind:
-   `hermes`, `opencode`, or `openclaw`.
+   `hermes`, `openclaw`, or `opencode`.
 
 If Vite is using environment-derived configuration, restart it after changing variables. AOS never substitutes fixture data for an invalid real-runtime configuration.
-
-## OpenCode is unavailable
-
-- Use `AOS_UI_RUNTIME_MODE=aos`; the browser never connects directly to
-  OpenCode.
-- Verify the private `runtime.baseUrl`, absolute `runtime.directory`,
-  `runtime.username`, and owner-only `runtime.passwordFile` match the running
-  OpenCode server.
-- From a proxy container, use the Compose service address (`opencode:4096`),
-  not a browser-facing URL. For an independently operated server, ensure its
-  address is reachable from the proxy process.
-- A missing Todo, Activity, context meter, title/delete, artifact, voice,
-  edit/regenerate, or steering control is an explicit OpenCode capability
-  limit, not a connection failure.
 
 ## Hermes authentication fails
 
@@ -74,9 +60,23 @@ same-origin `/api/aos/v1` path.
 - Check browser CORS errors for both the run and workspace origins.
 - Ensure history responses contain valid message data and resumable state when advertised.
 
+## OpenCode is unavailable
+
+- Use `AOS_UI_RUNTIME_MODE=aos`; the browser never connects directly to
+  OpenCode.
+- Verify the private `runtime.baseUrl`, absolute `runtime.directory`,
+  `runtime.username`, and owner-only `runtime.passwordFile` match the running
+  OpenCode server.
+- From a proxy container, use the Compose service address (`opencode:4096`),
+  not a browser-facing URL. For an independently operated server, ensure its
+  address is reachable from the proxy process.
+- A missing Todo, Activity, context meter, title/delete, artifact, voice,
+  edit/regenerate, or steering control is an explicit OpenCode capability
+  limit, not a connection failure.
+
 ## A capability is missing
 
-Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenCode and OpenClaw catalogs are read-only; generic AG-UI lacks shared Todos and Agent creation.
+Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenClaw and OpenCode catalogs are read-only; generic AG-UI lacks shared Todos and Agent creation.
 
 ## Browser notifications do not appear
 

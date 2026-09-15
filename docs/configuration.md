@@ -29,17 +29,17 @@ Vite derives the same public shape when no configuration file is supplied.
 | `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection. |
 | `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.   |
 
-The AOS proxy privately selects and authenticates exactly one Hermes, OpenCode,
-or OpenClaw runtime. There is no browser runtime mode or provider route for any
-of them.
+The AOS proxy privately selects and authenticates exactly one Hermes, OpenClaw,
+or OpenCode runtime. Hermes is the primary and first-supported harness. There
+is no browser runtime mode or provider route for any of them.
 
 ## Private proxy configuration
 
 The Bun proxy reads a strict private JSON file passed to
 `bun run proxy:serve -- --config PATH`. Start from the maintained example for
 the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
-[`OpenCode`](../deploy/proxy-config.opencode.example.json), or
-[`OpenClaw`](../deploy/proxy-config.openclaw.example.json).
+[`OpenClaw`](../deploy/proxy-config.openclaw.example.json), or
+[`OpenCode`](../deploy/proxy-config.opencode.example.json).
 
 | Field             | Meaning                                                                                       |
 | ----------------- | --------------------------------------------------------------------------------------------- |
@@ -61,8 +61,8 @@ runtime or credential.
 | `runtime.kind` | Required private fields                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------- |
 | `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs`                                          |
-| `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
 | `openclaw`     | WebSocket `baseUrl`, absolute owner-only `deviceIdentityFile`, and absolute owner-only `deviceTokenFile` |
+| `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
 
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private

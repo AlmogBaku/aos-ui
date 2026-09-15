@@ -128,7 +128,7 @@ logical execution and attachment.
 Admission, subscriber fanout, control authorization, interruption, and
 reconnect belong in the coordinator. Native sockets, subscriptions, live IDs,
 and retention belong in the adapter. The
-[OpenCode/OpenClaw research](../research/opencode-openclaw-runtime-transport-seams.md)
+[OpenClaw/OpenCode research](../research/opencode-openclaw-runtime-transport-seams.md)
 confirms that a generic transport manager would couple unlike systems.
 
 ### Accepted is not necessarily applied
@@ -171,7 +171,7 @@ neither substitutes for the other.
 
 ## Consequences for the next adapters
 
-OpenCode and OpenClaw should implement the same normalized runtime and
+OpenClaw and OpenCode should implement the same normalized runtime and
 coordinator obligations, but begin from their official clients and native
 lifecycle models. Their first deliverable should be a capability/lifecycle
 matrix followed by one read and one complete run through the proxy.

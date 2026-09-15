@@ -44,7 +44,7 @@ React + assistant-ui
 |                       runtime directory                       |
 |                  +-----------+-----------+                    |
 |                  |           |           |                    |
-|               Hermes      OpenCode    OpenClaw                |
+|               Hermes      OpenClaw    OpenCode                |
 |               adapter      adapter      adapter                |
 |                  |           |           |                    |
 |             native clients and provider-specific transports   |
@@ -314,9 +314,9 @@ Connection lifecycle varies by harness and remains private to its adapter.
 | Runtime  | Native client and connection model                                                                                                                                            |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Hermes   | Authenticated HTTP plus one multiplexed JSON-RPC WebSocket for each Runtime instance. The socket carries requests and events for many Sessions.                               |
-| OpenCode | One official SDK client for each configured server and workspace scope. Active Session observation uses scoped, abortable SSE streams.                                        |
 | OpenClaw | One official `GatewayClient` WebSocket for each Runtime instance. The socket multiplexes RPCs and events while Session subscriptions are acquired and released independently. |
 | Fixture  | Deterministic in-process behavior with the same runtime interface and no native transport.                                                                                    |
+| OpenCode | One official SDK client for each configured server and workspace scope. Active Session observation uses scoped, abortable SSE streams.                                        |
 
 No common socket pool or transport abstraction is imposed across adapters. The
 shared concern is Runtime-instance ownership and routing, not the shape of the
@@ -346,16 +346,6 @@ The adapter obtains a fresh WebSocket ticket for every native reconnect,
 restores durable Session bindings, replays from native epoch and sequence where
 available, and then confirms state through authoritative reads.
 
-### OpenCode lifecycle
-
-The OpenCode adapter uses the official SDK for normalized operations. Durable
-Session IDs are stable. Each observed Session owns an abortable SSE stream; the
-stream is released when no run, pending interaction, subscriber, or reconnect
-grace retains it.
-
-Reconnect reopens observation from the available provider position and
-reconciles Session history and status before accepting another turn.
-
 ### OpenClaw lifecycle
 
 The OpenClaw adapter maintains one official Gateway client for each Runtime
@@ -366,6 +356,16 @@ Session subscriptions are reference-counted inside the adapter. Because native
 events are not replayed across a lost Gateway connection, reconnect resubscribes
 and reconciles authoritative history, in-flight run state, and active run IDs
 before incremental delivery resumes.
+
+### OpenCode lifecycle
+
+The OpenCode adapter uses the official SDK for normalized operations. Durable
+Session IDs are stable. Each observed Session owns an abortable SSE stream; the
+stream is released when no run, pending interaction, subscriber, or reconnect
+grace retains it.
+
+Reconnect reopens observation from the available provider position and
+reconciles Session history and status before accepting another turn.
 
 ## Session retention
 
@@ -785,6 +785,6 @@ The native connection and recovery models underlying this architecture are
 documented in:
 
 - [Multi-harness AOS gateway architecture](../research/multi-harness-gateway-architecture.md)
-- [OpenCode and OpenClaw runtime transport seams](../research/opencode-openclaw-runtime-transport-seams.md)
-- [OpenCode and OpenClaw server clients](../research/opencode-openclaw-server-clients.md)
+- [OpenClaw and OpenCode runtime transport seams](../research/opencode-openclaw-runtime-transport-seams.md)
+- [OpenClaw and OpenCode server clients](../research/opencode-openclaw-server-clients.md)
 - [Hermes Desktop gateway connection architecture](../research/hermes-desktop-gateway-connection.md)

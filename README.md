@@ -31,7 +31,10 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
 - Optional Hermes voice controls and restricted guest invitations
 
-The browser has one real runtime: the normalized AOS proxy. The proxy privately attaches to one configured Hermes, OpenCode, or OpenClaw runtime; there is no browser-direct provider mode.
+The browser has one real runtime: the normalized AOS proxy. Hermes is AOS's
+primary and first-supported harness. The proxy can also attach to OpenClaw or
+OpenCode, which is documented last as the newest attachment path. There is no
+browser-direct provider mode.
 
 ## Quick start
 
@@ -39,7 +42,7 @@ AOS UI is not an agent harness. Run the AOS proxy against an authenticated harne
 
 ### Prerequisites
 
-- An independently operated Hermes, OpenCode, or OpenClaw runtime, plus that runtime's private credentials
+- An independently operated Hermes, OpenClaw, or OpenCode runtime, plus that runtime's private credentials
 - [Bun](https://bun.sh/)
 - A current desktop browser
 

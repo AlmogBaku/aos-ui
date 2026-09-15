@@ -25,10 +25,10 @@ Assistant UI manages the frontend projection of threads, messages, runs, branche
 ## Runtime boundaries
 
 The proxy selects one configured runtime adapter for a deployment. Hermes is
-the V1 implementation. The selection seam can accept OpenCode and OpenClaw
-later without adding provider branches to the browser. Each native adapter
-implements the same normalized server boundary while keeping its own transport,
-credentials, recovery positions, and provider payloads private.
+the primary and first-supported V1 implementation. OpenClaw and OpenCode also
+implement the same normalized server boundary without adding provider branches
+to the browser. Each native adapter keeps its own transport, credentials,
+recovery positions, and provider payloads private.
 
 The browser uses AG-UI to start or resume Session runs and receive their event
 streams. Namespaced AOS REST operations provide workspace resources and the

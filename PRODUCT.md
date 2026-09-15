@@ -16,7 +16,11 @@ AOS provides one calm workspace for selecting a primary Agent, resuming its Sess
 
 ## Positioning
 
-AOS is a UI for native harnesses, with Agent creation and rich messages around their conversations. OpenCode, Hermes, and OpenClaw use separate integrations behind one harness-runtime boundary; generic AG-UI and explicit fixtures remain available. Monty is an independent optional integration.
+AOS is a UI for native harnesses, with Agent creation and rich messages around
+their conversations. Hermes is the primary and first-supported harness;
+OpenClaw and OpenCode use separate integrations behind the same harness-runtime
+boundary. Generic AG-UI and explicit fixtures remain available. Monty is an
+independent optional integration.
 
 ## Operating Context
 
@@ -41,7 +45,14 @@ Activity is the source of truth for notification history and unread state, along
 
 Browser notifications require at least one loaded AOS tab; no delivery occurs after all tabs close. V1 includes no service worker, Web Push, backend notification service, email, remote approval, or scheduled-work notifications. Permission denial and unsupported browsers preserve Activity. Multiple tabs synchronize read state and elect one delivery tab; history hydration does not replay OS alerts. Clicks focus AOS and validate provider ownership before selecting the owning Agent and Session; deleted targets remain unavailable.
 
-Stored Activity and OS payloads contain no conversation, tool, question, permission, or error content. OS text also omits Agent and Session labels. OpenCode covers workspace activity, fixtures exercise deterministic scenarios, and AG-UI covers only the selected Session with an explicit settings limitation. Browser and OS policies can delay or suppress delivery. The Activity bell is in the desktop Agents heading and mobile header, with an accessible unread count, keyboard-managed drawer, English/Hebrew support, and reduced motion.
+Stored Activity and OS payloads contain no conversation, tool, question,
+permission, or error content. OS text also omits Agent and Session labels.
+Hermes and generic AG-UI cover only the active Session, fixtures exercise
+deterministic scenarios, and the other native adapters expose Activity only
+when their capability contract reports it. Browser and OS policies can delay
+or suppress delivery. The Activity bell is in the desktop Agents heading and
+mobile header, with an accessible unread count, keyboard-managed drawer,
+English/Hebrew support, and reduced motion.
 
 ## Brand Commitments
 

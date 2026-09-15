@@ -68,7 +68,7 @@ Active-turn steering stays inside the current segment and emits no second
 
 Connection and retention topology remains provider-private. Hermes uses a
 multiplexed JSON-RPC connection and durable-to-live Session attachments;
-OpenCode and OpenClaw have different native observation and recovery models.
+OpenClaw and OpenCode have different native observation and recovery models.
 They share coordinator semantics, not a generic socket manager.
 
 ## Map native output to valid AG-UI

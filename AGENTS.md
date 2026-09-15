@@ -5,9 +5,10 @@
 - `README.md` is the operator entry point. Keep its commands aligned with
   `package.json`, the Compose files, and the environment examples; follow
   `docs/README.md` for the maintained operator documentation map.
-- OpenCode and Hermes are independently installed and operated runtimes. AOS
-  attaches to their native servers; treat repository launchers and runtime
-  overlays as optional development conveniences.
+- Hermes, OpenClaw, and OpenCode are independently installed and operated
+  runtimes. Hermes is the primary and first-supported harness. AOS attaches to
+  native servers; treat repository launchers and runtime overlays as optional
+  development conveniences.
 - `PRODUCT.md` defines product terminology, ownership, scope, and accessibility
   commitments.
 - `docs/design/agent-workspace-design-lock.md` is the visual design authority.
@@ -82,8 +83,8 @@ external reverse proxy is optional.
   `New Agent`.
 - The browser supports only the normalized `aos` runtime and explicit
   `fixture` mode. The proxy selects one server adapter per deployment; Hermes
-  is the V1 implementation, while future OpenCode and OpenClaw adapters keep
-  their native transports server-side. Monty is optional.
+  is the primary V1 implementation. OpenClaw and OpenCode adapters keep their
+  distinct native transports server-side. Monty is optional.
 - The app chooses no OpenCode model by default. Set
   `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID` together or
   leave both empty. The three `AOS_UI_OPENAI_COMPATIBLE_*` values are likewise
@@ -116,7 +117,11 @@ external reverse proxy is optional.
   and conversation search. Do not recreate these flows in runtime adapters.
 - `src/lib/i18n` owns shared locale behavior. Some feature-local copy lives beside
   its component; search for both English and Hebrew variants before editing.
-- `shared/presentation` and `shared/agent-creator` define portable assets. `integrations/opencode` and `integrations/hermes` package native tools, safe writers, and creator support. Agent worktrees, profiles, secrets, and state remain external. Never import native implementations into browser code.
+- `shared/presentation` and `shared/agent-creator` define portable assets.
+  `integrations/hermes`, `integrations/openclaw`, and `integrations/opencode`
+  package native tools and the provider-supported creator behavior. Agent
+  worktrees, profiles, secrets, and state remain external. Never import native
+  implementations into browser code.
 - `integrations/monty` is the runtime fork, named `monty`. Preserve its MIT
   license and the upstream commit attribution in `integrations/monty/UPSTREAM.md`.
 

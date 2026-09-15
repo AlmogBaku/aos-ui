@@ -45,7 +45,7 @@ AOS resolves the Artifact through the selected runtime and offers a read-only pr
 
 Open **Manage Agents** to inspect the provider catalog. A visible, selectable Agent appears in the workspace roster. A hidden Agent remains provider-owned but is not selectable in normal navigation.
 
-Visibility edits are available only when the runtime exposes a native mutation and marks the entry editable. AOS confirms the provider result before updating the roster. OpenCode currently reports its catalog as read-only; Hermes can update native profile visibility. Fixture changes are temporary, and generic AG-UI support depends on the workspace service.
+Visibility edits are available only when the runtime exposes a native mutation and marks the entry editable. AOS confirms the provider result before updating the roster. Hermes can update native profile visibility; OpenClaw and OpenCode currently report their catalogs as read-only. Fixture changes are temporary, and generic AG-UI support depends on the workspace service.
 
 The dedicated creator identity and provider/system definitions never appear in normal management. Agent creation is available only when exactly one native Agent is marked as the creator. The public fixture intentionally omits it. See the [runtime matrix](runtime-capabilities.md) for current support.
 

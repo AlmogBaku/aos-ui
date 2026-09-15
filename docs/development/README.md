@@ -12,11 +12,11 @@ runtime gateway. Operator setup and product usage remain in the
   implementation choices and the mistakes that exposed the adapter contract.
 - [Gateway architecture](../design/aos-runtime-gateway-architecture.md) — the
   normative final-system boundaries.
-- [Gateway V1](../design/aos-runtime-gateway-v1.md) — the normative deployed
-  Hermes slice.
+- [Gateway V1](../design/aos-runtime-gateway-v1.md) — the Hermes-first slice
+  that established the adapter seam.
 
 Provider research records evidence rather than requirements:
 
 - [Hermes Desktop connection](../research/hermes-desktop-gateway-connection.md)
 - [Hermes native client reuse](../research/hermes-native-client-reuse.md)
-- [OpenCode and OpenClaw transport seams](../research/opencode-openclaw-runtime-transport-seams.md)
+- [Transport research for OpenClaw and OpenCode](../research/opencode-openclaw-runtime-transport-seams.md)

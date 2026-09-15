@@ -41,7 +41,7 @@ One gateway deployment has:
 - one Hermes Runtime instance and native connection.
 
 The composition root selects the adapter. Routes, authorization, run
-coordination, and browser code depend only on `ServerRuntime`. Adding a future
+coordination, and browser code depend only on `ServerRuntime`. Adding another
 adapter must not require provider branches in those modules. V1 does not expose
 multiple Runtime definitions concurrently and does not add empty OpenCode or
 OpenClaw implementations.
@@ -62,8 +62,8 @@ that selects a runtime kind. In V1 its strict configuration union and exhaustive
 factory contain only Hermes.
 
 Provider-native transport, authentication, live identity, recovery, and
-Session-retention behavior remain adapter-private. A future OpenCode or
-OpenClaw adapter may use its own native lifecycle; it is not required to adopt
+Session-retention behavior remain adapter-private. A later OpenClaw or
+OpenCode adapter may use its own native lifecycle; it is not required to adopt
 Hermes' WebSocket or attachment registry.
 
 Adding either known adapter should require one configuration variant, one new
@@ -300,7 +300,7 @@ never cross either listener.
 V1 does not include:
 
 - multiple Tenants, operator users, or concurrent Runtime definitions;
-- OpenCode or OpenClaw server adapters;
+- OpenClaw or OpenCode server adapters;
 - OIDC, SAML, operator cookies, or trusted identity assertions;
 - Hermes browser authentication or server-side cookie jars;
 - distributed Runtime ownership or cross-process run coordination;

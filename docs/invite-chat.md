@@ -9,8 +9,8 @@ conversation reference.
 
 Add `guest` to the private proxy configuration for the selected runtime, as
 shown in the maintained [Hermes](../deploy/proxy-config.hermes.example.json),
-[OpenCode](../deploy/proxy-config.opencode.example.json), or
-[OpenClaw](../deploy/proxy-config.openclaw.example.json) example.
+[OpenClaw](../deploy/proxy-config.openclaw.example.json), or
+[OpenCode](../deploy/proxy-config.opencode.example.json) example.
 The signing key must be a private 32-byte secret file. The default invitation
 lifetime is 72 hours.
 
@@ -78,7 +78,7 @@ sent in HTTP requests. The browser sends the token as guest API authorization.
 - Opening a new invitation creates nothing; an existing reference loads its
   conversation.
 - Hermes can atomically reuse or create the reserved invited Session on first
-  Send. OpenCode and OpenClaw can only resolve a pre-existing reserved Session:
+  Send. OpenClaw and OpenCode can only resolve a pre-existing reserved Session:
   their pinned native APIs do not prove safe equivalent creation. Do not issue
   a new first-send invitation for those runtimes until the reserved Session
   exists.
@@ -94,5 +94,5 @@ Guest output is allowlisted. It excludes reasoning, raw tools, privileged
 roles, provider metadata and positions, filesystem paths, credentials, live
 provider IDs, and Agent-wide approval grants.
 
-Native live acceptance has not been run for the OpenCode and OpenClaw guest
+Native live acceptance has not been run for the OpenClaw and OpenCode guest
 paths. It requires an approved disposable target and credentials.
