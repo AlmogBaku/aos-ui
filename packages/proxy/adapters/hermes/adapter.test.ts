@@ -1047,7 +1047,7 @@ describe("Hermes server adapter", () => {
     })
     expect(http.mock.calls.slice(1).map(([path]) => path)).toEqual([
       "/api/sessions/stored?profile=researcher",
-      "/api/sessions/stored/messages?profile=researcher&limit=200&offset=0&order=oldest&include_compacted=true",
+      "/api/sessions/stored/messages?profile=researcher&limit=200&offset=0&order=latest&include_compacted=true",
     ])
   })
 
@@ -1069,6 +1069,57 @@ describe("Hermes server adapter", () => {
             : { session_id: "stored", ...page }
         ),
       })
+
+    it("loads the newest native rows for the initial conversation page", async () => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher" }
+        const order = new URL(`http://hermes${path}`).searchParams.get("order")
+        const page =
+          order === "latest"
+            ? [
+                {
+                  id: "user-new",
+                  role: "user",
+                  content: "new question",
+                  timestamp: 3,
+                },
+                {
+                  id: "assistant-new",
+                  role: "assistant",
+                  content: "new answer",
+                  timestamp: 4,
+                },
+              ]
+            : [
+                {
+                  id: "user-old",
+                  role: "user",
+                  content: "old question",
+                  timestamp: 1,
+                },
+                {
+                  id: "assistant-old",
+                  role: "assistant",
+                  content: "old answer",
+                  timestamp: 2,
+                },
+              ]
+        return {
+          session_id: "stored",
+          messages: page,
+          pagination: { limit: 2, offset: 0, order, returned: 2, total: 4 },
+        }
+      })
+      const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages.map(({ id }) => id)).toEqual([
+        "user-new",
+        "assistant-new",
+      ])
+    })
 
     it.each([
       {

@@ -52,7 +52,7 @@ export class HermesDashboardClient {
       profile,
       limit: String(limit),
       offset: String(offset),
-      order: "oldest",
+      order: "latest",
       include_compacted: "true",
     })
     return this.http(

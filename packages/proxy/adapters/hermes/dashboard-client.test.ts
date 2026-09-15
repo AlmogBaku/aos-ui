@@ -21,7 +21,7 @@ describe("Hermes dashboard client", () => {
       ],
       ["/api/sessions/stored%2F1?profile=research%20profile"],
       [
-        "/api/sessions/stored%2F1/messages?profile=research+profile&limit=200&offset=20&order=oldest&include_compacted=true",
+        "/api/sessions/stored%2F1/messages?profile=research+profile&limit=200&offset=20&order=latest&include_compacted=true",
       ],
       [
         "/api/sessions/stored%2F1?profile=research%20profile",
