@@ -1,19 +1,29 @@
 import {
   GatewayClient,
+  GatewayClientRequestError,
   GatewayClientRequestTimeoutError,
   isGatewayProtocolResponseError,
   type DeviceIdentity,
   type GatewayClientOptions,
 } from "@openclaw/gateway-client"
 import {
+  ConnectErrorDetailCodes,
+  classifyGatewayConnectFailure,
+  readConnectErrorDetailCode,
+  readPairingConnectErrorDetails,
+} from "@openclaw/gateway-protocol/connect-error-details"
+import { readMissingScopeErrorDetails } from "@openclaw/gateway-protocol/gateway-error-details"
+import {
   PROTOCOL_VERSION,
   type EventFrame,
   type HelloOk,
 } from "@openclaw/gateway-protocol"
 
-type GatewayRequestOptions = Readonly<{
+export type OpenClawRequestOptions = Readonly<{
   signal?: AbortSignal
   timeoutMs?: number | null
+  onSent?: () => void
+  onAccepted?: (payload: unknown) => void
 }>
 
 export type OpenClawGatewayClientOptions = Pick<
@@ -26,9 +36,11 @@ export type OpenClawGatewayClientOptions = Pick<
   | "minProtocol"
   | "mode"
   | "onConnectError"
+  | "onClose"
   | "onEvent"
   | "onGap"
   | "onHelloOk"
+  | "onReconnectPaused"
   | "requestTimeoutMs"
   | "role"
   | "scopes"
@@ -42,7 +54,7 @@ export interface OpenClawGatewayClient {
   request<T>(
     method: string,
     params?: unknown,
-    options?: GatewayRequestOptions
+    options?: OpenClawRequestOptions
   ): Promise<T>
 }
 
@@ -54,6 +66,24 @@ export type OpenClawClientCredentials = Readonly<{
   publicKeyRawBase64UrlFromPem: (publicKeyPem: string) => string
 }>
 
+export type OpenClawConnectionFailureKind =
+  | "authentication"
+  | "credential-rejected"
+  | "pairing-required"
+  | "rate-limited"
+  | "scope-mismatch"
+  | "unavailable"
+
+export type OpenClawConnectionIssue = Readonly<{
+  kind: OpenClawConnectionFailureKind
+  terminal: boolean
+}>
+
+export type OpenClawConnectionClose = Readonly<{
+  phase: "pre-hello" | "post-hello"
+  recoverable: boolean
+}>
+
 export type OpenClawClientOptions = Readonly<{
   url: string
   credentials: OpenClawClientCredentials
@@ -61,6 +91,9 @@ export type OpenClawClientOptions = Readonly<{
   scopes: readonly string[]
   caps: readonly string[]
   requestTimeoutMs?: number
+  onConnectionIssue?: (issue: OpenClawConnectionIssue) => void
+  onReconnectPaused?: (issue: OpenClawConnectionIssue) => void
+  onClose?: (close: OpenClawConnectionClose) => void
   onEvent?: (event: EventFrame) => void
   onGap?: (gap: Readonly<{ expected: number; received: number }>) => void
   createGatewayClient?: (
@@ -68,10 +101,22 @@ export type OpenClawClientOptions = Readonly<{
   ) => OpenClawGatewayClient
 }>
 
-export class OpenClawClientAuthenticationError extends Error {
-  constructor() {
-    super("OpenClaw authentication failed")
-    this.name = "OpenClawClientAuthenticationError"
+export class OpenClawClientConnectionError extends Error {
+  constructor(readonly kind: OpenClawConnectionFailureKind) {
+    super(
+      kind === "pairing-required"
+        ? "OpenClaw device pairing is required"
+        : kind === "scope-mismatch"
+          ? "OpenClaw device scope is insufficient"
+          : kind === "rate-limited"
+            ? "OpenClaw authentication is rate limited"
+            : kind === "credential-rejected"
+              ? "OpenClaw credentials were rejected"
+              : kind === "authentication"
+                ? "OpenClaw authentication failed"
+                : "OpenClaw connection is unavailable"
+    )
+    this.name = "OpenClawClientConnectionError"
   }
 }
 
@@ -84,7 +129,9 @@ export class OpenClawClientUnavailableError extends Error {
 
 export class OpenClawClientRequestError extends Error {
   constructor(
-    readonly kind: "cancelled" | "rejected" | "timeout" | "unavailable"
+    readonly kind: "cancelled" | "rejected" | "timeout" | "unavailable",
+    readonly requestSent = false,
+    readonly accepted = false
   ) {
     super(
       kind === "cancelled"
@@ -96,6 +143,10 @@ export class OpenClawClientRequestError extends Error {
             : "OpenClaw connection is unavailable"
     )
     this.name = "OpenClawClientRequestError"
+  }
+
+  get uncertain() {
+    return this.requestSent && !this.accepted
   }
 }
 
@@ -142,8 +193,63 @@ function validateCredentials(
     throw new Error("Invalid OpenClaw credentials")
 }
 
+function connectionIssue(error: unknown): OpenClawConnectionIssue {
+  const details =
+    error instanceof GatewayClientRequestError
+      ? error.details
+      : error && typeof error === "object" && "details" in error
+        ? error.details
+        : undefined
+  const code = readConnectErrorDetailCode(details)
+  const classified = classifyGatewayConnectFailure({ details })
+  let kind: OpenClawConnectionFailureKind
+  if (
+    code === ConnectErrorDetailCodes.AUTH_REQUIRED ||
+    code === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED ||
+    code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH
+  )
+    kind = "authentication"
+  else if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED)
+    kind = "pairing-required"
+  else if (
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
+    readMissingScopeErrorDetails(details)
+  )
+    kind = "scope-mismatch"
+  else if (code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED)
+    kind = "rate-limited"
+  else if (
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED ||
+    code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.DEVICE_AUTH_INVALID ||
+    code === ConnectErrorDetailCodes.DEVICE_AUTH_DEVICE_ID_MISMATCH ||
+    code === ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED ||
+    code === ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID ||
+    code === ConnectErrorDetailCodes.DEVICE_AUTH_PUBLIC_KEY_INVALID
+  )
+    kind = "credential-rejected"
+  else if (classified.kind === "pairing-required") kind = "pairing-required"
+  else if (classified.kind === "scope-mismatch") kind = "scope-mismatch"
+  else if (classified.kind === "rate-limited") kind = "rate-limited"
+  else if (
+    classified.kind === "auth-rejected" ||
+    classified.kind === "device-identity-required"
+  )
+    kind = "credential-rejected"
+  else if (classified.kind === "identity-proxy") kind = "authentication"
+  else kind = "unavailable"
+  const pairing = readPairingConnectErrorDetails(details)
+  const pairingRetryable =
+    kind === "pairing-required" &&
+    (pairing?.pauseReconnect === false ||
+      pairing?.recommendedNextStep === "wait_then_retry")
+  return { kind, terminal: kind !== "unavailable" && !pairingRetryable }
+}
+
 type ClientState =
-  "new" | "starting" | "ready" | "failed" | "stopping" | "stopped"
+  "new" | "starting" | "ready" | "terminal" | "stopping" | "stopped"
 
 export class OpenClawClient {
   private state: ClientState = "new"
@@ -188,7 +294,16 @@ export class OpenClawClient {
       maxProtocol: PROTOCOL_VERSION,
       requestTimeoutMs: options.requestTimeoutMs,
       onHelloOk: (hello) => this.acceptHello(hello),
-      onConnectError: () => this.rejectAuthentication(),
+      onConnectError: (error) => this.handleConnectError(error, options),
+      onReconnectPaused: (info) => {
+        const issue = connectionIssue({ details: { code: info.detailCode } })
+        options.onReconnectPaused?.({ ...issue, terminal: true })
+      },
+      onClose: (_code, _reason, info) =>
+        options.onClose?.({
+          phase: info?.phase ?? "pre-hello",
+          recoverable: this.state === "starting" || this.state === "ready",
+        }),
       onEvent: (event) => options.onEvent?.(event),
       onGap: (gap) => options.onGap?.(gap),
     }
@@ -211,7 +326,7 @@ export class OpenClawClient {
     try {
       this.gateway.start()
     } catch {
-      this.rejectAuthentication()
+      this.rejectTerminal(new OpenClawClientConnectionError("unavailable"))
     }
     return this.ready
   }
@@ -219,18 +334,28 @@ export class OpenClawClient {
   async request<T>(
     method: string,
     params?: unknown,
-    options: GatewayRequestOptions = {}
+    options: OpenClawRequestOptions = {}
   ): Promise<T> {
     if (this.state !== "ready") throw new OpenClawClientUnavailableError()
     if (options.signal?.aborted)
       throw new OpenClawClientRequestError("cancelled")
+    const dispatch = { accepted: false, requestSent: false }
     try {
+      /** Each provider leaf validates its exact method params and result before conversion. */
       return await this.gateway.request<T>(method, params, {
         signal: options.signal,
         timeoutMs: options.timeoutMs ?? this.requestTimeout,
+        onSent: () => {
+          dispatch.requestSent = true
+          options.onSent?.()
+        },
+        onAccepted: (payload) => {
+          dispatch.accepted = true
+          options.onAccepted?.(payload)
+        },
       })
     } catch (error) {
-      throw this.sanitizeRequestError(error, options.signal)
+      throw this.sanitizeRequestError(error, options.signal, dispatch)
     }
   }
 
@@ -243,29 +368,69 @@ export class OpenClawClient {
   private acceptHello(hello: HelloOk) {
     if (this.state !== "starting") return
     if (hello.protocol !== PROTOCOL_VERSION) {
-      this.rejectAuthentication()
+      this.rejectTerminal(new OpenClawClientConnectionError("authentication"))
       return
     }
     this.state = "ready"
     this.resolveReady?.()
   }
 
-  private rejectAuthentication() {
-    if (this.state !== "starting") return
-    this.state = "failed"
-    this.rejectReady?.(new OpenClawClientAuthenticationError())
+  private handleConnectError(error: unknown, options: OpenClawClientOptions) {
+    const issue = connectionIssue(error)
+    options.onConnectionIssue?.(issue)
+    if (issue.terminal)
+      this.rejectTerminal(new OpenClawClientConnectionError(issue.kind))
+  }
+
+  private rejectTerminal(error: OpenClawClientConnectionError) {
+    if (this.state !== "starting" && this.state !== "ready") return
+    const wasStarting = this.state === "starting"
+    this.state = "terminal"
+    if (wasStarting) this.rejectReady?.(error)
+    this.stop ??= this.disposeTerminal()
   }
 
   private sanitizeRequestError(
     error: unknown,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    dispatch: Readonly<{ accepted: boolean; requestSent: boolean }>
   ) {
-    if (signal?.aborted) return new OpenClawClientRequestError("cancelled")
+    const timeoutSent =
+      error instanceof GatewayClientRequestTimeoutError && error.requestSent
+    const requestSent = dispatch.requestSent || timeoutSent
+    if (signal?.aborted)
+      return new OpenClawClientRequestError(
+        "cancelled",
+        requestSent,
+        dispatch.accepted
+      )
     if (error instanceof GatewayClientRequestTimeoutError)
-      return new OpenClawClientRequestError("timeout")
+      return new OpenClawClientRequestError(
+        "timeout",
+        requestSent,
+        dispatch.accepted
+      )
     if (isGatewayProtocolResponseError(error))
-      return new OpenClawClientRequestError("rejected")
-    return new OpenClawClientRequestError("unavailable")
+      return new OpenClawClientRequestError(
+        "rejected",
+        requestSent,
+        dispatch.accepted
+      )
+    return new OpenClawClientRequestError(
+      "unavailable",
+      requestSent,
+      dispatch.accepted
+    )
+  }
+
+  private async disposeTerminal() {
+    try {
+      await this.gateway.stopAndWait()
+    } catch {
+      // A terminal connection rejection is already reported without native detail.
+    } finally {
+      this.state = "stopped"
+    }
   }
 
   private async stopClient() {
