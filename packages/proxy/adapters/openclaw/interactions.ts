@@ -19,7 +19,6 @@ export type OpenClawInteractionTransport = Readonly<{
       | "question.list"
       | "question.resolve"
       | "approval.get"
-      | "approval.list"
       | "approval.resolve",
     params: unknown
   ): Promise<unknown>
@@ -309,17 +308,11 @@ export class OpenClawInteractions {
     })
   }
   async reconcile(scope: OpenClawInteractionScope) {
-    const [qs, as] = await Promise.all([
-      this.transport.request("question.list", {}),
-      this.transport.request("approval.list", {}),
-    ])
+    const qs = await this.transport.request("question.list", {})
     if (
       !qs ||
       typeof qs !== "object" ||
-      !Array.isArray((qs as Record<string, unknown>).questions) ||
-      !as ||
-      typeof as !== "object" ||
-      !Array.isArray((as as Record<string, unknown>).approvals)
+      !Array.isArray((qs as Record<string, unknown>).questions)
     )
       bad()
     const outcomes: RunFinishedInterruptOutcome[] = []
@@ -334,18 +327,9 @@ export class OpenClawInteractions {
         continue
       outcomes.push(this.acceptQuestion(scope, row))
     }
-    for (const a of (as as { approvals: unknown[] }).approvals) {
-      if (!a || typeof a !== "object" || Array.isArray(a)) bad()
-      const row = a as Record<string, unknown>
-      const presentation = row.presentation as
-        Record<string, unknown> | undefined
-      if (
-        row.sourceSessionKey !== scope.sessionId ||
-        presentation?.agentId !== scope.agentId
-      )
-        continue
-      outcomes.push(this.acceptApproval(scope, row))
-    }
+    for (const pending of this.#pending.values())
+      if (pending.kind === "approval" && pending.scope === scope)
+        await this.current(pending)
     return outcomes
   }
   async respond(
@@ -457,6 +441,7 @@ export class OpenClawInteractions {
     p: Extract<Pending, { kind: "approval" }>,
     params: { decision: string }
   ): OpenClawInteractionResult {
+    if (!validateApprovalResolveResult(value)) bad()
     if (!value || typeof value !== "object" || Array.isArray(value)) bad()
     const r = value as {
       applied?: unknown
@@ -473,10 +458,11 @@ export class OpenClawInteractions {
       return { status: "resolved" }
     if (
       r.applied === false &&
-      (approval.status === "allowed" || approval.status === "denied")
+      (approval.status === "allowed" ||
+        approval.status === "denied" ||
+        approval.status === "cancelled")
     )
       return { status: "already-resolved" }
-    if (validateApprovalResolveResult(value)) bad()
     return bad()
   }
   private complete(
