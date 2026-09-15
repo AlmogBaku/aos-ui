@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto"
+import { createHash, generateKeyPairSync } from "node:crypto"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -26,16 +26,20 @@ afterEach(async () => {
   )
 })
 
-async function credentials() {
+async function credentials(deviceIdOverride?: string) {
   const directory = await mkdtemp(join(tmpdir(), "aos-openclaw-factory-"))
   temporaryDirectories.push(directory)
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
+  const publicKeyDer = publicKey.export({ type: "spki", format: "der" })
+  const deviceId = createHash("sha256")
+    .update(publicKeyDer.subarray(publicKeyDer.byteLength - 32))
+    .digest("hex")
   const identityFile = join(directory, "identity.json")
   const tokenFile = join(directory, "token")
   await writeFile(
     identityFile,
     JSON.stringify({
-      deviceId: "device-a",
+      deviceId: deviceIdOverride ?? deviceId,
       privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
       publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
     }),
@@ -84,7 +88,9 @@ describe("OpenClaw runtime factory", () => {
         "operator.questions",
       ],
       credentials: {
-        deviceIdentity: { deviceId: "device-a" },
+        deviceIdentity: {
+          deviceId: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
         deviceToken: "device-token",
       },
     })
@@ -119,6 +125,23 @@ describe("OpenClaw runtime factory", () => {
           baseUrl: "ws://127.0.0.1:18789",
           deviceIdentityFile: identityFile,
           deviceTokenFile: tokenFile,
+        },
+        limits
+      )
+    ).rejects.toThrow("Invalid OpenClaw device identity")
+  })
+
+  it("rejects device identity metadata that does not match its key", async () => {
+    const files = await credentials("0".repeat(64))
+
+    await expect(
+      createOpenClawRuntime(
+        {
+          kind: "openclaw",
+          id: "openclaw-local",
+          baseUrl: "ws://127.0.0.1:18789",
+          deviceIdentityFile: files.identityFile,
+          deviceTokenFile: files.tokenFile,
         },
         limits
       )

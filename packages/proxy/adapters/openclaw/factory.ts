@@ -1,4 +1,5 @@
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   sign,
@@ -90,8 +91,21 @@ async function readCredentials(config: OpenClawRuntimeConfig) {
     typeof value.publicKeyPem !== "string"
   )
     throw new Error("Invalid OpenClaw device identity")
-  privateKey(value.privateKeyPem)
-  publicKeyBytes(value.publicKeyPem)
+  const privateKeyValue = privateKey(value.privateKeyPem)
+  const publicKeyValue = publicKeyBytes(value.publicKeyPem)
+  const derivedPublicKey = createPublicKey(privateKeyValue).export({
+    type: "spki",
+    format: "der",
+  })
+  const deviceId = createHash("sha256").update(publicKeyValue).digest("hex")
+  if (
+    !/^[a-f0-9]{64}$/u.test(value.deviceId) ||
+    value.deviceId !== deviceId ||
+    !derivedPublicKey.equals(
+      Buffer.concat([ED25519_SPKI_PREFIX, publicKeyValue])
+    )
+  )
+    throw new Error("Invalid OpenClaw device identity")
   return {
     deviceIdentity: {
       deviceId: value.deviceId,
@@ -119,9 +133,9 @@ export async function createOpenClawRuntime(
   let transition = Promise.resolve()
   const replaceGeneration = (reason: "gap" | "reconnect") => {
     generation += 1
-    transition = transition.then(async () => {
-      await state.subscriptions?.replaceGeneration(reason)
-    })
+    transition = transition
+      .catch(() => undefined)
+      .then(async () => state.subscriptions?.replaceGeneration(reason))
   }
   const client = (
     dependencies.clientFactory ?? ((options) => new OpenClawClient(options))
