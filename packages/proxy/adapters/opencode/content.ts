@@ -8,6 +8,12 @@ import {
 const MAX_ATTACHMENTS = 16
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
+const IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+])
 const SAFE_MIME =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
 
@@ -129,7 +135,7 @@ export class OpenCodeContent {
         (attachment.type !== "image" && attachment.type !== "file") ||
         (attachment.filename !== undefined && !filename) ||
         !mimeType ||
-        (attachment.type === "image" && !parsed.mimeType.startsWith("image/"))
+        (attachment.type === "image" && !IMAGE_MIME_TYPES.has(parsed.mimeType))
       )
         throw new OpenCodeContentUnavailableError()
       total += parsed.bytes

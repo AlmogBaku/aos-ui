@@ -131,6 +131,9 @@ export class OpenCodeInteractions {
     }
     if (!this.#pending.has(key(s, id)) && this.#pending.size >= MAX_PENDING)
       throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
+    const existing = this.#pending.get(key(s, id))
+    if (existing && existing.kind !== "question")
+      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
     this.#pending.set(key(s, id), {
       id,
       scope: s,
@@ -160,6 +163,14 @@ export class OpenCodeInteractions {
       sessionId: scope.sessionId,
       threadId: scope.threadId,
     }
+    const existing = this.#pending.get(key(s, id))
+    if (
+      (!existing && this.#pending.size >= MAX_PENDING) ||
+      (existing && existing.kind !== "permission")
+    )
+      throw new OpenCodeInteractionPublicError(
+        existing ? "AOS_PROVIDER_INVALID_RESPONSE" : "AOS_LIMIT_EXCEEDED"
+      )
     this.#pending.set(key(s, id), {
       id,
       scope: s,
@@ -177,8 +188,6 @@ export class OpenCodeInteractions {
       sessionId: scope.sessionId,
       threadId: scope.threadId,
     }
-    for (const [k, v] of this.#pending)
-      if (identity(v.scope) === identity(s)) this.#pending.delete(k)
     const qs = Array.isArray(native.questions)
       ? native.questions
       : record(native.questions)?.data
@@ -187,6 +196,8 @@ export class OpenCodeInteractions {
       : record(native.permissions)?.data
     if (!Array.isArray(qs) || !Array.isArray(ps))
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    for (const [k, v] of this.#pending)
+      if (identity(v.scope) === identity(s)) this.#pending.delete(k)
     for (const q of qs) this.acceptQuestion(scope, q)
     for (const p of ps) this.acceptPermission(scope, p)
     return this.snapshot(scope)
@@ -212,7 +223,7 @@ export class OpenCodeInteractions {
             reason: "approval",
             responseSchema: {
               type: "string",
-              enum: ["once", "always", "reject"],
+              enum: ["once", "always", "deny"],
             },
           }
         return {
@@ -290,20 +301,22 @@ export class OpenCodeInteractions {
               answers: e.answers!,
             })
         } else {
-          const choice = e.status === "cancelled" ? "reject" : e.payload
-          if (choice !== "once" && choice !== "always" && choice !== "reject")
+          const choice = e.status === "cancelled" ? "deny" : e.payload
+          if (choice !== "once" && choice !== "always" && choice !== "deny")
             throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
           await this.transport.permissions.reply(
             scope.sessionId,
             e.p.id,
-            choice
+            choice === "deny" ? "reject" : choice
           )
         }
+        this.#pending.delete(key(s, e.p.id))
       }
     } catch (error) {
       if (error instanceof OpenCodeMutationUncertainError)
         throw new OpenCodeInteractionPublicError("AOS_MUTATION_UNCERTAIN")
-      for (const e of entries) e.p.state = "pending"
+      for (const e of entries)
+        if (e.p.state === "dispatching") e.p.state = "pending"
       if (error instanceof OpenCodeInteractionPublicError) throw error
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
     }
@@ -320,13 +333,16 @@ export class OpenCodeInteractions {
         answer.length > (q.multiple ? q.options.length : 1)
       )
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-      return answer.map((raw) => {
+      const selected = answer.map((raw) => {
         const value = text(raw, 256)
         const option = q.options.find((x) => x.publicValue === value)
         if (option) return option.nativeLabel
         if (value && q.custom) return value
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
       })
+      if (new Set(selected).size !== selected.length)
+        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      return selected
     })
   }
 }

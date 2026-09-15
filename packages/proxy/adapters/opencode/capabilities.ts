@@ -9,7 +9,6 @@ export function openCodeCapabilities() {
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
-          { value: "session", scope: "session" },
           { value: "always", scope: "agent" },
           { value: "deny", scope: "request" },
         ],
@@ -20,7 +19,7 @@ export function openCodeCapabilities() {
         protocol: "ag-ui-interrupt",
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-empty-answer",
+        cancellation: "native-reject",
         maxQuestions: 32,
         maxChoicesPerQuestion: 64,
         maxAnswerValuesPerQuestion: 64,
