@@ -25,6 +25,52 @@ import {
 } from "./index"
 
 describe("AOS v1 normalized protocol", () => {
+  it("preserves provider-specific approval choices and question cancellation", () => {
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.shape.interactions.parse({
+        steering: {
+          status: "unavailable",
+          reason: "native-steering-unavailable",
+        },
+        approvals: {
+          status: "available",
+          protocol: "ag-ui-interrupt",
+          scope: "run",
+          choices: [
+            { value: "once", scope: "request" },
+            { value: "always", scope: "agent" },
+            { value: "deny", scope: "request" },
+          ],
+          maxPending: 64,
+        },
+        questions: {
+          status: "available",
+          protocol: "ag-ui-interrupt",
+          scope: "run",
+          answerModes: ["single", "multiple", "free-text"],
+          cancellation: "native-reject",
+          maxQuestions: 32,
+          maxChoicesPerQuestion: 64,
+          maxAnswerValuesPerQuestion: 64,
+          maxStringBytes: 4096,
+        },
+        reactions: {
+          status: "unavailable",
+          reason: "native-reaction-operation-unavailable",
+        },
+      })
+    ).toMatchObject({
+      approvals: {
+        choices: [
+          { value: "once", scope: "request" },
+          { value: "always", scope: "agent" },
+          { value: "deny", scope: "request" },
+        ],
+      },
+      questions: { cancellation: "native-reject" },
+    })
+  })
+
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
     expect(
       SessionWorkspaceCapabilitiesResponseSchema.parse({

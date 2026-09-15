@@ -391,24 +391,34 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       status: z.literal("available"),
       protocol: z.literal("ag-ui-interrupt"),
       scope: z.literal("run"),
-      choices: z.tuple([
-        z.strictObject({
-          value: z.literal("once"),
-          scope: z.literal("request"),
-        }),
-        z.strictObject({
-          value: z.literal("session"),
-          scope: z.literal("session"),
-        }),
-        z.strictObject({
-          value: z.literal("always"),
-          scope: z.literal("agent"),
-        }),
-        z.strictObject({
-          value: z.literal("deny"),
-          scope: z.literal("request"),
-        }),
-      ]),
+      choices: z
+        .array(
+          z.discriminatedUnion("value", [
+            z.strictObject({
+              value: z.literal("once"),
+              scope: z.literal("request"),
+            }),
+            z.strictObject({
+              value: z.literal("session"),
+              scope: z.literal("session"),
+            }),
+            z.strictObject({
+              value: z.literal("always"),
+              scope: z.literal("agent"),
+            }),
+            z.strictObject({
+              value: z.literal("deny"),
+              scope: z.literal("request"),
+            }),
+          ])
+        )
+        .min(1)
+        .max(4)
+        .refine(
+          (choices) =>
+            new Set(choices.map(({ value }) => value)).size === choices.length,
+          "Duplicate approval choice"
+        ),
       maxPending: z.number().int().min(1).max(1_000),
     }),
     questions: z.strictObject({
@@ -420,7 +430,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
         z.literal("multiple"),
         z.literal("free-text"),
       ]),
-      cancellation: z.literal("native-empty-answer"),
+      cancellation: z.enum(["native-empty-answer", "native-reject"]),
       maxQuestions: z.number().int().min(1).max(1_000),
       maxChoicesPerQuestion: z.number().int().min(1).max(1_000),
       maxAnswerValuesPerQuestion: z.number().int().min(1).max(1_000),
