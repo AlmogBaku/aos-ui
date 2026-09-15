@@ -147,6 +147,20 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
+  it("represents a missing native attachment capability without hiding other capabilities", () => {
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
+        {
+          status: "unavailable",
+          reason: "native-attachment-policy-unavailable",
+        }
+      )
+    ).toEqual({
+      status: "unavailable",
+      reason: "native-attachment-policy-unavailable",
+    })
+  })
+
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
     expect(
       SessionWorkspaceCapabilitiesResponseSchema.parse({
