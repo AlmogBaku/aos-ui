@@ -26,15 +26,24 @@ export type OpenClawSubscriptionScope = Readonly<{
 }>
 
 export type OpenClawSessionLease = Readonly<{
+  readonly key: string
   release(): Promise<void>
+}>
+
+export type OpenClawReconciliationFence = Readonly<{
+  dirty(): boolean
 }>
 
 type LogicalLease = {
   scope: OpenClawSubscriptionScope
   listener: (event: EventFrame) => void
-  reconcile?: (reason: "gap" | "reconnect") => void
+  reconcile?: (
+    reason: "gap" | "reconnect",
+    fence: OpenClawReconciliationFence
+  ) => void | Promise<void>
   native: GatewaySessionMessageSubscription
   released: boolean
+  dirty: boolean
 }
 
 function validIdentity(value: unknown) {
@@ -44,7 +53,7 @@ function validIdentity(value: unknown) {
 function validNativeEvent(frame: unknown): frame is EventFrame {
   if (!isGatewayEventFrame(frame)) return false
   if (frame.event === "chat") return Check(ChatEventSchema, frame.payload)
-  if (frame.event !== "agent") return false
+  if (frame.event !== "agent" && frame.event !== "session.tool") return false
   if (!frame.payload || typeof frame.payload !== "object") return false
   const payload = frame.payload as Record<string, unknown>
   const core = {
@@ -73,6 +82,8 @@ export class OpenClawSessionSubscriptions {
   readonly #leases = new Set<LogicalLease>()
   #generation = 1
   #transition: Promise<void> = Promise.resolve()
+  #paused = false
+  readonly #buffer: EventFrame[] = []
 
   constructor(client: OpenClawSubscriptionRequestClient) {
     this.#client = client
@@ -86,7 +97,10 @@ export class OpenClawSessionSubscriptions {
   async acquire(
     scope: OpenClawSubscriptionScope,
     listener: (event: EventFrame) => void,
-    reconcile?: (reason: "gap" | "reconnect") => void
+    reconcile?: (
+      reason: "gap" | "reconnect",
+      fence: OpenClawReconciliationFence
+    ) => void | Promise<void>
   ): Promise<OpenClawSessionLease> {
     if (!validIdentity(scope.agentId) || !validIdentity(scope.sessionKey))
       throw new Error("Invalid OpenClaw Session subscription scope")
@@ -100,6 +114,7 @@ export class OpenClawSessionSubscriptions {
         ...(reconcile ? { reconcile } : {}),
         native,
         released: false,
+        dirty: false,
       }
       this.#leases.add(logical)
       return this.#lease(logical)
@@ -112,14 +127,19 @@ export class OpenClawSessionSubscriptions {
     const sessionKey = payload.sessionKey as string
     const agentId =
       typeof payload.agentId === "string" ? payload.agentId : undefined
-    for (const lease of this.#leases) {
-      if (
-        lease.released ||
-        (lease.scope.sessionKey !== sessionKey &&
-          lease.native.key !== sessionKey) ||
-        (agentId !== undefined && agentId !== lease.scope.agentId)
-      )
-        continue
+    const matching = [...this.#leases].filter(
+      (lease) =>
+        !lease.released &&
+        (lease.scope.sessionKey === sessionKey ||
+          lease.native.key === sessionKey) &&
+        (agentId === undefined || agentId === lease.scope.agentId)
+    )
+    if (this.#paused) {
+      for (const lease of matching) lease.dirty = true
+      if (this.#buffer.length < 4_096) this.#buffer.push(candidate)
+      return
+    }
+    for (const lease of matching) {
       try {
         lease.listener(candidate)
       } catch {
@@ -128,9 +148,13 @@ export class OpenClawSessionSubscriptions {
     }
   }
 
-  async replaceGeneration(reason: "gap" | "reconnect") {
+  replaceGeneration(reason: "gap" | "reconnect") {
+    this.#generation += 1
+    const generation = this.#generation
+    this.#paused = true
+    this.#buffer.splice(0)
+    for (const lease of this.#leases) lease.dirty = true
     return this.#enqueue(async () => {
-      this.#generation += 1
       this.#coordinator.reset()
       this.#coordinator = this.#createCoordinator()
       for (const lease of this.#leases) {
@@ -141,11 +165,18 @@ export class OpenClawSessionSubscriptions {
       }
       for (const lease of this.#leases) {
         if (lease.released) continue
-        try {
-          lease.reconcile?.(reason)
-        } catch {
-          // Reconciliation is isolated per normalized Session.
-        }
+        do {
+          lease.dirty = false
+          await lease.reconcile?.(reason, { dirty: () => lease.dirty })
+        } while (
+          !lease.released &&
+          generation === this.#generation &&
+          lease.dirty
+        )
+      }
+      if (generation === this.#generation) {
+        this.#buffer.splice(0)
+        this.#paused = false
       }
     })
   }
@@ -190,6 +221,9 @@ export class OpenClawSessionSubscriptions {
 
   #lease(logical: LogicalLease): OpenClawSessionLease {
     return {
+      get key() {
+        return logical.native.key
+      },
       release: async () => {
         await this.#enqueue(async () => {
           if (logical.released) return

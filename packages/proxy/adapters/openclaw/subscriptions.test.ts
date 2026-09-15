@@ -115,7 +115,13 @@ describe("OpenClaw Session subscriptions", () => {
     const { calls, client } = requestClient()
     const subscriptions = new OpenClawSessionSubscriptions(client)
     const listener = vi.fn()
-    const reconcile = vi.fn()
+    let releaseFirstReconcile = () => {}
+    const firstReconcile = new Promise<void>((resolve) => {
+      releaseFirstReconcile = resolve
+    })
+    const reconcile = vi.fn(async () => {
+      if (reconcile.mock.calls.length === 1) await firstReconcile
+    })
     await subscriptions.acquire(
       { agentId: "research", sessionKey: "agent:research:main" },
       listener,
@@ -123,22 +129,14 @@ describe("OpenClaw Session subscriptions", () => {
     )
     const stale = subscriptions.generation
 
-    await subscriptions.replaceGeneration("gap")
-    expect(calls.filter(({ method }) => method.endsWith("subscribe"))).toEqual([
-      {
-        method: "sessions.messages.subscribe",
-        params: { key: "agent:research:main", agentId: "research" },
-      },
-      {
-        method: "sessions.messages.subscribe",
-        params: { key: "agent:research:main", agentId: "research" },
-      },
-    ])
-    expect(reconcile).toHaveBeenCalledExactlyOnceWith("gap")
+    const replacing = subscriptions.replaceGeneration("gap")
+    expect(subscriptions.generation).toBe(stale + 1)
+    await vi.waitFor(() => expect(reconcile).toHaveBeenCalledOnce())
 
     const event = {
       type: "event" as const,
       event: "chat",
+      seq: 5,
       payload: {
         runId: "native-run",
         sessionKey: "agent:research:main",
@@ -150,6 +148,32 @@ describe("OpenClaw Session subscriptions", () => {
     }
     subscriptions.accept(event, stale)
     subscriptions.accept(event, subscriptions.generation)
+    expect(listener).not.toHaveBeenCalled()
+
+    releaseFirstReconcile()
+    await replacing
+    expect(calls.filter(({ method }) => method.endsWith("subscribe"))).toEqual([
+      {
+        method: "sessions.messages.subscribe",
+        params: { key: "agent:research:main", agentId: "research" },
+      },
+      {
+        method: "sessions.messages.subscribe",
+        params: { key: "agent:research:main", agentId: "research" },
+      },
+    ])
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile.mock.calls[0]?.[0]).toBe("gap")
+    expect(reconcile.mock.calls[1]?.[0]).toBe("gap")
+
+    subscriptions.accept(
+      {
+        ...event,
+        seq: 6,
+        payload: { ...event.payload, seq: 2, deltaText: "fresh" },
+      },
+      subscriptions.generation
+    )
     expect(listener).toHaveBeenCalledOnce()
   })
 })
