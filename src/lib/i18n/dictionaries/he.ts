@@ -127,9 +127,6 @@ export const he = {
     noAgents: "אין סוכנים זמינים אצל ספק זה",
     noSessions: "עדיין אין שיחות",
     agentBuilderUnavailable: "בונה הסוכנים אינו זמין אצל ספק זה",
-    conversationTitle: "התחילו את השיחה הראשונה",
-    conversationDescription:
-      "התחילו לעבוד עם הסוכן. העבודה וההיסטוריה של השיחה יישמרו כאן יחד.",
   },
   accessibility: {
     selectedAgent: "הסוכן שנבחר",

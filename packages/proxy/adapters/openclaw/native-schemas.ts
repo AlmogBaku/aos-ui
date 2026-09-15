@@ -3,6 +3,8 @@ import {
   AgentsListResultSchema,
   ChatHistoryParamsSchema,
   ModelsListParamsSchema,
+  SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   SessionsListParamsSchema,
 } from "@openclaw/gateway-protocol"
 import { Value } from "typebox/value"
@@ -44,6 +46,12 @@ export type OpenClawSession = Readonly<{
   modelProvider?: string
   totalTokens?: number
   contextTokens?: number
+}>
+
+export type OpenClawCreatedSession = Readonly<{
+  key: string
+  sessionId?: string
+  runStarted?: boolean
 }>
 
 export type OpenClawHistory = Readonly<{
@@ -144,6 +152,10 @@ export function openClawSessionsParams(
     configuredAgentsOnly: true,
     includeDerivedTitles: true,
   })
+}
+
+export function openClawCreateSessionParams(agentId: string) {
+  return official(SessionsCreateParamsSchema, { agentId })
 }
 
 export function openClawInvitedSessionsParams(
@@ -262,6 +274,24 @@ export function parseOpenClawSessions(
         : {}),
     }
   })
+}
+
+export function parseOpenClawCreatedSession(
+  value: unknown
+): OpenClawCreatedSession {
+  boundedNativeValue(value, 1)
+  official(SessionsCreateResultSchema, value)
+  const created = value as OpenClawCreatedSession
+  if (created.runStarted === true) throw new OpenClawNativePayloadError()
+  return {
+    key: created.key,
+    ...(created.sessionId === undefined
+      ? {}
+      : { sessionId: created.sessionId }),
+    ...(created.runStarted === undefined
+      ? {}
+      : { runStarted: created.runStarted }),
+  }
 }
 
 export function parseOpenClawHistory(

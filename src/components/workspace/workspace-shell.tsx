@@ -784,7 +784,7 @@ function SessionTabs({
         </div>
       </div>
       <div className={styles.sessionActions} data-session-actions>
-        {selectedAgentId && openSessions.length > 0 ? (
+        {selectedAgentId ? (
           <Button
             ref={newSessionRef}
             className={styles.newSessionButton}
@@ -846,6 +846,7 @@ type InspectorPanelProps = Pick<
   | "dictionary"
   | "activeThreadId"
   | "onOpenSession"
+  | "onCreateSession"
   | "onActionError"
   | "threadListRuntime"
 > & {
@@ -862,6 +863,7 @@ function InspectorPanel({
   dictionary,
   activeThreadId,
   onOpenSession,
+  onCreateSession,
   onActionError,
   threadListRuntime,
   agent,
@@ -922,6 +924,7 @@ function InspectorPanel({
             query={query}
             onQueryChange={setQuery}
             onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+            onCreateSession={onCreateSession}
             threadListRuntime={threadListRuntime}
             onActionError={onActionError}
           />
@@ -1370,6 +1373,7 @@ export function WorkspaceShell({
     threadListRuntime,
     activeThreadId,
     onOpenSession,
+    onCreateSession,
     onActionError,
     agent: selectedAgent,
     artifactOutputs,

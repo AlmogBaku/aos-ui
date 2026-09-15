@@ -361,6 +361,16 @@ describe("Hermes server adapter", () => {
     }
   )
 
+  it("allows prompt submission while a new Hermes Session is starting", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        sessions: [{ id: "live-secret", status: "starting" }],
+      })),
+    })
+
+    await expect(adapter.status("live-secret")).resolves.toBe("idle")
+  })
+
   it("rejects malformed redirect acknowledgements and classifies a lost response as uncertain", async () => {
     const malformed = new HermesServerAdapter({
       request: vi.fn(async () => ({ status: "accepted" })),
@@ -613,6 +623,29 @@ describe("Hermes server adapter", () => {
       HermesAgentNotFoundError
     )
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves a new Session untitled so Hermes can auto-title its first exchange", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "profiles.list") return { profiles: [profile()] }
+      if (method === "session.create")
+        return { session_id: "live-private", stored_session_id: "stored/2" }
+      throw new Error("unexpected native request")
+    })
+    const adapter = new HermesServerAdapter({ request })
+
+    await adapter.createSession("researcher")
+
+    expect(request.mock.calls).toEqual([
+      ["profiles.list", { include_sessions: false }],
+      [
+        "session.create",
+        {
+          profile: "researcher",
+          close_on_disconnect: false,
+        },
+      ],
+    ])
   })
 
   it("resolves an invited Session without creating when creation is absent", async () => {

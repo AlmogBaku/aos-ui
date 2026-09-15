@@ -9,6 +9,7 @@ import {
 } from "react"
 import {
   useAuiState,
+  useAui,
   useRemoteThreadListRuntime,
   type AssistantRuntime,
   type ThreadMessageLike,
@@ -32,6 +33,8 @@ import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
 import { AosThreadListAdapter } from "./aos-thread-list"
+
+const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
 
 function ReadyAosRuntimeProvider({
   children,
@@ -66,6 +69,7 @@ function ReadyAosRuntimeProvider({
   const media = useMemo(() => new VoiceMediaController(), [])
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {
+      const aui = useAui()
       const remoteId = useAuiState((state) => state.threadListItem.remoteId)
       const localId = useAuiState((state) => state.threadListItem.id)
       const metadataAgentId = useAuiState((state) => {
@@ -85,7 +89,10 @@ function ReadyAosRuntimeProvider({
         () =>
           createAosRunAgent({
             agentId: agentId ?? "",
-            threadId: remoteId ?? "",
+            threadId: remoteId ?? localId ?? "",
+            resolveThreadId: remoteId
+              ? undefined
+              : async () => (await aui.threadListItem.initialize()).remoteId,
             stageAttachments: client.stageAttachments.bind(client),
             onComposerPrefill: remoteId
               ? async (text) => {
@@ -140,19 +147,33 @@ function ReadyAosRuntimeProvider({
                 }
               : undefined,
             onRunFinished:
-              remoteId && localId
+              localId
                 ? async () => {
-                    if (!client.needsSteeringReconciliation(remoteId)) return
-                    const history = await client.loadHistory(remoteId)
                     const runtime = assistantRuntimeRef.current
                     if (!runtime) return
+                    const target = runtime.threads.getById(localId)
+                    const item = runtime.threads.getItemById(localId)
+                    if (drafts.agentFor(localId)) {
+                      let unsubscribeTitle: () => void = () => undefined
+                      const refreshTitleWhenIdle = () => {
+                        if (target.getState().isRunning) return
+                        unsubscribeTitle()
+                        void item.generateTitle().catch(() => {
+                          // A later native invalidation retries the provider title.
+                        })
+                      }
+                      unsubscribeTitle = target.subscribe(refreshTitleWhenIdle)
+                      queueMicrotask(refreshTitleWhenIdle)
+                    }
+                    if (!remoteId) return
+                    if (!client.needsSteeringReconciliation(remoteId)) return
+                    const history = await client.loadHistory(remoteId)
                     const messages: ThreadMessageLike[] = history.messages.map(
                       (message) => ({
                         ...message,
                         createdAt: new Date(message.createdAt),
                       })
                     )
-                    const target = runtime.threads.getById(localId)
                     let unsubscribe: () => void = () => undefined
                     const resetWhenIdle = () => {
                       if (target.getState().isRunning) return
@@ -175,7 +196,7 @@ function ReadyAosRuntimeProvider({
                       .then((value) => value.agent)
                 : undefined,
           }),
-        [agentId, localId, remoteId]
+        [agentId, aui, localId, remoteId]
       )
       const history = useMemo(
         () =>
@@ -183,24 +204,27 @@ function ReadyAosRuntimeProvider({
         [agentId, remoteId]
       )
       const mediaAdapters = useMemo(
-        () =>
-          remoteId && agentId
-            ? media.createAdapters(remoteId, {
+        () => {
+          const scopeId = remoteId ?? localId
+          return scopeId && agentId
+            ? media.createAdapters(scopeId, {
                 transcribe: (recording, signal) =>
-                  client.transcribe(remoteId, recording, signal),
+                  client.transcribeForAgent(agentId, recording, signal),
                 synthesize: (text, signal) =>
-                  client.speak(remoteId, text, signal),
+                  client.speakForAgent(agentId, text, signal),
                 projectText: (text) => projectSpeechText(text, locale),
               })
-            : undefined,
-        [agentId, remoteId]
+            : undefined
+        },
+        [agentId, localId, remoteId]
       )
       return useAgUiRuntime({
         agent,
         // A locally-created draft has an Agent before it has a remote Session.
-        // RemoteThreadResource initializes it before the queued first run.
+        // Its run transport awaits thread-list initialization, while leaving
+        // the first user turn optimistic and immediately visible.
         isDisabled: !agentId,
-        unstable_enableMessageQueue: true,
+        unstable_enableMessageQueue: Boolean(remoteId),
         adapters: { history, attachments, ...mediaAdapters },
         onCancel: () => {
           if (remoteId && agentId)
@@ -232,7 +256,13 @@ function ReadyAosRuntimeProvider({
       const state = assistantRuntime.threads.getState()
       const item = state.threadItems[state.mainThreadId]
       const sessionId = item?.remoteId ?? item?.externalId
-      const agentId = item?.custom?.agentId
+      const metadataAgentId = item?.custom?.agentId
+      const agentId =
+        typeof metadataAgentId === "string"
+          ? metadataAgentId
+          : sessionId
+            ? threadList.agentFor(sessionId)
+            : undefined
       return sessionId && typeof agentId === "string"
         ? JSON.stringify([sessionId, agentId])
         : undefined
@@ -243,6 +273,88 @@ function ReadyAosRuntimeProvider({
     ? (JSON.parse(selectedScopeKey) as [string, string])
     : undefined
   const selectedSessionId = selectedScope?.[0]
+  useEffect(() => {
+    if (!selectedSessionId) return
+    const selectedItem = Object.values(
+      assistantRuntime.threads.getState().threadItems
+    ).find(
+      (candidate) =>
+        (candidate.remoteId ?? candidate.externalId) === selectedSessionId
+    )
+    if (!selectedItem || !drafts.agentFor(selectedItem.id)) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let refreshing = false
+    let refreshAgain = false
+
+    const refreshTitle = async () => {
+      if (!active) return
+      if (refreshing) {
+        refreshAgain = true
+        return
+      }
+      refreshing = true
+      try {
+        do {
+          refreshAgain = false
+          const state = assistantRuntime.threads.getState()
+          const item = Object.values(state.threadItems).find(
+            (candidate) =>
+              (candidate.remoteId ?? candidate.externalId) === selectedSessionId
+          )
+          if (!item) return
+          await assistantRuntime.threads.getItemById(item.id).generateTitle()
+        } while (active && refreshAgain)
+      } catch {
+        // The next native invalidation retries the authoritative title read.
+      } finally {
+        refreshing = false
+      }
+    }
+
+    const scheduleRefresh = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = undefined
+        void refreshTitle()
+      }, SESSION_TITLE_REFRESH_DEBOUNCE_MS)
+    }
+    const unsubscribe = client.subscribeSessionInvalidation(
+      selectedSessionId,
+      scheduleRefresh
+    )
+    scheduleRefresh()
+    return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
+      unsubscribe()
+    }
+  }, [assistantRuntime, client, drafts, selectedSessionId])
+  const selectedDraftKey = useSyncExternalStore(
+    (listener) => {
+      const unsubscribeDrafts = drafts.subscribe(listener)
+      const unsubscribeThreads = assistantRuntime.threads.subscribe(listener)
+      return () => {
+        unsubscribeDrafts()
+        unsubscribeThreads()
+      }
+    },
+    () => {
+      const state = assistantRuntime.threads.getState()
+      const item = state.threadItems[state.mainThreadId]
+      const agentId =
+        item && !item.remoteId && !item.externalId
+          ? drafts.agentFor(item.id)
+          : undefined
+      return item && agentId ? JSON.stringify([item.id, agentId]) : undefined
+    },
+    () => undefined
+  )
+  const selectedDraft = selectedDraftKey
+    ? (JSON.parse(selectedDraftKey) as [string, string])
+    : undefined
+  const selectedDraftId = selectedDraft?.[0]
+  const mediaScopeId = selectedSessionId ?? selectedDraftId
   if (selectedScope)
     client.adoptSessionOwnership(selectedScope[0], selectedScope[1])
   const capabilities = useAosSessionCapabilities(client, selectedSessionId)
@@ -293,10 +405,18 @@ function ReadyAosRuntimeProvider({
     capabilities?.content.transcription.status === "available"
   const speechAvailable = capabilities?.content.speech.status === "available"
   useEffect(() => {
-    media.setScope(selectedSessionId)
+    media.setScope(mediaScopeId)
     media.setSafelyIdle(
-      Boolean(selectedSessionId) && selectedSessionStatus === "idle"
+      Boolean(selectedDraftId) ||
+        (Boolean(selectedSessionId) && selectedSessionStatus === "idle")
     )
+    if (selectedDraftId) {
+      media.setAvailability(selectedDraftId, {
+        transcription: "unverified",
+        speech: "unverified",
+      })
+      return
+    }
     if (!selectedSessionId || !capabilitiesReady) return
     media.setAvailability(selectedSessionId, {
       transcription: transcriptionAvailable ? "unverified" : "unavailable",
@@ -305,6 +425,8 @@ function ReadyAosRuntimeProvider({
   }, [
     capabilitiesReady,
     media,
+    mediaScopeId,
+    selectedDraftId,
     selectedSessionId,
     selectedSessionStatus,
     speechAvailable,

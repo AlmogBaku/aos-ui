@@ -30,6 +30,7 @@ async function sendPrompt(
 async function createFreshSession(page: Page) {
   await page
     .getByRole("button", { name: english.newSession, exact: true })
+    .first()
     .click()
   await expect(
     page.getByRole("tab", { name: english.newSession, exact: true })

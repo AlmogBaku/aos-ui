@@ -415,6 +415,58 @@ describe("AOS normalized HttpAgent transport", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
+  it("preserves the first run-started event when the initial SSE body fails before emitting", async () => {
+    const threadId = "hermes:researcher:stored"
+    const interrupted = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.error(new Error("socket lost before start"))
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } }
+    )
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(interrupted)
+      .mockResolvedValueOnce(
+        new Response(
+          [
+            `data: ${JSON.stringify({ type: "RUN_STARTED", threadId, runId: "run-1" })}`,
+            `data: ${JSON.stringify({ type: "TEXT_MESSAGE_START", messageId: "message-2", role: "assistant" })}`,
+            `data: ${JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", messageId: "message-2", delta: "Recovered" })}`,
+            `data: ${JSON.stringify({ type: "TEXT_MESSAGE_END", messageId: "message-2" })}`,
+            `data: ${JSON.stringify({ type: "RUN_FINISHED", threadId, runId: "run-1", outcome: { type: "success" } })}`,
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId,
+      fetcher,
+    })
+
+    const events = await collect(agent, {
+      threadId,
+      runId: "run-1",
+      state: {},
+      messages: [{ id: "message-1", role: "user", content: "Hello" }],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    })
+
+    expect(events.map((event) => (event as { type: string }).type)).toEqual([
+      "RUN_STARTED",
+      "TEXT_MESSAGE_START",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_END",
+      "RUN_FINISHED",
+    ])
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
   it("stages AG-UI attachment content and forwards only text with the opaque stage id", async () => {
     const stageAttachments = vi.fn(async () => ({
       stageId: "stage-1",

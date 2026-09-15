@@ -302,4 +302,59 @@ describe("OpenClaw workspace reads", () => {
       agentId,
     })
   })
+
+  it("[CL1-WORKSPACE-009] creates an untitled native Session and verifies its exact owner", async () => {
+    const agentId = "team:alpha.beta"
+    const sessionId = "agent:team:alpha.beta:created-session"
+    const native = gateway({
+      "agents.list": {
+        defaultId: agentId,
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: agentId, name: "Alpha", kind: "agent" }],
+      },
+      "sessions.create": {
+        ok: true,
+        key: sessionId,
+        sessionId: "created-session",
+      },
+      "sessions.list": {
+        sessions: [{ key: sessionId, agentId }],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(workspace.createSession(agentId)).resolves.toEqual({
+      session: { id: sessionId, agentId },
+    })
+    expect(native.requests).toContainEqual({
+      method: "sessions.create",
+      params: { agentId },
+    })
+    expect(native.requests.at(-1)).toEqual({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId, search: sessionId }),
+    })
+  })
+
+  it("[CL1-WORKSPACE-010] rejects a newly created Session that cannot be proven to belong to the Agent", async () => {
+    const sessionId = "agent:analyst:created-session"
+    const native = gateway({
+      "agents.list": {
+        defaultId: "analyst",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "analyst", name: "Analyst", kind: "agent" }],
+      },
+      "sessions.create": { ok: true, key: sessionId },
+      "sessions.list": {
+        sessions: [{ key: sessionId, agentId: "other" }],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(workspace.createSession("analyst")).rejects.toEqual(
+      new OpenClawWorkspaceOwnershipError()
+    )
+  })
 })

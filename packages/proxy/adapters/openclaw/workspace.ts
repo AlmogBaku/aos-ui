@@ -4,12 +4,15 @@ import type {
   Session,
   SessionCatalogResponse,
 } from "../../../protocol"
+import { SessionCreateResponseSchema } from "../../../protocol"
 
 import {
   openClawAgentsParams,
+  openClawCreateSessionParams,
   openClawInvitedSessionsParams,
   openClawSessionsParams,
   parseOpenClawAgents,
+  parseOpenClawCreatedSession,
   parseOpenClawSessions,
   type OpenClawAgent,
   type OpenClawSession,
@@ -118,6 +121,7 @@ export type OpenClawWorkspace = Readonly<{
     offset: number
   ): Promise<SessionCatalogResponse>
   getSession(agentId: string, sessionKey: string): Promise<Session>
+  createSession(agentId: string): Promise<unknown>
   resolveSessionId(agentId: string, publicSessionId: string): string | undefined
   resolveInvitedSession(
     agentId: string,
@@ -169,6 +173,19 @@ export function createOpenClawWorkspace(input: {
       limit,
       offset,
     }
+  }
+  const getSession = async (agentId: string, sessionKey: string) => {
+    await requireVisibleAgent(agentId)
+    const page = parseOpenClawSessions(
+      await input.client.request(
+        "sessions.list",
+        openClawInvitedSessionsParams(agentId, sessionKey)
+      ),
+      MAX_SESSION_PAGE
+    )
+    const matches = page.filter((row) => row.key === sessionKey)
+    if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
+    return projectSession(agentId, matches[0]!)
   }
 
   return {
@@ -243,18 +260,19 @@ export function createOpenClawWorkspace(input: {
         offset,
       }
     },
-    async getSession(agentId, sessionKey) {
+    getSession,
+    async createSession(agentId) {
       await requireVisibleAgent(agentId)
-      const page = parseOpenClawSessions(
+      const created = parseOpenClawCreatedSession(
         await input.client.request(
-          "sessions.list",
-          openClawInvitedSessionsParams(agentId, sessionKey)
-        ),
-        MAX_SESSION_PAGE
+          "sessions.create",
+          openClawCreateSessionParams(agentId)
+        )
       )
-      const matches = page.filter((row) => row.key === sessionKey)
-      if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
-      return projectSession(agentId, matches[0]!)
+      await getSession(agentId, created.key)
+      return SessionCreateResponseSchema.parse({
+        session: { id: created.key, agentId },
+      })
     },
     resolveSessionId(_agentId, publicSessionId) {
       return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined

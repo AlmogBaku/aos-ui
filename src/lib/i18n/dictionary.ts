@@ -124,8 +124,6 @@ export type Dictionary = {
     noAgents: string
     noSessions: string
     agentBuilderUnavailable: string
-    conversationTitle: string
-    conversationDescription: string
   }
   agentManagement: {
     description: string

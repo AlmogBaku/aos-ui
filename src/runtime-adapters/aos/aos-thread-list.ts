@@ -245,9 +245,29 @@ export class AosThreadListAdapter implements RemoteThreadListAdapter {
     return this.client.deleteSession(threadId)
   }
 
-  async generateTitle() {
+  async generateTitle(remoteId: string) {
+    const client = this.client
     return new ReadableStream({
-      start(controller) {
+      async start(controller) {
+        try {
+          const session = await client.getSession(remoteId)
+          const title = session.title.trim()
+          if (title && title !== remoteId) {
+            controller.enqueue({
+              type: "part-start",
+              path: [0],
+              part: { type: "text" },
+            })
+            controller.enqueue({
+              type: "text-delta",
+              path: [0],
+              textDelta: title,
+            })
+            controller.enqueue({ type: "part-finish", path: [0] })
+          }
+        } catch {
+          // A later provider invalidation retries after Hermes persists a title.
+        }
         controller.close()
       },
     }) as Awaited<ReturnType<RemoteThreadListAdapter["generateTitle"]>>

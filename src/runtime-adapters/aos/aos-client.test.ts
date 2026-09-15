@@ -324,6 +324,34 @@ describe("provider-neutral AOS browser client", () => {
     ).toHaveLength(0)
   })
 
+  it("uses an Agent directly for draft voice without requiring Session ownership", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/audio/transcribe"))
+        return Response.json({ transcript: "Draft dictation" })
+      if (path.endsWith("/audio/speak"))
+        return new Response(new Blob(["audio"], { type: "audio/mpeg" }), {
+          headers: { "content-type": "audio/mpeg" },
+        })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+    const client = new AosRemoteClient({ fetcher })
+
+    await expect(
+      client.transcribeForAgent(
+        "researcher",
+        new Blob(["audio"], { type: "audio/webm" })
+      )
+    ).resolves.toBe("Draft dictation")
+    await expect(
+      client.speakForAgent("researcher", "Hello")
+    ).resolves.toBeInstanceOf(Blob)
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/aos/v1/agents/researcher/audio/transcribe",
+      "/api/aos/v1/agents/researcher/audio/speak",
+    ])
+  })
+
   it("projects PLAN snapshots and deltas without a Todo request", async () => {
     const session = {
       id: "session-1",

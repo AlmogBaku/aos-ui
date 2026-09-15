@@ -85,7 +85,6 @@ export type MobileNavigatorCopy = AgentSessionHistoryCopy & {
   close: string
   searchAgents: string
   newAgent: string
-  newSession: string
   manageAgents: string
   preferences: string
   agentDetails: string

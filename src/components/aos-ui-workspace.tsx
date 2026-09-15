@@ -389,17 +389,13 @@ const threadComponents = {
   ToolFallback: AosToolPresentation,
 }
 
-function ConversationEmpty({
+function NoAgentEmpty({
   dictionary,
-  agent,
-  onCreateSession,
   onActionError,
   onNewAgent,
   builderAvailable,
 }: {
   dictionary: Dictionary
-  agent: AgentSummary | null
-  onCreateSession: (agentId: string) => Promise<void>
   onActionError: (error: unknown) => void
   onNewAgent: () => Promise<void>
   builderAvailable: boolean
@@ -407,46 +403,20 @@ function ConversationEmpty({
   return (
     <div className="h-full overflow-y-auto px-6 text-center">
       <div className="mx-auto flex max-w-sm flex-col items-center pt-16 pb-12 lg:pt-24">
-        {agent ? (
-          <div className="flex flex-col items-center gap-3">
-            <AgentGlyph
-              agent={agent}
-              className="!size-14 !rounded-xl [&_svg]:!size-6"
-            />
-            <bdi className="text-sm font-medium">{agent.name}</bdi>
-          </div>
-        ) : null}
-        <div
-          className={cn("flex flex-col items-center gap-2", agent && "mt-7")}
-        >
+        <div className="flex flex-col items-center gap-2">
           <h1 className="text-xl font-semibold tracking-tight text-balance">
-            {agent
-              ? dictionary.empty.conversationTitle
-              : dictionary.empty.addAgentTitle}
+            {dictionary.empty.addAgentTitle}
           </h1>
           <p className="text-sm leading-6 text-pretty text-muted-foreground">
-            {agent
-              ? dictionary.empty.conversationDescription
-              : dictionary.empty.addAgentDescription}
+            {dictionary.empty.addAgentDescription}
           </p>
         </div>
-        {!agent && builderAvailable ? (
+        {builderAvailable ? (
           <Button
             className="mt-6 h-11 min-w-32 px-4"
             onClick={() => void onNewAgent().catch(onActionError)}
           >
             {dictionary.actions.newAgent}
-          </Button>
-        ) : null}
-        {agent?.kind === "ready" ? (
-          <Button
-            className="mt-6 h-10 min-w-32 px-4"
-            type="button"
-            onClick={() => {
-              void onCreateSession(agent.id).catch(onActionError)
-            }}
-          >
-            {dictionary.actions.newSession}
           </Button>
         ) : null}
       </div>
@@ -503,6 +473,7 @@ function WorkspaceContent({
     navigationCatalog,
     selectedAgentId,
     visibleThreadId,
+    conversationThreadId,
     selectedAgent,
     agentsLoading,
     sessionsLoading,
@@ -623,14 +594,16 @@ function WorkspaceContent({
             <AssistantInstructions instructions={assistantInstructions} />
           ) : null}
           <ToolUiLocaleProvider locale={locale}>
-            {agentsLoading || (sessionsLoading && !visibleThreadId) ? (
+            {agentsLoading ||
+            (!conversationThreadId &&
+              (sessionsLoading || Boolean(selectedAgent))) ? (
               <div
                 className="grid h-full place-items-center text-sm text-muted-foreground"
                 role="status"
               >
                 {workspaceCopy[locale].loading}
               </div>
-            ) : selectedAgent && visibleThreadId ? (
+            ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
                 <Thread
                   autoFocus={false}
@@ -642,10 +615,8 @@ function WorkspaceContent({
                 />
               </WorkspaceThreadChromeContext.Provider>
             ) : (
-              <ConversationEmpty
+              <NoAgentEmpty
                 dictionary={dictionary}
-                agent={selectedAgent}
-                onCreateSession={createSession}
                 onNewAgent={openAgentBuilder}
                 builderAvailable={Boolean(agentCreator)}
                 onActionError={(reason) => setActionError(toError(reason))}

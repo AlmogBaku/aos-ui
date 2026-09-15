@@ -29,6 +29,75 @@ describe("AOS remote thread-list adapter", () => {
     expect(adapter.agentFor("researcher-remote-session")).toBe("researcher")
   })
 
+  it("adopts the provider-generated title and refreshes its Session metadata", async () => {
+    const getSession = vi.fn(async () => ({
+      id: "remote-session",
+      agentId: "researcher",
+      title: "Investigate runtime drafts",
+      archived: false,
+      updatedAt: "2026-09-15T18:00:00.000Z",
+      status: "idle" as const,
+    }))
+    const adapter = new AosThreadListAdapter({
+      getSession,
+    } as unknown as AosRemoteClient)
+
+    const stream = await adapter.generateTitle("remote-session")
+    const chunks = []
+    const reader = stream.getReader()
+    for (;;) {
+      const result = await reader.read()
+      if (result.done) break
+      chunks.push(result.value)
+    }
+
+    expect(chunks).toEqual([
+      { type: "part-start", path: [0], part: { type: "text" } },
+      {
+        type: "text-delta",
+        path: [0],
+        textDelta: "Investigate runtime drafts",
+      },
+      { type: "part-finish", path: [0] },
+    ])
+  })
+
+  it("does not poll while the provider title is still the Session ID", async () => {
+    const getSession = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "remote-session",
+        agentId: "researcher",
+        title: "remote-session",
+        archived: false,
+        updatedAt: "1970-01-01T00:00:00.000Z",
+        status: "idle" as const,
+      })
+      .mockResolvedValueOnce({
+        id: "remote-session",
+        agentId: "researcher",
+        title: "Provider title",
+        archived: false,
+        updatedAt: "2026-09-15T18:00:00.000Z",
+        status: "idle" as const,
+      })
+    const adapter = new AosThreadListAdapter({
+      getSession,
+    } as unknown as AosRemoteClient)
+
+    const stream = await adapter.generateTitle("remote-session")
+    const chunks = []
+    const reader = stream.getReader()
+    for (;;) {
+      const result = await reader.read()
+      if (result.done) break
+      chunks.push(result.value)
+    }
+
+    expect(chunks).toEqual([])
+    expect(getSession).toHaveBeenCalledTimes(1)
+  })
+
   it("pages Agent-scoped Session catalogs only when assistant-ui requests more", async () => {
     const listSessionCatalog = vi.fn(async (limit: number, offset: number) => ({
       sessions: Array.from({ length: offset === 0 ? 50 : 1 }, (_, index) => ({

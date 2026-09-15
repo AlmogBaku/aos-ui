@@ -9,6 +9,10 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useEffect, useMemo, useState } from "react"
+import {
+  useLocalRuntime,
+  useRemoteThreadListRuntime,
+} from "@assistant-ui/react"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
@@ -19,11 +23,13 @@ import type {
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import {
+  createFixtureChatModel,
   FixtureThreadListAdapter,
   useFixtureRuntimeBundle,
 } from "@/runtime-adapters/fixture/fixture-runtime"
 import {
   FIXTURE_NOW,
+  createFixtureWorkspace,
   type FixtureWorkspace,
   fixtureSessions,
 } from "@/runtime-adapters/fixture/fixture-workspace"
@@ -61,9 +67,11 @@ function asHarnessRuntime(bundle: WorkspaceFixtureRuntime): HarnessRuntime {
 function RegisteredDraftWorkspace({
   bundle,
   capture,
+  beforeDraftSelection,
 }: {
   bundle: WorkspaceFixtureRuntime
   capture: (bundle: WorkspaceFixtureRuntime) => void
+  beforeDraftSelection?: () => Promise<void>
 }) {
   useEffect(() => capture(bundle), [bundle, capture])
   return (
@@ -73,10 +81,98 @@ function RegisteredDraftWorkspace({
       runtime={{
         ...asHarnessRuntime(bundle),
         createSessionDraft: async () => {
+          await beforeDraftSelection?.()
           await bundle.assistantRuntime.threads.switchToNewThread()
           return bundle.assistantRuntime.threads.getState().mainThreadId
         },
       }}
+      now={FIXTURE_NOW}
+    />
+  )
+}
+
+class DraftPromotingThreadListAdapter extends FixtureThreadListAdapter {
+  promotedThreadId: string | null = null
+
+  override async initialize(threadId: string) {
+    const [existing] = await this.workspace.getSessionMetadata([threadId])
+    if (existing) return super.initialize(threadId)
+    const created = await this.workspace.createSession("agent-aster", {
+      title: "New Session",
+    })
+    this.promotedThreadId = created.threadId
+    return { remoteId: created.threadId, externalId: created.threadId }
+  }
+}
+
+function DraftPromotionRaceWorkspace({
+  capture,
+}: {
+  capture: (runtime: HarnessRuntime) => void
+}) {
+  const [workspace] = useState(() => createFixtureWorkspace())
+  const [threadList] = useState(
+    () => new DraftPromotingThreadListAdapter(workspace)
+  )
+  const chatModel = useMemo(
+    () => createFixtureChatModel(workspace, { streamDelayMs: 0 }),
+    [workspace]
+  )
+  const assistantRuntime = useRemoteThreadListRuntime({
+    adapter: threadList,
+    runtimeHook: function useFixtureThreadRuntime() {
+      return useLocalRuntime(chatModel)
+    },
+  })
+  const filteredWorkspace = useMemo(() => {
+    const getSessionMetadata = async (threadIds: string[]) =>
+      (await workspace.getSessionMetadata(threadIds)).filter(
+        ({ threadId }) => threadId !== threadList.promotedThreadId
+      )
+    return {
+      listAgents: () => workspace.listAgents(),
+      refreshAgents: () => workspace.refreshAgents(),
+      createSession: (
+        agentId: string,
+        options?: Parameters<WorkspaceAdapter["createSession"]>[1]
+      ) => workspace.createSession(agentId, options),
+      getSessionMetadata,
+      subscribeSessionMetadata(
+        threadIds: readonly string[],
+        listener: Parameters<
+          NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
+        >[1]
+      ) {
+        let active = true
+        queueMicrotask(() => {
+          void getSessionMetadata([...threadIds]).then((metadata) => {
+            if (active) listener(metadata)
+          })
+        })
+        return () => {
+          active = false
+        }
+      },
+    } satisfies WorkspaceAdapter
+  }, [threadList, workspace])
+  const runtime = useMemo<HarnessRuntime>(
+    () => ({
+      assistantRuntime,
+      workspace: filteredWorkspace,
+      activityCoverage: "workspace",
+      createSessionDraft: async () => {
+        await assistantRuntime.threads.switchToNewThread()
+        return assistantRuntime.threads.getState().mainThreadId
+      },
+    }),
+    [assistantRuntime, filteredWorkspace]
+  )
+  useEffect(() => capture(runtime), [capture, runtime])
+  return (
+    <AosUiWorkspace
+      runtime={runtime}
+      locale="en"
+      dictionary={en}
       now={FIXTURE_NOW}
     />
   )
@@ -240,8 +336,84 @@ describe("reversible local Session tabs", () => {
     expect(bundle!.assistantRuntime.threads.getState().mainThreadId).toBe(
       draftId
     )
+    expect(
+      await screen.findByRole("heading", {
+        name: "What would you like to work on?",
+      })
+    ).toBeVisible()
+    expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
+    expect(screen.queryByText("Start your first session")).toBeNull()
     expect(create).not.toHaveBeenCalled()
     expect(window.location.pathname).toBe("/agent-aster")
+  })
+
+  it("keeps a promoted draft selected until provider metadata confirms it", async () => {
+    const user = userEvent.setup()
+    let runtime: HarnessRuntime | undefined
+    render(
+      <DraftPromotionRaceWorkspace
+        capture={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const newSession = (
+      await screen.findAllByRole("button", { name: en.actions.newSession })
+    ).find((candidate) => candidate.closest("[data-session-actions]"))
+    expect(newSession).toBeDefined()
+    await user.click(newSession!)
+    await screen.findByRole("textbox", { name: "Message input" })
+    const draftId = runtime!.assistantRuntime.threads.getState().mainThreadId
+
+    await act(async () => {
+      await runtime!.assistantRuntime.threads.mainItem.initialize()
+    })
+    const promotedId =
+      runtime!.assistantRuntime.threads.getState().threadItems[draftId]
+        ?.remoteId
+    expect(promotedId).toMatch(/^fixture-session-/u)
+
+    await act(
+      async () => await new Promise((resolve) => window.setTimeout(resolve, 50))
+    )
+    expect(runtime!.assistantRuntime.threads.getState().mainThreadId).toBe(
+      draftId
+    )
+    expect(window.location.pathname).toBe(`/agent-aster/${promotedId}`)
+    expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
+  })
+
+  it("hides the previous conversation while local draft selection is pending", async () => {
+    const user = userEvent.setup()
+    const draftGate = deferred<void>()
+    render(
+      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
+        {(bundle) => (
+          <RegisteredDraftWorkspace
+            bundle={bundle}
+            capture={() => undefined}
+            beforeDraftSelection={() => draftGate.promise}
+          />
+        )}
+      </ControlledWorkspaceFixture>
+    )
+
+    await screen.findByText("Test response")
+    const sessionActions = document.querySelector("[data-session-actions]")
+    expect(sessionActions).not.toBeNull()
+    await user.click(
+      within(sessionActions as HTMLElement).getByRole("button", {
+        name: en.actions.newSession,
+      })
+    )
+
+    expect(await screen.findByText("Loading workspace…")).toBeVisible()
+    expect(screen.queryByText("Test response")).toBeNull()
+
+    await act(async () => draftGate.resolve())
+    expect(
+      await screen.findByRole("textbox", { name: "Message input" })
+    ).toBeVisible()
   })
 
   it("applies browser navigation while a previous Session switch is finishing", async () => {
@@ -524,6 +696,11 @@ describe("Agent management", () => {
     expect(
       within(
         await screen.findByRole("main", { name: "Conversation" })
+      ).getByRole("heading", { name: "What would you like to work on?" })
+    ).toBeVisible()
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "Agent details" })
       ).getByText("Agent Creator")
     ).toBeVisible()
   })
@@ -540,7 +717,7 @@ describe("Agent management", () => {
 
     expect(
       await within(
-        screen.getByRole("main", { name: "Conversation" })
+        screen.getByRole("complementary", { name: "Agent details" })
       ).findByText("Agent Creator")
     ).toBeVisible()
   })
@@ -1315,23 +1492,39 @@ describe("AosUiApp fixture composition", () => {
         screen.queryByText(/Applied AI is accelerating fastest/)
       ).not.toBeInTheDocument()
     )
-    expect(screen.getByText(en.empty.conversationTitle)).toBeInTheDocument()
-    expect(screen.queryByRole("textbox", { name: "Message input" })).toBeNull()
+    expect(
+      await screen.findByRole("heading", {
+        name: "What would you like to work on?",
+      })
+    ).toBeVisible()
+    expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
+    expect(screen.queryByText("Start your first session")).toBeNull()
     expect(document.querySelector('[data-slot="todo-dock"]')).toBeNull()
   })
 
-  it("exposes one session-creation action when the selected Agent has no Sessions", async () => {
+  it("exposes tab-bar and inspector creation actions with no Sessions", async () => {
     const user = userEvent.setup()
     render(<EmptyAgentFixture />)
 
     await user.click(await screen.findByRole("button", { name: "Empty" }))
 
+    const actions = await screen.findAllByRole("button", {
+      name: en.actions.newSession,
+    })
+    expect(actions).toHaveLength(2)
     expect(
-      await screen.findAllByRole("button", { name: en.actions.newSession })
-    ).toHaveLength(1)
+      actions.some((button) => button.closest("[data-session-actions]"))
+    ).toBe(true)
+    expect(
+      within(
+        screen.getByRole("complementary", {
+          name: en.workspace.agentDetails,
+        })
+      ).getByRole("button", { name: en.actions.newSession })
+    ).toBeVisible()
   })
 
-  it("identifies the selected Agent in the empty conversation launch state", async () => {
+  it("identifies the selected Agent beside the shared empty conversation", async () => {
     const user = userEvent.setup()
     render(<EmptyAgentFixture />)
 
@@ -1339,7 +1532,9 @@ describe("AosUiApp fixture composition", () => {
 
     expect(
       within(
-        screen.getByRole("main", { name: en.workspace.conversation })
+        screen.getByRole("complementary", {
+          name: en.workspace.agentDetails,
+        })
       ).getByText("Empty")
     ).toBeVisible()
   })
@@ -1491,11 +1686,11 @@ describe("AosUiApp fixture composition", () => {
     await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: "Empty" }))
     await user.click(
-      (
-        await screen.findAllByRole("button", {
-          name: en.actions.newSession,
+      within(
+        screen.getByRole("complementary", {
+          name: en.workspace.agentDetails,
         })
-      ).find((button) => button.textContent === en.actions.newSession)!
+      ).getByRole("button", { name: en.actions.newSession })
     )
 
     expect(await screen.findByRole("alert")).toHaveTextContent(

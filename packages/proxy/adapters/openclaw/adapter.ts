@@ -196,9 +196,10 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.getSession(agentId, runtimeSessionId)
   }
 
-  async createSession(_agentId: string, _title?: string): Promise<unknown> {
-    void [_agentId, _title]
-    throw new OpenClawAdapterUnavailableError()
+  async createSession(agentId: string, _title?: string): Promise<unknown> {
+    void _title
+    await this.#start()
+    return this.#workspace.createSession(agentId)
   }
 
   async mutateSession(
@@ -393,7 +394,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
             }
           : unavailable("temporarily-unavailable"),
         sessionDetail: operation,
-        sessionCreation: unavailable("native-session-create-unavailable"),
+        sessionCreation: operation,
         sessionTitle: unavailable("native-session-title-unavailable"),
         sessionArchival: unavailable("native-session-archive-unavailable"),
         sessionDeletion: unavailable("native-session-delete-unavailable"),

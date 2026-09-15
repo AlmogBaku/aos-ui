@@ -75,6 +75,11 @@ type TodoSnapshot = {
   error: Error | null
 }
 
+type ConversationDraftSelection = {
+  agentId: string
+  threadId: string | null
+}
+
 /** Coordinates URL selection and provider-owned Session metadata, never messages. */
 export function useWorkspaceNavigation({
   bundle,
@@ -138,6 +143,10 @@ export function useWorkspaceNavigation({
   const desiredThread = useRef<string | null>(null)
   const localDraftAgent = useRef<string | null>(null)
   const localDraftId = useRef<string | null>(null)
+  const localDraftRemoteId = useRef<string | null>(null)
+  const localDraftOperation = useRef<symbol | null>(null)
+  const [conversationDraft, setConversationDraft] =
+    useState<ConversationDraftSelection | null>(null)
   const pendingSelection = useRef<symbol | null>(null)
   const appliedPathname = useRef<string | null>(null)
   const routeTransitionPathname = useRef<string | null>(null)
@@ -205,6 +214,13 @@ export function useWorkspaceNavigation({
     )
       ? activeThreadId
       : null
+  const conversationThreadId = conversationDraft
+    ? conversationDraft.agentId === selectedAgentId &&
+      conversationDraft.threadId !== null &&
+      mainItemId === conversationDraft.threadId
+      ? conversationDraft.threadId
+      : null
+    : visibleThreadId
 
   const updateRoute = useCallback(
     (selection: WorkspaceSelection, mode: "push" | "replace") => {
@@ -234,8 +250,11 @@ export function useWorkspaceNavigation({
 
   const selectRuntimeThread = useCallback(
     async (threadId: string) => {
+      localDraftOperation.current = null
       localDraftAgent.current = null
       localDraftId.current = null
+      localDraftRemoteId.current = null
+      setConversationDraft(null)
       const operation = Symbol("selection")
       pendingSelection.current = operation
       desiredThread.current = threadId
@@ -254,20 +273,43 @@ export function useWorkspaceNavigation({
   )
   const switchToNewThread = useCallback(
     async (agentId: string) => {
+      const operation = Symbol("local-draft")
+      localDraftOperation.current = operation
       localDraftAgent.current = agentId
+      localDraftId.current = null
+      localDraftRemoteId.current = null
+      setConversationDraft({ agentId, threadId: null })
+
+      const publishDraft = (draftId: string) => {
+        const state = runtime.threads.getState()
+        const selectedItem = state.threadItems[state.mainThreadId]
+        if (
+          localDraftOperation.current !== operation ||
+          localDraftAgent.current !== agentId ||
+          (state.mainThreadId !== draftId && selectedItem?.id !== draftId)
+        ) {
+          return
+        }
+        localDraftId.current = draftId
+        setConversationDraft({ agentId, threadId: draftId })
+      }
+
       try {
         const draftId = await createSessionDraft?.(agentId)
         if (draftId) {
-          localDraftId.current = draftId
+          publishDraft(draftId)
           return true
         }
         await runtime.threads.switchToNewThread()
-        localDraftId.current = runtime.threads.getState().mainThreadId
+        publishDraft(runtime.threads.getState().mainThreadId)
         return false
       } catch (error) {
-        if (localDraftAgent.current === agentId) {
+        if (localDraftOperation.current === operation) {
+          localDraftOperation.current = null
           localDraftAgent.current = null
           localDraftId.current = null
+          localDraftRemoteId.current = null
+          setConversationDraft(null)
         }
         throw error
       }
@@ -279,8 +321,9 @@ export function useWorkspaceNavigation({
     const agentId = localDraftAgent.current
     if (!agentId || !activeThreadId || mainItemId !== localDraftId.current)
       return
-    localDraftAgent.current = null
-    localDraftId.current = null
+    if (localDraftRemoteId.current === activeThreadId) return
+    localDraftRemoteId.current = activeThreadId
+    localDraftOperation.current = null
     setPreferredAgentId(agentId)
     setManuallyOpened((current) => ({
       ...current,
@@ -289,6 +332,21 @@ export function useWorkspaceNavigation({
     lastSelected.current.set(agentId, activeThreadId)
     updateRoute({ agentId, sessionId: activeThreadId }, "replace")
   }, [activeThreadId, mainItemId, updateRoute])
+
+  useEffect(() => {
+    if (
+      !visibleThreadId ||
+      activeThreadId !== visibleThreadId ||
+      !localDraftId.current ||
+      mainItemId !== localDraftId.current
+    )
+      return
+    localDraftOperation.current = null
+    localDraftAgent.current = null
+    localDraftId.current = null
+    localDraftRemoteId.current = null
+    setConversationDraft(null)
+  }, [activeThreadId, mainItemId, visibleThreadId])
 
   useEffect(() => {
     if (threadState.isLoading) return
@@ -860,6 +918,11 @@ export function useWorkspaceNavigation({
         : (nextAgents.find(isRosterAgent)?.id ?? null)
     )
     if (!nextAgents.some(isRosterAgent)) {
+      localDraftOperation.current = null
+      localDraftAgent.current = null
+      localDraftId.current = null
+      localDraftRemoteId.current = null
+      setConversationDraft(null)
       desiredThread.current = null
       await runtime.threads.switchToNewThread()
     }
@@ -888,6 +951,7 @@ export function useWorkspaceNavigation({
     navigationCatalog,
     selectedAgentId,
     visibleThreadId,
+    conversationThreadId,
     selectedAgent,
     agentsLoading,
     sessionsLoading,

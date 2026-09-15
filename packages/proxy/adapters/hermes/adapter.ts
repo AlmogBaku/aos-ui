@@ -1395,9 +1395,11 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     if (!session) return "idle" as const
     if (!isRecord(session)) throw new HermesUnavailableError()
     if (session.status === "waiting") return "waiting" as const
-    if (session.status === "working" || session.status === "starting")
-      return "running" as const
-    if (session.status === "idle") return "idle" as const
+    if (session.status === "working") return "running" as const
+    // A cold Session is submit-ready: Hermes claims the prompt and waits for
+    // its deferred agent build. Treating this as busy drops the first message.
+    if (session.status === "starting" || session.status === "idle")
+      return "idle" as const
     throw new HermesUnavailableError()
   }
 
@@ -1646,13 +1648,12 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     const catalog = await this.listAgents()
     if (!catalog.agents.some(({ summary }) => summary.id === profile))
       throw new HermesAgentNotFoundError()
-    const sessionTitle = title ?? "New Session"
     let payload: unknown
     try {
       payload = await this.transport.request("session.create", {
         profile,
         close_on_disconnect: false,
-        title: sessionTitle,
+        ...(title ? { title } : {}),
       })
     } catch (error) {
       throwUnavailable(error)

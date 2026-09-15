@@ -275,7 +275,7 @@ async function* reconnectingSse(
   onEvent?: (event: AosSessionSignalEvent) => void
 ) {
   let response = initial
-  let reconnected = false
+  let runStartedForwarded = false
   let terminal = false
   let after: number | undefined
   while (true) {
@@ -305,7 +305,10 @@ async function* reconnectingSse(
             interrupted = true
             break
           }
-          if (reconnected && event?.type === "RUN_STARTED") continue
+          if (event?.type === "RUN_STARTED") {
+            if (runStartedForwarded) continue
+            runStartedForwarded = true
+          }
           const signalEvent = sessionSignalEvent(event)
           if (signalEvent) onEvent?.(signalEvent)
           terminal =
@@ -329,7 +332,6 @@ async function* reconnectingSse(
       if (buffered) yield new TextEncoder().encode(buffered)
       return
     }
-    reconnected = true
     response = await reconnect(after)
   }
 }
@@ -371,6 +373,7 @@ function reconnectingResponse(
 export function createAosRunAgent({
   agentId,
   threadId,
+  resolveThreadId,
   fetcher = globalThis.fetch.bind(globalThis),
   stageAttachments,
   basePath = "/api/aos/v1",
@@ -384,6 +387,7 @@ export function createAosRunAgent({
 }: {
   agentId: string
   threadId: string
+  resolveThreadId?: () => string | Promise<string>
   fetcher?: typeof fetch
   stageAttachments?: (
     threadId: string,
@@ -413,13 +417,18 @@ export function createAosRunAgent({
       throw new Error("Invalid AOS run request")
     }
     const input = RunAgentInputSchema.parse(candidate)
+    const resolvedThreadId = resolveThreadId
+      ? await resolveThreadId()
+      : threadId
+    if (!resolvedThreadId) throw new Error("AOS Session is not initialized")
+    const resolvedUrl = `${basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(resolvedThreadId)}/runs`
     const resume = input.resume?.length ? input.resume : undefined
     const message = input.messages.at(-1)
     if (!resume && (!message || message.role !== "user"))
       throw new Error("AOS runs require a trailing user turn")
     const staged = attachmentsForStage(!resume ? message : undefined)
     const stage = staged.length
-      ? await stageAttachments?.(threadId, staged)
+      ? await stageAttachments?.(resolvedThreadId, staged)
       : undefined
     if (staged.length && !stage)
       throw new Error("AOS attachment staging is unavailable")
@@ -470,7 +479,7 @@ export function createAosRunAgent({
       credentials: "same-origin",
       headers,
       body: JSON.stringify({
-        threadId: input.threadId,
+        threadId: resolvedThreadId,
         runId: input.runId,
         ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
         state: {},
@@ -492,8 +501,10 @@ export function createAosRunAgent({
         ...(resume ? { resume } : {}),
       }),
     } satisfies RequestInit
-    const response = await friendlyErrorResponse(await fetcher(url, request))
-    const reconnectUrl = `${url}/reconnect`
+    const response = await friendlyErrorResponse(
+      await fetcher(resolvedUrl, request)
+    )
+    const reconnectUrl = `${resolvedUrl}/reconnect`
     return reconnectingResponse(
       response,
       async (after) =>
@@ -501,7 +512,7 @@ export function createAosRunAgent({
           await fetcher(reconnectUrl, {
             ...request,
             body: JSON.stringify({
-              threadId: input.threadId,
+              threadId: resolvedThreadId,
               runId: input.runId,
               ...(after === undefined ? {} : { after }),
             }),
@@ -516,7 +527,7 @@ export function createAosRunAgent({
               .object({ "aos.composerPrefill": z.string().max(1_048_576) })
               .safeParse(event.result)
             if (
-              event.threadId === input.threadId &&
+              event.threadId === resolvedThreadId &&
               event.runId === input.runId &&
               result.success &&
               new TextEncoder().encode(result.data["aos.composerPrefill"])
@@ -1306,6 +1317,14 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
+    return this.transcribeForAgent(this.#owner(threadId), audio, signal)
+  }
+
+  async transcribeForAgent(
+    agentId: string,
+    audio: Blob,
+    signal?: AbortSignal
+  ) {
     if (!audio.size || !audio.type)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
     const request = SessionTranscriptionRequestSchema.safeParse({
@@ -1314,9 +1333,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     })
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
-    const agentId = this.#owner(threadId)
     const path = `/agents/${encodeURIComponent(agentId)}/audio/transcribe`
-    const scope = this.#eventScope(agentId, threadId)
     const response = await this.#read(
       path,
       SessionTranscriptionResponseSchema,
@@ -1325,19 +1342,20 @@ export class AosRemoteClient implements WorkspaceAdapter {
         signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request.data),
-      },
-      scope
+      }
     )
     return response.transcript
   }
 
   async speak(threadId: string, text: string, signal?: AbortSignal) {
+    return this.speakForAgent(this.#owner(threadId), text, signal)
+  }
+
+  async speakForAgent(agentId: string, text: string, signal?: AbortSignal) {
     const request = SessionSpeechRequestSchema.safeParse({ text })
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid speech input")
-    const agentId = this.#owner(threadId)
     const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
-    const scope = this.#eventScope(agentId, threadId)
     return this.#readBlob(
       path,
       {
@@ -1345,8 +1363,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
         signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request.data),
-      },
-      scope
+      }
     )
   }
 

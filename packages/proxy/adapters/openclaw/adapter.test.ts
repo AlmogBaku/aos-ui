@@ -54,6 +54,8 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
           },
         ],
       }
+    if (method === "sessions.create")
+      return { ok: true, key: sessionKey, sessionId: "main" }
     if (method === "chat.history")
       return {
         messages: [
@@ -130,6 +132,27 @@ describe("OpenClaw ServerRuntime assembly", () => {
     )
   })
 
+  it("creates native Sessions without imposing a title", async () => {
+    const gateway = client()
+    const adapter = new OpenClawServerAdapter({
+      client: gateway,
+      runs: engine(),
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(
+      adapter.createSession("research", "New Session")
+    ).resolves.toEqual({
+      session: { id: sessionKey, agentId: "research" },
+    })
+    expect(gateway.request).toHaveBeenCalledWith("sessions.create", {
+      agentId: "research",
+    })
+    await expect(adapter.runtimeInfo()).resolves.toMatchObject({
+      capabilities: { sessionCreation: { status: "available" } },
+    })
+  })
+
   it("fails closed for unproven mutations and maps only bounded provider outcomes", async () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
@@ -138,9 +161,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: async () => () => undefined,
     })
 
-    await expect(adapter.createSession("research")).rejects.toBeInstanceOf(
-      OpenClawAdapterUnavailableError
-    )
     await expect(
       adapter.mutateSession("research", sessionKey, "DELETE")
     ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)

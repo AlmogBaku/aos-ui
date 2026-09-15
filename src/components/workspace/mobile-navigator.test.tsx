@@ -296,6 +296,9 @@ describe("MobileNavigator", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }))
     expect(screen.getByText("Current investigation")).toBeVisible()
 
+    expect(screen.getAllByRole("button", { name: "New Session" })).toHaveLength(
+      1
+    )
     fireEvent.click(screen.getByRole("button", { name: "New Session" }))
     expect(props.onCreateSession).toHaveBeenCalledWith("agent-a")
     expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })

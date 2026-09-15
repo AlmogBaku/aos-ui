@@ -50,6 +50,9 @@ export async function createAosSessionDraft(
       const item = state.threadItems[state.mainThreadId]
       if (!item || item.remoteId || item.externalId)
         throw new Error("AOS draft did not create a local thread")
+      const thread = runtime.threads.getById(state.mainThreadId)
+      thread.reset([])
+      await thread.composer.reset()
       registry.record(state.mainThreadId, agentId)
       return state.mainThreadId
     })

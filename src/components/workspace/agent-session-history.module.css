@@ -5,12 +5,28 @@
   flex-direction: column;
 }
 
+.historyControls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.5rem;
+}
+
 .searchField {
   display: flex;
+  min-inline-size: 0;
+  flex: 1;
   align-items: center;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--background);
+}
+
+.createSessionButton {
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  flex: none;
+  color: var(--muted-foreground);
 }
 
 .searchField:focus-within {
