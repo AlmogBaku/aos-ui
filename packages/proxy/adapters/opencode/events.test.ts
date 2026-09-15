@@ -9,85 +9,88 @@ const scope = {
   runId: "run-1",
 }
 
-function native(
-  id: number,
+function durable(
+  seq: number,
   type: string,
-  properties: Record<string, unknown> = {}
+  data: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {}
 ) {
   return {
-    id: String(id),
-    event: "session",
-    data: {
-      type,
-      properties: { sessionID: scope.sessionId, ...properties },
+    id: `native-${seq}`,
+    type,
+    durable: {
+      aggregateID: scope.sessionId,
+      seq,
+      version:
+        type === "session.next.step.ended" ||
+        type === "session.next.step.failed"
+          ? 2
+          : 1,
     },
+    data: { sessionID: scope.sessionId, ...data },
+    ...overrides,
+  }
+}
+
+function live(
+  seq: number,
+  type: string,
+  data: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    id: String(seq),
+    event: "session",
+    data: durable(seq, type, data, overrides),
   }
 }
 
 describe("OpenCodeEventProjector", () => {
-  it("orders validated reasoning, text, tools, progress, usage, and terminal lifecycle as AG-UI", () => {
+  it("orders real durable reasoning, text, tools, progress, usage, and authoritative finish as AG-UI", () => {
     const projector = new OpenCodeEventProjector(scope, 0)
     const events = [
-      native(1, "session.next.reasoning.started", {
+      live(1, "session.next.reasoning.started", {
         assistantMessageID: "assistant-1",
         reasoningID: "reasoning-1",
         timestamp: 1,
       }),
-      native(2, "session.next.reasoning.delta", {
-        assistantMessageID: "assistant-1",
-        reasoningID: "reasoning-1",
-        delta: "th",
-        timestamp: 2,
-      }),
-      native(3, "session.next.reasoning.ended", {
+      live(2, "session.next.reasoning.ended", {
         assistantMessageID: "assistant-1",
         reasoningID: "reasoning-1",
         text: "think",
+        timestamp: 2,
+      }),
+      live(3, "session.next.text.started", {
+        assistantMessageID: "assistant-1",
+        textID: "text-1",
         timestamp: 3,
       }),
-      native(4, "session.next.text.started", {
-        assistantMessageID: "assistant-1",
-        textID: "text-1",
-        timestamp: 4,
-      }),
-      native(5, "session.next.text.delta", {
-        assistantMessageID: "assistant-1",
-        textID: "text-1",
-        delta: "Hi",
-        timestamp: 5,
-      }),
-      native(6, "session.next.text.ended", {
+      live(4, "session.next.text.ended", {
         assistantMessageID: "assistant-1",
         textID: "text-1",
         text: "Hi there",
-        timestamp: 6,
+        timestamp: 4,
       }),
-      native(7, "session.next.tool.input.started", {
+      live(5, "session.next.tool.input.started", {
         assistantMessageID: "assistant-1",
         callID: "call-1",
         name: "read",
-        timestamp: 7,
+        timestamp: 5,
       }),
-      native(8, "session.next.tool.input.delta", {
-        assistantMessageID: "assistant-1",
-        callID: "call-1",
-        delta: '{"path":',
-        timestamp: 8,
-      }),
-      native(9, "session.next.tool.input.ended", {
+      live(6, "session.next.tool.input.ended", {
         assistantMessageID: "assistant-1",
         callID: "call-1",
         text: '{"path":"README.md"}',
-        timestamp: 9,
+        timestamp: 6,
       }),
-      native(10, "session.next.tool.progress", {
+      live(7, "session.next.tool.progress", {
         assistantMessageID: "assistant-1",
         callID: "call-1",
         structured: { ignoredNativePath: "/private/worktree" },
         content: [{ type: "text", text: "Reading" }],
-        timestamp: 10,
+        timestamp: 7,
       }),
-      native(11, "session.next.tool.success", {
+      live(8, "session.next.tool.success", {
         assistantMessageID: "assistant-1",
         callID: "call-1",
         structured: {},
@@ -101,9 +104,9 @@ describe("OpenCodeEventProjector", () => {
         ],
         provider: { executed: true },
         outputPaths: ["/private/worktree/README.md"],
-        timestamp: 11,
+        timestamp: 8,
       }),
-      native(12, "session.next.step.ended", {
+      live(9, "session.next.step.ended", {
         assistantMessageID: "assistant-1",
         finish: "stop",
         cost: 0.01,
@@ -113,39 +116,32 @@ describe("OpenCodeEventProjector", () => {
           reasoning: 5,
           cache: { read: 3, write: 2 },
         },
-        timestamp: 12,
+        timestamp: 9,
       }),
-      native(13, "session.idle"),
     ].flatMap((event) => projector.accept(event).events)
+    events.push(...projector.finish().events)
 
     expect(events.map((event) => event.type)).toEqual([
       EventType.REASONING_MESSAGE_START,
       EventType.REASONING_MESSAGE_CONTENT,
-      EventType.REASONING_MESSAGE_CONTENT,
       EventType.REASONING_MESSAGE_END,
       EventType.TEXT_MESSAGE_START,
       EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TEXT_MESSAGE_CONTENT,
       EventType.TEXT_MESSAGE_END,
       EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
       EventType.TOOL_CALL_ARGS,
       EventType.ACTIVITY_SNAPSHOT,
       EventType.TOOL_CALL_END,
       EventType.TOOL_CALL_RESULT,
       EventType.RUN_FINISHED,
     ])
-    expect(events[2]).toMatchObject({ delta: "ink" })
-    expect(events[6]).toMatchObject({ delta: " there" })
-    expect(events[11]).toMatchObject({
+    expect(events[8]).toMatchObject({
       activityType: "PROGRESS",
       content: { callId: "call-1", status: "running", text: "Reading" },
     })
-    expect(events[13]).toMatchObject({ content: "contents" })
+    expect(events[10]).toMatchObject({ content: "contents" })
     expect(JSON.stringify(events)).not.toContain("/private/worktree")
     expect(events.at(-1)).toMatchObject({
-      threadId: scope.threadId,
-      runId: scope.runId,
       usage: [
         {
           inputTokens: 11,
@@ -161,95 +157,149 @@ describe("OpenCodeEventProjector", () => {
       expect(EventSchemas.safeParse(event).success).toBe(true)
   })
 
-  it("ignores foreign and duplicate Session events without advancing its durable position", () => {
-    const projector = new OpenCodeEventProjector(scope, 4)
+  it("accepts the real durable tool failure shape and emits a safe terminal tool result", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    projector.accept(
+      live(1, "session.next.tool.input.started", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        name: "read",
+        timestamp: 1,
+      })
+    )
 
     expect(
-      projector.accept({
-        ...native(5, "session.next.text.ended", {
-          assistantMessageID: "assistant-foreign",
-          textID: "text-foreign",
-          text: 42,
-          timestamp: 5,
-        }),
-        data: {
-          type: "session.next.text.ended",
-          properties: { sessionID: "session-foreign", text: 42 },
+      projector.accept(
+        live(2, "session.next.tool.failed", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          error: { type: "unknown", message: "secret native failure" },
+          provider: { executed: true },
+          timestamp: 2,
+        })
+      )
+    ).toEqual({
+      events: [
+        { type: EventType.TOOL_CALL_END, toolCallId: "call-1" },
+        {
+          type: EventType.TOOL_CALL_RESULT,
+          messageId: "assistant-1:tool:call-1",
+          toolCallId: "call-1",
+          content: '{"status":"error"}',
+          role: "tool",
         },
-      })
-    ).toEqual({ events: [] })
-    expect(projector.accept(native(4, "session.idle"))).toEqual({ events: [] })
-    expect(projector.recoveryPosition()).toEqual({
-      epoch: "opencode:session-1",
-      lastSeen: 4,
+      ],
     })
   })
 
-  it("rejects a malformed known native event before conversion", () => {
+  it("validates the complete native durable envelope and rejects foreign aggregate correlation", () => {
     const projector = new OpenCodeEventProjector(scope, 0)
+    const malformed = live(
+      1,
+      "session.next.text.started",
+      {
+        assistantMessageID: "assistant-1",
+        textID: "text-1",
+        timestamp: 1,
+      },
+      { durable: { aggregateID: "foreign", seq: 1, version: 1 } }
+    )
+
+    expect(() => projector.accept(malformed)).toThrow(
+      OpenCodeEventValidationError
+    )
+    expect(projector.recoveryPosition().lastSeen).toBe(0)
 
     expect(() =>
       projector.accept(
-        native(1, "session.next.text.delta", {
-          assistantMessageID: "assistant-1",
-          textID: "text-1",
-          delta: 42,
-          timestamp: 1,
-        })
+        live(
+          1,
+          "session.next.step.ended",
+          {
+            assistantMessageID: "assistant-1",
+            finish: "stop",
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            timestamp: 1,
+          },
+          { durable: { aggregateID: scope.sessionId, seq: 1, version: 1 } }
+        )
       )
     ).toThrow(OpenCodeEventValidationError)
     expect(projector.recoveryPosition().lastSeen).toBe(0)
   })
 
-  it("repairs missed live deltas from a validated durable history event and deduplicates overlap", () => {
-    const projector = new OpenCodeEventProjector(scope, 8)
-    const history = {
-      id: "native-event-id",
-      type: "session.next.text.ended",
-      durable: { aggregateID: scope.sessionId, seq: 9, version: 1 },
-      data: {
-        sessionID: scope.sessionId,
-        assistantMessageID: "assistant-1",
-        textID: "text-1",
-        text: "Recovered text",
-        timestamp: 9,
-      },
-    }
+  it("rejects forward gaps and unknown durable event types without advancing", () => {
+    const projector = new OpenCodeEventProjector(scope, 3)
 
-    expect(projector.acceptHistory(history).events).toMatchObject([
-      { type: EventType.TEXT_MESSAGE_START, messageId: "assistant-1" },
-      {
-        type: EventType.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "Recovered text",
-      },
-      { type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
-    ])
-    expect(projector.acceptHistory(history)).toEqual({ events: [] })
-    expect(projector.recoveryPosition().lastSeen).toBe(9)
+    expect(() =>
+      projector.accept(
+        live(5, "session.next.text.started", {
+          assistantMessageID: "assistant-1",
+          textID: "text-1",
+          timestamp: 5,
+        })
+      )
+    ).toThrow(OpenCodeEventValidationError)
+    expect(() =>
+      projector.accept(live(4, "session.next.future.unknown", { timestamp: 4 }))
+    ).toThrow(OpenCodeEventValidationError)
+    expect(projector.recoveryPosition().lastSeen).toBe(3)
   })
 
-  it("maps the exact native Session error shape without exposing its provider message", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+  it("allowlists and validates intentionally ignored prompt admission events", () => {
+    const projector = new OpenCodeEventProjector(scope, 0, {
+      admissionId: "aos-admission",
+    })
 
     expect(
       projector.accept(
-        native(1, "session.error", {
-          error: {
-            name: "APIError",
-            data: { message: "Authorization=secret /private/worktree" },
-          },
+        live(1, "session.next.prompt.admitted", {
+          timestamp: 1,
+          messageID: "aos-admission",
+          prompt: { text: "Hello" },
+          delivery: "queue",
+        })
+      )
+    ).toEqual({ events: [], admissionId: "aos-admission" })
+    expect(projector.recoveryPosition().lastSeen).toBe(1)
+    expect(
+      projector.accept(
+        live(2, "session.next.prompt.admitted", {
+          timestamp: 2,
+          messageID: "next-admission",
+          prompt: { text: "Next" },
+          delivery: "queue",
         })
       )
     ).toEqual({
-      events: [
-        {
-          type: EventType.RUN_ERROR,
-          code: "AOS_PROVIDER_RUN_FAILED",
-          message: "OpenCode could not complete this run.",
-        },
-      ],
-      terminal: "error",
+      events: [],
+      admissionId: "next-admission",
+      admissionBoundary: true,
     })
+  })
+
+  it("repairs missed non-durable text deltas from a real durable ended event", () => {
+    const projector = new OpenCodeEventProjector(scope, 8)
+
+    expect(
+      projector.acceptHistory(
+        durable(9, "session.next.text.ended", {
+          assistantMessageID: "assistant-1",
+          textID: "text-1",
+          text: "Recovered text",
+          timestamp: 9,
+        })
+      ).events
+    ).toMatchObject([
+      { type: EventType.TEXT_MESSAGE_START, messageId: "assistant-1" },
+      { type: EventType.TEXT_MESSAGE_CONTENT, delta: "Recovered text" },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
+    ])
   })
 })

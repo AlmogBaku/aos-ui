@@ -21,26 +21,54 @@ import {
   type OpenCodeClient,
   type OpenCodeSessionEvents,
 } from "./client"
-import { OpenCodeEventProjector, OpenCodeEventValidationError } from "./events"
+import {
+  OpenCodeEventProjector,
+  OpenCodeEventValidationError,
+  validateOpenCodeHistoryEvent,
+  validateOpenCodeLiveEvent,
+  type ValidatedOpenCodeEvent,
+} from "./events"
 
 const MAX_HISTORY_PAGES = 1_000
 const MAX_USER_TURN_BYTES = 1024 * 1024
+const DEFAULT_MAX_QUEUE_EVENTS = 2_048
+const DEFAULT_MAX_BUFFERED_EVENTS = 1_024
+const DEFAULT_WAIT_RETRY_MS = 250
 
-export type OpenCodeBoundResume = (
-  scope: SessionScope,
-  resume: readonly ResumeEntry[]
-) => Promise<{ admittedSeq: number }>
+export type OpenCodeBoundResume = Readonly<{
+  /** Must prove every response is still bound to a pending native interaction. */
+  validate(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
+  /** Performs exactly one native 204 mutation after observation is attached. */
+  dispatch(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
+}>
 
 export type OpenCodeRunEngineOptions = Readonly<{
   resume?: OpenCodeBoundResume
+  maxQueueEvents?: number
+  maxBufferedEvents?: number
+  waitRetryMs?: number
 }>
 
 type ActiveRun = {
+  key: string
   scope: SessionScope
+  runId: string
   projector: OpenCodeEventProjector
   queue: EventQueue
+  controller: AbortController
   source?: OpenCodeSessionEvents
-  terminal: boolean
+  sourceAborted: boolean
+  buffer: Map<number, ValidatedOpenCodeEvent>
+  ready: boolean
+  segmentClosed: boolean
+  nativeTerminal: boolean
+  abandoned: boolean
+  reconciling: boolean
+  reconcileAgain: boolean
+  waiting: boolean
+  waitFailures: number
+  expectedAdmission?: string
+  admissionObserved: boolean
   settle(): void
   settled: Promise<void>
 }
@@ -48,12 +76,30 @@ type ActiveRun = {
 class EventQueue implements AsyncIterable<AGUIEvent> {
   readonly #values: AGUIEvent[] = []
   readonly #waiters: Array<() => void> = []
+  readonly #maximum: number
   #closed = false
 
+  constructor(maximum: number) {
+    this.#maximum = maximum
+  }
+
   push(event: AGUIEvent) {
-    if (this.#closed) return
+    if (this.#closed) return true
+    if (this.#values.length >= this.#maximum) return false
     this.#values.push(event)
     this.#waiters.shift()?.()
+    return true
+  }
+
+  resetWith(event: AGUIEvent) {
+    if (this.#closed) return
+    const started = this.#values.find(
+      (value) => value.type === EventType.RUN_STARTED
+    )
+    this.#values.length = 0
+    if (started && this.#maximum > 1) this.#values.push(started)
+    this.#values.push(event)
+    this.close()
   }
 
   close() {
@@ -84,6 +130,12 @@ function integer(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined
+}
+
+function positiveInteger(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : fallback
 }
 
 function isEmptyAuthority(value: unknown) {
@@ -170,7 +222,8 @@ function validateAdmission(
   expected: Readonly<{
     id: string
     sessionId: string
-    text?: string
+    text: string
+    after: number
   }>
 ) {
   const envelope = record(value)
@@ -180,22 +233,16 @@ function validateAdmission(
   if (
     !admission ||
     admittedSeq === undefined ||
+    admittedSeq <= expected.after ||
     admission.id !== expected.id ||
     admission.sessionID !== expected.sessionId ||
     (admission.delivery !== "queue" && admission.delivery !== "steer") ||
     typeof admission.timeCreated !== "number" ||
     !Number.isFinite(admission.timeCreated) ||
     !prompt ||
-    (expected.text !== undefined && prompt.text !== expected.text)
+    prompt.text !== expected.text
   )
     throw new OpenCodeMutationUncertainError()
-  return admittedSeq
-}
-
-function validateResumeAdmission(value: unknown) {
-  const result = record(value)
-  const admittedSeq = integer(result?.admittedSeq)
-  if (admittedSeq === undefined) throw new OpenCodeMutationUncertainError()
   return admittedSeq
 }
 
@@ -222,13 +269,33 @@ function settlement() {
   }
 }
 
+function runKey(scope: SessionScope) {
+  return `${scope.agentId}\0${scope.sessionId}`
+}
+
 export class OpenCodeRunEngine implements ServerRunEngine {
   readonly #client: OpenCodeClient
   readonly #options: OpenCodeRunEngineOptions
+  readonly #runs = new Map<string, ActiveRun>()
+  readonly #maxQueueEvents: number
+  readonly #maxBufferedEvents: number
+  readonly #waitRetryMs: number
 
   constructor(client: OpenCodeClient, options: OpenCodeRunEngineOptions = {}) {
     this.#client = client
     this.#options = options
+    this.#maxQueueEvents = positiveInteger(
+      options.maxQueueEvents,
+      DEFAULT_MAX_QUEUE_EVENTS
+    )
+    this.#maxBufferedEvents = positiveInteger(
+      options.maxBufferedEvents,
+      DEFAULT_MAX_BUFFERED_EVENTS
+    )
+    this.#waitRetryMs = positiveInteger(
+      options.waitRetryMs,
+      DEFAULT_WAIT_RETRY_MS
+    )
   }
 
   async start(
@@ -237,28 +304,61 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   ): Promise<ServerRunHandle> {
     const { input, resume, text } = validateInput(scope, candidate)
     await this.#verifyOwnership(scope)
-    if (await this.#active(scope.sessionId))
-      throw new Error("OpenCode is already running this Session")
 
-    let after: number
     if (resume) {
       if (!this.#options.resume)
         throw new Error("OpenCode interaction resume is unavailable")
-      after = validateResumeAdmission(await this.#options.resume(scope, resume))
-    } else {
-      const id = admissionId(scope, input.runId)
-      const acknowledgement = await this.#client.sessions.prompt(
-        scope.sessionId,
-        { id, prompt: { text: text! }, resume: true }
-      )
-      after = validateAdmission(acknowledgement, {
-        id,
-        sessionId: scope.sessionId,
-        text,
-      })
+      await this.#options.resume.validate(scope, resume)
+    } else if (await this.#active(scope.sessionId)) {
+      throw new Error("OpenCode is already running this Session")
     }
 
-    return await this.#observe(scope, input.runId, after)
+    const before = await this.#readHistory(scope.sessionId)
+    const baseline = before.at(-1)?.seq ?? -1
+    const expectedAdmission = resume
+      ? undefined
+      : admissionId(scope, input.runId)
+    const run = this.#createRun(scope, input.runId, baseline, expectedAdmission)
+
+    try {
+      await this.#attach(run, baseline)
+
+      // Observation is already draining while this second authoritative read
+      // closes the history-to-subscription window.
+      const caughtUp = await this.#readHistory(scope.sessionId, baseline)
+      if (caughtUp.length) {
+        if (!resume)
+          throw new Error("OpenCode became active before prompt admission")
+        const next = caughtUp.at(-1)!.seq
+        run.projector = this.#projector(run, next)
+        this.#discardBufferedThrough(run, next)
+      }
+      if (run.segmentClosed)
+        throw new Error("OpenCode observation failed before run mutation")
+
+      const after = run.projector.recoveryPosition().lastSeen
+      if (resume) {
+        await this.#options.resume!.dispatch(scope, resume)
+      } else {
+        const acknowledgement = await this.#client.sessions.prompt(
+          scope.sessionId,
+          { id: expectedAdmission!, prompt: { text: text! }, resume: true }
+        )
+        validateAdmission(acknowledgement, {
+          id: expectedAdmission!,
+          sessionId: scope.sessionId,
+          text: text!,
+          after,
+        })
+      }
+      run.ready = true
+      await this.#reconcile(run)
+      if (!run.nativeTerminal) this.#watchWait(run)
+      return this.#handle(run)
+    } catch (error) {
+      this.#abandon(run)
+      throw error
+    }
   }
 
   async recover(
@@ -271,85 +371,317 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       )
     await this.#verifyOwnership(scope)
     const expectedEpoch = `opencode:${scope.sessionId}`
-    const after =
-      request.position?.epoch === expectedEpoch ? request.position.lastSeen : 0
-    if (integer(after) === undefined)
+    if (
+      request.position &&
+      (request.position.epoch !== expectedEpoch ||
+        integer(request.position.lastSeen) === undefined)
+    )
       throw new Error("The reconnect position is invalid")
 
-    const run = this.#createRun(scope, request.runId, after)
-    run.source = await this.#client.sessions.events(scope.sessionId, {
-      after: String(after),
-    })
+    const requestedAfter = request.position?.lastSeen ?? -1
+    const expectedAdmission = admissionId(scope, request.runId)
+    const run = this.#createRun(
+      scope,
+      request.runId,
+      requestedAfter,
+      expectedAdmission
+    )
 
     try {
-      let cursor = after
-      for (
-        let pageNumber = 0;
-        pageNumber < MAX_HISTORY_PAGES;
-        pageNumber += 1
-      ) {
-        const page = historyPage(
-          await this.#client.sessions.history(scope.sessionId, {
-            after: cursor,
-            limit: 100,
-          })
-        )
-        for (const value of page.data)
-          this.#publish(run, run.projector.acceptHistory(value))
-        const next = run.projector.recoveryPosition().lastSeen
-        if (!page.hasMore) break
-        if (next <= cursor || pageNumber === MAX_HISTORY_PAGES - 1)
-          throw new OpenCodeClientError("invalid_response")
-        cursor = next
-      }
+      // Start consuming immediately. The bounded buffer remains live while the
+      // complete authoritative log is read and the requested interval located.
+      await this.#attach(run, requestedAfter)
+      const all = await this.#readHistory(scope.sessionId)
+      const admissionIndex = all.findIndex(
+        (event) =>
+          event.type === "session.next.prompt.admitted" &&
+          event.data.messageID === expectedAdmission
+      )
+      if (admissionIndex < 0)
+        throw new Error("OpenCode stable prompt admission was not found")
+      const admissionEvent = all[admissionIndex]!
+      const nextAdmissionIndex = all.findIndex(
+        (event, index) =>
+          index > admissionIndex &&
+          event.type === "session.next.prompt.admitted"
+      )
+      const intervalEnd =
+        nextAdmissionIndex < 0
+          ? (all.at(-1)?.seq ?? admissionEvent.seq)
+          : all[nextAdmissionIndex]!.seq - 1
+      const projectionStart = request.position
+        ? request.position.lastSeen
+        : admissionEvent.seq - 1
+      if (
+        projectionStart < admissionEvent.seq - 1 ||
+        projectionStart > intervalEnd
+      )
+        throw new Error("The reconnect position is outside this native run")
 
-      if (run.terminal) return this.#handle(run)
-      if (!(await this.#active(scope.sessionId))) {
-        this.#publish(run, run.projector.finish())
-        return this.#handle(run)
+      run.projector = this.#projector(
+        run,
+        projectionStart,
+        projectionStart < admissionEvent.seq ? expectedAdmission : undefined
+      )
+      run.admissionObserved = projectionStart >= admissionEvent.seq
+      for (const event of all) {
+        if (event.seq <= projectionStart || event.seq > intervalEnd) continue
+        this.#publish(run, run.projector.acceptValidated(event))
       }
+      this.#discardBufferedThrough(run, intervalEnd)
+      run.ready = true
+
+      if (nextAdmissionIndex >= 0) {
+        this.#finish(run)
+      } else {
+        await this.#reconcile(run)
+        if (!run.nativeTerminal) this.#watchWait(run)
+      }
+      return this.#handle(run)
     } catch (error) {
-      run.source.abort()
-      run.queue.close()
+      this.#abandon(run)
       throw error
     }
-    this.#pump(run)
-    return this.#handle(run)
   }
 
-  async #observe(scope: SessionScope, runId: string, after: number) {
-    const run = this.#createRun(scope, runId, after)
-    try {
-      run.source = await this.#client.sessions.events(scope.sessionId, {
-        after: String(after),
-      })
-      this.#pump(run)
-    } catch {
-      this.#publish(
-        run,
-        run.projector.fail(
-          "AOS_CONNECTION_INTERRUPTED",
-          "The OpenCode connection was interrupted; reconnect to reconcile this run."
-        ),
-        false
-      )
-    }
-    return this.#handle(run)
-  }
-
-  #createRun(scope: SessionScope, runId: string, after: number): ActiveRun {
-    const queue = new EventQueue()
+  #createRun(
+    scope: SessionScope,
+    runId: string,
+    after: number,
+    expectedAdmission?: string
+  ): ActiveRun {
+    const queue = new EventQueue(this.#maxQueueEvents)
     queue.push({ type: EventType.RUN_STARTED, threadId: scope.threadId, runId })
     return {
+      key: runKey(scope),
       scope,
+      runId,
       projector: new OpenCodeEventProjector(
         { sessionId: scope.sessionId, threadId: scope.threadId, runId },
-        after
+        after,
+        { admissionId: expectedAdmission }
       ),
       queue,
-      terminal: false,
+      controller: new AbortController(),
+      sourceAborted: false,
+      buffer: new Map(),
+      ready: false,
+      segmentClosed: false,
+      nativeTerminal: false,
+      abandoned: false,
+      reconciling: false,
+      reconcileAgain: false,
+      waiting: false,
+      waitFailures: 0,
+      expectedAdmission,
+      admissionObserved: expectedAdmission === undefined,
       ...settlement(),
     }
+  }
+
+  #projector(run: ActiveRun, after: number, expectedAdmission?: string) {
+    return new OpenCodeEventProjector(
+      {
+        sessionId: run.scope.sessionId,
+        threadId: run.scope.threadId,
+        runId: run.runId,
+      },
+      after,
+      { admissionId: expectedAdmission }
+    )
+  }
+
+  async #attach(run: ActiveRun, after: number) {
+    const prior = this.#runs.get(run.key)
+    if (prior && prior !== run) {
+      prior.abandoned = true
+      prior.controller.abort()
+      this.#abortSource(prior)
+      this.#segmentFail(
+        prior,
+        "AOS_CONNECTION_INTERRUPTED",
+        "This OpenCode observation was replaced by a newer scoped connection."
+      )
+    }
+    this.#runs.set(run.key, run)
+    run.source = await this.#client.sessions.events(
+      run.scope.sessionId,
+      after < 0 ? {} : { after: String(after) }
+    )
+    this.#pump(run)
+  }
+
+  #pump(run: ActiveRun) {
+    void (async () => {
+      try {
+        for await (const value of run.source!) {
+          if (run.abandoned || run.nativeTerminal) return
+          const event = validateOpenCodeLiveEvent(value, run.scope.sessionId)
+          const existing = run.buffer.get(event.seq)
+          if (existing && existing.fingerprint !== event.fingerprint)
+            throw new OpenCodeEventValidationError()
+          run.buffer.set(event.seq, event)
+          if (run.buffer.size > this.#maxBufferedEvents)
+            throw new OpenCodeEventValidationError()
+          if (run.ready) this.#scheduleReconcile(run)
+        }
+        if (!run.sourceAborted && !run.abandoned && !run.nativeTerminal)
+          this.#segmentFail(
+            run,
+            "AOS_CONNECTION_INTERRUPTED",
+            "The OpenCode connection was interrupted; reconnect to reconcile this run."
+          )
+      } catch (error) {
+        if (run.sourceAborted || run.abandoned || run.nativeTerminal) return
+        this.#segmentFail(
+          run,
+          error instanceof OpenCodeEventValidationError
+            ? "AOS_RESET_REQUIRED"
+            : "AOS_CONNECTION_INTERRUPTED",
+          error instanceof OpenCodeEventValidationError
+            ? "OpenCode history must be reconciled before this run can continue."
+            : "The OpenCode connection was interrupted; reconnect to reconcile this run."
+        )
+      }
+    })()
+  }
+
+  #scheduleReconcile(run: ActiveRun) {
+    if (run.reconciling) {
+      run.reconcileAgain = true
+      return
+    }
+    void this.#reconcile(run).catch((error) =>
+      this.#reconciliationFailed(run, error)
+    )
+  }
+
+  async #reconcile(run: ActiveRun) {
+    if (run.abandoned || run.nativeTerminal || !run.ready) return
+    if (run.reconciling) {
+      run.reconcileAgain = true
+      return
+    }
+    run.reconciling = true
+    try {
+      do {
+        run.reconcileAgain = false
+        let cleanIdlePasses = 0
+        for (let pass = 0; pass < 3; pass += 1) {
+          const before = run.projector.recoveryPosition().lastSeen
+          await this.#mergeAuthoritative(run)
+          const active = await this.#active(
+            run.scope.sessionId,
+            run.controller.signal
+          )
+          await this.#mergeAuthoritative(run)
+          const after = run.projector.recoveryPosition().lastSeen
+          const clean = after === before && run.buffer.size === 0
+          cleanIdlePasses = !active && clean ? cleanIdlePasses + 1 : 0
+          if (cleanIdlePasses >= 2) {
+            this.#finish(run)
+            return
+          }
+          if (active && clean) break
+        }
+      } while (run.reconcileAgain && !run.nativeTerminal && !run.abandoned)
+    } finally {
+      run.reconciling = false
+    }
+  }
+
+  async #mergeAuthoritative(run: ActiveRun) {
+    const after = run.projector.recoveryPosition().lastSeen
+    const history = await this.#readHistory(
+      run.scope.sessionId,
+      after,
+      run.controller.signal
+    )
+    const merged = new Map<number, ValidatedOpenCodeEvent>()
+    for (const event of history) merged.set(event.seq, event)
+    for (const [seq, event] of run.buffer) {
+      const existing = merged.get(seq)
+      if (existing && existing.fingerprint !== event.fingerprint)
+        throw new OpenCodeEventValidationError()
+      merged.set(seq, event)
+    }
+    for (const event of [...merged.values()].sort(
+      (left, right) => left.seq - right.seq
+    )) {
+      this.#publish(run, run.projector.acceptValidated(event))
+      run.buffer.delete(event.seq)
+    }
+  }
+
+  async #readHistory(sessionId: string, after?: number, signal?: AbortSignal) {
+    const events: ValidatedOpenCodeEvent[] = []
+    let cursor = after ?? -1
+    for (let pageNumber = 0; pageNumber < MAX_HISTORY_PAGES; pageNumber += 1) {
+      const page = historyPage(
+        await this.#client.sessions.history(sessionId, {
+          ...(cursor < 0 ? {} : { after: cursor }),
+          limit: 100,
+          ...(signal ? { signal } : {}),
+        })
+      )
+      for (const value of page.data) {
+        const event = validateOpenCodeHistoryEvent(value, sessionId)
+        if (event.seq !== cursor + 1) throw new OpenCodeEventValidationError()
+        events.push(event)
+        cursor = event.seq
+      }
+      if (!page.hasMore) return events
+      if (page.data.length === 0 || pageNumber === MAX_HISTORY_PAGES - 1)
+        throw new OpenCodeClientError("invalid_response")
+    }
+    throw new OpenCodeClientError("invalid_response")
+  }
+
+  #watchWait(run: ActiveRun) {
+    if (run.waiting || run.nativeTerminal || run.abandoned) return
+    run.waiting = true
+    void this.#client.sessions
+      .wait(run.scope.sessionId, run.controller.signal)
+      .then(async () => {
+        run.waiting = false
+        run.waitFailures = 0
+        if (run.abandoned || run.nativeTerminal) return
+        await this.#reconcile(run)
+        if (!run.nativeTerminal) this.#scheduleWaitRetry(run)
+      })
+      .catch(() => {
+        run.waiting = false
+        if (
+          run.controller.signal.aborted ||
+          run.abandoned ||
+          run.nativeTerminal
+        )
+          return
+        run.waitFailures += 1
+        this.#scheduleWaitRetry(run)
+      })
+  }
+
+  #scheduleWaitRetry(run: ActiveRun) {
+    const multiplier = Math.min(2 ** run.waitFailures, 16)
+    const timer = setTimeout(() => {
+      void this.#reconcile(run)
+        .catch((error) => this.#reconciliationFailed(run, error))
+        .finally(() => this.#watchWait(run))
+    }, this.#waitRetryMs * multiplier)
+    timer.unref?.()
+  }
+
+  #reconciliationFailed(run: ActiveRun, error: unknown) {
+    this.#segmentFail(
+      run,
+      error instanceof OpenCodeEventValidationError
+        ? "AOS_RESET_REQUIRED"
+        : "AOS_CONNECTION_INTERRUPTED",
+      error instanceof OpenCodeEventValidationError
+        ? "OpenCode history must be reconciled before this run can continue."
+        : "The OpenCode connection was interrupted; reconnect to reconcile this run."
+    )
   }
 
   #handle(run: ActiveRun): ServerRunHandle {
@@ -361,68 +693,111 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
   }
 
-  #pump(run: ActiveRun) {
-    void (async () => {
-      try {
-        for await (const value of run.source!) {
-          this.#publish(run, run.projector.accept(value))
-          if (run.terminal) return
-        }
-        if (!run.terminal)
-          this.#publish(
-            run,
-            run.projector.fail(
-              "AOS_CONNECTION_INTERRUPTED",
-              "The OpenCode connection was interrupted; reconnect to reconcile this run."
-            ),
-            false
-          )
-      } catch (error) {
-        if (run.terminal) return
-        this.#publish(
-          run,
-          run.projector.fail(
-            error instanceof OpenCodeEventValidationError
-              ? "AOS_RESET_REQUIRED"
-              : "AOS_CONNECTION_INTERRUPTED",
-            error instanceof OpenCodeEventValidationError
-              ? "OpenCode history must be reconciled before this run can continue."
-              : "The OpenCode connection was interrupted; reconnect to reconcile this run."
-          ),
-          false
-        )
-      }
-    })()
-  }
-
   #publish(
     run: ActiveRun,
-    projection: ReturnType<OpenCodeEventProjector["accept"]>,
-    settle = true
+    projection: ReturnType<OpenCodeEventProjector["acceptValidated"]>
   ) {
-    for (const event of projection.events) run.queue.push(event)
-    if (!projection.terminal) return
-    run.terminal = true
+    if (run.segmentClosed) return
+    if (projection.admissionId !== undefined) {
+      if (
+        run.expectedAdmission !== undefined &&
+        !run.admissionObserved &&
+        projection.admissionId !== run.expectedAdmission
+      )
+        throw new OpenCodeEventValidationError()
+      run.admissionObserved = true
+    }
+    if (projection.admissionBoundary) {
+      this.#finish(run)
+      return
+    }
+    for (const event of projection.events) {
+      if (!run.queue.push(event)) {
+        this.#segmentFail(
+          run,
+          "AOS_RESET_REQUIRED",
+          "The OpenCode event buffer was exceeded; reconnect to reconcile this run.",
+          true
+        )
+        return
+      }
+    }
+    if (projection.terminal === "error") {
+      this.#abortSource(run)
+      run.queue.close()
+      run.segmentClosed = true
+      run.settle()
+    }
+  }
+
+  #finish(run: ActiveRun) {
+    if (run.nativeTerminal) return
+    run.nativeTerminal = true
+    run.controller.abort()
+    this.#abortSource(run)
+    if (!run.admissionObserved) {
+      this.#segmentFail(
+        run,
+        "AOS_RESET_REQUIRED",
+        "OpenCode became idle before its stable prompt admission could be reconciled."
+      )
+      if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+      return
+    }
+    if (!run.segmentClosed) {
+      this.#publish(run, run.projector.finish())
+      run.queue.close()
+      run.segmentClosed = true
+    }
+    run.settle()
+    if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+  }
+
+  #segmentFail(run: ActiveRun, code: string, message: string, reset = false) {
+    if (run.segmentClosed) return
+    this.#abortSource(run)
+    const failure = run.projector.fail(code, message).events.at(-1)!
+    if (reset) run.queue.resetWith(failure)
+    else {
+      if (!run.queue.push(failure)) run.queue.resetWith(failure)
+      else run.queue.close()
+    }
+    run.segmentClosed = true
+    run.settle()
+  }
+
+  #abortSource(run: ActiveRun) {
+    if (run.sourceAborted) return
+    run.sourceAborted = true
     run.source?.abort()
+  }
+
+  #abandon(run: ActiveRun) {
+    run.abandoned = true
+    run.controller.abort()
+    this.#abortSource(run)
     run.queue.close()
-    if (settle) run.settle()
+    run.settle()
+    if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+  }
+
+  #discardBufferedThrough(run: ActiveRun, seq: number) {
+    for (const value of run.buffer.keys())
+      if (value <= seq) run.buffer.delete(value)
   }
 
   async #stop(run: ActiveRun): Promise<"stopping" | "idle"> {
-    if (run.terminal) return "idle"
+    if (run.nativeTerminal) return "idle"
     await this.#client.sessions.interrupt(run.scope.sessionId)
-    if (run.terminal) return "idle"
+    if (run.nativeTerminal) return "idle"
     run.projector.markStopping()
     try {
-      if (!(await this.#active(run.scope.sessionId))) {
-        this.#publish(run, run.projector.finish())
-        return "idle"
-      }
+      await this.#reconcile(run)
     } catch {
-      // The interrupt acknowledgement is authoritative. A failed status read
-      // cannot turn that acknowledged mutation into a retryable Stop.
+      // The interrupt acknowledgement is authoritative. A failed read cannot
+      // make this Stop safe to retry or prove the native Session idle.
     }
-    return "stopping"
+    return run.nativeTerminal ? "idle" : "stopping"
   }
 
   async #verifyOwnership(scope: SessionScope) {
@@ -432,7 +807,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     )
   }
 
-  async #active(sessionId: string) {
-    return isSessionActive(await this.#client.sessions.active(), sessionId)
+  async #active(sessionId: string, signal?: AbortSignal) {
+    return isSessionActive(
+      await this.#client.sessions.active(signal),
+      sessionId
+    )
   }
 }

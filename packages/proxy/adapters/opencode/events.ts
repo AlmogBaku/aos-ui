@@ -4,6 +4,9 @@ import type { OpenCodeDurableEvent } from "./client"
 
 const MAX_ID_LENGTH = 512
 const MAX_TEXT_BYTES = 1024 * 1024
+const MAX_EVENT_BYTES = 2 * 1024 * 1024
+const MAX_DUPLICATE_FINGERPRINTS = 256
+const MAX_JSON_DEPTH = 64
 
 type ProjectorScope = Readonly<{
   sessionId: string
@@ -14,12 +17,17 @@ type ProjectorScope = Readonly<{
 type Projection = Readonly<{
   events: AGUIEvent[]
   terminal?: "finished" | "error"
+  admissionId?: string
+  admissionBoundary?: boolean
 }>
 
-type NativeEvent = Readonly<{
+export type ValidatedOpenCodeEvent = Readonly<{
+  id: string
   seq: number
+  version: number
   type: string
-  properties: Record<string, unknown>
+  data: Record<string, unknown>
+  fingerprint: string
 }>
 
 type ToolState = {
@@ -39,6 +47,42 @@ export class OpenCodeEventValidationError extends Error {
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
   return value as Record<string, unknown>
+}
+
+function stableJson(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>()
+): string {
+  if (depth > MAX_JSON_DEPTH) throw new OpenCodeEventValidationError()
+  if (value === null || typeof value === "boolean") return JSON.stringify(value)
+  if (typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "number" && Number.isFinite(value))
+    return JSON.stringify(value)
+  if (!value || typeof value !== "object")
+    throw new OpenCodeEventValidationError()
+  if (seen.has(value)) throw new OpenCodeEventValidationError()
+  seen.add(value)
+  const result = Array.isArray(value)
+    ? `[${value.map((item) => stableJson(item, depth + 1, seen)).join(",")}]`
+    : `{${Object.keys(value)
+        .sort()
+        .map(
+          (key) =>
+            `${JSON.stringify(key)}:${stableJson(
+              (value as Record<string, unknown>)[key],
+              depth + 1,
+              seen
+            )}`
+        )
+        .join(",")}}`
+  seen.delete(value)
+  if (
+    depth === 0 &&
+    new TextEncoder().encode(result).byteLength > MAX_EVENT_BYTES
+  )
+    throw new OpenCodeEventValidationError()
+  return result
 }
 
 function boundedString(value: unknown, allowEmpty = false) {
@@ -78,68 +122,113 @@ function requireTimestamp(value: unknown) {
     throw new OpenCodeEventValidationError()
 }
 
-function liveEvent(
-  value: OpenCodeDurableEvent,
-  expectedSessionId: string
-): NativeEvent | undefined {
-  if (value.event !== "session") throw new OpenCodeEventValidationError()
-  const seq = Number(value.id)
-  if (!Number.isSafeInteger(seq) || seq < 0 || String(seq) !== value.id)
-    throw new OpenCodeEventValidationError()
-  const data = record(value.data)
-  const type = identifier(data?.type)
-  const properties = record(data?.properties)
-  if (!type || !properties) throw new OpenCodeEventValidationError()
-  if (properties.sessionID !== expectedSessionId) return
-  return { seq, type, properties }
+function requireRecord(value: unknown) {
+  const parsed = record(value)
+  if (!parsed) throw new OpenCodeEventValidationError()
+  return parsed
 }
 
-function historyEvent(
-  value: unknown,
-  expectedSessionId: string
-): NativeEvent | undefined {
-  const event = record(value)
-  const type = identifier(event?.type)
-  const data = record(event?.data)
-  const durable = record(event?.durable)
-  if (!type || !data || !durable) throw new OpenCodeEventValidationError()
-  if (data.sessionID !== expectedSessionId) return
-  if (durable.aggregateID !== expectedSessionId)
-    throw new OpenCodeEventValidationError()
-  const seq = integer(durable.seq)
-  const version = integer(durable.version)
-  if (seq === undefined || version === undefined)
-    throw new OpenCodeEventValidationError()
-  requireIdentifier(event?.id)
-  return { seq, type, properties: data }
+function optionalStrings(value: unknown) {
+  if (value === undefined) return
+  if (!Array.isArray(value)) throw new OpenCodeEventValidationError()
+  for (const item of value) requireString(item)
 }
 
-function eventMessageId(properties: Record<string, unknown>) {
-  requireTimestamp(properties.timestamp)
-  return requireIdentifier(properties.assistantMessageID)
+function validateSource(value: unknown) {
+  const source = requireRecord(value)
+  if (
+    typeof source.start !== "number" ||
+    !Number.isFinite(source.start) ||
+    typeof source.end !== "number" ||
+    !Number.isFinite(source.end)
+  )
+    throw new OpenCodeEventValidationError()
+  requireString(source.text, true)
+}
+
+function validateStringRecord(value: unknown) {
+  const entries = requireRecord(value)
+  for (const [key, item] of Object.entries(entries)) {
+    requireString(key)
+    requireString(item, true)
+  }
+}
+
+function validateProviderMetadata(value: unknown) {
+  const metadata = requireRecord(value)
+  for (const nested of Object.values(metadata)) requireRecord(nested)
+}
+
+function validateModel(value: unknown) {
+  const model = requireRecord(value)
+  requireIdentifier(model.id)
+  requireIdentifier(model.providerID)
+  if (model.variant !== undefined) requireIdentifier(model.variant)
+}
+
+function validateLocation(value: unknown) {
+  const location = requireRecord(value)
+  requireString(location.directory)
+  if (location.workspaceID !== undefined)
+    requireIdentifier(location.workspaceID)
+}
+
+function validatePrompt(value: unknown) {
+  const prompt = requireRecord(value)
+  requireString(prompt.text, true)
+  if (prompt.files !== undefined) {
+    if (!Array.isArray(prompt.files)) throw new OpenCodeEventValidationError()
+    for (const value of prompt.files) {
+      const file = requireRecord(value)
+      requireString(file.uri)
+      requireString(file.mime)
+      if (file.name !== undefined) requireString(file.name)
+      if (file.description !== undefined) requireString(file.description)
+      if (file.source !== undefined) validateSource(file.source)
+    }
+  }
+  if (prompt.agents !== undefined) {
+    if (!Array.isArray(prompt.agents)) throw new OpenCodeEventValidationError()
+    for (const value of prompt.agents) {
+      const agent = requireRecord(value)
+      requireIdentifier(agent.name)
+      if (agent.source !== undefined) validateSource(agent.source)
+    }
+  }
+}
+
+function validateProvider(value: unknown) {
+  const provider = requireRecord(value)
+  if (typeof provider.executed !== "boolean")
+    throw new OpenCodeEventValidationError()
+  if (provider.metadata !== undefined)
+    validateProviderMetadata(provider.metadata)
+}
+
+function validateStepError(value: unknown) {
+  const error = requireRecord(value)
+  if (error.type !== "unknown") throw new OpenCodeEventValidationError()
+  requireString(error.message)
 }
 
 function safeTextContent(value: unknown) {
   if (!Array.isArray(value)) throw new OpenCodeEventValidationError()
   const parts: string[] = []
   for (const item of value) {
-    const content = record(item)
-    if (!content || (content.type !== "text" && content.type !== "file"))
-      throw new OpenCodeEventValidationError()
+    const content = requireRecord(item)
     if (content.type === "text") parts.push(requireString(content.text, true))
-    else {
+    else if (content.type === "file") {
       requireString(content.uri)
       requireString(content.mime)
       if (content.name !== undefined) requireString(content.name)
-    }
+    } else throw new OpenCodeEventValidationError()
   }
   return parts.join("\n")
 }
 
-function tokenUsage(value: unknown): TokenUsage[] | undefined {
-  const tokens = record(value)
-  const cache = record(tokens?.cache)
-  if (!tokens || !cache) throw new OpenCodeEventValidationError()
+function tokenUsage(value: unknown): TokenUsage[] {
+  const tokens = requireRecord(value)
+  const cache = requireRecord(tokens.cache)
   const input = integer(tokens.input)
   const output = integer(tokens.output)
   const reasoning = integer(tokens.reasoning)
@@ -164,63 +253,281 @@ function tokenUsage(value: unknown): TokenUsage[] | undefined {
   ]
 }
 
-function validateSessionError(value: unknown) {
-  const error = record(value)
-  const data = record(error?.data)
-  const names = new Set([
-    "ProviderAuthError",
-    "UnknownError",
-    "MessageOutputLengthError",
-    "MessageAbortedError",
-    "StructuredOutputError",
-    "ContextOverflowError",
-    "ContentFilterError",
-    "APIError",
-  ])
+function validateRetryError(value: unknown) {
+  const error = requireRecord(value)
+  requireString(error.message)
+  if (typeof error.isRetryable !== "boolean")
+    throw new OpenCodeEventValidationError()
   if (
-    !error ||
-    !data ||
-    typeof error.name !== "string" ||
-    !names.has(error.name)
+    error.statusCode !== undefined &&
+    (typeof error.statusCode !== "number" || !Number.isFinite(error.statusCode))
   )
     throw new OpenCodeEventValidationError()
-  if (data.message !== undefined) requireString(data.message)
+  if (error.responseHeaders !== undefined)
+    validateStringRecord(error.responseHeaders)
+  if (error.responseBody !== undefined) requireString(error.responseBody, true)
+  if (error.metadata !== undefined) validateStringRecord(error.metadata)
 }
 
-function validateStepError(value: unknown) {
-  const error = record(value)
-  if (!error || error.type !== "unknown")
+function validateRevert(value: unknown) {
+  const revert = requireRecord(value)
+  requireIdentifier(revert.messageID)
+  if (revert.partID !== undefined) requireIdentifier(revert.partID)
+  if (revert.snapshot !== undefined) requireString(revert.snapshot, true)
+  if (revert.diff !== undefined) requireString(revert.diff, true)
+  if (revert.files === undefined) return
+  if (!Array.isArray(revert.files)) throw new OpenCodeEventValidationError()
+  for (const value of revert.files) {
+    const file = requireRecord(value)
+    requireString(file.path)
+    if (
+      file.status !== "added" &&
+      file.status !== "modified" &&
+      file.status !== "deleted"
+    )
+      throw new OpenCodeEventValidationError()
+    if (
+      integer(file.additions) === undefined ||
+      integer(file.deletions) === undefined
+    )
+      throw new OpenCodeEventValidationError()
+    requireString(file.patch, true)
+  }
+}
+
+function validateData(type: string, data: Record<string, unknown>) {
+  requireIdentifier(data.sessionID)
+  requireTimestamp(data.timestamp)
+
+  switch (type) {
+    case "session.next.agent.switched":
+      requireIdentifier(data.messageID)
+      requireIdentifier(data.agent)
+      break
+    case "session.next.model.switched":
+      requireIdentifier(data.messageID)
+      validateModel(data.model)
+      break
+    case "session.next.moved":
+      validateLocation(data.location)
+      if (data.subdirectory !== undefined) requireString(data.subdirectory)
+      break
+    case "session.next.prompted":
+    case "session.next.prompt.admitted":
+      requireIdentifier(data.messageID)
+      validatePrompt(data.prompt)
+      if (data.delivery !== "steer" && data.delivery !== "queue")
+        throw new OpenCodeEventValidationError()
+      break
+    case "session.next.context.updated":
+    case "session.next.synthetic":
+      requireIdentifier(data.messageID)
+      requireString(data.text, true)
+      break
+    case "session.next.shell.started":
+      requireIdentifier(data.messageID)
+      requireIdentifier(data.callID)
+      requireString(data.command)
+      break
+    case "session.next.shell.ended":
+      requireIdentifier(data.callID)
+      requireString(data.output, true)
+      break
+    case "session.next.step.started":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.agent)
+      validateModel(data.model)
+      if (data.snapshot !== undefined) requireString(data.snapshot)
+      break
+    case "session.next.step.ended":
+      requireIdentifier(data.assistantMessageID)
+      requireString(data.finish)
+      if (
+        typeof data.cost !== "number" ||
+        !Number.isFinite(data.cost) ||
+        data.cost < 0
+      )
+        throw new OpenCodeEventValidationError()
+      tokenUsage(data.tokens)
+      if (data.snapshot !== undefined) requireString(data.snapshot, true)
+      optionalStrings(data.files)
+      break
+    case "session.next.step.failed":
+      requireIdentifier(data.assistantMessageID)
+      validateStepError(data.error)
+      break
+    case "session.next.text.started":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.textID)
+      break
+    case "session.next.text.ended":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.textID)
+      requireString(data.text, true)
+      break
+    case "session.next.reasoning.started":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.reasoningID)
+      if (data.providerMetadata !== undefined)
+        validateProviderMetadata(data.providerMetadata)
+      break
+    case "session.next.reasoning.ended":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.reasoningID)
+      requireString(data.text, true)
+      if (data.providerMetadata !== undefined)
+        validateProviderMetadata(data.providerMetadata)
+      break
+    case "session.next.tool.input.started":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      requireIdentifier(data.name)
+      break
+    case "session.next.tool.input.ended":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      requireString(data.text, true)
+      break
+    case "session.next.tool.called":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      requireIdentifier(data.tool)
+      requireRecord(data.input)
+      validateProvider(data.provider)
+      break
+    case "session.next.tool.progress":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      requireRecord(data.structured)
+      safeTextContent(data.content)
+      break
+    case "session.next.tool.success":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      requireRecord(data.structured)
+      safeTextContent(data.content)
+      optionalStrings(data.outputPaths)
+      validateProvider(data.provider)
+      break
+    case "session.next.tool.failed":
+      requireIdentifier(data.assistantMessageID)
+      requireIdentifier(data.callID)
+      validateStepError(data.error)
+      validateProvider(data.provider)
+      break
+    case "session.next.retried":
+      if (integer(data.attempt) === undefined)
+        throw new OpenCodeEventValidationError()
+      validateRetryError(data.error)
+      break
+    case "session.next.compaction.started":
+      requireIdentifier(data.messageID)
+      if (data.reason !== "auto" && data.reason !== "manual")
+        throw new OpenCodeEventValidationError()
+      break
+    case "session.next.compaction.ended":
+      requireIdentifier(data.messageID)
+      if (data.reason !== "auto" && data.reason !== "manual")
+        throw new OpenCodeEventValidationError()
+      requireString(data.text, true)
+      requireString(data.recent, true)
+      break
+    case "session.next.revert.staged":
+      validateRevert(data.revert)
+      break
+    case "session.next.revert.cleared":
+      break
+    case "session.next.revert.committed":
+      requireIdentifier(data.messageID)
+      break
+    default:
+      throw new OpenCodeEventValidationError()
+  }
+}
+
+export function validateOpenCodeHistoryEvent(
+  value: unknown,
+  expectedSessionId: string
+): ValidatedOpenCodeEvent {
+  const event = requireRecord(value)
+  const id = requireIdentifier(event.id)
+  const type = requireIdentifier(event.type)
+  const durable = requireRecord(event.durable)
+  const data = requireRecord(event.data)
+  const seq = integer(durable.seq)
+  const version = integer(durable.version)
+  const expectedVersion =
+    type === "session.next.step.ended" || type === "session.next.step.failed"
+      ? 2
+      : 1
+  if (
+    durable.aggregateID !== expectedSessionId ||
+    seq === undefined ||
+    version !== expectedVersion ||
+    data.sessionID !== expectedSessionId
+  )
     throw new OpenCodeEventValidationError()
-  requireString(error.message)
+  if (event.metadata !== undefined) requireRecord(event.metadata)
+  if (event.location !== undefined) validateLocation(event.location)
+  validateData(type, data)
+  const fingerprint = stableJson(event)
+  return {
+    id,
+    seq,
+    version,
+    type,
+    data,
+    fingerprint,
+  }
+}
+
+export function validateOpenCodeLiveEvent(
+  value: OpenCodeDurableEvent,
+  expectedSessionId: string
+) {
+  if (value.event !== "session") throw new OpenCodeEventValidationError()
+  const seq = Number(value.id)
+  if (!Number.isSafeInteger(seq) || seq < 0 || String(seq) !== value.id)
+    throw new OpenCodeEventValidationError()
+  const event = validateOpenCodeHistoryEvent(value.data, expectedSessionId)
+  if (event.seq !== seq) throw new OpenCodeEventValidationError()
+  return event
 }
 
 export class OpenCodeEventProjector {
   readonly #scope: ProjectorScope
   readonly #epoch: string
   readonly #tools = new Map<string, ToolState>()
+  readonly #fingerprints = new Map<number, string>()
+  readonly #admissionId?: string
+  #admissionMatched: boolean
   #lastSeen: number
-  #terminal = false
+  #closed = false
   #stopping = false
   #messageId?: string
-  #textId?: string
-  #text = ""
   #textOpen = false
   #reasoningId?: string
-  #reasoning = ""
   #reasoningOpen = false
   #usage?: TokenUsage[]
 
-  constructor(scope: ProjectorScope, lastSeen: number) {
+  constructor(
+    scope: ProjectorScope,
+    lastSeen: number,
+    options: Readonly<{ admissionId?: string }> = {}
+  ) {
     if (
       !identifier(scope.sessionId) ||
-      !identifier(scope.threadId) ||
-      !identifier(scope.runId) ||
-      integer(lastSeen) === undefined
+      !boundedString(scope.threadId) ||
+      !boundedString(scope.runId) ||
+      (lastSeen !== -1 && integer(lastSeen) === undefined) ||
+      (options.admissionId !== undefined && !identifier(options.admissionId))
     )
       throw new OpenCodeEventValidationError()
     this.#scope = scope
     this.#epoch = `opencode:${scope.sessionId}`
     this.#lastSeen = lastSeen
+    this.#admissionId = options.admissionId
+    this.#admissionMatched = options.admissionId === undefined
   }
 
   recoveryPosition() {
@@ -232,20 +539,39 @@ export class OpenCodeEventProjector {
   }
 
   accept(value: OpenCodeDurableEvent): Projection {
-    if (this.#terminal) return { events: [] }
-    const event = liveEvent(value, this.#scope.sessionId)
-    return event ? this.#accept(event) : { events: [] }
+    return this.acceptValidated(
+      validateOpenCodeLiveEvent(value, this.#scope.sessionId)
+    )
   }
 
   acceptHistory(value: unknown): Projection {
-    if (this.#terminal) return { events: [] }
-    const event = historyEvent(value, this.#scope.sessionId)
-    return event ? this.#accept(event) : { events: [] }
+    return this.acceptValidated(
+      validateOpenCodeHistoryEvent(value, this.#scope.sessionId)
+    )
+  }
+
+  acceptValidated(event: ValidatedOpenCodeEvent): Projection {
+    const prior = this.#fingerprints.get(event.seq)
+    if (prior !== undefined) {
+      if (prior !== event.fingerprint) throw new OpenCodeEventValidationError()
+      return { events: [] }
+    }
+    if (event.seq <= this.#lastSeen) return { events: [] }
+    if (event.seq !== this.#lastSeen + 1)
+      throw new OpenCodeEventValidationError()
+    const projection = this.#closed ? { events: [] } : this.#project(event)
+    this.#lastSeen = event.seq
+    this.#fingerprints.set(event.seq, event.fingerprint)
+    if (this.#fingerprints.size > MAX_DUPLICATE_FINGERPRINTS) {
+      const oldest = this.#fingerprints.keys().next().value
+      if (oldest !== undefined) this.#fingerprints.delete(oldest)
+    }
+    return projection
   }
 
   finish(): Projection {
-    if (this.#terminal) return { events: [] }
-    this.#terminal = true
+    if (this.#closed) return { events: [] }
+    this.#closed = true
     const events = this.#closeOpenContent(
       this.#stopping ? "stopped" : "completed"
     )
@@ -261,120 +587,89 @@ export class OpenCodeEventProjector {
   }
 
   fail(code: string, message: string): Projection {
-    if (this.#terminal) return { events: [] }
-    this.#terminal = true
+    if (this.#closed) return { events: [] }
+    this.#closed = true
     const events = this.#closeOpenContent()
     events.push({ type: EventType.RUN_ERROR, code, message })
     return { events, terminal: "error" }
   }
 
-  #accept(event: NativeEvent): Projection {
-    if (event.seq <= this.#lastSeen) return { events: [] }
-    const projection = this.#project(event)
-    this.#lastSeen = event.seq
-    return projection
-  }
-
-  #project(event: NativeEvent): Projection {
-    const { type, properties } = event
+  #project(event: ValidatedOpenCodeEvent): Projection {
+    const { type, data } = event
     const events: AGUIEvent[] = []
-
+    if (type === "session.next.prompt.admitted") {
+      const id = data.messageID as string
+      if (!this.#admissionMatched) {
+        if (id !== this.#admissionId) throw new OpenCodeEventValidationError()
+        this.#admissionMatched = true
+        return { events, admissionId: id }
+      }
+      return { events, admissionId: id, admissionBoundary: true }
+    }
     if (type === "session.next.reasoning.started") {
-      const messageId = eventMessageId(properties)
-      const reasoningId = requireIdentifier(properties.reasoningID)
+      this.#openReasoning(
+        events,
+        data.assistantMessageID as string,
+        data.reasoningID as string
+      )
+    } else if (type === "session.next.reasoning.ended") {
+      const messageId = data.assistantMessageID as string
+      const reasoningId = data.reasoningID as string
       this.#openReasoning(events, messageId, reasoningId)
-    } else if (type === "session.next.reasoning.delta") {
-      const messageId = eventMessageId(properties)
-      const reasoningId = requireIdentifier(properties.reasoningID)
-      const delta = requireString(properties.delta, true)
-      this.#openReasoning(events, messageId, reasoningId)
-      if (delta) {
+      const text = data.text as string
+      if (text)
         events.push({
           type: EventType.REASONING_MESSAGE_CONTENT,
           messageId: reasoningId,
-          delta,
+          delta: text,
         })
-        this.#reasoning += delta
-      }
-    } else if (type === "session.next.reasoning.ended") {
-      const messageId = eventMessageId(properties)
-      const reasoningId = requireIdentifier(properties.reasoningID)
-      const text = requireString(properties.text, true)
-      this.#openReasoning(events, messageId, reasoningId)
-      this.#appendCompleted(events, "reasoning", reasoningId, text)
       this.#closeReasoning(events)
     } else if (type === "session.next.text.started") {
-      const messageId = eventMessageId(properties)
-      const textId = requireIdentifier(properties.textID)
       this.#closeReasoning(events)
-      this.#openText(events, messageId, textId)
-    } else if (type === "session.next.text.delta") {
-      const messageId = eventMessageId(properties)
-      const textId = requireIdentifier(properties.textID)
-      const delta = requireString(properties.delta, true)
+      this.#openText(events, data.assistantMessageID as string)
+    } else if (type === "session.next.text.ended") {
+      const messageId = data.assistantMessageID as string
       this.#closeReasoning(events)
-      this.#openText(events, messageId, textId)
-      if (delta) {
+      this.#openText(events, messageId)
+      const text = data.text as string
+      if (text)
         events.push({
           type: EventType.TEXT_MESSAGE_CONTENT,
           messageId,
-          delta,
+          delta: text,
         })
-        this.#text += delta
-      }
-    } else if (type === "session.next.text.ended") {
-      const messageId = eventMessageId(properties)
-      const textId = requireIdentifier(properties.textID)
-      const text = requireString(properties.text, true)
-      this.#closeReasoning(events)
-      this.#openText(events, messageId, textId)
-      this.#appendCompleted(events, "text", messageId, text)
       this.#closeText(events)
     } else if (type === "session.next.tool.input.started") {
-      const messageId = eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
-      const name = requireIdentifier(properties.name)
-      this.#openTool(events, callId, messageId, name)
-    } else if (type === "session.next.tool.input.delta") {
-      const messageId = eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
-      const delta = requireString(properties.delta, true)
-      const tool = this.#tools.get(callId)
-      if (!tool || tool.messageId !== messageId)
-        throw new OpenCodeEventValidationError()
-      if (delta) {
-        events.push({
-          type: EventType.TOOL_CALL_ARGS,
-          toolCallId: callId,
-          delta,
-        })
-        tool.args += delta
-      }
+      this.#openTool(
+        events,
+        data.callID as string,
+        data.assistantMessageID as string,
+        data.name as string
+      )
     } else if (type === "session.next.tool.input.ended") {
-      const messageId = eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
-      const text = requireString(properties.text, true)
+      const callId = data.callID as string
       const tool = this.#tools.get(callId)
-      if (!tool || tool.messageId !== messageId || !text.startsWith(tool.args))
+      if (!tool || tool.messageId !== data.assistantMessageID)
         throw new OpenCodeEventValidationError()
-      const delta = text.slice(tool.args.length)
-      if (delta)
+      const text = data.text as string
+      if (text) {
         events.push({
           type: EventType.TOOL_CALL_ARGS,
           toolCallId: callId,
-          delta,
+          delta: text,
         })
-      tool.args = text
+        tool.args = text
+      }
     } else if (type === "session.next.tool.called") {
-      const messageId = eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
-      const name = requireIdentifier(properties.tool)
-      const input = record(properties.input)
-      if (!input || !record(properties.provider))
-        throw new OpenCodeEventValidationError()
-      const tool = this.#openTool(events, callId, messageId, name)
-      const args = JSON.stringify(input)
-      if (!tool.args && args) {
+      const callId = data.callID as string
+      const tool = this.#openTool(
+        events,
+        callId,
+        data.assistantMessageID as string,
+        data.tool as string
+      )
+      if (!tool.args) {
+        const args = JSON.stringify(data.input)
         events.push({
           type: EventType.TOOL_CALL_ARGS,
           toolCallId: callId,
@@ -383,34 +678,23 @@ export class OpenCodeEventProjector {
         tool.args = args
       }
     } else if (type === "session.next.tool.progress") {
-      eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
-      if (!record(properties.structured) || !this.#tools.has(callId))
-        throw new OpenCodeEventValidationError()
-      const progress = safeTextContent(properties.content)
+      const callId = data.callID as string
+      if (!this.#tools.has(callId)) throw new OpenCodeEventValidationError()
+      const text = safeTextContent(data.content)
       events.push({
         type: EventType.ACTIVITY_SNAPSHOT,
         messageId: `${this.#scope.runId}:progress:${callId}`,
         activityType: "PROGRESS",
-        content: {
-          callId,
-          status: "running",
-          ...(progress ? { text: progress } : {}),
-        },
+        content: { callId, status: "running", ...(text ? { text } : {}) },
         replace: true,
       })
     } else if (
       type === "session.next.tool.success" ||
       type === "session.next.tool.failed"
     ) {
-      eventMessageId(properties)
-      const callId = requireIdentifier(properties.callID)
+      const callId = data.callID as string
       const tool = this.#tools.get(callId)
-      if (!tool || tool.ended || !record(properties.provider))
-        throw new OpenCodeEventValidationError()
-      if (!record(properties.structured))
-        throw new OpenCodeEventValidationError()
-      const content = safeTextContent(properties.content)
+      if (!tool || tool.ended) throw new OpenCodeEventValidationError()
       tool.ended = true
       events.push({ type: EventType.TOOL_CALL_END, toolCallId: callId })
       events.push({
@@ -420,36 +704,18 @@ export class OpenCodeEventProjector {
         content:
           type === "session.next.tool.failed"
             ? JSON.stringify({ status: "error" })
-            : content || JSON.stringify({ status: "completed" }),
+            : safeTextContent(data.content) ||
+              JSON.stringify({ status: "completed" }),
         role: "tool",
       })
     } else if (type === "session.next.step.ended") {
-      eventMessageId(properties)
-      requireString(properties.finish)
-      if (typeof properties.cost !== "number" || properties.cost < 0)
-        throw new OpenCodeEventValidationError()
-      this.#usage = tokenUsage(properties.tokens)
-    } else if (
-      type === "session.next.step.failed" ||
-      type === "session.error"
-    ) {
-      if (type === "session.next.step.failed") {
-        eventMessageId(properties)
-        validateStepError(properties.error)
-      } else validateSessionError(properties.error)
+      this.#usage = tokenUsage(data.tokens)
+    } else if (type === "session.next.step.failed") {
       return this.fail(
         "AOS_PROVIDER_RUN_FAILED",
         "OpenCode could not complete this run."
       )
-    } else if (type === "session.status") {
-      const status = record(properties.status)
-      if (!status || !["idle", "busy", "retry"].includes(String(status.type)))
-        throw new OpenCodeEventValidationError()
-      if (status.type === "idle") return this.finish()
-    } else if (type === "session.idle") {
-      return this.finish()
     }
-
     return { events }
   }
 
@@ -461,7 +727,6 @@ export class OpenCodeEventProjector {
     }
     this.#messageId = messageId
     this.#reasoningId = reasoningId
-    this.#reasoning = ""
     this.#reasoningOpen = true
     events.push({
       type: EventType.REASONING_MESSAGE_START,
@@ -470,15 +735,13 @@ export class OpenCodeEventProjector {
     })
   }
 
-  #openText(events: AGUIEvent[], messageId: string, textId: string) {
+  #openText(events: AGUIEvent[], messageId: string) {
     if (this.#textOpen) {
-      if (this.#messageId !== messageId || this.#textId !== textId)
+      if (this.#messageId !== messageId)
         throw new OpenCodeEventValidationError()
       return
     }
     this.#messageId = messageId
-    this.#textId = textId
-    this.#text = ""
     this.#textOpen = true
     events.push({
       type: EventType.TEXT_MESSAGE_START,
@@ -508,29 +771,6 @@ export class OpenCodeEventProjector {
       parentMessageId: messageId,
     })
     return tool
-  }
-
-  #appendCompleted(
-    events: AGUIEvent[],
-    kind: "text" | "reasoning",
-    messageId: string,
-    completed: string
-  ) {
-    const streamed = kind === "text" ? this.#text : this.#reasoning
-    if (!completed.startsWith(streamed))
-      throw new OpenCodeEventValidationError()
-    const delta = completed.slice(streamed.length)
-    if (!delta) return
-    events.push({
-      type:
-        kind === "text"
-          ? EventType.TEXT_MESSAGE_CONTENT
-          : EventType.REASONING_MESSAGE_CONTENT,
-      messageId,
-      delta,
-    })
-    if (kind === "text") this.#text = completed
-    else this.#reasoning = completed
   }
 
   #closeReasoning(events: AGUIEvent[]) {
