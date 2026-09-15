@@ -73,7 +73,6 @@ const NativeToolStateSchema = z.discriminatedUnion("status", [
     input: z.record(z.string(), z.unknown()),
     structured: z.record(z.string(), z.unknown()),
     content: z.array(z.unknown()).max(2_000),
-    time: z.object({ start: z.number().finite().nonnegative() }),
   }),
   z.object({
     status: z.literal("completed"),

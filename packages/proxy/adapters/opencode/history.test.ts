@@ -32,7 +32,6 @@ describe("OpenCode history projection", () => {
                 input: { safe: true, path: "/private" },
                 structured: {},
                 content: [],
-                time: { start: 2_000 },
               },
             },
             {
