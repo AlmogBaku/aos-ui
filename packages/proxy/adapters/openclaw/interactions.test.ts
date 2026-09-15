@@ -53,7 +53,218 @@ const approval = {
   status: "pending",
   sourceSessionKey: "session-a",
 }
+const resumeScope = {
+  agentId: scope.agentId,
+  sessionId: scope.sessionId,
+  threadId: scope.threadId,
+}
+const resolvedQuestion = [
+  {
+    interruptId: "q",
+    status: "resolved" as const,
+    payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
+  },
+]
 describe("OpenClaw interactions", () => {
+  it("binds a Session resume to its original native run before dispatch", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question }
+        : {
+            status: "answered",
+            answers: resolvedQuestion[0].payload,
+          }
+    )
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    await expect(
+      interactions.validate(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ runId: "run-a" })
+    await expect(
+      interactions.dispatch(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ status: "resolved" })
+
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(request).toHaveBeenLastCalledWith("question.resolve", {
+      id: "q",
+      answers: resolvedQuestion[0].payload,
+    })
+  })
+
+  it("rejects missing, foreign, ambiguous, and malformed bound resumes before native access", async () => {
+    const request = vi.fn()
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    await expect(interactions.validate(resumeScope, [])).rejects.toMatchObject({
+      code: "AOS_INVALID_INTERACTION",
+    })
+    await expect(
+      interactions.validate(
+        { ...resumeScope, threadId: "foreign" },
+        resolvedQuestion
+      )
+    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    await expect(
+      interactions.validate(resumeScope, [
+        ...resolvedQuestion,
+        { interruptId: "other", status: "cancelled" },
+      ])
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    await expect(
+      interactions.validate(resumeScope, [
+        { ...resolvedQuestion[0], extra: "not-part-of-resume" },
+      ])
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+
+    const otherRun = { ...scope, runId: "run-b" }
+    interactions.acceptQuestion(otherRun, { ...question, runId: "run-b" })
+    await expect(
+      interactions.validate(resumeScope, resolvedQuestion)
+    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("rejects a response changed after validation before native mutation", async () => {
+    const request = vi.fn(async () => ({ approval }))
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptApproval(scope, approval)
+    const allowed = [
+      {
+        interruptId: "approval-a",
+        status: "resolved" as const,
+        payload: "allow-once",
+      },
+    ]
+
+    await interactions.validate(resumeScope, allowed)
+    await expect(
+      interactions.dispatch(resumeScope, [{ ...allowed[0], payload: "deny" }])
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith("approval.get", { id: "approval-a" })
+  })
+
+  it.each([
+    ["expired", "expired"],
+    ["answered", "already-resolved"],
+  ] as const)(
+    "binds authoritative %s state without dispatching a native resolve",
+    async (nativeStatus, expectedStatus) => {
+      const request = vi.fn(async () => ({
+        question: { ...question, status: nativeStatus },
+      }))
+      const interactions = new OpenClawInteractions({ request })
+      interactions.acceptQuestion(scope, question)
+
+      await expect(
+        interactions.validate(resumeScope, resolvedQuestion)
+      ).resolves.toEqual({ runId: "run-a" })
+      await expect(
+        interactions.dispatch(resumeScope, resolvedQuestion)
+      ).resolves.toEqual({ status: expectedStatus })
+      expect(request).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("preserves an uncertain tombstone for idempotent bound retries", async () => {
+    const { OpenClawClientRequestError } = await import("./client")
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.get") return { question }
+      throw new OpenClawClientRequestError("timeout", true, false)
+    })
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    await interactions.validate(resumeScope, resolvedQuestion)
+    await expect(
+      interactions.dispatch(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ status: "uncertain" })
+    await expect(
+      interactions.validate(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ runId: "run-a" })
+    await expect(
+      interactions.dispatch(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ status: "uncertain" })
+    expect(
+      request.mock.calls.filter(([method]) => method === "question.resolve")
+    ).toHaveLength(1)
+  })
+
+  it("reports a concurrent duplicate dispatch as in progress without replay", async () => {
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.get") return { question }
+      await gate
+      return { status: "answered", answers: resolvedQuestion[0].payload }
+    })
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+    await interactions.validate(resumeScope, resolvedQuestion)
+
+    const first = interactions.dispatch(resumeScope, resolvedQuestion)
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "question.resolve")
+      ).toHaveLength(1)
+    )
+    await expect(
+      interactions.dispatch(resumeScope, resolvedQuestion)
+    ).resolves.toEqual({ status: "in-progress" })
+    release()
+    await expect(first).resolves.toEqual({ status: "resolved" })
+    expect(
+      request.mock.calls.filter(([method]) => method === "question.resolve")
+    ).toHaveLength(1)
+  })
+
+  it("enforces the advertised per-run pending cap before native access", () => {
+    const request = vi.fn()
+    const interactions = new OpenClawInteractions({ request })
+    for (let index = 0; index < 64; index++)
+      interactions.acceptQuestion(scope, {
+        ...question,
+        id: `question-${index}`,
+      })
+
+    expect(() =>
+      interactions.acceptQuestion(scope, { ...question, id: "question-64" })
+    ).toThrowError(
+      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    )
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("bounds completed interaction tombstones independently", async () => {
+    const request = vi.fn(async (method: string, raw: unknown) => {
+      const params = raw as {
+        id: string
+        answers?: { answers: Record<string, string[]> }
+      }
+      return method === "question.get"
+        ? { question: { ...question, id: params.id } }
+        : { status: "answered", answers: params.answers }
+    })
+    const interactions = new OpenClawInteractions({ request })
+    for (let index = 0; index <= 256; index++) {
+      const interruptId = `question-${index}`
+      interactions.acceptQuestion(scope, { ...question, id: interruptId })
+      await interactions.respond(scope, [
+        { ...resolvedQuestion[0], interruptId },
+      ])
+    }
+
+    await expect(
+      interactions.respond(scope, [
+        { ...resolvedQuestion[0], interruptId: "question-0" },
+      ])
+    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+  })
+
   it("accepts exact native limits and free-form, empty-option and secret answers", async () => {
     const request = vi.fn(async (method: string) =>
       method === "question.get"

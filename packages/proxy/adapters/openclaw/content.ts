@@ -1,7 +1,11 @@
 import { validateChatSendParams } from "@openclaw/gateway-protocol"
+import type { ServerAttachmentStage } from "../../core/runtime"
 
-const MAX = 25 * 1024 * 1024
-const MAX_COUNT = 16
+export const OPENCLAW_ATTACHMENT_PROXY_LIMITS = Object.freeze({
+  maxMimeTypeBytes: 256,
+  maxFilenameBytes: 255,
+  maxCount: 16,
+})
 const MIME =
   /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u
 const encoder = new TextEncoder()
@@ -17,6 +21,22 @@ export type OpenClawAttachment = Readonly<{
   filename?: string
   mimeType?: string
 }>
+export type OpenClawGatewayPolicy = Readonly<{
+  maxPayload: number
+  attachments: Readonly<{
+    maxBytes: number
+    maxImageBytes: number
+  }>
+}>
+type StagedOpenClawAttachments = Readonly<{
+  attachments: readonly OpenClawAttachment[]
+  policy: OpenClawGatewayPolicy
+}>
+const STAGED_OPENCLAW_ATTACHMENTS = Symbol("staged-openclaw-attachments")
+const REQUEST_ID_PLACEHOLDER = "00000000-0000-0000-0000-000000000000"
+export type OpenClawAttachmentStage = ServerAttachmentStage & {
+  readonly [STAGED_OPENCLAW_ATTACHMENTS]: StagedOpenClawAttachments
+}
 const text = (v: unknown, n: number) =>
   typeof v === "string" && v.trim() && encoder.encode(v).byteLength <= n
     ? v.trim()
@@ -26,14 +46,28 @@ const id = (v: unknown) => {
   return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
 }
 const filename = (v: unknown) => {
-  const x = text(v, 255)
+  const x = text(v, OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxFilenameBytes)
   return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
 }
 const mime = (v: unknown) => {
-  const x = text(v, 256)
+  const x = text(v, OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxMimeTypeBytes)
   return x && MIME.test(x) ? x : undefined
 }
-function parseDataUrl(v: unknown) {
+function validPolicy(
+  policy: OpenClawGatewayPolicy | undefined
+): policy is OpenClawGatewayPolicy {
+  return (
+    !!policy &&
+    !!policy.attachments &&
+    Number.isSafeInteger(policy.maxPayload) &&
+    policy.maxPayload > 0 &&
+    Number.isSafeInteger(policy.attachments.maxBytes) &&
+    policy.attachments.maxBytes > 0 &&
+    Number.isSafeInteger(policy.attachments.maxImageBytes) &&
+    policy.attachments.maxImageBytes > 0
+  )
+}
+function parseDataUrl(v: unknown, maxBytes: number) {
   if (typeof v !== "string") return undefined
   const m = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/u.exec(v)
   if (
@@ -46,9 +80,77 @@ function parseDataUrl(v: unknown) {
     return undefined
   const padding = m[2].endsWith("==") ? 2 : m[2].endsWith("=") ? 1 : 0,
     sizeBytes = (m[2].length / 4) * 3 - padding
-  return sizeBytes <= MAX
+  return sizeBytes <= maxBytes
     ? { dataUrl: v, mimeType: m[1]!, sizeBytes }
     : undefined
+}
+function prepareAttachments(
+  attachments: readonly OpenClawAttachment[],
+  policy: OpenClawGatewayPolicy
+) {
+  if (
+    !validPolicy(policy) ||
+    attachments.length > OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxCount
+  )
+    throw new OpenClawContentPublicError()
+  const publicAttachments: Array<
+    | { type: "image"; dataUrl: string; filename?: string }
+    | { type: "file"; filename?: string; mimeType: string }
+  > = []
+  const staged: OpenClawAttachment[] = []
+  const native = attachments.map((attachment) => {
+    if (attachment.type !== "image" && attachment.type !== "file")
+      throw new OpenClawContentPublicError()
+    const parsed = parseDataUrl(
+        attachment.dataUrl,
+        attachment.type === "image"
+          ? policy.attachments.maxImageBytes
+          : policy.attachments.maxBytes
+      ),
+      name =
+        attachment.filename === undefined
+          ? undefined
+          : filename(attachment.filename)
+    if (
+      !parsed ||
+      (attachment.filename !== undefined && !name) ||
+      (attachment.mimeType !== undefined &&
+        attachment.mimeType !== parsed.mimeType)
+    )
+      throw new OpenClawContentPublicError()
+    const canonical = Object.freeze({
+      type: attachment.type,
+      dataUrl: parsed.dataUrl,
+      mimeType: parsed.mimeType,
+      ...(name ? { filename: name } : {}),
+    })
+    staged.push(canonical)
+    publicAttachments.push(
+      attachment.type === "image"
+        ? {
+            type: "image",
+            dataUrl: parsed.dataUrl,
+            ...(name ? { filename: name } : {}),
+          }
+        : {
+            type: "file",
+            mimeType: parsed.mimeType,
+            ...(name ? { filename: name } : {}),
+          }
+    )
+    return {
+      type: attachment.type,
+      content: parsed.dataUrl,
+      mimeType: parsed.mimeType,
+      sizeBytes: parsed.sizeBytes,
+      ...(name ? { fileName: name } : {}),
+    }
+  })
+  return {
+    native,
+    staged: Object.freeze(staged),
+    public: Object.freeze(publicAttachments),
+  }
 }
 /** Validates the entire official chat.send request, including encoded attachment content. */
 export function prepareOpenClawChatAttachments(
@@ -57,54 +159,67 @@ export function prepareOpenClawChatAttachments(
     message: string
     idempotencyKey: string
     attachments: readonly OpenClawAttachment[]
-  }>
+  }>,
+  policy: OpenClawGatewayPolicy
 ) {
   if (
     !id(input.sessionKey) ||
     !text(input.message, 1_000_000) ||
-    !id(input.idempotencyKey) ||
-    input.attachments.length > MAX_COUNT
+    !id(input.idempotencyKey)
   )
     throw new OpenClawContentPublicError()
-  let total = 0
-  const publicAttachments: Array<{
-    type: "image" | "file"
-    filename?: string
-    mimeType: string
-  }> = []
-  const attachments = input.attachments.map((a) => {
-    const parsed = parseDataUrl(a.dataUrl),
-      name = a.filename === undefined ? undefined : filename(a.filename)
-    if (
-      !parsed ||
-      (a.filename !== undefined && !name) ||
-      (a.mimeType !== undefined && a.mimeType !== parsed.mimeType) ||
-      (a.type !== "image" && a.type !== "file")
-    )
-      throw new OpenClawContentPublicError()
-    total += parsed.sizeBytes
-    if (total > MAX) throw new OpenClawContentPublicError()
-    publicAttachments.push({
-      type: a.type,
-      ...(name ? { filename: name } : {}),
-      mimeType: parsed.mimeType,
-    })
-    return {
-      type: a.type,
-      content: parsed.dataUrl,
-      mimeType: parsed.mimeType,
-      sizeBytes: parsed.sizeBytes,
-      ...(name ? { fileName: name } : {}),
-    }
-  })
+  const attachments = prepareAttachments(input.attachments, policy)
   const native = {
     sessionKey: input.sessionKey,
     message: input.message,
     idempotencyKey: input.idempotencyKey,
-    attachments,
+    attachments: attachments.native,
   }
-  if (!validateChatSendParams(native)) throw new OpenClawContentPublicError()
-  return { native, public: publicAttachments }
+  if (
+    !validateChatSendParams(native) ||
+    encoder.encode(
+      JSON.stringify({
+        type: "req",
+        id: REQUEST_ID_PLACEHOLDER,
+        method: "chat.send",
+        params: native,
+      })
+    ).byteLength > policy.maxPayload
+  )
+    throw new OpenClawContentPublicError()
+  return { native, public: attachments.public }
+}
+/** Holds validated provider inputs server-side until the next native admission. */
+export function stageOpenClawChatAttachments(
+  input: readonly OpenClawAttachment[],
+  policy: OpenClawGatewayPolicy
+): OpenClawAttachmentStage {
+  if (!validPolicy(policy)) throw new OpenClawContentPublicError()
+  const retainedPolicy = Object.freeze({
+      maxPayload: policy.maxPayload,
+      attachments: Object.freeze({
+        maxBytes: policy.attachments.maxBytes,
+        maxImageBytes: policy.attachments.maxImageBytes,
+      }),
+    }),
+    prepared = prepareAttachments(input, retainedPolicy)
+  return {
+    public: prepared.public,
+    appendTo: (message) => message,
+    cleanup: async () => undefined,
+    [STAGED_OPENCLAW_ATTACHMENTS]: Object.freeze({
+      attachments: prepared.staged,
+      policy: retainedPolicy,
+    }),
+  }
+}
+export function readOpenClawChatAttachments(
+  stage: ServerAttachmentStage | undefined
+) {
+  if (!stage) return undefined
+  return (stage as Partial<OpenClawAttachmentStage>)[
+    STAGED_OPENCLAW_ATTACHMENTS
+  ]
 }
 /** The verified plugin reports validation only; it cannot publish a native artifact. */
 export function projectOpenClawRichPresentation(raw: unknown) {
