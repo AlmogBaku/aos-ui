@@ -476,6 +476,47 @@ describe("OpenCodeRunEngine", () => {
     }
   )
 
+  it("re-emits one valid run error when recovery starts after a durable step failure", async () => {
+    const failure = {
+      ...historyEvent(1, "session.next.step.failed", {
+        timestamp: 1,
+        assistantMessageID: "assistant-failed",
+        error: { type: "unknown", message: "native failure" },
+      }),
+      durable: { aggregateID: scope.sessionId, seq: 1, version: 2 },
+    }
+    const all = [
+      admitted(0, admission["run-recovered"]),
+      failure,
+      admitted(2, "newer-run"),
+    ]
+    const state = client({
+      history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+        data: all.filter((event) => event.durable.seq > (options?.after ?? -1)),
+        hasMore: false,
+      })),
+    })
+
+    const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+      threadId: scope.threadId,
+      runId: "run-recovered",
+      position: {
+        epoch: `opencode:${scope.sessionId}`,
+        lastSeen: 1,
+      },
+    })
+    const events = await collect(handle)
+
+    expect(events.map((event) => (event as { type: string }).type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.RUN_ERROR,
+    ])
+    expect(
+      events.filter((event) => EventSchemas.safeParse(event).success)
+    ).toHaveLength(events.length)
+    expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
   it("rejects recovery when the stable admission cannot be verified", async () => {
     const state = client({
       history: vi.fn(async () => ({
@@ -742,6 +783,83 @@ describe("OpenCodeRunEngine", () => {
     const priorEvents = await collect(prior)
     expect(priorEvents).toHaveLength(2)
     expect(priorEvents.at(-1)).toMatchObject({ type: EventType.RUN_ERROR })
+  })
+
+  it("settles a transport-failed Stop through the authoritative replacement recovery", async () => {
+    const first = controlledStream()
+    const second = controlledStream()
+    const wait = deferred()
+    let subscriptionCount = 0
+    let running = false
+    const state = client({
+      events: vi.fn(async () => {
+        subscriptionCount += 1
+        return subscriptionCount === 1 ? first.source : second.source
+      }),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          running = true
+          return {
+            data: {
+              admittedSeq: 0,
+              id: request.id,
+              sessionID: scope.sessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+      history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+        data:
+          subscriptionCount > 1 && (options?.after ?? -1) < 0
+            ? [admitted(0, admission["run-1"])]
+            : [],
+        hasMore: false,
+      })),
+      wait: vi.fn(async () => wait.promise),
+    })
+    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const prior = await engine.start(scope, input())
+    first.publish(
+      liveEvent(0, "session.next.prompt.admitted", {
+        timestamp: 0,
+        messageID: admission["run-1"],
+        prompt: { text: "Hello OpenCode" },
+        delivery: "queue",
+      })
+    )
+    await until(() => expect(prior.recoveryPosition().lastSeen).toBe(0))
+    first.fail()
+    await prior.settled
+
+    const stopped = prior.stop()
+    await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
+    await engine.recover(scope, {
+      threadId: scope.threadId,
+      runId: "run-1",
+      position: {
+        epoch: `opencode:${scope.sessionId}`,
+        lastSeen: 0,
+      },
+    })
+    running = false
+    wait.resolve()
+
+    await expect(
+      Promise.race([
+        stopped,
+        new Promise<"timed-out">((resolve) =>
+          setTimeout(() => resolve("timed-out"), 100)
+        ),
+      ])
+    ).resolves.toBe("idle")
+    expect(first.abort).toHaveBeenCalledOnce()
+    expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
   it("resets a segment instead of growing an unconsumed AG-UI queue", async () => {

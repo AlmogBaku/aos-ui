@@ -71,8 +71,21 @@ type ActiveRun = {
   admissionObserved: boolean
   settle(): void
   settled: Promise<void>
-  settleNative(): void
-  nativeSettled: Promise<void>
+  nativeSettlement: ScopedNativeSettlement
+}
+
+type Settlement = Readonly<{
+  settled: Promise<void>
+  settle(): void
+  readonly done: boolean
+}>
+
+type ScopedNativeSettlement = Settlement & {
+  key: string
+  scope: SessionScope
+  monitoring: boolean
+  waitFailures: number
+  stopRequested: boolean
 }
 
 class EventQueue implements AsyncIterable<AGUIEvent> {
@@ -255,7 +268,7 @@ function historyPage(value: unknown) {
   return { data: page.data, hasMore: page.hasMore }
 }
 
-function settlement() {
+function settlement(): Settlement {
   let resolve!: () => void
   let done = false
   const settled = new Promise<void>((next) => {
@@ -263,6 +276,9 @@ function settlement() {
   })
   return {
     settled,
+    get done() {
+      return done
+    },
     settle: () => {
       if (done) return
       done = true
@@ -279,6 +295,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   readonly #client: OpenCodeClient
   readonly #options: OpenCodeRunEngineOptions
   readonly #runs = new Map<string, ActiveRun>()
+  readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
   readonly #maxQueueEvents: number
   readonly #maxBufferedEvents: number
   readonly #waitRetryMs: number
@@ -429,7 +446,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       for (const event of all) {
         if (event.seq < admissionEvent.seq || event.seq > intervalEnd) continue
         if (event.seq <= projectionStart) {
-          run.projector.reconstructValidated(event)
+          this.#publish(run, run.projector.reconstructValidated(event))
           continue
         }
         this.#publish(run, run.projector.acceptValidated(event))
@@ -438,7 +455,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       run.ready = true
 
       if (nextAdmissionIndex >= 0) {
-        this.#finish(run)
+        this.#finish(run, false)
       } else {
         await this.#reconcile(run)
         if (!run.nativeTerminal) this.#watchWait(run)
@@ -458,10 +475,27 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   ): ActiveRun {
     const queue = new EventQueue(this.#maxQueueEvents)
     const segmentSettlement = settlement()
-    const nativeSettlement = settlement()
+    const key = runKey(scope)
+    let nativeSettlement = this.#nativeSettlements.get(key)
+    if (!nativeSettlement) {
+      const pending = settlement()
+      nativeSettlement = {
+        settled: pending.settled,
+        settle: pending.settle,
+        get done() {
+          return pending.done
+        },
+        key,
+        scope,
+        monitoring: false,
+        waitFailures: 0,
+        stopRequested: false,
+      }
+      this.#nativeSettlements.set(key, nativeSettlement)
+    }
     queue.push({ type: EventType.RUN_STARTED, threadId: scope.threadId, runId })
     return {
-      key: runKey(scope),
+      key,
       scope,
       runId,
       projector: new OpenCodeEventProjector(
@@ -485,8 +519,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       admissionObserved: expectedAdmission === undefined,
       settled: segmentSettlement.settled,
       settle: segmentSettlement.settle,
-      nativeSettled: nativeSettlement.settled,
-      settleNative: nativeSettlement.settle,
+      nativeSettlement,
     }
   }
 
@@ -719,7 +752,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       run.admissionObserved = true
     }
     if (projection.admissionBoundary) {
-      this.#finish(run)
+      this.#finish(run, false)
       return
     }
     for (const event of projection.events) {
@@ -741,10 +774,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
   }
 
-  #finish(run: ActiveRun) {
+  #finish(run: ActiveRun, authoritativeNativeIdle = true) {
     if (run.nativeTerminal) return
     run.nativeTerminal = true
-    run.settleNative()
+    if (authoritativeNativeIdle) this.#settleNative(run.nativeSettlement)
     run.controller.abort()
     this.#abortSource(run)
     if (!run.admissionObserved) {
@@ -796,7 +829,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     this.#abortSource(run)
     run.queue.close()
     run.settle()
-    run.settleNative()
+    if (run.nativeSettlement.stopRequested)
+      this.#monitorNativeSettlement(run.nativeSettlement)
     if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
   }
 
@@ -818,8 +852,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
     if (run.nativeTerminal) return "idle"
     if (run.segmentClosed) {
-      this.#watchWait(run)
-      await run.nativeSettled
+      run.nativeSettlement.stopRequested = true
+      this.#monitorNativeSettlement(run.nativeSettlement)
+      await run.nativeSettlement.settled
       return "idle"
     }
     return "stopping"
@@ -837,5 +872,36 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       await this.#client.sessions.active(signal),
       sessionId
     )
+  }
+
+  #settleNative(settlement: ScopedNativeSettlement) {
+    settlement.settle()
+    if (this.#nativeSettlements.get(settlement.key) === settlement)
+      this.#nativeSettlements.delete(settlement.key)
+  }
+
+  #monitorNativeSettlement(settlement: ScopedNativeSettlement) {
+    if (settlement.done || settlement.monitoring) return
+    settlement.monitoring = true
+    const reconcile = async () => {
+      if (settlement.done) return
+      try {
+        const current = this.#runs.get(settlement.key)
+        if (current && !current.abandoned) {
+          await this.#reconcile(current)
+        } else if (!(await this.#active(settlement.scope.sessionId))) {
+          this.#settleNative(settlement)
+          return
+        }
+        settlement.waitFailures = 0
+      } catch {
+        settlement.waitFailures += 1
+      }
+      if (settlement.done) return
+      const multiplier = Math.min(2 ** settlement.waitFailures, 16)
+      const timer = setTimeout(reconcile, this.#waitRetryMs * multiplier)
+      timer.unref?.()
+    }
+    void reconcile()
   }
 }

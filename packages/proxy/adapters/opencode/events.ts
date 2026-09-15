@@ -560,7 +560,7 @@ export class OpenCodeEventProjector {
   }
 
   reconstructValidated(event: ValidatedOpenCodeEvent) {
-    this.#acceptValidated(event, true)
+    return this.#acceptValidated(event, true)
   }
 
   #acceptValidated(
@@ -582,7 +582,13 @@ export class OpenCodeEventProjector {
       const oldest = this.#fingerprints.keys().next().value
       if (oldest !== undefined) this.#fingerprints.delete(oldest)
     }
-    return suppressEvents ? { events: [] } : projection
+    if (!suppressEvents) return projection
+    if (!projection.terminal) return { events: [] }
+    const terminal = projection.events.at(-1)
+    return {
+      events: terminal ? [terminal] : [],
+      terminal: projection.terminal,
+    }
   }
 
   finish(): Projection {
