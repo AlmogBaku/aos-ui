@@ -41,6 +41,7 @@ import {
   type ComposerEnterEvent,
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
@@ -111,6 +112,7 @@ import {
   type ComponentType,
   type FC,
   type KeyboardEvent,
+  type MouseEvent,
   type PropsWithChildren,
   type ReactNode,
 } from "react"
@@ -1572,8 +1574,42 @@ const AssistantActionBar: FC = () => {
   const retrySourceId = useAuiState((state) => state.message.parentId)
   const hasPendingInteraction = useAgUiInterrupts().length > 0
   const aui = useAui()
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
   const voice = useVoiceContext()
   const reading = useVoiceMessageReading()
+  useEffect(
+    () => () => {
+      if (copyResetTimerRef.current !== undefined) {
+        clearTimeout(copyResetTimerRef.current)
+      }
+      aui.message.setIsCopied(false)
+    },
+    [aui]
+  )
+  const copyMessage = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      const text = aui.message.getCopyText()
+      if (!text) return
+
+      void copyTextToClipboard(text).then(
+        () => {
+          if (copyResetTimerRef.current !== undefined) {
+            clearTimeout(copyResetTimerRef.current)
+          }
+          aui.message.setIsCopied(true)
+          copyResetTimerRef.current = setTimeout(() => {
+            copyResetTimerRef.current = undefined
+            aui.message.setIsCopied(false)
+          }, 3000)
+        },
+        () => undefined
+      )
+    },
+    [aui]
+  )
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning={!reading}
@@ -1581,6 +1617,7 @@ const AssistantActionBar: FC = () => {
       className="aui-assistant-action-bar-root col-start-3 row-start-2 -ms-1 flex animate-in items-center gap-1 text-muted-foreground duration-200 fade-in motion-reduce:animate-none"
     >
       <ActionBarPrimitive.Copy
+        onClick={copyMessage}
         render={<TooltipIconButton tooltip={labels.copy} />}
       >
         <AuiIf condition={(s) => s.message.isCopied}>

@@ -255,9 +255,21 @@ describe("assistant tool timeline", () => {
       />
     )
 
-    expect(
-      screen.getByText("Big finding already. Let me fix the call-site shape.")
-    ).toBeVisible()
+    const prose = screen.getByText(
+      "Big finding already. Let me fix the call-site shape."
+    )
+    const timelines = document.querySelectorAll(
+      '[data-slot="message-tool-experience"]'
+    )
+
+    expect(prose).toBeVisible()
+    expect(timelines).toHaveLength(2)
+    expect(timelines[0]?.compareDocumentPosition(prose)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+    expect(prose.compareDocumentPosition(timelines[1]!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
   })
 })
 
@@ -567,6 +579,53 @@ describe("Thread accessibility", () => {
 
     await screen.findByText("The reference is ready.")
     expect(screen.getByText("The reference is ready.")).toBeVisible()
+  })
+
+  it("copies assistant text when the Clipboard API is unavailable", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard"
+    )
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    })
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      "execCommand"
+    )
+    let copiedText = ""
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn((command: string) => {
+        if (command !== "copy") return false
+        const selected = document.activeElement
+        copiedText =
+          selected instanceof HTMLTextAreaElement ? selected.value : ""
+        return true
+      }),
+    })
+
+    try {
+      render(<LocalThread />)
+
+      const copy = await screen.findByRole("button", { name: "Copy" })
+      fireEvent.click(copy)
+
+      await waitFor(() => expect(copy).toHaveAttribute("data-copied", "true"))
+      expect(copiedText).toBe("The reference is ready.")
+    } finally {
+      if (execCommandDescriptor) {
+        Object.defineProperty(document, "execCommand", execCommandDescriptor)
+      } else {
+        Reflect.deleteProperty(document, "execCommand")
+      }
+      if (clipboardDescriptor) {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor)
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard")
+      }
+    }
   })
 
   it("does not render a completed assistant turn with no content", () => {
@@ -892,11 +951,7 @@ describe("Thread accessibility", () => {
     })
 
     render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-      />
+      <LocalThread model={{ run }} enableMessageQueue initialMessages={[]} />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "first")
@@ -910,9 +965,7 @@ describe("Thread accessibility", () => {
     await user.type(input, "queue this")
     const queue = screen.getByRole("button", { name: "Queue message" })
     expect(queue).toBeVisible()
-    expect(
-      screen.queryByRole("button", { name: "Stop generating" })
-    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Stop generating" })).toBeNull()
 
     fireEvent.blur(input)
     expect(
