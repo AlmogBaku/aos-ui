@@ -41,6 +41,7 @@ import {
   type ComposerEnterEvent,
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
@@ -107,14 +108,46 @@ import {
   useCallback,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentType,
   type FC,
   type KeyboardEvent,
+  type MouseEvent,
   type PropsWithChildren,
   type ReactNode,
 } from "react"
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart
+
+const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
+
+function touchPrimarySnapshot(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(TOUCH_PRIMARY_QUERY).matches
+  )
+}
+
+function subscribeToTouchPrimary(change: () => void): () => void {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
+    return () => undefined
+  }
+  const query = window.matchMedia(TOUCH_PRIMARY_QUERY)
+  query.addEventListener("change", change)
+  return () => query.removeEventListener("change", change)
+}
+
+function useTouchPrimaryInput(): boolean {
+  return useSyncExternalStore(
+    subscribeToTouchPrimary,
+    touchPrimarySnapshot,
+    () => false
+  )
+}
 
 /**
  * Optional component overrides for the thread. `AssistantMessage` and
@@ -663,6 +696,7 @@ const Composer: FC<{
   const queuedMessagesLabel = labels.queuedMessages ?? "Queued messages"
   const features = useContext(ThreadComposerFeaturesContext)
   const hasPendingInteraction = useAgUiInterrupts().length > 0
+  const isTouchPrimaryInput = useTouchPrimaryInput()
   const aui = useAui()
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const submissionLockRef = useRef(false)
@@ -988,6 +1022,7 @@ const Composer: FC<{
           isRunning: aui.thread.getState().isRunning,
           hasQueue: aui.thread.getState().capabilities.queue === true,
           isEmpty: aui.composer.getState().isEmpty,
+          plainEnterSends: !isTouchPrimaryInput,
           canSteer: features.steer !== undefined && !hasPendingInteraction,
           hasAttachments: aui.composer.getState().attachments.length > 0,
         }
@@ -1045,6 +1080,7 @@ const Composer: FC<{
       aui,
       focusInput,
       historyEntries,
+      isTouchPrimaryInput,
       openHistorySearch,
       features,
       hasPendingInteraction,
@@ -1436,12 +1472,19 @@ const AssistantMessage: FC = () => {
         >
           <InlineReadAloud />
         </div>
-        <MessageToolExperience renderTool={ToolFallbackComponent} />
         <MessagePrimitive.GroupedParts groupBy={ASSISTANT_MESSAGE_GROUPER}>
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                return <div data-slot="aui_chain-of-thought">{children}</div>
+                return (
+                  <>
+                    <MessageToolExperience
+                      renderTool={ToolFallbackComponent}
+                      indices={part.indices}
+                    />
+                    {children}
+                  </>
+                )
               case "group-tool":
                 return null
               case "group-reasoning": {

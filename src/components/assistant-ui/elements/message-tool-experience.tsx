@@ -40,11 +40,7 @@ type ToolPart = Pick<
 
 type RuntimeToolPart = Extract<EnrichedPartState, { type: "tool-call" }>
 type RuntimeReasoningPart = Extract<EnrichedPartState, { type: "reasoning" }>
-type RuntimeTextPart = Extract<EnrichedPartState, { type: "text" }>
-type RuntimeExecutionPart =
-  | RuntimeReasoningPart
-  | RuntimeTextPart
-  | RuntimeToolPart
+type RuntimeExecutionPart = RuntimeReasoningPart | RuntimeToolPart
 
 const summaryOnlyToolNames = new Set([
   "skill",
@@ -185,11 +181,23 @@ export function executionTimelineState(
 
 export function MessageToolExperience({
   renderTool,
+  indices,
 }: {
   renderTool: ToolCallMessagePartComponent
+  /** Source-part positions for one contiguous execution segment. */
+  indices?: readonly number[]
 }) {
   const selectParts = useMemo(() => createExecutionPartSelector(), [])
-  const parts = useAuiState((state) => selectParts(state.message.parts))
+  const parts = useAuiState((state) =>
+    selectParts(
+      indices
+        ? indices.flatMap((index) => {
+            const part = state.message.parts[index]
+            return part === undefined ? [] : [part]
+          })
+        : state.message.parts
+    )
+  )
   const toolParts = useMemo(() => parts.filter(isRuntimeToolPart), [parts])
   const reasoningParts = useMemo(
     () => parts.filter(isRuntimeReasoningPart),
@@ -248,18 +256,6 @@ export function MessageToolExperience({
             className="flex min-w-0 flex-col gap-0.5"
           >
             {parts.map((part, index) => {
-              if (part.type === "text") {
-                return (
-                  <p
-                    key={`text-${index}`}
-                    data-slot="execution-message"
-                    className="py-1 text-sm leading-relaxed whitespace-pre-wrap text-foreground/70"
-                    dir="auto"
-                  >
-                    {part.text}
-                  </p>
-                )
-              }
               if (part.type === "reasoning") {
                 const running = part.status.type === "running"
                 return (
