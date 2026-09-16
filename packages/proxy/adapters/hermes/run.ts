@@ -1332,6 +1332,22 @@ export class HermesRunEngine {
           active.redirectBoundaryObserved = true
         return
       }
+      if (!active.messageId && completedMessageId)
+        active.messageId = completedMessageId
+      const finalText = boundedText(payload.text)
+      if (finalText) this.#ensureMessageId(active)
+      if (
+        finalText !== undefined &&
+        active.messageId &&
+        active.streamedText !== undefined &&
+        finalText.startsWith(active.streamedText)
+      ) {
+        const remaining = finalText.slice(active.streamedText.length)
+        if (remaining) {
+          this.#appendStreamedText(active, remaining)
+          this.#emitMediaFilteredText(active, active.mediaFilter.write(remaining))
+        }
+      }
       if (payload.status === "error")
         this.#fail(
           active,
@@ -1339,25 +1355,6 @@ export class HermesRunEngine {
           "Hermes could not complete this run."
         )
       else {
-        if (!active.messageId && completedMessageId)
-          active.messageId = completedMessageId
-        const finalText = boundedText(payload.text)
-        if (finalText) this.#ensureMessageId(active)
-        if (
-          finalText !== undefined &&
-          active.messageId &&
-          active.streamedText !== undefined &&
-          finalText.startsWith(active.streamedText)
-        ) {
-          const remaining = finalText.slice(active.streamedText.length)
-          if (remaining) {
-            this.#appendStreamedText(active, remaining)
-            this.#emitMediaFilteredText(
-              active,
-              active.mediaFilter.write(remaining)
-            )
-          }
-        }
         if (active.redirectChainActive || active.redirectDispatchPending) {
           this.#sealGeneration(active)
           if (active.redirectDispatchPending)

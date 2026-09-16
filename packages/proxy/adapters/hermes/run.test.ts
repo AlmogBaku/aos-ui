@@ -2367,6 +2367,118 @@ describe("HermesRunEngine", () => {
     ])
   })
 
+  it("keeps Hermes partial output visible when message completion fails", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 1,
+            payload: {
+              message_id: "partial-reply",
+              text: "The completed response retained by Hermes",
+              status: "error",
+              error: "secret native body",
+              partial: true,
+              recoverable: true,
+            },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "partial-reply",
+        role: "assistant",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "partial-reply",
+        delta: "The completed response retained by Hermes",
+      },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "partial-reply" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Hermes could not complete this run.",
+        code: "AOS_PROVIDER_RUN_FAILED",
+      },
+    ])
+  })
+
+  it("appends Hermes terminal output after a streamed partial failure", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "partial-reply" },
+          })
+          publish?.({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { text: "Retained while streaming" },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 3,
+            payload: {
+              message_id: "partial-reply",
+              text: "Retained while streaming and at completion",
+              status: "error",
+              error: "secret native body",
+              partial: true,
+            },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "partial-reply",
+        role: "assistant",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "partial-reply",
+        delta: "Retained while streaming",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "partial-reply",
+        delta: " and at completion",
+      },
+      { type: EventType.TEXT_MESSAGE_END, messageId: "partial-reply" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Hermes could not complete this run.",
+        code: "AOS_PROVIDER_RUN_FAILED",
+      },
+    ])
+  })
+
   it("rejects unstaged multimodal content instead of silently dropping it", async () => {
     const engine = new HermesRunEngine(native())
 
