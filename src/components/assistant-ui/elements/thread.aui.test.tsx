@@ -193,20 +193,15 @@ describe("assistant tool timeline", () => {
     )
   })
 
-  it("keeps intermediate assistant prose inside the timeline and the final answer visible", async () => {
-    const user = userEvent.setup()
+  it("keeps assistant prose visible between completed tool calls", async () => {
     render(
       <LocalThread
         toolFallback={AosToolPresentation}
         initialMessages={[
           {
-            id: "tool-loop-with-final",
+            id: "tool-loop-with-interleaved-prose",
             role: "assistant",
             content: [
-              {
-                type: "text",
-                text: "I will inspect the project first.",
-              },
               {
                 type: "tool-call",
                 toolCallId: "read-project",
@@ -216,7 +211,14 @@ describe("assistant tool timeline", () => {
               },
               {
                 type: "text",
-                text: "The final answer remains in the conversation.",
+                text: "Big finding already. Let me fix the call-site shape.",
+              },
+              {
+                type: "tool-call",
+                toolCallId: "fix-project",
+                toolName: "edit_file",
+                args: { path: "README.md" },
+                result: "updated",
               },
             ],
           },
@@ -225,12 +227,8 @@ describe("assistant tool timeline", () => {
     )
 
     expect(
-      screen.getByText("The final answer remains in the conversation.")
+      screen.getByText("Big finding already. Let me fix the call-site shape.")
     ).toBeVisible()
-    expect(screen.queryByText("I will inspect the project first.")).toBeNull()
-
-    await user.click(screen.getByRole("button", { name: "1 tool call" }))
-    expect(screen.getByText("I will inspect the project first.")).toBeVisible()
   })
 })
 

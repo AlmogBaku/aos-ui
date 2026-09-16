@@ -42,7 +42,9 @@ type RuntimeToolPart = Extract<EnrichedPartState, { type: "tool-call" }>
 type RuntimeReasoningPart = Extract<EnrichedPartState, { type: "reasoning" }>
 type RuntimeTextPart = Extract<EnrichedPartState, { type: "text" }>
 type RuntimeExecutionPart =
-  RuntimeReasoningPart | RuntimeTextPart | RuntimeToolPart
+  | RuntimeReasoningPart
+  | RuntimeTextPart
+  | RuntimeToolPart
 
 const summaryOnlyToolNames = new Set([
   "skill",
@@ -112,14 +114,6 @@ function isRuntimeReasoningPart(part: unknown): part is RuntimeReasoningPart {
   )
 }
 
-function isRuntimeTextPart(part: unknown): part is RuntimeTextPart {
-  return (
-    typeof part === "object" &&
-    part !== null &&
-    (part as { type?: unknown }).type === "text"
-  )
-}
-
 function isOrdinaryToolPart(part: RuntimeToolPart) {
   return part.toolName !== "question" && !part.toolUI && !isAosRichTool(part)
 }
@@ -128,16 +122,6 @@ function isExecutionBoundaryPart(part: unknown) {
   return (
     isRuntimeReasoningPart(part) ||
     (isRuntimeToolPart(part) && isOrdinaryToolPart(part))
-  )
-}
-
-export function isIntermediateExecutionText(
-  parts: readonly unknown[],
-  index: number
-) {
-  return (
-    isRuntimeTextPart(parts[index]) &&
-    parts.slice(index + 1).some(isExecutionBoundaryPart)
   )
 }
 
@@ -162,9 +146,7 @@ export function createExecutionPartSelector() {
   let previous: readonly RuntimeExecutionPart[] = []
   return (parts: readonly unknown[]) => {
     const next = parts.filter(
-      (part, index): part is RuntimeExecutionPart =>
-        isExecutionBoundaryPart(part) ||
-        (isRuntimeTextPart(part) && isIntermediateExecutionText(parts, index))
+      (part): part is RuntimeExecutionPart => isExecutionBoundaryPart(part)
     )
     if (
       previous.length === next.length &&

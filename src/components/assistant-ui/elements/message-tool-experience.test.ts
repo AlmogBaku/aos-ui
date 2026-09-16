@@ -41,7 +41,7 @@ describe("createExecutionPartSelector", () => {
     ).toEqual(["Checking the implementation", "read_file"])
   })
 
-  it("moves only assistant text before a later execution part into the timeline", () => {
+  it("keeps assistant prose out of the execution timeline", () => {
     const select = createExecutionPartSelector()
     const parts = select([
       {
@@ -77,12 +77,7 @@ describe("createExecutionPartSelector", () => {
       parts.map((part) =>
         part.type === "tool-call" ? part.toolName : part.text
       )
-    ).toEqual([
-      "I will inspect the repository.",
-      "read_file",
-      "The first check found another issue.",
-      "Checking the second issue",
-    ])
+    ).toEqual(["read_file", "Checking the second issue"])
   })
 })
 

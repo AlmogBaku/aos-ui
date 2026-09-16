@@ -16,10 +16,7 @@ import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
-import {
-  isIntermediateExecutionText,
-  MessageToolExperience,
-} from "@/components/assistant-ui/elements/message-tool-experience"
+import { MessageToolExperience } from "@/components/assistant-ui/elements/message-tool-experience"
 import { isAosRichTool } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import {
@@ -1404,7 +1401,6 @@ const MessageError: FC = () => {
 
 const AssistantMessage: FC = () => {
   const reading = useVoiceMessageReading()
-  const messageParts = useAuiState((state) => state.message.parts)
   const completedWithoutContent = useAuiState(
     (state) =>
       state.message.status?.type === "complete" &&
@@ -1452,13 +1448,6 @@ const AssistantMessage: FC = () => {
                 return null
               }
               case "text": {
-                const partIndex = messageParts.indexOf(part)
-                if (
-                  partIndex >= 0 &&
-                  isIntermediateExecutionText(messageParts, partIndex)
-                ) {
-                  return null
-                }
                 return reading ? (
                   <></>
                 ) : (
