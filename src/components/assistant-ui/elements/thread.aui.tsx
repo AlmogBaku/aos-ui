@@ -170,6 +170,7 @@ export type ThreadLabels = {
   stopDictation: string
   stopVoiceInput: string
   sendMessage: string
+  queueMessage: string
   stopGenerating: string
   assistantWorking: string
   copy: string
@@ -219,6 +220,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   stopDictation: "Stop dictation",
   stopVoiceInput: "Stop voice input",
   sendMessage: "Send message",
+  queueMessage: "Queue message",
   stopGenerating: "Stop generating",
   assistantWorking: "Assistant is working",
   copy: "Copy",
@@ -671,6 +673,7 @@ const Composer: FC<{
   const clearUndoRef = useRef<RecoverableDraft | null>(null)
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
   const historyBrowseRef = useRef<HistoryBrowse | null>(null)
+  const [inputFocused, setInputFocused] = useState(false)
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
@@ -1219,16 +1222,18 @@ const Composer: FC<{
               }}
               onFocus={() => {
                 escapeRef.current = null
+                setInputFocused(true)
               }}
               onBlur={() => {
                 escapeRef.current = null
+                setInputFocused(false)
               }}
               onKeyDown={handleKeyDown}
               aria-label={labels.messageInput}
             />
           </VoiceComposerField>
         </div>
-        <ComposerToolbar onSend={submitOrdinary}>
+        <ComposerToolbar onSend={submitOrdinary} inputFocused={inputFocused}>
           <ComposerFeatureBar direction={direction} />
         </ComposerToolbar>
       </ComposerPrimitive.AttachmentDropzone>
@@ -1314,14 +1319,20 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   )
 }
 
-const ComposerToolbar: FC<PropsWithChildren<{ onSend(): void }>> = ({
-  children,
-  onSend,
-}) => {
+const ComposerToolbar: FC<
+  PropsWithChildren<{ onSend(): void; inputFocused: boolean }>
+> = ({ children, onSend, inputFocused }) => {
   const labels = useContext(ThreadLabelsContext)
   const voice = useVoiceContext()
   const voiceActive = useVoiceCaptureActive()
+  const isRunning = useAuiState((state) => state.thread.isRunning)
+  const canQueue = useAuiState(
+    (state) =>
+      state.thread.capabilities.queue === true &&
+      state.composer.text.trim().length > 0
+  )
   const canSend = useAuiState((state) => state.composer.canSend)
+  const showQueue = isRunning && inputFocused && canQueue
   return (
     <div
       data-slot="aui_composer-toolbar"
@@ -1333,7 +1344,7 @@ const ComposerToolbar: FC<PropsWithChildren<{ onSend(): void }>> = ({
         <VoiceComposerControl />
         {!voiceActive ? (
           <>
-            <AuiIf condition={(s) => !s.thread.isRunning}>
+            {!isRunning ? (
               <button
                 type="button"
                 className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
@@ -1345,8 +1356,20 @@ const ComposerToolbar: FC<PropsWithChildren<{ onSend(): void }>> = ({
                   <ArrowUpIcon className="aui-composer-send-icon size-4" />
                 </span>
               </button>
-            </AuiIf>
-            <AuiIf condition={(s) => s.thread.isRunning}>
+            ) : showQueue ? (
+              <button
+                type="button"
+                className="aui-composer-send grid size-11 shrink-0 place-items-center rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-25 @min-[64rem]/workspace:size-8 @min-[64rem]/workspace:bg-primary @min-[64rem]/workspace:text-primary-foreground"
+                aria-label={labels.queueMessage}
+                disabled={!canSend}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={onSend}
+              >
+                <span className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground @min-[64rem]/workspace:contents">
+                  <ArrowUpIcon className="aui-composer-send-icon size-4" />
+                </span>
+              </button>
+            ) : (
               <ComposerPrimitive.Cancel
                 render={
                   <Button
@@ -1361,7 +1384,7 @@ const ComposerToolbar: FC<PropsWithChildren<{ onSend(): void }>> = ({
                   <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
                 </span>
               </ComposerPrimitive.Cancel>
-            </AuiIf>
+            )}
           </>
         ) : null}
       </div>

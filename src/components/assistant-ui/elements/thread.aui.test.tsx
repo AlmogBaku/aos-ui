@@ -837,6 +837,51 @@ describe("Thread accessibility", () => {
     ).toBeInTheDocument()
   })
 
+  it("offers Queue only for a focused text draft while a response runs", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "first")
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+
+    expect(
+      screen.getByRole("button", { name: "Stop generating" })
+    ).toBeVisible()
+
+    await user.type(input, "queue this")
+    const queue = screen.getByRole("button", { name: "Queue message" })
+    expect(queue).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Stop generating" })
+    ).toBeNull()
+
+    fireEvent.blur(input)
+    expect(
+      screen.getByRole("button", { name: "Stop generating" })
+    ).toBeVisible()
+
+    fireEvent.focus(input)
+    await user.click(screen.getByRole("button", { name: "Queue message" }))
+
+    expect(
+      await screen.findByRole("region", { name: "Queued messages" })
+    ).toBeVisible()
+    expect(screen.getByText("queue this")).toBeVisible()
+    expect(run).toHaveBeenCalledOnce()
+  })
+
   it.each(["button", "escape"])(
     "routes explicit Stop (%s) through the runtime exactly once",
     async (trigger) => {
