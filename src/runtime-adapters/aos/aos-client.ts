@@ -321,8 +321,11 @@ async function* reconnectingSse(
         }
         if (interrupted || done) break
       }
-    } catch (error) {
-      if (signal?.aborted) throw error
+    } catch {
+      // A user stop aborts the browser-owned fetch body. Its implementation
+      // error (for example, "BodyStreamBuffer was aborted") is not a model
+      // failure and must not escape into the conversation.
+      if (signal?.aborted) return
       interrupted = true
     } finally {
       if (interrupted) await reader.cancel().catch(() => undefined)
