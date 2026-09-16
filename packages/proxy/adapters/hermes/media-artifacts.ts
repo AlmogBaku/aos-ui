@@ -172,7 +172,7 @@ export class HermesMediaTextFilter {
   #projectLine(line: string) {
     const reference = mediaReference(line)
     if (!reference) return line
-    return this.#trusted.size > 0 ? "" : "[Media unavailable]"
+    return this.#trusted.size > 0 ? undefined : "[Media unavailable]"
   }
 
   #drain(final: boolean) {
@@ -183,7 +183,7 @@ export class HermesMediaTextFilter {
         const line = this.#pending.slice(0, newline).replace(/\r$/u, "")
         this.#pending = this.#pending.slice(newline + 1)
         const projected = this.#projectLine(line)
-        if (projected) output += `${projected}\n`
+        if (projected !== undefined) output += `${projected}\n`
         continue
       }
       if (
@@ -198,7 +198,7 @@ export class HermesMediaTextFilter {
         this.#discardingMediaLine = true
         break
       }
-      output += this.#projectLine(this.#pending)
+      output += this.#projectLine(this.#pending) ?? ""
       this.#pending = ""
     }
     return output

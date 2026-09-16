@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   HermesMediaTextFilter,
   projectHermesMediaArtifacts,
+  projectHermesMediaText,
 } from "./media-artifacts"
 
 const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
@@ -97,5 +98,21 @@ describe("Hermes native media projection", () => {
     ].join("")
 
     expect(output).toBe("")
+  })
+
+  it("preserves blank lines that delimit Markdown blocks", () => {
+    const markdown = [
+      "- Last list item",
+      "",
+      "**Candidates:**",
+      "",
+      "| # | Idea |",
+      "|---|---|",
+      "| 1 | DevTools |",
+      "",
+      "**Pick:** DevTools",
+    ].join("\n")
+
+    expect(projectHermesMediaText(markdown, [])).toBe(markdown)
   })
 })
