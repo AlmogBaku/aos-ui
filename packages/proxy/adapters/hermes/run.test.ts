@@ -2497,12 +2497,10 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("keeps the run open when a failed tool attempt is followed by recovery", async () => {
+  it("keeps the run open across a failed tool, interim text, and recovered tools", async () => {
     let publish: ((event: unknown) => void) | undefined
-    const status = vi.fn(async () => "idle" as const)
     const engine = new HermesRunEngine(
       native({
-        status,
         observe: async (_liveSessionId, listener) => {
           publish = listener
           return () => undefined
@@ -2527,25 +2525,18 @@ describe("HermesRunEngine", () => {
             },
           })
           publish?.({
-            type: "message.complete",
+            type: "message.interim",
             session_id: "live-secret",
             seq: 3,
             payload: {
-              message_id: "failed-attempt",
-              status: "error",
-              recoverable: true,
+              text: "The first call failed. I will split the work.",
+              already_streamed: false,
             },
-          })
-          publish?.({
-            type: "message.start",
-            session_id: "live-secret",
-            seq: 4,
-            payload: { message_id: "recovered-attempt" },
           })
           publish?.({
             type: "tool.complete",
             session_id: "live-secret",
-            seq: 5,
+            seq: 4,
             payload: {
               tool_id: "recovery-tool-1",
               name: "web_extract",
@@ -2556,7 +2547,7 @@ describe("HermesRunEngine", () => {
           publish?.({
             type: "tool.complete",
             session_id: "live-secret",
-            seq: 6,
+            seq: 5,
             payload: {
               tool_id: "recovery-tool-2",
               name: "execute_code",
@@ -2567,11 +2558,10 @@ describe("HermesRunEngine", () => {
           publish?.({
             type: "message.complete",
             session_id: "live-secret",
-            seq: 7,
+            seq: 6,
             payload: {
-              message_id: "recovered-attempt",
               text: "Recovered after splitting the work.",
-              status: "completed",
+              status: "complete",
             },
           })
           return { acknowledgement: "accepted" }
@@ -2581,7 +2571,6 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
 
-    expect(status).toHaveBeenCalledTimes(1)
     expect(
       events.filter((event) => event.type === EventType.TOOL_CALL_RESULT)
     ).toHaveLength(3)
@@ -2590,12 +2579,117 @@ describe("HermesRunEngine", () => {
         type: EventType.RUN_ERROR,
       })
     )
-    expect(events).toContainEqual({
-      type: EventType.TEXT_MESSAGE_CONTENT,
-      messageId: "recovered-attempt",
-      delta: "Recovered after splitting the work.",
-    })
+    const failedTool = events.findIndex(
+      (event) =>
+        event.type === EventType.TOOL_CALL_RESULT &&
+        event.toolCallId === "failed-tool"
+    )
+    const interim = events.findIndex(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_CONTENT &&
+        event.delta === "The first call failed. I will split the work."
+    )
+    const recoveredTool = events.findIndex(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        event.toolCallId === "recovery-tool-1"
+    )
+    const finalText = events.findIndex(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_CONTENT &&
+        event.delta === "Recovered after splitting the work."
+    )
+    const finished = events.findIndex(
+      (event) => event.type === EventType.RUN_FINISHED
+    )
+
+    expect(failedTool).toBeGreaterThan(-1)
+    expect(interim).toBeGreaterThan(failedTool)
+    expect(recoveredTool).toBeGreaterThan(interim)
+    expect(finalText).toBeGreaterThan(recoveredTool)
+    expect(finished).toBeGreaterThan(finalText)
     expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+    expect(
+      events.filter((event) => event.type === EventType.RUN_FINISHED)
+    ).toHaveLength(1)
+  })
+
+  it("seals already-streamed interim text without duplicating it", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "reply" },
+          })
+          publish?.({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { text: "Checking the next boundary." },
+          })
+          publish?.({
+            type: "message.interim",
+            session_id: "live-secret",
+            seq: 3,
+            payload: {
+              text: "Checking the next boundary.",
+              already_streamed: true,
+            },
+          })
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 4,
+            payload: {
+              tool_id: "tool-after-interim",
+              name: "verify",
+              args: {},
+              result: { success: true },
+            },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 5,
+            payload: { text: "Final answer", status: "complete" },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+    expect(
+      events.filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+    ).toEqual([
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "reply",
+        delta: "Checking the next boundary.",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "run-1:assistant:2",
+        delta: "Final answer",
+      },
+    ])
+    expect(
+      events.findIndex((event) => event.type === EventType.TEXT_MESSAGE_END)
+    ).toBeLessThan(
+      events.findIndex(
+        (event) =>
+          event.type === EventType.TOOL_CALL_START &&
+          event.toolCallId === "tool-after-interim"
+      )
+    )
   })
 
   it("rejects unstaged multimodal content instead of silently dropping it", async () => {

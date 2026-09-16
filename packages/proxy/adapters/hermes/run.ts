@@ -313,7 +313,7 @@ type ActiveRun = {
   redirectDispatchPending: boolean
   redirectBoundaryObserved: boolean
   redirectIdleObserved: boolean
-  recoverableErrorObserved: boolean
+  failedCompletionObserved: boolean
   stopping: boolean
   uncertain: boolean
   detached: boolean
@@ -738,7 +738,7 @@ export class HermesRunEngine {
         redirectDispatchPending: false,
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
-        recoverableErrorObserved: false,
+        failedCompletionObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -970,7 +970,7 @@ export class HermesRunEngine {
         redirectDispatchPending: false,
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
-        recoverableErrorObserved: false,
+        failedCompletionObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -1219,6 +1219,29 @@ export class HermesRunEngine {
       this.#emitMediaFilteredText(active, active.mediaFilter.write(textDelta))
       return
     }
+    if (event.type === "message.interim" && textDelta !== undefined) {
+      if (textDelta.length === 0) return
+      this.#ensureMessageId(active)
+      const streamedText = active.streamedText
+      if (streamedText !== undefined && textDelta.startsWith(streamedText)) {
+        const remaining = textDelta.slice(streamedText.length)
+        if (remaining) {
+          this.#appendStreamedText(active, remaining)
+          this.#emitMediaFilteredText(
+            active,
+            active.mediaFilter.write(remaining)
+          )
+        }
+      } else if (payload.already_streamed !== true) {
+        this.#appendStreamedText(active, textDelta)
+        this.#emitMediaFilteredText(active, active.mediaFilter.write(textDelta))
+      }
+      // Interim assistant commentary is a message boundary inside the native
+      // turn. Hermes may continue with more tools and another text message;
+      // only message.complete settles the run.
+      this.#sealGeneration(active)
+      return
+    }
     // Hermes uses thinking.delta for transient spinner/status copy. It is not
     // model reasoning and must not be persisted into the reasoning message.
     if (event.type === "thinking.delta") return
@@ -1311,12 +1334,12 @@ export class HermesRunEngine {
         !active.stopping &&
         !active.uncertain &&
         !active.redirectChainActive &&
-        !active.recoverableErrorObserved
+        !active.failedCompletionObserved
       )
         return
       if (active.stopping) this.#finish(active, { stopped: true })
       else if (active.redirectChainActive) this.#finish(active)
-      else if (active.recoverableErrorObserved)
+      else if (active.failedCompletionObserved)
         this.#fail(
           active,
           "AOS_PROVIDER_RUN_FAILED",
@@ -1368,11 +1391,10 @@ export class HermesRunEngine {
         }
       }
       if (payload.status === "error") {
-        // A failed Hermes generation is not necessarily a failed turn. The
-        // harness can recover with more tool calls and another assistant
-        // message, so close only this message and wait for native lifecycle
-        // events to declare the Session idle or successfully complete.
-        active.recoverableErrorObserved = true
+        // Do not settle from an error frame alone. Seal its assistant message
+        // and wait for Hermes' idle lifecycle edge, while still accepting any
+        // later buffered tool/message frames in source order.
+        active.failedCompletionObserved = true
         this.#sealGeneration(active)
       } else {
         if (active.redirectChainActive || active.redirectDispatchPending) {

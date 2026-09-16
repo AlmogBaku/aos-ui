@@ -6,7 +6,8 @@ for other harnesses.
 
 Read the [runtime adapter authoring guide](../../../../docs/development/runtime-adapter-authoring.md)
 for shared obligations. [`UPSTREAM.md`](UPSTREAM.md) records the pinned MIT
-sources and attribution.
+sources and attribution. [`TURN-LIFECYCLE.md`](TURN-LIFECYCLE.md) defines the
+native `/api/ws` turn boundaries and their AG-UI mapping.
 
 ## Package map
 
