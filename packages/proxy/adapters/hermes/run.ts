@@ -314,6 +314,7 @@ type ActiveRun = {
   redirectBoundaryObserved: boolean
   redirectIdleObserved: boolean
   failedCompletionObserved: boolean
+  nativeErrorObserved: boolean
   stopping: boolean
   uncertain: boolean
   detached: boolean
@@ -739,6 +740,7 @@ export class HermesRunEngine {
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
         failedCompletionObserved: false,
+        nativeErrorObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -971,6 +973,7 @@ export class HermesRunEngine {
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
         failedCompletionObserved: false,
+        nativeErrorObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -1334,12 +1337,13 @@ export class HermesRunEngine {
         !active.stopping &&
         !active.uncertain &&
         !active.redirectChainActive &&
-        !active.failedCompletionObserved
+        !active.failedCompletionObserved &&
+        !active.nativeErrorObserved
       )
         return
       if (active.stopping) this.#finish(active, { stopped: true })
       else if (active.redirectChainActive) this.#finish(active)
-      else if (active.failedCompletionObserved)
+      else if (active.failedCompletionObserved || active.nativeErrorObserved)
         this.#fail(
           active,
           "AOS_PROVIDER_RUN_FAILED",
@@ -1349,11 +1353,11 @@ export class HermesRunEngine {
       return
     }
     if (event.type === "error") {
-      this.#fail(
-        active,
-        "AOS_PROVIDER_RUN_FAILED",
-        "Hermes could not complete this run."
-      )
+      // Hermes also uses `error` for advisory failures such as a rejected
+      // pending model switch, after which the current turn keeps running.
+      // Reconcile native liveness before emitting terminal AG-UI state.
+      active.nativeErrorObserved = true
+      void this.#failNativeErrorIfIdle(active)
       return
     }
     if (event.type === "message.complete") {
@@ -1572,6 +1576,22 @@ export class HermesRunEngine {
       // the mutation safe to retry or prove that Hermes is idle.
     }
     return "stopping"
+  }
+
+  async #failNativeErrorIfIdle(active: ActiveRun) {
+    try {
+      if ((await this.#native.status(active.liveSessionId)) !== "idle") return
+    } catch {
+      // A failed status read cannot prove that an advisory native error ended
+      // the turn. Later message/session lifecycle events remain authoritative.
+      return
+    }
+    if (active.terminal || !active.nativeErrorObserved) return
+    this.#fail(
+      active,
+      "AOS_PROVIDER_RUN_FAILED",
+      "Hermes could not complete this run."
+    )
   }
 
   async #steer(active: ActiveRun, text: string) {

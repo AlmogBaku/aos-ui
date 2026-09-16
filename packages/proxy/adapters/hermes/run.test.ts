@@ -1445,10 +1445,80 @@ describe("HermesRunEngine", () => {
     expect(interrupted).toBe(1)
   })
 
-  it("terminalizes native failures without disclosing provider error bodies", async () => {
+  it("keeps the run open after an advisory native error while Hermes is running", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const status = vi
+      .fn<() => Promise<"idle" | "running">>()
+      .mockResolvedValueOnce("idle")
+      .mockResolvedValue("running")
+    const engine = new HermesRunEngine(
+      native({
+        status,
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "message-42" },
+          })
+          publish?.({
+            type: "error",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { message: "Could not switch model" },
+          })
+          await Promise.resolve()
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 3,
+            payload: {
+              tool_id: "recovery-tool",
+              name: "inspect",
+              args: {},
+              result: { success: true },
+            },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 4,
+            payload: { text: "Recovered response", status: "complete" },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+
+    expect(status).toHaveBeenCalledTimes(2)
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: EventType.RUN_ERROR })
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: EventType.TOOL_CALL_RESULT,
+        toolCallId: "recovery-tool",
+      })
+    )
+    expect(events).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "message-42",
+      delta: "Recovered response",
+    })
+    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+  })
+
+  it("terminalizes confirmed idle native failures without disclosing provider error bodies", async () => {
     let publish: ((event: unknown) => void) | undefined
     const engine = new HermesRunEngine(
       native({
+        status: async () => "idle",
         observe: async (_liveSessionId, listener) => {
           publish = listener
           return () => undefined
