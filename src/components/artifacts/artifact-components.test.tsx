@@ -7,7 +7,16 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import {
+  AssistantRuntimeProvider,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useLocalRuntime,
+  type ChatModelAdapter,
+  type ThreadMessageLike,
+} from "@assistant-ui/react"
 
+import type { ArtifactMessage } from "@/artifacts/artifacts"
 import type { ArtifactAdapter } from "@/runtime-adapters/contracts"
 
 import {
@@ -61,6 +70,53 @@ const ArtifactTestSurface = () => (
     <ArtifactViewerContent />
   </>
 )
+
+const noOpAdapter: ChatModelAdapter = {
+  async *run() {},
+}
+
+const duplicateArtifactMessages = [
+  {
+    id: "first-publication",
+    role: "assistant",
+    content: [messages[1].content[0]],
+  },
+  {
+    id: "second-publication",
+    role: "assistant",
+    content: [messages[1].content[0]],
+  },
+] satisfies ThreadMessageLike[]
+
+const ArtifactMessageParts = () => <MessagePrimitive.Parts />
+
+function InlineArtifactTestSurface({
+  providerMessages,
+}: {
+  providerMessages: readonly ArtifactMessage[]
+}) {
+  const runtime = useLocalRuntime(noOpAdapter, {
+    initialMessages: duplicateArtifactMessages,
+  })
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve: async () => new Blob(["Newer body"]) }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={providerMessages}
+      >
+        <ArtifactDataUI />
+        <ThreadPrimitive.Messages
+          components={{ Message: ArtifactMessageParts }}
+        />
+        <ArtifactViewerContent />
+      </ArtifactWorkspaceProvider>
+    </AssistantRuntimeProvider>
+  )
+}
 
 afterEach(() => {
   cleanup()
@@ -364,6 +420,54 @@ describe("artifact workspace", () => {
     expect(signals).toHaveLength(1)
   })
 
+  it("keeps the viewer open when the conversation continues after its publication", async () => {
+    const resolve = vi.fn<ArtifactAdapter["resolve"]>(async () =>
+      Promise.resolve(new Blob(["Newer body"]))
+    )
+    const { rerender } = render(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={messages}
+      >
+        <ArtifactTestSurface />
+      </ArtifactWorkspaceProvider>
+    )
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
+    expect(
+      await screen.findByRole("region", { name: "Output preview" })
+    ).toBeVisible()
+
+    rerender(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={[
+          ...messages,
+          {
+            id: "follow-up",
+            role: "user",
+            content: [{ type: "text", text: "Continue" }],
+          },
+          {
+            id: "completion",
+            role: "assistant",
+            content: [{ type: "text", text: "Completed" }],
+          },
+        ]}
+      >
+        <ArtifactTestSurface />
+      </ArtifactWorkspaceProvider>
+    )
+
+    expect(screen.getByRole("region", { name: "Output preview" })).toBeVisible()
+  })
+
   it("closes the viewer when the active branch no longer contains its publication", async () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>(
       ({ signal }) =>
@@ -395,6 +499,72 @@ describe("artifact workspace", () => {
       >
         <ArtifactTestSurface />
       </ArtifactWorkspaceProvider>
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Output preview" })
+      ).not.toBeInTheDocument()
+    )
+  })
+
+  it("closes the viewer when an identical artifact replaces its publication on another branch", async () => {
+    const { rerender } = render(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve: async () => new Blob(["Newer body"]) }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={messages}
+      >
+        <ArtifactTestSurface />
+      </ArtifactWorkspaceProvider>
+    )
+
+    fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
+    expect(
+      await screen.findByRole("region", { name: "Output preview" })
+    ).toBeVisible()
+
+    rerender(
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={{ resolve: async () => new Blob(["Newer body"]) }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={[
+          messages[0],
+          { ...messages[1], id: "replacement-publication" },
+        ]}
+      >
+        <ArtifactTestSurface />
+      </ArtifactWorkspaceProvider>
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Output preview" })
+      ).not.toBeInTheDocument()
+    )
+  })
+
+  it("tracks the publication opened from an inline artifact card", async () => {
+    const { rerender } = render(
+      <InlineArtifactTestSurface providerMessages={duplicateArtifactMessages} />
+    )
+
+    const openButtons = await screen.findAllByRole("button", {
+      name: "Open: newer.txt",
+    })
+    fireEvent.click(openButtons[0]!)
+    expect(
+      await screen.findByRole("region", { name: "Output preview" })
+    ).toBeVisible()
+
+    rerender(
+      <InlineArtifactTestSurface
+        providerMessages={duplicateArtifactMessages.slice(1)}
+      />
     )
 
     await waitFor(() =>

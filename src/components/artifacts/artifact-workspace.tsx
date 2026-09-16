@@ -1,6 +1,6 @@
 "use client"
 
-import { makeAssistantDataUI } from "@assistant-ui/react"
+import { makeAssistantDataUI, useAui, useAuiState } from "@assistant-ui/react"
 import {
   ChevronDownIcon,
   CopyIcon,
@@ -76,7 +76,11 @@ type ArtifactWorkspaceContextValue = {
   occurrences: ArtifactOccurrence[]
   artifactHtmlAssetOrigins: readonly string[]
   selectedArtifact: ArtifactDescriptor | null
-  openArtifact: (artifact: ArtifactDescriptor, trigger?: HTMLElement) => void
+  openArtifact: (
+    artifact: ArtifactDescriptor,
+    trigger?: HTMLElement,
+    occurrenceKey?: string
+  ) => void
   closeArtifact: () => void
   downloadArtifact: (artifact: ArtifactDescriptor) => Promise<void>
 }
@@ -106,12 +110,10 @@ export type ArtifactWorkspaceProviderProps = {
 
 const NO_ASSET_ORIGINS: readonly string[] = []
 
-function sameArtifactOccurrence(
-  previous: ArtifactOccurrence,
-  next: ArtifactOccurrence
+function sameArtifactDescriptor(
+  previousArtifact: ArtifactDescriptor,
+  nextArtifact: ArtifactDescriptor
 ) {
-  const previousArtifact = previous.artifact
-  const nextArtifact = next.artifact
   const previousSource = previousArtifact.source
   const nextSource = nextArtifact.source
   const sameSource =
@@ -126,12 +128,21 @@ function sameArtifactOccurrence(
           : false)
 
   return (
-    previous.key === next.key &&
     previousArtifact.id === nextArtifact.id &&
     previousArtifact.filename === nextArtifact.filename &&
     previousArtifact.mimeType === nextArtifact.mimeType &&
     previousArtifact.sizeBytes === nextArtifact.sizeBytes &&
     sameSource
+  )
+}
+
+function sameArtifactOccurrence(
+  previous: ArtifactOccurrence,
+  next: ArtifactOccurrence
+) {
+  return (
+    previous.key === next.key &&
+    sameArtifactDescriptor(previous.artifact, next.artifact)
   )
 }
 
@@ -175,7 +186,7 @@ export function ArtifactWorkspaceProvider({
     artifact: ArtifactDescriptor
     agentId: string
     threadId: string
-    messagePathKey: string
+    occurrenceKey: string
   } | null>(null)
   const openingControlRef = useRef<HTMLElement | null>(null)
   const downloadControllersRef = useRef(new Set<AbortController>())
@@ -185,17 +196,13 @@ export function ArtifactWorkspaceProvider({
     () => extractArtifactOccurrences(messages),
     [messages]
   )
-  const messagePathKey = messages.map(({ id }) => id).join("\u0000")
   const selectedArtifact =
     selection?.agentId === agentId &&
     selection.threadId === threadId &&
-    selection.messagePathKey === messagePathKey &&
     occurrences.some(
-      ({ artifact }) =>
-        artifact.id === selection.artifact.id &&
-        artifact.filename === selection.artifact.filename &&
-        JSON.stringify(artifact.source) ===
-          JSON.stringify(selection.artifact.source)
+      ({ artifact, key }) =>
+        key === selection.occurrenceKey &&
+        sameArtifactDescriptor(artifact, selection.artifact)
     )
       ? selection.artifact
       : null
@@ -210,11 +217,26 @@ export function ArtifactWorkspaceProvider({
   }, [selectedArtifact, selection])
 
   const openArtifact = useCallback(
-    (artifact: ArtifactDescriptor, trigger?: HTMLElement) => {
+    (
+      artifact: ArtifactDescriptor,
+      trigger?: HTMLElement,
+      occurrenceKey?: string
+    ) => {
+      const publication = occurrenceKey
+        ? occurrences.find(({ key }) => key === occurrenceKey)
+        : occurrences.findLast(({ artifact: candidate }) =>
+            sameArtifactDescriptor(candidate, artifact)
+          )
+      if (!publication) return
       openingControlRef.current = trigger ?? null
-      setSelection({ artifact, agentId, threadId, messagePathKey })
+      setSelection({
+        artifact,
+        agentId,
+        threadId,
+        occurrenceKey: publication.key,
+      })
     },
-    [agentId, messagePathKey, threadId]
+    [agentId, occurrences, threadId]
   )
   const closeArtifact = useCallback(() => {
     const openingControl = openingControlRef.current
@@ -322,9 +344,11 @@ function formatSize(sizeBytes: number, locale: Locale) {
 export function ArtifactCard({
   artifact,
   compact = false,
+  occurrenceKey,
 }: {
   artifact: ArtifactDescriptor
   compact?: boolean
+  occurrenceKey?: string
 }) {
   const { adapter, downloadArtifact, labels, locale, openArtifact } =
     useArtifactWorkspace()
@@ -394,7 +418,9 @@ export function ArtifactCard({
             ? "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-start outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
             : "flex min-w-0 items-center gap-2 rounded-lg text-start outline-none focus-visible:ring-2 focus-visible:ring-ring [@media(pointer:coarse)]:min-h-11"
         }
-        onClick={(event) => openArtifact(artifact, event.currentTarget)}
+        onClick={(event) =>
+          openArtifact(artifact, event.currentTarget, occurrenceKey)
+        }
       >
         {identity}
       </button>
@@ -458,7 +484,12 @@ export function ArtifactOutputs({ className = "" }: { className?: string }) {
         ) : (
           <div className="mt-2 overflow-hidden rounded-lg border border-border bg-card">
             {occurrences.toReversed().map(({ key, artifact }) => (
-              <ArtifactCard key={key} artifact={artifact} compact />
+              <ArtifactCard
+                key={key}
+                artifact={artifact}
+                occurrenceKey={key}
+                compact
+              />
             ))}
           </div>
         )}
@@ -1002,13 +1033,28 @@ function HtmlPreview({
   )
 }
 
-export function ArtifactToolResultCard({ result }: { result?: unknown }) {
+export function ArtifactToolResultCard({
+  result,
+  occurrenceKey,
+}: {
+  result?: unknown
+  occurrenceKey?: string
+}) {
   const artifact = parseArtifactDescriptor(result)
-  return artifact ? <ArtifactCard artifact={artifact} /> : null
+  return artifact ? (
+    <ArtifactCard artifact={artifact} occurrenceKey={occurrenceKey} />
+  ) : null
 }
 
 function ArtifactDataPart({ data }: { data: unknown }) {
-  return <ArtifactToolResultCard result={data} />
+  const messageId = useAuiState((state) => state.message.id)
+  const part = useAui().part
+  const occurrenceKey =
+    part.source === "message" && part.query.type === "index"
+      ? `${messageId}:${part.query.index}`
+      : undefined
+
+  return <ArtifactToolResultCard result={data} occurrenceKey={occurrenceKey} />
 }
 
 export const ArtifactDataUI = makeAssistantDataUI<unknown>({
