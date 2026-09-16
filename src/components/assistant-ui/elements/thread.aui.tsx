@@ -41,7 +41,6 @@ import {
   type ComposerEnterEvent,
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
-import { copyTextToClipboard } from "@/lib/clipboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
@@ -112,7 +111,6 @@ import {
   type ComponentType,
   type FC,
   type KeyboardEvent,
-  type MouseEvent,
   type PropsWithChildren,
   type ReactNode,
 } from "react"
@@ -1731,6 +1729,7 @@ const UserActionBar: FC = () => {
 const EditComposer: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const messageRewind = useContext(MessageRewindContext)
+  const isTouchPrimaryInput = useTouchPrimaryInput()
   const sourceId = useAuiState((state) => state.message.id)
   const aui = useAui()
   useEffect(() => {
@@ -1747,7 +1746,7 @@ const EditComposer: FC = () => {
           className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base text-foreground outline-none"
           autoFocus
           enterKeyHint="enter"
-          submitMode="ctrlEnter"
+          submitMode={isTouchPrimaryInput ? "ctrlEnter" : "enter"}
         />
         <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
           <ComposerPrimitive.Cancel

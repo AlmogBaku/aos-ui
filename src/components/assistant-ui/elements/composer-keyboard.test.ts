@@ -10,14 +10,22 @@ const state = (overrides: Partial<ComposerEnterState> = {}) => ({
   isRunning: false,
   hasQueue: false,
   isEmpty: false,
+  plainEnterSends: true,
   ...overrides,
 })
 
 describe("composer keyboard decisions", () => {
-  it("keeps plain Enter as a native newline on every platform", () => {
-    expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe(
-      "newline"
-    )
+  it("sends a desktop draft on plain Enter", () => {
+    expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe("send")
+  })
+
+  it("keeps plain Enter as a native newline on touch-primary devices", () => {
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter" },
+        state({ plainEnterSends: false })
+      )
+    ).toBe("newline")
   })
 
   it("submits a non-empty draft on idle Command/Ctrl+Enter", () => {
@@ -42,6 +50,15 @@ describe("composer keyboard decisions", () => {
     expect(
       resolveComposerEnterAction(
         { key: "Enter", ctrlKey: true },
+        state({ isRunning: true, hasQueue: true })
+      )
+    ).toBe("queue")
+  })
+
+  it("queues a busy desktop draft on plain Enter", () => {
+    expect(
+      resolveComposerEnterAction(
+        { key: "Enter" },
         state({ isRunning: true, hasQueue: true })
       )
     ).toBe("queue")

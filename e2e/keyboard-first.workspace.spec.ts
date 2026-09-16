@@ -108,7 +108,7 @@ test("a captured shortcut drives its new behavior and Reset restores the default
   await expect(page.getByRole("dialog", { name: "Commands" })).toBeVisible()
 })
 
-test("Enter inserts a newline while Ctrl+Enter sends the draft", async ({
+test("desktop Shift+Enter inserts a newline while Enter sends the draft", async ({
   page,
 }) => {
   await openWorkspace(page)
@@ -116,11 +116,11 @@ test("Enter inserts a newline while Ctrl+Enter sends the draft", async ({
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.focus()
   await page.keyboard.type("Keyboard draft")
-  await page.keyboard.press("Enter")
+  await page.keyboard.press("Shift+Enter")
   await page.keyboard.type("continued")
   await expect(input).toHaveValue("Keyboard draft\ncontinued")
 
-  await page.keyboard.press("Control+Enter")
+  await page.keyboard.press("Enter")
   await expect(input).toHaveValue("")
   await expect(
     page.getByText("Keyboard draft\ncontinued", { exact: true })

@@ -39,7 +39,36 @@ import {
 import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 
-afterEach(cleanup)
+const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
+const matchMediaDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  "matchMedia"
+)
+
+function setTouchPrimary(matches: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string): MediaQueryList => ({
+      matches: query === TOUCH_PRIMARY_QUERY ? matches : false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    }),
+  })
+}
+
+afterEach(() => {
+  cleanup()
+  if (matchMediaDescriptor) {
+    Object.defineProperty(window, "matchMedia", matchMediaDescriptor)
+  } else {
+    Reflect.deleteProperty(window, "matchMedia")
+  }
+})
 
 describe("active-turn steering data UI", () => {
   it("registers the replayable steering acknowledgement event", () => {
@@ -483,7 +512,7 @@ function useMultiSessionRuntime() {
 }
 
 describe("Thread accessibility", () => {
-  it("uses Enter for newlines and Ctrl+Enter to send the composer draft", async () => {
+  it("uses Shift+Enter for newlines and plain Enter to send a desktop draft", async () => {
     const user = userEvent.setup()
     const run = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "Done" }],
@@ -494,6 +523,27 @@ describe("Thread accessibility", () => {
     expect(input).toHaveAttribute("enterkeyhint", "enter")
 
     await user.type(input, "First line")
+    await user.keyboard("{Shift>}{Enter}{/Shift}")
+    await user.type(input, "Second line")
+
+    expect(input).toHaveValue("First line\nSecond line")
+    expect(run).not.toHaveBeenCalled()
+
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    expect(input).toHaveValue("")
+  })
+
+  it("uses plain Return for newlines on a touch-primary device", async () => {
+    setTouchPrimary(true)
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Done" }],
+    }))
+    render(<LocalThread model={{ run }} initialMessages={[]} />)
+
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "First line")
     await user.keyboard("{Enter}")
     await user.type(input, "Second line")
 
@@ -502,7 +552,6 @@ describe("Thread accessibility", () => {
 
     await user.keyboard("{Control>}{Enter}{/Control}")
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    expect(input).toHaveValue("")
   })
 
   it("renders the welcome state accessibly", () => {
@@ -1252,7 +1301,7 @@ describe("Thread accessibility", () => {
     )
   })
 
-  it("uses Enter for newlines and Ctrl+Enter to submit message edits", async () => {
+  it("uses Shift+Enter for newlines and plain Enter to submit desktop message edits", async () => {
     const user = userEvent.setup()
     let runtime: AssistantRuntime | undefined
     const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
@@ -1276,6 +1325,43 @@ describe("Thread accessibility", () => {
     )
     expect(editor).not.toBeNull()
     expect(editor).toHaveAttribute("enterkeyhint", "enter")
+
+    await user.clear(editor!)
+    await user.type(editor!, "First line")
+    await user.keyboard("{Shift>}{Enter}{/Shift}")
+    await user.type(editor!, "Second line")
+
+    expect(editor).toHaveValue("First line\nSecond line")
+    expect(run).not.toHaveBeenCalled()
+
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+  })
+
+  it("keeps touch-primary message edits multiline until Ctrl+Enter", async () => {
+    setTouchPrimary(true)
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn<ChatModelAdapter["run"]>().mockResolvedValue({
+      content: [{ type: "text", text: "Updated" }],
+    })
+    const view = render(
+      <LocalThread
+        model={{ run }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await screen.findByText("The reference is ready.")
+
+    act(() => {
+      runtime!.thread.getMessageById("message-user").composer.beginEdit()
+    })
+    const editor = view.container.querySelector<HTMLTextAreaElement>(
+      ".aui-edit-composer-input"
+    )
+    expect(editor).not.toBeNull()
 
     await user.clear(editor!)
     await user.type(editor!, "First line")

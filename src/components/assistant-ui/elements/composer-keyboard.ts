@@ -7,6 +7,7 @@ export type ComposerEnterState = {
   readonly isRunning: boolean
   readonly hasQueue: boolean
   readonly isEmpty: boolean
+  readonly plainEnterSends: boolean
   readonly canSteer?: boolean
   readonly hasAttachments?: boolean
 }
@@ -130,7 +131,9 @@ export function resolveComposerEnterAction(
   if (state.isEmpty) return "noop"
   const sendShortcut = event.metaKey === true || event.ctrlKey === true
   const steeringShortcut = event.shiftKey && sendShortcut
-  if (!sendShortcut) return "newline"
+  if (!sendShortcut && (event.shiftKey || !state.plainEnterSends)) {
+    return "newline"
+  }
   if (!state.isRunning) return "send"
   if (steeringShortcut) {
     if (state.canSteer && !state.hasAttachments) return "steer"
