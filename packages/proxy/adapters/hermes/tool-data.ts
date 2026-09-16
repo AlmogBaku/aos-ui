@@ -214,6 +214,27 @@ function parseJson(value: unknown) {
   }
 }
 
+/**
+ * Hermes integrations do not consistently set `is_error` on durable tool
+ * rows. Preserve an explicit native flag, then recognize the small set of
+ * result envelopes that unambiguously represent failure.
+ */
+export function hermesToolResultIsError(
+  value: unknown,
+  nativeIsError = false
+): boolean {
+  if (nativeIsError) return true
+  const parsed = parseJson(value)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    return false
+  const result = parsed as Record<string, unknown>
+  if (result.success === false || result.ok === false) return true
+  return (
+    typeof result.status === "string" &&
+    ["error", "failed", "failure"].includes(result.status.toLowerCase())
+  )
+}
+
 function project(value: unknown) {
   return projectValue(
     parseJson(value),

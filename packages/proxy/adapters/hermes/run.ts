@@ -23,7 +23,11 @@ import {
   HermesMediaTextFilter,
   projectHermesMediaArtifacts,
 } from "./media-artifacts"
-import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
+import {
+  hermesToolResultIsError,
+  projectHermesToolArgs,
+  projectHermesToolResult,
+} from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
@@ -309,6 +313,7 @@ type ActiveRun = {
   redirectDispatchPending: boolean
   redirectBoundaryObserved: boolean
   redirectIdleObserved: boolean
+  recoverableErrorObserved: boolean
   stopping: boolean
   uncertain: boolean
   detached: boolean
@@ -733,6 +738,7 @@ export class HermesRunEngine {
         redirectDispatchPending: false,
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
+        recoverableErrorObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -964,6 +970,7 @@ export class HermesRunEngine {
         redirectDispatchPending: false,
         redirectBoundaryObserved: false,
         redirectIdleObserved: false,
+        recoverableErrorObserved: false,
         stopping: false,
         uncertain: false,
         detached: false,
@@ -1244,15 +1251,17 @@ export class HermesRunEngine {
       tool.ended = true
       const toolCallId = stableNativeId(payload.tool_id)
       if (!toolCallId) return
+      const isError = hermesToolResultIsError(
+        payload.result,
+        payload.is_error === true
+      )
       const artifact =
-        tool.name === "present_artifact"
+        tool.name === "present_artifact" && !isError
           ? projectHermesArtifactReceipt(payload.result)
           : undefined
-      const mediaArtifacts = projectHermesMediaArtifacts(
-        toolCallId,
-        tool.name,
-        payload.result
-      )
+      const mediaArtifacts = isError
+        ? []
+        : projectHermesMediaArtifacts(toolCallId, tool.name, payload.result)
       const questionResult =
         tool.name === "question"
           ? projectHermesQuestionResult(payload.result)
@@ -1266,15 +1275,11 @@ export class HermesRunEngine {
           ? JSON.stringify(artifact.result)
           : tool.name === "text_to_speech"
             ? JSON.stringify({
-                status: payload.is_error === true ? "failed" : "completed",
+                status: isError ? "failed" : "completed",
               })
             : questionResult
               ? JSON.stringify(questionResult)
-              : resultContent(
-                  tool.name,
-                  payload.result,
-                  payload.is_error === true
-                ),
+              : resultContent(tool.name, payload.result, isError),
         role: "tool",
       })
       if (tool.name === "todo") {
@@ -1302,10 +1307,21 @@ export class HermesRunEngine {
         active.redirectIdleObserved = true
         return
       }
-      if (!active.stopping && !active.uncertain && !active.redirectChainActive)
+      if (
+        !active.stopping &&
+        !active.uncertain &&
+        !active.redirectChainActive &&
+        !active.recoverableErrorObserved
+      )
         return
       if (active.stopping) this.#finish(active, { stopped: true })
       else if (active.redirectChainActive) this.#finish(active)
+      else if (active.recoverableErrorObserved)
+        this.#fail(
+          active,
+          "AOS_PROVIDER_RUN_FAILED",
+          "Hermes could not complete this run."
+        )
       else this.#settle(active)
       return
     }
@@ -1345,16 +1361,20 @@ export class HermesRunEngine {
         const remaining = finalText.slice(active.streamedText.length)
         if (remaining) {
           this.#appendStreamedText(active, remaining)
-          this.#emitMediaFilteredText(active, active.mediaFilter.write(remaining))
+          this.#emitMediaFilteredText(
+            active,
+            active.mediaFilter.write(remaining)
+          )
         }
       }
-      if (payload.status === "error")
-        this.#fail(
-          active,
-          "AOS_PROVIDER_RUN_FAILED",
-          "Hermes could not complete this run."
-        )
-      else {
+      if (payload.status === "error") {
+        // A failed Hermes generation is not necessarily a failed turn. The
+        // harness can recover with more tool calls and another assistant
+        // message, so close only this message and wait for native lifecycle
+        // events to declare the Session idle or successfully complete.
+        active.recoverableErrorObserved = true
+        this.#sealGeneration(active)
+      } else {
         if (active.redirectChainActive || active.redirectDispatchPending) {
           this.#sealGeneration(active)
           if (active.redirectDispatchPending)

@@ -2352,6 +2352,12 @@ describe("HermesRunEngine", () => {
             seq: 1,
             payload: { status: "error", error: "secret native body" },
           })
+          publish?.({
+            type: "session.info",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { running: false },
+          })
           return { acknowledgement: "accepted" }
         },
       })
@@ -2388,6 +2394,12 @@ describe("HermesRunEngine", () => {
               partial: true,
               recoverable: true,
             },
+          })
+          publish?.({
+            type: "session.info",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { running: false },
           })
           return { acknowledgement: "accepted" }
         },
@@ -2448,6 +2460,12 @@ describe("HermesRunEngine", () => {
               partial: true,
             },
           })
+          publish?.({
+            type: "session.info",
+            session_id: "live-secret",
+            seq: 4,
+            payload: { running: false },
+          })
           return { acknowledgement: "accepted" }
         },
       })
@@ -2477,6 +2495,107 @@ describe("HermesRunEngine", () => {
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
+  })
+
+  it("keeps the run open when a failed tool attempt is followed by recovery", async () => {
+    let publish: ((event: unknown) => void) | undefined
+    const status = vi.fn(async () => "idle" as const)
+    const engine = new HermesRunEngine(
+      native({
+        status,
+        observe: async (_liveSessionId, listener) => {
+          publish = listener
+          return () => undefined
+        },
+        submit: async () => {
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 1,
+            payload: { message_id: "failed-attempt" },
+          })
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 2,
+            payload: {
+              tool_id: "failed-tool",
+              name: "use_skill",
+              args: { name: "missing" },
+              result: { success: false, error: "Skill not found" },
+              is_error: true,
+            },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 3,
+            payload: {
+              message_id: "failed-attempt",
+              status: "error",
+              recoverable: true,
+            },
+          })
+          publish?.({
+            type: "message.start",
+            session_id: "live-secret",
+            seq: 4,
+            payload: { message_id: "recovered-attempt" },
+          })
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 5,
+            payload: {
+              tool_id: "recovery-tool-1",
+              name: "web_extract",
+              args: { url: "https://example.com" },
+              result: { success: true },
+            },
+          })
+          publish?.({
+            type: "tool.complete",
+            session_id: "live-secret",
+            seq: 6,
+            payload: {
+              tool_id: "recovery-tool-2",
+              name: "execute_code",
+              args: { code: "return true" },
+              result: { success: true },
+            },
+          })
+          publish?.({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: 7,
+            payload: {
+              message_id: "recovered-attempt",
+              text: "Recovered after splitting the work.",
+              status: "completed",
+            },
+          })
+          return { acknowledgement: "accepted" }
+        },
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+
+    expect(status).toHaveBeenCalledTimes(1)
+    expect(
+      events.filter((event) => event.type === EventType.TOOL_CALL_RESULT)
+    ).toHaveLength(3)
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        type: EventType.RUN_ERROR,
+      })
+    )
+    expect(events).toContainEqual({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "recovered-attempt",
+      delta: "Recovered after splitting the work.",
+    })
+    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
   })
 
   it("rejects unstaged multimodal content instead of silently dropping it", async () => {

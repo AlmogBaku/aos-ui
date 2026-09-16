@@ -3,7 +3,11 @@ import {
   projectHermesMediaArtifacts,
   projectHermesMediaText,
 } from "./media-artifacts"
-import { projectHermesToolArgs, projectHermesToolResult } from "./tool-data"
+import {
+  hermesToolResultIsError,
+  projectHermesToolArgs,
+  projectHermesToolResult,
+} from "./tool-data"
 
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -494,30 +498,25 @@ export function projectHermesHistory(
       const toolName = resultToolName
         ? canonicalToolName(resultToolName)
         : part.toolName
+      const toolResult = value.content ?? value.result
+      const isError = hermesToolResultIsError(
+        toolResult,
+        value.is_error === true
+      )
       const artifact =
-        toolName === "present_artifact" && value.is_error !== true
-          ? projectHermesArtifactReceipt(value.content ?? value.result)
+        toolName === "present_artifact" && !isError
+          ? projectHermesArtifactReceipt(toolResult)
           : undefined
-      const mediaArtifacts =
-        value.is_error !== true
-          ? projectHermesMediaArtifacts(
-              toolCallId,
-              toolName,
-              value.content ?? value.result
-            )
-          : []
+      const mediaArtifacts = !isError
+        ? projectHermesMediaArtifacts(toolCallId, toolName, toolResult)
+        : []
       const content = [...message.content]
       content[target.partIndex] = {
         ...part,
         ...(resultToolName ? { toolName } : {}),
         result:
-          artifact?.result ??
-          publicToolResult(
-            toolName,
-            value.content ?? value.result,
-            value.is_error === true
-          ),
-        ...(value.is_error === true ? { isError: true } : {}),
+          artifact?.result ?? publicToolResult(toolName, toolResult, isError),
+        ...(isError ? { isError: true } : {}),
       }
       if (artifact) content.push(artifact.part)
       if (mediaArtifacts.length) {

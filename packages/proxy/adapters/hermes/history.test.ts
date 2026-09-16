@@ -3,6 +3,42 @@ import { describe, expect, it } from "vitest"
 import { projectHermesHistory } from "./history"
 
 describe("server-side Hermes history projection", () => {
+  it("preserves a semantic tool failure when Hermes omits is_error", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-failed-tool",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "failed-tool",
+            function: {
+              name: "use_skill",
+              arguments: '{"name":"missing"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "failed-tool",
+        tool_name: "use_skill",
+        content: JSON.stringify({
+          success: false,
+          error: "Skill 'missing' not found.",
+        }),
+      },
+    ])
+
+    expect(messages[0]?.content).toMatchObject([
+      {
+        type: "tool-call",
+        toolCallId: "failed-tool",
+        result: { success: false, error: "Skill 'missing' not found." },
+        isError: true,
+      },
+    ])
+  })
+
   it("restores trusted TTS media and suppresses a redundant copied marker", () => {
     const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
     const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
