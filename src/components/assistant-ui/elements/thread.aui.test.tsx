@@ -1113,6 +1113,257 @@ describe("Thread accessibility", () => {
     expect(screen.getByAltText("תצוגה מקדימה של קובץ")).toBeInTheDocument()
   })
 
+  it("renders a sent audio attachment as an inline native player", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-audio",
+            role: "user",
+            content: [{ type: "text", text: "Listen to this" }],
+            attachments: [
+              {
+                id: "attachment-audio",
+                type: "file",
+                name: "voice-note.mp3",
+                contentType: "audio/mpeg",
+                status: { type: "complete" },
+                content: [
+                  {
+                    type: "file",
+                    data: "data:audio/mpeg;base64,YXVkaW8=",
+                    filename: "voice-note.mp3",
+                    mimeType: "audio/mpeg",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    const player = screen.getByLabelText("Audio attachment: voice-note.mp3")
+    expect(player).toBeInstanceOf(HTMLAudioElement)
+    expect(player).toHaveAttribute(
+      "src",
+      "data:audio/mpeg;base64,YXVkaW8="
+    )
+    expect(player).toHaveAttribute("controls")
+    expect(player).toHaveAttribute("preload", "metadata")
+    expect(player).not.toHaveAttribute("autoplay")
+  })
+
+  it("builds a playable data URL for raw base64 media content", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-base64-audio",
+            role: "user",
+            content: [],
+            attachments: [
+              {
+                id: "attachment-base64-audio",
+                type: "file",
+                name: "raw-audio.wav",
+                contentType: "audio/wav",
+                status: { type: "complete" },
+                content: [
+                  {
+                    type: "file",
+                    data: "YXVkaW8=",
+                    filename: "raw-audio.wav",
+                    mimeType: "audio/wav",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(
+      screen.getByLabelText("Audio attachment: raw-audio.wav")
+    ).toHaveAttribute("src", "data:audio/wav;base64,YXVkaW8=")
+  })
+
+  it("preserves a blob URL used by a sent media attachment", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-blob-audio",
+            role: "user",
+            content: [],
+            attachments: [
+              {
+                id: "attachment-blob-audio",
+                type: "file",
+                name: "local-note.webm",
+                contentType: "audio/webm",
+                status: { type: "complete" },
+                content: [
+                  {
+                    type: "file",
+                    data: "blob:https://aos.test/media-1",
+                    filename: "local-note.webm",
+                    mimeType: "audio/webm",
+                    sourceType: "url",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(
+      screen.getByLabelText("Audio attachment: local-note.webm")
+    ).toHaveAttribute("src", "blob:https://aos.test/media-1")
+  })
+
+  it("renders a URL-backed sent video with a localized accessible name", () => {
+    render(
+      <LocalThread
+        labels={{ attachments: { video: "וידאו מצורף" } }}
+        initialMessages={[
+          {
+            id: "message-video",
+            role: "user",
+            content: [{ type: "text", text: "Watch this" }],
+            attachments: [
+              {
+                id: "attachment-video",
+                type: "file",
+                name: "walkthrough.mp4",
+                contentType: "video/mp4",
+                status: { type: "complete" },
+                content: [
+                  {
+                    type: "file",
+                    data: "https://media.example.test/walkthrough.mp4",
+                    filename: "walkthrough.mp4",
+                    mimeType: "video/mp4",
+                    sourceType: "url",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    const player = screen.getByLabelText("וידאו מצורף: walkthrough.mp4")
+    expect(player).toBeInstanceOf(HTMLVideoElement)
+    expect(player).toHaveAttribute(
+      "src",
+      "https://media.example.test/walkthrough.mp4"
+    )
+    expect(player).toHaveAttribute("controls")
+    expect(player).toHaveAttribute("preload", "metadata")
+    expect(player).not.toHaveAttribute("autoplay")
+  })
+
+  it("keeps a media attachment tile when provider history has no playable source", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-metadata-only-video",
+            role: "user",
+            content: [],
+            attachments: [
+              {
+                id: "attachment-metadata-only-video",
+                type: "file",
+                name: "archived.mov",
+                contentType: "video/quicktime",
+                status: { type: "complete" },
+                content: [],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByRole("button", { name: "Video attachment" })).toBeVisible()
+    expect(document.querySelector("video")).toBeNull()
+  })
+
+  it("falls back to a media tile for an unsafe URL source", () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "message-unsafe-audio",
+            role: "user",
+            content: [],
+            attachments: [
+              {
+                id: "attachment-unsafe-audio",
+                type: "file",
+                name: "unsafe.mp3",
+                contentType: "audio/mpeg",
+                status: { type: "complete" },
+                content: [
+                  {
+                    type: "file",
+                    data: "javascript:alert(1)",
+                    filename: "unsafe.mp3",
+                    mimeType: "audio/mpeg",
+                    sourceType: "url",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(document.querySelector("audio")).toBeNull()
+  })
+
+  it("keeps playable audio compact while it is still in the composer", async () => {
+    let runtime: AssistantRuntime | undefined
+    render(
+      <LocalThread
+        initialMessages={[]}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+
+    await act(() =>
+      runtime!.thread.composer.addAttachment({
+        name: "draft-note.mp3",
+        type: "file",
+        contentType: "audio/mpeg",
+        content: [
+          {
+            type: "file",
+            data: "data:audio/mpeg;base64,YXVkaW8=",
+            filename: "draft-note.mp3",
+            mimeType: "audio/mpeg",
+          },
+        ],
+      })
+    )
+
+    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(document.querySelector("audio")).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Remove attachment" })
+    ).toBeVisible()
+  })
+
   it("returns focus to the composer after an attachment is added", async () => {
     let runtime: AssistantRuntime | undefined
     render(

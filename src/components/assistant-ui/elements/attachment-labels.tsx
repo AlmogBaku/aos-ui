@@ -7,6 +7,8 @@ export type AttachmentLabels = {
   remove: string
   preview: string
   image: string
+  audio: string
+  video: string
   document: string
   file: string
   uploading: string
@@ -18,6 +20,8 @@ export const DEFAULT_ATTACHMENT_LABELS: AttachmentLabels = {
   remove: "Remove attachment",
   preview: "Attachment preview",
   image: "Image attachment",
+  audio: "Audio attachment",
+  video: "Video attachment",
   document: "Document attachment",
   file: "File attachment",
   uploading: "Uploading",

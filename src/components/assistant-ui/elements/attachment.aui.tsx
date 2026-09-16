@@ -44,6 +44,21 @@ type AttachmentPreviewProps = {
   src: string
 }
 
+const PLAYABLE_MEDIA_SOURCE = /^(?:data:|blob:|https?:\/\/)/i
+
+const playableMediaSource = (
+  data: string,
+  mimeType: string,
+  sourceType?: "url" | "id"
+) => {
+  if (sourceType === "id") return undefined
+  if (sourceType === "url") {
+    return PLAYABLE_MEDIA_SOURCE.test(data) ? data : undefined
+  }
+  if (PLAYABLE_MEDIA_SOURCE.test(data)) return data
+  return `data:${mimeType};base64,${data}`
+}
+
 const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
   const [isLoaded, setIsLoaded] = useState(false)
   const labels = useAttachmentLabels()
@@ -117,20 +132,41 @@ const AttachmentUI: FC = () => {
   const labels = useAttachmentLabels()
   const isComposer = aui.attachment.source !== "message"
 
-  const isImage = useAuiState((s) => s.attachment.type === "image")
-  const typeLabel = useAuiState((s) => {
-    const type = s.attachment.type
-    switch (type) {
+  const name = useAuiState((s) => s.attachment.name)
+  const contentType = useAuiState((s) => s.attachment.contentType)
+  const mediaFile = useAuiState((s) =>
+    s.attachment.content?.find((part) => part.type === "file")
+  )
+  const mediaMimeType = mediaFile?.mimeType ?? contentType
+  const normalizedMediaMimeType = mediaMimeType?.toLowerCase()
+  const mediaKind = normalizedMediaMimeType?.startsWith("audio/")
+    ? "audio"
+    : normalizedMediaMimeType?.startsWith("video/")
+      ? "video"
+      : undefined
+  const mediaSrc =
+    !isComposer && mediaKind && mediaFile && mediaMimeType
+      ? playableMediaSource(mediaFile.data, mediaMimeType, mediaFile.sourceType)
+      : undefined
+
+  const attachmentType = useAuiState((s) => s.attachment.type)
+  const isImage = attachmentType === "image"
+  const typeLabel = (() => {
+    switch (mediaKind ?? attachmentType) {
       case "image":
         return labels.image
+      case "audio":
+        return labels.audio
+      case "video":
+        return labels.video
       case "document":
         return labels.document
       case "file":
         return labels.file
       default:
-        return type
+        return attachmentType
     }
-  })
+  })()
 
   const uploadState = useAuiState((s) =>
     s.attachment.status.type === "running"
@@ -149,6 +185,30 @@ const AttachmentUI: FC = () => {
       ? (s.attachment.status.message ?? labels.uploadFailed)
       : undefined
   )
+
+  if (mediaKind === "audio" && mediaSrc) {
+    return (
+      <audio
+        aria-label={`${labels.audio}: ${name}`}
+        className="aui-attachment-audio block w-full max-w-[30rem]"
+        controls
+        preload="metadata"
+        src={mediaSrc}
+      />
+    )
+  }
+
+  if (mediaKind === "video" && mediaSrc) {
+    return (
+      <video
+        aria-label={`${labels.video}: ${name}`}
+        className="aui-attachment-video block h-auto max-h-96 w-full max-w-[30rem] rounded-lg bg-black object-contain"
+        controls
+        preload="metadata"
+        src={mediaSrc}
+      />
+    )
+  }
 
   return (
     <TooltipProvider>
@@ -235,7 +295,7 @@ const AttachmentRemove: FC = () => {
 
 export const UserMessageAttachments: FC = () => {
   return (
-    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row justify-end gap-2">
+    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row flex-wrap justify-end gap-2">
       <MessagePrimitive.Attachments>
         {() => <AttachmentUI />}
       </MessagePrimitive.Attachments>
