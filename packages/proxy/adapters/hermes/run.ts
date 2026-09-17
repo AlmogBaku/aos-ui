@@ -963,10 +963,17 @@ export class HermesRunEngine {
     let accepting = false
     let reattached = false
     let lost: LostReason | undefined
+    let interrupted: RunFinishedInterruptOutcome | undefined
     let unsubscribe: (() => void) | undefined
     let liveSessionId: string
     let cursor: AttachCursor
     safelyUnsubscribe(active.unsubscribe)
+    // Hermes asks the user through server→client requests, not through the
+    // event stream: an interrupt ends this segment wherever the request landed.
+    const stopInterrupts = this.#native.onInterrupt(active.scope, (outcome) => {
+      if (accepting) this.#finishInterrupt(active, outcome)
+      else interrupted = outcome
+    })
     try {
       ;({ liveSessionId } = await this.#native.resume(active.scope))
       unsubscribe = await this.#native.observe(liveSessionId, (signal) => {
@@ -990,13 +997,17 @@ export class HermesRunEngine {
       cursor = await this.#attachCursor(liveSessionId, mode)
     } catch {
       safelyUnsubscribe(unsubscribe)
+      stopInterrupts()
       active.uncertain = true
       active.detached = true
       active.queue.close()
       throw providerUnavailable()
     }
     active.liveSessionId = liveSessionId
-    active.unsubscribe = unsubscribe
+    active.unsubscribe = () => {
+      stopInterrupts()
+      unsubscribe?.()
+    }
     active.epoch = cursor.epoch
     active.lastSeen = cursor.barrier
     active.catchUp = undefined
@@ -1022,6 +1033,7 @@ export class HermesRunEngine {
     for (const event of drainBufferedEvents(buffered))
       this.#accept(active, event, true)
     if (reattached) this.#scheduleCatchUp(active)
+    if (interrupted) this.#finishInterrupt(active, interrupted)
   }
 
   /** The cursor each attach mode derives from Hermes' own ring. */
@@ -1295,24 +1307,6 @@ export class HermesRunEngine {
       !this.#advance(active, event.seq, value, replayed)
     )
       return
-    let interaction:
-      RunFinishedInterruptOutcome | { status: string } | undefined
-    try {
-      interaction = this.#native.acceptInteraction(
-        { ...active.scope, runId: active.runId },
-        active.liveSessionId,
-        value
-      )
-    } catch {
-      this.#fail(
-        active,
-        "AOS_PROVIDER_RUN_FAILED",
-        "Hermes returned invalid interaction data."
-      )
-      return
-    }
-    if (interaction && "interrupts" in interaction)
-      return this.#finishInterrupt(active, interaction)
     this.#dispatch(active, event, payloadOf(event))
   }
 
@@ -1986,7 +1980,6 @@ export class HermesRunEngine {
       ...(active.usage ? { usage: active.usage } : {}),
       outcome: { type: "success" },
     })
-    this.#native.clearPendingInteraction(active.scope)
     if (!confirmedIdle) this.#watchSettling(active)
     this.#settle(active)
   }
@@ -2007,7 +2000,6 @@ export class HermesRunEngine {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#emit(active, { type: EventType.RUN_ERROR, message, code })
-    this.#native.clearPendingInteraction(active.scope)
     this.#settle(active)
   }
 

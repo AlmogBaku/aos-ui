@@ -48,6 +48,7 @@ export {
 } from "./http"
 export type { HermesLog, HermesSocket } from "./gateway-socket"
 export type { ServerRequest, ServerRequestHandler }
+export { JSON_RPC_METHOD_NOT_FOUND } from "./vendor/hermes-shared/json-rpc-channel"
 
 /** Hermes authoritatively rejected a dispatched JSON-RPC request. */
 export class HermesRpcRejectedError extends Error {
@@ -115,6 +116,8 @@ export interface HermesRpcTransport {
   onEvent?(listener: (event: unknown) => void): () => void
   onRequest?(handler: ServerRequestHandler): () => void
   onConnection?(handler: HermesConnectionHandler): () => void
+  /** Whether a frame written now reaches Hermes; a synchronous answer needs it. */
+  connected?(): boolean
   close?(): Promise<void>
 }
 
@@ -152,9 +155,6 @@ const DEFAULT_HEAL_GRACE_MS = 20_000
 const READY_EPOCH_WAIT_MS = 2_000
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_IN_FLIGHT_REQUESTS = 256
-/** Bound for the unanswered-server-request log: Hermes chooses the method. */
-const MAX_LOGGED_REQUEST_METHODS = 32
-const MAX_LOGGED_METHOD_CHARS = 64
 /** Close codes Hermes refuses a token with; unverified against a live server. */
 const AUTH_CLOSE_CODES = new Set([4401, 4403])
 
@@ -238,12 +238,8 @@ export class HermesGateway implements HermesRpcTransport {
   readonly #openWaiters = new Set<OpenWaiter>()
   /** Live requests by minted id, so the wire guard can find their bound. */
   readonly #inFlightById = new Map<string, PendingResponse>()
-  readonly #loggedRequestMethods = new Set<string>()
-  #requestMethodLogCapped = false
   /** The request being dispatched, awaiting the id `#mintRequestId` gives it. */
   #dispatching: PendingResponse | undefined
-  #removeDefaultRequestHandler: (() => void) | undefined
-  #requestHandlerCount = 0
   #inFlight = 0
   /** Identity of the socket generation currently dialled or open. */
   #generation: object | undefined
@@ -292,9 +288,6 @@ export class HermesGateway implements HermesRpcTransport {
     })
     this.#client.onState((state) => this.#onState(state))
     this.#client.onAny((event) => this.#onGatewayEvent(event))
-    this.#removeDefaultRequestHandler = this.#client.onRequest((request) =>
-      this.#claimUnhandledRequest(request)
-    )
   }
 
   /** Joins an in-flight dial; an explicit call clears an authentication stop. */
@@ -696,50 +689,26 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   onRequest(handler: ServerRequestHandler): () => void {
-    this.#requestHandlerCount += 1
-    const remove = this.#client.onRequest(handler)
-    let removed = false
-    return () => {
-      if (removed) return
-      removed = true
-      this.#requestHandlerCount -= 1
-      remove()
-    }
+    return this.#client.onRequest(handler)
+  }
+
+  /**
+   * Whether a frame written now reaches Hermes. A server→client request is
+   * answered synchronously on the socket that carried it, and a dead socket
+   * swallows that write, so the answering surface checks this first instead of
+   * reporting an answer Hermes never received.
+   */
+  connected(): boolean {
+    return (
+      !this.#closed &&
+      !this.#authFailed &&
+      this.#client.connectionState === "open"
+    )
   }
 
   onConnection(handler: HermesConnectionHandler): () => void {
     this.#connectionHandlers.add(handler)
     return () => this.#connectionHandlers.delete(handler)
-  }
-
-  /**
-   * Claim every server→client request while no real handler is registered, so
-   * the vendored channel does not answer `-32601` on AOS' behalf and silently
-   * resolve a native `clarify` as "skipped"; Hermes waits out its own deadline
-   * instead. One log line per distinct method, bounded and truncated because
-   * Hermes chooses both the method and how many it sends.
-   */
-  #claimUnhandledRequest(request: ServerRequest): boolean {
-    if (this.#requestHandlerCount > 0) return false
-    const method = request.method.slice(0, MAX_LOGGED_METHOD_CHARS)
-    if (this.#loggedRequestMethods.has(method)) return true
-    if (this.#loggedRequestMethods.size >= MAX_LOGGED_REQUEST_METHODS) {
-      if (this.#requestMethodLogCapped) return true
-      this.#requestMethodLogCapped = true
-      this.#log?.warn("hermes.gateway.server_request_unanswered_capped", {
-        methods: this.#loggedRequestMethods.size,
-      })
-      return true
-    }
-    this.#loggedRequestMethods.add(method)
-    this.#log?.warn("hermes.gateway.server_request_unanswered", { method })
-    return true
-  }
-
-  /** Drop the claim-and-hold handler once a real handler owns requests. */
-  removeDefaultRequestHandler(): void {
-    this.#removeDefaultRequestHandler?.()
-    this.#removeDefaultRequestHandler = undefined
   }
 
   async close(): Promise<void> {
@@ -749,7 +718,6 @@ export class HermesGateway implements HermesRpcTransport {
     clearTimeout(this.#redialTimer)
     this.#redialTimer = undefined
     this.#readyWaiter?.settle(false)
-    this.removeDefaultRequestHandler()
     this.#failOpenWaiters(new HermesUnavailableError())
     this.#eventListeners.clear()
     this.#connectionHandlers.clear()

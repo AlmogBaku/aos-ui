@@ -312,16 +312,33 @@ export class HermesServerAdapter implements ServerRuntime {
       },
       { idleMs: options.sessionIdleMs, log: options.log }
     )
-    this.interactions = new HermesInteractions({
-      request: (method, params) => this.transport.request(method, params),
+    const ensureAttached = async (scope: HermesRunScope) => ({
+      liveSessionId: (await this.#attachments.ensure(scope)).liveSessionId,
+      running: this.#attachedRunning(scope.agentId, scope.sessionId),
     })
+    this.interactions = new HermesInteractions(
+      {
+        // A transport that cannot carry server→client requests answers none:
+        // read-only surfaces still work, no interaction is ever presented.
+        onRequest: (handler) =>
+          transport.onRequest?.(handler) ?? (() => undefined),
+        onEvent: (listener) =>
+          transport.onEvent?.(listener) ?? (() => undefined),
+        // Only the gateway knows its socket; a transport that cannot say is
+        // taken at its word when a write does not throw.
+        connected: () => transport.connected?.() ?? true,
+      },
+      {
+        ensure: ensureAttached,
+        retain: (scope, reason) => this.#attachments.retain(scope, reason),
+        scopeFor: (liveSessionId) => this.#attachments.scopeFor(liveSessionId),
+      },
+      ...(options.log ? [{ log: options.log }] : [])
+    )
     this.native = new HermesNativeRuntime({
       transport,
       attachments: {
-        ensure: async (scope) => ({
-          liveSessionId: (await this.#attachments.ensure(scope)).liveSessionId,
-          running: this.#attachedRunning(scope.agentId, scope.sessionId),
-        }),
+        ensure: ensureAttached,
         retain: (scope, reason) => this.#attachments.retain(scope, reason),
         subscribeLive: (liveSessionId, observer) =>
           this.#attachments.subscribeLive(liveSessionId, observer),
@@ -480,8 +497,7 @@ export class HermesServerAdapter implements ServerRuntime {
       cause instanceof HermesRunPublicError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
-        (cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-          cause.code === "AOS_RECONCILIATION_STALE"))
+        cause.code === "AOS_PROVIDER_UNAVAILABLE")
     )
       return { code: "temporarily_unavailable", status: 503 } as const
     if (cause instanceof HermesInteractionPublicError)
@@ -656,7 +672,6 @@ export class HermesServerAdapter implements ServerRuntime {
         agentId,
         sessionId: storedId,
         threadId: publicSessionId,
-        runId,
       })),
     }
   }
@@ -883,6 +898,7 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async close() {
+    this.interactions.close()
     await this.#attachments.close()
     await this.transport.close?.()
   }

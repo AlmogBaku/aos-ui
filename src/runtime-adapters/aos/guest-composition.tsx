@@ -44,6 +44,7 @@ import { WorkspaceConversationShell } from "@/components/workspace"
 import { AgUiInterruptComposer } from "@/components/runtime-interactions/pending-composer"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
+import { runErrorMessage } from "@/lib/i18n/run-errors"
 import type { Locale } from "@/lib/i18n/config"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import { SlashCommandSchema } from "@aos/protocol"
@@ -52,6 +53,7 @@ import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import type { AosEventScope } from "./aos-reconciliation"
+import type { RunErrorResolver } from "./aos-reconnect"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
 const dictionaries = { en, he } as const
@@ -343,18 +345,29 @@ function ReadyGuestAosSurface({
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const media = useMemo(() => new VoiceMediaController(), [])
+  // A guest failure arrives as a stable code with English text; the invitation
+  // language owns the copy a guest reads.
+  const resolveRunError = useCallback<RunErrorResolver>(
+    (code, fallback) =>
+      runErrorMessage(dictionaries[selectedLocale], code, fallback),
+    [selectedLocale]
+  )
   const client = useMemo(
     () =>
       new AosRemoteClient({
         basePath: config.basePath,
         authorization,
         scope,
+        resolveRunError,
       }),
-    [authorization, config.basePath, scope]
+    [authorization, config.basePath, resolveRunError, scope]
   )
   const history = useMemo(
-    () => new AosThreadListAdapter(client).historyFor(scope.sessionId),
-    [client, scope.sessionId]
+    () =>
+      new AosThreadListAdapter(client, undefined, resolveRunError).historyFor(
+        scope.sessionId
+      ),
+    [client, resolveRunError, scope.sessionId]
   )
   const onComposerPrefill = useCallback(
     async (text: string) => {
@@ -380,6 +393,7 @@ function ReadyGuestAosSurface({
         onComposerPrefill,
         stageAttachments: client.stageAttachments.bind(client),
         getCapabilities: async () => context.capabilities.agent,
+        resolveRunError,
       }),
     [
       authorization,
@@ -387,6 +401,7 @@ function ReadyGuestAosSurface({
       config.basePath,
       context.capabilities.agent,
       onComposerPrefill,
+      resolveRunError,
       scope.agentId,
       scope.sessionId,
     ]

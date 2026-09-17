@@ -54,6 +54,51 @@ function fakeGateway() {
 }
 
 describe("HermesAttachmentRegistry", () => {
+  it("re-resumes a bound Session when a caller needs it reconciled", async () => {
+    const gateway = fakeGateway()
+    const resume = vi.fn(async () => ({ liveSessionId: "live-stored" }))
+    const registry = new HermesAttachmentRegistry(
+      { resume, close: async () => undefined },
+      gateway.transport
+    )
+
+    await registry.ensure(scope)
+    await registry.ensure(scope)
+    expect(resume).toHaveBeenCalledTimes(1)
+
+    await registry.ensure(scope, { refresh: true })
+    expect(resume).toHaveBeenCalledTimes(2)
+
+    // A refresh still joins an in-flight resume rather than issuing its own.
+    const first = registry.ensure(scope, { refresh: true })
+    const second = registry.ensure(scope, { refresh: true })
+    await Promise.all([first, second])
+    expect(resume).toHaveBeenCalledTimes(3)
+    await registry.close()
+  })
+
+  it("reports the durable scope a bound live Session id belongs to", async () => {
+    const gateway = fakeGateway()
+    const registry = new HermesAttachmentRegistry(
+      {
+        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
+        close: async () => undefined,
+      },
+      gateway.transport
+    )
+
+    expect(registry.scopeFor("live-stored")).toBeUndefined()
+    await registry.ensure(scope)
+
+    expect(registry.scopeFor("live-stored")).toEqual(scope)
+    expect(registry.scopeFor("live-other")).toBeUndefined()
+
+    registry.invalidate("live-stored")
+
+    expect(registry.scopeFor("live-stored")).toBeUndefined()
+    await registry.close()
+  })
+
   it("single-flights session resume and routes events by live Session", async () => {
     const gateway = fakeGateway()
     const resume = vi.fn(async (value: typeof scope) => ({

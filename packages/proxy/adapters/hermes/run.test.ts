@@ -1,4 +1,9 @@
-import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core"
+import {
+  EventSchemas,
+  EventType,
+  type RunAgentInput,
+  type RunFinishedInterruptOutcome,
+} from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import type {
@@ -60,9 +65,8 @@ function runtime(overrides: Partial<HermesRunNative> = {}): HermesRunNative {
     status: async () => "idle",
     retain: async () => () => undefined,
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    acceptInteraction: () => undefined,
+    onInterrupt: () => () => undefined,
     respondInteractions: async () => [],
-    clearPendingInteraction: () => undefined,
     ...overrides,
     // Hermes answers `session.events.since` with -32602 unless the cursor is an
     // integer, so no replay may ever be issued without one.
@@ -97,6 +101,30 @@ function observation() {
     },
     signal(liveSessionId: string, signal: AttachmentSignal) {
       observers.get(liveSessionId)?.(signal)
+    },
+  }
+}
+
+/**
+ * The interrupt stream `interactions.ts` owns: Hermes asks the user through a
+ * server→client request, so a test raises one directly instead of publishing a
+ * native event.
+ */
+function interrupts() {
+  const listeners = new Set<(outcome: RunFinishedInterruptOutcome) => void>()
+  return {
+    onInterrupt: (
+      _scope: HermesRunScope,
+      listener: (outcome: RunFinishedInterruptOutcome) => void
+    ) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    subscribed() {
+      return listeners.size
+    },
+    raise(outcome: RunFinishedInterruptOutcome) {
+      for (const listener of [...listeners]) listener(outcome)
     },
   }
 }
@@ -598,6 +626,7 @@ describe("HermesRunEngine", () => {
   it("finishes with a native AG-UI interrupt and resumes it without submitting a prompt", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const interrupt = interrupts()
     let submits = 0
     // Hermes' own watermark: the resumed run attaches after the first turn's
     // frames and continues their sequence.
@@ -605,37 +634,26 @@ describe("HermesRunEngine", () => {
     const engine = new HermesRunEngine(
       runtime({
         observe: attachment.observe,
+        onInterrupt: interrupt.onInterrupt,
         cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         submit: async () => {
           submits += 1
-          publish({
-            type: "approval.request",
-            session_id: "live-secret",
-            seq: 1,
-            payload: { request_id: "approval-1" },
+          interrupt.raise({
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "approval-1",
+                reason: "approval",
+                message: "Continue?",
+                responseSchema: { type: "string", enum: ["once", "deny"] },
+              },
+            ],
           })
           return {
             acknowledgement: "accepted" as const,
             status: "streaming" as const,
           }
         },
-        acceptInteraction: (_scope, _liveSessionId, event) =>
-          (event as { type?: string }).type === "approval.request"
-            ? {
-                type: "interrupt",
-                interrupts: [
-                  {
-                    id: "approval-1",
-                    reason: "approval",
-                    message: "Continue?",
-                    responseSchema: {
-                      type: "string",
-                      enum: ["once", "deny"],
-                    },
-                  },
-                ],
-              }
-            : undefined,
         respondInteractions: async (_scope, resume) => {
           expect(resume).toEqual([
             {
@@ -728,9 +746,34 @@ describe("HermesRunEngine", () => {
     expect(submits).toBe(1)
   })
 
+  it("observes interrupts only while the run is attached to its Session", async () => {
+    const attachment = observation()
+    const interrupt = interrupts()
+    const turn = nativeTurn()
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        onInterrupt: interrupt.onInterrupt,
+      })
+    )
+
+    const handle = await engine.start(scope, input())
+    expect(interrupt.subscribed()).toBe(1)
+
+    attachment.publish("live-secret", turn.messageStart("msg-1"))
+    attachment.publish("live-secret", turn.complete("msg-1", "Done"))
+    attachment.publish("live-secret", turn.idle())
+    await collect(handle)
+
+    // The settling watcher keeps the native observation until Hermes reports
+    // the Session idle; the interrupt subscription is released with it.
+    await vi.waitFor(() => expect(interrupt.subscribed()).toBe(0))
+  })
+
   it("streams a resumed interaction when Hermes continues without another message start", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const interrupt = interrupts()
     // Hermes' own watermark: the resumed run attaches after the first turn's
     // frames and continues their sequence.
     let watermark = 0
@@ -738,31 +781,23 @@ describe("HermesRunEngine", () => {
       runtime({
         observe: attachment.observe,
         cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
+        onInterrupt: interrupt.onInterrupt,
         submit: async () => {
-          publish({
-            type: "clarify.request",
-            session_id: "live-secret",
-            seq: 1,
-            payload: { request_id: "question-1" },
+          interrupt.raise({
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "question-1",
+                reason: "question",
+                message: "Answer whichever apply.",
+              },
+            ],
           })
           return {
             acknowledgement: "accepted" as const,
             status: "streaming" as const,
           }
         },
-        acceptInteraction: (_scope, _liveSessionId, event) =>
-          (event as { type?: string }).type === "clarify.request"
-            ? {
-                type: "interrupt",
-                interrupts: [
-                  {
-                    id: "question-1",
-                    reason: "question",
-                    message: "Answer whichever apply.",
-                  },
-                ],
-              }
-            : undefined,
         respondInteractions: async () => {
           publish({
             type: "tool.complete",

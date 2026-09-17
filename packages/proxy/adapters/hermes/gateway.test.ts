@@ -910,75 +910,48 @@ describe("Hermes gateway lifecycle and server requests", () => {
     )
   })
 
-  it("claims a server request without answering it while no handler is registered", async () => {
-    const { gateway, sockets, log } = harness()
+  it("answers an unclaimed server request so Hermes stops waiting on it", async () => {
+    const { gateway, sockets } = harness()
     await gateway.connect()
+    const declined = vi.fn(() => false as const)
+    gateway.onRequest(declined)
 
     sockets[0]!.deliver({
       id: "srq-000000000001",
-      method: "clarify",
-      params: { session_id: "live-secret", question: "which file?" },
-    })
-    sockets[0]!.deliver({
-      id: "srq-000000000002",
-      method: "clarify",
-      params: { session_id: "live-secret", question: "again?" },
-    })
-
-    expect(sockets[0]!.sent).toEqual([])
-    expect(
-      log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.server_request_unanswered"
-      )
-    ).toHaveLength(1)
-    await gateway.close()
-  })
-
-  it("logs a bounded set of unanswered server-request methods", async () => {
-    const { gateway, sockets, log } = harness()
-    await gateway.connect()
-
-    for (let index = 0; index < 200; index += 1)
-      sockets[0]!.deliver({
-        id: `srq-${index.toString(16).padStart(12, "0")}`,
-        method: `clarify-${index}`,
-        params: { session_id: "live-secret" },
-      })
-
-    const unanswered = log.warn.mock.calls.filter(
-      ([event]) => event === "hermes.gateway.server_request_unanswered"
-    )
-    expect(unanswered.length).toBeLessThanOrEqual(32)
-    expect(
-      log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.server_request_unanswered_capped"
-      )
-    ).toHaveLength(1)
-    expect(sockets[0]!.sent).toEqual([])
-    await gateway.close()
-  })
-
-  it("truncates a long server-request method name before logging it", async () => {
-    const { gateway, sockets, log } = harness()
-    await gateway.connect()
-    const method = "clarify".padEnd(200, "x")
-
-    sockets[0]!.deliver({
-      id: "srq-000000000005",
-      method,
+      method: "sudo",
       params: { session_id: "live-secret" },
     })
 
-    const [call] = log.warn.mock.calls.filter(
-      ([event]) => event === "hermes.gateway.server_request_unanswered"
-    )
-    expect(call?.[1]).toEqual({ method: method.slice(0, 64) })
+    expect(declined).toHaveBeenCalledTimes(1)
+    expect(sockets[0]!.lastRequest()).toMatchObject({
+      id: "srq-000000000001",
+      error: { code: -32601 },
+    })
     await gateway.close()
   })
 
-  it("writes no response for open requests re-delivered by a resume result", async () => {
+  it("reports whether an answer written now can reach Hermes", async () => {
+    const { gateway, sockets } = harness()
+
+    expect(gateway.connected()).toBe(false)
+    await gateway.connect()
+    expect(gateway.connected()).toBe(true)
+
+    sockets[0]!.close(1006)
+    expect(gateway.connected()).toBe(false)
+
+    await gateway.close()
+    expect(gateway.connected()).toBe(false)
+  })
+
+  it("re-delivers open requests from a resume result before it resolves", async () => {
     const { gateway, sockets } = harness()
     await gateway.connect()
+    const claimed: Array<{ id: string; replayed?: boolean }> = []
+    gateway.onRequest((request) => {
+      claimed.push({ id: request.id, replayed: request.replayed })
+      return true
+    })
 
     const resume = gateway.request("session.resume", { session_id: "stored" })
     await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
@@ -996,6 +969,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     })
 
     await expect(resume).resolves.toMatchObject({ running: true })
+    expect(claimed).toEqual([{ id: "srq-000000000003", replayed: true }])
     expect(sockets[0]!.sent).toHaveLength(1)
     await gateway.close()
   })

@@ -136,13 +136,23 @@ export class HermesAttachmentRegistry {
     })
   }
 
-  async ensure(scope: HermesAttachmentScope): Promise<HermesAttachment> {
+  /**
+   * The live Session behind a durable one, resuming it when AOS has no usable
+   * binding. `refresh` asks Hermes again even when one exists: a caller that
+   * needs the authoritative Session state (what is still waiting on it, whether
+   * it is running) cannot read it from a cached binding.
+   */
+  async ensure(
+    scope: HermesAttachmentScope,
+    options: { refresh?: boolean } = {}
+  ): Promise<HermesAttachment> {
     const entry = this.#entry(scope)
     this.#cancelIdle(entry)
     // A heal keeps the old live id until its resume answers. Joining the
     // in-flight call means no caller leaves with an id this heal replaces.
     if (entry.resuming) return entry.resuming
-    if (entry.attachment.liveSessionId && !entry.stale) return entry.attachment
+    if (entry.attachment.liveSessionId && !entry.stale && !options.refresh)
+      return entry.attachment
     return this.#resumeOnce(entry)
   }
 
@@ -178,6 +188,18 @@ export class HermesAttachmentRegistry {
     const entry = this.#byLiveId.get(liveSessionId)
     if (!entry) throw new Error("Hermes Session is not attached")
     return this.subscribe(entry.attachment, observer)
+  }
+
+  /**
+   * The durable Session a live Hermes Session id is bound to, if AOS bound it.
+   * A native frame or server request addresses the volatile id, so this is how
+   * a Session-scoped concern routes one without keeping its own binding map.
+   */
+  scopeFor(liveSessionId: string): HermesAttachmentScope | undefined {
+    const entry = this.#byLiveId.get(liveSessionId)
+    if (!entry) return undefined
+    const { agentId, sessionId, threadId } = entry.attachment
+    return { agentId, sessionId, threadId }
   }
 
   /**

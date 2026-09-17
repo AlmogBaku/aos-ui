@@ -357,4 +357,35 @@ describe("guest AG-UI projection", () => {
       project({ type: EventType.CUSTOM, name: "hermes.native", value: {} })
     ).toBeUndefined()
   })
+
+  it.each([
+    ["AOS_CONNECTION_INTERRUPTED", "AOS_CONNECTION_INTERRUPTED"],
+    ["AOS_SEND_UNCERTAIN", "AOS_SEND_UNCERTAIN"],
+    ["AOS_INTERACTION_UNCERTAIN", "AOS_INTERACTION_UNCERTAIN"],
+    ["AOS_RESET_REQUIRED", "temporarily_unavailable"],
+    ["AOS_STREAM_OVERFLOW", "temporarily_unavailable"],
+    ["AOS_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],
+    ["AOS_PROVIDER_AGENT_UNAVAILABLE", "temporarily_unavailable"],
+    ["AOS_SESSION_BUSY", "rate_limited"],
+    ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
+    ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
+    ["AOS_INTERACTION_EXPIRED", "request_failed"],
+    ["AOS_UNKNOWN_TO_THIS_BUILD", "request_failed"],
+    ["constructor", "request_failed"],
+    ["toString", "request_failed"],
+  ])("projects the run error code %s as %s", (code, expected) => {
+    const projected = project({
+      type: EventType.RUN_ERROR,
+      code,
+      message: "Hermes said something private about /private/path",
+    })
+
+    expect(projected).toMatchObject({
+      type: EventType.RUN_ERROR,
+      code: expected,
+    })
+    expect(String((projected as { message?: string })?.message)).not.toContain(
+      "/private/path"
+    )
+  })
 })

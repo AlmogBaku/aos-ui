@@ -21,7 +21,7 @@ import {
   type HermesRpcTransport,
 } from "./gateway"
 import type { AttachmentObserver } from "./attachment-registry"
-import { isRecord, sessionKey, trimmedText } from "./native"
+import { isRecord, trimmedText } from "./native"
 import { projectHermesHistory } from "./history"
 import {
   executeSlashCommand,
@@ -109,16 +109,14 @@ export interface HermesRunNative {
   inspectExecution(
     scope: HermesRunScope & { runId: string }
   ): Promise<HermesInteractionSnapshot>
-  acceptInteraction(
-    scope: HermesRunScope & { runId: string },
-    liveSessionId: string,
-    event: unknown
-  ): RunFinishedInterruptOutcome | { status: string } | undefined
+  onInterrupt(
+    scope: HermesRunScope,
+    listener: (outcome: RunFinishedInterruptOutcome) => void
+  ): () => void
   respondInteractions(
     scope: HermesRunScope & { runId: string },
     resume: readonly ResumeEntry[]
   ): Promise<readonly { status: string }[]>
-  clearPendingInteraction(scope: HermesRunScope): void
 }
 
 /** The durable-to-live binding surface `run-native.ts` depends on. */
@@ -136,11 +134,10 @@ export type HermesNativeAttachments = {
 
 /** The interaction surface `run-native.ts` depends on (`HermesInteractions`). */
 export type HermesNativeInteractions = {
-  acceptNative(
-    scope: HermesRunScope & { runId: string },
-    liveSessionId: string,
-    event: unknown
-  ): RunFinishedInterruptOutcome | { status: string } | undefined
+  onInterrupt(
+    scope: HermesRunScope,
+    listener: (outcome: RunFinishedInterruptOutcome) => void
+  ): () => void
   respond(
     scope: HermesRunScope & { runId: string },
     entry: ResumeEntry
@@ -255,7 +252,6 @@ export class HermesNativeRuntime implements HermesRunNative {
   readonly #interactions: HermesNativeInteractions
   readonly #history: (scope: HermesRunScope) => Promise<readonly unknown[]>
   readonly #log: HermesLog | undefined
-  readonly #pendingInteractionReleases = new Map<string, () => void>()
 
   constructor(options: HermesNativeOptions) {
     this.#transport = options.transport
@@ -440,24 +436,20 @@ export class HermesNativeRuntime implements HermesRunNative {
     return this.#attachments.retain(scope, reason)
   }
 
-  async inspectExecution(scope: HermesRunScope & { runId: string }) {
-    const snapshot = await this.#interactions.resume(scope)
-    // Discovery is authoritative: with no pending native request there is no
-    // interaction left to hold the attachment open.
-    if (!snapshot.outcome?.interrupts.length)
-      this.clearPendingInteraction(scope)
-    return snapshot
+  inspectExecution(scope: HermesRunScope & { runId: string }) {
+    return this.#interactions.resume(scope)
   }
 
-  acceptInteraction(
-    scope: HermesRunScope & { runId: string },
-    liveSessionId: string,
-    event: unknown
+  /**
+   * Interactions own the native request stream and the retainer that keeps a
+   * Session with a pending request addressable, so a run only asks to be told
+   * when one interrupts its Session.
+   */
+  onInterrupt(
+    scope: HermesRunScope,
+    listener: (outcome: RunFinishedInterruptOutcome) => void
   ) {
-    const outcome = this.#interactions.acceptNative(scope, liveSessionId, event)
-    if (outcome && "interrupts" in outcome)
-      void this.#retainPendingInteraction(scope)
-    return outcome
+    return this.#interactions.onInterrupt(scope, listener)
   }
 
   async respondInteractions(
@@ -465,31 +457,9 @@ export class HermesNativeRuntime implements HermesRunNative {
     resume: readonly ResumeEntry[]
   ) {
     await this.#interactions.resume(scope)
-    const results = await Promise.all(
+    return Promise.all(
       resume.map((entry) => this.#interactions.respond(scope, entry))
     )
-    if (
-      results.every(
-        ({ status }) => status === "resolved" || status === "expired"
-      )
-    )
-      this.clearPendingInteraction(scope)
-    return results
-  }
-
-  clearPendingInteraction(scope: HermesRunScope) {
-    const key = sessionKey(scope)
-    this.#pendingInteractionReleases.get(key)?.()
-    this.#pendingInteractionReleases.delete(key)
-  }
-
-  async #retainPendingInteraction(scope: HermesRunScope) {
-    const key = sessionKey(scope)
-    if (this.#pendingInteractionReleases.has(key)) return
-    const release = await this.#attachments.retain(scope, "interaction")
-    // A terminal event may have won the race while the attachment resumed.
-    if (this.#pendingInteractionReleases.has(key)) release()
-    else this.#pendingInteractionReleases.set(key, release)
   }
 
   /**

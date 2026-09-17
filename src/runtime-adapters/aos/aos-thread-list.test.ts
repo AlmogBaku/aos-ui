@@ -4,6 +4,30 @@ import type { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry } from "./aos-drafts"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
+/** A reload that still reports the run the browser was streaming. */
+const activeReloadPage = {
+  sessionId: "session-1",
+  messages: [
+    {
+      id: "user-1",
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Question" }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+    {
+      id: "partial-assistant",
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "Still working" }],
+      createdAt: "2026-01-01T00:00:01.000Z",
+    },
+  ],
+  total: 2,
+  limit: 200,
+  offset: 0,
+  nextOffset: 2,
+  execution: { status: "running" as const, runId: "run-1" },
+}
+
 describe("AOS remote thread-list adapter", () => {
   it("creates a selected Agent's remote Session only when its local draft initializes", async () => {
     const createSession = vi.fn(async (agentId: string) => ({
@@ -308,30 +332,87 @@ describe("AOS remote thread-list adapter", () => {
     ])
   })
 
-  it("stops recovery after one history reload when the provider still reports the run as active", async () => {
-    const historyPage = {
-      sessionId: "session-1",
-      messages: [
-        {
-          id: "user-1",
-          role: "user" as const,
-          content: [{ type: "text" as const, text: "Question" }],
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "partial-assistant",
-          role: "assistant" as const,
-          content: [{ type: "text" as const, text: "Still working" }],
-          createdAt: "2026-01-01T00:00:01.000Z",
-        },
-      ],
-      total: 2,
-      limit: 200,
-      offset: 0,
-      nextOffset: 2,
-      execution: { status: "running" as const, runId: "run-1" },
-    }
-    const loadHistory = vi.fn(async () => historyPage)
+  it("keeps a confirmed-running run alive by reconnecting from the start of its segment", async () => {
+    const loadHistory = vi.fn(async () => activeReloadPage)
+    const reconnectRun = vi.fn(async function* (
+      _threadId: string,
+      _runId: string,
+      _signal?: AbortSignal,
+      options?: { after?: number }
+    ) {
+      if (options?.after !== 0) {
+        yield {
+          type: "RUN_ERROR" as const,
+          code: "AOS_RESET_REQUIRED",
+          message: "Reload history",
+        }
+        return
+      }
+      // A cursor of 0 replays the whole segment, so the coordinator repeats
+      // the in-flight turn the reloaded history also reported.
+      yield {
+        type: "TEXT_MESSAGE_START" as const,
+        messageId: "assistant-1",
+        role: "assistant" as const,
+      }
+      yield {
+        type: "TEXT_MESSAGE_CONTENT" as const,
+        messageId: "assistant-1",
+        delta: "Still working",
+      }
+      yield {
+        type: "TEXT_MESSAGE_CONTENT" as const,
+        messageId: "assistant-1",
+        delta: " and still going",
+      }
+      yield {
+        type: "RUN_FINISHED" as const,
+        threadId: "session-1",
+        runId: "run-1",
+        outcome: { type: "success" as const },
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+    await history.load()
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(loadHistory).toHaveBeenCalledTimes(2)
+    expect(reconnectRun).toHaveBeenCalledTimes(2)
+    expect(reconnectRun.mock.calls[1]).toEqual([
+      "session-1",
+      "run-1",
+      expect.any(AbortSignal),
+      { after: 0 },
+    ])
+    // The replayed prefix is rendered once: the reloaded history is not seeded
+    // on top of it.
+    expect(updates).toEqual([
+      {
+        content: [{ type: "text", text: "Still working" }],
+        status: { type: "running" },
+      },
+      {
+        content: [{ type: "text", text: "Still working and still going" }],
+        status: { type: "running" },
+      },
+      {
+        content: [{ type: "text", text: "Still working and still going" }],
+        status: { type: "complete", reason: "stop" },
+      },
+    ])
+  })
+
+  it("stops recovery after one reload when the reconnected segment resets again", async () => {
+    const loadHistory = vi.fn(async () => activeReloadPage)
     const reconnectRun = vi.fn(async function* () {
       yield {
         type: "RUN_ERROR" as const,
@@ -353,7 +434,7 @@ describe("AOS remote thread-list adapter", () => {
       updates.push(update)
 
     expect(loadHistory).toHaveBeenCalledTimes(2)
-    expect(reconnectRun).toHaveBeenCalledOnce()
+    expect(reconnectRun).toHaveBeenCalledTimes(2)
     expect(updates).toEqual([
       {
         content: [{ type: "text", text: "Still working" }],
@@ -361,6 +442,78 @@ describe("AOS remote thread-list adapter", () => {
           type: "incomplete",
           reason: "error",
           error: "Reload history",
+        },
+      },
+    ])
+  })
+
+  it("resumes an uncertain execution that the provider still reports with a run id", async () => {
+    const loadHistory = vi.fn(async () => ({
+      ...activeReloadPage,
+      execution: { status: "failed" as const, runId: "run-1" },
+    }))
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "RUN_FINISHED" as const,
+        threadId: "session-1",
+        runId: "run-1",
+        outcome: { type: "success" as const },
+      }
+    })
+    const adapter = new AosThreadListAdapter({
+      loadHistory,
+      reconnectRun,
+    } as unknown as AosRemoteClient)
+    const history = adapter.historyFor("session-1")
+
+    await expect(history.load()).resolves.toMatchObject({
+      unstable_resume: true,
+    })
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(reconnectRun).toHaveBeenCalledOnce()
+    expect(updates).toEqual([
+      { content: [], status: { type: "complete", reason: "stop" } },
+    ])
+  })
+
+  it("localizes a resumed run failure by code and keeps proxy text otherwise", async () => {
+    const loadHistory = vi.fn(async () => activeReloadPage)
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "RUN_ERROR" as const,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "Hermes could not complete this run.",
+      }
+    })
+    const adapter = new AosThreadListAdapter(
+      { loadHistory, reconnectRun } as unknown as AosRemoteClient,
+      undefined,
+      (code, fallback) =>
+        code === "AOS_PROVIDER_RUN_FAILED"
+          ? "הספק לא הצליח להשלים את ההרצה הזו."
+          : fallback
+    )
+    const history = adapter.historyFor("session-1")
+    await history.load()
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(updates).toEqual([
+      {
+        content: [],
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error: "הספק לא הצליח להשלים את ההרצה הזו.",
         },
       },
     ])

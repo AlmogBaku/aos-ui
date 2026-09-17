@@ -259,25 +259,31 @@ describe("Hermes server adapter", () => {
   })
 
   it("restores pending interactions from authoritative owned Session state", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "session.resume")
-        return {
-          session_id: "live-secret",
-          running: true,
-          pending_approval: {
-            request_id: "approval-1",
-            message: "Allow this action?",
-            choices: ["once", "deny"],
+    // Hermes re-delivers a server request still waiting on this Session as an
+    // `open_requests` entry of the resume that rebinds it.
+    const router = rpcRouter({
+      "session.resume": async () => ({
+        session_id: "live-secret",
+        running: true,
+        open_requests: [
+          {
+            id: "srq-00000000000b",
+            method: "approval",
+            params: {
+              session_id: "live-secret",
+              request_id: "approval-1",
+              command: "Allow this action?",
+            },
           },
-        }
-      throw new Error(`unexpected ${method}`)
+        ],
+      }),
     })
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions/stored?"))
         return { id: "stored", profile: "researcher", title: "Owned" }
       throw new Error(`unexpected ${path}`)
     })
-    const adapter = new HermesServerAdapter({ request, http })
+    const adapter = new HermesServerAdapter({ ...router, http })
 
     await expect(
       adapter.pendingInteractions("researcher", "stored")
@@ -287,14 +293,17 @@ describe("Hermes server adapter", () => {
       status: "waiting-for-input",
       outcome: {
         type: "interrupt",
-        interrupts: [{ id: "approval-1", reason: "approval" }],
+        interrupts: [{ id: "srq-00000000000b", reason: "approval" }],
       },
     })
-    expect(request).toHaveBeenCalledWith("session.resume", {
+    expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored",
       profile: "researcher",
       omit_messages: true,
     })
+    // The re-delivered request is never answered on AOS' behalf.
+    expect(router.requests.answer("srq-00000000000b")).toBeUndefined()
+    expect(router.requests.refusal("srq-00000000000b")).toBeUndefined()
   })
 
   it("implements the server-only native run boundary over exact Hermes operations", async () => {
@@ -370,7 +379,10 @@ describe("Hermes server adapter", () => {
       ["session.interrupt", { session_id: "live-secret" }],
       ["session.active_list", {}],
     ])
-    expect(onEvent).toHaveBeenCalledTimes(1)
+    // Two AOS observers, each subscribing once for the whole runtime's life:
+    // the attachment registry routes native frames and interactions watch
+    // `request.cancel`.
+    expect(onEvent).toHaveBeenCalledTimes(2)
   })
 
   it.each(["redirected", "queued"] as const)(
@@ -1499,7 +1511,6 @@ describe("Hermes server adapter", () => {
         "Hermes is unavailable."
       ),
       new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE"),
-      new HermesInteractionPublicError("AOS_RECONCILIATION_STALE"),
     ])
       expect(adapter.publicError(cause)).toEqual({
         code: "temporarily_unavailable",
@@ -1526,11 +1537,18 @@ describe("Hermes server adapter", () => {
             status: "idle",
             ...(resumes === 1
               ? {
-                  pending_approval: {
-                    request_id: "approval-1",
-                    message: "Allow this action?",
-                    choices: ["once", "deny"],
-                  },
+                  open_requests: [
+                    {
+                      id: "srq-00000000000c",
+                      method: "approval",
+                      params: {
+                        session_id: "live-secret",
+                        request_id: "approval-1",
+                        command: "Allow this action?",
+                        choices: ["once", "deny"],
+                      },
+                    },
+                  ],
                 }
               : {}),
           }
@@ -1547,19 +1565,21 @@ describe("Hermes server adapter", () => {
 
       expect(await adapter.native.inspectExecution(scope)).toMatchObject({
         status: "waiting-for-input",
-        outcome: { interrupts: [{ id: "approval-1", reason: "approval" }] },
+        outcome: {
+          interrupts: [{ id: "srq-00000000000c", reason: "approval" }],
+        },
       })
-      expect(
-        adapter.native.acceptInteraction(scope, "live-secret", {
-          type: "approval.request",
+      // A live request for the same Session keeps the attachment retained.
+      router.requests.deliver(
+        "approval",
+        {
           session_id: "live-secret",
-          payload: {
-            request_id: "approval-2",
-            message: "Allow the next action?",
-            choices: ["once", "deny"],
-          },
-        })
-      ).toMatchObject({ type: "interrupt" })
+          request_id: "approval-2",
+          command: "Allow the next action?",
+          choices: ["once", "deny"],
+        },
+        { id: "srq-00000000000d" }
+      )
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(1_000)
       expect(router.calls("session.close")).toHaveLength(0)

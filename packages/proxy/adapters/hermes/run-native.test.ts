@@ -9,6 +9,7 @@ import {
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesRunScope } from "./run"
+import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
 
 const scope: HermesRunScope = {
   agentId: "researcher",
@@ -19,10 +20,22 @@ const scope: HermesRunScope = {
 const MAX_REPLAY_RESPONSE_BYTES = 6_291_456
 
 function stubInteractions() {
+  const listeners = new Set<(outcome: RunFinishedInterruptOutcome) => void>()
   return {
-    acceptNative: vi.fn(() => undefined),
+    onInterrupt: vi.fn(
+      (
+        _scope: HermesRunScope,
+        listener: (outcome: RunFinishedInterruptOutcome) => void
+      ) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }
+    ),
     respond: vi.fn(async () => ({ status: "resolved" })),
     resume: vi.fn(async () => ({ running: false, status: "idle" as const })),
+    raise(outcome: RunFinishedInterruptOutcome) {
+      for (const listener of [...listeners]) listener(outcome)
+    },
   }
 }
 
@@ -421,6 +434,28 @@ describe("Hermes native retention", () => {
     expect(attachments.retain).toHaveBeenCalledWith(scope, "settling")
     stop()
     expect(release).toHaveBeenCalledOnce()
+  })
+
+  it("passes interrupts through from the interaction surface", () => {
+    const { native, interactions } = runtime()
+    const observed = vi.fn()
+
+    const stop = native.onInterrupt(scope, observed)
+    const outcome = {
+      type: "interrupt" as const,
+      interrupts: [{ id: "srq-1", reason: "approval", message: "Continue?" }],
+    }
+    interactions.raise(outcome)
+
+    expect(observed).toHaveBeenCalledWith(outcome)
+    expect(interactions.onInterrupt).toHaveBeenCalledWith(
+      scope,
+      expect.any(Function)
+    )
+
+    stop()
+    interactions.raise(outcome)
+    expect(observed).toHaveBeenCalledTimes(1)
   })
 
   it("refuses to observe a live Session that was never attached", async () => {

@@ -143,6 +143,51 @@ const sessionCapabilities = {
   },
 }
 
+function stubReconciliationSocket() {
+  class AOSSocket extends EventTarget {
+    readyState = 0
+    constructor() {
+      super()
+      queueMicrotask(() => {
+        this.readyState = 1
+        this.dispatchEvent(new Event("open"))
+      })
+    }
+    send(raw: string) {
+      const { scope, streamId } = JSON.parse(raw) as {
+        scope: unknown
+        streamId: string
+      }
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "aos.ready",
+              version: 1,
+              streamId,
+              scope,
+              generation: 0,
+              read: "authoritative",
+            }),
+          })
+        )
+      )
+    }
+    close() {
+      this.readyState = 3
+      this.dispatchEvent(new Event("close"))
+    }
+  }
+  Object.defineProperty(window, "WebSocket", { value: AOSSocket })
+}
+
+function sseBody(events: readonly Record<string, unknown>[]) {
+  return events
+    .map((event) => `data: ${JSON.stringify(event)}`)
+    .concat("")
+    .join("\n\n")
+}
+
 test("AOS proxy restores history, offers commands, streams one turn, stops, and reconnects", async ({
   page,
 }) => {
@@ -151,43 +196,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   let reconnectRequests = 0
   let restoreActiveRun = false
 
-  await page.addInitScript(() => {
-    class AOSSocket extends EventTarget {
-      readyState = 0
-      constructor() {
-        super()
-        queueMicrotask(() => {
-          this.readyState = 1
-          this.dispatchEvent(new Event("open"))
-        })
-      }
-      send(raw: string) {
-        const { scope, streamId } = JSON.parse(raw) as {
-          scope: unknown
-          streamId: string
-        }
-        queueMicrotask(() =>
-          this.dispatchEvent(
-            new MessageEvent("message", {
-              data: JSON.stringify({
-                type: "aos.ready",
-                version: 1,
-                streamId,
-                scope,
-                generation: 0,
-                read: "authoritative",
-              }),
-            })
-          )
-        )
-      }
-      close() {
-        this.readyState = 3
-        this.dispatchEvent(new Event("close"))
-      }
-    }
-    Object.defineProperty(window, "WebSocket", { value: AOSSocket })
-  })
+  await page.addInitScript(stubReconciliationSocket)
 
   await page.route("**/runtime-config.json", (route) =>
     route.fulfill({ json: { mode: "aos" } })
@@ -425,4 +434,175 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(page.getByText("Partial before refresh")).toHaveCount(0)
   expect(runRequests).toBe(1)
   expect(reconnectRequests).toBe(1)
+})
+
+test("AOS keeps a reloaded run alive when its journal is gone and the provider still reports it running", async ({
+  page,
+}) => {
+  const reconnectCursors: (number | undefined)[] = []
+  let runActive = true
+
+  await page.addInitScript(stubReconciliationSocket)
+
+  await page.route("**/runtime-config.json", (route) =>
+    route.fulfill({ json: { mode: "aos" } })
+  )
+  await page.route("**/api/aos/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith("/runtime")) return route.fulfill({ json: runtime })
+    if (path.endsWith("/agents"))
+      return route.fulfill({
+        json: {
+          revision: "catalog-1",
+          agents: [
+            {
+              summary: {
+                kind: "ready",
+                id: "research",
+                name: "Research",
+                status: "running",
+              },
+              visibility: "visible",
+              selectable: true,
+              editable: false,
+              revision: "research-1",
+            },
+          ],
+        },
+      })
+    if (path.endsWith("/sessions"))
+      return route.fulfill({
+        json: {
+          sessions: [{ ...session, status: runActive ? "running" : "idle" }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        },
+      })
+    if (path.endsWith("/history"))
+      return route.fulfill({
+        json: {
+          sessionId: session.id,
+          messages: [
+            {
+              id: "reset-user",
+              role: "user",
+              content: [{ type: "text", text: "Keep going" }],
+              createdAt: "2026-09-12T00:00:01.000Z",
+            },
+            {
+              id: "reset-partial",
+              role: "assistant",
+              content: [{ type: "text", text: "Partial before reset" }],
+              createdAt: "2026-09-12T00:00:02.000Z",
+            },
+          ],
+          total: 2,
+          limit: 200,
+          offset: 0,
+          nextOffset: 2,
+          execution: runActive
+            ? { status: "running", runId: "live-run" }
+            : { status: "idle" },
+        },
+      })
+    if (path.endsWith("/workspace/capabilities"))
+      return route.fulfill({ json: sessionCapabilities })
+    if (path.endsWith("/workspace/models"))
+      return route.fulfill({
+        json: {
+          selectedId: "default",
+          options: [{ id: "default", label: "Default", group: "Hermes" }],
+        },
+      })
+    if (path.endsWith("/workspace/context"))
+      return route.fulfill({
+        json: { usedTokens: 1, maxTokens: 100, source: "provider-usage" },
+      })
+    if (path.endsWith("/workspace/todos"))
+      return route.fulfill({ json: { todos: [] } })
+    if (path.endsWith("/interactions/pending"))
+      return route.fulfill({
+        json: { runId: "live-run", running: true, status: "running" },
+      })
+    if (path.endsWith("/workspace/activity"))
+      return route.fulfill({
+        json: {
+          status: "available",
+          scope: "attached-active-session",
+          coverage: "active-session-only",
+          state: "running",
+        },
+      })
+    if (path.endsWith("/audio"))
+      return route.fulfill({
+        json: {
+          transcription: { status: "unavailable", reason: "not-configured" },
+          speech: { status: "unavailable", reason: "not-configured" },
+        },
+      })
+    if (path.endsWith("/runs/reconnect")) {
+      const body = route.request().postDataJSON() as { after?: number }
+      reconnectCursors.push(body.after)
+      // Without a cursor the coordinator cannot replay a journal-less segment.
+      if (body.after === undefined)
+        return route.fulfill({
+          contentType: "text/event-stream",
+          body: sseBody([
+            {
+              type: "RUN_ERROR",
+              code: "AOS_RESET_REQUIRED",
+              message: "Hermes history must be reconciled.",
+            },
+          ]),
+        })
+      runActive = false
+      // A cursor of 0 replays the segment, so the coordinator repeats the whole
+      // in-flight turn the reloaded history also reported.
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: sseBody([
+          { type: "RUN_STARTED", threadId: session.id, runId: "live-run" },
+          {
+            type: "TEXT_MESSAGE_START",
+            messageId: "reset-answer",
+            role: "assistant",
+          },
+          {
+            type: "TEXT_MESSAGE_CONTENT",
+            messageId: "reset-answer",
+            delta: "Partial before reset",
+          },
+          {
+            type: "TEXT_MESSAGE_CONTENT",
+            messageId: "reset-answer",
+            delta: " and finishing now.",
+          },
+          { type: "TEXT_MESSAGE_END", messageId: "reset-answer" },
+          {
+            type: "RUN_FINISHED",
+            threadId: session.id,
+            runId: "live-run",
+            outcome: { type: "success" },
+          },
+        ]),
+      })
+    }
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found" } },
+    })
+  })
+
+  await page.goto("/")
+
+  // The replayed prefix is rendered once, not appended to the reloaded one.
+  await expect(
+    page.getByText("Partial before reset and finishing now.", { exact: true })
+  ).toBeVisible()
+  await expect(page.getByText("Partial before reset")).toHaveCount(1)
+  await expect(
+    page.getByText("Hermes history must be reconciled.")
+  ).toHaveCount(0)
+  expect(reconnectCursors).toEqual([undefined, 0])
 })

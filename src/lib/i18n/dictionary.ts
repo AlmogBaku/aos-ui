@@ -117,6 +117,30 @@ export type Dictionary = {
     waitingForInput: string
     failed: string
   }
+  /** Localized copy for the normalized `AOS_*` run failure codes. */
+  runErrors: {
+    AOS_RECONNECT_EXHAUSTED: string
+    AOS_CONNECTION_INTERRUPTED: string
+    AOS_SEND_UNCERTAIN: string
+    AOS_INTERACTION_UNCERTAIN: string
+    AOS_INTERACTION_FAILED: string
+    AOS_INTERACTION_EXPIRED: string
+    AOS_PROVIDER_RUN_FAILED: string
+    AOS_PROVIDER_AGENT_UNAVAILABLE: string
+    AOS_PROVIDER_BILLING_FAILED: string
+    AOS_PROVIDER_RETRYABLE_FAILURE: string
+    AOS_PROVIDER_UNAVAILABLE: string
+    AOS_SESSION_BUSY: string
+    AOS_RESET_REQUIRED: string
+    AOS_STOP_UNCERTAIN: string
+    AOS_STREAM_OVERFLOW: string
+    AOS_COMMAND_WITH_ATTACHMENTS: string
+    AOS_REWIND_CONFLICT: string
+    // Generic codes the guest boundary substitutes for a private failure.
+    temporarily_unavailable: string
+    rate_limited: string
+    request_failed: string
+  }
   empty: {
     addAgentTitle: string
     addAgentDescription: string

@@ -1,136 +1,81 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { HermesInteractions } from "./interactions"
+import { HermesInteractions, type HermesInteractionScope } from "./interactions"
+import { serverRequests } from "./test-utils/server-requests"
 
-const scope = {
+const scope: HermesInteractionScope = {
   agentId: "research",
   sessionId: "session-1",
   threadId: "session-1",
-  runId: "run-1",
 }
 
-describe("HermesInteractions", () => {
-  it("accepts a pending interrupt from a fresh AG-UI segment run id", async () => {
-    const request = vi.fn(async () => ({ status: "ok" }))
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "approval-fresh-segment",
-        message: "Continue?",
-        choices: ["session"],
-      },
-    })
+const LIVE = "live-private"
 
-    await expect(
-      interactions.respond(
-        { ...scope, runId: "run-2" },
-        {
-          interruptId: "approval-fresh-segment",
-          status: "resolved",
-          payload: "session",
-        }
-      )
-    ).resolves.toEqual({ status: "resolved" })
-    expect(request).toHaveBeenCalledWith("approval.respond", {
-      session_id: "live-private",
-      request_id: "approval-fresh-segment",
-      choice: "session",
-    })
+/**
+ * One answering surface over the vendored request channel. `bind` stands in for
+ * a completed `session.resume`: the registry knows which durable Session a live
+ * Hermes Session id belongs to only once it has resumed it.
+ */
+function harness(
+  options: {
+    live?: string
+    running?: boolean
+    /** Result whose `open_requests` a resume re-delivers before it resolves. */
+    resumeResult?: unknown
+    log?: { warn: (event: string, fields: Record<string, unknown>) => void }
+  } = {}
+) {
+  const requests = serverRequests()
+  const bound = new Map<string, HermesInteractionScope>()
+  const live = options.live ?? LIVE
+  const ensure = vi.fn(async (target: HermesInteractionScope) => {
+    if (options.resumeResult !== undefined)
+      requests.deliverOpen(options.resumeResult)
+    bound.set(live, { ...target })
+    return { liveSessionId: live, running: options.running ?? false }
   })
+  const release = vi.fn()
+  const retain = vi.fn(async () => release)
+  const interactions = new HermesInteractions(
+    requests.transport,
+    {
+      ensure,
+      retain,
+      scopeFor: (liveSessionId: string) => bound.get(liveSessionId),
+    },
+    options.log ? { log: options.log } : {}
+  )
+  return {
+    requests,
+    interactions,
+    ensure,
+    retain,
+    release,
+    bind(liveSessionId = live, target = scope) {
+      bound.set(liveSessionId, { ...target })
+    },
+  }
+}
 
-  it("normalizes a native approval as a run-bound AG-UI interrupt", () => {
-    const request = vi.fn()
-    const interactions = new HermesInteractions({ request })
+describe("HermesInteractions server requests", () => {
+  it("presents a single clarify request as the existing question interrupt", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
 
-    const outcome = interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "approval-1",
-        command: "deploy production",
-        choices: ["deny", "once", "always"],
-        allow_permanent: false,
-      },
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+      choices: ["eu", "us"],
     })
 
+    const [outcome] = interactions.pending(scope)
     expect(outcome).toEqual({
       type: "interrupt",
       interrupts: [
         {
-          id: "approval-1",
-          reason: "approval",
-          message: "deploy production",
-          responseSchema: {
-            type: "string",
-            enum: ["deny", "once"],
-          },
-          metadata: {
-            "aos.kind": "approval",
-            "aos.scope": "run",
-            "aos.choiceScopes": {
-              deny: "request",
-              once: "request",
-            },
-          },
-        },
-      ],
-    })
-    expect(JSON.stringify(outcome)).not.toContain("live-private")
-  })
-
-  it("uses the existing safe fallback for an approval without display text", () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
-
-    expect(
-      interactions.acceptNative(scope, "live-private", {
-        type: "approval.request",
-        session_id: "live-private",
-        payload: { request_id: "approval-untitled" },
-      })
-    ).toMatchObject({
-      interrupts: [
-        {
-          id: "approval-untitled",
-          message: "Hermes is requesting permission to continue.",
-        },
-      ],
-    })
-  })
-
-  it("normalizes ordered native clarification questions without exposing question wire ids", () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
-
-    const outcome = interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-1",
-        questions: [
-          {
-            qid: "native-q2",
-            question: "Which region?",
-            choices: ["eu", "us"],
-            multi_select: false,
-          },
-          {
-            qid: "native-q1",
-            question: "Which checks?",
-            choices: ["smoke", "e2e"],
-            multi_select: true,
-          },
-        ],
-      },
-    })
-
-    expect(outcome).toEqual({
-      type: "interrupt",
-      interrupts: [
-        {
-          id: "clarify-1",
+          id,
           reason: "question",
-          message: "2 questions require answers",
+          message: "Which region?",
           responseSchema: {
             type: "object",
             properties: {
@@ -144,17 +89,9 @@ describe("HermesInteractions", () => {
                     minItems: 0,
                     maxItems: 1,
                   },
-                  {
-                    type: "array",
-                    title: "Which checks?",
-                    items: { type: "string", enum: ["smoke", "e2e"] },
-                    minItems: 0,
-                    maxItems: 2,
-                    uniqueItems: true,
-                  },
                 ],
-                minItems: 2,
-                maxItems: 2,
+                minItems: 1,
+                maxItems: 1,
               },
             },
             required: ["answers"],
@@ -163,481 +100,848 @@ describe("HermesInteractions", () => {
           metadata: {
             "aos.kind": "questions",
             "aos.scope": "run",
-            "aos.questionCount": 2,
+            "aos.questionCount": 1,
           },
         },
       ],
     })
-    expect(JSON.stringify(outcome)).not.toMatch(/live-private|native-q/)
+    expect(JSON.stringify(outcome)).not.toContain(LIVE)
+    expect(requests.frames()).toEqual([])
   })
 
-  it("rejects malformed and oversized recognized native interaction payloads safely", () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
-    const malformed = {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-1",
-        questions: [{ qid: "q0", question: "?", multi_select: "yes" }],
-        provider_url: "https://hermes.internal",
-      },
-    }
-
-    let malformedError: unknown
-    try {
-      interactions.acceptNative(scope, "live-private", malformed)
-    } catch (error) {
-      malformedError = error
-    }
-    expect(malformedError).toMatchObject({
-      name: "HermesInteractionPublicError",
-      code: "AOS_PROVIDER_INVALID_RESPONSE",
-      message: "Hermes returned invalid interaction data",
+  it("answers a single clarify once, on the request Hermes is waiting on", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+      choices: ["eu", "us"],
     })
-    let oversizedError: unknown
-    try {
-      interactions.acceptNative(scope, "live-private", {
-        type: "approval.request",
-        session_id: "live-private",
-        payload: {
-          request_id: "approval-2",
-          command: "x".repeat(70_000),
+
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["eu"]] },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+
+    expect(requests.answer(id)).toEqual({ answer: "eu" })
+    expect(requests.frames()).toHaveLength(1)
+    expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("answers a single multi-select clarify with every selected value", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which checks?",
+      choices: ["smoke", "e2e", "unit"],
+      multi_select: true,
+    })
+
+    // The interrupt offers the whole selection, so the answer must carry it:
+    // Hermes parses a single multi-select answer as a JSON array
+    // (`tools/clarify_tool.py` `_parse_multi_select_response`).
+    expect(interactions.pending(scope)[0]?.interrupts[0]).toMatchObject({
+      responseSchema: {
+        properties: {
+          answers: {
+            prefixItems: [{ maxItems: 3, uniqueItems: true }],
+          },
         },
-      })
-    } catch (error) {
-      oversizedError = error
-    }
-    expect(oversizedError).toMatchObject({
-      code: "AOS_PROVIDER_INVALID_RESPONSE",
-    })
-  })
-
-  it("responds to an approval once with its private native binding and makes replay idempotent", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: 1 })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "deploy" },
-    })
-
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "approval-1",
-        status: "resolved",
-        payload: "session",
-      })
-    ).resolves.toEqual({ status: "resolved" })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "approval-1",
-        status: "resolved",
-        payload: "session",
-      })
-    ).resolves.toEqual({ status: "already-resolved" })
-    expect(request).toHaveBeenCalledTimes(1)
-    expect(request).toHaveBeenCalledWith("approval.respond", {
-      session_id: "live-private",
-      request_id: "approval-1",
-      choice: "session",
-    })
-  })
-
-  it("treats the existing Hermes boolean response fixtures as successful acknowledgements", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: true })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { id: "approval-from-id", command: "deploy" },
-    })
-
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "approval-from-id",
-        status: "resolved",
-        payload: "once",
-        metadata: { presentation: { selectedBy: "keyboard" } },
-      })
-    ).resolves.toEqual({ status: "resolved" })
-    expect(request).toHaveBeenCalledWith("approval.respond", {
-      session_id: "live-private",
-      request_id: "approval-from-id",
-      choice: "once",
-    })
-
-    request.mockResolvedValue({ resolved: true })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: { request_id: "clarify-fixture", question: "Continue?" },
-    })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "clarify-fixture",
-        status: "resolved",
-        payload: { answers: [["yes"]] },
-        metadata: { ignored: true },
-      })
-    ).resolves.toEqual({ status: "resolved" })
-  })
-
-  it("preserves exact native clarification choices and free-text answer whitespace", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: true })
-    const interactions = new HermesInteractions({ request })
-    const outcome = interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-whitespace",
-        questions: [
-          {
-            qid: "choice",
-            question: "Pick exact",
-            choices: ["  padded choice  ", "plain"],
-            multi_select: false,
-          },
-          {
-            qid: "free",
-            question: "Free text",
-            choices: null,
-            multi_select: false,
-          },
-        ],
-      },
-    })
-    expect(
-      outcome &&
-        "interrupts" in outcome &&
-        outcome.interrupts[0]?.responseSchema?.properties
-    ).toMatchObject({
-      answers: {
-        prefixItems: [
-          { items: { enum: ["  padded choice  ", "plain"] } },
-          { items: { type: "string" } },
-        ],
       },
     })
 
-    await interactions.respond(scope, {
-      interruptId: "clarify-whitespace",
-      status: "resolved",
-      payload: { answers: [["  padded choice  "], ["  free text  "]] },
-    })
-    expect(request.mock.calls).toEqual([
-      [
-        "clarify.respond",
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["smoke", "e2e"]] },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+
+    expect(requests.answer(id)).toEqual({ answer: '["smoke","e2e"]' })
+    expect(requests.frames()).toHaveLength(1)
+  })
+
+  it("presents a clarify batch as one interrupt and answers every question id", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
         {
-          session_id: "live-private",
-          request_id: "clarify-whitespace",
-          question_id: "choice",
-          answer: "  padded choice  ",
+          qid: "q0",
+          question: "Which region?",
+          choices: ["eu", "us"],
+          multi_select: false,
+        },
+        {
+          qid: "q1",
+          question: "Which checks?",
+          choices: ["smoke", "e2e"],
+          multi_select: true,
         },
       ],
-      [
-        "clarify.respond",
-        {
-          session_id: "live-private",
-          request_id: "clarify-whitespace",
-          question_id: "free",
-          answer: "  free text  ",
-        },
-      ],
-    ])
-  })
-
-  it("rejects cross-Agent and cross-Session interaction substitution", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: 1 })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "deploy" },
     })
-    const resume = {
-      interruptId: "approval-1",
-      status: "resolved",
-      payload: "once",
-    }
 
-    for (const changed of [
-      { ...scope, agentId: "other" },
-      { ...scope, sessionId: "other", threadId: "other" },
-    ]) {
-      await expect(interactions.respond(changed, resume)).rejects.toMatchObject(
-        {
-          code: "AOS_INTERACTION_NOT_FOUND",
-          message: "Interaction not found",
-        }
-      )
-    }
-    expect(request).not.toHaveBeenCalled()
-  })
-
-  it("sends ordered clarification answers with exact single and multi-select semantics", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "ok", remaining: ["q1"] })
-      .mockResolvedValueOnce({ status: "ok", remaining: [] })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-1",
-        questions: [
-          {
-            qid: "q0",
-            question: "Region?",
-            choices: ["eu", "us"],
-            multi_select: false,
-          },
-          {
-            qid: "q1",
-            question: "Checks?",
-            choices: ["smoke", "e2e"],
-            multi_select: true,
-          },
-        ],
-      },
+    const [outcome] = interactions.pending(scope)
+    expect(outcome?.interrupts).toHaveLength(1)
+    expect(outcome?.interrupts[0]).toMatchObject({
+      id,
+      reason: "question",
+      message: "2 questions require answers",
+      metadata: { "aos.questionCount": 2 },
     })
+    expect(JSON.stringify(outcome)).not.toContain("q0")
 
     await expect(
       interactions.respond(scope, {
-        interruptId: "clarify-1",
+        interruptId: id,
         status: "resolved",
         payload: { answers: [["eu"], ["smoke", "e2e"]] },
       })
     ).resolves.toEqual({ status: "resolved" })
-    expect(request.mock.calls).toEqual([
-      [
-        "clarify.respond",
-        {
-          session_id: "live-private",
-          request_id: "clarify-1",
-          question_id: "q0",
-          answer: "eu",
-        },
-      ],
-      [
-        "clarify.respond",
-        {
-          session_id: "live-private",
-          request_id: "clarify-1",
-          question_id: "q1",
-          answer: '["smoke","e2e"]',
-        },
-      ],
-    ])
+
+    expect(requests.answer(id)).toEqual({
+      answers: { q0: "eu", q1: '["smoke","e2e"]' },
+    })
+    expect(requests.frames()).toHaveLength(1)
   })
 
-  it("uses Hermes' native cancellation semantics for questions and available approval denial", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "ok", remaining: [] })
-      .mockResolvedValueOnce({ resolved: 1 })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: { request_id: "clarify-1", question: "Proceed?" },
-    })
-    await interactions.respond(scope, {
-      interruptId: "clarify-1",
-      status: "cancelled",
-    })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "deploy" },
-    })
-    await interactions.respond(scope, {
-      interruptId: "approval-1",
-      status: "cancelled",
-    })
-
-    expect(request.mock.calls).toEqual([
-      [
-        "clarify.respond",
-        {
-          session_id: "live-private",
-          request_id: "clarify-1",
-          answer: "",
-        },
-      ],
-      [
-        "approval.respond",
-        {
-          session_id: "live-private",
-          request_id: "approval-1",
-          choice: "deny",
-        },
-      ],
-    ])
-  })
-
-  it("rejects malformed answers and returns a redacted uncertain result after an outage without replay", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          "connect https://hermes.internal token=super-secret /home/agent"
-        )
-      )
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-1",
-        question: "Region?",
-        choices: ["eu", "us"],
+  it("restores answers Hermes already locked as ordered schema defaults", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver(
+      "clarify",
+      {
+        session_id: LIVE,
+        questions: [
+          {
+            qid: "q0",
+            question: "Existing path?",
+            choices: null,
+            multi_select: false,
+          },
+          {
+            qid: "q1",
+            question: "Which region?",
+            choices: ["eu", "us"],
+            multi_select: false,
+          },
+        ],
+        answers: { q0: "/home/operator/secret" },
       },
-    })
-
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "clarify-1",
-        status: "resolved",
-        payload: { answers: [["moon"]] },
-      })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "clarify-1",
-        status: "resolved",
-        payload: { answers: [["eu"]] },
-      })
-    ).resolves.toEqual({ status: "uncertain" })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "clarify-1",
-        status: "resolved",
-        payload: { answers: [["eu"]] },
-      })
-    ).resolves.toEqual({ status: "uncertain" })
-    expect(request).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(await interactions.pending(scope))).not.toMatch(
-      /hermes\.internal|super-secret|\/home\/agent|live-private/
+      { replayed: false }
     )
+
+    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
+    expect(interrupt?.metadata).toMatchObject({
+      "aos.lockedAnswerIndexes": [0],
+    })
+    const schema = interrupt?.responseSchema as {
+      properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
+    }
+    const locked = schema.properties.answers.prefixItems[0]!.default!
+    expect(locked).toEqual(["[provider path redacted]"])
+
+    // A locked free-text answer is echoed back as its native value: the public
+    // redaction must never become the answer Hermes stores.
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: { answers: [locked, ["eu"]] },
+    })
+
+    expect(requests.answer(id)).toEqual({
+      answers: { q0: "/home/operator/secret", q1: "eu" },
+    })
   })
 
-  it("authoritatively restores pending interactions on resume without disclosing the live Session id", async () => {
-    const request = vi.fn().mockResolvedValue({
-      session_id: "live-private-2",
+  it("uses Hermes' own cancellation semantics for a single question and a batch", async () => {
+    const single = harness()
+    single.bind()
+    const singleId = single.requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    await expect(
+      single.interactions.respond(scope, {
+        interruptId: singleId,
+        status: "cancelled",
+      })
+    ).resolves.toEqual({ status: "resolved" })
+    expect(single.requests.answer(singleId)).toEqual({ answer: "" })
+
+    const batch = harness()
+    batch.bind()
+    const batchId = batch.requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
+        { qid: "q0", question: "Which region?", multi_select: false },
+        { qid: "q1", question: "Which checks?", multi_select: false },
+      ],
+    })
+    await batch.interactions.respond(scope, {
+      interruptId: batchId,
+      status: "cancelled",
+    })
+    expect(batch.requests.answer(batchId)).toEqual({})
+  })
+
+  it("presents an approval with its native choice scopes and answers the choice", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "deploy production",
+      choices: ["once", "deny", "always"],
+      allow_permanent: false,
+    })
+
+    expect(interactions.pending(scope)[0]).toEqual({
+      type: "interrupt",
+      interrupts: [
+        {
+          id,
+          reason: "approval",
+          message: "deploy production",
+          responseSchema: { type: "string", enum: ["once", "deny"] },
+          metadata: {
+            "aos.kind": "approval",
+            "aos.scope": "run",
+            "aos.choiceScopes": { once: "request", deny: "request" },
+          },
+        },
+      ],
+    })
+
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: "once",
+      })
+    ).resolves.toEqual({ status: "resolved" })
+    expect(requests.answer(id)).toEqual({ choice: "once" })
+  })
+
+  it("answers a session or permanent approval choice with the all flag", async () => {
+    for (const choice of ["session", "always"] as const) {
+      const { requests, interactions, bind } = harness()
+      bind()
+      const id = requests.deliver("approval", {
+        session_id: LIVE,
+        request_id: `approval-${choice}`,
+        description: "Write to the repository",
+      })
+
+      expect(
+        interactions.pending(scope)[0]?.interrupts[0]?.metadata?.[
+          "aos.choiceScopes"
+        ]
+      ).toEqual({
+        once: "request",
+        session: "session",
+        always: "agent",
+        deny: "request",
+      })
+
+      await interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: choice,
+      })
+      expect(requests.answer(id)).toEqual({ choice, all: true })
+    }
+  })
+
+  it("denies a cancelled approval", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "rm -rf /",
+    })
+
+    await interactions.respond(scope, { interruptId: id, status: "cancelled" })
+
+    expect(requests.answer(id)).toEqual({ choice: "deny" })
+  })
+
+  it("declines a server request AOS cannot answer so Hermes stops waiting", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+
+    const id = requests.deliver("sudo", {
+      session_id: LIVE,
+      command: "sudo apt install",
+    })
+
+    expect(requests.refusal(id)).toMatchObject({ code: -32601 })
+    expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("declines a request addressed to a live Session AOS has not bound", () => {
+    const { requests, interactions } = harness()
+
+    const id = requests.deliver("clarify", {
+      session_id: "live-unknown",
+      question: "Which region?",
+    })
+
+    expect(requests.refusal(id)).toMatchObject({ code: -32601 })
+    expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("declines a malformed or oversized recognized request payload", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+
+    const malformed = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [{ qid: "q0", question: { path: "/etc/shadow" } }],
+    })
+    const oversized = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-huge",
+      command: "x".repeat(70_000),
+    })
+    const duplicated = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
+        { qid: "q0", question: "One?", multi_select: false },
+        { qid: "q0", question: "Two?", multi_select: false },
+      ],
+    })
+
+    for (const id of [malformed, oversized, duplicated])
+      expect(requests.refusal(id)).toMatchObject({ code: -32601 })
+    expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("expires a request Hermes cancelled and reports it to a later response", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+
+    requests.emit({
+      type: "request.cancel",
+      session_id: LIVE,
+      seq: 7,
+      payload: { id, method: "clarify", reason: "timeout" },
+    })
+
+    expect(interactions.pending(scope)).toEqual([])
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["eu"]] },
+      })
+    ).resolves.toEqual({ status: "expired" })
+    expect(requests.frames()).toEqual([])
+  })
+
+  it("ignores a cancellation addressed to another live Session", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    bind("live-other", { ...scope, sessionId: "session-2" })
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+
+    requests.emit({
+      type: "request.cancel",
+      session_id: "live-other",
+      payload: { id, method: "clarify", reason: "timeout" },
+    })
+
+    expect(interactions.pending(scope)).toHaveLength(1)
+  })
+
+  it("rebuilds a pending interaction from a resume re-delivery without answering it", async () => {
+    const resumeResult = {
+      session_id: LIVE,
       running: true,
-      status: "running",
-      pending_approval: {
-        request_id: "approval-2",
-        description: "Restart deployment",
-        smart_denied: true,
-      },
-      pending_clarify: {
-        request_id: "clarify-2",
-        question: "Region?",
-        choices: ["eu", "us"],
-        multi_select: false,
-      },
-      provider_url: "https://hermes.internal",
+      open_requests: [
+        {
+          id: "srq-00000000000a",
+          method: "approval",
+          params: {
+            session_id: LIVE,
+            request_id: "approval-restored",
+            command: "restart deployment",
+          },
+        },
+      ],
+    }
+    const { requests, interactions } = harness({
+      running: true,
+      resumeResult,
     })
-    const interactions = new HermesInteractions({ request })
+    const notified = vi.fn()
+    interactions.onInterrupt(scope, notified)
 
-    const resumed = await interactions.resume(scope)
+    const snapshot = await interactions.resume(scope)
 
-    expect(request).toHaveBeenCalledWith("session.resume", {
-      session_id: "session-1",
-      profile: "research",
-      omit_messages: true,
-    })
-    expect(resumed).toMatchObject({
+    expect(snapshot).toMatchObject({
       running: true,
       status: "waiting-for-input",
       outcome: {
         type: "interrupt",
-        interrupts: [
-          { id: "approval-2", reason: "approval" },
-          { id: "clarify-2", reason: "question" },
-        ],
+        interrupts: [{ id: "srq-00000000000a", reason: "approval" }],
       },
     })
-    expect(JSON.stringify(resumed)).not.toMatch(
-      /live-private|hermes\.internal|provider_url/
-    )
+    expect(JSON.stringify(snapshot)).not.toContain(LIVE)
+    expect(notified).not.toHaveBeenCalled()
+    expect(requests.frames()).toEqual([])
+
+    // A second re-delivery replaces the handle without a duplicate interrupt.
+    await interactions.resume(scope)
+    expect(interactions.pending(scope)).toHaveLength(1)
+    expect(notified).not.toHaveBeenCalled()
+
+    await interactions.respond(scope, {
+      interruptId: "srq-00000000000a",
+      status: "resolved",
+      payload: "once",
+    })
+    expect(requests.answer("srq-00000000000a")).toEqual({ choice: "once" })
   })
 
-  it("accepts the no-prompt live resume shape when Hermes omits running", async () => {
-    const request = vi.fn().mockResolvedValue({
-      session_id: "live-private",
-      stored_session_id: "session-1",
-      message_count: 0,
-      messages: [],
-      messages_omitted: true,
-      info: { lazy: true },
+  it("notifies the run when a heal re-delivers a request it has not seen", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const notified = vi.fn()
+    interactions.onInterrupt(scope, notified)
+
+    // A `clarify` frame written while the socket was detached reaches AOS only
+    // as an `open_requests` re-delivery of the heal that rebound the Session.
+    const redelivered = {
+      open_requests: [
+        {
+          id: "srq-00000000000f",
+          method: "clarify",
+          params: { session_id: LIVE, question: "Which region?" },
+        },
+      ],
+    }
+    requests.deliverOpen(redelivered)
+
+    expect(interactions.pending(scope)).toHaveLength(1)
+    expect(notified).toHaveBeenCalledTimes(1)
+    expect(notified).toHaveBeenCalledWith(interactions.pending(scope)[0])
+
+    // A later re-delivery of the same request only replaces its handle.
+    requests.deliverOpen(redelivered)
+    expect(interactions.pending(scope)).toHaveLength(1)
+    expect(notified).toHaveBeenCalledTimes(1)
+  })
+
+  it("notifies an active run once per live interrupt until it unsubscribes", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const notified = vi.fn()
+    const stop = interactions.onInterrupt(scope, notified)
+
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
     })
-    const interactions = new HermesInteractions({ request })
+
+    expect(notified).toHaveBeenCalledTimes(1)
+    expect(notified.mock.calls[0]?.[0]).toMatchObject({
+      type: "interrupt",
+      interrupts: [{ id, reason: "question" }],
+    })
+
+    stop()
+    requests.deliver("clarify", { session_id: LIVE, question: "Another?" })
+    expect(notified).toHaveBeenCalledTimes(1)
+  })
+
+  it("notifies only the run bound to the addressed Session", () => {
+    const { requests, interactions, bind } = harness()
+    const other = { ...scope, sessionId: "session-2", threadId: "session-2" }
+    bind()
+    bind("live-other", other)
+    const notified = vi.fn()
+    const otherNotified = vi.fn()
+    interactions.onInterrupt(scope, notified)
+    interactions.onInterrupt(other, otherNotified)
+
+    requests.deliver("clarify", { session_id: "live-other", question: "?" })
+
+    expect(notified).not.toHaveBeenCalled()
+    expect(otherNotified).toHaveBeenCalledTimes(1)
+    expect(interactions.pending(scope)).toEqual([])
+    expect(interactions.pending(other)).toHaveLength(1)
+  })
+
+  it("keeps a pending interaction when the connection cannot carry its answer", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    requests.disconnect()
+
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["eu"]] },
+      })
+    ).resolves.toEqual({ status: "uncertain" })
+
+    expect(interactions.pending(scope)).toHaveLength(1)
+    expect(requests.frames()).toEqual([])
+
+    requests.reconnect()
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["eu"]] },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+    expect(requests.answer(id)).toEqual({ answer: "eu" })
+  })
+
+  it("makes a repeated identical response idempotent and rejects a changed one", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "deploy",
+    })
+    const response = {
+      interruptId: id,
+      status: "resolved" as const,
+      payload: "once",
+    }
+
+    await expect(interactions.respond(scope, response)).resolves.toEqual({
+      status: "resolved",
+    })
+    await expect(interactions.respond(scope, response)).resolves.toEqual({
+      status: "already-resolved",
+    })
+    await expect(
+      interactions.respond(scope, { ...response, payload: "deny" })
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    expect(requests.frames()).toHaveLength(1)
+  })
+
+  it("does not reopen a completed interaction from a duplicate live request", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "deploy",
+    })
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: "once",
+    })
+
+    requests.deliver(
+      "approval",
+      { session_id: LIVE, request_id: "approval-1", command: "deploy" },
+      { id }
+    )
+
+    expect(interactions.pending(scope)).toEqual([])
+    expect(requests.frames()).toHaveLength(1)
+  })
+
+  it("rejects cross-Agent and cross-Session interaction substitution", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "deploy",
+    })
+
+    for (const foreign of [
+      { ...scope, agentId: "other" },
+      { ...scope, sessionId: "session-2" },
+      { ...scope, threadId: "thread-2" },
+    ])
+      await expect(
+        interactions.respond(foreign, {
+          interruptId: id,
+          status: "resolved",
+          payload: "once",
+        })
+      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    expect(requests.frames()).toEqual([])
+  })
+
+  it("rejects a malformed answer without answering Hermes", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+      choices: ["eu", "us"],
+    })
+
+    for (const payload of [
+      { answers: [["ap"]] },
+      { answers: [] },
+      { answers: [["eu"], ["us"]] },
+      { answers: [["eu", "us"]] },
+      "eu",
+    ])
+      await expect(
+        interactions.respond(scope, {
+          interruptId: id,
+          status: "resolved",
+          payload,
+        })
+      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["eu"]] },
+        extra: true,
+      })
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    expect(requests.frames()).toEqual([])
+  })
+
+  it("preserves exact native choices and free-text answer whitespace", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
+        {
+          qid: "q0",
+          question: "Which region?",
+          choices: ["  eu-west  ", "us"],
+          multi_select: false,
+        },
+        { qid: "q1", question: "Notes?", choices: null, multi_select: false },
+      ],
+    })
+
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: { answers: [["  eu-west  "], ["  keep  spacing  "]] },
+    })
+
+    expect(requests.answer(id)).toEqual({
+      answers: { q0: "  eu-west  ", q1: "  keep  spacing  " },
+    })
+  })
+
+  it("redacts native credentials, URLs, and paths while answering exactly", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Use https://hermes.internal with token=secret?",
+      choices: ["/home/operator/run.sh", "skip"],
+    })
+
+    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
+    expect(interrupt?.message).toBe(
+      "Use [provider location redacted] with [credential redacted]"
+    )
+    const choices = (
+      interrupt?.responseSchema as {
+        properties: {
+          answers: {
+            prefixItems: Array<{ items: { enum?: string[] } }>
+          }
+        }
+      }
+    ).properties.answers.prefixItems[0]!.items.enum!
+    expect(choices[0]).toBe("[provider path redacted]")
+
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: { answers: [[choices[0]!]] },
+    })
+
+    expect(requests.answer(id)).toEqual({ answer: "/home/operator/run.sh" })
+  })
+
+  it("enforces question count, nesting, and answer byte limits", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+
+    const tooMany = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: Array.from({ length: 33 }, (_, index) => ({
+        qid: `q${index}`,
+        question: `Question ${index}?`,
+        multi_select: false,
+      })),
+    })
+    expect(requests.refusal(tooMany)).toMatchObject({ code: -32601 })
+
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Notes?",
+    })
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["x".repeat(4_097)]] },
+      })
+    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [["x".repeat(70_000)]] },
+      })
+    ).rejects.toMatchObject({ code: "AOS_LIMIT_EXCEEDED" })
+    expect(requests.answer(id)).toBeUndefined()
+  })
+
+  it("expires a pending interaction Hermes rebound to another live Session", async () => {
+    const { requests, interactions, bind } = harness({ live: "live-run-2" })
+    bind("live-run-1")
+    const id = requests.deliver("approval", {
+      session_id: "live-run-1",
+      request_id: "approval-run-1",
+      command: "hold",
+    })
+    expect(interactions.pending(scope)).toHaveLength(1)
 
     await expect(interactions.resume(scope)).resolves.toEqual({
       running: false,
-      status: "unknown",
+      status: "idle",
     })
-    expect(request).toHaveBeenCalledWith("session.resume", {
-      session_id: "session-1",
-      profile: "research",
-      omit_messages: true,
-    })
+
+    expect(interactions.pending(scope)).toEqual([])
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: "once",
+      })
+    ).resolves.toEqual({ status: "expired" })
   })
 
-  it("projects resume outages and malformed native results with safe typed errors", async () => {
-    const secret = "token=secret https://hermes.internal /home/operator"
-    const outage = new HermesInteractions({
-      request: vi.fn().mockRejectedValue(new Error(secret)),
+  it("projects a resume outage as a safe typed error", async () => {
+    const requests = serverRequests()
+    const interactions = new HermesInteractions(requests.transport, {
+      ensure: async () => {
+        throw new Error("token=secret https://hermes.internal /home/operator")
+      },
+      scopeFor: () => undefined,
     })
-    await expect(outage.resume(scope)).rejects.toMatchObject({
+
+    await expect(interactions.resume(scope)).rejects.toMatchObject({
       code: "AOS_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable",
     })
-
-    const malformed = new HermesInteractions({
-      request: vi.fn().mockResolvedValue({
-        session_id: "live-private",
-        running: "yes",
-        pending_clarify: { request_id: "x", question: { path: secret } },
-      }),
-    })
-    await expect(malformed.resume(scope)).rejects.toMatchObject({
-      code: "AOS_PROVIDER_INVALID_RESPONSE",
-      message: "Hermes returned invalid interaction data",
-    })
   })
 
-  it("expires only the clarification bound to the native Session and run", async () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: { request_id: "clarify-1", question: "Region?" },
+  it("resumes through the registry's single native binding", async () => {
+    const { interactions, ensure } = harness({ running: true })
+
+    await expect(
+      Promise.all([interactions.resume(scope), interactions.resume(scope)])
+    ).resolves.toEqual([
+      { running: true, status: "running" },
+      { running: true, status: "running" },
+    ])
+    expect(ensure).toHaveBeenCalledTimes(2)
+    // Reconciliation is authoritative: Hermes is asked again, through the one
+    // registry binding, rather than read from a cached one.
+    expect(ensure).toHaveBeenLastCalledWith(scope, { refresh: true })
+  })
+
+  it("logs a bounded, truncated set of declined server-request methods", () => {
+    const warn = vi.fn()
+    const { requests, bind } = harness({ log: { warn } })
+    bind()
+
+    const long = `sudo.${"x".repeat(200)}`
+    requests.deliver(long, { session_id: LIVE })
+    expect(warn).toHaveBeenCalledWith("hermes.interactions.request_declined", {
+      method: long.slice(0, 64),
+    })
+    // Hermes owns the method text and the volume: one line per distinct method,
+    // truncated, and the remembered set is capped.
+    requests.deliver(long, { session_id: LIVE })
+    expect(warn).toHaveBeenCalledTimes(1)
+    for (let index = 0; index < 64; index += 1)
+      requests.deliver(`vault.code.${index}`, { session_id: LIVE })
+    expect(warn).toHaveBeenCalledTimes(32)
+  })
+
+  it("releases both subscriptions on close", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    interactions.close()
+
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
     })
 
-    expect(
-      interactions.acceptNative(scope, "other-live", {
-        type: "clarify.expire",
-        session_id: "live-private",
-        payload: { request_id: "clarify-1" },
-      })
-    ).toBeUndefined()
-    expect(interactions.pending(scope)).toHaveLength(1)
-    expect(
-      interactions.acceptNative(scope, "live-private", {
-        type: "clarify.expire",
-        session_id: "live-private",
-        payload: { request_id: "clarify-1" },
-      })
-    ).toEqual({ status: "expired" })
+    expect(requests.refusal(id)).toMatchObject({ code: -32601 })
     expect(interactions.pending(scope)).toEqual([])
   })
 
+  it("retains the attachment while a request waits and releases it after", async () => {
+    const { requests, interactions, retain, release, bind } = harness()
+    bind()
+    const first = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    const second = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "deploy",
+    })
+
+    expect(retain).toHaveBeenCalledExactlyOnceWith(scope, "interaction")
+
+    await interactions.respond(scope, {
+      interruptId: first,
+      status: "resolved",
+      payload: { answers: [["eu"]] },
+    })
+    // One request is still waiting on this Session.
+    expect(release).not.toHaveBeenCalled()
+
+    await interactions.respond(scope, {
+      interruptId: second,
+      status: "resolved",
+      payload: "once",
+    })
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce())
+  })
+
   it("reports operation-specific interaction capabilities with choices, scopes, limits, and limitations", () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
+    const { interactions } = harness()
 
     expect(interactions.capabilities()).toEqual({
       approvals: {
@@ -661,418 +965,12 @@ describe("HermesInteractions", () => {
         maxQuestions: 32,
         maxChoicesPerQuestion: 64,
         maxAnswerValuesPerQuestion: 64,
-        maxStringBytes: 4096,
+        maxStringBytes: 4_096,
       },
       reactions: {
         status: "unavailable",
         reason: "native-reaction-operation-unavailable",
       },
-    })
-    expect(
-      (interactions as unknown as { react?: unknown }).react
-    ).toBeUndefined()
-  })
-
-  it("redacts native credentials, URLs, and filesystem paths while mapping a selected display choice back exactly", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: true })
-    const interactions = new HermesInteractions({ request })
-
-    const outcome = interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: {
-        request_id: "clarify-safe",
-        question:
-          "Use Authorization: Bearer plain-private-token and token=super-secret from /project/key, then C:/Users/operator/key; inspect:/opt/private/key or C:\\Users\\operator\\key at wss://hermes.internal/ws?code=x?",
-        choices: ["/srv/private/a", "file:///tmp/key"],
-      },
-    })
-
-    const serialized = JSON.stringify(outcome)
-    expect(serialized).not.toMatch(
-      /plain-private-token|super-secret|\/project\/key|C:[\\/]Users|\/opt\/private|\/srv\/private|hermes\.internal|\/tmp\/key/
-    )
-    expect(serialized).toContain("[credential redacted]")
-    expect(serialized).toContain("[provider path redacted]")
-    expect(serialized).toContain("[provider location redacted]")
-    const properties =
-      outcome && "interrupts" in outcome
-        ? (outcome.interrupts[0]?.responseSchema?.properties as {
-            answers: {
-              prefixItems: Array<{ items: { enum: string[] } }>
-            }
-          })
-        : undefined
-    const displayedChoice = properties?.answers.prefixItems[0]?.items.enum[0]
-    await interactions.respond(scope, {
-      interruptId: "clarify-safe",
-      status: "resolved",
-      payload: { answers: [[displayedChoice]] },
-    })
-    expect(request).toHaveBeenCalledWith("clarify.respond", {
-      session_id: "live-private",
-      request_id: "clarify-safe",
-      answer: "/srv/private/a",
-    })
-  })
-
-  it("prevents a concurrent response and rejects changed payloads on replay", async () => {
-    let finish!: (value: unknown) => void
-    const request = vi.fn().mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve
-        })
-    )
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "deploy" },
-    })
-    const original = {
-      interruptId: "approval-1",
-      status: "resolved",
-      payload: "once",
-    }
-    const first = interactions.respond(scope, original)
-
-    await expect(interactions.respond(scope, original)).resolves.toEqual({
-      status: "in-progress",
-    })
-    finish({ resolved: 1 })
-    await expect(first).resolves.toEqual({ status: "resolved" })
-    await expect(
-      interactions.respond(scope, { ...original, payload: "deny" })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
-  it("enforces question count, nesting, and answer byte limits", async () => {
-    const interactions = new HermesInteractions({ request: vi.fn() })
-    expect(() =>
-      interactions.acceptNative(scope, "live-private", {
-        type: "clarify.request",
-        session_id: "live-private",
-        payload: {
-          request_id: "too-many",
-          questions: Array.from({ length: 33 }, (_, index) => ({
-            qid: `q${index}`,
-            question: "Question?",
-            choices: null,
-            multi_select: false,
-          })),
-        },
-      })
-    ).toThrowError("Hermes returned invalid interaction data")
-
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: { request_id: "bounded", question: "Answer?" },
-    })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "bounded",
-        status: "resolved",
-        payload: { answers: [["x".repeat(4097)]] },
-      })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
-  })
-
-  it("does not reopen a completed interaction from a duplicate live event", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: 1 })
-    const interactions = new HermesInteractions({ request })
-    const event = {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { request_id: "approval-1", command: "deploy" },
-    }
-    interactions.acceptNative(scope, "live-private", event)
-    await interactions.respond(scope, {
-      interruptId: "approval-1",
-      status: "resolved",
-      payload: "once",
-    })
-
-    expect(
-      interactions.acceptNative(scope, "live-private", event)
-    ).toBeUndefined()
-    expect(interactions.pending(scope)).toEqual([])
-  })
-
-  it("authoritatively restores an id-only pending approval after completion", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "session.resume")
-        return {
-          session_id: "live-private-2",
-          running: true,
-          pending_approval: { id: "approval-1", command: "deploy again" },
-        }
-      return { resolved: true }
-    })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "approval.request",
-      session_id: "live-private",
-      payload: { id: "approval-1", command: "deploy" },
-    })
-    await interactions.respond(scope, {
-      interruptId: "approval-1",
-      status: "resolved",
-      payload: "once",
-    })
-
-    const resumed = await interactions.resume(scope)
-
-    expect(resumed.outcome).toMatchObject({
-      interrupts: [{ id: "approval-1", message: "deploy again" }],
-    })
-    await expect(
-      interactions.respond(scope, {
-        interruptId: "approval-1",
-        status: "resolved",
-        payload: "once",
-      })
-    ).resolves.toEqual({ status: "resolved" })
-    expect(
-      request.mock.calls.filter(([method]) => method === "approval.respond")
-    ).toHaveLength(2)
-  })
-
-  it("restores already locked batch answers as safe ordered schema defaults", async () => {
-    const interactions = new HermesInteractions({
-      request: vi.fn().mockResolvedValue({
-        session_id: "live-private",
-        running: true,
-        pending_clarify: {
-          request_id: "clarify-locked",
-          questions: [
-            {
-              qid: "q0",
-              question: "Region?",
-              choices: ["eu", "us"],
-              multi_select: false,
-            },
-            {
-              qid: "q1",
-              question: "Checks?",
-              choices: ["smoke", "e2e"],
-              multi_select: true,
-            },
-          ],
-          answers: { q0: "eu", q1: '["smoke"]' },
-        },
-      }),
-    })
-
-    const resumed = await interactions.resume(scope)
-    const interrupt = resumed.outcome?.interrupts[0]
-    expect(interrupt?.metadata).toMatchObject({
-      "aos.lockedAnswerIndexes": [0, 1],
-    })
-    expect(
-      (
-        interrupt?.responseSchema?.properties as {
-          answers: { prefixItems: Array<{ default?: string[] }> }
-        }
-      ).answers.prefixItems.map((item) => item.default)
-    ).toEqual([["eu"], ["smoke"]])
-  })
-
-  it("does not overwrite a locked sensitive free-text answer with its public redaction", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        session_id: "live-private",
-        running: true,
-        pending_clarify: {
-          request_id: "clarify-locked",
-          questions: [
-            {
-              qid: "q0",
-              question: "Existing path?",
-              choices: null,
-              multi_select: false,
-            },
-            {
-              qid: "q1",
-              question: "Region?",
-              choices: ["eu", "us"],
-              multi_select: false,
-            },
-          ],
-          answers: { q0: "/home/operator/secret" },
-        },
-      })
-      .mockResolvedValueOnce({ status: "ok", remaining: [] })
-    const interactions = new HermesInteractions({ request })
-    const resumed = await interactions.resume(scope)
-    const schema = resumed.outcome?.interrupts[0]?.responseSchema as {
-      properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
-    }
-    const redacted = schema.properties.answers.prefixItems[0]!.default!
-
-    await interactions.respond(scope, {
-      interruptId: "clarify-locked",
-      status: "resolved",
-      payload: { answers: [redacted, ["eu"]] },
-    })
-
-    expect(request).toHaveBeenCalledTimes(2)
-    expect(request).toHaveBeenLastCalledWith("clarify.respond", {
-      session_id: "live-private",
-      request_id: "clarify-locked",
-      question_id: "q1",
-      answer: "eu",
-    })
-    expect(JSON.stringify(request.mock.calls)).not.toContain(
-      "[provider path redacted]"
-    )
-  })
-
-  it("clears a logical Session's pending interrupt after authoritative idle reconciliation", async () => {
-    const request = vi.fn().mockResolvedValue({
-      session_id: "live-run-2",
-      running: false,
-      status: "idle",
-    })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-run-1", {
-      type: "approval.request",
-      session_id: "live-run-1",
-      payload: { request_id: "approval-run-1", command: "hold" },
-    })
-
-    await interactions.resume({ ...scope, runId: "run-2" })
-
-    expect(interactions.pending(scope)).toHaveLength(0)
-  })
-
-  it("ignores a delayed native event that conflicts with an established run binding", async () => {
-    const request = vi.fn().mockResolvedValue({ resolved: 1 })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-current", {
-      type: "approval.request",
-      session_id: "live-current",
-      payload: { request_id: "approval-current", command: "hold" },
-    })
-
-    expect(
-      interactions.acceptNative(scope, "live-foreign", {
-        type: "approval.request",
-        session_id: "live-foreign",
-        payload: { request_id: "approval-foreign", command: "steal" },
-      })
-    ).toBeUndefined()
-    await interactions.respond(scope, {
-      interruptId: "approval-current",
-      status: "resolved",
-      payload: "once",
-    })
-    expect(request).toHaveBeenCalledWith("approval.respond", {
-      session_id: "live-current",
-      request_id: "approval-current",
-      choice: "once",
-    })
-  })
-
-  it("treats an oversized native response as uncertain and never replays it", async () => {
-    const request = vi.fn().mockResolvedValue({
-      status: "ok",
-      remaining: Array.from({ length: 20_000 }, (_, index) => `q-${index}`),
-    })
-    const interactions = new HermesInteractions({ request })
-    interactions.acceptNative(scope, "live-private", {
-      type: "clarify.request",
-      session_id: "live-private",
-      payload: { request_id: "clarify-1", question: "Region?" },
-    })
-    const response = {
-      interruptId: "clarify-1",
-      status: "resolved",
-      payload: { answers: [["eu"]] },
-    }
-
-    await expect(interactions.respond(scope, response)).resolves.toEqual({
-      status: "uncertain",
-    })
-    await expect(interactions.respond(scope, response)).resolves.toEqual({
-      status: "uncertain",
-    })
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
-  it("rejects duplicate native batch question ids and locked multi-select values", async () => {
-    const duplicateQuestions = new HermesInteractions({ request: vi.fn() })
-    expect(() =>
-      duplicateQuestions.acceptNative(scope, "live-private", {
-        type: "clarify.request",
-        session_id: "live-private",
-        payload: {
-          request_id: "clarify-duplicate",
-          questions: [
-            {
-              qid: "q0",
-              question: "First?",
-              choices: null,
-              multi_select: false,
-            },
-            {
-              qid: "q0",
-              question: "Second?",
-              choices: null,
-              multi_select: false,
-            },
-          ],
-        },
-      })
-    ).toThrowError("Hermes returned invalid interaction data")
-
-    const duplicateAnswers = new HermesInteractions({
-      request: vi.fn().mockResolvedValue({
-        session_id: "live-private",
-        running: true,
-        pending_clarify: {
-          request_id: "clarify-duplicate-answer",
-          questions: [
-            {
-              qid: "q0",
-              question: "Checks?",
-              choices: ["smoke", "e2e"],
-              multi_select: true,
-            },
-          ],
-          answers: { q0: '["smoke","smoke"]' },
-        },
-      }),
-    })
-    await expect(duplicateAnswers.resume(scope)).rejects.toMatchObject({
-      code: "AOS_PROVIDER_INVALID_RESPONSE",
-    })
-  })
-
-  it("coalesces concurrent resume reconciliation for the same pending snapshot", async () => {
-    let resolve!: (value: unknown) => void
-    const request = vi.fn(() => new Promise((settle) => (resolve = settle)))
-    const interactions = new HermesInteractions({ request })
-    const first = interactions.resume(scope)
-    const second = interactions.resume(scope)
-
-    expect(request).toHaveBeenCalledOnce()
-    resolve({ session_id: "live-current", running: false, status: "idle" })
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { running: false, status: "idle" },
-      { running: false, status: "idle" },
-    ])
-    expect(
-      interactions.acceptNative(scope, "live-current", {
-        type: "approval.request",
-        session_id: "live-current",
-        payload: { request_id: "current", command: "current" },
-      })
-    ).toMatchObject({
-      type: "interrupt",
     })
   })
 })

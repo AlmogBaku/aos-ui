@@ -13,6 +13,7 @@ import {
 } from "../../../packages/protocol"
 import type { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry } from "./aos-drafts"
+import type { RunErrorResolver } from "./aos-reconnect"
 
 const PAGE_SIZE = 50
 type RemoteThreadMetadata = Awaited<
@@ -40,18 +41,26 @@ function cursorOffset(cursor: string | undefined) {
   return offset
 }
 
+type ResumedSegment =
+  | { kind: "settled" }
+  | { kind: "reset"; content: ThreadAssistantMessagePart[]; message?: string }
+
 class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
   #activeRunId?: string
   #activeFallback?: ThreadAssistantMessagePart[]
   constructor(
     private readonly client: AosRemoteClient,
-    private readonly threadId: string
+    private readonly threadId: string,
+    private readonly resolveRunError?: RunErrorResolver
   ) {}
 
   async load() {
     const history = await this.client.loadHistory(this.threadId)
+    // An uncertain execution is projected as `failed` while it keeps its run
+    // id: reconnecting with that id is exactly what reconciles it.
     this.#activeRunId =
-      history.execution?.status === "running"
+      history.execution?.status === "running" ||
+      history.execution?.status === "failed"
         ? history.execution.runId
         : undefined
     const messages = [...history.messages]
@@ -74,18 +83,97 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
     }
   }
 
+  #error(event: { code?: string; message?: string }, fallback: string) {
+    const message = event.message ?? fallback
+    return this.resolveRunError
+      ? this.resolveRunError(event.code, message)
+      : message
+  }
+
   async *resume(options: {
     abortSignal: AbortSignal
   }): AsyncGenerator<ChatModelRunResult> {
     const runId = this.#activeRunId
     if (!runId) return
+    let after: number | undefined
+    let reloaded = false
+    // The authoritative prefix from the single reload. A later segment that
+    // replays the turn itself supersedes it, so it is rendered only when a
+    // reconnect settles without delivering any content.
+    let reloadedContent: ThreadAssistantMessagePart[] = []
+    while (true) {
+      const segment = yield* this.#segment(runId, options.abortSignal, after)
+      if (segment.kind === "settled") return
+      if (reloaded) {
+        yield {
+          content: segment.content.length ? segment.content : reloadedContent,
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: segment.message ?? "AOS run history is unavailable",
+          },
+        }
+        return
+      }
+      reloaded = true
+      const history = await this.client.loadHistory(this.threadId)
+      const assistant = history.messages.findLast(
+        (message) => message.role === "assistant"
+      )
+      const fallback =
+        assistant?.role === "assistant"
+          ? assistant.content.map((part) => ({ ...part }))
+          : (this.#activeFallback ?? segment.content)
+      if (
+        history.execution?.status === "waiting-for-input" &&
+        assistant?.status?.type === "requires-action"
+      ) {
+        yield {
+          content: fallback,
+          status: assistant.status,
+          metadata: assistant.metadata,
+        }
+        return
+      }
+      if (history.execution?.status === "idle") {
+        yield {
+          content: fallback,
+          status: { type: "complete", reason: "stop" },
+        }
+        return
+      }
+      if (history.execution?.status !== "running") {
+        yield {
+          content: fallback,
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error: segment.message ?? "AOS run history is unavailable",
+          },
+        }
+        return
+      }
+      // The provider still reports this run, and an explicit cursor replays
+      // the segment from its beginning. That replay carries the whole turn, so
+      // the reloaded prefix is deliberately not seeded: it would be rendered
+      // twice.
+      reloadedContent = fallback
+      after = 0
+    }
+  }
+
+  async *#segment(
+    runId: string,
+    abortSignal: AbortSignal,
+    after?: number
+  ): AsyncGenerator<ChatModelRunResult, ResumedSegment> {
     const content: ThreadAssistantMessagePart[] = []
     const tools = new Map<string, number>()
-    for await (const event of this.client.reconnectRun(
-      this.threadId,
-      runId,
-      options.abortSignal
-    )) {
+    for await (const event of after === undefined
+      ? this.client.reconnectRun(this.threadId, runId, abortSignal)
+      : this.client.reconnectRun(this.threadId, runId, abortSignal, {
+          after,
+        })) {
       if (event.type === "TEXT_MESSAGE_CONTENT") {
         const last = content.at(-1)
         if (last?.type === "text")
@@ -127,50 +215,21 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
           }
       }
       if (event.type === "RUN_ERROR") {
-        if (event.code === "AOS_RESET_REQUIRED") {
-          const history = await this.client.loadHistory(this.threadId)
-          const assistant = history.messages.findLast(
-            (message) => message.role === "assistant"
-          )
-          const fallback =
-            assistant?.role === "assistant"
-              ? assistant.content.map((part) => ({ ...part }))
-              : (this.#activeFallback ?? content)
-          if (
-            history.execution?.status === "waiting-for-input" &&
-            assistant?.status?.type === "requires-action"
-          ) {
-            yield {
-              content: fallback,
-              status: assistant.status,
-              metadata: assistant.metadata,
-            }
-          } else if (history.execution?.status === "idle") {
-            yield {
-              content: fallback,
-              status: { type: "complete", reason: "stop" },
-            }
-          } else {
-            yield {
-              content: fallback,
-              status: {
-                type: "incomplete",
-                reason: "error",
-                error: event.message ?? "AOS run history is unavailable",
-              },
-            }
+        if (event.code === "AOS_RESET_REQUIRED")
+          return {
+            kind: "reset",
+            content: [...content],
+            message: this.#error(event, "AOS run history is unavailable"),
           }
-          return
-        }
         yield {
           content: [...content],
           status: {
             type: "incomplete",
             reason: "error",
-            error: event.message ?? "AOS run failed",
+            error: this.#error(event, "AOS run failed"),
           },
         }
-        return
+        return { kind: "settled" }
       }
       if (event.type === "RUN_FINISHED") {
         if (event.outcome?.type === "interrupt") {
@@ -181,13 +240,13 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
               custom: { agui: { interrupts: event.outcome.interrupts } },
             },
           }
-          return
+          return { kind: "settled" }
         }
         yield {
           content: [...content],
           status: { type: "complete", reason: "stop" },
         }
-        return
+        return { kind: "settled" }
       }
       if (
         event.type === "TEXT_MESSAGE_CONTENT" ||
@@ -198,6 +257,7 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
       )
         yield { content: [...content], status: { type: "running" } }
     }
+    return { kind: "settled" }
   }
 
   async append() {
@@ -216,7 +276,8 @@ export class AosThreadListAdapter implements RemoteThreadListAdapter {
 
   constructor(
     readonly client: AosRemoteClient,
-    readonly drafts?: AosDraftRegistry
+    readonly drafts?: AosDraftRegistry,
+    readonly resolveRunError?: RunErrorResolver
   ) {}
 
   async list({ after }: { after?: string } = {}) {
@@ -319,7 +380,11 @@ export class AosThreadListAdapter implements RemoteThreadListAdapter {
   historyFor(threadId: string): ThreadHistoryAdapter {
     let history = this.#histories.get(threadId)
     if (!history) {
-      history = new AosThreadHistoryAdapter(this.client, threadId)
+      history = new AosThreadHistoryAdapter(
+        this.client,
+        threadId,
+        this.resolveRunError
+      )
       this.#histories.set(threadId, history)
     }
     return history

@@ -32,7 +32,7 @@ function nativeFor(request: HermesRpcTransport["request"]) {
       invalidate: () => {},
     },
     interactions: {
-      acceptNative: () => undefined,
+      onInterrupt: () => () => undefined,
       respond: async () => ({ status: "resolved" }),
       resume: async () => ({ running: false, status: "idle" }),
     },
@@ -395,9 +395,8 @@ it("finishes a synchronous command run without waiting for native conversational
     redirect: async () => "redirected",
     retain: async () => () => {},
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    acceptInteraction: () => undefined,
+    onInterrupt: () => () => undefined,
     respondInteractions: async () => [],
-    clearPendingInteraction: () => {},
     submit: async () => ({
       acknowledgement: "accepted",
       status: "streaming",

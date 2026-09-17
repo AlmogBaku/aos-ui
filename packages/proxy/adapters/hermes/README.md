@@ -21,7 +21,9 @@ native `/api/ws` turn boundaries and their AG-UI mapping.
 - `run.ts` converts native execution frames into ordered AG-UI segments.
 - `history.ts` converts authoritative native history and strips native context
   envelopes and filesystem details.
-- `interactions.ts` validates question and approval batches and their resumes.
+- `interactions.ts` answers Hermes' server-to-client `clarify` and `approval`
+  JSON-RPC requests: it validates them, presents AG-UI interrupts, and responds
+  on the request handle Hermes is waiting on.
 - `slash-commands.ts` validates and bounds the native command catalog.
 - `content.ts`, `workspace.ts`, and `tool-data.ts` normalize their corresponding
   provider surfaces.
@@ -48,6 +50,10 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   Unknown slash text remains a prompt, and alias traversal is bounded.
 - Edit and Retry use authoritative message identities. Commands do not combine
   with rewind.
+- A question or approval arrives as a server-to-client JSON-RPC request, not as
+  an event, and is answered on that request. A request AOS cannot render is
+  declined so the channel answers `-32601` and the agent proceeds; an
+  unanswerable request would otherwise park the turn until its native deadline.
 - A pending question or approval retains the Session. Its answer is a complete
   AG-UI resume, not a new Hermes prompt.
 - Native attachment/context envelopes and paths are parsed before normalized

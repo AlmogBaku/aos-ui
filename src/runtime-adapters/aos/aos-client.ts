@@ -56,6 +56,15 @@ import type {
   WorkspaceActivityEvent,
 } from "../contracts"
 import type { AosEventScope } from "./aos-reconciliation"
+import {
+  isRecoverableRunError,
+  reconnectDelay,
+  reconnectDelayMs,
+  RECONNECT_EXHAUSTED_CODE,
+  RECONNECT_EXHAUSTED_MESSAGE,
+  RECONNECT_MAX_ATTEMPTS,
+  type RunErrorResolver,
+} from "./aos-reconnect"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
@@ -119,6 +128,7 @@ export type AosRemoteClientOptions = {
   basePath?: string
   authorization?: string
   scope?: AosEventScope
+  resolveRunError?: RunErrorResolver
   reconciler?: {
     read<T>(scope: AosEventScope, operation: () => Promise<T>): Promise<T>
     subscribe?(scope: AosEventScope, listener: () => void): () => void
@@ -267,17 +277,72 @@ function ssePosition(frame: string) {
   return Number.isSafeInteger(position) ? position : undefined
 }
 
+type ReconnectingSseOptions = {
+  reconnect: (after?: number) => Promise<Response>
+  signal?: AbortSignal | null
+  /** Cursor already sent for `initial`, so a renumbered reply is detectable. */
+  after?: number
+  onRunFinished?: (event: RunFinishedEvent) => Promise<void>
+  onEvent?: (event: AosSessionSignalEvent) => void
+  resolveRunError?: RunErrorResolver
+}
+
+/**
+ * Replaces a run failure description with localized workspace copy, keeping
+ * every other field of the normalized frame.
+ */
+function runErrorFrame(
+  frame: string,
+  event: Record<string, unknown>,
+  separator: string,
+  resolveRunError?: RunErrorResolver
+) {
+  if (!resolveRunError) return undefined
+  const code = typeof event.code === "string" ? event.code : undefined
+  const fallback = typeof event.message === "string" ? event.message : ""
+  const message = resolveRunError(code, fallback)
+  if (message === fallback) return undefined
+  const preserved = frame
+    .split(/\r?\n|\r/u)
+    .filter((line) => !line.startsWith("data:"))
+  return `${[...preserved, `data: ${JSON.stringify({ ...event, message })}`].join("\n")}${separator}`
+}
+
+/**
+ * One live run stream over however many normalized responses it takes. A run
+ * that loses its response is redialed with a bounded jittered backoff; only an
+ * unresumable run or an exhausted budget ends it, and always with one run error.
+ */
 async function* reconnectingSse(
   initial: Response,
-  reconnect: (after?: number) => Promise<Response>,
-  signal: AbortSignal | null | undefined,
-  onRunFinished?: (event: RunFinishedEvent) => Promise<void>,
-  onEvent?: (event: AosSessionSignalEvent) => void
+  {
+    reconnect,
+    signal,
+    after: initialAfter,
+    onRunFinished,
+    onEvent,
+    resolveRunError,
+  }: ReconnectingSseOptions
 ) {
+  const encoder = new TextEncoder()
   let response = initial
   let runStartedForwarded = false
   let terminal = false
-  let after: number | undefined
+  let after = initialAfter
+  let sent = initialAfter
+  let failures = 0
+  const exhausted = () => {
+    const event = {
+      type: "RUN_ERROR",
+      code: RECONNECT_EXHAUSTED_CODE,
+      message: resolveRunError
+        ? resolveRunError(RECONNECT_EXHAUSTED_CODE, RECONNECT_EXHAUSTED_MESSAGE)
+        : RECONNECT_EXHAUSTED_MESSAGE,
+    }
+    const signalEvent = sessionSignalEvent(event)
+    if (signalEvent) onEvent?.(signalEvent)
+    return encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+  }
   while (true) {
     if (!response.ok || !response.body)
       throw new Error(`AOS run request failed (${response.status})`)
@@ -285,6 +350,10 @@ async function* reconnectingSse(
     const decoder = new TextDecoder("utf-8", { fatal: true })
     let buffered = ""
     let interrupted = false
+    // Frames this attempt added to the run. A reply that only repeats the
+    // interrupt made no progress, so it must be paced like a failed redial.
+    let progressed = 0
+    let renumbered = false
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -296,10 +365,18 @@ async function* reconnectingSse(
           buffered = buffered.slice(boundary.index + boundary.separator.length)
           const event = sseEvent(frame)
           const position = ssePosition(frame)
-          if (position !== undefined) after = position
+          if (position !== undefined && !renumbered) {
+            // A replacement execution segment may restart its sequence: its
+            // ids are not comparable with the cursor this stream sent, so the
+            // next redial asks for the segment from its beginning.
+            if (sent !== undefined && position < sent) {
+              renumbered = true
+              after = 0
+            } else after = position
+          }
           if (
             event?.type === "RUN_ERROR" &&
-            event.code === "AOS_CONNECTION_INTERRUPTED" &&
+            isRecoverableRunError(event.code) &&
             !signal?.aborted
           ) {
             interrupted = true
@@ -309,6 +386,9 @@ async function* reconnectingSse(
             if (runStartedForwarded) continue
             runStartedForwarded = true
           }
+          // A cursor-only or keep-alive frame carries no run content, so it
+          // never makes an otherwise repeated interrupt look productive.
+          if (event) progressed += 1
           const signalEvent = sessionSignalEvent(event)
           if (signalEvent) onEvent?.(signalEvent)
           terminal =
@@ -317,7 +397,16 @@ async function* reconnectingSse(
             await onRunFinished(event as RunFinishedEvent).catch(
               () => undefined
             )
-          yield new TextEncoder().encode(`${frame}${boundary.separator}`)
+          const localized =
+            event?.type === "RUN_ERROR"
+              ? runErrorFrame(
+                  frame,
+                  event as Record<string, unknown>,
+                  boundary.separator,
+                  resolveRunError
+                )
+              : undefined
+          yield encoder.encode(localized ?? `${frame}${boundary.separator}`)
         }
         if (interrupted || done) break
       }
@@ -332,28 +421,53 @@ async function* reconnectingSse(
       reader.releaseLock()
     }
     if (terminal || signal?.aborted) {
-      if (buffered) yield new TextEncoder().encode(buffered)
+      if (buffered) yield encoder.encode(buffered)
       return
     }
-    response = await reconnect(after)
+    // A reply that added run content redials at once; an empty stream, or one
+    // that only repeated the interrupt, is paced and counted instead. The
+    // cursor stays where the last delivered frame left it: asking for the whole
+    // segment again would replay what this thread already rendered.
+    if (progressed > 0) failures = 0
+    else failures += 1
+    while (true) {
+      if (signal?.aborted) return
+      if (failures >= RECONNECT_MAX_ATTEMPTS) {
+        yield exhausted()
+        return
+      }
+      await reconnectDelay(reconnectDelayMs(failures), signal)
+      if (signal?.aborted) return
+      sent = after
+      let candidate: Response
+      try {
+        candidate = await reconnect(after)
+      } catch {
+        if (signal?.aborted) return
+        failures += 1
+        continue
+      }
+      if (candidate.ok && candidate.body) {
+        response = candidate
+        break
+      }
+      // A server-side failure may pass; a rejected redial (run conflict, no
+      // such run) never will, so this run ends instead of hammering the proxy.
+      if (candidate.status < 500) {
+        yield exhausted()
+        return
+      }
+      failures += 1
+    }
   }
 }
 
 function reconnectingResponse(
   initial: Response,
-  reconnect: (after?: number) => Promise<Response>,
-  signal: AbortSignal | null | undefined,
-  onRunFinished?: (event: RunFinishedEvent) => Promise<void>,
-  onEvent?: (event: AosSessionSignalEvent) => void
+  options: ReconnectingSseOptions
 ) {
   if (!initial.ok || !initial.body) return initial
-  const events = reconnectingSse(
-    initial,
-    reconnect,
-    signal,
-    onRunFinished,
-    onEvent
-  )
+  const events = reconnectingSse(initial, options)
   return new Response(
     new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -386,6 +500,7 @@ export function createAosRunAgent({
   onComposerPrefill,
   onRunFinished,
   onEvent,
+  resolveRunError,
   getCapabilities,
 }: {
   agentId: string
@@ -406,7 +521,8 @@ export function createAosRunAgent({
   onRewindCompleted?: (replacement: RewindReplacement) => Promise<void>
   onComposerPrefill?: (text: string) => void | Promise<void>
   onRunFinished?: (event: RunFinishedEvent) => Promise<void>
-  onEvent?: (event: AosSessionSignalEvent) => void
+  onEvent?: (threadId: string, event: AosSessionSignalEvent) => void
+  resolveRunError?: RunErrorResolver
   getCapabilities?: () => Promise<AgentCapabilities>
 }) {
   const url = `${basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
@@ -508,9 +624,8 @@ export function createAosRunAgent({
       await fetcher(resolvedUrl, request)
     )
     const reconnectUrl = `${resolvedUrl}/reconnect`
-    return reconnectingResponse(
-      response,
-      async (after) =>
+    return reconnectingResponse(response, {
+      reconnect: async (after) =>
         friendlyErrorResponse(
           await fetcher(reconnectUrl, {
             ...request,
@@ -521,8 +636,10 @@ export function createAosRunAgent({
             }),
           })
         ),
-      init.signal,
-      async (event) => {
+      signal: init.signal,
+      resolveRunError,
+      onEvent: onEvent && ((event) => onEvent(resolvedThreadId, event)),
+      onRunFinished: async (event) => {
         try {
           if (event.outcome?.type !== "success") return
           try {
@@ -545,8 +662,7 @@ export function createAosRunAgent({
           await onRunFinished?.(event)
         }
       },
-      onEvent
-    )
+    })
   }
   const agent = new HttpAgent({
     url,
@@ -563,6 +679,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
   readonly #basePath: string
   readonly #authorization?: string
   readonly #scope?: AosEventScope
+  readonly #resolveRunError?: RunErrorResolver
   readonly #reconciler?: AosRemoteClientOptions["reconciler"]
   readonly #revisions = new Map<string, string>()
   readonly #sessions = new Map<string, Session>()
@@ -587,6 +704,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     this.#basePath = options.basePath ?? "/api/aos/v1"
     this.#authorization = options.authorization
     this.#scope = options.scope
+    this.#resolveRunError = options.resolveRunError
     this.#reconciler = options.reconciler
     if (options.scope)
       this.#sessionOwners.set(options.scope.sessionId, options.scope.agentId)
@@ -879,6 +997,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
         })
       this.#runIds.delete(threadId)
     } else if (event.type === "RUN_ERROR") {
+      // A recoverable failure is reconciled by reconnecting with the same run
+      // id, so the Session keeps running and keeps its remembered run.
+      if (isRecoverableRunError(event.code)) {
+        this.#setSessionStatus(threadId, "running")
+        return
+      }
       this.#setSessionStatus(threadId, "failed")
       if (runId)
         this.#emitActivity({
@@ -1075,6 +1199,10 @@ export class AosRemoteClient implements WorkspaceAdapter {
       RunStopResponseSchema,
       { method: "POST" }
     )
+    // The stream that would deliver the settling terminal event is already
+    // aborted, so this run is no longer observed: forget it so steering cannot
+    // target it and let the next provider read settle the Session status.
+    this.#runIds.delete(threadId)
     this.#setSessionStatus(
       threadId,
       result.status === "stopping" ? "running" : "idle"
@@ -1193,7 +1321,8 @@ export class AosRemoteClient implements WorkspaceAdapter {
   async *reconnectRun(
     threadId: string,
     runId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { after?: number }
   ): AsyncGenerator<AGUIEvent> {
     const agentId = this.#owner(threadId)
     const url = `${this.#basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/reconnect`
@@ -1221,7 +1350,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
             })
           )
         }
-        return reconnectingResponse(await reconnect(), reconnect, signal)
+        return reconnectingResponse(await reconnect(options?.after), {
+          reconnect,
+          signal,
+          after: options?.after,
+          resolveRunError: this.#resolveRunError,
+        })
       },
     })
     const events: AGUIEvent[] = []
@@ -1323,11 +1457,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.transcribeForAgent(this.#owner(threadId), audio, signal)
   }
 
-  async transcribeForAgent(
-    agentId: string,
-    audio: Blob,
-    signal?: AbortSignal
-  ) {
+  async transcribeForAgent(agentId: string, audio: Blob, signal?: AbortSignal) {
     if (!audio.size || !audio.type)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
     const request = SessionTranscriptionRequestSchema.safeParse({
@@ -1359,15 +1489,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid speech input")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
-    return this.#readBlob(
-      path,
-      {
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request.data),
-      }
-    )
+    return this.#readBlob(path, {
+      method: "POST",
+      signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+    })
   }
 
   async #patchSession(
@@ -1474,7 +1601,13 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   #rememberSession(session: Session) {
-    const status = this.#sessionStatuses.get(session.id) ?? session.status
+    // A locally derived status only outlives a provider read while this client
+    // still observes that Session's run; otherwise the provider is authoritative.
+    const cached = this.#sessionStatuses.get(session.id)
+    const status =
+      cached !== undefined && this.#runIds.has(session.id)
+        ? cached
+        : session.status
     this.#sessions.set(session.id, structuredClone({ ...session, status }))
     this.#sessionStatuses.set(session.id, status)
     this.#sessionOwners.set(session.id, session.agentId)

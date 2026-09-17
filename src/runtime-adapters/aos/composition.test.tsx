@@ -140,6 +140,8 @@ describe("provider-neutral AOS runtime composition", () => {
     )
 
     await supplied!.assistantRuntime.threads.getLoadThreadsPromise()
+    const activity: unknown[] = []
+    supplied!.workspace.subscribeActivity?.((event) => activity.push(event))
     await act(async () => {
       await supplied!.createSessionDraft?.("researcher")
     })
@@ -193,6 +195,18 @@ describe("provider-neutral AOS runtime composition", () => {
       messages: [expect.objectContaining({ role: "user", content: "Hello" })],
     })
     expect(await screen.findByText("Draft response")).toBeVisible()
+    // The promoting run streams through the agent built while the Session was
+    // still a local draft, so its lifecycle must still reach the client.
+    expect(activity).toEqual([
+      expect.objectContaining({
+        type: "run-started",
+        threadId: "remote-session",
+      }),
+      expect.objectContaining({
+        type: "run-finished",
+        threadId: "remote-session",
+      }),
+    ])
     await act(async () => {
       resolveHistory?.(
         Response.json({
@@ -212,9 +226,9 @@ describe("provider-neutral AOS runtime composition", () => {
       expect(supplied!.assistantRuntime.thread.getState().isRunning).toBe(false)
     )
     await waitFor(() =>
-      expect(
-        supplied!.assistantRuntime.threads.mainItem.getState().title
-      ).toBe("Hello")
+      expect(supplied!.assistantRuntime.threads.mainItem.getState().title).toBe(
+        "Hello"
+      )
     )
     title = "Harness-generated title"
     expect(titleInvalidations).toHaveLength(1)
@@ -233,9 +247,9 @@ describe("provider-neutral AOS runtime composition", () => {
       expect(supplied!.assistantRuntime.thread.getState().isRunning).toBe(false)
     )
     await waitFor(() =>
-      expect(
-        supplied!.assistantRuntime.threads.mainItem.getState().title
-      ).toBe("Harness-generated title")
+      expect(supplied!.assistantRuntime.threads.mainItem.getState().title).toBe(
+        "Harness-generated title"
+      )
     )
   })
 

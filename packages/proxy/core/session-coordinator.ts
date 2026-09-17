@@ -193,8 +193,7 @@ function uncertainError(event: AGUIEvent) {
     event.type === EventType.RUN_ERROR &&
     (event.code === "AOS_SEND_UNCERTAIN" ||
       event.code === "AOS_INTERACTION_UNCERTAIN" ||
-      event.code === "AOS_CONNECTION_INTERRUPTED" ||
-      event.code === "AOS_RESET_REQUIRED")
+      event.code === "AOS_CONNECTION_INTERRUPTED")
   )
 }
 
@@ -341,8 +340,13 @@ export class SessionCoordinator {
       return this.#startSegment(existing, input, access)
     }
 
-    if (existing && existing.state !== "idle")
-      throw new ServerRunConflictError()
+    if (existing && existing.state !== "idle") {
+      if (
+        existing.state !== "uncertain" ||
+        !(await this.#settleUncertain(scope, existing, access))
+      )
+        throw new ServerRunConflictError()
+    }
     this.#assertCapacity(access.lane)
     if (this.#admissions.has(key)) throw new ServerRunConflictError()
     this.#admissions.add(key)
@@ -405,24 +409,59 @@ export class SessionCoordinator {
 
     if (existing && existing.segment.runId !== request.runId)
       throw new ServerRunConflictError()
-    let recovery = this.#recoveries.get(key)
-    if (!recovery) {
-      this.#assertCapacity(existing?.startedByLane ?? access.lane, existing)
-      if (this.#admissions.has(key)) throw new ServerRunConflictError()
-      recovery = this.#recoverExecution(scope, request, access, existing)
-      this.#recoveries.set(key, recovery)
-      void recovery
-        .finally(() => {
-          if (this.#recoveries.get(key) === recovery)
-            this.#recoveries.delete(key)
-        })
-        .catch(() => undefined)
-    }
-    const recovered = await recovery
+    const recovered = await this.#recovery(scope, request, access, existing)
     if (recovered.segment.runId !== request.runId)
       throw new ServerRunConflictError()
     if (access.canControl) recovered.controllers.add(access.controllerId)
     return this.#subscribe(recovered.segment, 0, access)
+  }
+
+  #recovery(
+    scope: SessionScope,
+    request: CoordinatorRecoveryRequest,
+    access: CoordinatorAccess,
+    existing: Execution | undefined
+  ) {
+    const key = scopeKey(scope)
+    const inFlight = this.#recoveries.get(key)
+    if (inFlight) return inFlight
+    this.#assertCapacity(existing?.startedByLane ?? access.lane, existing)
+    if (this.#admissions.has(key)) throw new ServerRunConflictError()
+    const recovery = this.#recoverExecution(scope, request, access, existing)
+    this.#recoveries.set(key, recovery)
+    void recovery
+      .finally(() => {
+        if (this.#recoveries.get(key) === recovery) this.#recoveries.delete(key)
+      })
+      .catch(() => undefined)
+    return recovery
+  }
+
+  /**
+   * The provider decides whether an uncertain run is over. A recovery that
+   * settles it clears the way for this turn; a run that keeps streaming, and a
+   * recovery that cannot be reached, stay authoritative.
+   */
+  async #settleUncertain(
+    scope: SessionScope,
+    execution: Execution,
+    access: CoordinatorAccess
+  ) {
+    const key = scopeKey(scope)
+    try {
+      await this.#recovery(
+        scope,
+        { threadId: scope.threadId, runId: execution.segment.runId },
+        access,
+        execution
+      )
+    } catch {
+      return false
+    }
+    // One macrotask lets an already-terminal recovery reach this coordinator
+    // before the new turn is admitted.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return this.#executions.get(key)?.state === "idle"
   }
 
   async #recoverExecution(
@@ -442,14 +481,21 @@ export class SessionCoordinator {
           : {}),
       }
       const handle = await this.options.engine.recover(scope, providerRequest)
+      const replaced = existing?.segment
       const segment = this.#segment(
         key,
         request.runId,
         handle,
-        existing?.segment.onTerminal,
+        replaced?.onTerminal,
         false
       )
-      if (existing) this.#forgetJournal(existing.segment)
+      if (replaced) {
+        // One run keeps one journal and one monotonic sequence across its
+        // segments: a browser cursor can never skip a recovered event.
+        segment.journal = replaced.journal
+        segment.nextSequence = replaced.nextSequence
+        this.#forgetJournal(replaced)
+      }
       const execution: Execution = existing
         ? existing
         : {
@@ -637,7 +683,10 @@ export class SessionCoordinator {
             sequence: ++segment.nextSequence,
             event,
           }
-          this.#rememberJournal(segment, sequenced)
+          // A recoverable interrupt is not part of the run: journaling it would
+          // replay a failure the provider never reported.
+          const interrupted = uncertainError(event)
+          if (!interrupted) this.#rememberJournal(segment, sequenced)
           this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           if (event.type === EventType.RUN_FINISHED) {
@@ -651,10 +700,12 @@ export class SessionCoordinator {
             break
           }
           if (event.type === EventType.RUN_ERROR) {
-            this.#forgetJournal(segment)
+            // The journal outlives an interrupt so a reload after recovery
+            // still replays this run from its beginning.
+            if (!interrupted) this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
-            execution.state = uncertainError(event) ? "uncertain" : "idle"
+            execution.state = interrupted ? "uncertain" : "idle"
             break
           }
         }
@@ -689,6 +740,15 @@ export class SessionCoordinator {
   #rememberJournal(segment: Segment, value: SequencedRunEvent) {
     const journal = segment.journal
     if (!journal) return
+    // One run replays as one run: a recovered segment repeats RUN_STARTED, and
+    // a second one would make the journal an invalid AG-UI stream.
+    if (
+      value.event.type === EventType.RUN_STARTED &&
+      journal.replay.some(
+        ({ value: journaled }) => journaled.event.type === EventType.RUN_STARTED
+      )
+    )
+      return
     const previous = journal.replay.at(-1)
     const compacted = previous
       ? compactedEvent(previous.value.event, value.event)

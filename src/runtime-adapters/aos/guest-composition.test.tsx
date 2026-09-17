@@ -306,4 +306,100 @@ describe("AOS guest browser composition", () => {
     ).toBeInTheDocument()
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it("localizes a guest run failure in the invitation language", async () => {
+    stubMatchMedia()
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/guest/v1/runtime")
+        return Response.json({
+          runtimeId: "hermes-primary",
+          agentId: "researcher",
+          conversationRef: "guest_ref",
+          session: { id: "guest_ref", created: false },
+          ui: { lang: "he" },
+          capabilities: {
+            agent: { transport: { streaming: true, resumable: true } },
+            content: {
+              attachments: { status: "unavailable" },
+              artifacts: { status: "unavailable" },
+              transcription: { status: "unavailable" },
+              speech: { status: "unavailable" },
+            },
+            interactions: {
+              questions: { status: "available" },
+              approvals: { status: "available" },
+            },
+          },
+          expiresAt: "2026-09-18T08:00:00.000Z",
+        })
+      if (url.includes("/history"))
+        return Response.json({
+          sessionId: "guest_ref",
+          messages: [
+            {
+              id: "user-1",
+              role: "user",
+              content: [{ type: "text", text: "Question" }],
+              createdAt: "2026-09-15T00:00:00.000Z",
+            },
+          ],
+          total: 1,
+          limit: 200,
+          offset: 0,
+          nextOffset: 1,
+          execution: { status: "failed", runId: "run-1" },
+        })
+      if (url.includes("/runs/reconnect"))
+        return new Response(
+          [
+            { type: "RUN_STARTED", threadId: "guest_ref", runId: "run-1" },
+            {
+              type: "TEXT_MESSAGE_START",
+              messageId: "assistant-1",
+              role: "assistant",
+            },
+            {
+              type: "TEXT_MESSAGE_CONTENT",
+              messageId: "assistant-1",
+              delta: "Partial guest answer",
+            },
+            {
+              type: "RUN_ERROR",
+              code: "temporarily_unavailable",
+              message:
+                "The service is temporarily unavailable. Please try again.",
+            },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}`)
+            .concat("")
+            .join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(
+      <GuestAosSurface
+        config={{
+          status: "ready",
+          surface: "guest",
+          basePath: "/api/guest/v1",
+          lane: "guest",
+        }}
+        inviteToken="opaque.token"
+        locale="en"
+      />
+    )
+
+    expect(
+      await screen.findByText("השירות אינו זמין באופן זמני. נסו שוב.")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(
+        "The service is temporarily unavailable. Please try again."
+      )
+    ).not.toBeInTheDocument()
+  })
 })

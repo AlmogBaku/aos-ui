@@ -988,4 +988,151 @@ describe("provider-neutral AOS browser client", () => {
       })
     ).rejects.toMatchObject({ code: "run_conflict" })
   })
+
+  it("prefers the provider Session status once no run is observed", async () => {
+    let providerStatus: "running" | "idle" = "running"
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json({
+          sessions: [
+            {
+              id: "session-1",
+              agentId: "researcher",
+              title: "Research",
+              archived: false,
+              updatedAt: "2026-01-02T00:00:00.000Z",
+              status: providerStatus,
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      ),
+    })
+
+    await client.listSessions("researcher")
+    expect(client.sessionStatus("session-1")).toBe("running")
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_ERROR,
+      code: "AOS_PROVIDER_RUN_FAILED",
+      message: "The provider could not complete this run.",
+    })
+    expect(client.sessionStatus("session-1")).toBe("failed")
+
+    providerStatus = "idle"
+    await client.listSessions("researcher")
+
+    expect(client.sessionStatus("session-1")).toBe("idle")
+    await expect(client.getSessionMetadata(["session-1"])).resolves.toEqual([
+      expect.objectContaining({ threadId: "session-1", status: "idle" }),
+    ])
+  })
+
+  it("keeps an observed run's derived status ahead of a stale provider read", async () => {
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json({
+          sessions: [
+            {
+              id: "session-1",
+              agentId: "researcher",
+              title: "Research",
+              archived: false,
+              updatedAt: "2026-01-02T00:00:00.000Z",
+              status: "idle" as const,
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      ),
+    })
+
+    await client.listSessions("researcher")
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+    await client.listSessions("researcher")
+
+    expect(client.sessionStatus("session-1")).toBe("running")
+  })
+
+  it("keeps a recoverable run error running so the browser can reconnect", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ status: "steered" })
+    )
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership("session-1", "researcher")
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_ERROR,
+      code: "AOS_SEND_UNCERTAIN",
+      message: "The message may have been accepted.",
+    })
+
+    expect(client.sessionStatus("session-1")).toBe("running")
+    await expect(
+      client.steerRun("session-1", {
+        requestId: "queue-item-1",
+        text: "Still steerable",
+      })
+    ).resolves.toEqual({ status: "steered" })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+      expectedRunId: "run-1",
+    })
+  })
+
+  it("forgets the observed run on Stop so steering cannot target it", async () => {
+    let providerStatus: "running" | "idle" = "running"
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input)
+      if (path.endsWith("/runs/stop"))
+        return Response.json({ status: "stopping" }, { status: 202 })
+      return Response.json({
+        sessions: [
+          {
+            id: "session-1",
+            agentId: "researcher",
+            title: "Research",
+            archived: false,
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            status: providerStatus,
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      })
+    })
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+
+    await expect(client.stopRun("session-1")).resolves.toEqual({
+      status: "stopping",
+    })
+
+    await expect(
+      client.steerRun("session-1", {
+        requestId: "queue-item-1",
+        text: "Too late",
+      })
+    ).rejects.toMatchObject({ code: "run_conflict" })
+    providerStatus = "idle"
+    await client.listSessions("researcher")
+    expect(client.sessionStatus("session-1")).toBe("idle")
+  })
 })

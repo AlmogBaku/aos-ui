@@ -17,6 +17,9 @@ import {
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
+import { en } from "@/lib/i18n/dictionaries/en"
+import { he } from "@/lib/i18n/dictionaries/he"
+import { runErrorMessage } from "@/lib/i18n/run-errors"
 
 import type {
   RuntimeAdapterDefinition,
@@ -32,9 +35,14 @@ import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
+import type { RunErrorResolver } from "./aos-reconnect"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
 const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
+
+// Both locales ship with the workspace bundle, so a failure that arrives before
+// the first paint is already localized.
+const dictionaries = { en, he } as const
 
 function ReadyAosRuntimeProvider({
   children,
@@ -55,14 +63,20 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [reconciler])
+  // Normalized run failures arrive as a stable code with English provider
+  // text; the workspace localizes what it recognizes and keeps the rest.
+  const resolveRunError = useCallback<RunErrorResolver>(
+    (code, fallback) => runErrorMessage(dictionaries[locale], code, fallback),
+    [locale]
+  )
   const client = useMemo(
-    () => new AosRemoteClient({ reconciler }),
-    [reconciler]
+    () => new AosRemoteClient({ reconciler, resolveRunError }),
+    [reconciler, resolveRunError]
   )
   const drafts = useMemo(() => new AosDraftRegistry(), [])
   const threadList = useMemo(
-    () => new AosThreadListAdapter(client, drafts),
-    [client, drafts]
+    () => new AosThreadListAdapter(client, drafts, resolveRunError),
+    [client, drafts, resolveRunError]
   )
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
@@ -146,48 +160,50 @@ function ReadyAosRuntimeProvider({
                   queueMicrotask(resetWhenIdle)
                 }
               : undefined,
-            onRunFinished:
-              localId
-                ? async () => {
-                    const runtime = assistantRuntimeRef.current
-                    if (!runtime) return
-                    const target = runtime.threads.getById(localId)
-                    const item = runtime.threads.getItemById(localId)
-                    if (drafts.agentFor(localId)) {
-                      let unsubscribeTitle: () => void = () => undefined
-                      const refreshTitleWhenIdle = () => {
-                        if (target.getState().isRunning) return
-                        unsubscribeTitle()
-                        void item.generateTitle().catch(() => {
-                          // A later native invalidation retries the provider title.
-                        })
-                      }
-                      unsubscribeTitle = target.subscribe(refreshTitleWhenIdle)
-                      queueMicrotask(refreshTitleWhenIdle)
-                    }
-                    if (!remoteId) return
-                    if (!client.needsSteeringReconciliation(remoteId)) return
-                    const history = await client.loadHistory(remoteId)
-                    const messages: ThreadMessageLike[] = history.messages.map(
-                      (message) => ({
-                        ...message,
-                        createdAt: new Date(message.createdAt),
-                      })
-                    )
-                    let unsubscribe: () => void = () => undefined
-                    const resetWhenIdle = () => {
+            onRunFinished: localId
+              ? async () => {
+                  const runtime = assistantRuntimeRef.current
+                  if (!runtime) return
+                  const target = runtime.threads.getById(localId)
+                  const item = runtime.threads.getItemById(localId)
+                  if (drafts.agentFor(localId)) {
+                    let unsubscribeTitle: () => void = () => undefined
+                    const refreshTitleWhenIdle = () => {
                       if (target.getState().isRunning) return
-                      unsubscribe()
-                      target.reset(messages)
-                      client.completeSteeringReconciliation(remoteId)
+                      unsubscribeTitle()
+                      void item.generateTitle().catch(() => {
+                        // A later native invalidation retries the provider title.
+                      })
                     }
-                    unsubscribe = target.subscribe(resetWhenIdle)
-                    queueMicrotask(resetWhenIdle)
+                    unsubscribeTitle = target.subscribe(refreshTitleWhenIdle)
+                    queueMicrotask(refreshTitleWhenIdle)
                   }
-                : undefined,
-            onEvent: remoteId
-              ? (event) => client.acceptRunEvent(remoteId, event)
+                  if (!remoteId) return
+                  if (!client.needsSteeringReconciliation(remoteId)) return
+                  const history = await client.loadHistory(remoteId)
+                  const messages: ThreadMessageLike[] = history.messages.map(
+                    (message) => ({
+                      ...message,
+                      createdAt: new Date(message.createdAt),
+                    })
+                  )
+                  let unsubscribe: () => void = () => undefined
+                  const resetWhenIdle = () => {
+                    if (target.getState().isRunning) return
+                    unsubscribe()
+                    target.reset(messages)
+                    client.completeSteeringReconciliation(remoteId)
+                  }
+                  unsubscribe = target.subscribe(resetWhenIdle)
+                  queueMicrotask(resetWhenIdle)
+                }
               : undefined,
+            // A promoting draft streams its first turn through this agent, so
+            // the callback is bound before the remote Session id exists and
+            // receives the id the run resolved.
+            onEvent: (threadId, event) =>
+              client.acceptRunEvent(threadId, event),
+            resolveRunError,
             getCapabilities:
               remoteId && agentId
                 ? () =>
@@ -203,21 +219,18 @@ function ReadyAosRuntimeProvider({
           remoteId && agentId ? threadList.historyFor(remoteId) : undefined,
         [agentId, remoteId]
       )
-      const mediaAdapters = useMemo(
-        () => {
-          const scopeId = remoteId ?? localId
-          return scopeId && agentId
-            ? media.createAdapters(scopeId, {
-                transcribe: (recording, signal) =>
-                  client.transcribeForAgent(agentId, recording, signal),
-                synthesize: (text, signal) =>
-                  client.speakForAgent(agentId, text, signal),
-                projectText: (text) => projectSpeechText(text, locale),
-              })
-            : undefined
-        },
-        [agentId, localId, remoteId]
-      )
+      const mediaAdapters = useMemo(() => {
+        const scopeId = remoteId ?? localId
+        return scopeId && agentId
+          ? media.createAdapters(scopeId, {
+              transcribe: (recording, signal) =>
+                client.transcribeForAgent(agentId, recording, signal),
+              synthesize: (text, signal) =>
+                client.speakForAgent(agentId, text, signal),
+              projectText: (text) => projectSpeechText(text, locale),
+            })
+          : undefined
+      }, [agentId, localId, remoteId])
       return useAgUiRuntime({
         agent,
         // A locally-created draft has an Agent before it has a remote Session.
@@ -232,7 +245,7 @@ function ReadyAosRuntimeProvider({
         },
       })
     },
-    [attachments, client, drafts, locale, media, threadList]
+    [attachments, client, drafts, locale, media, resolveRunError, threadList]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadList,

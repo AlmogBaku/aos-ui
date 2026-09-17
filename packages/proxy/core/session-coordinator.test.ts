@@ -1086,4 +1086,322 @@ describe("SessionCoordinator", () => {
     ).resolves.toBeDefined()
     expect(engine.start).toHaveBeenCalledTimes(2)
   })
+  it("keeps the journaled prefix across a recoverable interrupt", async () => {
+    const interrupted = new EventSource()
+    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => interrupted),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    const live = await sessions.start(scope, input("run-1"), access("one"))
+    const readLive = reader(live)
+    const started = {
+      type: EventType.RUN_STARTED,
+      threadId: scope.threadId,
+      runId: "run-1",
+    } as const
+    const textStart = {
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: "assistant-1",
+      role: "assistant",
+    } as const
+    for (const event of [
+      started,
+      textStart,
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "Hel",
+      } as const,
+    ]) {
+      interrupted.emit(event)
+      await readLive()
+    }
+    interrupted.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_CONNECTION_INTERRUPTED",
+      message: "The provider connection was interrupted.",
+    })
+    await readLive()
+    interrupted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    live.close()
+
+    const redial = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 4 },
+      access("one")
+    )
+    const readRedial = reader(redial)
+    // Every adapter opens a recovered segment with its own RUN_STARTED.
+    recovered.emit(started)
+    await readRedial()
+    recovered.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "lo",
+    })
+    await readRedial()
+    redial.close()
+
+    const reload = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("two")
+    )
+    const readReload = reader(reload)
+    const replayed = await Promise.all([
+      readReload(),
+      readReload(),
+      readReload(),
+    ])
+    expect(replayed.map((entry) => entry.value?.event)).toEqual([
+      started,
+      textStart,
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "Hello",
+      },
+    ])
+    recovered.emit({
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: "assistant-1",
+    })
+    await expect(readReload()).resolves.toMatchObject({
+      value: { event: { type: EventType.TEXT_MESSAGE_END } },
+    })
+  })
+
+  it("delivers recovered events to two redials sharing one cursor", async () => {
+    const interrupted = new EventSource()
+    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => interrupted),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    const live = await sessions.start(scope, input("run-1"), access("one"))
+    const readLive = reader(live)
+    for (const event of [
+      {
+        type: EventType.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      } as const,
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      } as const,
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "Hel",
+      } as const,
+    ]) {
+      interrupted.emit(event)
+      await readLive()
+    }
+    interrupted.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_CONNECTION_INTERRUPTED",
+      message: "The provider connection was interrupted.",
+    })
+    await readLive()
+    interrupted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    live.close()
+
+    const first = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 3 },
+      access("one")
+    )
+    const readFirst = reader(first)
+    const second = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 3 },
+      access("two")
+    )
+    const readSecond = reader(second)
+    recovered.emit({
+      type: EventType.RUN_STARTED,
+      threadId: scope.threadId,
+      runId: "run-1",
+    })
+    recovered.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "lo",
+    })
+
+    const [leftStart, rightStart] = await Promise.all([
+      readFirst(),
+      readSecond(),
+    ])
+    expect(leftStart.value?.event).toMatchObject({
+      type: EventType.RUN_STARTED,
+    })
+    expect(rightStart.value?.event).toMatchObject({
+      type: EventType.RUN_STARTED,
+    })
+    const [left, right] = await Promise.all([readFirst(), readSecond()])
+    expect(left.value?.event).toMatchObject({ delta: "lo" })
+    expect(right.value?.event).toMatchObject({ delta: "lo" })
+    expect(left.value?.sequence).toBeGreaterThan(4)
+    expect(right.value?.sequence).toBe(left.value?.sequence)
+    expect(engine.recover).toHaveBeenCalledOnce()
+  })
+
+  it("recovers an uncertain execution before refusing a new turn", async () => {
+    const interrupted = new EventSource()
+    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 7 })
+    const admitted = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(interrupted)
+        .mockResolvedValueOnce(admitted),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    interrupted.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_CONNECTION_INTERRUPTED",
+      message: "The provider connection was interrupted.",
+    })
+    interrupted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    // The provider answers the recovery with an already-finished run.
+    recovered.emit({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    recovered.finish()
+
+    const subscription = await sessions.start(
+      scope,
+      input("run-2"),
+      access("one")
+    )
+
+    expect(subscription.runId).toBe("run-2")
+    expect(engine.recover).toHaveBeenCalledWith(scope, {
+      threadId: scope.threadId,
+      runId: "run-1",
+      position: { epoch: "epoch-1", lastSeen: 0 },
+    })
+    expect(engine.start).toHaveBeenCalledTimes(2)
+  })
+
+  it("refuses a new turn when the recovered run is still running", async () => {
+    const interrupted = new EventSource()
+    const recovered = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => interrupted),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    interrupted.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_CONNECTION_INTERRUPTED",
+      message: "The provider connection was interrupted.",
+    })
+    interrupted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    recovered.emit({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "still working",
+    })
+
+    await expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).rejects.toThrow("already active")
+    expect(engine.recover).toHaveBeenCalledOnce()
+    expect(sessions.state(scope)).toBe("running")
+  })
+
+  it("refuses a new turn when recovering an uncertain execution fails", async () => {
+    const interrupted = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => interrupted),
+      recover: vi.fn(async () => {
+        throw new Error("provider unavailable")
+      }),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    interrupted.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_CONNECTION_INTERRUPTED",
+      message: "The provider connection was interrupted.",
+    })
+    interrupted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+
+    await expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).rejects.toThrow("already active")
+    expect(engine.recover).toHaveBeenCalledOnce()
+    expect(engine.start).toHaveBeenCalledOnce()
+  })
+
+  it("leaves an execution idle after a provider stream overflow", async () => {
+    const overflowed = new EventSource()
+    const admitted = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(overflowed)
+        .mockResolvedValueOnce(admitted),
+      recover: vi.fn(async () => admitted),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    overflowed.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_STREAM_OVERFLOW",
+      message: "The provider produced more events than AOS can buffer.",
+    })
+    overflowed.finish()
+
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    await expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).resolves.toBeDefined()
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("settles a reset-required run so the next turn is admitted", async () => {
+    const reset = new EventSource()
+    const admitted = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(reset)
+        .mockResolvedValueOnce(admitted),
+      recover: vi.fn(async () => admitted),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    reset.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_RESET_REQUIRED",
+      message: "AOS run history must be reloaded before continuing.",
+    })
+    reset.finish()
+
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    await expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).resolves.toBeDefined()
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
 })

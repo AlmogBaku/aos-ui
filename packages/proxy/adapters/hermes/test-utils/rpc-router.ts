@@ -24,7 +24,9 @@ import type {
   HermesConnectionHandler,
   HermesRpcOptions,
   HermesRpcTransport,
+  ServerRequestHandler,
 } from "../gateway"
+import { serverRequests, type ServerRequestsHarness } from "./server-requests"
 
 export type RpcHandler = (
   params: Readonly<Record<string, unknown>>
@@ -33,6 +35,12 @@ export type RpcHandler = (
 export type RpcRouter = HermesRpcTransport & {
   /** Publish an event to every active `onEvent` subscriber. */
   publish(event: unknown): void
+  /**
+   * The server→client request half, over the vendored channel: `deliver` sends
+   * one live request and every result carrying `open_requests` re-delivers them
+   * before `request()` resolves, exactly as a reconnect does.
+   */
+  requests: ServerRequestsHarness
   /** Drive the gateway connection lifecycle. */
   connection: {
     restored(): Promise<void>
@@ -78,6 +86,7 @@ export function rpcRouter(
   >()
   const subscribers: Array<(event: unknown) => void> = []
   const connectionHandlers: HermesConnectionHandler[] = []
+  const requests = serverRequests()
 
   function recordCall(
     method: string,
@@ -101,7 +110,10 @@ export function rpcRouter(
       recordCall(method, params, options?.maxResponseBytes)
       const handler = effectiveHandlers[method]
       if (!handler) throw new Error(`unexpected RPC: ${method}`)
-      return handler(params)
+      const result = await handler(params)
+      // The channel re-delivers `open_requests` before the caller sees them.
+      requests.deliverOpen(result)
+      return result
     },
 
     onEvent: (listener: (event: unknown) => void): (() => void) => {
@@ -111,6 +123,13 @@ export function rpcRouter(
         if (index !== -1) subscribers.splice(index, 1)
       }
     },
+
+    onRequest: (handler: ServerRequestHandler): (() => void) =>
+      requests.transport.onRequest(handler),
+
+    connected: (): boolean => requests.transport.connected(),
+
+    requests,
 
     onConnection: (handler: HermesConnectionHandler): (() => void) => {
       connectionHandlers.push(handler)
