@@ -5,51 +5,8 @@ import {
   HermesHttpError,
   HermesRpcError,
   HermesWebSocketRpcTransport,
-  type HermesSocket,
 } from "./transport"
-
-class FakeSocket implements HermesSocket {
-  readonly listeners = new Map<string, Set<(event: unknown) => void>>()
-  readyState = 0
-  sent: string[] = []
-
-  addEventListener(type: string, listener: (event: unknown) => void) {
-    const listeners = this.listeners.get(type) ?? new Set()
-    listeners.add(listener)
-    this.listeners.set(type, listeners)
-  }
-
-  removeEventListener(type: string, listener: (event: unknown) => void) {
-    this.listeners.get(type)?.delete(listener)
-  }
-
-  send(value: string) {
-    this.sent.push(value)
-    const frame = JSON.parse(value) as { id: string }
-    queueMicrotask(() =>
-      this.emit("message", {
-        data: JSON.stringify({
-          jsonrpc: "2.0",
-          id: frame.id,
-          result: { profiles: [] },
-        }),
-      })
-    )
-  }
-
-  close() {
-    this.readyState = 3
-  }
-
-  open() {
-    this.readyState = 1
-    this.emit("open", {})
-  }
-
-  emit(type: string, event: unknown) {
-    for (const listener of this.listeners.get(type) ?? []) listener(event)
-  }
-}
+import { FakeSocket } from "./test-utils/fake-socket"
 
 describe("Hermes WebSocket RPC transport", () => {
   it.each([-32601, 4018])(

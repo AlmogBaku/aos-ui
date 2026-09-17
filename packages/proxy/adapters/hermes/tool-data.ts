@@ -1,3 +1,5 @@
+import { parseJsonOrValue } from "./native"
+
 export type HermesPublicJsonValue =
   | null
   | boolean
@@ -205,15 +207,6 @@ function projectValue(
   return result
 }
 
-function parseJson(value: unknown) {
-  if (typeof value !== "string") return value
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
-  }
-}
-
 /**
  * Hermes integrations do not consistently set `is_error` on durable tool
  * rows. Preserve an explicit native flag, then recognize the small set of
@@ -224,7 +217,7 @@ export function hermesToolResultIsError(
   nativeIsError = false
 ): boolean {
   if (nativeIsError) return true
-  const parsed = parseJson(value)
+  const parsed = parseJsonOrValue(value)
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
     return false
   const result = parsed as Record<string, unknown>
@@ -237,7 +230,7 @@ export function hermesToolResultIsError(
 
 function project(value: unknown) {
   return projectValue(
-    parseJson(value),
+    parseJsonOrValue(value),
     {
       entries: 0,
       stringLength: 0,

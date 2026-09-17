@@ -4,6 +4,7 @@ import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesRunEngine, type HermesRunNative } from "./run"
 import { HermesRpcError } from "./transport"
+import { rpcRouter } from "./test-utils/rpc-router"
 
 const scope = {
   agentId: "writer",
@@ -12,33 +13,28 @@ const scope = {
 }
 
 it("projects native slash catalog names in order without duplicate or malformed entries", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "session.resume")
-      return { session_id: "live", running: false }
-    if (method === "commands.catalog")
-      return {
-        pairs: [
-          ["/help", "Help"],
-          ["/skill", "Skill"],
-          ["/help", "Duplicate"],
-          ["/bad name", "Invalid"],
-        ],
-      }
-    throw new Error("unexpected RPC")
+  const router = rpcRouter({
+    "session.resume": async () => ({ session_id: "live", running: false }),
+    "commands.catalog": async () => ({
+      pairs: [
+        ["/help", "Help"],
+        ["/skill", "Skill"],
+        ["/help", "Duplicate"],
+        ["/bad name", "Invalid"],
+      ],
+    }),
   })
   const adapter = new HermesServerAdapter({
-    request,
+    ...router,
     http: async () => ({ id: "stored", profile: "writer", title: "Work" }),
   })
   await expect(adapter.slashCommands("writer", "stored")).resolves.toEqual([
     { name: "help", description: "Help" },
     { name: "skill", description: "Skill" },
   ])
-  expect(request).toHaveBeenCalledWith(
-    "commands.catalog",
-    { session_id: "live", profile: "writer" },
-    expect.any(Number)
-  )
+  const catalogCall = router.calls("commands.catalog")[0]
+  expect(catalogCall?.params).toEqual({ session_id: "live", profile: "writer" })
+  expect(catalogCall?.maxResponseBytes).toEqual(expect.any(Number))
 })
 
 it("includes skill commands that follow the first 256 catalog entries", async () => {

@@ -1,3 +1,5 @@
+import { isRecord, utf8BytesWithin } from "./native"
+
 type NativeRecord = Record<string, unknown>
 
 const MAX_ATTACHMENTS = 16
@@ -148,24 +150,12 @@ export class HermesContentCleanupRequiredError extends HermesContentUnavailableE
   }
 }
 
-function isRecord(value: unknown): value is NativeRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 function hasOnlyKeys(value: NativeRecord, allowed: readonly string[]) {
   return Object.keys(value).every((key) => allowed.includes(key))
 }
 
 function utf8BytesAtMost(value: string, maxBytes: number) {
-  if (value.length === 0 || value.length > maxBytes) return undefined
-  let bytes = 0
-  for (let index = 0; index < value.length; index += 1) {
-    const point = value.codePointAt(index)!
-    if (point > 0xffff) index += 1
-    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4
-    if (bytes > maxBytes) return undefined
-  }
-  return bytes
+  return value.length === 0 ? undefined : utf8BytesWithin(value, maxBytes)
 }
 
 function boundedText(value: unknown, max: number) {

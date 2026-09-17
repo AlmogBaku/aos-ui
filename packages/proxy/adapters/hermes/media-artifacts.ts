@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { isRecord } from "./native"
 
 type HermesMediaArtifact = {
   reference: string
@@ -29,10 +30,6 @@ const MEDIA_DIRECTIVE_PREFIX = /^\s*MEDIA:/u
 const POSSIBLE_MEDIA_PREFIX =
   /^\s*(?:M(?:E(?:D(?:I(?:A(?::(?:\s*)?)?)?)?)?)?)?$/u
 const MAX_MEDIA_LINE_BYTES = 4_112
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 function parsedRecord(value: unknown) {
   if (typeof value !== "string") return isRecord(value) ? value : undefined

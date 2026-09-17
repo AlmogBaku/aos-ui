@@ -16,6 +16,14 @@ export default defineConfig([
     ".hermes/**",
     ".impeccable/**",
     ".worktrees/**",
+    // Upstream-verbatim files are ignored; AOS-authored files in the same
+    // directory (gateway-events.ts, snapshot.test.ts, UPSTREAM.md) are not.
+    "packages/proxy/adapters/hermes/vendor/**/json-rpc-gateway.ts",
+    "packages/proxy/adapters/hermes/vendor/**/json-rpc-channel.ts",
+    "packages/proxy/adapters/hermes/vendor/**/reconnect-backoff.ts",
+    "packages/proxy/adapters/hermes/vendor/**/json-rpc-channel.test.ts",
+    "packages/proxy/adapters/hermes/vendor/**/json-rpc-gateway-replay.test.ts",
+    "packages/proxy/adapters/hermes/vendor/**/reconnect-backoff.test.ts",
   ]),
   js.configs.recommended,
   ...tseslint.configs.recommended,

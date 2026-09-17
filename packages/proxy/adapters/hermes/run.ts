@@ -29,6 +29,7 @@ import {
   projectHermesToolResult,
 } from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
+import { boundedGraphBytes, nativeId, utf8BytesWithin } from "./native"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_USER_TURN_BYTES = 1_048_576
@@ -39,8 +40,6 @@ const MAX_QUEUED_BYTES = 4_194_304
 const MAX_PREACTIVE_EVENTS = 4_096
 const MAX_PREACTIVE_BYTES = 4_194_304
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
-const MAX_GRAPH_ENTRIES = 1_024
-const MAX_GRAPH_DEPTH = 12
 const MAX_TOOL_PAYLOAD_BYTES = 65_536
 const RUN_INPUT_FIELDS = new Set([
   "threadId",
@@ -120,111 +119,6 @@ export type HermesReconnectRequest = RecoveryRequest
 
 type QueueWaiter = {
   resolve(result: IteratorResult<AGUIEvent>): void
-}
-
-function utf8CodePointBytes(codePoint: number) {
-  return codePoint <= 0x7f
-    ? 1
-    : codePoint <= 0x7ff
-      ? 2
-      : codePoint <= 0xffff
-        ? 3
-        : 4
-}
-
-function utf8BytesWithin(value: string, maximum: number) {
-  let bytes = 0
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0
-    bytes += utf8CodePointBytes(codePoint)
-    if (bytes > maximum) return undefined
-  }
-  return bytes
-}
-
-function jsonStringBytesWithin(value: string, maximum: number) {
-  let bytes = 2
-  if (bytes > maximum) return undefined
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0
-    bytes +=
-      character === '"' || character === "\\"
-        ? 2
-        : codePoint < 0x20
-          ? character === "\b" ||
-            character === "\f" ||
-            character === "\n" ||
-            character === "\r" ||
-            character === "\t"
-            ? 2
-            : 6
-          : codePoint >= 0xd800 && codePoint <= 0xdfff
-            ? 6
-            : utf8CodePointBytes(codePoint)
-    if (bytes > maximum) return undefined
-  }
-  return bytes
-}
-
-function boundedGraphBytes(value: unknown, maximum: number) {
-  const seen = new WeakSet<object>()
-  let bytes = 0
-  let entries = 0
-
-  const addBytes = (amount: number) => {
-    bytes += amount
-    return bytes <= maximum
-  }
-  const visit = (current: unknown, depth: number): boolean => {
-    if (depth > MAX_GRAPH_DEPTH || entries > MAX_GRAPH_ENTRIES) return false
-    if (typeof current === "string") {
-      const size = jsonStringBytesWithin(current, maximum - bytes)
-      return size !== undefined && addBytes(size)
-    }
-    if (
-      current === null ||
-      typeof current === "boolean" ||
-      typeof current === "number"
-    )
-      return addBytes(32)
-    if (typeof current !== "object") return false
-    if (seen.has(current)) return false
-    seen.add(current)
-    if (!addBytes(2)) return false
-
-    if (Array.isArray(current)) {
-      for (let index = 0; index < current.length; index += 1) {
-        entries += 1
-        if (entries > MAX_GRAPH_ENTRIES || !addBytes(1)) return false
-        let item: unknown
-        try {
-          item = current[index]
-        } catch {
-          return false
-        }
-        if (!visit(item, depth + 1)) return false
-      }
-      return true
-    }
-
-    for (const key in current) {
-      if (!Object.hasOwn(current, key)) continue
-      entries += 1
-      if (entries > MAX_GRAPH_ENTRIES) return false
-      const keyBytes = jsonStringBytesWithin(key, maximum - bytes)
-      if (keyBytes === undefined || !addBytes(keyBytes + 2)) return false
-      let item: unknown
-      try {
-        item = (current as Record<string, unknown>)[key]
-      } catch {
-        return false
-      }
-      if (!visit(item, depth + 1)) return false
-    }
-    return true
-  }
-
-  return visit(value, 0) ? bytes : undefined
 }
 
 class EventQueue implements AsyncIterable<AGUIEvent> {
@@ -497,13 +391,7 @@ function payloadOf(event: HermesNativeEvent) {
 }
 
 function stableNativeId(value: unknown) {
-  if (typeof value !== "string" || value.length === 0 || value.length > 512)
-    return undefined
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    if (code < 32 || code === 127) return undefined
-  }
-  return value
+  return nativeId(value, 512)
 }
 
 function canonicalToolName(name: string) {

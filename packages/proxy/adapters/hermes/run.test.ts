@@ -2,6 +2,7 @@ import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
 import { HermesRunEngine, type HermesRunNative } from "./run"
+import { nativeTurn } from "./test-utils/native-events"
 
 const scope = {
   agentId: "research",
@@ -55,69 +56,20 @@ describe("HermesRunEngine", () => {
       })
     )
     const handle = await engine.start(scope, input())
-    publish?.({
-      type: "message.start",
-      session_id: "live-secret",
-      seq: 1,
-      payload: { message_id: "reply-before" },
-    })
-    publish?.({
-      type: "message.delta",
-      session_id: "live-secret",
-      seq: 2,
-      payload: { text: "Before" },
-    })
-    publish?.({
-      type: "tool.start",
-      session_id: "live-secret",
-      seq: 3,
-      payload: { tool_id: "tool-1", name: "read_file", args: {} },
-    })
+    const t = nativeTurn("live-secret", 1)
+    publish?.(t.messageStart("reply-before"))
+    publish?.(t.delta("Before"))
+    publish?.(t.toolStart("tool-1", "read_file", {}))
 
     await expect(
       handle.steer?.({ requestId: "queue-item-1", text: "Correction" })
     ).resolves.toBe("steered")
-    publish?.({
-      type: "message.complete",
-      session_id: "live-secret",
-      seq: 4,
-      payload: { message_id: "reply-before", text: "Before" },
-    })
-    publish?.({
-      type: "tool.complete",
-      session_id: "live-secret",
-      seq: 5,
-      payload: {
-        tool_id: "tool-1",
-        name: "read_file",
-        args: {},
-        result: "contents",
-      },
-    })
-    publish?.({
-      type: "message.start",
-      session_id: "live-secret",
-      seq: 6,
-      payload: { message_id: "reply-after" },
-    })
-    publish?.({
-      type: "message.delta",
-      session_id: "live-secret",
-      seq: 7,
-      payload: { text: "After" },
-    })
-    publish?.({
-      type: "message.complete",
-      session_id: "live-secret",
-      seq: 8,
-      payload: { message_id: "reply-after", text: "After" },
-    })
-    publish?.({
-      type: "session.info",
-      session_id: "live-secret",
-      seq: 9,
-      payload: { running: false },
-    })
+    publish?.(t.complete("reply-before", "Before"))
+    publish?.(t.toolComplete("tool-1", "read_file", "contents"))
+    publish?.(t.messageStart("reply-after"))
+    publish?.(t.delta("After"))
+    publish?.(t.complete("reply-after", "After"))
+    publish?.(t.idle())
 
     const events = await collect(handle)
     expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
@@ -214,24 +166,41 @@ describe("HermesRunEngine", () => {
     }
 
     const first = await engine.start(scope, input())
-    publish({
-      type: "message.start",
-      session_id: "live-secret",
-      seq: 1,
-      payload: { message_id: "reply" },
-    })
-    publish({
-      type: "message.delta",
-      session_id: "live-secret",
-      seq: 2,
-      payload: { text: "Done" },
-    })
-    publish({
-      type: "message.complete",
-      session_id: "live-secret",
-      seq: 3,
-      payload: {},
-    })
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("reply"))
+    publish(t.delta("Done"))
+    publish(t.complete("reply", "Done"))
+
+    await first.settled
+    await expect(
+      engine.start(scope, input({ runId: "run-2" }))
+    ).resolves.toBeDefined()
+  })
+
+  it("settles a run on a payload-less message.complete frame", async () => {
+    let listener: ((event: unknown) => void) | undefined
+    let observing = false
+    const engine = new HermesRunEngine(
+      native({
+        observe: async (_liveSessionId, next) => {
+          listener = next
+          observing = true
+          return () => {
+            observing = false
+          }
+        },
+      })
+    )
+    const publish = (event: unknown) => {
+      if (observing) listener?.(event)
+    }
+
+    const first = await engine.start(scope, input())
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("reply"))
+    publish(t.delta("Done"))
+    // Empty-payload completion: message_id, text, status all absent
+    publish(t.frame("message.complete"))
 
     await first.settled
     await expect(

@@ -1,4 +1,5 @@
 import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
+import { isRecord, utf8BytesWithin } from "./native"
 
 export type HermesInteractionScope = {
   agentId: string
@@ -98,19 +99,13 @@ type HermesInteractionResumeSnapshot = {
   outcome?: RunFinishedInterruptOutcome
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function utf8Bytes(value: string) {
-  return new TextEncoder().encode(value).byteLength
-}
-
 function validString(
   value: unknown,
   max: number = HERMES_INTERACTION_LIMITS.maxStringBytes
 ) {
-  return typeof value === "string" && value.trim() && utf8Bytes(value) <= max
+  return typeof value === "string" &&
+    value.trim() &&
+    utf8BytesWithin(value, max) !== undefined
     ? value.trim()
     : undefined
 }
@@ -121,7 +116,7 @@ function nativeText(
   allowEmpty = false
 ) {
   return typeof value === "string" &&
-    utf8Bytes(value) <= max &&
+    utf8BytesWithin(value, max) !== undefined &&
     (allowEmpty || value.length > 0)
     ? value
     : undefined
@@ -161,7 +156,12 @@ function boundedJson(value: unknown) {
     )
       return true
     if (typeof item === "string")
-      return utf8Bytes(item) <= HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      return (
+        utf8BytesWithin(
+          item,
+          HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+        ) !== undefined
+      )
     if (typeof item !== "object" || seen.has(item)) return false
     seen.add(item)
     const values = Array.isArray(item) ? item : Object.values(item)
@@ -172,8 +172,10 @@ function boundedJson(value: unknown) {
   if (!visit(value, 0)) return false
   try {
     return (
-      utf8Bytes(JSON.stringify(value)) <=
-      HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      utf8BytesWithin(
+        JSON.stringify(value),
+        HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      ) !== undefined
     )
   } catch {
     return false
@@ -252,7 +254,8 @@ function parseClarification(payload: Record<string, unknown>) {
       if (
         !question ||
         typeof encoded !== "string" ||
-        utf8Bytes(encoded) > HERMES_INTERACTION_LIMITS.maxStringBytes
+        utf8BytesWithin(encoded, HERMES_INTERACTION_LIMITS.maxStringBytes) ===
+          undefined
       )
         invalidNative()
       let nativeAnswers: string[]

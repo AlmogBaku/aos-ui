@@ -1,4 +1,5 @@
 import type { SessionMessage } from "../../../protocol"
+import { isRecord as isNativeRecord, timestamp } from "./native"
 import {
   projectHermesMediaArtifacts,
   projectHermesMediaText,
@@ -68,7 +69,7 @@ const privateLocationValue =
   /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
 
 function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
+  return isNativeRecord(value)
 }
 
 function stringValue(value: unknown) {
@@ -194,15 +195,6 @@ function publicToolResult(name: string, value: unknown, isError: boolean) {
   return Object.keys(receipt).length
     ? receipt
     : { status: isError ? "failed" : "completed" }
-}
-
-function timestamp(value: unknown, index: number) {
-  const numeric = typeof value === "number" ? value : Number(value)
-  if (!Number.isFinite(numeric) || numeric <= 0)
-    return new Date(index).toISOString()
-  return new Date(
-    numeric < 10_000_000_000 ? numeric * 1000 : numeric
-  ).toISOString()
 }
 
 function canonicalToolName(name: string) {

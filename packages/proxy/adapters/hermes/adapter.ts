@@ -56,6 +56,12 @@ import {
 } from "../../core/runtime"
 import type { ResumeEntry } from "@ag-ui/core"
 import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
+import {
+  isRecord,
+  nativeId,
+  parseJson as nativeParseJson,
+  timestamp,
+} from "./native"
 
 async function executeSlashCommand(
   transport: HermesRpcTransport,
@@ -192,10 +198,6 @@ export class HermesSessionConflictError extends Error {
 
 type NativeRecord = Record<string, unknown>
 
-function isRecord(value: unknown): value is NativeRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
@@ -287,15 +289,7 @@ function observedEventDisposition(
 }
 
 function validLiveSessionId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
+  return nativeId(value, 256) !== undefined
 }
 
 function throwUnavailable(error: unknown): never {
@@ -376,15 +370,6 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
   return `${agentId}\u0000${sessionId}`
 }
 
-function parsedJson(value: unknown) {
-  if (typeof value !== "string") return value
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return undefined
-  }
-}
-
 function publishedArtifact(rows: readonly unknown[], artifactId: string) {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]
@@ -404,7 +389,7 @@ function publishedArtifact(rows: readonly unknown[], artifactId: string) {
               filename: media.descriptor.filename,
             }
     }
-    const value = parsedJson(row.content ?? row.result)
+    const value = nativeParseJson(row.content ?? row.result)
     if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
       continue
     const artifact = isRecord(value.artifact) ? value.artifact : undefined
@@ -439,15 +424,6 @@ function dataUrlBytes(value: unknown) {
   } catch {
     return undefined
   }
-}
-
-function timestamp(value: unknown) {
-  const numeric = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(numeric) && numeric > 0
-    ? new Date(
-        numeric < 10_000_000_000 ? numeric * 1000 : numeric
-      ).toISOString()
-    : new Date(0).toISOString()
 }
 
 function rewindSubmitParams(rows: readonly unknown[], rewindSourceId: string) {
