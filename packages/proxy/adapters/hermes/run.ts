@@ -13,21 +13,8 @@ import {
   type ServerRunHandle,
   type SessionScope,
 } from "../../core/runtime"
-import {
-  projectHermesQuestionArgs,
-  projectHermesQuestionResult,
-} from "./history"
-import {
-  HermesMediaTextFilter,
-  projectHermesArtifactReceipt,
-  projectHermesMediaArtifacts,
-} from "./media-artifacts"
-import {
-  canonicalToolName,
-  hermesToolResultIsError,
-  projectHermesToolArgs,
-  projectHermesToolResult,
-} from "./tool-data"
+import { HermesMediaTextFilter } from "./media-artifacts"
+import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
 import {
   boundedGraphBytes,
@@ -53,7 +40,6 @@ const MAX_QUEUED_BYTES = 4_194_304
 const MAX_PREACTIVE_EVENTS = 4_096
 const MAX_PREACTIVE_BYTES = 4_194_304
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
-const MAX_TOOL_PAYLOAD_BYTES = 65_536
 const MAX_LOGGED_NATIVE_CHARS = 200
 /** How long Hermes may keep a Session running after its completion frame. */
 const SETTLING_WINDOW_MS = 5_000
@@ -524,40 +510,6 @@ function payloadOf(event: HermesNativeEvent) {
 
 function stableNativeId(value: unknown) {
   return nativeId(value, 512)
-}
-
-function toolArgs(value: unknown) {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {}
-}
-
-function normalizedTool(name: string, value: unknown) {
-  const args = toolArgs(value)
-  if (
-    name !== "tool_call" ||
-    typeof args.name !== "string" ||
-    typeof args.arguments !== "string" ||
-    utf8BytesWithin(args.arguments, MAX_TOOL_PAYLOAD_BYTES) === undefined
-  )
-    return { name, args }
-  try {
-    const selectedArgs = JSON.parse(args.arguments) as unknown
-    if (typeof selectedArgs !== "object" || selectedArgs === null)
-      return { name, args }
-    return { name: args.name, args: toolArgs(selectedArgs) }
-  } catch {
-    return { name, args }
-  }
-}
-
-function safeToolArgs(name: string, value: Record<string, unknown>) {
-  const projected = projectHermesToolArgs(value)
-  if (name !== "present_artifact") return JSON.stringify(projected)
-  const receipt: Record<string, unknown> = {}
-  for (const key of ["id", "title", "filename", "mimeType", "sizeBytes"])
-    if (key in projected) receipt[key] = projected[key]
-  return JSON.stringify(receipt)
 }
 
 function boundedText(value: unknown) {
@@ -1427,53 +1379,32 @@ export class HermesRunEngine {
     tool.ended = true
     const toolCallId = stableNativeId(payload.tool_id)
     if (!toolCallId) return
-    const isError = hermesToolResultIsError(
+    const outcome = projectHermesToolOutcome(
+      toolCallId,
+      tool.name,
       payload.result,
       payload.is_error === true
     )
-    const artifact =
-      tool.name === "present_artifact" && !isError
-        ? projectHermesArtifactReceipt(payload.result)
-        : undefined
-    const mediaArtifacts = isError
-      ? []
-      : projectHermesMediaArtifacts(toolCallId, tool.name, payload.result)
-    const questionResult =
-      tool.name === "question"
-        ? projectHermesQuestionResult(payload.result)
-        : undefined
     this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
     this.#emit(active, {
       type: EventType.TOOL_CALL_RESULT,
       messageId: `${tool.messageId}:tool:${toolCallId}`,
       toolCallId,
-      content: artifact
-        ? JSON.stringify(artifact.result)
-        : tool.name === "text_to_speech"
-          ? JSON.stringify({ status: isError ? "failed" : "completed" })
-          : questionResult
-            ? JSON.stringify(questionResult)
-            : JSON.stringify(projectHermesToolResult(payload.result, isError)),
+      content: JSON.stringify(outcome.result),
       role: "tool",
     })
     if (tool.name === "todo") {
       const todos = projectHermesTodos(payload.result)
       if (todos !== undefined) this.#emitPlan(active, todos)
     }
-    if (artifact)
+    for (const reference of outcome.trustedMedia)
+      active.mediaFilter.trust(reference)
+    for (const artifact of outcome.parts)
       this.#emit(active, {
         type: EventType.CUSTOM,
-        name: artifact.part.name,
-        value: artifact.part.data,
+        name: artifact.name,
+        value: artifact.data,
       })
-    for (const media of mediaArtifacts) {
-      active.mediaFilter.trust(media.reference)
-      this.#emit(active, {
-        type: EventType.CUSTOM,
-        name: "aos.artifact",
-        value: media.descriptor,
-      })
-    }
   }
 
   /**
@@ -1643,12 +1574,8 @@ export class HermesRunEngine {
     const messageId = this.#ensureMessageId(active)
     const nativeName = stableNativeId(payload.name)
     if (!nativeName) return undefined
-    const normalized = normalizedTool(nativeName, payload.args)
-    const tool = {
-      name: canonicalToolName(normalized.name),
-      ended: false,
-      messageId,
-    }
+    const projected = projectHermesToolCall(nativeName, payload.args)
+    const tool = { name: projected.toolName, ended: false, messageId }
     active.tools.set(toolCallId, tool)
     this.#emit(active, {
       type: EventType.TOOL_CALL_START,
@@ -1659,10 +1586,7 @@ export class HermesRunEngine {
     this.#emit(active, {
       type: EventType.TOOL_CALL_ARGS,
       toolCallId,
-      delta:
-        tool.name === "question"
-          ? JSON.stringify(projectHermesQuestionArgs(normalized.args) ?? {})
-          : safeToolArgs(tool.name, normalized.args),
+      delta: JSON.stringify(projected.args),
     })
     return tool
   }

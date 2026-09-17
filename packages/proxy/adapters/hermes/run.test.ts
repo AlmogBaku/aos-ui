@@ -21,12 +21,14 @@ import type {
   HermesRunNative,
   HermesSubmitPrompt,
 } from "./run-native"
+import { projectHermesHistory } from "./history"
 import {
   advisoryErrorThenComplete,
   failedToolThenRecovery,
   nativeTurn,
   terminalErrorThenIdle,
 } from "./test-utils/native-events"
+import { assistantToolCall, toolRow } from "./test-utils/history-rows"
 
 const scope = {
   agentId: "research",
@@ -1098,7 +1100,9 @@ describe("HermesRunEngine", () => {
       {
         type: EventType.TOOL_CALL_ARGS,
         toolCallId: "call-7",
-        delta: '{"goal":"Inspect"}',
+        // A delegated subagent always carries a description, exactly as the
+        // authoritative history projection records it.
+        delta: '{"goal":"Inspect","description":"Inspect"}',
       },
       { type: EventType.TOOL_CALL_END, toolCallId: "call-7" },
       {
@@ -5885,5 +5889,373 @@ describe("HermesRunEngine", () => {
       )
     ).toEqual(["Hello", " there"])
     expect(ofType(events, EventType.RUN_ERROR)).toEqual([])
+  })
+})
+
+/**
+ * One tool call, projected twice: once as it streams live through the engine and
+ * once as `history.ts` refreshes it from the authoritative durable rows. Both
+ * paths must agree on the public tool name, arguments, error classification,
+ * result content and artifact descriptors, so a change to either alone fails
+ * here.
+ */
+describe("live and refreshed Hermes tool projection agree", () => {
+  type ParityCall = {
+    toolCallId: string
+    name: string
+    args: Record<string, unknown>
+    result: unknown
+    isError?: boolean
+    /**
+     * The tool name Hermes records on the durable result row. It names the
+     * selected tool for a `tool_call` bridge call, so it may differ from the
+     * name the assistant row and the live frames carry.
+     */
+    resultName?: string
+  }
+
+  type ToolProjection = {
+    toolName: string
+    args: unknown
+    argsText: string
+    result: unknown
+    resultText: string
+    artifacts: unknown[]
+  }
+
+  async function liveProjection(call: ParityCall): Promise<ToolProjection> {
+    const attachment = observation()
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        submit: async () => {
+          const turn = nativeTurn("live-secret", 1)
+          for (const frame of [
+            turn.messageStart("message-parity"),
+            turn.toolStart(call.toolCallId, call.name, call.args),
+            turn.toolComplete(
+              call.toolCallId,
+              call.name,
+              call.result,
+              call.isError
+            ),
+            turn.complete("message-parity", ""),
+            turn.idle(),
+          ])
+            attachment.publish("live-secret", frame)
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+    const events = await collect(await engine.start(scope, input()))
+    const forCall = (type: EventType) =>
+      ofType(events, type).find(
+        (event) =>
+          (event as { toolCallId?: unknown }).toolCallId === call.toolCallId
+      ) as Record<string, unknown> | undefined
+    const argsText = String(forCall(EventType.TOOL_CALL_ARGS)?.delta ?? "")
+    const resultText = String(
+      forCall(EventType.TOOL_CALL_RESULT)?.content ?? ""
+    )
+    return {
+      toolName: String(forCall(EventType.TOOL_CALL_START)?.toolCallName ?? ""),
+      args: JSON.parse(argsText || "null"),
+      argsText,
+      result: JSON.parse(resultText || "null"),
+      resultText,
+      artifacts: ofType(events, EventType.CUSTOM)
+        .filter(
+          (event) => (event as { name?: unknown }).name === "aos.artifact"
+        )
+        .map((event) => (event as { value: unknown }).value),
+    }
+  }
+
+  function refreshedProjection(
+    call: ParityCall
+  ): ToolProjection & { isError: boolean } {
+    const messages = projectHermesHistory([
+      assistantToolCall("assistant-parity", [
+        { toolCallId: call.toolCallId, name: call.name, args: call.args },
+      ]),
+      toolRow(
+        call.toolCallId,
+        call.resultName ?? call.name,
+        call.result,
+        call.isError
+      ),
+    ])
+    const parts = (messages[0]?.content ?? []) as unknown as Record<
+      string,
+      unknown
+    >[]
+    const part = parts.find(
+      (candidate) =>
+        candidate.type === "tool-call" &&
+        candidate.toolCallId === call.toolCallId
+    )
+    return {
+      toolName: String(part?.toolName ?? ""),
+      args: part?.args ?? null,
+      argsText: String(part?.argsText ?? ""),
+      result: part?.result ?? null,
+      resultText: JSON.stringify(part?.result ?? null),
+      artifacts: parts
+        .filter(
+          (candidate) =>
+            candidate.type === "data" && candidate.name === "aos.artifact"
+        )
+        .map((candidate) => candidate.data),
+      isError: part?.isError === true,
+    }
+  }
+
+  async function parity(call: ParityCall) {
+    const live = await liveProjection(call)
+    const { isError, ...refreshed } = refreshedProjection(call)
+    expect(live).toEqual(refreshed)
+    return { projection: live, isError }
+  }
+
+  it("projects a published artifact receipt identically", async () => {
+    const { projection, isError } = await parity({
+      toolCallId: "artifact-parity",
+      name: "present_artifact",
+      args: {
+        id: "report-1",
+        title: "Report",
+        path: "/srv/hermes/private/report.md",
+      },
+      result: {
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: "report-1",
+          filename: "report.md",
+          path: "/srv/hermes/private/report.md",
+          mimeType: "text/markdown",
+          sizeBytes: 42,
+        },
+      },
+    })
+
+    expect(isError).toBe(false)
+    expect(projection.args).toEqual({ id: "report-1", title: "Report" })
+    expect(projection.result).toEqual({
+      ok: true,
+      type: "aos.artifact",
+      artifact: {
+        id: "report-1",
+        filename: "report.md",
+        mimeType: "text/markdown",
+        sizeBytes: 42,
+      },
+    })
+    expect(projection.artifacts).toEqual([
+      {
+        id: "report-1",
+        filename: "report.md",
+        mimeType: "text/markdown",
+        sizeBytes: 42,
+        source: { type: "provider", reference: "report-1" },
+      },
+    ])
+    expect(JSON.stringify(projection)).not.toContain("/srv/hermes")
+  })
+
+  it("collapses an unpublishable artifact receipt identically", async () => {
+    const { projection, isError } = await parity({
+      toolCallId: "artifact-unsafe-parity",
+      name: "present_artifact",
+      args: { path: "/srv/private/report.md" },
+      result: {
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: "/srv/private/report.md",
+          filename: "../report.md",
+          path: "/srv/private/report.md",
+        },
+      },
+    })
+
+    expect(isError).toBe(false)
+    expect(projection.args).toEqual({})
+    expect(projection.result).toEqual({ ok: true })
+    expect(projection.artifacts).toEqual([])
+    expect(JSON.stringify(projection)).not.toContain("/srv/private")
+  })
+
+  it("projects a text_to_speech receipt and its trusted media identically", async () => {
+    const audio = "/home/alice/voice-memos/out/brief.mp3"
+    const { projection, isError } = await parity({
+      toolCallId: "tts-parity",
+      name: "text_to_speech",
+      args: { text: "Quarterly update" },
+      result: {
+        success: true,
+        file_path: audio,
+        file_paths: [audio],
+        media_tag: `MEDIA:${audio}`,
+        provider: "edge",
+      },
+    })
+
+    expect(isError).toBe(false)
+    expect(projection.result).toEqual({ status: "completed" })
+    expect(projection.artifacts).toMatchObject([
+      { filename: "brief.mp3", mimeType: "audio/mpeg" },
+    ])
+    expect(JSON.stringify(projection)).not.toContain(audio)
+  })
+
+  it("classifies a failed text_to_speech receipt identically", async () => {
+    const { projection, isError } = await parity({
+      toolCallId: "tts-failed-parity",
+      name: "text_to_speech",
+      args: { text: "Quarterly update" },
+      result: { success: false, error: "voice unavailable" },
+    })
+
+    expect(isError).toBe(true)
+    expect(projection.result).toEqual({ status: "failed" })
+    expect(projection.artifacts).toEqual([])
+  })
+
+  it("projects a batched clarification and its recorded answers identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "clarify-parity",
+      name: "clarify",
+      args: {
+        questions: [
+          {
+            question: "Where do you live?",
+            choices: ["Jerusalem", "Tel Aviv"],
+            multi_select: false,
+          },
+        ],
+      },
+      result: {
+        responses: [
+          {
+            question: "Where do you live?",
+            choices_offered: ["Jerusalem", "Tel Aviv"],
+            user_response: JSON.stringify(["Jerusalem"]),
+          },
+        ],
+      },
+    })
+
+    expect(projection.toolName).toBe("question")
+    expect(projection.args).toEqual({
+      question: "1 question",
+      questions: [
+        {
+          question: "Where do you live?",
+          options: ["Jerusalem", "Tel Aviv"],
+          allowFreeform: false,
+          multiple: false,
+        },
+      ],
+      allowFreeform: true,
+    })
+    expect(projection.result).toEqual({
+      status: "answered",
+      responses: [{ question: "Where do you live?", answers: ["Jerusalem"] }],
+    })
+  })
+
+  it("normalizes a freeform clarification identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "clarify-freeform-parity",
+      name: "clarify",
+      args: { question: "Anything else?" },
+      result: {
+        responses: [
+          { question: "Anything else?", user_response: "Ship it tomorrow" },
+        ],
+      },
+    })
+
+    expect(projection.toolName).toBe("question")
+    expect(projection.args).toEqual({
+      question: "Anything else?",
+      allowFreeform: true,
+      multiple: false,
+    })
+    expect(projection.result).toEqual({
+      status: "answered",
+      responses: [
+        { question: "Anything else?", answers: ["Ship it tomorrow"] },
+      ],
+    })
+  })
+
+  it("drops a credential-shaped clarification answer identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "clarify-secret-parity",
+      name: "clarify",
+      args: { question: "Which token?" },
+      result: {
+        responses: [
+          {
+            question: "Which token?",
+            user_response: JSON.stringify(["api_key=sk-live-abcdef"]),
+          },
+        ],
+      },
+    })
+
+    expect(projection.result).toEqual({
+      status: "cancelled",
+      responses: [{ question: "Which token?", answers: [] }],
+    })
+    expect(JSON.stringify(projection)).not.toContain("sk-live")
+  })
+
+  it("applies the delegate_subagent description fallback identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "delegate-parity",
+      name: "delegate_task",
+      args: { goal: "Inspect the ledger" },
+      result: { ok: true },
+    })
+
+    expect(projection.toolName).toBe("delegate_subagent")
+    expect(projection.args).toEqual({
+      goal: "Inspect the ledger",
+      description: "Inspect the ledger",
+    })
+    expect(projection.result).toEqual({ ok: true })
+  })
+
+  it("unwraps a tool-search bridge call identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "bridge-parity",
+      name: "tool_call",
+      args: { name: "read_file", arguments: '{"path":"report.txt"}' },
+      result: "contents",
+      resultName: "read_file",
+    })
+
+    expect(projection.toolName).toBe("read_file")
+    expect(projection.args).toEqual({ path: "report.txt" })
+  })
+
+  it("keeps an oversized bridge envelope unwrapped identically", async () => {
+    const { projection } = await parity({
+      toolCallId: "bridge-oversized-parity",
+      name: "tool_call",
+      args: {
+        name: "read_file",
+        arguments: JSON.stringify({ note: "x".repeat(70_000) }),
+      },
+      result: "contents",
+    })
+
+    expect(projection.toolName).toBe("tool_call")
   })
 })

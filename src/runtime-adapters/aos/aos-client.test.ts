@@ -22,6 +22,22 @@ const catalog = {
   ],
 }
 
+/** The normalized failure fields a caller can observe, whatever the request. */
+async function normalizedFailure(
+  fetcher: typeof fetch,
+  operation: (client: AosRemoteClient) => Promise<unknown>
+) {
+  const client = new AosRemoteClient({ fetcher: vi.fn(fetcher) })
+  client.adoptSessionOwnership("session-1", "researcher")
+  try {
+    await operation(client)
+    return undefined
+  } catch (error) {
+    const { name, kind, message, code } = error as AosClientError
+    return { name, kind, message, code }
+  }
+}
+
 describe("provider-neutral AOS browser client", () => {
   it("uses a normalized error description instead of proxy response details", async () => {
     const client = new AosRemoteClient({
@@ -1135,4 +1151,53 @@ describe("provider-neutral AOS browser client", () => {
     await client.listSessions("researcher")
     expect(client.sessionStatus("session-1")).toBe("idle")
   })
+
+  it.each([
+    [
+      "an unreachable proxy",
+      async () => {
+        throw new TypeError("Failed to fetch")
+      },
+      {
+        name: "AosClientError",
+        kind: "connection-interrupted",
+        message: "AOS proxy request failed",
+        code: undefined,
+      },
+    ],
+    [
+      "an unavailable provider",
+      async () =>
+        Response.json(
+          {
+            error: {
+              code: "temporarily_unavailable",
+              description:
+                "The service is temporarily unavailable. Please try again.",
+            },
+          },
+          { status: 503 }
+        ),
+      {
+        name: "AosClientError",
+        kind: "provider-unavailable",
+        message: "The service is temporarily unavailable. Please try again.",
+        code: "temporarily_unavailable",
+      },
+    ],
+  ] satisfies Array<[string, typeof fetch, Record<string, unknown>]>)(
+    "reports %s the same way for a Session write as for a Session read",
+    async (_name, fetcher, expected) => {
+      expect(
+        await normalizedFailure(fetcher, (client) =>
+          client.deleteSession("session-1")
+        )
+      ).toEqual(expected)
+      expect(
+        await normalizedFailure(fetcher, (client) =>
+          client.getSession("session-1")
+        )
+      ).toEqual(expected)
+    }
+  )
 })

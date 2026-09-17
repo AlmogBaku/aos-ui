@@ -5,8 +5,28 @@ import {
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
 import type { RuntimeInstance, ServerRuntime } from "../core/runtime"
+import type { SessionExecutionState } from "../core/session-coordinator"
 import { boundedJson, errorResponse, pageQuery } from "./http"
 import type { ProxyRouteApp } from "./types"
+
+/**
+ * The public Session status an observed execution derives. `undefined` means
+ * the execution says nothing, leaving the answer to the caller's own idle
+ * authority: the provider status on a Session read, `idle` on a history load.
+ */
+function executionStatus(state: SessionExecutionState) {
+  switch (state) {
+    case "waiting-for-input":
+      return "waiting-for-input" as const
+    case "running":
+    case "stopping":
+      return "running" as const
+    case "uncertain":
+      return "failed" as const
+    default:
+      return undefined
+  }
+}
 
 function sessionStatus(
   options: ProxyAppOptions,
@@ -19,17 +39,7 @@ function sessionStatus(
     agentId: session.agentId,
     sessionId,
   })
-  return {
-    ...session,
-    status:
-      state === "waiting-for-input"
-        ? ("waiting-for-input" as const)
-        : state === "running" || state === "stopping"
-          ? ("running" as const)
-          : state === "uncertain"
-            ? ("failed" as const)
-            : session.status,
-  }
+  return { ...session, status: executionStatus(state) ?? session.status }
 }
 
 export async function loadSessionHistory(
@@ -71,14 +81,7 @@ export async function loadSessionHistory(
   return {
     ...history,
     execution: {
-      status:
-        execution.state === "waiting-for-input"
-          ? "waiting-for-input"
-          : execution.state === "running" || execution.state === "stopping"
-            ? "running"
-            : execution.state === "uncertain"
-              ? "failed"
-              : "idle",
+      status: executionStatus(execution.state) ?? "idle",
       ...(execution.state === "idle" ? {} : { runId: execution.runId }),
     },
   }

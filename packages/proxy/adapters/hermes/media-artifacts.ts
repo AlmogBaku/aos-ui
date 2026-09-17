@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto"
-import { isRecord } from "./native"
+import {
+  containsPrivateValue,
+  isRecord,
+  parseJson,
+  trimmedText,
+  utf8BytesWithin,
+} from "./native"
 
 type HermesMediaArtifact = {
   reference: string
@@ -32,13 +38,8 @@ const POSSIBLE_MEDIA_PREFIX =
 const MAX_MEDIA_LINE_BYTES = 4_112
 
 function parsedRecord(value: unknown) {
-  if (typeof value !== "string") return isRecord(value) ? value : undefined
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return isRecord(parsed) ? parsed : undefined
-  } catch {
-    return undefined
-  }
+  const parsed = parseJson(value)
+  return isRecord(parsed) ? parsed : undefined
 }
 
 function mediaReference(line: string) {
@@ -49,7 +50,7 @@ function safeAudioReference(reference: string) {
   if (
     reference !== reference.trim() ||
     !reference ||
-    Buffer.byteLength(reference, "utf8") > 4_096 ||
+    utf8BytesWithin(reference, 4_096) === undefined ||
     [...reference].some((character) => {
       const code = character.charCodeAt(0)
       return code < 32 || code === 127
@@ -61,7 +62,7 @@ function safeAudioReference(reference: string) {
     !filename ||
     filename === "." ||
     filename === ".." ||
-    Buffer.byteLength(filename, "utf8") > 255
+    utf8BytesWithin(filename, 255) === undefined
   )
     return undefined
   const extension = filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
@@ -188,7 +189,7 @@ export class HermesMediaTextFilter {
         (POSSIBLE_MEDIA_PREFIX.test(this.#pending) ||
           MEDIA_DIRECTIVE_PREFIX.test(this.#pending))
       ) {
-        if (Buffer.byteLength(this.#pending, "utf8") <= MAX_MEDIA_LINE_BYTES)
+        if (utf8BytesWithin(this.#pending, MAX_MEDIA_LINE_BYTES) !== undefined)
           break
         output += "[Media unavailable]"
         this.#pending = ""
@@ -213,24 +214,6 @@ export function projectHermesMediaText(
 // ---------------------------------------------------------------------------
 // Published `aos.artifact` receipts
 // ---------------------------------------------------------------------------
-
-const credentialValue =
-  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
-const privateLocationValue =
-  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
-
-/**
- * True when a native string looks like a credential or a private filesystem or
- * internal-network location. Shared by artifact receipts and history tool
- * projection so one rule decides what may leave the adapter.
- */
-export function containsPrivateValue(value: string) {
-  return credentialValue.test(value) || privateLocationValue.test(value)
-}
-
-function trimmedString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 
 function safeArtifactToken(value: string, maxLength: number) {
   return (
@@ -257,9 +240,9 @@ export function projectHermesArtifactReceipt(raw: unknown) {
     return undefined
   const artifact = value.artifact
   if (!isRecord(artifact)) return undefined
-  const id = trimmedString(artifact.id)
-  const filename = trimmedString(artifact.filename)
-  const mimeType = trimmedString(artifact.mimeType)
+  const id = trimmedText(artifact.id)
+  const filename = trimmedText(artifact.filename)
+  const mimeType = trimmedText(artifact.mimeType)
   const sizeBytes = artifact.sizeBytes
   if (
     !id ||
@@ -306,8 +289,8 @@ export function publishedArtifact(
     const row = rows[index]
     if (!isRecord(row)) continue
     if (row.role === "tool") {
-      const toolCallId = trimmedString(row.tool_call_id ?? row.toolCallId)
-      const toolName = trimmedString(row.tool_name ?? row.toolName)
+      const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId)
+      const toolName = trimmedText(row.tool_name ?? row.toolName)
       if (toolCallId && toolName)
         for (const media of projectHermesMediaArtifacts(
           toolCallId,
@@ -323,9 +306,9 @@ export function publishedArtifact(
     const value = parsedRecord(row.content ?? row.result)
     if (!value || value.ok !== true || value.type !== "aos.artifact") continue
     const artifact = isRecord(value.artifact) ? value.artifact : undefined
-    const id = trimmedString(artifact?.id)
-    const reference = trimmedString(artifact?.path)
-    const filename = trimmedString(artifact?.filename)
+    const id = trimmedText(artifact?.id)
+    const reference = trimmedText(artifact?.path)
+    const filename = trimmedText(artifact?.filename)
     if (
       id !== artifactId ||
       !reference ||

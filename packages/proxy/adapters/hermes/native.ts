@@ -59,6 +59,29 @@ export function trimmedText(value: unknown) {
 }
 
 // ---------------------------------------------------------------------------
+// Redaction predicates
+// ---------------------------------------------------------------------------
+
+const CREDENTIAL_VALUE =
+  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
+const PRIVATE_LOCATION_VALUE =
+  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
+
+/** True when a native string carries a credential-shaped secret. */
+export function containsCredentialValue(value: string) {
+  return CREDENTIAL_VALUE.test(value)
+}
+
+/**
+ * True when a native string looks like a credential or a private filesystem or
+ * internal-network location. The one rule deciding what may leave the adapter,
+ * shared by tool projection and artifact receipts.
+ */
+export function containsPrivateValue(value: string) {
+  return containsCredentialValue(value) || PRIVATE_LOCATION_VALUE.test(value)
+}
+
+// ---------------------------------------------------------------------------
 // UTF-8 byte helpers
 // ---------------------------------------------------------------------------
 

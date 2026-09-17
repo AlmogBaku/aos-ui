@@ -123,6 +123,11 @@ export class AosClientError extends Error {
   }
 }
 
+/** A proxy reply the browser cannot trust: never disclosed beyond this shape. */
+function invalidResponse() {
+  return new AosClientError("proxy-failure", "Invalid AOS proxy response")
+}
+
 export type AosRemoteClientOptions = {
   fetcher?: typeof fetch
   basePath?: string
@@ -710,27 +715,15 @@ export class AosRemoteClient implements WorkspaceAdapter {
       this.#sessionOwners.set(options.scope.sessionId, options.scope.agentId)
   }
 
-  async #read<T>(
-    path: string,
-    schema: Schema<T>,
-    init?: RequestInit,
-    scope?: AosEventScope
-  ): Promise<T> {
-    const operation = () => this.#readDirect(path, schema, init)
-    return scope && this.#reconciler
-      ? this.#reconciler.read(scope, operation)
-      : operation()
-  }
-
-  async #readDirect<T>(
-    path: string,
-    schema: Schema<T>,
-    init?: RequestInit
-  ): Promise<T> {
+  /**
+   * The one normalized proxy request: shared credentials and authorization,
+   * and one failure mapping every caller reports identically.
+   */
+  async #request(path: string, accept: string, init?: RequestInit) {
     let response: Response
     try {
       const headers = new Headers(init?.headers)
-      headers.set("accept", "application/json")
+      headers.set("accept", accept)
       if (this.#authorization) headers.set("authorization", this.#authorization)
       response = await this.#fetch(`${this.#basePath}${path}`, {
         ...init,
@@ -748,15 +741,42 @@ export class AosRemoteClient implements WorkspaceAdapter {
         error?.code
       )
     }
+    return response
+  }
+
+  /** Reads observed by an opened Session reconcile; every other read is direct. */
+  #reconciled<T>(
+    scope: AosEventScope | undefined,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    return scope && this.#reconciler
+      ? this.#reconciler.read(scope, operation)
+      : operation()
+  }
+
+  async #read<T>(
+    path: string,
+    schema: Schema<T>,
+    init?: RequestInit,
+    scope?: AosEventScope
+  ): Promise<T> {
+    return this.#reconciled(scope, () => this.#readDirect(path, schema, init))
+  }
+
+  async #readDirect<T>(
+    path: string,
+    schema: Schema<T>,
+    init?: RequestInit
+  ): Promise<T> {
+    const response = await this.#request(path, "application/json", init)
     let payload: unknown
     try {
       payload = await response.json()
     } catch {
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      throw invalidResponse()
     }
     const parsed = schema.safeParse(payload)
-    if (!parsed.success)
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+    if (!parsed.success) throw invalidResponse()
     return parsed.data
   }
 
@@ -1515,26 +1535,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   async #writeVoid(path: string, init: RequestInit) {
-    let response: Response
-    try {
-      const headers = new Headers(init.headers)
-      headers.set("accept", "application/json")
-      if (this.#authorization) headers.set("authorization", this.#authorization)
-      response = await this.#fetch(`${this.#basePath}${path}`, {
-        ...init,
-        credentials: "same-origin",
-        headers,
-      })
-    } catch {
-      throw new Error("AOS proxy request failed")
-    }
-    if (!response.ok) {
-      const error = await normalizedError(response)
-      throw new AosClientError(
-        response.status === 503 ? "provider-unavailable" : "proxy-failure",
-        error?.description
-      )
-    }
+    await this.#request(path, "application/json", init)
   }
 
   #sessionPath(threadId: string, suffix: string) {
@@ -1564,40 +1565,20 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   async #readBlob(path: string, init?: RequestInit, scope?: AosEventScope) {
-    const operation = async () => {
-      let response: Response
-      try {
-        const headers = new Headers(init?.headers)
-        headers.set("accept", "application/octet-stream")
-        if (this.#authorization)
-          headers.set("authorization", this.#authorization)
-        response = await this.#fetch(`${this.#basePath}${path}`, {
-          ...init,
-          credentials: "same-origin",
-          headers,
-        })
-      } catch {
-        throw new AosClientError("connection-interrupted")
-      }
-      if (!response.ok) {
-        const error = await normalizedError(response)
-        throw new AosClientError(
-          response.status === 503 ? "provider-unavailable" : "proxy-failure",
-          error?.description
-        )
-      }
+    return this.#reconciled(scope, async () => {
+      const response = await this.#request(
+        path,
+        "application/octet-stream",
+        init
+      )
       const contentType = response.headers.get("content-type")
-      if (!contentType || /[\r\n]/u.test(contentType))
-        throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      if (!contentType || /[\r\n]/u.test(contentType)) throw invalidResponse()
       try {
         return await response.blob()
       } catch {
-        throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+        throw invalidResponse()
       }
-    }
-    return scope && this.#reconciler
-      ? this.#reconciler.read(scope, operation)
-      : operation()
+    })
   }
 
   #rememberSession(session: Session) {

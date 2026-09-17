@@ -81,6 +81,19 @@ async function settleMicrotasks() {
   for (let index = 0; index < 100; index += 1) await Promise.resolve()
 }
 
+/**
+ * Drives the stream on the fake clock alone: every step drains the queues the
+ * response bodies settle on and fires the timers already due, so no assertion
+ * depends on how quickly the host happens to schedule them.
+ */
+async function advanceUntil(ready: () => boolean, description: string) {
+  for (let index = 0; index < 200; index += 1) {
+    if (ready()) return
+    await vi.advanceTimersByTimeAsync(0)
+  }
+  throw new Error(`The fake clock never reached ${description}`)
+}
+
 function bodyOf(call: Parameters<typeof fetch> | undefined) {
   return JSON.parse(String(call?.[1]?.body)) as Record<string, unknown>
 }
@@ -224,6 +237,9 @@ describe("AOS run stream reconnect policy", () => {
 
   it("returns silently when the caller aborts during a reconnect backoff", async () => {
     vi.useFakeTimers()
+    // A fixed jitter draw keeps the second redial parked in a backoff window
+    // the clock below never reaches, so the abort always lands inside it.
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(sse(["id: 41", started, unsettled()]))
@@ -237,11 +253,18 @@ describe("AOS run stream reconnect policy", () => {
     })
 
     const pending = collect(agent, runInput)
-    await settleMicrotasks()
+    let complete = false
+    const settled = pending.finally(() => {
+      complete = true
+    })
+    await advanceUntil(
+      () => fetcher.mock.calls.length === 2 && vi.getTimerCount() > 0,
+      "a redial waiting out its backoff"
+    )
     expect(fetcher).toHaveBeenCalledTimes(2)
     agent.abortRun()
-    await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY_MS * 4)
-    const events = await pending
+    await advanceUntil(() => complete, "the aborted run stream ending")
+    const events = await settled
 
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(

@@ -19,7 +19,13 @@ import {
   type HermesLog,
   type ServerRequest,
 } from "./gateway"
-import { isRecord, nativeId, publicReason, utf8BytesWithin } from "./native"
+import {
+  isRecord,
+  nativeId,
+  parseJson,
+  publicReason,
+  utf8BytesWithin,
+} from "./native"
 
 export type HermesInteractionScope = {
   agentId: string
@@ -385,12 +391,9 @@ function lockAnswers(answers: unknown, questions: Question[]) {
       invalidNative()
     let nativeAnswers: string[]
     if (question.multiple) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(encoded)
-      } catch {
-        invalidNative()
-      }
+      // A native answer list that is not JSON parses to `undefined`, which the
+      // array check below rejects like any other invalid shape.
+      const parsed = parseJson(encoded)
       if (
         !Array.isArray(parsed) ||
         parsed.some(

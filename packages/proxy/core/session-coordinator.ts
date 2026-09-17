@@ -59,21 +59,70 @@ export type SessionCoordinatorOptions = {
   maxReplayBytes: number
 }
 
+/**
+ * The one replay store of a run segment: every event it delivered, keyed by run
+ * sequence, so a cursor-bearing redial and a cursorless reload read the same
+ * history. Adjacent deltas merge only when the journal is read, which keeps a
+ * cursor exact and still spares a reload thousands of single-character events.
+ */
+type SegmentJournal = {
+  entries: SequencedRunEvent[]
+  /** Bytes a replay of the whole journal occupies once deltas merge. */
+  bytes: number
+  /** Events a replay of the whole journal emits once deltas merge. */
+  events: number
+  /**
+   * The compacted trailing event of the journal. A delta that merges into it
+   * replaces its bytes instead of adding a whole event, so both bounds measure
+   * the replay a subscriber actually receives.
+   */
+  tail?: { event: AGUIEvent; bytes: number }
+  /** The journal holds the run from its first event, so a reload replays it. */
+  fromStart: boolean
+}
+
 type Segment = {
   cacheKey: string
   runId: string
   handle: ServerRunHandle
   fanout: SubscriberFanout<SequencedRunEvent>
-  journal?: {
-    replay: Array<{ value: SequencedRunEvent; bytes: number }>
-    replayBytes: number
-  }
-  replay: Array<{ value: SequencedRunEvent; bytes: number }>
-  replayBytes: number
-  replayOverflow: boolean
+  journal?: SegmentJournal
   nextSequence: number
   terminal: boolean
   interrupts: Interrupt[]
+  onTerminal?: (event: AGUIEvent) => void | Promise<void>
+}
+
+/** How a segment relates to the replayable history of its run. */
+type SegmentHistory =
+  /** First segment of a run: its own journal, its own sequence. */
+  | { journal: "start" }
+  /** Later segment of the same run: continues the replaced segment's journal. */
+  | { journal: "continue"; previous?: Segment }
+  /** A provider run AOS never streamed from its beginning. */
+  | { journal: "none" }
+
+function freshJournal(fromStart: boolean): SegmentJournal {
+  return { entries: [], bytes: 0, events: 0, fromStart }
+}
+
+/**
+ * A segment inherits the journal of the segment it replaces, so one run keeps
+ * one replayable history and one monotonic sequence. A segment that joins a run
+ * already in progress starts an empty journal a reload must not replay as the
+ * beginning of that run.
+ */
+function segmentJournal(history: SegmentHistory): SegmentJournal {
+  if (history.journal === "continue" && history.previous)
+    return history.previous.journal ?? freshJournal(false)
+  return freshJournal(history.journal !== "none")
+}
+
+type SegmentInit = {
+  cacheKey: string
+  runId: string
+  handle: ServerRunHandle
+  history: SegmentHistory
   onTerminal?: (event: AGUIEvent) => void | Promise<void>
 }
 
@@ -92,8 +141,47 @@ type Execution = {
   >
 }
 
+/** Every field one admitted turn owns, shared by a new and a restarted one. */
+type AdmittedTurn = Pick<
+  Execution,
+  | "state"
+  | "admissionId"
+  | "admissionFingerprint"
+  | "segment"
+  | "control"
+  | "steeringRequests"
+>
+
+type TurnInit = {
+  state: SessionExecutionState
+  runId: string
+  /** Exact admission request this turn is fingerprinted from. */
+  request: unknown
+  segment: Segment
+}
+
+type ExecutionInit = TurnInit & {
+  scope: SessionScope
+  startedByLane: "operator" | "guest"
+  controllers?: readonly string[]
+}
+
+/**
+ * One place decides what admitting a turn means, so a field can never be
+ * threaded at three construction sites and forgotten at the fourth.
+ */
+function admittedTurn(init: TurnInit): AdmittedTurn {
+  return {
+    state: init.state,
+    admissionId: init.runId,
+    admissionFingerprint: admissionFingerprint(init.request),
+    segment: init.segment,
+    control: Promise.resolve(),
+    steeringRequests: new Map(),
+  }
+}
+
 const MAX_STEERING_REQUESTS_PER_EXECUTION = 256
-const MAX_ACTIVE_RUN_JOURNALS = 5
 
 function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\u0000${scope.sessionId}`
@@ -144,6 +232,51 @@ function compactedEvent(
   return undefined
 }
 
+/**
+ * The events a subscriber positioned at `after` must receive from a journal:
+ * adjacent deltas merge, so a reload replays one event per message instead of
+ * one per token, and a cursor never repeats a delta already delivered.
+ */
+function compactedReplay(
+  entries: readonly SequencedRunEvent[],
+  after: number
+): SequencedRunEvent[] {
+  const replay: SequencedRunEvent[] = []
+  let runStarted = false
+  for (const value of entries) {
+    if (value.sequence <= after) continue
+    // One run replays as one run: a recovered segment repeats RUN_STARTED, and
+    // a second one would make the replay an invalid AG-UI stream.
+    if (value.event.type === EventType.RUN_STARTED) {
+      if (runStarted) continue
+      runStarted = true
+    }
+    const previous = replay.at(-1)
+    const compacted = previous
+      ? compactedEvent(previous.event, value.event)
+      : undefined
+    if (compacted) replay[replay.length - 1] = { ...value, event: compacted }
+    else replay.push(value)
+  }
+  return replay
+}
+
+/**
+ * Whether one journal can still answer a subscriber positioned at `after`.
+ *
+ * A cursorless reload owns no part of the run, so only a journal that holds the
+ * run from its first event answers it. A cursor of zero comes from a browser
+ * that owns no events either: a fresh reader, or one that just reloaded the
+ * authoritative history after a reset, so a segment that is still streaming
+ * answers it from its live events alone. Any other cursor needs the journal to
+ * prove the events after it are contiguous.
+ */
+function replayable(segment: Segment, after: number | undefined) {
+  if (after === undefined) return segment.journal?.fromStart === true
+  if (segment.journal) return true
+  return after === 0 && !segment.terminal
+}
+
 function admissionFingerprint(value: unknown): string {
   const canonical = (candidate: unknown): unknown => {
     if (Array.isArray(candidate)) return candidate.map(canonical)
@@ -186,6 +319,21 @@ function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
     expected.every((id) => received.includes(id)) &&
     new Set(received).size === received.length
   )
+}
+
+/**
+ * A provider stream can end without a terminal AG-UI event. The provider's own
+ * settlement decides the turn then; only an unresolved one stays uncertain.
+ * One macrotask lets a settlement raced with the stream ending arrive first.
+ */
+function settledNow(settled: Promise<void>) {
+  return Promise.race([
+    settled.then(
+      () => true,
+      () => false
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0)),
+  ])
 }
 
 function uncertainError(event: AGUIEvent) {
@@ -274,29 +422,25 @@ export class SessionCoordinator {
         }
         return undefined
       }
-      const segment = this.#segment(
-        key,
+      const segment = this.#createSegment({
+        cacheKey: key,
         runId,
-        discovered.handle,
-        undefined,
-        false
-      )
+        handle: discovered.handle,
+        // AOS never saw this run start, so it has nothing to replay.
+        history: { journal: "none" },
+      })
       this.#trackJournal(segment)
       segment.interrupts = structuredClone(discovered.interrupts ?? [])
-      const execution: Execution = existing ?? {
-        scope,
-        state: discovered.state,
-        admissionId: runId,
-        admissionFingerprint: admissionFingerprint({
-          threadId: scope.threadId,
+      const execution: Execution =
+        existing ??
+        this.#createExecution({
+          scope,
+          state: discovered.state,
           runId,
-        }),
-        startedByLane: "operator",
-        controllers: new Set(),
-        segment,
-        control: Promise.resolve(),
-        steeringRequests: new Map(),
-      }
+          request: { threadId: scope.threadId, runId },
+          startedByLane: "operator",
+          segment,
+        })
       if (existing) {
         this.#forgetJournal(existing.segment)
         existing.segment.fanout.close()
@@ -356,17 +500,21 @@ export class SessionCoordinator {
         input,
         ...(attachments ? [attachments] : [])
       )
-      const execution: Execution = {
+      const execution: Execution = this.#createExecution({
         scope,
         state: "running",
-        admissionId: input.runId,
-        admissionFingerprint: admissionFingerprint(input),
+        runId: input.runId,
+        request: input,
         startedByLane: access.lane,
-        controllers: new Set(access.canControl ? [access.controllerId] : []),
-        segment: this.#segment(key, input.runId, handle, access.onTerminal),
-        control: Promise.resolve(),
-        steeringRequests: new Map(),
-      }
+        controllers: access.canControl ? [access.controllerId] : [],
+        segment: this.#createSegment({
+          cacheKey: key,
+          runId: input.runId,
+          handle,
+          history: { journal: "start" },
+          onTerminal: access.onTerminal,
+        }),
+      })
       this.#executions.set(key, execution)
       this.#trackJournal(execution.segment)
       this.#consume(execution, execution.segment)
@@ -387,24 +535,14 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (
-      request.after === undefined &&
       existing?.segment.runId === request.runId &&
       existing.state !== "uncertain"
     ) {
-      if (!existing.segment.journal)
+      if (!replayable(existing.segment, request.after))
         return this.#resetSubscription(existing.segment, access)
       if (access.canControl) existing.controllers.add(access.controllerId)
       this.#touchJournal(existing.segment)
-      return this.#subscribeJournal(existing.segment, access)
-    }
-    const after = request.after ?? 0
-    if (
-      existing?.segment.runId === request.runId &&
-      !existing.segment.replayOverflow &&
-      existing.state !== "uncertain"
-    ) {
-      if (access.canControl) existing.controllers.add(access.controllerId)
-      return this.#subscribe(existing.segment, after, access)
+      return this.#subscribe(existing.segment, request.after ?? 0, access)
     }
 
     if (existing && existing.segment.runId !== request.runId)
@@ -412,8 +550,14 @@ export class SessionCoordinator {
     const recovered = await this.#recovery(scope, request, access, existing)
     if (recovered.segment.runId !== request.runId)
       throw new ServerRunConflictError()
+    // A recovery that replaced a known execution continues its sequence, so the
+    // browser cursor still applies. A recovery of a run this coordinator never
+    // streamed numbers the segment from one, and that cursor means nothing.
+    const after = existing ? request.after : undefined
+    if (!replayable(recovered.segment, after))
+      return this.#resetSubscription(recovered.segment, access)
     if (access.canControl) recovered.controllers.add(access.controllerId)
-    return this.#subscribe(recovered.segment, 0, access)
+    return this.#subscribe(recovered.segment, after ?? 0, access)
   }
 
   #recovery(
@@ -482,33 +626,26 @@ export class SessionCoordinator {
       }
       const handle = await this.options.engine.recover(scope, providerRequest)
       const replaced = existing?.segment
-      const segment = this.#segment(
-        key,
-        request.runId,
+      const segment = this.#createSegment({
+        cacheKey: key,
+        runId: request.runId,
         handle,
-        replaced?.onTerminal,
-        false
-      )
-      if (replaced) {
         // One run keeps one journal and one monotonic sequence across its
         // segments: a browser cursor can never skip a recovered event.
-        segment.journal = replaced.journal
-        segment.nextSequence = replaced.nextSequence
-        this.#forgetJournal(replaced)
-      }
-      const execution: Execution = existing
-        ? existing
-        : {
-            scope,
-            state: "running",
-            admissionId: request.runId,
-            admissionFingerprint: admissionFingerprint(providerRequest),
-            startedByLane: access.lane,
-            controllers: new Set<string>(),
-            segment,
-            control: Promise.resolve(),
-            steeringRequests: new Map(),
-          }
+        history: { journal: "continue", previous: replaced },
+        onTerminal: replaced?.onTerminal,
+      })
+      if (replaced) this.#forgetJournal(replaced)
+      const execution: Execution =
+        existing ??
+        this.#createExecution({
+          scope,
+          state: "running",
+          runId: request.runId,
+          request: providerRequest,
+          startedByLane: access.lane,
+          segment,
+        })
       if (existing) existing.segment.fanout.close()
       execution.state = "running"
       execution.segment = segment
@@ -620,14 +757,23 @@ export class SessionCoordinator {
     this.#admissions.add(key)
     try {
       const handle = await this.options.engine.start(execution.scope, input)
-      const segment = this.#segment(key, input.runId, handle)
+      const segment = this.#createSegment({
+        cacheKey: key,
+        runId: input.runId,
+        handle,
+        history: { journal: "start" },
+      })
       this.#forgetJournal(execution.segment)
-      execution.segment = segment
-      execution.control = Promise.resolve()
-      execution.steeringRequests = new Map()
-      execution.admissionId = input.runId
-      execution.admissionFingerprint = admissionFingerprint(input)
-      execution.state = "running"
+      // A resumed turn is a fresh admission on the same execution record.
+      Object.assign(
+        execution,
+        admittedTurn({
+          state: "running",
+          runId: input.runId,
+          request: input,
+          segment,
+        })
+      )
       if (access.canControl) execution.controllers.add(access.controllerId)
       this.#trackJournal(segment)
       this.#consume(execution, segment)
@@ -637,30 +783,32 @@ export class SessionCoordinator {
     }
   }
 
-  #segment(
-    cacheKey: string,
-    runId: string,
-    handle: ServerRunHandle,
-    onTerminal?: (event: AGUIEvent) => void | Promise<void>,
-    journalComplete = true
-  ): Segment {
+  #createExecution(init: ExecutionInit): Execution {
     return {
-      cacheKey,
-      runId,
-      handle,
+      scope: init.scope,
+      startedByLane: init.startedByLane,
+      controllers: new Set(init.controllers ?? []),
+      ...admittedTurn(init),
+    }
+  }
+
+  #createSegment(init: SegmentInit): Segment {
+    const previous =
+      init.history.journal === "continue" ? init.history.previous : undefined
+    return {
+      cacheKey: init.cacheKey,
+      runId: init.runId,
+      handle: init.handle,
       fanout: new SubscriberFanout<SequencedRunEvent>({
         maxEvents: this.options.maxSubscriberEvents,
         maxBytes: this.options.maxSubscriberBytes,
         sizeOf: ({ event }) => safeEventBytes(event),
       }),
-      journal: journalComplete ? { replay: [], replayBytes: 0 } : undefined,
-      replay: [],
-      replayBytes: 0,
-      replayOverflow: false,
-      nextSequence: 0,
+      journal: segmentJournal(init.history),
+      nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
       interrupts: [],
-      ...(onTerminal ? { onTerminal } : {}),
+      ...(init.onTerminal ? { onTerminal: init.onTerminal } : {}),
     }
   }
 
@@ -686,8 +834,7 @@ export class SessionCoordinator {
           // A recoverable interrupt is not part of the run: journaling it would
           // replay a failure the provider never reported.
           const interrupted = uncertainError(event)
-          if (!interrupted) this.#rememberJournal(segment, sequenced)
-          this.#remember(segment, sequenced)
+          if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           if (event.type === EventType.RUN_FINISHED) {
             this.#forgetJournal(segment)
@@ -710,67 +857,51 @@ export class SessionCoordinator {
           }
         }
       } catch {
-        if (execution.segment === segment) execution.state = "uncertain"
+        // A stream that throws ended like any other stream without a terminal
+        // event: the provider's settlement below is what decides the turn.
       } finally {
-        if (!terminal && execution.segment === segment)
-          execution.state = "uncertain"
         segment.fanout.close()
+        if (!terminal && execution.segment === segment) {
+          const settled = await settledNow(segment.handle.settled)
+          if (execution.segment === segment)
+            execution.state = settled ? "idle" : "uncertain"
+        }
       }
     })()
   }
 
+  /**
+   * A run that outgrows either replay bound loses its journal. A subscriber the
+   * rest of the segment cannot answer is then sent one reset instead of a
+   * partial history.
+   */
   #remember(segment: Segment, value: SequencedRunEvent) {
-    if (segment.replayOverflow) return
-    const bytes = safeEventBytes(value.event)
-    if (
-      !Number.isSafeInteger(bytes) ||
-      bytes > this.options.maxReplayBytes ||
-      segment.replay.length >= this.options.maxReplayEvents ||
-      segment.replayBytes + bytes > this.options.maxReplayBytes
-    ) {
-      segment.replayOverflow = true
-      segment.replay.splice(0)
-      segment.replayBytes = 0
-      return
-    }
-    segment.replay.push({ value, bytes })
-    segment.replayBytes += bytes
-  }
-
-  #rememberJournal(segment: Segment, value: SequencedRunEvent) {
     const journal = segment.journal
     if (!journal) return
-    // One run replays as one run: a recovered segment repeats RUN_STARTED, and
-    // a second one would make the journal an invalid AG-UI stream.
-    if (
-      value.event.type === EventType.RUN_STARTED &&
-      journal.replay.some(
-        ({ value: journaled }) => journaled.event.type === EventType.RUN_STARTED
-      )
-    )
-      return
-    const previous = journal.replay.at(-1)
-    const compacted = previous
-      ? compactedEvent(previous.value.event, value.event)
+    const previous = journal.tail
+    const merged = previous
+      ? compactedEvent(previous.event, value.event)
       : undefined
-    const bytes = safeEventBytes(compacted ?? value.event)
-    const nextBytes = compacted
-      ? journal.replayBytes - previous!.bytes + bytes
-      : journal.replayBytes + bytes
+    // A merged delta extends the trailing event of the replay, so it costs the
+    // growth of that event and not another whole event.
+    const tail = merged
+      ? { event: merged, bytes: safeEventBytes(merged) }
+      : { event: value.event, bytes: safeEventBytes(value.event) }
+    const bytes =
+      journal.bytes - (merged && previous ? previous.bytes : 0) + tail.bytes
+    const events = journal.events + (merged ? 0 : 1)
     if (
-      !Number.isSafeInteger(bytes) ||
-      bytes > this.options.maxReplayBytes ||
-      nextBytes > this.options.maxReplayBytes
+      !Number.isSafeInteger(tail.bytes) ||
+      events > this.options.maxReplayEvents ||
+      bytes > this.options.maxReplayBytes
     ) {
-      segment.journal = undefined
-      this.#journals.delete(segment.cacheKey)
+      this.#forgetJournal(segment)
       return
     }
-    if (compacted && previous) {
-      previous.value = { sequence: value.sequence, event: compacted }
-      previous.bytes = bytes
-    } else journal.replay.push({ value, bytes })
-    journal.replayBytes = nextBytes
+    journal.entries.push(value)
+    journal.bytes = bytes
+    journal.events = events
+    journal.tail = tail
     this.#touchJournal(segment)
   }
 
@@ -780,7 +911,11 @@ export class SessionCoordinator {
     if (previous && previous !== segment) previous.journal = undefined
     this.#journals.delete(segment.cacheKey)
     this.#journals.set(segment.cacheKey, segment)
-    while (this.#journals.size > MAX_ACTIVE_RUN_JOURNALS) {
+    // One Session streams one run at a time and every journal is bounded on its
+    // own, so the execution limit bounds the journals a browser can still be
+    // reading. A live run is journaling events, which keeps it recently used,
+    // so what this trims is the leftover of a Session nobody is streaming.
+    while (this.#journals.size > this.options.maxActiveExecutions) {
       const oldestKey = this.#journals.keys().next().value
       if (oldestKey === undefined) break
       const oldest = this.#journals.get(oldestKey)
@@ -803,7 +938,6 @@ export class SessionCoordinator {
 
   #publish(segment: Segment, event: AGUIEvent) {
     const sequenced = { sequence: ++segment.nextSequence, event }
-    this.#rememberJournal(segment, sequenced)
     this.#remember(segment, sequenced)
     segment.fanout.publish(sequenced)
   }
@@ -817,19 +951,22 @@ export class SessionCoordinator {
     return result
   }
 
+  /**
+   * One subscribe path for every browser: the journal answers from `after` (0
+   * for a reload that owns nothing yet), then the live stream continues.
+   */
   #subscribe(segment: Segment, after: number, access: CoordinatorAccess) {
     const project = (value: SequencedRunEvent) => {
       const event = access.project ? access.project(value.event) : value.event
       return event ? { sequence: value.sequence, event } : undefined
     }
     const live = segment.fanout.subscribe(project, access.onDetach)
-    const replay = segment.replay.map(({ value }) => value)
+    const replay = compactedReplay(segment.journal?.entries ?? [], after)
     const events: AsyncIterable<SequencedRunEvent> = {
       [Symbol.asyncIterator]: async function* () {
         let last = after
         try {
           for (const value of replay) {
-            if (value.sequence <= last) continue
             const projected = project(value)
             if (!projected) continue
             last = projected.sequence
@@ -839,36 +976,6 @@ export class SessionCoordinator {
             if (value.sequence <= last) continue
             last = value.sequence
             yield value
-          }
-        } finally {
-          live.close()
-        }
-      },
-    }
-    return {
-      runId: segment.runId,
-      events,
-      close: () => live.close(),
-    }
-  }
-
-  #subscribeJournal(segment: Segment, access: CoordinatorAccess) {
-    const project = (value: SequencedRunEvent) => {
-      const event = access.project ? access.project(value.event) : value.event
-      return event ? { sequence: value.sequence, event } : undefined
-    }
-    const live = segment.fanout.subscribe(project, access.onDetach)
-    const barrier = segment.nextSequence
-    const replay = segment.journal?.replay.map(({ value }) => value) ?? []
-    const events: AsyncIterable<SequencedRunEvent> = {
-      [Symbol.asyncIterator]: async function* () {
-        try {
-          for (const value of replay) {
-            const projected = project(value)
-            if (projected) yield projected
-          }
-          for await (const value of live.events) {
-            if (value.sequence > barrier) yield value
           }
         } finally {
           live.close()

@@ -57,7 +57,7 @@ import {
 } from "./attachment-registry"
 import type { ServerRuntime } from "../../core/runtime"
 import { nativeSlashCommands } from "./slash-commands"
-import { isRecord, nativeId, timestamp } from "./native"
+import { isRecord, nativeId, timestamp, trimmedText } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
@@ -92,10 +92,6 @@ export class HermesSessionConflictError extends Error {
 }
 
 type NativeRecord = Record<string, unknown>
-
-function nonEmptyString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 
 function historyPagination(
   requestedLimit: number,
@@ -160,7 +156,7 @@ function nativeBots(profile: NativeRecord) {
 }
 
 function projectProfile(profile: NativeRecord): AgentCatalogEntry {
-  const id = nonEmptyString(profile.name)
+  const id = trimmedText(profile.name)
   if (!id) throw new HermesUnavailableError()
   const uiMeta = isRecord(profile.ui_meta) ? profile.ui_meta : {}
   const aos = isRecord(uiMeta.aos) ? uiMeta.aos : {}
@@ -173,9 +169,9 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
     summary: {
       kind: "ready",
       id,
-      name: nonEmptyString(profile.display_name) ?? id,
-      ...(nonEmptyString(profile.description)
-        ? { description: nonEmptyString(profile.description) }
+      name: trimmedText(profile.display_name) ?? id,
+      ...(trimmedText(profile.description)
+        ? { description: trimmedText(profile.description) }
         : {}),
       visibility,
       ...(creator ? { role: "creator" as const } : {}),
@@ -857,7 +853,7 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-    if (!isRecord(described) || nonEmptyString(described.name) !== agentId)
+    if (!isRecord(described) || trimmedText(described.name) !== agentId)
       throw new HermesUnavailableError()
     if (nativeRevision(described) !== expected)
       throw new HermesRevisionConflictError()
@@ -982,10 +978,10 @@ export class HermesServerAdapter implements ServerRuntime {
     const seen = new Set<string>()
     const sessions = payload.sessions.map((row) => {
       if (!isRecord(row)) throw new HermesUnavailableError()
-      const storedId = nonEmptyString(row.id)
+      const storedId = trimmedText(row.id)
       if (
         !storedId ||
-        nonEmptyString(row.profile) !== profile ||
+        trimmedText(row.profile) !== profile ||
         seen.has(storedId) ||
         (row.is_active !== undefined && typeof row.is_active !== "boolean")
       )
@@ -994,7 +990,7 @@ export class HermesServerAdapter implements ServerRuntime {
       return {
         id: sessionId(profile, storedId),
         agentId: profile,
-        title: nonEmptyString(row.title) ?? storedId,
+        title: trimmedText(row.title) ?? storedId,
         archived: row.archived === true,
         updatedAt: timestamp(row.last_active ?? row.started_at),
         status:
@@ -1103,7 +1099,7 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     if (
       !isRecord(payload) ||
-      nonEmptyString(payload.session_id) !== storedId ||
+      trimmedText(payload.session_id) !== storedId ||
       !Array.isArray(payload.messages)
     )
       throw new HermesUnavailableError()
@@ -1154,17 +1150,17 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     if (
       !isRecord(payload) ||
-      nonEmptyString(payload.id) !== storedId ||
+      trimmedText(payload.id) !== storedId ||
       (payload.is_active !== undefined &&
         typeof payload.is_active !== "boolean")
     )
       throw new HermesUnavailableError()
-    if (nonEmptyString(payload.profile) !== profile)
+    if (trimmedText(payload.profile) !== profile)
       throw new HermesSessionNotFoundError()
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
       agentId: profile,
-      title: nonEmptyString(payload.title) ?? storedId,
+      title: trimmedText(payload.title) ?? storedId,
       archived: payload.archived === true,
       updatedAt: timestamp(payload.last_active ?? payload.started_at),
       status:
@@ -1225,8 +1221,8 @@ export class HermesServerAdapter implements ServerRuntime {
       throwUnavailable(error)
     }
     if (!isRecord(payload)) throw new HermesUnavailableError()
-    const storedId = nonEmptyString(payload.stored_session_id)
-    const liveId = nonEmptyString(payload.session_id)
+    const storedId = trimmedText(payload.stored_session_id)
+    const liveId = trimmedText(payload.session_id)
     if (!storedId || !liveId) throw new HermesUnavailableError()
     return SessionCreateResponseSchema.parse({
       session: {

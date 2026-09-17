@@ -25,8 +25,13 @@ native `/api/ws` turn boundaries and their AG-UI mapping.
   JSON-RPC requests: it validates them, presents AG-UI interrupts, and responds
   on the request handle Hermes is waiting on.
 - `slash-commands.ts` validates and bounds the native command catalog.
-- `content.ts`, `workspace.ts`, and `tool-data.ts` normalize their corresponding
-  provider surfaces.
+- `tool-data.ts` owns tool projection: `run.ts` and `history.ts` both read a
+  tool call through `projectHermesToolCall` and its outcome through
+  `projectHermesToolOutcome`, so a live turn and a refreshed transcript cannot
+  disagree about a tool's public name, arguments, error state, result or
+  artifacts. `media-artifacts.ts` remains the artifact authority behind it.
+- `content.ts` and `workspace.ts` normalize their corresponding provider
+  surfaces.
 
 Colocated and integration tests cover the package's observable behavior.
 `core/session-coordinator.test.ts` protects provider-neutral execution
