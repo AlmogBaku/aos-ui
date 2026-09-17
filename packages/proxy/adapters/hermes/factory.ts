@@ -42,10 +42,14 @@ export async function createHermesRuntime(
   const transportFactory =
     dependencies.transportFactory ??
     ((options: HermesGatewayOptions) => new HermesGateway(options))
+  // One redacted log for the whole runtime: the gateway reports transport
+  // outages, the attachment registry reports rebinding failures, and the native
+  // run boundary reports the code of every authoritative Hermes rejection.
+  const log = createGatewayLog()
   const transport = transportFactory({
     baseUrl: config.baseUrl,
     credentials: async () => ({ "X-Hermes-Session-Token": token }),
-    log: createGatewayLog(),
+    log,
   })
   // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
   // is not up yet is retried in the background instead of failing whichever
@@ -54,6 +58,7 @@ export async function createHermesRuntime(
     void transport.connect().catch(() => undefined)
   const runtime = new HermesServerAdapter(transport, {
     sessionIdleMs: config.sessionIdleMs,
+    log,
   })
   const sessions = new SessionCoordinator({
     engine: runtime.runs,

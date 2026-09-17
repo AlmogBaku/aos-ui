@@ -12,10 +12,21 @@ import {
 import {
   HermesAuthenticationError,
   HermesHttpError,
+  HermesRpcRejectedError,
   HermesRpcUncertainError,
 } from "./gateway"
+import { rpcRouter } from "./test-utils/rpc-router"
 import { ServerRunSteerUncertainError } from "../../core/runtime"
-import { HermesRunRewindConflictError } from "./run"
+import { HermesRunPublicError, HermesRunRewindConflictError } from "./run"
+import { HermesInteractionPublicError } from "./interactions"
+import {
+  HermesContentScopeError,
+  HermesContentUnavailableError,
+} from "./content"
+import {
+  HermesWorkspaceScopeError,
+  HermesWorkspaceUnavailableError,
+} from "./workspace"
 
 function profile(hidden = false, revision: number | null = 7) {
   return {
@@ -297,49 +308,60 @@ describe("Hermes server adapter", () => {
           truncated: false,
           events: [],
         }
-      if (method === "prompt.submit") return { accepted: true }
+      if (method === "prompt.submit") return { status: "streaming" }
       if (method === "session.redirect")
         return { status: "redirected", text: "Use the newer API" }
-      if (method === "session.interrupt") return { interrupted: true }
+      if (method === "session.interrupt") return { status: "interrupted" }
       if (method === "session.active_list")
         return { sessions: [{ id: "live-secret", status: "working" }] }
       throw new Error(`unexpected ${method}`)
     })
     const stopObservation = vi.fn()
-    const observeEvents = vi.fn(async () => stopObservation)
-    const adapter = new HermesServerAdapter({ request, observeEvents })
+    const onEvent = vi.fn(() => stopObservation)
+    const adapter = new HermesServerAdapter({ request, onEvent })
     const scope = {
       agentId: "researcher",
       sessionId: "stored",
       threadId: "stored",
     }
 
-    await expect(adapter.resume(scope)).resolves.toEqual({
+    await expect(adapter.native.resume(scope)).resolves.toEqual({
       liveSessionId: "live-secret",
+      running: false,
     })
     await expect(
-      adapter.observe("live-secret", vi.fn(), vi.fn())
+      adapter.native.observe("live-secret", vi.fn())
     ).resolves.toEqual(expect.any(Function))
-    await expect(adapter.recover("live-secret", 2)).resolves.toEqual({
+    await expect(adapter.native.replay("live-secret", 2)).resolves.toEqual({
       epoch: "epoch-1",
       lastSeen: 4,
       truncated: false,
       events: [],
     })
     await expect(
-      adapter.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
-    ).resolves.toEqual({ acknowledgement: "accepted" })
+      adapter.native.submit("live-secret", {
+        scope,
+        text: "Hello",
+        runId: "run-1",
+      })
+    ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
     await expect(
-      adapter.redirect("live-secret", "Use the newer API")
+      adapter.native.redirect("live-secret", "Use the newer API")
     ).resolves.toBe("redirected")
-    await expect(adapter.interrupt("live-secret")).resolves.toBeUndefined()
-    await expect(adapter.status("live-secret")).resolves.toBe("running")
+    await expect(adapter.native.interrupt("live-secret")).resolves.toBe(
+      "interrupted"
+    )
+    await expect(adapter.native.status("live-secret")).resolves.toBe("working")
     expect(request.mock.calls).toEqual([
       [
         "session.resume",
         { session_id: "stored", profile: "researcher", omit_messages: true },
       ],
-      ["session.events.since", { session_id: "live-secret", last_seen: 2 }],
+      [
+        "session.events.since",
+        { session_id: "live-secret", last_seen: 2 },
+        { maxResponseBytes: 6_291_456 },
+      ],
       ["prompt.submit", { session_id: "live-secret", text: "Hello" }],
       [
         "session.redirect",
@@ -348,7 +370,7 @@ describe("Hermes server adapter", () => {
       ["session.interrupt", { session_id: "live-secret" }],
       ["session.active_list", {}],
     ])
-    expect(observeEvents).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledTimes(1)
   })
 
   it.each(["redirected", "queued"] as const)(
@@ -358,28 +380,18 @@ describe("Hermes server adapter", () => {
         request: vi.fn(async () => ({ status, text: "Correction" })),
       })
 
-      await expect(adapter.redirect("live-secret", "Correction")).resolves.toBe(
-        status
-      )
+      await expect(
+        adapter.native.redirect("live-secret", "Correction")
+      ).resolves.toBe(status)
     }
   )
-
-  it("allows prompt submission while a new Hermes Session is starting", async () => {
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(async () => ({
-        sessions: [{ id: "live-secret", status: "starting" }],
-      })),
-    })
-
-    await expect(adapter.status("live-secret")).resolves.toBe("idle")
-  })
 
   it("rejects malformed redirect acknowledgements and classifies a lost response as uncertain", async () => {
     const malformed = new HermesServerAdapter({
       request: vi.fn(async () => ({ status: "accepted" })),
     })
     await expect(
-      malformed.redirect("live-secret", "Correction")
+      malformed.native.redirect("live-secret", "Correction")
     ).rejects.toBeInstanceOf(HermesUnavailableError)
 
     const uncertain = new HermesServerAdapter({
@@ -388,13 +400,13 @@ describe("Hermes server adapter", () => {
       }),
     })
     await expect(
-      uncertain.redirect("live-secret", "Correction")
+      uncertain.native.redirect("live-secret", "Correction")
     ).rejects.toBeInstanceOf(ServerRunSteerUncertainError)
   })
 
   it("rewinds Edit or Retry at the authoritative durable user row", async () => {
     const request = vi.fn(async (method: string) => {
-      if (method === "prompt.submit") return { accepted: true }
+      if (method === "prompt.submit") return { status: "streaming" }
       throw new Error(`unexpected ${method}`)
     })
     const http = vi.fn(async (path: string) => {
@@ -418,13 +430,13 @@ describe("Hermes server adapter", () => {
     }
 
     await expect(
-      adapter.submit("live-secret", {
+      adapter.native.submit("live-secret", {
         scope,
         text: "Edited",
         runId: "edit-run",
         rewindSourceId: "hermes-row-12",
       })
-    ).resolves.toEqual({ acknowledgement: "accepted" })
+    ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
 
     expect(request).toHaveBeenCalledWith("prompt.submit", {
       session_id: "live-secret",
@@ -435,7 +447,7 @@ describe("Hermes server adapter", () => {
   })
 
   it("guards a first-turn rewind and never appends when the source is stale", async () => {
-    const request = vi.fn(async () => ({ accepted: true }))
+    const request = vi.fn(async () => ({ status: "streaming" }))
     let messages: readonly unknown[] = [
       { row_id: 10, role: "user", text: "Original" },
       { row_id: 11, role: "assistant", text: "Old reply" },
@@ -454,7 +466,7 @@ describe("Hermes server adapter", () => {
       threadId: "stored",
     }
 
-    await adapter.submit("live-secret", {
+    await adapter.native.submit("live-secret", {
       scope,
       text: "Retry",
       runId: "retry-run",
@@ -471,7 +483,7 @@ describe("Hermes server adapter", () => {
     request.mockClear()
     messages = [{ row_id: 12, role: "assistant", text: "Changed" }]
     await expect(
-      adapter.submit("live-secret", {
+      adapter.native.submit("live-secret", {
         scope,
         text: "Retry",
         runId: "stale-retry-run",
@@ -479,28 +491,6 @@ describe("Hermes server adapter", () => {
       })
     ).rejects.toBeInstanceOf(HermesRunRewindConflictError)
     expect(request).not.toHaveBeenCalled()
-  })
-
-  it("accepts Hermes recovery cursors returned as latest_seq", async () => {
-    const adapter = new HermesServerAdapter({
-      request: async (method: string) => {
-        if (method === "session.events.since")
-          return {
-            epoch: "epoch-1",
-            latest_seq: 4,
-            truncated: false,
-            events: [],
-          }
-        throw new Error(`unexpected ${method}`)
-      },
-    })
-
-    await expect(adapter.recover("live-secret")).resolves.toEqual({
-      epoch: "epoch-1",
-      lastSeen: 4,
-      truncated: false,
-      events: [],
-    })
   })
 
   it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
@@ -1383,88 +1373,208 @@ describe("Hermes server adapter", () => {
     })
   })
 
-  it("observes only bounded events for the exact resumed native Session", async () => {
-    let nativeListener: ((event: unknown) => void) | undefined
-    const stop = vi.fn()
-    const listener = vi.fn()
-    const disconnected = vi.fn()
-    const observeEvents = vi.fn(async (next: (event: unknown) => void) => {
-      nativeListener = next
-      return stop
-    })
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(),
-      observeEvents,
-    })
+  it("refuses to observe a native Session that was never attached", async () => {
+    const adapter = new HermesServerAdapter({ request: vi.fn() })
 
-    await adapter.observe("live-session", listener, disconnected)
-    nativeListener!({ type: "message", session_id: "other-session" })
-    nativeListener!({
-      type: "message",
-      session_id: "live-session",
-      payload: "x".repeat(4_194_305),
-    })
-    expect(disconnected).toHaveBeenCalledOnce()
-    expect(stop).toHaveBeenCalledOnce()
-    expect(listener).not.toHaveBeenCalled()
-  })
-
-  it("ignores oversized foreign Session events before accepting an exact event", async () => {
-    let nativeListener: ((event: unknown) => void) | undefined
-    const listener = vi.fn()
-    const disconnected = vi.fn()
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(),
-      observeEvents: vi.fn(async (next) => {
-        nativeListener = next
-        return vi.fn()
-      }),
-    })
-    await adapter.observe("live-session", listener, disconnected)
-    nativeListener!({
-      type: "message",
-      session_id: "other-session",
-      payload: "x".repeat(4_194_305),
-    })
-    const expected = {
-      type: "message",
-      session_id: "live-session",
-      payload: { text: "changed" },
-    }
-    nativeListener!(expected)
-
-    expect(listener).toHaveBeenCalledOnce()
-    expect(listener).toHaveBeenCalledWith(expected)
-    expect(disconnected).not.toHaveBeenCalled()
-  })
-
-  it("disconnects once on a deeply nested active Session event and rejects oversized live identities", async () => {
-    let nativeListener: ((event: unknown) => void) | undefined
-    const disconnected = vi.fn()
-    const stop = vi.fn()
-    const request = vi.fn(async () => ({ session_id: "x".repeat(257) }))
-    const adapter = new HermesServerAdapter({
-      request,
-      observeEvents: vi.fn(async (next) => {
-        nativeListener = next
-        return stop
-      }),
-    })
-    await adapter.observe("live-session", vi.fn(), disconnected)
-    let payload: unknown = "leaf"
-    for (let index = 0; index < 20; index += 1) payload = { nested: payload }
-    nativeListener!({ type: "message", session_id: "live-session", payload })
-    nativeListener!({ type: "message", session_id: "live-session", payload })
-
-    expect(disconnected).toHaveBeenCalledOnce()
-    expect(stop).toHaveBeenCalledOnce()
     await expect(
-      adapter.resume({
+      adapter.native.observe("live-session", vi.fn())
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("rejects an oversized native live Session identity", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async () => ({ session_id: "x".repeat(257) })),
+    })
+
+    await expect(
+      adapter.native.resume({
         agentId: "researcher",
         sessionId: "stored",
         threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("re-resumes the durable Session when Hermes rejects a heal as gone", async () => {
+    let resumes = 0
+    const router = rpcRouter({
+      "session.resume": async () => {
+        resumes += 1
+        if (resumes === 2) throw new HermesRpcRejectedError(4007)
+        return { session_id: resumes === 1 ? "live-first" : "live-second" }
+      },
+    })
+    const adapter = new HermesServerAdapter(router)
+    const scope = {
+      agentId: "researcher",
+      sessionId: "stored",
+      threadId: "stored",
+    }
+    await expect(adapter.native.resume(scope)).resolves.toMatchObject({
+      liveSessionId: "live-first",
+    })
+    const signals: string[] = []
+    await adapter.native.observe("live-first", (signal) =>
+      signals.push(
+        signal.kind === "lost" ? `lost:${signal.reason}` : signal.kind
+      )
+    )
+
+    await router.connection.restored()
+
+    expect(signals).toEqual(["lost:rebound"])
+    await expect(adapter.native.resume(scope)).resolves.toMatchObject({
+      liveSessionId: "live-second",
+    })
+    expect(router.calls("session.resume")).toHaveLength(3)
+  })
+
+  it("writes an attachment rebind failure to the runtime log", async () => {
+    const warn = vi.fn()
+    let resumes = 0
+    const router = rpcRouter({
+      "session.resume": async () => {
+        resumes += 1
+        if (resumes === 2) throw new HermesUnavailableError()
+        return { session_id: "live-first" }
+      },
+    })
+    const adapter = new HermesServerAdapter(router, { log: { warn } })
+    const scope = {
+      agentId: "researcher",
+      sessionId: "stored",
+      threadId: "stored",
+    }
+    await adapter.native.resume(scope)
+    await adapter.native.observe("live-first", vi.fn())
+
+    await router.connection.restored()
+
+    expect(warn).toHaveBeenCalledWith("hermes.attachment.rebind_failed", {
+      reason: expect.any(String),
+    })
+  })
+
+  it("publishes each native failure class under its own public error code", async () => {
+    const adapter = new HermesServerAdapter({ request: vi.fn() })
+
+    expect(adapter.publicError(new HermesAuthenticationError())).toEqual({
+      code: "runtime_authentication_required",
+      status: 401,
+    })
+    for (const cause of [
+      new HermesAgentNotFoundError(),
+      new HermesSessionNotFoundError(),
+      new HermesWorkspaceScopeError(),
+      new HermesContentScopeError(),
+      new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND"),
+    ])
+      expect(adapter.publicError(cause)).toEqual({
+        code: "not_found",
+        status: 404,
+      })
+    for (const cause of [
+      new HermesRevisionConflictError(),
+      new HermesSessionConflictError(),
+    ])
+      expect(adapter.publicError(cause)).toEqual({
+        code: "revision_conflict",
+        status: 409,
+      })
+    // An unconfirmed Stop may have been accepted: the browser reconciles.
+    expect(
+      adapter.publicError(
+        new HermesRunPublicError(
+          "AOS_STOP_UNCERTAIN",
+          "Stop was not confirmed."
+        )
+      )
+    ).toEqual({ code: "uncertain_mutation", status: 409 })
+    for (const cause of [
+      new HermesUnavailableError(),
+      new HermesWorkspaceUnavailableError(),
+      new HermesContentUnavailableError(),
+      new HermesRunPublicError(
+        "AOS_PROVIDER_UNAVAILABLE",
+        "Hermes is unavailable."
+      ),
+      new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE"),
+      new HermesInteractionPublicError("AOS_RECONCILIATION_STALE"),
+    ])
+      expect(adapter.publicError(cause)).toEqual({
+        code: "temporarily_unavailable",
+        status: 503,
+      })
+    expect(
+      adapter.publicError(
+        new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+      )
+    ).toEqual({ code: "invalid_request", status: 400 })
+    expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
+  })
+
+  it("releases the interaction retainer when discovery finds no pending request", async () => {
+    vi.useFakeTimers()
+    try {
+      let resumes = 0
+      const router = rpcRouter({
+        "session.resume": async () => {
+          resumes += 1
+          return {
+            session_id: "live-secret",
+            running: false,
+            status: "idle",
+            ...(resumes === 1
+              ? {
+                  pending_approval: {
+                    request_id: "approval-1",
+                    message: "Allow this action?",
+                    choices: ["once", "deny"],
+                  },
+                }
+              : {}),
+          }
+        },
+        "session.close": async () => ({ closed: true }),
+      })
+      const adapter = new HermesServerAdapter(router, { sessionIdleMs: 1_000 })
+      const scope = {
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "stored",
+        runId: "run-1",
+      }
+
+      expect(await adapter.native.inspectExecution(scope)).toMatchObject({
+        status: "waiting-for-input",
+        outcome: { interrupts: [{ id: "approval-1", reason: "approval" }] },
+      })
+      expect(
+        adapter.native.acceptInteraction(scope, "live-secret", {
+          type: "approval.request",
+          session_id: "live-secret",
+          payload: {
+            request_id: "approval-2",
+            message: "Allow the next action?",
+            choices: ["once", "deny"],
+          },
+        })
+      ).toMatchObject({ type: "interrupt" })
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(router.calls("session.close")).toHaveLength(0)
+
+      expect(await adapter.native.inspectExecution(scope)).toMatchObject({
+        status: "idle",
+      })
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(router.calls("session.close")[0]?.params).toEqual({
+        session_id: "live-secret",
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("reports a missing Agent separately from a Hermes outage", async () => {

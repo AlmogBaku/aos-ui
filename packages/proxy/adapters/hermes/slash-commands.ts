@@ -3,9 +3,15 @@ import {
   SlashCommandSchema,
   type SlashCommand,
 } from "../../../protocol"
-import type { HermesRpcTransport } from "./gateway"
+import {
+  HermesRpcRejectedError,
+  HermesUnavailableError,
+  type HermesRpcTransport,
+} from "./gateway"
+import { isRecord } from "./native"
 
 const MAX_CATALOG_RESPONSE_BYTES = 2_097_152
+const MAX_COMMAND_RESPONSE_BYTES = 1_048_576
 
 async function nativeCommandPairs(
   transport: HermesRpcTransport,
@@ -111,4 +117,104 @@ export function slashInvocation(
   if (!invocation || !commands.some(({ name }) => name === invocation.name))
     return undefined
   return invocation
+}
+
+/**
+ * What one native command execution produced. A `completion` answered the user
+ * in band and no native turn follows; a `submitted` execution expanded into a
+ * `prompt.submit`, whose native admission result the caller validates.
+ */
+export type HermesSlashExecution =
+  | { kind: "completion"; output: string; composerPrefill?: string }
+  | { kind: "submitted"; result: unknown }
+
+/**
+ * Execute one recognized native command. `slash.exec` is the current native
+ * entry point; `command.dispatch` is attempted only when Hermes states the
+ * method is unsupported, and alias traversal is bounded. No dispatched write is
+ * ever retried.
+ */
+export async function executeSlashCommand(
+  transport: HermesRpcTransport,
+  liveSessionId: string,
+  name: string,
+  args: string,
+  depth = 0
+): Promise<HermesSlashExecution> {
+  if (depth >= 4) throw new HermesUnavailableError()
+  let result: unknown
+  try {
+    result = await transport.request(
+      "slash.exec",
+      {
+        command: `${name}${args ? ` ${args}` : ""}`,
+        session_id: liveSessionId,
+      },
+      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+    )
+  } catch (error) {
+    if (
+      !(error instanceof HermesRpcRejectedError) ||
+      (error.code !== -32601 && error.code !== 4018)
+    )
+      throw error
+    result = await transport.request(
+      "command.dispatch",
+      { session_id: liveSessionId, name, arg: args },
+      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+    )
+  }
+  if (!isRecord(result)) throw new HermesUnavailableError()
+  if (result.type === "alias") {
+    const target =
+      typeof result.target === "string"
+        ? /^\/?([^\s/]+)(?:\s+([\s\S]*))?$/u.exec(result.target)
+        : undefined
+    if (!target) throw new HermesUnavailableError()
+    return executeSlashCommand(
+      transport,
+      liveSessionId,
+      target[1]!,
+      [target[2], args].filter(Boolean).join(" "),
+      depth + 1
+    )
+  }
+  if (result.type === "send" || result.type === "skill") {
+    if (typeof result.message !== "string" || !result.message.trim())
+      throw new HermesUnavailableError()
+    return {
+      kind: "submitted",
+      result: await transport.request("prompt.submit", {
+        session_id: liveSessionId,
+        text: result.message,
+      }),
+    }
+  }
+  if (result.type === "prefill") {
+    if (
+      typeof result.message !== "string" ||
+      !result.message ||
+      Buffer.byteLength(result.message, "utf8") > MAX_COMMAND_RESPONSE_BYTES ||
+      (result.notice !== undefined && typeof result.notice !== "string")
+    )
+      throw new HermesUnavailableError()
+    return {
+      kind: "completion",
+      output: typeof result.notice === "string" ? result.notice : "",
+      composerPrefill: result.message,
+    }
+  }
+  if (
+    result.type !== "exec" &&
+    result.type !== "plugin" &&
+    typeof result.output !== "string" &&
+    typeof result.warning !== "string"
+  )
+    throw new HermesUnavailableError()
+  return {
+    kind: "completion",
+    output: [result.warning, result.output]
+      .filter((value): value is string => typeof value === "string" && !!value)
+      .join("\n"),
+  }
 }

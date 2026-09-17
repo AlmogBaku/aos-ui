@@ -11,6 +11,7 @@ import {
 } from "./gateway"
 import { MAX_EVENT_FRAME_BYTES } from "./gateway-socket"
 import { FakeSocket } from "./test-utils/fake-socket"
+import { nativeTurn } from "./test-utils/native-events"
 
 const TOKEN = "native-secret"
 const BASE_URL = "http://127.0.0.1:9119"
@@ -21,23 +22,33 @@ type Harness = {
   sockets: FakeSocket[]
   factory: ReturnType<typeof vi.fn>
   log: { warn: ReturnType<typeof vi.fn> }
-  control: { autoOpen: boolean; autoReply: boolean }
+  control: { autoOpen: boolean; autoReply: boolean; autoReady: boolean }
 }
 
 function harness(
   options: Partial<HermesGatewayOptions> & {
     autoOpen?: boolean
     autoReply?: boolean
+    /** Announce a replay epoch on open, the way a live Hermes does. */
+    autoReady?: boolean
   } = {}
 ): Harness {
-  const { autoOpen, autoReply, ...gatewayOptions } = options
+  const { autoOpen, autoReply, autoReady, ...gatewayOptions } = options
   const sockets: FakeSocket[] = []
-  const control = { autoOpen: autoOpen ?? true, autoReply: autoReply ?? false }
+  const control = {
+    autoOpen: autoOpen ?? true,
+    autoReply: autoReply ?? false,
+    autoReady: autoReady ?? false,
+  }
   const factory = vi.fn(() => {
     const socket = new FakeSocket()
     socket.autoReply = control.autoReply
     sockets.push(socket)
-    if (control.autoOpen) queueMicrotask(() => socket.open())
+    if (control.autoOpen)
+      queueMicrotask(() => {
+        socket.open()
+        if (control.autoReady) socket.deliverReady({ replay_epoch: "e1" })
+      })
     return socket
   })
   const log = { warn: vi.fn() }
@@ -71,7 +82,10 @@ afterEach(() => {
 
 describe("Hermes gateway dial and authentication", () => {
   it("dials the token URL and writes correlated JSON-RPC frames", async () => {
-    const { gateway, sockets, factory } = harness({ autoReply: true })
+    const { gateway, sockets, factory } = harness({
+      autoReply: true,
+      autoReady: true,
+    })
 
     await expect(
       gateway.request("profiles.list", { include_sessions: false })
@@ -232,7 +246,10 @@ describe("Hermes gateway request classification", () => {
   })
 
   it("uses one socket for one hundred concurrent Session requests", async () => {
-    const { gateway, sockets, factory } = harness({ autoReply: true })
+    const { gateway, sockets, factory } = harness({
+      autoReply: true,
+      autoReady: true,
+    })
 
     await expect(
       Promise.all(
@@ -512,35 +529,21 @@ describe("Hermes gateway event fan-out", () => {
     await gateway.close()
   })
 
-  it("forwards native notifications to the deprecated observer shim", async () => {
-    vi.useFakeTimers()
-    const { gateway, sockets, control } = harness()
-    const observed = vi.fn()
-    const disconnected = vi.fn()
+  it("delivers two native event frames to an observer in wire order", async () => {
+    const { gateway, sockets } = harness()
+    const turn = nativeTurn("live-a")
+    const observed: unknown[] = []
+    gateway.onEvent((event) => {
+      observed.push(event)
+    })
     await gateway.connect()
-    const stop = await gateway.observeEvents(observed, disconnected)
 
-    sockets[0]!.deliverEvent({
-      type: "message.delta",
-      session_id: "live-secret",
-      seq: 2,
-      payload: { text: "Hello" },
-    })
+    const first = turn.delta("first")
+    const second = turn.delta("second")
+    sockets[0]!.deliverEvent(first)
+    sockets[0]!.deliverEvent(second)
 
-    expect(observed).toHaveBeenCalledWith({
-      type: "message.delta",
-      session_id: "live-secret",
-      seq: 2,
-      payload: { text: "Hello" },
-    })
-    expect(disconnected).not.toHaveBeenCalled()
-
-    control.autoOpen = false
-    sockets[0]!.close(1006)
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(disconnected).toHaveBeenCalledTimes(1)
-
-    stop()
+    expect(observed).toEqual([first, second])
     await gateway.close()
   })
 })
@@ -643,12 +646,14 @@ describe("Hermes gateway heartbeat and redial", () => {
     const { gateway, sockets, factory } = harness()
     gateway.onConnection({ restored, lost })
     await gateway.connect()
+    sockets[0]!.deliverReady({ replay_epoch: "e1" })
     await flush()
     expect(restored).toHaveBeenCalledTimes(1)
 
     sockets[0]!.close(1006)
     await vi.advanceTimersByTimeAsync(150)
     expect(factory).toHaveBeenCalledTimes(2)
+    sockets[1]!.deliverReady({ replay_epoch: "e1" })
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(lost).not.toHaveBeenCalled()
@@ -682,24 +687,195 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("reports a replay epoch change once", async () => {
+  it("reports only an epoch change when Hermes restarted across a reconnect", async () => {
     vi.useFakeTimers()
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const epochChanged = vi.fn()
+    const restored = vi.fn()
     const { gateway, sockets } = harness()
-    gateway.onConnection({ epochChanged })
+    gateway.onConnection({ restored, epochChanged })
     await gateway.connect()
-
     sockets[0]!.deliverReady({ replay_epoch: "e1" })
-    sockets[0]!.deliverReady({ replay_epoch: "e1" })
-    expect(epochChanged).not.toHaveBeenCalled()
+    await flush()
+    expect(restored).toHaveBeenCalledTimes(1)
 
     sockets[0]!.close(1006)
     await vi.advanceTimersByTimeAsync(150)
     sockets[1]!.deliverReady({ replay_epoch: "e2" })
     sockets[1]!.deliverReady({ replay_epoch: "e2" })
+    await flush()
 
     expect(epochChanged).toHaveBeenCalledTimes(1)
+    // Re-resuming every binding a restart already killed is pure churn.
+    expect(restored).toHaveBeenCalledTimes(1)
+    await gateway.close()
+  })
+
+  it("reports only restored when the reconnect carries the same epoch", async () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const epochChanged = vi.fn()
+    const restored = vi.fn()
+    const { gateway, sockets } = harness()
+    gateway.onConnection({ restored, epochChanged })
+    await gateway.connect()
+    sockets[0]!.deliverReady({ replay_epoch: "e1" })
+    await flush()
+
+    sockets[0]!.close(1006)
+    await vi.advanceTimersByTimeAsync(150)
+    sockets[1]!.deliverReady({ replay_epoch: "e1" })
+    await flush()
+
+    expect(restored).toHaveBeenCalledTimes(2)
+    expect(epochChanged).not.toHaveBeenCalled()
+    await gateway.close()
+  })
+
+  it("reports restored when no ready frame announces an epoch in time", async () => {
+    vi.useFakeTimers()
+    const epochChanged = vi.fn()
+    const restored = vi.fn()
+    const { gateway } = harness()
+    gateway.onConnection({ restored, epochChanged })
+    await gateway.connect()
+    await flush()
+
+    expect(restored).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(restored).toHaveBeenCalledTimes(1)
+    expect(epochChanged).not.toHaveBeenCalled()
+    await gateway.close()
+  })
+
+  it("redials and connects after a socket factory throws once", async () => {
+    vi.useFakeTimers()
+    const sockets: FakeSocket[] = []
+    let attempts = 0
+    const factory = vi.fn(() => {
+      attempts += 1
+      if (attempts === 1) throw new Error("socket refused")
+      const socket = new FakeSocket()
+      sockets.push(socket)
+      queueMicrotask(() => socket.open())
+      return socket
+    })
+    const gateway = new HermesGateway({
+      baseUrl: BASE_URL,
+      credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
+      fetcher: vi.fn(),
+      socketFactory: factory,
+      backoff: { jitter: false },
+      connectTimeoutMs: 1_000,
+      requestTimeoutMs: 1_000,
+    })
+
+    await expect(gateway.connect()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(factory).toHaveBeenCalledTimes(2)
+    expect(sockets[0]!.readyState).toBe(1)
+    await expect(
+      gateway.request("profiles.list", { include_sessions: false })
+    ).resolves.toEqual({ profiles: [] })
+    await gateway.close()
+  })
+
+  it("logs a refused socket factory apart from a failed handshake", async () => {
+    vi.useFakeTimers()
+    const log = { warn: vi.fn() }
+    const factory = vi.fn(() => {
+      throw new TypeError("socket refused for wss://hermes.internal/api/ws")
+    })
+    const gateway = new HermesGateway({
+      baseUrl: BASE_URL,
+      credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
+      fetcher: vi.fn(),
+      socketFactory: factory,
+      backoff: { jitter: false },
+      connectTimeoutMs: 1_000,
+      log,
+    })
+
+    await expect(gateway.connect()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+
+    expect(
+      log.warn.mock.calls.filter(
+        ([event]) => event === "hermes.gateway.dial_failed"
+      )
+    ).toEqual([
+      [
+        "hermes.gateway.dial_failed",
+        { reason: "socket_factory_threw", error: "TypeError" },
+      ],
+    ])
+    await gateway.close()
+  })
+
+  it("logs a handshake failure under its own reason", async () => {
+    const { gateway, log } = harness({ autoOpen: false, connectTimeoutMs: 20 })
+
+    await expect(gateway.connect()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+
+    expect(
+      log.warn.mock.calls
+        .filter(([event]) => event === "hermes.gateway.dial_failed")
+        .map(([, fields]) => (fields as { reason?: unknown }).reason)
+    ).toEqual(["handshake_failed"])
+    await gateway.close()
+  })
+
+  it("writes a request parked during an outage only after restore settles", async () => {
+    const { gateway, sockets } = harness({ autoOpen: false })
+    let releaseRestore = () => {}
+    const restoreDone = new Promise<void>((resolve) => {
+      releaseRestore = resolve
+    })
+    const restored = vi.fn(() => restoreDone)
+    gateway.onConnection({ restored })
+
+    const parked = gateway.request("profiles.list", {})
+    await vi.waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0]!.autoReply = true
+    sockets[0]!.open()
+    sockets[0]!.deliverReady({ replay_epoch: "e1" })
+    await flush()
+
+    expect(restored).toHaveBeenCalledTimes(1)
+    expect(sockets[0]!.sent).toEqual([])
+
+    releaseRestore()
+
+    await expect(parked).resolves.toEqual({ profiles: [] })
+    expect(sockets[0]!.requestsFor("profiles.list")).toHaveLength(1)
+    await gateway.close()
+  })
+
+  it("writes a parked request even when a restored handler rejects", async () => {
+    const { gateway, sockets, log } = harness({ autoOpen: false })
+    gateway.onConnection({ restored: () => Promise.reject(new Error("boom")) })
+
+    const parked = gateway.request("profiles.list", {})
+    await vi.waitFor(() => expect(sockets).toHaveLength(1))
+    sockets[0]!.autoReply = true
+    sockets[0]!.open()
+    sockets[0]!.deliverReady({ replay_epoch: "e1" })
+
+    await expect(parked).resolves.toEqual({ profiles: [] })
+    expect(
+      log.warn.mock.calls.filter(
+        ([event]) => event === "hermes.gateway.handler_failed"
+      )
+    ).toHaveLength(1)
     await gateway.close()
   })
 })
@@ -755,6 +931,48 @@ describe("Hermes gateway lifecycle and server requests", () => {
         ([event]) => event === "hermes.gateway.server_request_unanswered"
       )
     ).toHaveLength(1)
+    await gateway.close()
+  })
+
+  it("logs a bounded set of unanswered server-request methods", async () => {
+    const { gateway, sockets, log } = harness()
+    await gateway.connect()
+
+    for (let index = 0; index < 200; index += 1)
+      sockets[0]!.deliver({
+        id: `srq-${index.toString(16).padStart(12, "0")}`,
+        method: `clarify-${index}`,
+        params: { session_id: "live-secret" },
+      })
+
+    const unanswered = log.warn.mock.calls.filter(
+      ([event]) => event === "hermes.gateway.server_request_unanswered"
+    )
+    expect(unanswered.length).toBeLessThanOrEqual(32)
+    expect(
+      log.warn.mock.calls.filter(
+        ([event]) => event === "hermes.gateway.server_request_unanswered_capped"
+      )
+    ).toHaveLength(1)
+    expect(sockets[0]!.sent).toEqual([])
+    await gateway.close()
+  })
+
+  it("truncates a long server-request method name before logging it", async () => {
+    const { gateway, sockets, log } = harness()
+    await gateway.connect()
+    const method = "clarify".padEnd(200, "x")
+
+    sockets[0]!.deliver({
+      id: "srq-000000000005",
+      method,
+      params: { session_id: "live-secret" },
+    })
+
+    const [call] = log.warn.mock.calls.filter(
+      ([event]) => event === "hermes.gateway.server_request_unanswered"
+    )
+    expect(call?.[1]).toEqual({ method: method.slice(0, 64) })
     await gateway.close()
   })
 

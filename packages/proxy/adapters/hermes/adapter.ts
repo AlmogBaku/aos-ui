@@ -17,20 +17,19 @@ import {
 import {
   HermesAuthenticationError,
   HermesHttpError,
-  HermesRpcRejectedError,
-  HermesRpcUncertainError,
   HermesUnavailableError,
+  throwUnavailable,
+  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 import { projectHermesHistory } from "./history"
-import { projectHermesMediaArtifacts } from "./media-artifacts"
+import { publishedArtifact } from "./media-artifacts"
 import {
-  HermesRunRewindConflictError,
   HermesRunEngine,
   HermesRunPublicError,
-  type HermesRunNative,
   type HermesRunScope,
 } from "./run"
+import { HermesNativeRuntime, type HermesRunNative } from "./run-native"
 import {
   createHermesWorkspaceOperations,
   HermesWorkspaceScopeError,
@@ -41,6 +40,7 @@ import {
 } from "./workspace"
 import {
   createHermesContentOperations,
+  decodeDataUrl,
   HermesContentScopeError,
   HermesContentUnavailableError,
   type HermesContentAttachment,
@@ -50,99 +50,14 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
-import { HermesAttachmentRegistry } from "./attachment-registry"
 import {
-  ServerRunSteerUncertainError,
-  type ServerRuntime,
-} from "../../core/runtime"
-import type { ResumeEntry } from "@ag-ui/core"
-import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
-import {
-  isRecord,
-  nativeId,
-  parseJson as nativeParseJson,
-  timestamp,
-} from "./native"
-
-async function executeSlashCommand(
-  transport: HermesRpcTransport,
-  liveSessionId: string,
-  name: string,
-  args: string,
-  depth = 0
-): Promise<{ output: string; composerPrefill?: string } | undefined> {
-  if (depth >= 4) throw new HermesUnavailableError()
-  let result: unknown
-  try {
-    result = await transport.request(
-      "slash.exec",
-      {
-        command: `${name}${args ? ` ${args}` : ""}`,
-        session_id: liveSessionId,
-      },
-      { maxResponseBytes: 1_048_576 }
-    )
-  } catch (error) {
-    if (
-      !(error instanceof HermesRpcRejectedError) ||
-      (error.code !== -32601 && error.code !== 4018)
-    )
-      throw error
-    result = await transport.request(
-      "command.dispatch",
-      { session_id: liveSessionId, name, arg: args },
-      { maxResponseBytes: 1_048_576 }
-    )
-  }
-  if (!isRecord(result)) throw new HermesUnavailableError()
-  if (result.type === "alias") {
-    const target =
-      typeof result.target === "string"
-        ? /^\/?([^\s/]+)(?:\s+([\s\S]*))?$/u.exec(result.target)
-        : undefined
-    if (!target) throw new HermesUnavailableError()
-    return executeSlashCommand(
-      transport,
-      liveSessionId,
-      target[1]!,
-      [target[2], args].filter(Boolean).join(" "),
-      depth + 1
-    )
-  }
-  if (result.type === "send" || result.type === "skill") {
-    if (typeof result.message !== "string" || !result.message.trim())
-      throw new HermesUnavailableError()
-    await transport.request("prompt.submit", {
-      session_id: liveSessionId,
-      text: result.message,
-    })
-    return undefined
-  }
-  if (result.type === "prefill") {
-    if (
-      typeof result.message !== "string" ||
-      !result.message ||
-      Buffer.byteLength(result.message, "utf8") > 1_048_576 ||
-      (result.notice !== undefined && typeof result.notice !== "string")
-    )
-      throw new HermesUnavailableError()
-    return {
-      output: typeof result.notice === "string" ? result.notice : "",
-      composerPrefill: result.message,
-    }
-  }
-  if (
-    result.type !== "exec" &&
-    result.type !== "plugin" &&
-    typeof result.output !== "string" &&
-    typeof result.warning !== "string"
-  )
-    throw new HermesUnavailableError()
-  const output = [result.warning, result.output]
-    .filter((value): value is string => typeof value === "string" && !!value)
-    .join("\n")
-  return { output }
-}
+  HermesAttachmentRegistry,
+  HermesSessionGoneError,
+  isSessionGone,
+} from "./attachment-registry"
+import type { ServerRuntime } from "../../core/runtime"
+import { nativeSlashCommands } from "./slash-commands"
+import { isRecord, nativeId, timestamp } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
@@ -223,58 +138,8 @@ function historyPagination(
   return { total: continuationTotal, nextOffset }
 }
 
-const MAX_OBSERVED_EVENT_BYTES = 4_194_304
-const MAX_OBSERVED_EVENT_DEPTH = 12
-const MAX_OBSERVED_EVENT_NODES = 4_096
-
-function observedEventDisposition(
-  value: unknown,
-  liveSessionId: string
-): "foreign" | "invalid" | "valid" {
-  if (!isRecord(value) || value.session_id !== liveSessionId) return "foreign"
-  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }]
-  const seen = new WeakSet<object>()
-  let bytes = 0
-  let nodes = 0
-  while (stack.length > 0) {
-    const current = stack.pop()!
-    nodes += 1
-    if (
-      nodes > MAX_OBSERVED_EVENT_NODES ||
-      current.depth > MAX_OBSERVED_EVENT_DEPTH
-    )
-      return "invalid"
-    if (typeof current.value === "string")
-      bytes += Buffer.byteLength(current.value, "utf8")
-    else if (
-      typeof current.value === "number" ||
-      typeof current.value === "boolean" ||
-      current.value === null
-    )
-      bytes += 16
-    else if (typeof current.value === "object") {
-      if (seen.has(current.value)) return "invalid"
-      seen.add(current.value)
-      const entries = Array.isArray(current.value)
-        ? current.value.map((entry) => ["", entry] as const)
-        : Object.entries(current.value)
-      for (const [key, entry] of entries) {
-        bytes += Buffer.byteLength(key, "utf8")
-        stack.push({ value: entry, depth: current.depth + 1 })
-      }
-    } else return "invalid"
-    if (bytes > MAX_OBSERVED_EVENT_BYTES) return "invalid"
-  }
-  return "valid"
-}
-
 function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
-}
-
-function throwUnavailable(error: unknown): never {
-  if (error instanceof HermesAuthenticationError) throw error
-  throw new HermesUnavailableError()
 }
 
 function nativeRevision(profile: NativeRecord) {
@@ -350,90 +215,7 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
   return `${agentId}\u0000${sessionId}`
 }
 
-function publishedArtifact(rows: readonly unknown[], artifactId: string) {
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index]
-    if (!isRecord(row)) continue
-    if (row.role === "tool") {
-      const toolCallId = nonEmptyString(row.tool_call_id ?? row.toolCallId)
-      const toolName = nonEmptyString(row.tool_name ?? row.toolName)
-      if (toolCallId && toolName)
-        for (const media of projectHermesMediaArtifacts(
-          toolCallId,
-          toolName,
-          row.content ?? row.result
-        ))
-          if (media.descriptor.id === artifactId)
-            return {
-              reference: media.reference,
-              filename: media.descriptor.filename,
-            }
-    }
-    const value = nativeParseJson(row.content ?? row.result)
-    if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
-      continue
-    const artifact = isRecord(value.artifact) ? value.artifact : undefined
-    const id = nonEmptyString(artifact?.id)
-    const reference = nonEmptyString(artifact?.path)
-    const filename = nonEmptyString(artifact?.filename)
-    if (
-      id !== artifactId ||
-      !reference ||
-      !filename ||
-      reference.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/u.test(reference) ||
-      reference.split(/[\\/]/u).includes("..")
-    )
-      continue
-    return { reference, filename }
-  }
-  return undefined
-}
-
-function dataUrlBytes(value: unknown) {
-  if (!isRecord(value) || typeof value.dataUrl !== "string") return undefined
-  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/u.exec(
-    value.dataUrl
-  )
-  if (!match || match[2].length % 4 !== 0) return undefined
-  try {
-    const bytes = Uint8Array.from(atob(match[2]), (character) =>
-      character.charCodeAt(0)
-    )
-    return { bytes, mimeType: match[1] }
-  } catch {
-    return undefined
-  }
-}
-
-function rewindSubmitParams(rows: readonly unknown[], rewindSourceId: string) {
-  const history = projectHermesHistory(rows)
-  const targetIndex = history.findIndex(
-    ({ id, role }) => id === rewindSourceId && role === "user"
-  )
-  const target = targetIndex < 0 ? undefined : history[targetIndex]
-  if (!target) throw new HermesRunRewindConflictError()
-
-  const row = /^hermes-row-(\d+)$/u.exec(target.id)?.[1]
-  const rowId = row === undefined ? undefined : Number(row)
-  const address =
-    rowId !== undefined && Number.isSafeInteger(rowId) && rowId > 0
-      ? { truncate_before_row_id: rowId }
-      : !target.id.startsWith("hermes-history-")
-        ? { truncate_before_message_id: target.id }
-        : undefined
-  if (!address) throw new HermesRunRewindConflictError()
-
-  return {
-    confirm_truncate: true,
-    ...address,
-    ...(history.slice(0, targetIndex).some(({ role }) => role === "user")
-      ? {}
-      : { confirm_empty_truncate: true }),
-  }
-}
-
-export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
+export class HermesServerAdapter implements ServerRuntime {
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
@@ -443,13 +225,14 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     string,
     Promise<{ sessionId: string; created: boolean }>
   >()
-  readonly #pendingInteractionReleases = new Map<string, () => void>()
   readonly interactions: HermesInteractions
+  /** The typed native run boundary; `run-native.ts` owns every native outcome. */
+  readonly native: HermesRunNative
   readonly runs: HermesRunEngine
 
   constructor(
     private readonly transport: HermesRpcTransport,
-    options: { sessionIdleMs?: number } = {}
+    options: { sessionIdleMs?: number; log?: HermesLog } = {}
   ) {
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
@@ -474,18 +257,22 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       transport: {
         request: (method, params, maxResponseBytes) =>
           this.transport.request(method, params, { maxResponseBytes }),
-        readArtifact: async (scope, reference, _maxBytes, maxResponseBytes) => {
+        readArtifact: async (scope, reference, maxBytes, maxResponseBytes) => {
           if (!this.#dashboard) throw new HermesUnavailableError()
           const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
           if (!storedId) throw new HermesUnavailableError()
-          return dataUrlBytes(
-            await this.#dashboard.readArtifactDataUrl(
-              scope.agentId,
-              storedId,
-              reference,
-              maxResponseBytes
-            )
-          ) as { bytes: Uint8Array; mimeType?: string }
+          const payload = await this.#dashboard.readArtifactDataUrl(
+            scope.agentId,
+            storedId,
+            reference,
+            maxResponseBytes
+          )
+          const decoded = decodeDataUrl(
+            isRecord(payload) ? payload.dataUrl : undefined,
+            maxBytes
+          )
+          if (!decoded) throw new HermesUnavailableError()
+          return decoded
         },
         audioConfig: async (scope, kind, maxResponseBytes) => {
           if (!this.#dashboard) throw new HermesUnavailableError()
@@ -513,17 +300,41 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       {
         resume: (scope) => this.#resumeNative(scope),
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
-        observe: async (listener, disconnected) => {
-          if (!this.transport.observeEvents) throw new HermesUnavailableError()
-          return this.transport.observeEvents(listener, disconnected)
-        },
       },
-      { idleMs: options.sessionIdleMs }
+      // The registry requires observation, so a transport that cannot observe
+      // is adapted here rather than silently skipped there: such a transport
+      // serves only the read-only surfaces, and no run can attach through it.
+      {
+        onEvent: (listener) =>
+          transport.onEvent?.(listener) ?? (() => undefined),
+        onConnection: (handler) =>
+          transport.onConnection?.(handler) ?? (() => undefined),
+      },
+      { idleMs: options.sessionIdleMs, log: options.log }
     )
     this.interactions = new HermesInteractions({
       request: (method, params) => this.transport.request(method, params),
     })
-    this.runs = new HermesRunEngine(this)
+    this.native = new HermesNativeRuntime({
+      transport,
+      attachments: {
+        ensure: async (scope) => ({
+          liveSessionId: (await this.#attachments.ensure(scope)).liveSessionId,
+          running: this.#attachedRunning(scope.agentId, scope.sessionId),
+        }),
+        retain: (scope, reason) => this.#attachments.retain(scope, reason),
+        subscribeLive: (liveSessionId, observer) =>
+          this.#attachments.subscribeLive(liveSessionId, observer),
+        invalidate: (liveSessionId) =>
+          this.#attachments.invalidate(liveSessionId),
+      },
+      interactions: this.interactions,
+      history: (scope) => this.#rawHistory(scope),
+      ...(options.log ? { log: options.log } : {}),
+    })
+    this.runs = new HermesRunEngine(this.native, {
+      ...(options.log ? { log: options.log } : {}),
+    })
   }
 
   resolveSessionId(agentId: string, publicSessionId: string) {
@@ -656,6 +467,13 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       cause instanceof HermesSessionConflictError
     )
       return { code: "revision_conflict", status: 409 } as const
+    // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
+    // browser must reconcile instead of treating the Session as unavailable.
+    if (
+      cause instanceof HermesRunPublicError &&
+      cause.code === "AOS_STOP_UNCERTAIN"
+    )
+      return { code: "uncertain_mutation", status: 409 } as const
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
@@ -691,14 +509,26 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       sessionId: publicSessionId,
       liveSessionId: attached.liveSessionId,
       attached: true,
-      active:
-        resumed?.running === true ||
-        resumed?.status === "working" ||
-        resumed?.status === "waiting" ||
-        resumed?.status === "starting",
+      active: this.#attachedRunning(agentId, storedId),
       usage: info?.usage,
       info: info ?? resumed,
     }
+  }
+
+  /**
+   * Last known native turn state of a bound Session, from the authoritative
+   * `session.resume` payload the registry recorded.
+   */
+  #attachedRunning(agentId: string, sessionId: string) {
+    const resumed = this.#attachmentInfo.get(
+      attachmentInfoKey(agentId, sessionId)
+    )
+    return (
+      resumed?.running === true ||
+      resumed?.status === "working" ||
+      resumed?.status === "waiting" ||
+      resumed?.status === "starting"
+    )
   }
 
   async #rawHistory(
@@ -829,10 +659,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         runId,
       })),
     }
-  }
-
-  inspectExecution(scope: HermesRunScope & { runId: string }) {
-    return this.interactions.resume(scope)
   }
 
   stageAttachments(
@@ -1061,50 +887,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     await this.transport.close?.()
   }
 
-  acceptInteraction(
-    scope: HermesRunScope & { runId: string },
-    liveSessionId: string,
-    event: unknown
-  ) {
-    const outcome = this.interactions.acceptNative(scope, liveSessionId, event)
-    if (outcome && "interrupts" in outcome)
-      this.#retainPendingInteraction(scope)
-    return outcome
-  }
-
-  async respondInteractions(
-    scope: HermesRunScope & { runId: string },
-    resume: readonly ResumeEntry[]
-  ) {
-    await this.interactions.resume(scope)
-    return Promise.all(
-      resume.map((entry) => this.interactions.respond(scope, entry))
-    ).then((results) => {
-      if (
-        results.every(
-          ({ status }) => status === "resolved" || status === "expired"
-        )
-      )
-        this.clearPendingInteraction(scope)
-      return results
-    })
-  }
-
-  clearPendingInteraction(scope: HermesRunScope) {
-    const key = attachmentInfoKey(scope.agentId, scope.sessionId)
-    this.#pendingInteractionReleases.get(key)?.()
-    this.#pendingInteractionReleases.delete(key)
-  }
-
-  async #retainPendingInteraction(scope: HermesRunScope) {
-    const key = attachmentInfoKey(scope.agentId, scope.sessionId)
-    if (this.#pendingInteractionReleases.has(key)) return
-    const release = await this.#attachments.retain(scope, "interaction")
-    // A terminal event may have won the race while the attachment resumed.
-    if (this.#pendingInteractionReleases.has(key)) release()
-    else this.#pendingInteractionReleases.set(key, release)
-  }
-
   async #resumeNative(scope: HermesRunScope) {
     let payload: unknown
     try {
@@ -1114,6 +896,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         omit_messages: true,
       })
     } catch (error) {
+      // A heal must learn that Hermes reaped this live Session so the registry
+      // can invalidate the binding and resume the durable Session again; every
+      // other transport failure stays an outage.
+      if (isSessionGone(error)) throw new HermesSessionGoneError()
       throwUnavailable(error)
     }
     const liveSessionId =
@@ -1138,11 +924,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     }
   }
 
-  async resume(scope: HermesRunScope) {
-    const attachment = await this.#attachments.ensure(scope)
-    return { liveSessionId: attachment.liveSessionId }
-  }
-
   async subscribeSessionInvalidation(
     agentId: string,
     publicSessionId: string,
@@ -1153,78 +934,11 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     if (!sessionId) throw new HermesSessionNotFoundError()
     return this.#attachments.subscribe(
       { agentId, sessionId, threadId: publicSessionId },
-      () => listener(),
-      () => reset?.()
-    )
-  }
-
-  async observe(
-    liveSessionId: string,
-    listener: (event: unknown) => void,
-    disconnected?: (error?: Error) => void
-  ) {
-    try {
-      return await this.#attachments.subscribeLive(
-        liveSessionId,
-        listener,
-        disconnected
-      )
-    } catch (error) {
-      // HermesRunEngine always attaches first. This fallback keeps the private
-      // native adapter boundary usable for direct diagnostics without creating
-      // a second transport or leaking it through ServerRuntime.
-      if (!this.transport.observeEvents) throwUnavailable(error)
-      let failed = false
-      let stop: (() => void) | undefined
-      const fail = () => {
-        if (failed) return
-        failed = true
-        disconnected?.(new Error("Hermes observation failed"))
-        stop?.()
+      (signal) => {
+        if (signal.kind === "event") listener()
+        else if (signal.kind === "lost") reset?.()
       }
-      try {
-        stop = await this.transport.observeEvents((event) => {
-          if (failed) return
-          const disposition = observedEventDisposition(event, liveSessionId)
-          if (disposition === "valid") listener(event)
-          else if (disposition === "invalid") fail()
-        }, fail)
-        return stop
-      } catch (fallbackError) {
-        throwUnavailable(fallbackError)
-      }
-    }
-  }
-
-  async recover(liveSessionId: string, lastSeen?: number) {
-    let payload: unknown
-    try {
-      payload = await this.transport.request("session.events.since", {
-        session_id: liveSessionId,
-        ...(lastSeen === undefined ? {} : { last_seen: lastSeen }),
-      })
-    } catch (error) {
-      throwUnavailable(error)
-    }
-    if (!isRecord(payload) || !Array.isArray(payload.events))
-      throw new HermesUnavailableError()
-    const epoch = nonEmptyString(payload.epoch)
-    const nativeLastSeen = payload.latest_seq ?? payload.last_seen
-    if (
-      !epoch ||
-      typeof nativeLastSeen !== "number" ||
-      !Number.isSafeInteger(nativeLastSeen) ||
-      nativeLastSeen < 0 ||
-      (payload.truncated !== undefined &&
-        typeof payload.truncated !== "boolean")
     )
-      throw new HermesUnavailableError()
-    return {
-      epoch,
-      lastSeen: nativeLastSeen,
-      truncated: payload.truncated === true,
-      events: payload.events,
-    }
   }
 
   async slashCommands(agentId: string, publicSessionId: string) {
@@ -1237,124 +951,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-  }
-
-  async submit(
-    liveSessionId: string,
-    prompt: {
-      scope: HermesRunScope
-      text: string
-      runId: string
-      rewindSourceId?: string
-    }
-  ) {
-    let invocation: Awaited<ReturnType<typeof nativeSlashInvocation>>
-    if (prompt.text.startsWith("/")) {
-      try {
-        invocation = await nativeSlashInvocation(
-          this.transport,
-          { session_id: liveSessionId },
-          prompt.text
-        )
-      } catch {
-        return { acknowledgement: "rejected" as const }
-      }
-      if (invocation && prompt.scope.hasAttachments)
-        return {
-          acknowledgement: "rejected" as const,
-          rejection: "command-with-attachments" as const,
-        }
-    }
-    const rewind =
-      invocation || prompt.rewindSourceId === undefined
-        ? {}
-        : rewindSubmitParams(
-            await this.#rawHistory(prompt.scope),
-            prompt.rewindSourceId
-          )
-    try {
-      if (invocation) {
-        let completion
-        try {
-          completion = await executeSlashCommand(
-            this.transport,
-            liveSessionId,
-            invocation.name,
-            invocation.args
-          )
-        } catch (error) {
-          if (error instanceof HermesRpcRejectedError)
-            return { acknowledgement: "rejected" as const }
-          throw error
-        }
-        return {
-          acknowledgement: "accepted" as const,
-          ...(completion ? { completion } : {}),
-        }
-      }
-      await this.transport.request("prompt.submit", {
-        session_id: liveSessionId,
-        text: prompt.text,
-        ...rewind,
-      })
-    } catch (error) {
-      throwUnavailable(error)
-    }
-    return { acknowledgement: "accepted" as const }
-  }
-
-  async interrupt(liveSessionId: string) {
-    try {
-      await this.transport.request("session.interrupt", {
-        session_id: liveSessionId,
-      })
-    } catch (error) {
-      throwUnavailable(error)
-    }
-  }
-
-  async redirect(liveSessionId: string, text: string) {
-    let payload: unknown
-    try {
-      payload = await this.transport.request("session.redirect", {
-        session_id: liveSessionId,
-        text,
-      })
-    } catch (error) {
-      if (error instanceof HermesRpcUncertainError)
-        throw new ServerRunSteerUncertainError()
-      throwUnavailable(error)
-    }
-    if (
-      !isRecord(payload) ||
-      (payload.status !== "redirected" && payload.status !== "queued") ||
-      typeof payload.text !== "string"
-    )
-      throw new HermesUnavailableError()
-    return payload.status
-  }
-
-  async status(liveSessionId: string) {
-    let payload: unknown
-    try {
-      payload = await this.transport.request("session.active_list", {})
-    } catch (error) {
-      throwUnavailable(error)
-    }
-    if (!isRecord(payload) || !Array.isArray(payload.sessions))
-      throw new HermesUnavailableError()
-    const session = payload.sessions.find(
-      (value) => isRecord(value) && nonEmptyString(value.id) === liveSessionId
-    )
-    if (!session) return "idle" as const
-    if (!isRecord(session)) throw new HermesUnavailableError()
-    if (session.status === "waiting") return "waiting" as const
-    if (session.status === "working") return "running" as const
-    // A cold Session is submit-ready: Hermes claims the prompt and waits for
-    // its deferred agent build. Treating this as busy drops the first message.
-    if (session.status === "starting" || session.status === "idle")
-      return "idle" as const
-    throw new HermesUnavailableError()
   }
 
   async listSessions(profile: string, limit: number, offset: number) {

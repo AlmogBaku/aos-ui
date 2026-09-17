@@ -47,6 +47,18 @@ export function parseJsonOrValue(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Return `value` as a trimmed non-empty string, or `undefined`. The one shared
+ * shape for reading an optional native text field.
+ */
+export function trimmedText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+// ---------------------------------------------------------------------------
 // UTF-8 byte helpers
 // ---------------------------------------------------------------------------
 
@@ -271,4 +283,29 @@ export function timestamp(value: unknown, fallbackMs = 0): string {
         numeric < 10_000_000_000 ? numeric * 1000 : numeric
       ).toISOString()
     : new Date(fallbackMs).toISOString()
+}
+
+// ---------------------------------------------------------------------------
+// Durable Session identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The one map key for a durable Agent/Session pair. The separator cannot occur
+ * in a native identifier, so two distinct pairs never collide.
+ */
+export function sessionKey(scope: { agentId: string; sessionId: string }) {
+  return `${scope.agentId}\u0000${scope.sessionId}`
+}
+
+// ---------------------------------------------------------------------------
+// Log redaction
+// ---------------------------------------------------------------------------
+
+/**
+ * The only error detail any Hermes module may log: never a message, path, URL
+ * or token. Shared by the gateway and the attachment registry so one redaction
+ * semantic covers every native failure log.
+ */
+export function publicReason(error: unknown) {
+  return error instanceof Error ? error.name : "unknown"
 }

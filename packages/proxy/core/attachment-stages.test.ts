@@ -25,7 +25,12 @@ describe("AttachmentStageRegistry", () => {
     const expiredCleanup = vi.fn(async () => undefined)
     const takenCleanup = vi.fn(async () => undefined)
     const registry = new AttachmentStageRegistry(2, 1_000, 10, 2)
-    const expired = registry.create("agent", "session", stage(expiredCleanup), 5)
+    const expired = registry.create(
+      "agent",
+      "session",
+      stage(expiredCleanup),
+      5
+    )
     const taken = registry.create("agent", "session", stage(takenCleanup), 5)
 
     expect(registry.take("agent", "session", taken!)).toBeDefined()

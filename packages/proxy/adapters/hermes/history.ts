@@ -1,6 +1,8 @@
 import type { SessionMessage } from "../../../protocol"
 import { isRecord as isNativeRecord, timestamp } from "./native"
 import {
+  containsPrivateValue,
+  projectHermesArtifactReceipt,
   projectHermesMediaArtifacts,
   projectHermesMediaText,
 } from "./media-artifacts"
@@ -62,11 +64,6 @@ const privateToolKeys = new Set([
   "workdir",
   "workingdirectory",
 ])
-
-const credentialValue =
-  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
-const privateLocationValue =
-  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
 
 function isRecord(value: unknown): value is JsonRecord {
   return isNativeRecord(value)
@@ -137,11 +134,7 @@ function isPrivateToolKey(key: string) {
 function publicJsonValue(value: JsonValue, depth = 0): JsonValue | undefined {
   if (depth > MAX_PUBLIC_DEPTH) return undefined
   if (typeof value === "string") {
-    if (
-      value.length > MAX_PUBLIC_STRING_LENGTH ||
-      credentialValue.test(value) ||
-      privateLocationValue.test(value)
-    )
+    if (value.length > MAX_PUBLIC_STRING_LENGTH || containsPrivateValue(value))
       return undefined
     return value
   }
@@ -331,63 +324,6 @@ function unwrapTool(name: string, args: JsonRecord) {
   const selectedArgs = parseJson(args.arguments)
   if (!selectedName || !isRecord(selectedArgs)) return { name, args }
   return { name: selectedName, args: selectedArgs }
-}
-
-function safeArtifactToken(value: string, maxLength: number) {
-  return (
-    value.length <= maxLength &&
-    !/[\\/]/u.test(value) &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0)
-      return code <= 31 || code === 127
-    }) &&
-    value !== "." &&
-    value !== ".." &&
-    !credentialValue.test(value) &&
-    !privateLocationValue.test(value)
-  )
-}
-
-export function projectHermesArtifactReceipt(raw: unknown) {
-  const value = parseJson(raw)
-  if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
-    return undefined
-  const artifact = value.artifact
-  if (!isRecord(artifact)) return undefined
-  const id = stringValue(artifact.id)
-  const filename = stringValue(artifact.filename)
-  const mimeType = stringValue(artifact.mimeType)
-  const sizeBytes = artifact.sizeBytes
-  if (
-    !id ||
-    !filename ||
-    !safeArtifactToken(id, 256) ||
-    !safeArtifactToken(filename, 255) ||
-    (mimeType !== undefined &&
-      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
-        mimeType
-      )) ||
-    (sizeBytes !== undefined &&
-      (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
-  )
-    return undefined
-  const descriptor = {
-    id,
-    filename,
-    ...(mimeType ? { mimeType } : {}),
-    ...(typeof sizeBytes === "number" ? { sizeBytes } : {}),
-  }
-  return {
-    result: { ok: true, type: "aos.artifact", artifact: descriptor },
-    part: {
-      type: "data" as const,
-      name: "aos.artifact",
-      data: {
-        ...descriptor,
-        source: { type: "provider", reference: id },
-      },
-    },
-  }
 }
 
 function imageSource(value: unknown) {

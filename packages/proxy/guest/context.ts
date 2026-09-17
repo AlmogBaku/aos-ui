@@ -62,12 +62,7 @@ export function createGuestRoutes(options: GuestAppOptions) {
       ((delayMs: number, task: () => void) => setTimeout(task, delayMs)),
     cancel:
       options.cancel ?? ((timer: unknown) => clearTimeout(timer as number)),
-    attachmentStages: new AttachmentStageRegistry(
-      256,
-      300_000,
-      67_108_864,
-      4
-    ),
+    attachmentStages: new AttachmentStageRegistry(256, 300_000, 67_108_864, 4),
     authenticate: (request: Request) => authorizer.authenticate(request),
     authorize: (
       identity: VerifiedGuestIdentity,

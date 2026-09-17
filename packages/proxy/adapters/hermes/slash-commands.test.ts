@@ -2,14 +2,42 @@ import { expect, it, vi } from "vitest"
 import { EventType } from "@ag-ui/core"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
-import { HermesRunEngine, type HermesRunNative } from "./run"
-import { HermesRpcRejectedError } from "./gateway"
+import { HermesRunEngine } from "./run"
+import type { HermesRunNative } from "./run-native"
+import { HermesNativeRuntime } from "./run-native"
+import {
+  HermesRpcRejectedError,
+  HermesUnavailableError,
+  type HermesRpcTransport,
+} from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 
 const scope = {
   agentId: "writer",
   sessionId: "stored",
   threadId: "stored",
+}
+
+/**
+ * The native run boundary over one transport: command routing is a submit-time
+ * decision, so these cases drive it exactly as `run.ts` does.
+ */
+function nativeFor(request: HermesRpcTransport["request"]) {
+  return new HermesNativeRuntime({
+    transport: { request },
+    attachments: {
+      ensure: async () => ({ liveSessionId: "live", running: false }),
+      retain: async () => () => {},
+      subscribeLive: async () => () => {},
+      invalidate: () => {},
+    },
+    interactions: {
+      acceptNative: () => undefined,
+      respond: async () => ({ status: "resolved" }),
+      resume: async () => ({ running: false, status: "idle" }),
+    },
+    history: async () => [],
+  })
 }
 
 it("projects native slash catalog names in order without duplicate or malformed entries", async () => {
@@ -75,19 +103,19 @@ it("keeps the capability response usable when the native catalog is unavailable"
   })
 })
 
-it("rejects a malformed catalog instead of treating it as an authoritative miss", async () => {
+it("reports a malformed catalog as an outage instead of a refused command", async () => {
   const request = vi.fn(async (method: string) => {
     if (method === "commands.catalog") return { commands: [] }
     throw new Error("unexpected RPC")
   })
 
   await expect(
-    new HermesServerAdapter({ request }).submit("live", {
+    nativeFor(request).submit("live", {
       scope,
       text: "/help",
       runId: "run",
     })
-  ).resolves.toEqual({ acknowledgement: "rejected" })
+  ).rejects.toBeInstanceOf(HermesUnavailableError)
   expect(request).toHaveBeenCalledOnce()
 })
 
@@ -97,15 +125,15 @@ it("routes an exact native command to slash.exec and exposes synchronous text", 
     if (method === "slash.exec") return { output: "<script>text only</script>" }
     throw new Error("unexpected RPC")
   })
-  const adapter = new HermesServerAdapter({ request })
   await expect(
-    adapter.submit("live", {
+    nativeFor(request).submit("live", {
       scope,
       text: "/help details",
       runId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
+    status: "streaming",
     completion: { output: "<script>text only</script>" },
   })
   expect(request).toHaveBeenCalledWith(
@@ -131,13 +159,14 @@ it("preserves native prefill results for commands such as undo", async () => {
   })
 
   await expect(
-    new HermesServerAdapter({ request }).submit("live", {
+    nativeFor(request).submit("live", {
       scope,
       text: "/undo",
       runId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
+    status: "streaming",
     completion: {
       output: "Undid 1 turn.",
       composerPrefill: "Earlier question",
@@ -157,13 +186,14 @@ it("recognizes typed commands from the full native catalog", async () => {
   })
 
   await expect(
-    new HermesServerAdapter({ request }).submit("live", {
+    nativeFor(request).submit("live", {
       scope,
       text: "/command-256",
       runId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
+    status: "streaming",
     completion: { output: "Last command" },
   })
   expect(
@@ -194,7 +224,7 @@ it.each([
       throw new Error("unexpected RPC")
     })
 
-    await new HermesServerAdapter({ request }).submit("live", {
+    await nativeFor(request).submit("live", {
       scope,
       text,
       runId: "run",
@@ -230,8 +260,7 @@ it.each(["/unknown", "/constructor", " /help", "/helpful", "normal text"])(
         ? { pairs: [["/help", "Help"]], canon: { "/help": "/help" } }
         : { status: "streaming" }
     )
-    const adapter = new HermesServerAdapter({ request })
-    await adapter.submit("live", { scope, text, runId: "run" })
+    await nativeFor(request).submit("live", { scope, text, runId: "run" })
     expect(request).toHaveBeenCalledWith("prompt.submit", {
       session_id: "live",
       text,
@@ -252,14 +281,13 @@ it.each([-32601, 4018])(
         return { type: "skill", name: "skill", message: "Expanded skill" }
       return { status: "streaming" }
     })
-    const adapter = new HermesServerAdapter({ request })
     await expect(
-      adapter.submit("live", {
+      nativeFor(request).submit("live", {
         scope,
         text: "/skill arguments",
         runId: "run",
       })
-    ).resolves.toEqual({ acknowledgement: "accepted" })
+    ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
     expect(request).toHaveBeenCalledWith(
       "command.dispatch",
       { session_id: "live", name: "skill", arg: "arguments" },
@@ -282,13 +310,16 @@ it.each([
       if (method === "commands.catalog") return { pairs: [["/help", "Help"]] }
       throw failure
     })
-    const submission = new HermesServerAdapter({ request }).submit("live", {
+    const submission = nativeFor(request).submit("live", {
       scope,
       text: "/help",
       runId: "run",
     })
     if (outcome === "rejected")
-      await expect(submission).resolves.toEqual({ acknowledgement: "rejected" })
+      await expect(submission).resolves.toEqual({
+        acknowledgement: "rejected",
+        reason: "unknown",
+      })
     else await expect(submission).rejects.toThrow()
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "commands.catalog",
@@ -307,13 +338,14 @@ it("follows native aliases and completes outputless synchronous commands", async
     }
   )
   await expect(
-    new HermesServerAdapter({ request }).submit("live", {
+    nativeFor(request).submit("live", {
       scope,
       text: "/help info",
       runId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
+    status: "streaming",
     completion: { output: "" },
   })
   expect(request).toHaveBeenCalledWith(
@@ -329,18 +361,18 @@ it("rejects recognized commands with attachments and sends unknown ones normally
       ? { pairs: [["/help", "Help"]] }
       : { status: "streaming" }
   )
-  const adapter = new HermesServerAdapter({ request })
+  const native = nativeFor(request)
   await expect(
-    adapter.submit("live", {
+    native.submit("live", {
       scope: { ...scope, hasAttachments: true },
       text: "/help",
       runId: "one",
     })
   ).resolves.toEqual({
     acknowledgement: "rejected",
-    rejection: "command-with-attachments",
+    reason: "command-with-attachments",
   })
-  await adapter.submit("live", {
+  await native.submit("live", {
     scope: { ...scope, hasAttachments: true },
     text: "/unknown",
     runId: "two",
@@ -354,13 +386,21 @@ it("rejects recognized commands with attachments and sends unknown ones normally
 
 it("finishes a synchronous command run without waiting for native conversational events", async () => {
   const native: HermesRunNative = {
-    resume: async () => ({ liveSessionId: "live" }),
+    resume: async () => ({ liveSessionId: "live", running: false }),
     observe: async () => () => {},
-    recover: async () => ({ epoch: "epoch", lastSeen: 0, events: [] }),
+    cursor: async () => ({ epoch: "epoch", latestSeq: 0 }),
+    replay: async () => ({ epoch: "epoch", lastSeen: 0, events: [] }),
     status: async () => "idle",
-    interrupt: async () => {},
+    interrupt: async () => "interrupted",
+    redirect: async () => "redirected",
+    retain: async () => () => {},
+    inspectExecution: async () => ({ running: false, status: "idle" }),
+    acceptInteraction: () => undefined,
+    respondInteractions: async () => [],
+    clearPendingInteraction: () => {},
     submit: async () => ({
       acknowledgement: "accepted",
+      status: "streaming",
       completion: { output: "Help output" },
     }),
   }

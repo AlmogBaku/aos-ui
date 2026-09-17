@@ -209,3 +209,133 @@ export function projectHermesMediaText(
   const filter = new HermesMediaTextFilter(trustedReferences)
   return `${filter.write(text)}${filter.finish()}`.replace(/\n$/u, "")
 }
+
+// ---------------------------------------------------------------------------
+// Published `aos.artifact` receipts
+// ---------------------------------------------------------------------------
+
+const credentialValue =
+  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
+const privateLocationValue =
+  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
+
+/**
+ * True when a native string looks like a credential or a private filesystem or
+ * internal-network location. Shared by artifact receipts and history tool
+ * projection so one rule decides what may leave the adapter.
+ */
+export function containsPrivateValue(value: string) {
+  return credentialValue.test(value) || privateLocationValue.test(value)
+}
+
+function trimmedString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function safeArtifactToken(value: string, maxLength: number) {
+  return (
+    value.length <= maxLength &&
+    !/[\\/]/u.test(value) &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || code === 127
+    }) &&
+    value !== "." &&
+    value !== ".." &&
+    !containsPrivateValue(value)
+  )
+}
+
+/**
+ * Project a native `present_artifact` receipt into the public opaque artifact
+ * descriptor. The native path never leaves this function; the public reference
+ * is the artifact id the content operations resolve back to a path.
+ */
+export function projectHermesArtifactReceipt(raw: unknown) {
+  const value = parsedRecord(raw)
+  if (!value || value.ok !== true || value.type !== "aos.artifact")
+    return undefined
+  const artifact = value.artifact
+  if (!isRecord(artifact)) return undefined
+  const id = trimmedString(artifact.id)
+  const filename = trimmedString(artifact.filename)
+  const mimeType = trimmedString(artifact.mimeType)
+  const sizeBytes = artifact.sizeBytes
+  if (
+    !id ||
+    !filename ||
+    !safeArtifactToken(id, 256) ||
+    !safeArtifactToken(filename, 255) ||
+    (mimeType !== undefined &&
+      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
+        mimeType
+      )) ||
+    (sizeBytes !== undefined &&
+      (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
+  )
+    return undefined
+  const descriptor = {
+    id,
+    filename,
+    ...(mimeType ? { mimeType } : {}),
+    ...(typeof sizeBytes === "number" ? { sizeBytes } : {}),
+  }
+  return {
+    result: { ok: true, type: "aos.artifact", artifact: descriptor },
+    part: {
+      type: "data" as const,
+      name: "aos.artifact",
+      data: {
+        ...descriptor,
+        source: { type: "provider", reference: id },
+      },
+    },
+  }
+}
+
+/**
+ * Resolve one already-published artifact id to its native reference by scanning
+ * authoritative history newest-first. Only a native tool receipt grants
+ * authority; a relative, traversal-free path is the sole accepted reference.
+ */
+export function publishedArtifact(
+  rows: readonly unknown[],
+  artifactId: string
+) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (!isRecord(row)) continue
+    if (row.role === "tool") {
+      const toolCallId = trimmedString(row.tool_call_id ?? row.toolCallId)
+      const toolName = trimmedString(row.tool_name ?? row.toolName)
+      if (toolCallId && toolName)
+        for (const media of projectHermesMediaArtifacts(
+          toolCallId,
+          toolName,
+          row.content ?? row.result
+        ))
+          if (media.descriptor.id === artifactId)
+            return {
+              reference: media.reference,
+              filename: media.descriptor.filename,
+            }
+    }
+    const value = parsedRecord(row.content ?? row.result)
+    if (!value || value.ok !== true || value.type !== "aos.artifact") continue
+    const artifact = isRecord(value.artifact) ? value.artifact : undefined
+    const id = trimmedString(artifact?.id)
+    const reference = trimmedString(artifact?.path)
+    const filename = trimmedString(artifact?.filename)
+    if (
+      id !== artifactId ||
+      !reference ||
+      !filename ||
+      reference.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/u.test(reference) ||
+      reference.split(/[\\/]/u).includes("..")
+    )
+      continue
+    return { reference, filename }
+  }
+  return undefined
+}

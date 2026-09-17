@@ -12,7 +12,7 @@
  *   })
  *   const adapter = new HermesServerAdapter(router)
  *
- *   // Later: drive native events into any observeEvents subscriber
+ *   // Later: drive native events into every onEvent subscriber
  *   router.publish({ type: "session.info", session_id: "live-secret",
  *                    seq: 1, payload: { running: false } })
  *
@@ -20,15 +20,25 @@
  *   expect(router.calls("session.resume")).toHaveLength(1)
  */
 
-import type { HermesRpcOptions, HermesRpcTransport } from "../gateway"
+import type {
+  HermesConnectionHandler,
+  HermesRpcOptions,
+  HermesRpcTransport,
+} from "../gateway"
 
 export type RpcHandler = (
   params: Readonly<Record<string, unknown>>
 ) => Promise<unknown>
 
 export type RpcRouter = HermesRpcTransport & {
-  /** Publish an event to all active observeEvents subscribers. */
+  /** Publish an event to every active `onEvent` subscriber. */
   publish(event: unknown): void
+  /** Drive the gateway connection lifecycle. */
+  connection: {
+    restored(): Promise<void>
+    lost(): void
+    epochChanged(): void
+  }
   /** Return all recorded calls for `method`, newest-last. */
   calls(method: string): Array<{
     params: Readonly<Record<string, unknown>>
@@ -44,8 +54,9 @@ export type RpcRouter = HermesRpcTransport & {
  *  - Any method without a handler throws `Error("unexpected RPC: <method>")`.
  *
  * The returned object records every `request()` call for later assertion.
- * `observeEvents` and `close` are stubs that track subscriptions; call
- * `publish(event)` to fan out to all active listeners.
+ * `onEvent`, `onConnection`, and `close` are stubs that track subscriptions;
+ * call `publish(event)` to fan out to every active listener and `connection.*`
+ * to replay a heal, a loss, or a Hermes restart.
  */
 export function rpcRouter(
   handlers: Partial<Record<string, RpcHandler>> = {}
@@ -66,6 +77,7 @@ export function rpcRouter(
     }>
   >()
   const subscribers: Array<(event: unknown) => void> = []
+  const connectionHandlers: HermesConnectionHandler[] = []
 
   function recordCall(
     method: string,
@@ -92,9 +104,7 @@ export function rpcRouter(
       return handler(params)
     },
 
-    observeEvents: async (
-      listener: (event: unknown) => void
-    ): Promise<() => void> => {
+    onEvent: (listener: (event: unknown) => void): (() => void) => {
       subscribers.push(listener)
       return () => {
         const index = subscribers.indexOf(listener)
@@ -102,8 +112,31 @@ export function rpcRouter(
       }
     },
 
+    onConnection: (handler: HermesConnectionHandler): (() => void) => {
+      connectionHandlers.push(handler)
+      return () => {
+        const index = connectionHandlers.indexOf(handler)
+        if (index !== -1) connectionHandlers.splice(index, 1)
+      }
+    },
+
     close: async (): Promise<void> => {
       subscribers.splice(0)
+      connectionHandlers.splice(0)
+    },
+
+    connection: {
+      restored: async (): Promise<void> => {
+        for (const handler of connectionHandlers.slice())
+          await handler.restored?.()
+      },
+      lost: (): void => {
+        for (const handler of connectionHandlers.slice()) handler.lost?.()
+      },
+      epochChanged: (): void => {
+        for (const handler of connectionHandlers.slice())
+          handler.epochChanged?.()
+      },
     },
 
     publish(event: unknown): void {
