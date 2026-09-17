@@ -3,7 +3,7 @@ import { EventType } from "@ag-ui/core"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesRunEngine, type HermesRunNative } from "./run"
-import { HermesRpcError } from "./transport"
+import { HermesRpcRejectedError } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 
 const scope = {
@@ -111,7 +111,7 @@ it("routes an exact native command to slash.exec and exposes synchronous text", 
   expect(request).toHaveBeenCalledWith(
     "slash.exec",
     { command: "help details", session_id: "live" },
-    expect.any(Number)
+    { maxResponseBytes: expect.any(Number) }
   )
   expect(
     request.mock.calls.some(([method]) => method === "prompt.submit")
@@ -203,7 +203,7 @@ it.each([
     expect(request).toHaveBeenCalledWith(
       "slash.exec",
       { command, session_id: "live" },
-      expect.any(Number)
+      { maxResponseBytes: expect.any(Number) }
     )
     expect(
       request.mock.calls.some(([method]) => method === "prompt.submit")
@@ -247,7 +247,7 @@ it.each([-32601, 4018])(
   async (code) => {
     const request = vi.fn(async (method: string) => {
       if (method === "commands.catalog") return { pairs: [["/skill", "Skill"]] }
-      if (method === "slash.exec") throw new HermesRpcError(code)
+      if (method === "slash.exec") throw new HermesRpcRejectedError(code)
       if (method === "command.dispatch")
         return { type: "skill", name: "skill", message: "Expanded skill" }
       return { status: "streaming" }
@@ -263,7 +263,7 @@ it.each([-32601, 4018])(
     expect(request).toHaveBeenCalledWith(
       "command.dispatch",
       { session_id: "live", name: "skill", arg: "arguments" },
-      expect.any(Number)
+      { maxResponseBytes: expect.any(Number) }
     )
     expect(request).toHaveBeenCalledWith("prompt.submit", {
       session_id: "live",
@@ -273,7 +273,7 @@ it.each([-32601, 4018])(
 )
 
 it.each([
-  [new HermesRpcError(5030), "rejected"],
+  [new HermesRpcRejectedError(5030), "rejected"],
   [new Error("uncertain connection"), "throws"],
 ] as const)(
   "never retries execution failure through another dispatch or chat: %s",
@@ -319,7 +319,7 @@ it("follows native aliases and completes outputless synchronous commands", async
   expect(request).toHaveBeenCalledWith(
     "slash.exec",
     { session_id: "live", command: "status more info" },
-    expect.any(Number)
+    { maxResponseBytes: expect.any(Number) }
   )
 })
 

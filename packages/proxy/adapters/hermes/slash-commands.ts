@@ -3,7 +3,7 @@ import {
   SlashCommandSchema,
   type SlashCommand,
 } from "../../../protocol"
-import type { HermesRpcTransport } from "./adapter"
+import type { HermesRpcTransport } from "./gateway"
 
 const MAX_CATALOG_RESPONSE_BYTES = 2_097_152
 
@@ -11,11 +11,9 @@ async function nativeCommandPairs(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>
 ) {
-  const value = await transport.request(
-    "commands.catalog",
-    params,
-    MAX_CATALOG_RESPONSE_BYTES
-  )
+  const value = await transport.request("commands.catalog", params, {
+    maxResponseBytes: MAX_CATALOG_RESPONSE_BYTES,
+  })
   if (
     !value ||
     typeof value !== "object" ||

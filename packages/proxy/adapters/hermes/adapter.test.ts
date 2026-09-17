@@ -9,8 +9,11 @@ import {
   HermesServerAdapter,
   type HermesRpcTransport,
 } from "./adapter"
-import { HermesAuthenticationError } from "./transport"
-import { HermesHttpError, HermesRpcUncertainError } from "./transport"
+import {
+  HermesAuthenticationError,
+  HermesHttpError,
+  HermesRpcUncertainError,
+} from "./gateway"
 import { ServerRunSteerUncertainError } from "../../core/runtime"
 import { HermesRunRewindConflictError } from "./run"
 
@@ -154,7 +157,7 @@ describe("Hermes server adapter", () => {
         content_base64: "data:image/png;base64,aGVsbG8=",
         filename: "image.png",
       },
-      65_536
+      { maxResponseBytes: 65_536 }
     )
 
     await expect(

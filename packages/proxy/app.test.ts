@@ -5,7 +5,7 @@ import { createProxyApp } from "./app"
 import {
   HermesAuthenticationError,
   HermesHttpError,
-} from "./adapters/hermes/transport"
+} from "./adapters/hermes/gateway"
 import {
   HermesServerAdapter,
   HermesSessionNotFoundError,

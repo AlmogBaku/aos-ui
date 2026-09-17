@@ -20,7 +20,7 @@
  *   expect(router.calls("session.resume")).toHaveLength(1)
  */
 
-import type { HermesRpcTransport } from "../adapter"
+import type { HermesRpcOptions, HermesRpcTransport } from "../gateway"
 
 export type RpcHandler = (
   params: Readonly<Record<string, unknown>>
@@ -84,9 +84,9 @@ export function rpcRouter(
     async request(
       method: string,
       params: Readonly<Record<string, unknown>>,
-      maxResponseBytes?: number
+      options?: HermesRpcOptions
     ): Promise<unknown> {
-      recordCall(method, params, maxResponseBytes)
+      recordCall(method, params, options?.maxResponseBytes)
       const handler = effectiveHandlers[method]
       if (!handler) throw new Error(`unexpected RPC: ${method}`)
       return handler(params)

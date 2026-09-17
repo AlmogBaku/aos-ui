@@ -1,6 +1,5 @@
 import {
   AgentCatalogResponseSchema,
-  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
@@ -20,7 +19,9 @@ import {
   HermesHttpError,
   HermesRpcRejectedError,
   HermesRpcUncertainError,
-} from "./transport"
+  HermesUnavailableError,
+  type HermesRpcTransport,
+} from "./gateway"
 import { projectHermesHistory } from "./history"
 import { projectHermesMediaArtifacts } from "./media-artifacts"
 import {
@@ -79,7 +80,7 @@ async function executeSlashCommand(
         command: `${name}${args ? ` ${args}` : ""}`,
         session_id: liveSessionId,
       },
-      1_048_576
+      { maxResponseBytes: 1_048_576 }
     )
   } catch (error) {
     if (
@@ -90,7 +91,7 @@ async function executeSlashCommand(
     result = await transport.request(
       "command.dispatch",
       { session_id: liveSessionId, name, arg: args },
-      1_048_576
+      { maxResponseBytes: 1_048_576 }
     )
   }
   if (!isRecord(result)) throw new HermesUnavailableError()
@@ -143,23 +144,7 @@ async function executeSlashCommand(
   return { output }
 }
 
-export interface HermesRpcTransport {
-  request(
-    method: string,
-    params: Readonly<Record<string, unknown>>,
-    maxResponseBytes?: number
-  ): Promise<unknown>
-  http?(
-    path: string,
-    init?: { method?: string; body?: unknown; maxResponseBytes?: number }
-  ): Promise<unknown>
-  authState?(): Promise<RuntimeAuthState>
-  observeEvents?(
-    listener: (event: unknown) => void,
-    disconnected: (error?: Error) => void
-  ): Promise<() => void>
-  close?(): Promise<void>
-}
+export type { HermesRpcTransport } from "./gateway"
 
 export class HermesRevisionConflictError extends Error {
   constructor() {
@@ -168,12 +153,7 @@ export class HermesRevisionConflictError extends Error {
   }
 }
 
-export class HermesUnavailableError extends Error {
-  constructor() {
-    super("Hermes is temporarily unavailable")
-    this.name = "HermesUnavailableError"
-  }
-}
+export { HermesUnavailableError }
 
 export class HermesAgentNotFoundError extends Error {
   constructor() {
@@ -493,7 +473,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       },
       transport: {
         request: (method, params, maxResponseBytes) =>
-          this.transport.request(method, params, maxResponseBytes),
+          this.transport.request(method, params, { maxResponseBytes }),
         readArtifact: async (scope, reference, _maxBytes, maxResponseBytes) => {
           if (!this.#dashboard) throw new HermesUnavailableError()
           const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
@@ -881,8 +861,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   }
 
   async authState(): Promise<RuntimeAuthState> {
-    if (this.transport.authState)
-      return RuntimeAuthStateSchema.parse(await this.transport.authState())
     try {
       await this.transport.request("profiles.list", { include_sessions: false })
       return { status: "authenticated" }

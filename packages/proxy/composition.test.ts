@@ -9,8 +9,8 @@ import type { HermesRpcTransport } from "./adapters/hermes/adapter"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
   HermesAuthenticationError,
-  type HermesWebSocketRpcTransportOptions,
-} from "./adapters/hermes/transport"
+  type HermesGatewayOptions,
+} from "./adapters/hermes/gateway"
 import { createConfiguredProxy } from "./composition"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
 import type { RuntimeFactory } from "./adapters/create-runtime"
@@ -163,7 +163,7 @@ describe("configured proxy composition", () => {
   it("loads one server token and shares one runtime and transport across both lanes", async () => {
     const transportClose = vi.fn(async () => undefined)
     const transportFactory = vi.fn(
-      (options: HermesWebSocketRpcTransportOptions) =>
+      (options: HermesGatewayOptions) =>
         ({
           request: vi.fn(async (method: string) =>
             method === "profiles.list" ? { profiles: [profile()] } : undefined

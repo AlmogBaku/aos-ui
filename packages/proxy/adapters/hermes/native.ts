@@ -79,6 +79,38 @@ export function utf8BytesWithin(
 }
 
 // ---------------------------------------------------------------------------
+// Bounded JSON shape
+// ---------------------------------------------------------------------------
+
+/** Maximum accepted object/array nesting depth of a decoded native payload. */
+export const MAX_NATIVE_JSON_DEPTH = 32
+/** Maximum accepted node count of a decoded native payload. */
+export const MAX_NATIVE_JSON_NODES = 200_000
+
+/**
+ * True when `value` stays within `MAX_NATIVE_JSON_DEPTH` nesting levels and
+ * `MAX_NATIVE_JSON_NODES` total nodes. Shared by the socket wire guard
+ * (`gateway-socket.ts`) and the bounded REST reader (`http.ts`) so a decoded
+ * frame and a decoded body obey one bound.
+ */
+export function boundedJsonShape(value: unknown) {
+  const pending: { value: unknown; depth: number }[] = [{ value, depth: 0 }]
+  let nodes = 0
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    nodes += 1
+    if (nodes > MAX_NATIVE_JSON_NODES || current.depth > MAX_NATIVE_JSON_DEPTH)
+      return false
+    if (typeof current.value !== "object" || current.value === null) continue
+    for (const child of Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value))
+      pending.push({ value: child, depth: current.depth + 1 })
+  }
+  return true
+}
+
+// ---------------------------------------------------------------------------
 // Bounded JSON-graph walk
 // ---------------------------------------------------------------------------
 
