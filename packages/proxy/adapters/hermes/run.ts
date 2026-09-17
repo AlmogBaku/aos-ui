@@ -23,6 +23,7 @@ import {
   projectHermesMediaArtifacts,
 } from "./media-artifacts"
 import {
+  canonicalToolName,
   hermesToolResultIsError,
   projectHermesToolArgs,
   projectHermesToolResult,
@@ -30,6 +31,7 @@ import {
 import { projectHermesTodos, type HermesTodo } from "./workspace"
 import {
   boundedGraphBytes,
+  isRecord,
   nativeId,
   sessionKey,
   utf8BytesWithin,
@@ -92,17 +94,29 @@ export type HermesRecovery = {
 export type HermesRunHandle = ServerRunHandle
 
 /**
- * Where a run's cursor comes from when it attaches to a live Hermes Session.
- *
- * `barrier` is a new turn: only frames newer than Hermes' current watermark
- * belong to it. `position` is a browser reconnect: the run continues from the
- * cursor it already published. `discover` is a proxy restart with no cursor at
- * all, where only the still-open native turn in Hermes' ring is this run's.
+ * `barrier`: a new turn, so only frames past Hermes' watermark are its own.
+ * `position`: a browser reconnect from the cursor the run already published.
+ * `discover`: a proxy restart where only Hermes' own open turn is this run's.
  */
 type AttachMode =
   | { kind: "barrier" }
   | { kind: "position"; epoch: string; after: number }
   | { kind: "discover" }
+
+/**
+ * Where a run's frames start once it is bound. `head` is Hermes' watermark when
+ * a page was read, `reconcile` that Hermes cannot place this run in its ring.
+ */
+type AttachCursor = {
+  epoch: string
+  barrier: number
+  head?: number
+  replayed?: readonly HermesNativeEvent[]
+  reconcile?: boolean
+}
+
+/** Why the observed frame stream ended. */
+type LostReason = "disconnected" | "rebound" | "restart"
 
 export type HermesReconnectRequest = RecoveryRequest
 
@@ -226,9 +240,8 @@ type BufferedNativeEvents = {
 type TurnOutcome = "open" | "complete" | "failed" | "interrupted"
 
 /**
- * What proved Hermes has nothing left to run for this turn: its own idle
- * `session.info` frame, an authoritative status read, or such a read taken while
- * a turn Hermes admitted behind another one had still not started.
+ * What proved Hermes has nothing left to run: its own idle `session.info`, an
+ * authoritative status read, or such a read while an admitted turn had not run.
  */
 type SettlementEdge = "idle" | "status" | "unstarted"
 
@@ -245,9 +258,8 @@ type NativeFailure = {
 }
 
 /**
- * Hermes keeps the Session running while its turn thread finishes bookkeeping
- * after the completion frame. Until it reports idle the Session is still busy
- * for AOS, so the next Send waits here instead of reading "busy".
+ * Hermes keeps the Session running after the completion frame while its turn
+ * thread finishes bookkeeping, so the next Send waits here, not on "busy".
  */
 type SettlingWatcher = {
   readonly active: ActiveRun
@@ -305,11 +317,7 @@ function stopUncertain() {
 function bufferNativeEvent(buffer: BufferedNativeEvents, value: unknown) {
   if (buffer.overflow) return
   const bytes = boundedGraphBytes(value, MAX_PREACTIVE_BYTES - buffer.bytes)
-  if (
-    bytes === undefined ||
-    buffer.events.length >= MAX_PREACTIVE_EVENTS ||
-    bytes > MAX_PREACTIVE_BYTES - buffer.bytes
-  ) {
+  if (bytes === undefined || buffer.events.length >= MAX_PREACTIVE_EVENTS) {
     buffer.overflow = true
     buffer.events.splice(0, buffer.events.length)
     buffer.bytes = 0
@@ -346,13 +354,10 @@ function safelyUnsubscribe(unsubscribe: (() => void) | undefined) {
 }
 
 function settlingWatcher(active: ActiveRun): SettlingWatcher {
-  let resolve!: () => void
-  const done = new Promise<void>((settled) => {
-    resolve = settled
-  })
+  const { promise, resolve } = deferred()
   const watcher: SettlingWatcher = {
     active,
-    done,
+    done: promise,
     settled: false,
     settle() {
       watcher.settled = true
@@ -373,12 +378,41 @@ function resolvedWithin(done: Promise<unknown>, ms: number) {
   ]).finally(() => clearTimeout(timer))
 }
 
-function runSettlement() {
-  let resolveSettled!: () => void
-  const settled = new Promise<void>((resolve) => {
-    resolveSettled = resolve
+/** A promise and its resolver: the one shape for AOS' own settlement edges. */
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((settle) => {
+    resolve = settle
   })
-  return { settled, resolveSettled }
+  return { promise, resolve }
+}
+
+function runSettlement() {
+  const { promise, resolve } = deferred()
+  return { settled: promise, resolveSettled: resolve }
+}
+
+/** The streaming state of one assistant generation; a sealed one starts over. */
+function generationState() {
+  return {
+    textStarted: false,
+    streamedText: "" as string | undefined,
+    mediaFilter: new HermesMediaTextFilter(),
+    reasoningStarted: false,
+    reasoningEnded: false,
+    streamedReasoning: "",
+  }
+}
+
+/** Every run's stream opens with its own RUN_STARTED. */
+function startedQueue(scope: HermesRunScope, runId: string) {
+  const queue = new EventQueue()
+  queue.push({
+    type: EventType.RUN_STARTED,
+    threadId: scope.threadId,
+    runId,
+  })
+  return queue
 }
 
 function userText(input: RunAgentInput) {
@@ -423,9 +457,9 @@ function nativeEventSessionId(value: unknown) {
 }
 
 /**
- * Every replayed frame must belong to this live Session, carry a sequence, and
- * arrive in increasing order inside the page Hermes reported. An unusable page
- * is never partially accepted: the caller reconciles instead.
+ * Every replayed frame must belong to this live Session, carry a sequence and
+ * increase within the page Hermes reported. An unusable page is never partially
+ * accepted: the caller reconciles instead.
  */
 function validatedReplay(
   recovery: HermesRecovery,
@@ -463,10 +497,9 @@ function validatedReplay(
 }
 
 /**
- * The frames of the last native turn Hermes has not closed. A turn is closed by
- * its `message.complete` or by an idle `session.info`; everything before the
- * last unclosed `message.start` belongs to an earlier turn and to authoritative
- * history, never to the run being attached.
+ * The frames of the last native turn Hermes has not closed. `message.complete`
+ * or an idle `session.info` closes a turn; everything before the last unclosed
+ * `message.start` is an earlier turn's, and belongs to history alone.
  */
 function openTurnFrames(events: readonly HermesNativeEvent[]) {
   let start = -1
@@ -493,28 +526,14 @@ function stableNativeId(value: unknown) {
   return nativeId(value, 512)
 }
 
-function canonicalToolName(name: string) {
-  return name === "delegate_task"
-    ? "delegate_subagent"
-    : name === "skill_view"
-      ? "use_skill"
-      : name === "todo_list"
-        ? "todo"
-        : name === "clarify"
-          ? "question"
-          : name
-}
-
-function toolArgs(name: string, value: unknown) {
-  const args =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {}
-  return args
+function toolArgs(value: unknown) {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function normalizedTool(name: string, value: unknown) {
-  const args = toolArgs(name, value)
+  const args = toolArgs(value)
   if (
     name !== "tool_call" ||
     typeof args.name !== "string" ||
@@ -526,26 +545,19 @@ function normalizedTool(name: string, value: unknown) {
     const selectedArgs = JSON.parse(args.arguments) as unknown
     if (typeof selectedArgs !== "object" || selectedArgs === null)
       return { name, args }
-    return {
-      name: args.name,
-      args: toolArgs(args.name, selectedArgs),
-    }
+    return { name: args.name, args: toolArgs(selectedArgs) }
   } catch {
     return { name, args }
   }
 }
 
-function safeToolArgs(_name: string, value: Record<string, unknown>) {
+function safeToolArgs(name: string, value: Record<string, unknown>) {
   const projected = projectHermesToolArgs(value)
-  if (_name !== "present_artifact") return JSON.stringify(projected)
+  if (name !== "present_artifact") return JSON.stringify(projected)
   const receipt: Record<string, unknown> = {}
   for (const key of ["id", "title", "filename", "mimeType", "sizeBytes"])
     if (key in projected) receipt[key] = projected[key]
   return JSON.stringify(receipt)
-}
-
-function resultContent(_name: string, value: unknown, isError = false) {
-  return JSON.stringify(projectHermesToolResult(value, isError))
 }
 
 function boundedText(value: unknown) {
@@ -555,32 +567,27 @@ function boundedText(value: unknown) {
     : undefined
 }
 
+/** Hermes' token counter names, in AG-UI terms. */
+const TOKEN_USAGE_FIELDS = {
+  input: "inputTokens",
+  output: "outputTokens",
+  reasoning: "reasoningTokens",
+  total: "totalTokens",
+} as const
+
+/** A native usage payload is accepted whole or not at all. */
 function tokenUsage(value: unknown): TokenUsage[] | undefined {
-  if (typeof value !== "object" || value === null) return undefined
-  const native = value as Record<string, unknown>
-  const numeric = ["input", "output", "reasoning", "total"] as const
-  if (
-    (native.model !== undefined && !stableNativeId(native.model)) ||
-    numeric.some(
-      (key) =>
-        native[key] !== undefined &&
-        (typeof native[key] !== "number" ||
-          !Number.isSafeInteger(native[key]) ||
-          native[key] < 0)
-    )
-  )
+  if (!isRecord(value)) return undefined
+  if (value.model !== undefined && !stableNativeId(value.model))
     return undefined
-  const model = stableNativeId(native.model)
-  const usage: TokenUsage = {
-    ...(model ? { model } : {}),
-    ...(typeof native.input === "number" ? { inputTokens: native.input } : {}),
-    ...(typeof native.output === "number"
-      ? { outputTokens: native.output }
-      : {}),
-    ...(typeof native.reasoning === "number"
-      ? { reasoningTokens: native.reasoning }
-      : {}),
-    ...(typeof native.total === "number" ? { totalTokens: native.total } : {}),
+  const model = stableNativeId(value.model)
+  const usage: TokenUsage = model ? { model } : {}
+  for (const [key, field] of Object.entries(TOKEN_USAGE_FIELDS)) {
+    const count = value[key]
+    if (count === undefined) continue
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
+      return undefined
+    usage[field] = count
   }
   return Object.keys(usage).length > 0 ? [usage] : undefined
 }
@@ -776,32 +783,28 @@ export class HermesRunEngine {
         return this.#handle(active)
       }
       if (active.terminal) return this.#handle(active)
-      if (results.some(({ status }) => status === "uncertain")) {
+      if (results.some(({ status }) => status === "uncertain"))
         this.#detach(
           active,
           "AOS_INTERACTION_UNCERTAIN",
           INTERACTION_UNCERTAIN_MESSAGE
         )
-      } else if (results.some(({ status }) => status === "expired")) {
+      else if (results.some(({ status }) => status === "expired"))
         this.#fail(
           active,
           "AOS_INTERACTION_EXPIRED",
           "This Hermes interaction is no longer pending."
         )
-      }
       return this.#handle(active)
     }
     // The Session stays busy for AOS while Hermes finishes the previous turn.
     await this.#settling.get(key)?.done
-    let status: HermesNativeStatus
-    try {
-      status = await this.#native.status(active.liveSessionId)
-    } catch {
-      if (!this.#isSubmitEligible(active)) return this.#handle(active)
+    const status = await this.#readStatus(active.liveSessionId)
+    if (!this.#isSubmitEligible(active)) return this.#handle(active)
+    if (status === undefined) {
       this.#settle(active)
       throw providerUnavailable()
     }
-    if (!this.#isSubmitEligible(active)) return this.#handle(active)
     // Only a Session running a turn is authoritatively busy; one that is still
     // building its Agent, or that Hermes does not list, accepts the turn.
     if (status === "working" || status === "waiting") {
@@ -872,19 +875,20 @@ export class HermesRunEngine {
 
   async discover(scope: HermesRunScope, runId: string) {
     const snapshot = await this.#native.inspectExecution({ ...scope, runId })
-    if (snapshot.status === "waiting-for-input" && snapshot.outcome) {
+    const outcome = snapshot.outcome
+    if (snapshot.status === "waiting-for-input" && outcome) {
       const events: AGUIEvent[] = [
         { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
         {
           type: EventType.RUN_FINISHED,
           threadId: scope.threadId,
           runId,
-          outcome: snapshot.outcome,
+          outcome,
         },
       ]
       return {
         state: "waiting-for-input" as const,
-        interrupts: snapshot.outcome.interrupts,
+        interrupts: outcome.interrupts,
         handle: {
           events: (async function* () {
             yield* events
@@ -910,13 +914,7 @@ export class HermesRunEngine {
     active: ActiveRun,
     position: { epoch: string; lastSeen: number }
   ): Promise<HermesRunHandle> {
-    const queue = new EventQueue()
-    queue.push({
-      type: EventType.RUN_STARTED,
-      threadId: active.scope.threadId,
-      runId: active.runId,
-    })
-    active.queue = queue
+    active.queue = startedQueue(active.scope, active.runId)
     active.uncertain = false
     active.detached = false
     await this.#attach(active, {
@@ -928,28 +926,17 @@ export class HermesRunEngine {
   }
 
   #createActive(scope: HermesRunScope, runId: string): ActiveRun {
-    const queue = new EventQueue()
-    queue.push({
-      type: EventType.RUN_STARTED,
-      threadId: scope.threadId,
-      runId,
-    })
     return {
       scope,
       runId,
       liveSessionId: "",
-      queue,
+      queue: startedQueue(scope, runId),
       unsubscribe: () => undefined,
       epoch: "",
       lastSeen: 0,
       generation: 0,
       sealedMessageIds: new Set(),
-      textStarted: false,
-      streamedText: "",
-      mediaFilter: new HermesMediaTextFilter(),
-      reasoningStarted: false,
-      reasoningEnded: false,
-      streamedReasoning: "",
+      ...generationState(),
       tools: new Map(),
       turn: "open",
       errorObserved: false,
@@ -965,8 +952,7 @@ export class HermesRunEngine {
 
   /**
    * The one path that binds a run to a live Hermes Session: a new turn, a
-   * browser reconnect, discovery after a proxy restart and an in-place reattach
-   * differ only in `mode`, so the cursor rule lives here once.
+   * reconnect, discovery and an in-place reattach differ only in `mode`.
    */
   async #attach(active: ActiveRun, mode: AttachMode) {
     const buffered: BufferedNativeEvents = {
@@ -976,14 +962,10 @@ export class HermesRunEngine {
     }
     let accepting = false
     let reattached = false
-    let lost: "disconnected" | "rebound" | "restart" | undefined
+    let lost: LostReason | undefined
     let unsubscribe: (() => void) | undefined
     let liveSessionId: string
-    let epoch: string
-    let barrier: number
-    let head: number | undefined
-    let replayed: readonly HermesNativeEvent[] | undefined
-    let reconcile = false
+    let cursor: AttachCursor
     safelyUnsubscribe(active.unsubscribe)
     try {
       ;({ liveSessionId } = await this.#native.resume(active.scope))
@@ -1005,44 +987,7 @@ export class HermesRunEngine {
         lost = signal.reason
         if (accepting) this.#lost(active, signal.reason)
       })
-      if (mode.kind === "barrier") {
-        // A new turn needs only Hermes' current epoch and watermark: retained
-        // frames belong to earlier turns and to authoritative history.
-        const cursor = await this.#native.cursor(liveSessionId)
-        epoch = cursor.epoch
-        barrier = cursor.latestSeq
-      } else if (mode.kind === "position") {
-        const recovery = await this.#native.replay(liveSessionId, mode.after)
-        const events = validatedReplay(recovery, liveSessionId, mode.after)
-        epoch = recovery.epoch
-        barrier = mode.after
-        head = recovery.lastSeen
-        if (recovery.truncated === true || !events || epoch !== mode.epoch)
-          reconcile = true
-        else replayed = events
-      } else {
-        const recovery = await this.#native.replay(liveSessionId, 0)
-        const events = validatedReplay(recovery, liveSessionId, 0)
-        const open = events && openTurnFrames(events)
-        epoch = recovery.epoch
-        barrier = recovery.lastSeen
-        if (!events) reconcile = true
-        else if (open) {
-          replayed = open
-          head = recovery.lastSeen
-          barrier = open[0]!.seq! - 1
-        } else {
-          const status = await this.#native.status(liveSessionId)
-          if (settledStatus(status)) reconcile = true
-          else {
-            // Hermes is working but its ring no longer holds this turn's start;
-            // authoritative history restores the earlier frames.
-            const cursor = await this.#native.cursor(liveSessionId)
-            epoch = cursor.epoch
-            barrier = cursor.latestSeq
-          }
-        }
-      }
+      cursor = await this.#attachCursor(liveSessionId, mode)
     } catch {
       safelyUnsubscribe(unsubscribe)
       active.uncertain = true
@@ -1052,30 +997,26 @@ export class HermesRunEngine {
     }
     active.liveSessionId = liveSessionId
     active.unsubscribe = unsubscribe
-    active.epoch = epoch
-    active.lastSeen = barrier
+    active.epoch = cursor.epoch
+    active.lastSeen = cursor.barrier
     active.catchUp = undefined
     active.deferredEdge = undefined
     this.#active.set(sessionKey(active.scope), active)
-    if (reconcile || buffered.overflow) {
+    if (cursor.reconcile || buffered.overflow) {
       drainBufferedEvents(buffered)
-      this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
-      return
+      return this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
     }
     if (lost) {
       drainBufferedEvents(buffered)
-      this.#lost(active, lost)
-      return
+      return this.#lost(active, lost)
     }
-    if (replayed && !this.#acceptReplayed(active, replayed)) {
+    if (cursor.replayed && !this.#acceptReplayed(active, cursor.replayed)) {
       drainBufferedEvents(buffered)
-      this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
-      return
+      return this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
     }
-    // Hermes reported a watermark past the last frame this page carried, so the
-    // sequences in between are missing rather than delivered: read the ring once
-    // more instead of skipping over them.
-    if (head !== undefined && head > active.lastSeen)
+    // A watermark past the last frame this page carried means the sequences
+    // in between are missing rather than delivered: read the ring once more.
+    if (cursor.head !== undefined && cursor.head > active.lastSeen)
       this.#scheduleCatchUp(active)
     accepting = true
     for (const event of drainBufferedEvents(buffered))
@@ -1083,10 +1024,56 @@ export class HermesRunEngine {
     if (reattached) this.#scheduleCatchUp(active)
   }
 
+  /** The cursor each attach mode derives from Hermes' own ring. */
+  async #attachCursor(
+    liveSessionId: string,
+    mode: AttachMode
+  ): Promise<AttachCursor> {
+    // A new turn needs only Hermes' current epoch and watermark: retained
+    // frames belong to earlier turns and to authoritative history.
+    if (mode.kind === "barrier") {
+      const cursor = await this.#native.cursor(liveSessionId)
+      return { epoch: cursor.epoch, barrier: cursor.latestSeq }
+    }
+    if (mode.kind === "position") {
+      const recovery = await this.#native.replay(liveSessionId, mode.after)
+      const events = validatedReplay(recovery, liveSessionId, mode.after)
+      const position = {
+        epoch: recovery.epoch,
+        barrier: mode.after,
+        head: recovery.lastSeen,
+      }
+      return recovery.truncated === true ||
+        !events ||
+        recovery.epoch !== mode.epoch
+        ? { ...position, reconcile: true }
+        : { ...position, replayed: events }
+    }
+    const recovery = await this.#native.replay(liveSessionId, 0)
+    const events = validatedReplay(recovery, liveSessionId, 0)
+    const open = events && openTurnFrames(events)
+    if (open)
+      return {
+        epoch: recovery.epoch,
+        barrier: open[0]!.seq! - 1,
+        head: recovery.lastSeen,
+        replayed: open,
+      }
+    if (!events || settledStatus(await this.#native.status(liveSessionId)))
+      return {
+        epoch: recovery.epoch,
+        barrier: recovery.lastSeen,
+        reconcile: true,
+      }
+    // Hermes is working but its ring no longer holds this turn's start;
+    // authoritative history restores the earlier frames.
+    const cursor = await this.#native.cursor(liveSessionId)
+    return { epoch: cursor.epoch, barrier: cursor.latestSeq }
+  }
+
   /**
-   * Accept a replayed page. Replayed frames must continue the run's own
-   * sequence: a gap means Hermes dropped frames this run already needs, which
-   * only authoritative history can reconcile.
+   * Replayed frames must continue the run's own sequence: a gap means Hermes
+   * dropped frames only authoritative history can now reconcile.
    */
   #acceptReplayed(active: ActiveRun, events: readonly HermesNativeEvent[]) {
     for (const event of events) {
@@ -1116,9 +1103,8 @@ export class HermesRunEngine {
   }
 
   /**
-   * A catch-up page belongs to the attachment it was read for. A detach or a
-   * later attach replaces that attachment, so a page that arrives afterwards can
-   * neither advance the frozen watermark nor fail whoever holds the run now.
+   * A catch-up page belongs to the attachment it was read for: after a detach or
+   * a later attach it may neither advance the frozen watermark nor fail the run.
    */
   #ownsCatchUp(active: ActiveRun, buffer: BufferedNativeEvents) {
     if (active.catchUp !== buffer) return false
@@ -1163,8 +1149,7 @@ export class HermesRunEngine {
       buffer.overflow ||
       !this.#acceptReplayed(active, events) ||
       // A held frame the page never reached means Hermes' ring no longer holds
-      // the gap. An empty page with nothing held is an ordinary heal, where the
-      // socket missed no frame at all.
+      // the gap; an empty page with nothing held is a heal that missed nothing.
       (!active.terminal && firstBufferedSeq(held) > active.lastSeen + 1)
     ) {
       this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
@@ -1176,22 +1161,27 @@ export class HermesRunEngine {
     if (deferred) this.#settleFrom(active, deferred)
   }
 
+  /** Hermes' status, or `undefined` when the read itself failed. */
+  async #readStatus(liveSessionId: string) {
+    try {
+      return await this.#native.status(liveSessionId)
+    } catch {
+      return undefined
+    }
+  }
+
   /** Hermes' authoritative answer to "is this Session's turn over?". */
   async #settleStale(active: ActiveRun) {
-    let status: HermesNativeStatus
-    try {
-      status = await this.#native.status(active.liveSessionId)
-    } catch {
+    const status = await this.#readStatus(active.liveSessionId)
+    if (status === undefined || !settledStatus(status))
       throw new ServerRunConflictError()
-    }
-    if (!settledStatus(status)) throw new ServerRunConflictError()
     this.#settle(active)
   }
 
   /**
-   * Submit the authorized user turn. `retried` records the single re-send
-   * Hermes' own "that live Session is gone" allows: it rejected the write, so
-   * nothing ran and rebinding the durable Session is not a repeated mutation.
+   * Submit the authorized user turn. `retried` records the single re-send a
+   * "that live Session is gone" rejection allows: it rejected the write, so
+   * nothing ran and rebinding the durable Session repeats no mutation.
    */
   async #submit(
     active: ActiveRun,
@@ -1224,9 +1214,8 @@ export class HermesRunEngine {
     }
     if (outcome.acknowledgement === "accepted") {
       // Only a queued admission puts this turn behind another one, so its first
-      // frame is a `message.start`, not the current turn's idle boundary. An
-      // in-place `steered`/`redirected` admission merged the prompt into the
-      // turn already running: that turn's completion is this run's outcome.
+      // frame is a `message.start`, not the current turn's idle boundary; an
+      // in-place `steered`/`redirected` prompt joins the turn already running.
       if (outcome.status === "queued") active.awaitingStart = true
       if (!outcome.completion) return
       if (outcome.completion.output) {
@@ -1246,30 +1235,22 @@ export class HermesRunEngine {
       )
       return
     }
-    if (outcome.reason === "command-with-attachments") {
-      this.#fail(
+    if (outcome.reason === "command-with-attachments")
+      return this.#fail(
         active,
         "AOS_COMMAND_WITH_ATTACHMENTS",
         "Slash commands cannot be sent with attachments."
       )
-      return
-    }
-    if (outcome.reason === "busy") {
-      this.#fail(active, "AOS_SESSION_BUSY", SESSION_BUSY_MESSAGE)
-      return
-    }
-    if (outcome.reason !== "session-gone" || retried) {
-      this.#fail(
+    if (outcome.reason === "busy")
+      return this.#fail(active, "AOS_SESSION_BUSY", SESSION_BUSY_MESSAGE)
+    if (outcome.reason !== "session-gone")
+      return this.#fail(
         active,
-        outcome.reason === "session-gone"
-          ? "AOS_RESET_REQUIRED"
-          : "AOS_PROVIDER_RUN_FAILED",
-        outcome.reason === "session-gone"
-          ? RESET_REQUIRED_MESSAGE
-          : "Hermes rejected this command."
+        "AOS_PROVIDER_RUN_FAILED",
+        "Hermes rejected this command."
       )
-      return
-    }
+    if (retried)
+      return this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
     try {
       await this.#attach(active, { kind: "barrier" })
     } catch (error) {
@@ -1294,9 +1275,8 @@ export class HermesRunEngine {
   }
 
   /**
-   * `replayed` marks a frame that came from a replayed page or from a buffer
-   * drained behind one: only there can a frame at or before the watermark be an
-   * ordinary duplicate.
+   * `replayed` marks a frame from a replayed page or a buffer drained behind
+   * one: only there is a frame at or before the watermark a plain duplicate.
    */
   #accept(active: ActiveRun, value: unknown, replayed = false) {
     if (active.terminal) {
@@ -1310,30 +1290,11 @@ export class HermesRunEngine {
     }
     const event = nativeEvent(value)
     if (!event || event.session_id !== active.liveSessionId) return
-    if (event.seq !== undefined) {
-      if (event.seq === active.lastSeen) return
-      if (event.seq < active.lastSeen) {
-        if (replayed) return
-        // Hermes restarted this Session's counter inside the same epoch, so its
-        // ring can no longer address the rest of the turn.
-        this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
-        return
-      }
-      if (active.catchUp) {
-        bufferNativeEvent(active.catchUp, value)
-        return
-      }
-      if (event.seq !== active.lastSeen + 1) {
-        // A frame is missing: hold this one and read the ring once. Hermes
-        // stamps `seq` per Session before routing, so the watermark's successor
-        // is always the next frame this run must deliver, whether the watermark
-        // came from a barrier read or from a frame this run delivered.
-        this.#scheduleCatchUp(active, value)
-        return
-      }
-      active.lastSeen = event.seq
-    }
-    const payload = payloadOf(event)
+    if (
+      event.seq !== undefined &&
+      !this.#advance(active, event.seq, value, replayed)
+    )
+      return
     let interaction:
       RunFinishedInterruptOutcome | { status: string } | undefined
     try {
@@ -1350,210 +1311,231 @@ export class HermesRunEngine {
       )
       return
     }
-    if (interaction && "interrupts" in interaction) {
-      this.#finishInterrupt(active, interaction)
-      return
+    if (interaction && "interrupts" in interaction)
+      return this.#finishInterrupt(active, interaction)
+    this.#dispatch(active, event, payloadOf(event))
+  }
+
+  /** Whether this sequence is the frame the run must deliver next. */
+  #advance(active: ActiveRun, seq: number, value: unknown, replayed: boolean) {
+    if (seq === active.lastSeen) return false
+    if (seq < active.lastSeen) {
+      // Hermes restarted this Session's counter inside the same epoch, so its
+      // ring can no longer address the rest of the turn.
+      if (!replayed)
+        this.#fail(active, "AOS_RESET_REQUIRED", RESET_REQUIRED_MESSAGE)
+      return false
     }
-    if (event.type === "session.info" || event.type === "session.usage") {
-      const usage = tokenUsage(payload.usage)
-      if (usage) active.usage = usage
+    if (active.catchUp) {
+      bufferNativeEvent(active.catchUp, value)
+      return false
     }
-    if (event.type === "message.start") {
-      // A native turn is running again: the turn Hermes admitted behind another
-      // one has begun, and no earlier outcome describes this run any more,
-      // including an error frame the superseded turn left unreconciled.
-      active.awaitingStart = false
-      active.turn = "open"
-      active.failure = undefined
-      active.errorObserved = false
-      if (!active.messageId) {
+    // A frame is missing: hold this one and read the ring once. Hermes stamps
+    // `seq` per Session before routing, so the successor is always the next.
+    if (seq !== active.lastSeen + 1) {
+      this.#scheduleCatchUp(active, value)
+      return false
+    }
+    active.lastSeen = seq
+    return true
+  }
+
+  /** One branch per native frame type; an unknown frame is ignored. */
+  #dispatch(
+    active: ActiveRun,
+    event: HermesNativeEvent,
+    payload: Record<string, unknown>
+  ) {
+    switch (event.type) {
+      case "session.info":
+      case "session.usage": {
+        const usage = tokenUsage(payload.usage)
+        if (usage) active.usage = usage
+        if (event.type === "session.info" && payload.running === false)
+          this.#settleFrom(active, "idle")
+        return
+      }
+      case "message.start": {
+        // A native turn is running again, so no earlier outcome describes this
+        // run any more, including an error the superseded turn left behind.
+        active.awaitingStart = false
+        active.turn = "open"
+        active.failure = undefined
+        active.errorObserved = false
+        if (active.messageId) return
         const messageId = stableNativeId(payload.message_id ?? payload.id)
         if (messageId && active.sealedMessageIds.has(messageId)) return
         active.messageId = messageId ?? this.#fallbackMessageId(active)
+        return
       }
-      return
-    }
-    const textDelta = boundedText(payload.text)
-    if (event.type === "message.delta" && textDelta !== undefined) {
-      if (textDelta.length === 0) return
-      this.#appendStreamedText(active, textDelta)
-      this.#emitMediaFilteredText(active, active.mediaFilter.write(textDelta))
-      return
-    }
-    if (event.type === "message.interim" && textDelta !== undefined) {
-      if (textDelta.length === 0) return
-      this.#ensureMessageId(active)
-      const streamedText = active.streamedText
-      if (streamedText !== undefined && textDelta.startsWith(streamedText)) {
-        const remaining = textDelta.slice(streamedText.length)
-        if (remaining) {
-          this.#appendStreamedText(active, remaining)
-          this.#emitMediaFilteredText(
-            active,
-            active.mediaFilter.write(remaining)
-          )
-        }
-      } else if (payload.already_streamed !== true) {
-        this.#appendStreamedText(active, textDelta)
-        this.#emitMediaFilteredText(active, active.mediaFilter.write(textDelta))
+      case "message.delta": {
+        const delta = boundedText(payload.text)
+        if (delta) this.#appendText(active, delta)
+        return
       }
-      // Interim assistant commentary is a message boundary inside the native
-      // turn. Hermes may continue with more tools and another text message;
-      // only message.complete settles the run.
-      this.#sealGeneration(active)
-      return
-    }
-    // Hermes uses thinking.delta for transient spinner/status copy. It is not
-    // model reasoning and must not be persisted into the reasoning message.
-    if (event.type === "thinking.delta") return
-    if (
-      event.type === "reasoning.delta" &&
-      textDelta !== undefined &&
-      !active.textStarted
-    ) {
-      this.#ensureMessageId(active)
-      this.#appendReasoning(active, textDelta)
-      return
-    }
-    if (
-      event.type === "reasoning.available" &&
-      textDelta !== undefined &&
-      !active.textStarted &&
-      active.streamedReasoning.length === 0
-    ) {
-      this.#ensureMessageId(active)
-      this.#appendReasoning(active, textDelta)
-      return
-    }
-    if (event.type === "tool.start" || event.type === "tool.progress") {
-      this.#startTool(active, payload)
-      return
-    }
-    if (event.type === "tool.complete") {
-      const tool = this.#startTool(active, payload)
-      if (!tool || tool.ended) return
-      tool.ended = true
-      const toolCallId = stableNativeId(payload.tool_id)
-      if (!toolCallId) return
-      const isError = hermesToolResultIsError(
-        payload.result,
-        payload.is_error === true
-      )
-      const artifact =
-        tool.name === "present_artifact" && !isError
-          ? projectHermesArtifactReceipt(payload.result)
-          : undefined
-      const mediaArtifacts = isError
-        ? []
-        : projectHermesMediaArtifacts(toolCallId, tool.name, payload.result)
-      const questionResult =
-        tool.name === "question"
-          ? projectHermesQuestionResult(payload.result)
-          : undefined
-      this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
-      this.#emit(active, {
-        type: EventType.TOOL_CALL_RESULT,
-        messageId: `${tool.messageId}:tool:${toolCallId}`,
-        toolCallId,
-        content: artifact
-          ? JSON.stringify(artifact.result)
-          : tool.name === "text_to_speech"
-            ? JSON.stringify({
-                status: isError ? "failed" : "completed",
-              })
-            : questionResult
-              ? JSON.stringify(questionResult)
-              : resultContent(tool.name, payload.result, isError),
-        role: "tool",
-      })
-      if (tool.name === "todo") {
-        const todos = projectHermesTodos(payload.result)
-        if (todos !== undefined) this.#emitPlan(active, todos)
-      }
-      if (artifact)
-        this.#emit(active, {
-          type: EventType.CUSTOM,
-          name: artifact.part.name,
-          value: artifact.part.data,
-        })
-      for (const media of mediaArtifacts) {
-        active.mediaFilter.trust(media.reference)
-        this.#emit(active, {
-          type: EventType.CUSTOM,
-          name: "aos.artifact",
-          value: media.descriptor,
-        })
-      }
-      return
-    }
-    if (event.type === "session.info" && payload.running === false) {
-      this.#settleFrom(active, "idle")
-      return
-    }
-    if (event.type === "error") {
-      // Hermes also uses `error` for advisory failures such as a rejected
-      // pending model switch, after which the current turn keeps running.
-      // Reconcile native liveness before emitting terminal AG-UI state.
-      active.errorObserved = true
-      const failure = nativeFailure(payload)
-      active.failure ??= failure
-      void this.#reconcileNativeError(active, failure)
-      return
-    }
-    if (event.type === "message.complete") {
-      // Hermes ends the turn a queued prompt waits behind before it reports
-      // idle, so a completion that arrives before this run's own turn started
-      // describes the superseded turn: neither its text, its usage nor its
-      // outcome belongs here. Seal what is open and wait for this run's turn.
-      if (active.awaitingStart) {
+      case "message.interim": {
+        const delta = boundedText(payload.text)
+        if (!delta) return
+        this.#ensureMessageId(active)
+        if (
+          !this.#appendSuffix(active, delta) &&
+          payload.already_streamed !== true
+        )
+          this.#appendText(active, delta)
+        // Interim commentary is a message boundary inside the native turn:
+        // more tools and text may follow, and only message.complete settles.
         this.#sealGeneration(active)
         return
       }
-      const usage = tokenUsage(payload.usage)
-      if (usage) active.usage = usage
-      const completedMessageId = stableNativeId(
-        payload.message_id ?? payload.id
-      )
-      // Hermes ended the turn; how it ended decides what settlement does.
-      active.turn = turnOutcome(payload.status)
-      if (active.turn === "failed") active.failure = nativeFailure(payload)
-      const redirecting = active.redirect.chain || active.redirect.pending
-      // A completion for a generation this run already sealed belongs to the
-      // turn a correction superseded, not to the text the run is streaming.
-      if (
-        redirecting &&
-        completedMessageId &&
-        active.sealedMessageIds.has(completedMessageId)
-      )
+      // Hermes uses thinking.delta for transient spinner/status copy. It is not
+      // model reasoning and must not be persisted into the reasoning message.
+      case "thinking.delta":
         return
-      if (!active.messageId && completedMessageId)
-        active.messageId = completedMessageId
-      const finalText = boundedText(payload.text)
-      if (finalText) this.#ensureMessageId(active)
-      if (
-        finalText !== undefined &&
-        active.messageId &&
-        active.streamedText !== undefined &&
-        finalText.startsWith(active.streamedText)
-      ) {
-        const remaining = finalText.slice(active.streamedText.length)
-        if (remaining) {
-          this.#appendStreamedText(active, remaining)
-          this.#emitMediaFilteredText(
-            active,
-            active.mediaFilter.write(remaining)
-          )
-        }
+      case "reasoning.delta":
+      case "reasoning.available": {
+        // Reasoning is model thought, so it belongs only ahead of any assistant
+        // text, and an available frame only where nothing streamed already.
+        const delta = boundedText(payload.text)
+        if (
+          delta === undefined ||
+          active.textStarted ||
+          (event.type === "reasoning.available" &&
+            active.streamedReasoning.length > 0)
+        )
+          return
+        this.#ensureMessageId(active)
+        this.#appendReasoning(active, delta)
+        return
       }
-      // A failed turn is not settled from its own frame: seal its assistant
-      // message and wait for Hermes' idle edge, while still accepting later
-      // buffered tool/message frames in source order. A correction in the chain
-      // keeps the run open for the turn that correction lands in.
-      if (active.turn === "failed" || redirecting) this.#sealGeneration(active)
-      else if (active.turn === "interrupted")
-        this.#finish(active, { stopped: true })
-      else this.#finish(active)
+      case "tool.start":
+      case "tool.progress":
+        this.#startTool(active, payload)
+        return
+      case "tool.complete":
+        return this.#acceptToolComplete(active, payload)
+      case "error": {
+        // Hermes also uses `error` for advisory failures (a rejected pending
+        // model switch): reconcile liveness before any terminal AG-UI state.
+        active.errorObserved = true
+        const failure = nativeFailure(payload)
+        active.failure ??= failure
+        void this.#reconcileNativeError(active, failure)
+        return
+      }
+      case "message.complete":
+        return this.#acceptComplete(active, payload)
     }
+  }
+
+  #acceptToolComplete(active: ActiveRun, payload: Record<string, unknown>) {
+    const tool = this.#startTool(active, payload)
+    if (!tool || tool.ended) return
+    tool.ended = true
+    const toolCallId = stableNativeId(payload.tool_id)
+    if (!toolCallId) return
+    const isError = hermesToolResultIsError(
+      payload.result,
+      payload.is_error === true
+    )
+    const artifact =
+      tool.name === "present_artifact" && !isError
+        ? projectHermesArtifactReceipt(payload.result)
+        : undefined
+    const mediaArtifacts = isError
+      ? []
+      : projectHermesMediaArtifacts(toolCallId, tool.name, payload.result)
+    const questionResult =
+      tool.name === "question"
+        ? projectHermesQuestionResult(payload.result)
+        : undefined
+    this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
+    this.#emit(active, {
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: `${tool.messageId}:tool:${toolCallId}`,
+      toolCallId,
+      content: artifact
+        ? JSON.stringify(artifact.result)
+        : tool.name === "text_to_speech"
+          ? JSON.stringify({ status: isError ? "failed" : "completed" })
+          : questionResult
+            ? JSON.stringify(questionResult)
+            : JSON.stringify(projectHermesToolResult(payload.result, isError)),
+      role: "tool",
+    })
+    if (tool.name === "todo") {
+      const todos = projectHermesTodos(payload.result)
+      if (todos !== undefined) this.#emitPlan(active, todos)
+    }
+    if (artifact)
+      this.#emit(active, {
+        type: EventType.CUSTOM,
+        name: artifact.part.name,
+        value: artifact.part.data,
+      })
+    for (const media of mediaArtifacts) {
+      active.mediaFilter.trust(media.reference)
+      this.#emit(active, {
+        type: EventType.CUSTOM,
+        name: "aos.artifact",
+        value: media.descriptor,
+      })
+    }
+  }
+
+  /**
+   * Hermes ends the turn a queued prompt waits behind before it reports idle, so
+   * a completion arriving before this run's turn started describes the
+   * superseded turn: neither its text, its usage nor its outcome is this run's.
+   */
+  #acceptComplete(active: ActiveRun, payload: Record<string, unknown>) {
+    if (active.awaitingStart) return this.#sealGeneration(active)
+    const usage = tokenUsage(payload.usage)
+    if (usage) active.usage = usage
+    const completedMessageId = stableNativeId(payload.message_id ?? payload.id)
+    // Hermes ended the turn; how it ended decides what settlement does.
+    active.turn = turnOutcome(payload.status)
+    if (active.turn === "failed") active.failure = nativeFailure(payload)
+    const redirecting = active.redirect.chain || active.redirect.pending
+    // A completion for a generation this run already sealed belongs to the turn
+    // a correction superseded, not to the text the run is streaming.
+    if (
+      redirecting &&
+      completedMessageId &&
+      active.sealedMessageIds.has(completedMessageId)
+    )
+      return
+    if (!active.messageId && completedMessageId)
+      active.messageId = completedMessageId
+    const finalText = boundedText(payload.text)
+    if (finalText) {
+      this.#ensureMessageId(active)
+      this.#appendSuffix(active, finalText)
+    }
+    // A failed turn is not settled from its own frame: seal the assistant
+    // message and wait for Hermes' idle edge, still accepting later frames in
+    // source order. A correction keeps the run open for the turn it lands in.
+    if (active.turn === "failed" || redirecting) this.#sealGeneration(active)
+    else if (active.turn === "interrupted")
+      this.#finish(active, { stopped: true })
+    else this.#finish(active)
+  }
+
+  /** Stream a text delta: recorded for suffix matching, then media-filtered. */
+  #appendText(active: ActiveRun, delta: string) {
+    this.#appendStreamedText(active, delta)
+    this.#emitMediaFilteredText(active, active.mediaFilter.write(delta))
+  }
+
+  /**
+   * Stream only the part of a full-text frame this run has not streamed yet;
+   * false when the frame does not continue the streamed text at all.
+   */
+  #appendSuffix(active: ActiveRun, text: string) {
+    const streamed = active.streamedText
+    if (streamed === undefined || !text.startsWith(streamed)) return false
+    const remaining = text.slice(streamed.length)
+    if (remaining) this.#appendText(active, remaining)
+    return true
   }
 
   /** After the turn ended, the only frame left that matters is Hermes idling. */
@@ -1583,8 +1565,26 @@ export class HermesRunEngine {
     })
   }
 
-  #flushMediaText(active: ActiveRun) {
-    this.#emitMediaFilteredText(active, active.mediaFilter.finish())
+  /**
+   * Close whatever the current generation opened, in publication order. `tools`
+   * is what a call Hermes never finished reports; without it it is only ended.
+   */
+  #closeGeneration(
+    active: ActiveRun,
+    options: {
+      media?: boolean
+      tools?: "completed" | "stopped" | "unresolved"
+    } = {}
+  ) {
+    if (options.media)
+      this.#emitMediaFilteredText(active, active.mediaFilter.finish())
+    this.#endReasoning(active)
+    if (options.tools)
+      this.#settleOpenTools(
+        active,
+        options.tools === "unresolved" ? undefined : options.tools
+      )
+    this.#endText(active)
   }
 
   #emitPlan(active: ActiveRun, todos: HermesTodo[]) {
@@ -1738,8 +1738,8 @@ export class HermesRunEngine {
       }
     }
     try {
-      // Only idle or absent confirms Stop. A Session that is still building its
-      // Agent has merely latched the cancel request.
+      // Only idle or absent confirms Stop: a Session still building its Agent
+      // has merely latched the cancel request.
       if (settledStatus(await this.#native.status(active.liveSessionId))) {
         this.#finish(active, { stopped: true }, true)
         return "idle"
@@ -1753,16 +1753,11 @@ export class HermesRunEngine {
 
   /**
    * A bare `error` frame is not a terminal contract: Hermes emits it for
-   * advisory failures too. One authoritative status read decides, and the
-   * verdict is logged once per frame.
+   * advisory failures too. One status read decides, logged once per frame.
    */
   async #reconcileNativeError(active: ActiveRun, failure: NativeFailure) {
-    let status: HermesNativeStatus | undefined
-    try {
-      status = await this.#native.status(active.liveSessionId)
-    } catch {
-      // A failed read cannot prove termination; later frames stay authoritative.
-    }
+    // A failed read cannot prove termination; later frames stay authoritative.
+    const status = await this.#readStatus(active.liveSessionId)
     const verdict =
       status === undefined
         ? "unconfirmed"
@@ -1834,18 +1829,11 @@ export class HermesRunEngine {
   }
 
   #sealGeneration(active: ActiveRun) {
-    this.#flushMediaText(active)
-    this.#endReasoning(active)
-    this.#endText(active)
+    this.#closeGeneration(active, { media: true })
     if (active.messageId) active.sealedMessageIds.add(active.messageId)
     active.messageId = undefined
     active.generation += 1
-    active.textStarted = false
-    active.streamedText = ""
-    active.mediaFilter = new HermesMediaTextFilter()
-    active.reasoningStarted = false
-    active.reasoningEnded = false
-    active.streamedReasoning = ""
+    Object.assign(active, generationState())
   }
 
   /**
@@ -1854,9 +1842,8 @@ export class HermesRunEngine {
    */
   #settleFrom(active: ActiveRun, edge: SettlementEdge) {
     if (active.terminal) return
-    // A page read for a hole is authoritative about what this turn still
-    // contains, so a status read taken while it is in flight cannot terminalize
-    // the run ahead of the frames the page is about to deliver.
+    // A page read for a hole is authoritative about what this turn still holds,
+    // so a status read cannot terminalize the run ahead of that page.
     if (active.catchUp) {
       active.deferredEdge = edge
       return
@@ -1867,11 +1854,9 @@ export class HermesRunEngine {
       this.#settle(active)
       return
     }
-    // Either a correction is deciding whether this turn continues, or the turn
-    // Hermes admitted behind another one has not started, so this edge is not
-    // this run's outcome yet. An authoritative read that already found Hermes
-    // idle is still evidence: Hermes may be about to start the turn it admitted,
-    // so one bounded re-read decides instead of the read being discarded.
+    // A correction deciding whether this turn continues, or an admitted turn
+    // that has not started, makes this edge no outcome of this run's yet. A read
+    // that found Hermes idle is still evidence: one bounded re-read decides.
     if (active.redirect.pending || active.awaitingStart) {
       if (edge === "idle" || (edge === "status" && active.awaitingStart))
         this.#recheckSettlement(
@@ -1882,11 +1867,10 @@ export class HermesRunEngine {
     }
     if (active.stopping || active.turn === "interrupted")
       this.#finish(active, { stopped: true }, true)
-    // Hermes admitted this turn and then went idle without ever running it, so
-    // no assistant turn exists: the run reports a failure the user can retry
-    // rather than an empty success. Nothing this turn produced can describe it —
-    // an outcome or error observed while it waited belongs to the turn it waited
-    // behind — so the failure is AOS' own rather than a native classification.
+    // Hermes admitted this turn and went idle without ever running it, so no
+    // assistant turn exists: report a failure the user can retry, not an empty
+    // success. Anything observed while it waited belongs to the turn ahead of
+    // it, so the failure is AOS' own rather than a native classification.
     else if (edge === "unstarted")
       this.#failTurn(active, { failureReason: "queued-turn-not-started" })
     else if (active.turn === "failed" || active.errorObserved)
@@ -1920,8 +1904,7 @@ export class HermesRunEngine {
 
   /**
    * Re-read Hermes after something that could have ended the turn without a
-   * usable edge: a correction that was in flight at the boundary, or a turn
-   * Hermes admitted behind another one that may never start.
+   * usable edge: a correction in flight at the boundary, or an unstarted turn.
    */
   #recheckSettlement(
     active: ActiveRun,
@@ -1933,12 +1916,8 @@ export class HermesRunEngine {
 
   async #settleIfIdle(active: ActiveRun, rereads: number) {
     if (active.terminal || active.redirect.pending) return
-    let status: HermesNativeStatus | undefined
-    try {
-      status = await this.#native.status(active.liveSessionId)
-    } catch {
-      // A failed read proves nothing; the re-reads below still bound the wait.
-    }
+    // A failed read proves nothing; the re-reads below still bound the wait.
+    const status = await this.#readStatus(active.liveSessionId)
     if (active.terminal) return
     if (status !== undefined && settledStatus(status)) {
       // Hermes has no turn left, so nothing this run waits for can still
@@ -1948,9 +1927,8 @@ export class HermesRunEngine {
       this.#settleFrom(active, unstarted ? "unstarted" : "status")
       return
     }
-    // Hermes is still busy, so this read cannot say whether the turn it admitted
-    // behind another one is starting or was dropped. Bounded re-reads keep a
-    // start that never comes from fencing the Session behind this run.
+    // A busy read cannot say whether the admitted turn is starting or was
+    // dropped: bounded re-reads keep a start that never comes from fencing.
     if (active.awaitingStart && rereads > 0)
       this.#recheckSettlement(active, QUEUED_START_GRACE_MS, rereads - 1)
   }
@@ -1966,9 +1944,9 @@ export class HermesRunEngine {
   async #awaitSettled(key: string, watcher: SettlingWatcher) {
     const { active } = watcher
     const deadline = Date.now() + SETTLING_WINDOW_MS
-    // A retainer only keeps the native binding warm, so no Send waits past the
-    // settling window for a slow native resume: it is released whenever it
-    // arrives and the bounded wait below runs on its own deadline.
+    // A retainer only keeps the native binding warm, so a slow native resume
+    // holds no Send: it is released whenever it arrives, and the wait below
+    // runs on its own deadline.
     const retainer = this.#native
       .retain(active.scope, "settling")
       .catch(() => undefined)
@@ -1995,18 +1973,11 @@ export class HermesRunEngine {
    */
   #finish(active: ActiveRun, result?: unknown, confirmedIdle = false) {
     if (active.terminal) return
-    this.#flushMediaText(active)
-    this.#endReasoning(active)
-    this.#settleOpenTools(
-      active,
-      typeof result === "object" &&
-        result !== null &&
-        "stopped" in result &&
-        result.stopped === true
-        ? "stopped"
-        : "completed"
-    )
-    this.#endText(active)
+    this.#closeGeneration(active, {
+      media: true,
+      tools:
+        isRecord(result) && result.stopped === true ? "stopped" : "completed",
+    })
     this.#emit(active, {
       type: EventType.RUN_FINISHED,
       threadId: active.scope.threadId,
@@ -2022,9 +1993,7 @@ export class HermesRunEngine {
 
   #finishInterrupt(active: ActiveRun, outcome: RunFinishedInterruptOutcome) {
     if (active.terminal) return
-    this.#endReasoning(active)
-    this.#settleOpenTools(active)
-    this.#endText(active)
+    this.#closeGeneration(active, { tools: "unresolved" })
     this.#emit(active, {
       type: EventType.RUN_FINISHED,
       threadId: active.scope.threadId,
@@ -2036,15 +2005,14 @@ export class HermesRunEngine {
 
   #fail(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
-    this.#endReasoning(active)
-    this.#endText(active)
+    this.#closeGeneration(active)
     this.#emit(active, { type: EventType.RUN_ERROR, message, code })
     this.#native.clearPendingInteraction(active.scope)
     this.#settle(active)
   }
 
   /** The observed frame stream ended; how it ended decides what the run does. */
-  #lost(active: ActiveRun, reason: "disconnected" | "rebound" | "restart") {
+  #lost(active: ActiveRun, reason: LostReason) {
     if (reason === "disconnected")
       this.#detach(
         active,
@@ -2058,8 +2026,7 @@ export class HermesRunEngine {
   /**
    * Stop consuming without settling: the run may still be alive in Hermes, so
    * the browser reconciles. Releasing the native observer freezes the watermark
-   * at the last delivered frame, so a reconnect replays from there instead of
-   * past a frame nobody received.
+   * at the last delivered frame, so a reconnect replays from there.
    */
   #detach(active: ActiveRun, code: string, message: string) {
     if (active.terminal || active.detached) return
@@ -2073,9 +2040,8 @@ export class HermesRunEngine {
 
   #emit(active: ActiveRun, event: AGUIEvent) {
     if (active.terminal) return false
-    // An uncertain run's stream is no longer authoritative: the browser
-    // reconciles it. Publishing into it would only fill a queue nobody reads,
-    // and an overflow there would settle the run without that reconcile.
+    // An uncertain run's stream is no longer authoritative: publishing fills a
+    // queue nobody reads, and an overflow there would settle it unreconciled.
     if (active.uncertain) return true
     if (active.queue.push(event)) return true
     this.#overflow(active)

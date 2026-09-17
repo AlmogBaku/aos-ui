@@ -1,24 +1,11 @@
 /**
- * The AOS side of the Hermes JSON-RPC gateway connection.
- *
- * `HermesGateway` is a thin wrapper around the vendored upstream
- * `JsonRpcGatewayClient` (`vendor/hermes-shared/`). The vendored client owns
- * request correlation, per-call timeouts and `AbortSignal`, JSON-RPC error
- * typing, the `gateway.ping` heartbeat, socket generations and server→client
- * request routing; none of that is re-implemented here.
- *
- * This wrapper owns only what upstream leaves to its embedder:
- *
- *  - the dial URL and the private server token (never logged, never surfaced);
- *  - an eager dial plus redial with the vendored reconnect backoff, forever;
- *  - the heal grace window before a loss is reported to connection handlers;
- *  - stopping every redial after an authentication rejection;
- *  - the wire guard (`gateway-socket.ts`) and a per-request response bound;
- *  - sanitized three-way error classification (rejected / uncertain /
- *    unavailable) plus caller aborts;
- *  - one event fan-out that survives every redial;
- *  - replay-epoch change detection;
- *  - `close()`.
+ * The AOS side of the Hermes JSON-RPC gateway connection. The vendored
+ * `JsonRpcGatewayClient` (`vendor/hermes-shared/`) owns correlation, per-call
+ * timeouts and `AbortSignal`, JSON-RPC error typing, the `gateway.ping`
+ * heartbeat, socket generations and server→client request routing; this wrapper
+ * owns the dial URL and private token, redial and heal grace, the wire guard and
+ * response bounds, error classification, one event fan-out, epoch changes and
+ * `close()`.
  */
 
 import {
@@ -38,6 +25,7 @@ import {
 } from "./vendor/hermes-shared/reconnect-backoff"
 import {
   createHermesHttp,
+  HermesAuthenticationError,
   normalizeBaseUrl,
   responseLimit,
   withinDeadline,
@@ -60,8 +48,6 @@ export {
 } from "./http"
 export type { HermesLog, HermesSocket } from "./gateway-socket"
 export type { ServerRequest, ServerRequestHandler }
-
-import { HermesAuthenticationError } from "./http"
 
 /** Hermes authoritatively rejected a dispatched JSON-RPC request. */
 export class HermesRpcRejectedError extends Error {
@@ -87,22 +73,21 @@ export class HermesUnavailableError extends Error {
   }
 }
 
-/**
- * Nothing usable came back from a native call. An authentication rejection is
- * definitive and keeps its own type; every other failure is an outage the
- * caller must not present as a refusal.
- */
-export function throwUnavailable(error: unknown): never {
-  if (error instanceof HermesAuthenticationError) throw error
-  throw new HermesUnavailableError()
-}
-
 /** The caller's `AbortSignal` aborted the request. */
 export class HermesRequestAbortedError extends Error {
   constructor() {
     super("Hermes request was aborted")
     this.name = "HermesRequestAbortedError"
   }
+}
+
+/**
+ * An authentication rejection is definitive and keeps its type; every other
+ * native failure is an outage the caller must not present as a refusal.
+ */
+export function throwUnavailable(error: unknown): never {
+  if (error instanceof HermesAuthenticationError) throw error
+  throw new HermesUnavailableError()
 }
 
 export type HermesRpcOptions = {
@@ -138,48 +123,56 @@ export type HermesGatewayOptions = {
   credentials: HermesCredentials
   fetcher?: typeof fetch
   socketFactory?: (url: string) => HermesSocket
-  /** Deadline for one native REST call (default 15 s). */
-  timeoutMs?: number
   /** Deadline for one JSON-RPC call (default 15 s). */
   requestTimeoutMs?: number
   /** Deadline for one dial, and for a caller waiting on one (default 15 s). */
   connectTimeoutMs?: number
   /** Grace before a socket loss is reported as lost (default 20 s). */
   healGraceMs?: number
-  heartbeatIntervalMs?: number
-  heartbeatDeadlineMs?: number
   backoff?: ReconnectBackoffOptions
   log?: HermesLog
 }
 
-/** Shared by `createRequestId`; the vendored default builder is never used. */
+/** A caller parked in `#awaitOpen` until a socket is open. */
+type OpenWaiter = { resolve(): void; reject(error: Error): void }
+
+/** One dispatched request: its response bound and its oversized rejector. */
+type PendingResponse = {
+  limit: number
+  id?: string
+  reject(error: Error): void
+}
+
 const REQUEST_ID_PREFIX = "aos-"
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000
 /** Hermes' own orphan-reap grace: past this the Session is treated as lost. */
 const DEFAULT_HEAL_GRACE_MS = 20_000
-/**
- * How long a fresh socket generation has to announce its replay epoch in a
- * `gateway.ready` frame before the connection is announced as unchanged.
- */
+/** How long a generation may take to announce its epoch in `gateway.ready`. */
 const READY_EPOCH_WAIT_MS = 2_000
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_IN_FLIGHT_REQUESTS = 256
 /** Bound for the unanswered-server-request log: Hermes chooses the method. */
 const MAX_LOGGED_REQUEST_METHODS = 32
 const MAX_LOGGED_METHOD_CHARS = 64
-/**
- * WebSocket close codes Hermes is expected to use when it refuses the token.
- * Unverified against a live server; a live check may add or replace them.
- */
+/** Close codes Hermes refuses a token with; unverified against a live server. */
 const AUTH_CLOSE_CODES = new Set([4401, 4403])
 
-// Private sentinels: the vendored client puts these in the `Error` it rejects
-// with, so classification can compare by message. They are mapped to a typed
-// AOS error before any caller sees them and are never logged.
+// Private sentinels the vendored client rejects with, so classification can
+// compare by message. Mapped to a typed AOS error before any caller sees them.
 const NOT_CONNECTED = "aos-gateway:not-connected"
 const GENERATION_CLOSED = "aos-gateway:generation-closed"
 const CONNECT_FAILED = "aos-gateway:connect-failed"
+
+/** A token that cannot break the dial URL it is a query parameter of. */
+function isServerToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 4096 &&
+    !/[\0\r\n]/u.test(value)
+  )
+}
 
 function webSocketUrl(baseUrl: string, token: string) {
   const url = new URL(`${baseUrl}/api/ws`)
@@ -189,8 +182,7 @@ function webSocketUrl(baseUrl: string, token: string) {
 }
 
 function isAbort(error: unknown) {
-  // The vendored channel rejects with a `DOMException`, which is not an
-  // `Error` instance on every runtime AOS supports.
+  // The vendored channel rejects with a `DOMException`, not always an `Error`.
   return (
     typeof error === "object" &&
     error !== null &&
@@ -199,31 +191,29 @@ function isAbort(error: unknown) {
 }
 
 /**
- * Stand-in for a socket the factory refused to create. The vendored client has
- * already moved to `connecting` before it calls the factory and short-circuits
- * every later dial while it stays there, so a synchronous factory failure is
- * reported to it as a socket that closes at once: it drops the generation,
- * rejects the dial, and the redial ladder can run again.
+ * Stand-in for a socket the factory refused to build. The vendored client is
+ * already `connecting` and short-circuits every later dial while it stays there,
+ * so the refusal has to look like a socket that closes at once: generation
+ * dropped, dial rejected, redial ladder free to run again.
  */
 function refusedSocket(): HermesSocket {
-  const closeListeners = new Set<(event: unknown) => void>()
-  /** `WebSocket.CLOSED`, spelled out so the stub needs no DOM global. */
-  const closedReadyState = 3
+  const listeners = new Set<(event: unknown) => void>()
   let announced = false
   const announce = () => {
     if (announced) return
     announced = true
-    for (const listener of [...closeListeners]) listener({ code: 1006 })
+    for (const listener of [...listeners]) listener({ code: 1006 })
   }
   return {
-    readyState: closedReadyState,
+    /** `WebSocket.CLOSED`, spelled out so the stub needs no DOM global. */
+    readyState: 3,
     addEventListener(type, listener) {
       if (type !== "close") return
-      closeListeners.add(listener)
+      listeners.add(listener)
       queueMicrotask(announce)
     },
     removeEventListener(type, listener) {
-      if (type === "close") closeListeners.delete(listener)
+      if (type === "close") listeners.delete(listener)
     },
     send() {},
     close() {
@@ -245,19 +235,13 @@ export class HermesGateway implements HermesRpcTransport {
   readonly #backoff: ReconnectBackoffOptions | undefined
   readonly #eventListeners = new Set<(event: unknown) => void>()
   readonly #connectionHandlers = new Set<HermesConnectionHandler>()
-  readonly #openWaiters = new Set<{
-    resolve(): void
-    reject(error: Error): void
-  }>()
-  readonly #inFlightById = new Map<
-    string,
-    { limit: number; reject(error: Error): void }
-  >()
+  readonly #openWaiters = new Set<OpenWaiter>()
+  /** Live requests by minted id, so the wire guard can find their bound. */
+  readonly #inFlightById = new Map<string, PendingResponse>()
   readonly #loggedRequestMethods = new Set<string>()
   #requestMethodLogCapped = false
-  #pendingRegistration:
-    { limit: number; reject(error: Error): void } | undefined
-  #mintedRequestId: string | undefined
+  /** The request being dispatched, awaiting the id `#mintRequestId` gives it. */
+  #dispatching: PendingResponse | undefined
   #removeDefaultRequestHandler: (() => void) | undefined
   #requestHandlerCount = 0
   #inFlight = 0
@@ -292,7 +276,6 @@ export class HermesGateway implements HermesRpcTransport {
       baseUrl: this.#baseUrl,
       credentials: options.credentials,
       fetcher: options.fetcher,
-      timeoutMs: options.timeoutMs,
     })
     this.#client = new JsonRpcGatewayClient({
       requestTimeoutMs: this.#requestTimeoutMs,
@@ -300,8 +283,6 @@ export class HermesGateway implements HermesRpcTransport {
       // `run.ts` owns native replay: it needs the cursor, epoch and truncation
       // flag the vendored best-effort resume discards.
       replay: false,
-      heartbeatIntervalMs: options.heartbeatIntervalMs,
-      heartbeatDeadlineMs: options.heartbeatDeadlineMs,
       notConnectedErrorMessage: NOT_CONNECTED,
       closedErrorMessage: GENERATION_CLOSED,
       connectErrorMessage: CONNECT_FAILED,
@@ -316,26 +297,17 @@ export class HermesGateway implements HermesRpcTransport {
     )
   }
 
-  // -------------------------------------------------------------------------
-  // Connection
-  // -------------------------------------------------------------------------
-
-  /**
-   * Dial Hermes. Joins an in-flight dial; an explicit call also clears a
-   * previous authentication stop so a rotated token can be picked up.
-   */
+  /** Joins an in-flight dial; an explicit call clears an authentication stop. */
   async connect(): Promise<void> {
     if (this.#closed) throw new HermesUnavailableError()
-    const existing = this.#dial
-    if (existing) return existing
+    if (this.#dial) return this.#dial
     this.#authFailed = false
     const dial = this.#dialOnce()
     this.#dial = dial
     try {
       await dial
     } catch (error) {
-      // An authentication failure is definitive: waiting callers learn it now
-      // instead of sitting out the connect deadline, and nothing is redialled.
+      // Definitive: parked callers learn it now, and nothing is redialled.
       if (error instanceof HermesAuthenticationError)
         this.#failOpenWaiters(error)
       else this.#scheduleRedial()
@@ -348,8 +320,8 @@ export class HermesGateway implements HermesRpcTransport {
   async #dialOnce(): Promise<void> {
     const token = await this.#serverToken()
     const url = webSocketUrl(this.#baseUrl, token)
-    // Pre-check with the vendored guard so its own `invalidUrl()` message —
-    // which embeds the URL, and therefore the token — is unreachable.
+    // Pre-checked here so the vendored `invalidUrl()` message, which embeds
+    // the URL and therefore the token, is unreachable.
     if (!isGatewayWebSocketUrl(url)) throw new HermesUnavailableError()
     if (this.#closed) throw new HermesUnavailableError()
     try {
@@ -360,18 +332,18 @@ export class HermesGateway implements HermesRpcTransport {
       throw new HermesUnavailableError()
     }
     if (this.#closed) {
-      // close() landed while the handshake was in flight: drop the generation
-      // so a late open cannot publish anything.
+      // close() landed mid-handshake: a late open must publish nothing.
       this.#client.invalidate(GENERATION_CLOSED)
       throw new HermesUnavailableError()
     }
     // The vendored client resolves a dial it short-circuited, so a resolved
-    // `connect()` is not by itself proof of an open socket. Report the dial as
-    // failed instead, which arms the redial ladder in `connect()`.
+    // `connect()` is no proof of an open socket: fail, and let `connect()`
+    // arm the redial ladder.
     if (this.#client.connectionState !== "open")
       throw new HermesUnavailableError()
   }
 
+  /** Read the private server token under the connect deadline; validate it. */
   async #serverToken() {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.#connectTimeoutMs)
@@ -381,13 +353,7 @@ export class HermesGateway implements HermesRpcTransport {
         controller.signal
       )
       const token = headers["X-Hermes-Session-Token"]
-      if (
-        typeof token !== "string" ||
-        token.length < 1 ||
-        token.length > 4096 ||
-        /[\0\r\n]/u.test(token)
-      )
-        throw new HermesAuthenticationError()
+      if (!isServerToken(token)) throw new HermesAuthenticationError()
       return token
     } catch (error) {
       if (error instanceof HermesAuthenticationError) throw error
@@ -398,16 +364,11 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   /**
-   * Wrap one dialled socket. A real WebSocket still dispatches frames that were
-   * already queued when it was abandoned, so every guard callback is gated on
-   * this socket still being the current generation: a late unreadable frame
-   * from a dropped socket must not invalidate the healthy socket that replaced
-   * it, nor fail a request id the replacement reused.
+   * Wrap one dialled socket. A real WebSocket still dispatches frames queued
+   * before it was abandoned, so every guard callback is gated on this socket
+   * still being the current generation.
    */
   #createSocket(url: string) {
-    // Every dial retires the previous generation, including a dial the factory
-    // refuses: a frame the abandoned socket still dispatches must never pass
-    // the guard and invalidate whatever is dialled next.
     const generation = {}
     this.#generation = generation
     const current = () => this.#generation === generation
@@ -415,8 +376,7 @@ export class HermesGateway implements HermesRpcTransport {
     try {
       raw = this.#socketFactory(url)
     } catch (error) {
-      // A factory that refuses to build a socket is its own outage, distinct
-      // from a socket Hermes never completed a handshake on.
+      // Its own outage, apart from a handshake Hermes never completed.
       this.#logDialFailure("socket_factory_threw", error)
       return refusedSocket() as unknown as WebSocket
     }
@@ -434,9 +394,9 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   /**
-   * The redial ladder runs forever at the cap: log the outage, not every rung
-   * of it. The next successful open re-arms this. Only the error's type is
-   * recorded; a native message may carry the dial URL and its token.
+   * The redial ladder runs forever at the cap: log the outage once, not every
+   * rung; the next open re-arms this. Only the error type is recorded, because a
+   * native message may carry the dial URL and its token.
    */
   #logDialFailure(reason: string, error: unknown) {
     if (this.#dialFailureLogged) return
@@ -454,8 +414,7 @@ export class HermesGateway implements HermesRpcTransport {
         close_code: event.code,
       })
     }
-    // Never intercept: the vendored client drops the generation and reports
-    // `closed`, which is what arms the heal grace and the redial below.
+    // Never intercept: the vendored `closed` transition arms heal and redial.
     return false
   }
 
@@ -465,9 +424,9 @@ export class HermesGateway implements HermesRpcTransport {
       this.#attempt = 0
       this.#lostAnnounced = false
       this.#dialFailureLogged = false
-      this.#clearTimer("heal")
-      // Rebinding comes first: a request parked across the outage must not be
-      // written before `restored` handlers have re-registered their Sessions.
+      this.#clearHealGrace()
+      // Rebinding first: a parked request must not be written before
+      // `restored` handlers have re-registered their Sessions.
       const release = () => this.#resolveOpenWaiters()
       void this.#announceOpen().then(release, release)
       return
@@ -483,17 +442,13 @@ export class HermesGateway implements HermesRpcTransport {
       this.#healTimer = undefined
       if (this.#closed || this.#client.connectionState === "open") return
       this.#lostAnnounced = true
-      for (const handler of [...this.#connectionHandlers]) {
-        try {
-          handler.lost?.()
-        } catch (error) {
-          this.#log?.warn("hermes.gateway.handler_failed", {
-            phase: "lost",
-            reason: publicReason(error),
-          })
-        }
-      }
+      this.#notify("lost", (handler) => handler.lost?.())
     }, this.#healGraceMs)
+  }
+
+  #clearHealGrace() {
+    clearTimeout(this.#healTimer)
+    this.#healTimer = undefined
   }
 
   #scheduleRedial() {
@@ -510,49 +465,33 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   /**
-   * Announce a new socket generation exactly once, as either a restore or a
-   * restart. Hermes reports its replay epoch in the first `gateway.ready` frame
-   * of the generation, so that frame is awaited briefly first: a restarted
-   * Hermes must not have every binding re-resumed only to discard it again.
+   * Announce a new socket generation once, as a restore or a restart. Hermes
+   * reports its replay epoch in the generation's first `gateway.ready` frame, so
+   * that frame is briefly awaited first: a restarted Hermes must not have every
+   * binding re-resumed only to discard it again. No epoch in time is unchanged.
    */
   async #announceOpen() {
-    if (await this.#awaitEpochVerdict()) this.#notifyEpochChanged()
+    this.#readyWaiter?.settle(false)
+    let resolveVerdict!: (changed: boolean) => void
+    const verdict = new Promise<boolean>((resolve) => {
+      resolveVerdict = resolve
+    })
+    // Only ever settled from a later task, so `timer` is already bound.
+    const waiter = {
+      settle: (changed: boolean) => {
+        clearTimeout(timer)
+        if (this.#readyWaiter === waiter) this.#readyWaiter = undefined
+        resolveVerdict(changed)
+      },
+    }
+    const timer = setTimeout(() => waiter.settle(false), READY_EPOCH_WAIT_MS)
+    this.#readyWaiter = waiter
+    if (await verdict) this.#notifyEpochChanged()
     else await this.#notifyRestored()
   }
 
-  /**
-   * Resolve true when this generation announced a replay epoch other than the
-   * last one. A generation that never announces one is treated as unchanged
-   * once the bounded wait elapses.
-   */
-  #awaitEpochVerdict() {
-    this.#readyWaiter?.settle(false)
-    return new Promise<boolean>((resolve) => {
-      const waiter = {
-        settle: (changed: boolean) => {
-          clearTimeout(timer)
-          if (this.#readyWaiter === waiter) this.#readyWaiter = undefined
-          resolve(changed)
-        },
-      }
-      // Only ever called from a later task, so the deadline timer below is
-      // already bound by the time it runs.
-      const timer = setTimeout(() => waiter.settle(false), READY_EPOCH_WAIT_MS)
-      this.#readyWaiter = waiter
-    })
-  }
-
   #notifyEpochChanged() {
-    for (const handler of [...this.#connectionHandlers]) {
-      try {
-        handler.epochChanged?.()
-      } catch (error) {
-        this.#log?.warn("hermes.gateway.handler_failed", {
-          phase: "epoch",
-          reason: publicReason(error),
-        })
-      }
-    }
+    this.#notify("epoch", (handler) => handler.epochChanged?.())
   }
 
   async #notifyRestored() {
@@ -560,12 +499,27 @@ export class HermesGateway implements HermesRpcTransport {
       try {
         await handler.restored?.()
       } catch (error) {
-        this.#log?.warn("hermes.gateway.handler_failed", {
-          phase: "restored",
-          reason: publicReason(error),
-        })
+        this.#logHandlerFailure("restored", error)
       }
     }
+  }
+
+  /** Fan out to every connection handler; one throw never stops the rest. */
+  #notify(phase: string, call: (handler: HermesConnectionHandler) => void) {
+    for (const handler of [...this.#connectionHandlers]) {
+      try {
+        call(handler)
+      } catch (error) {
+        this.#logHandlerFailure(phase, error)
+      }
+    }
+  }
+
+  #logHandlerFailure(phase: string, error: unknown) {
+    this.#log?.warn("hermes.gateway.handler_failed", {
+      phase,
+      reason: publicReason(error),
+    })
   }
 
   #onGatewayEvent(event: GatewayEvent) {
@@ -575,10 +529,7 @@ export class HermesGateway implements HermesRpcTransport {
       try {
         listener(event)
       } catch (error) {
-        this.#log?.warn("hermes.gateway.handler_failed", {
-          phase: "event",
-          reason: publicReason(error),
-        })
+        this.#logHandlerFailure("event", error)
       }
     }
   }
@@ -590,8 +541,8 @@ export class HermesGateway implements HermesRpcTransport {
     this.#epoch = epoch
     const changed = previous !== undefined && previous !== epoch
     if (changed) this.#log?.warn("hermes.gateway.replay_epoch_changed", {})
-    // The wait this generation's open armed owns the verdict, so handlers learn
-    // a restart instead of a restore rather than both in turn.
+    // The wait armed by this generation's open owns the verdict, so handlers
+    // learn a restart instead of a restore rather than both in turn.
     if (this.#readyWaiter) {
       this.#readyWaiter.settle(changed)
       return
@@ -601,9 +552,8 @@ export class HermesGateway implements HermesRpcTransport {
 
   /**
    * Resolve once a socket is open, joining an in-flight dial. Nothing has been
-   * written yet, so the connect deadline reports unavailable and the caller's
-   * `AbortSignal` reports an abort immediately instead of waiting that deadline
-   * out.
+   * written, so the connect deadline reports unavailable, and an abort is
+   * reported at once rather than waiting that deadline out.
    */
   #awaitOpen(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.reject(new HermesRequestAbortedError())
@@ -613,18 +563,15 @@ export class HermesGateway implements HermesRpcTransport {
     if (!this.#dial && this.#redialTimer === undefined)
       void this.connect().catch(() => undefined)
     return new Promise<void>((resolve, reject) => {
-      let settled = false
-      // Only ever called from a later task, so the deadline timer below is
-      // already bound by the time any of these run.
+      // Only ever called from a later task, so `timer` is already bound.
+      // Membership in `#openWaiters` is what settles a waiter exactly once.
       const finish = (complete: () => void) => {
-        if (settled) return
-        settled = true
+        if (!this.#openWaiters.delete(waiter)) return
         clearTimeout(timer)
-        this.#openWaiters.delete(waiter)
         signal?.removeEventListener("abort", onAbort)
         complete()
       }
-      const waiter = {
+      const waiter: OpenWaiter = {
         resolve: () => finish(resolve),
         reject: (error: Error) => finish(() => reject(error)),
       }
@@ -645,17 +592,6 @@ export class HermesGateway implements HermesRpcTransport {
   #failOpenWaiters(error: Error) {
     for (const waiter of [...this.#openWaiters]) waiter.reject(error)
   }
-
-  #clearTimer(kind: "heal" | "redial") {
-    const timer = kind === "heal" ? this.#healTimer : this.#redialTimer
-    if (timer !== undefined) clearTimeout(timer)
-    if (kind === "heal") this.#healTimer = undefined
-    else this.#redialTimer = undefined
-  }
-
-  // -------------------------------------------------------------------------
-  // Requests
-  // -------------------------------------------------------------------------
 
   async request(
     method: string,
@@ -678,34 +614,30 @@ export class HermesGateway implements HermesRpcTransport {
     this.#inFlight += 1
     try {
       await this.#awaitOpen(options.signal)
-      let rejectOversized!: (error: Error) => void
+      let entry!: PendingResponse
       const oversized = new Promise<never>((_resolve, reject) => {
-        rejectOversized = reject
+        entry = { limit, reject }
       })
-      this.#pendingRegistration = { limit, reject: rejectOversized }
-      this.#mintedRequestId = undefined
-      let pending: Promise<unknown>
+      this.#dispatching = entry
+      let dispatched: Promise<unknown>
       try {
-        pending = this.#client.request(
+        dispatched = this.#client.request(
           method,
           { ...params },
           options.timeoutMs ?? this.#requestTimeoutMs,
           options.signal
         )
       } finally {
-        this.#pendingRegistration = undefined
+        this.#dispatching = undefined
       }
-      const id = this.#mintedRequestId
-      this.#mintedRequestId = undefined
       try {
         // The oversized race settles only from the wire guard; the vendored
-        // pending entry then expires on its own timeout, and `Promise.race`
-        // has already claimed that rejection.
-        return await (id === undefined
-          ? pending
-          : Promise.race([pending, oversized]))
+        // entry then expires on its own timeout, already claimed by the race.
+        return await (entry.id === undefined
+          ? dispatched
+          : Promise.race([dispatched, oversized]))
       } finally {
-        if (id !== undefined) this.#inFlightById.delete(id)
+        if (entry.id !== undefined) this.#inFlightById.delete(entry.id)
       }
     } catch (error) {
       throw this.#classify(error)
@@ -714,12 +646,13 @@ export class HermesGateway implements HermesRpcTransport {
     }
   }
 
+  /** Mint the correlation id and bind the dispatching request's byte bound. */
   #mintRequestId(nextId: number) {
     const id = `${REQUEST_ID_PREFIX}${nextId}`
-    const registration = this.#pendingRegistration
-    if (registration) {
-      this.#inFlightById.set(id, registration)
-      this.#mintedRequestId = id
+    const entry = this.#dispatching
+    if (entry) {
+      entry.id = id
+      this.#inFlightById.set(id, entry)
     }
     return id
   }
@@ -756,10 +689,6 @@ export class HermesGateway implements HermesRpcTransport {
     return this.#httpClient.http(path, init)
   }
 
-  // -------------------------------------------------------------------------
-  // Observation
-  // -------------------------------------------------------------------------
-
   /** One vendored `onAny` subscription fans out to every listener, forever. */
   onEvent(listener: (event: unknown) => void): () => void {
     this.#eventListeners.add(listener)
@@ -784,37 +713,27 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   /**
-   * Claim every server→client request while no real handler is registered so
-   * the vendored channel does not answer `-32601` on AOS' behalf, which would
-   * silently resolve a native `clarify` as "skipped". Hermes waits out its own
-   * request deadline instead — today's behaviour. Interactions replaces this.
+   * Claim every server→client request while no real handler is registered, so
+   * the vendored channel does not answer `-32601` on AOS' behalf and silently
+   * resolve a native `clarify` as "skipped"; Hermes waits out its own deadline
+   * instead. One log line per distinct method, bounded and truncated because
+   * Hermes chooses both the method and how many it sends.
    */
   #claimUnhandledRequest(request: ServerRequest): boolean {
     if (this.#requestHandlerCount > 0) return false
-    this.#logUnansweredRequest(request.method)
-    return true
-  }
-
-  /**
-   * Log one line per native method, once. Hermes chooses both the method and
-   * how many distinct ones it sends, so the remembered set is bounded and the
-   * method is truncated before it reaches the log.
-   */
-  #logUnansweredRequest(method: string) {
-    const label = method.slice(0, MAX_LOGGED_METHOD_CHARS)
-    if (this.#loggedRequestMethods.has(label)) return
+    const method = request.method.slice(0, MAX_LOGGED_METHOD_CHARS)
+    if (this.#loggedRequestMethods.has(method)) return true
     if (this.#loggedRequestMethods.size >= MAX_LOGGED_REQUEST_METHODS) {
-      if (this.#requestMethodLogCapped) return
+      if (this.#requestMethodLogCapped) return true
       this.#requestMethodLogCapped = true
       this.#log?.warn("hermes.gateway.server_request_unanswered_capped", {
         methods: this.#loggedRequestMethods.size,
       })
-      return
+      return true
     }
-    this.#loggedRequestMethods.add(label)
-    this.#log?.warn("hermes.gateway.server_request_unanswered", {
-      method: label,
-    })
+    this.#loggedRequestMethods.add(method)
+    this.#log?.warn("hermes.gateway.server_request_unanswered", { method })
+    return true
   }
 
   /** Drop the claim-and-hold handler once a real handler owns requests. */
@@ -826,8 +745,9 @@ export class HermesGateway implements HermesRpcTransport {
   async close(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
-    this.#clearTimer("heal")
-    this.#clearTimer("redial")
+    this.#clearHealGrace()
+    clearTimeout(this.#redialTimer)
+    this.#redialTimer = undefined
     this.#readyWaiter?.settle(false)
     this.removeDefaultRequestHandler()
     this.#failOpenWaiters(new HermesUnavailableError())

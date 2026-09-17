@@ -1,5 +1,17 @@
 import { parseJsonOrValue } from "./native"
 
+/** Hermes' native tool names AOS renames. */
+const CANONICAL_TOOL_NAMES = new Map<string, string>([
+  ["delegate_task", "delegate_subagent"],
+  ["skill_view", "use_skill"],
+  ["todo_list", "todo"],
+  ["clarify", "question"],
+])
+
+export function canonicalToolName(name: string) {
+  return CANONICAL_TOOL_NAMES.get(name) ?? name
+}
+
 export type HermesPublicJsonValue =
   | null
   | boolean

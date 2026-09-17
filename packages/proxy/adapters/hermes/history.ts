@@ -7,6 +7,7 @@ import {
   projectHermesMediaText,
 } from "./media-artifacts"
 import {
+  canonicalToolName,
   hermesToolResultIsError,
   projectHermesToolArgs,
   projectHermesToolResult,
@@ -188,17 +189,6 @@ function publicToolResult(name: string, value: unknown, isError: boolean) {
   return Object.keys(receipt).length
     ? receipt
     : { status: isError ? "failed" : "completed" }
-}
-
-function canonicalToolName(name: string) {
-  return (
-    {
-      delegate_task: "delegate_subagent",
-      skill_view: "use_skill",
-      todo_list: "todo",
-      clarify: "question",
-    }[name] ?? name
-  )
 }
 
 function canonicalToolArgs(name: string, args: JsonRecord) {
