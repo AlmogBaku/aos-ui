@@ -56,6 +56,28 @@ export type RunErrorResolver = (
   fallback: string
 ) => string
 
+/**
+ * How a normalized failure reads in the workspace: the localized headline for
+ * its code, keeping whatever the proxy sent after the first line as the
+ * provider's own detail. A code this build does not know keeps the proxy text
+ * whole.
+ *
+ * Applying this twice returns the same text, so a stream localized on its way
+ * through and a restored failure resolved again both read identically.
+ */
+export function runErrorText(
+  resolve: RunErrorResolver | undefined,
+  code: string | undefined,
+  message: string
+) {
+  if (!resolve) return message
+  const boundary = message.indexOf("\n")
+  const headline = boundary === -1 ? message : message.slice(0, boundary)
+  const detail = boundary === -1 ? "" : message.slice(boundary + 1)
+  const localized = resolve(code, headline)
+  return detail ? `${localized}\n${detail}` : localized
+}
+
 /** Waits out a backoff window, returning early when the caller aborts. */
 export function reconnectDelay(ms: number, signal?: AbortSignal | null) {
   if (ms <= 0 || signal?.aborted) return Promise.resolve()

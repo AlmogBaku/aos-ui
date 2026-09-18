@@ -14,7 +14,11 @@ import {
 } from "../../../packages/protocol"
 import type { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry } from "./aos-drafts"
-import { RESET_REQUIRED_CODE, type RunErrorResolver } from "./aos-reconnect"
+import {
+  RESET_REQUIRED_CODE,
+  runErrorText,
+  type RunErrorResolver,
+} from "./aos-reconnect"
 
 const PAGE_SIZE = 50
 type RemoteThreadMetadata = Awaited<
@@ -102,8 +106,8 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
 
   /**
    * A restored failed turn carries the normalized code beside the proxy's own
-   * description, so the workspace prefers its localized copy exactly as it does
-   * for a live failure.
+   * description, so the workspace reads it exactly as it reads a live failure:
+   * its own localized headline over the provider's own detail.
    */
   #restoredFailure(message: SessionMessage) {
     if (message.status?.type !== "incomplete") return undefined
@@ -118,10 +122,11 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
   }
 
   #error(event: { code?: string; message?: string }, fallback: string) {
-    const message = event.message ?? fallback
-    return this.resolveRunError
-      ? this.resolveRunError(event.code, message)
-      : message
+    return runErrorText(
+      this.resolveRunError,
+      event.code,
+      event.message ?? fallback
+    )
   }
 
   async *resume(options: {

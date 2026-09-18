@@ -6,8 +6,8 @@
  * Session's inflight snapshot. Only `session.resume` returns that snapshot; the
  * authoritative history route does not carry it. Hermes Desktop rebuilds the
  * failed turn from it, so an AOS history load does the same here, publishing the
- * very failure the live run engine would have published and never exposing
- * Hermes' own error text.
+ * very failure the live run engine would have published: the same headline and
+ * the same bounded native cause.
  *
  * Upstream `InflightTurn` (contract commit in UPSTREAM.md) carries `assistant`,
  * `streaming`, `user`, `corrections`, `correction_offsets`, `error`, `status`,
@@ -51,7 +51,7 @@ export type HermesInflightTurn = {
   readonly errorSurface?: Readonly<
     Partial<Record<SurfaceField, string | boolean>>
   >
-  /** Hermes' own error text. The server log may see it; the browser never does. */
+  /** Hermes' own error text, published only as a bounded, redacted detail. */
   readonly error?: string
 }
 
@@ -132,8 +132,10 @@ export function restoredHermesFailedTurn(
       ...(inflight.error !== undefined ? { error: inflight.error } : {}),
     })
   )
-  // A restore trusts no media reference: nothing published a tool result for
-  // this turn, exactly as an assistant history row without one is projected.
+  // Only prose Hermes actually streamed is content: a turn that streamed
+  // nothing before failing restores as the failure alone, exactly as the live
+  // turn published it. A restore also trusts no media reference, because
+  // nothing published a tool result for this turn.
   // Truncated, never refused: an oversized retained turn must not fail the
   // whole history load on the protocol's character bound.
   const text = (

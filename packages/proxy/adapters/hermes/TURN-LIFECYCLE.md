@@ -31,17 +31,17 @@ socket close, or the end of an individual assistant text segment.
 Hermes emits `message.start` when it accepts a prompt. A turn may then contain
 any number of assistant text segments and tool calls in source order.
 
-| Native event                                 | Meaning                                                                                                                                       | Ends the turn?               |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `message.delta`                              | Streaming text for the current assistant segment.                                                                                             | No                           |
-| `message.interim`                            | Seals assistant commentary before subsequent work. `already_streamed` says whether preceding deltas already carried the text.                 | No                           |
-| `tool.start`, `tool.progress`                | Tool execution lifecycle.                                                                                                                     | No                           |
-| `tool.complete` success                      | A successful tool result.                                                                                                                     | No                           |
-| `tool.complete` failure                      | A failed tool attempt. Hermes may recover with more text and tools.                                                                           | No                           |
-| `message.complete` with `status: "complete"` | Successful terminal assistant outcome for the native turn.                                                                                    | Yes                          |
-| `message.complete` with `status: "error"`    | Terminal failure of the native turn. `recoverable` preserves a failed turn for retry; it does not keep that same turn running.                | Yes                          |
-| `error`                                      | Ambiguous failure notification. Hermes also uses it for advisory failures, such as a rejected pending model switch, while the turn continues. | No; reconcile Session status |
-| `session.info` with `running: false`         | Fallback settlement signal when the expected completion frame was lost or native work stopped abnormally.                                     | Fallback only                |
+| Native event                                 | Meaning                                                                                                                                                                                                                                                    | Ends the turn?               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `message.delta`                              | Streaming text for the current assistant segment.                                                                                                                                                                                                          | No                           |
+| `message.interim`                            | Seals assistant commentary before subsequent work. `already_streamed` says whether preceding deltas already carried the text.                                                                                                                              | No                           |
+| `tool.start`, `tool.progress`                | Tool execution lifecycle.                                                                                                                                                                                                                                  | No                           |
+| `tool.complete` success                      | A successful tool result.                                                                                                                                                                                                                                  | No                           |
+| `tool.complete` failure                      | A failed tool attempt. Hermes may recover with more text and tools.                                                                                                                                                                                        | No                           |
+| `message.complete` with `status: "complete"` | Successful terminal assistant outcome for the native turn.                                                                                                                                                                                                 | Yes                          |
+| `message.complete` with `status: "error"`    | Terminal failure of the native turn. `recoverable` preserves a failed turn for retry; it does not keep that same turn running. `text` is the model's own prose only when `partial` is true; without it Hermes composed the copy that explains the failure. | Yes                          |
+| `error`                                      | Ambiguous failure notification. Hermes also uses it for advisory failures, such as a rejected pending model switch, while the turn continues.                                                                                                              | No; reconcile Session status |
+| `session.info` with `running: false`         | Fallback settlement signal when the expected completion frame was lost or native work stopped abnormally.                                                                                                                                                  | Fallback only                |
 
 Hermes sets the Session to idle after emitting the turn's completion frame. A
 consumer should prefer `message.complete` as the semantic terminal event and
@@ -115,8 +115,12 @@ The Hermes adapter applies these rules:
 - Tool failure terminates that tool call, not the run.
 - A successful `message.complete` closes outstanding message/tool structures
   and emits exactly one `RUN_FINISHED`.
-- A terminal native error becomes a sanitized, localized AOS run error. Native
-  exception strings and transport details must not reach the browser.
+- A terminal native error becomes a localized AOS run error, never an assistant
+  message: a failed completion's `text` is published as assistant text only when
+  `partial` is true, so Hermes' own failure copy never reads as a reply. The run
+  error carries the catalogue headline for the mapped code, followed by Hermes'
+  own error text bounded to 500 characters and dropped whole when it trips the
+  adapter's redaction rule. Transport details never reach the browser.
 - A generic `error` frame records a possible failure and triggers an
   authoritative Session-status read. `running` or `waiting` keeps the run open;
   `idle` confirms the failure. A failed status read cannot prove termination,
@@ -129,8 +133,9 @@ The Hermes adapter applies these rules:
   snapshot instead of its transcript, and only `session.resume` returns that
   snapshot. A history load whose last page ends with an unanswered prompt
   therefore resumes the Session once and restores the retained turn with the
-  same public failure code and message the live run published. No other history
-  load resumes anything, and Hermes' own error text stays in the server log.
+  same public failure code and message the live run published, restoring the
+  retained assistant text only when Hermes streamed prose before failing. No
+  other history load resumes anything.
 
 ## How AOS vendors `JsonRpcGatewayClient`
 
@@ -164,9 +169,10 @@ this document. Changing any of these behaviors requires updating the test.
 - `keeps the run open across a failed tool, interim text, and recovered tools`
 - `seals already-streamed interim text without duplicating it`
 - `settles a run when its native turn later completes`
-- `treats a failed message completion as a safe run error`
+- `treats a failed message completion as a run error with its cause`
 - `keeps Hermes partial output visible when message completion fails`
-- `terminalizes confirmed idle native failures without disclosing provider error bodies`
+- `never publishes Hermes' failure copy as assistant text`
+- `terminalizes a confirmed idle native failure with its bounded cause`
 - `keeps the run open after an advisory native error while Hermes is running`
 - `completes the advisory-error sequence without a run error`
 - `fails the terminal-error sequence once at the idle edge`

@@ -631,6 +631,92 @@ describe("AOS remote thread-list adapter", () => {
     })
   })
 
+  it("keeps the provider detail under a restored localized headline", async () => {
+    const adapter = new AosThreadListAdapter(
+      {
+        loadHistory: vi.fn(async () => ({
+          sessionId: "session-1",
+          messages: [
+            {
+              id: "aos-inflight:session-1",
+              role: "assistant" as const,
+              content: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              status: {
+                type: "incomplete" as const,
+                reason: "error" as const,
+                error:
+                  "The provider could not complete this run.\nAn error occurred (ValidationException)",
+              },
+              metadata: {
+                custom: {
+                  aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+                },
+              },
+            },
+          ],
+          total: 1,
+          limit: 200,
+          offset: 0,
+          nextOffset: 1,
+          execution: { status: "idle" as const },
+        })),
+      } as unknown as AosRemoteClient,
+      undefined,
+      (code, fallback) =>
+        code === "AOS_PROVIDER_RETRYABLE_FAILURE" ? "שגיאת ספק" : fallback
+    )
+
+    const history = await adapter.historyFor("session-1").load()
+
+    expect(history.messages.at(-1)?.message).toMatchObject({
+      content: [],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: "שגיאת ספק\nAn error occurred (ValidationException)",
+      },
+    })
+  })
+
+  it("never localizes a resumed run failure a second time", async () => {
+    const loadHistory = vi.fn(async () => activeReloadPage)
+    // The run stream localizes on the way through, so the history adapter sees
+    // a failure that already reads in the workspace's own copy.
+    const reconnectRun = vi.fn(async function* () {
+      yield {
+        type: "RUN_ERROR" as const,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "שגיאת ספק\nAn error occurred (ValidationException)",
+      }
+    })
+    const adapter = new AosThreadListAdapter(
+      { loadHistory, reconnectRun } as unknown as AosRemoteClient,
+      undefined,
+      (code, fallback) =>
+        code === "AOS_PROVIDER_RUN_FAILED" ? "שגיאת ספק" : fallback
+    )
+    const history = adapter.historyFor("session-1")
+    await history.load()
+
+    const updates = []
+    for await (const update of history.resume!({
+      abortSignal: new AbortController().signal,
+    } as Parameters<NonNullable<typeof history.resume>>[0]))
+      updates.push(update)
+
+    expect(updates).toEqual([
+      {
+        content: [],
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error: "שגיאת ספק\nAn error occurred (ValidationException)",
+        },
+      },
+    ])
+  })
+
   it("keeps the proxy description of a restored failure this build cannot localize", async () => {
     const adapter = new AosThreadListAdapter({
       loadHistory: vi.fn(async () => ({

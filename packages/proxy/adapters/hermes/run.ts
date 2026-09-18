@@ -643,7 +643,11 @@ export class HermesRunEngine {
     if (!active.messageId && completedMessageId)
       active.messageId = completedMessageId
     const finalText = boundedText(payload.text)
-    if (finalText) {
+    // A failed turn's `text` is the model's own prose only while `partial` marks
+    // it as such. Without that flag Hermes composed the copy explaining the
+    // failure, which AOS publishes as a failure and never as an assistant
+    // message.
+    if (finalText && (active.turn !== "failed" || payload.partial === true)) {
       this.#ensureMessageId(active)
       this.#appendSuffix(active, finalText)
     }

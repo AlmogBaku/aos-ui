@@ -64,6 +64,7 @@ import {
   RECONNECT_EXHAUSTED_CODE,
   RECONNECT_EXHAUSTED_MESSAGE,
   RECONNECT_MAX_ATTEMPTS,
+  runErrorText,
   type RunErrorResolver,
 } from "./aos-reconnect"
 
@@ -301,8 +302,8 @@ type ReconnectingSseOptions = {
 }
 
 /**
- * Replaces a run failure description with localized workspace copy, keeping
- * every other field of the normalized frame.
+ * Replaces a run failure headline with localized workspace copy, keeping the
+ * provider's own detail and every other field of the normalized frame.
  */
 function runErrorFrame(
   frame: string,
@@ -313,7 +314,7 @@ function runErrorFrame(
   if (!resolveRunError) return undefined
   const code = typeof event.code === "string" ? event.code : undefined
   const fallback = typeof event.message === "string" ? event.message : ""
-  const message = resolveRunError(code, fallback)
+  const message = runErrorText(resolveRunError, code, fallback)
   if (message === fallback) return undefined
   const preserved = frame
     .split(/\r?\n|\r/u)

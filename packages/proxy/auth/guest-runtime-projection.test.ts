@@ -233,6 +233,48 @@ describe("guest AG-UI projection", () => {
     })
   })
 
+  it("never projects the provider detail of a restored failure to a guest", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "failed",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error:
+                "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+            },
+            metadata: {
+              custom: {
+                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+              },
+            },
+          },
+        ],
+        total: 1,
+        limit: 200,
+        offset: 0,
+        nextOffset: 1,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[0]).toMatchObject({
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("temporarily_unavailable"),
+      },
+    })
+    expect(JSON.stringify(projected)).not.toContain("ValidationException")
+  })
+
   it("preserves only normalized attachment metadata in guest history", () => {
     const projected = projectGuestHistory(
       {
@@ -478,5 +520,21 @@ describe("guest AG-UI projection", () => {
     expect(String((projected as { message?: string })?.message)).not.toContain(
       "/private/path"
     )
+  })
+
+  it("never projects the provider detail of a run failure to a guest", () => {
+    const projected = project({
+      type: EventType.RUN_ERROR,
+      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      message:
+        "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+    })
+
+    expect(projected).toEqual({
+      type: EventType.RUN_ERROR,
+      code: "temporarily_unavailable",
+      message: guestErrorDescription("temporarily_unavailable"),
+    })
+    expect(JSON.stringify(projected)).not.toContain("ValidationException")
   })
 })

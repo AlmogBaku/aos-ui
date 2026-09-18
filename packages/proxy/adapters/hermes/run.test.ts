@@ -1588,7 +1588,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
       type: EventType.RUN_ERROR,
-      message: "Hermes could not complete this run.",
+      message: "Hermes could not complete this run.\nterminal provider crash",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
     expect(
@@ -1601,7 +1601,7 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("terminalizes confirmed idle native failures without disclosing provider error bodies", async () => {
+  it("terminalizes a confirmed idle native failure with its bounded cause", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
@@ -1620,7 +1620,7 @@ describe("HermesRunEngine", () => {
             session_id: "live-secret",
             seq: 2,
             payload: {
-              message: "token abc123 failed at /private/provider/path",
+              message: "provider stream closed before the first token",
             },
           })
           return {
@@ -1635,7 +1635,8 @@ describe("HermesRunEngine", () => {
       { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
       {
         type: EventType.RUN_ERROR,
-        message: "Hermes could not complete this run.",
+        message:
+          "Hermes could not complete this run.\nprovider stream closed before the first token",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
@@ -2517,7 +2518,7 @@ describe("HermesRunEngine", () => {
     })
   })
 
-  it("treats a failed message completion as a safe run error", async () => {
+  it("treats a failed message completion as a run error with its cause", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
@@ -2528,7 +2529,10 @@ describe("HermesRunEngine", () => {
             type: "message.complete",
             session_id: "live-secret",
             seq: 1,
-            payload: { status: "error", error: "secret native body" },
+            payload: {
+              status: "error",
+              error: "provider rejected the request",
+            },
           })
           publish({
             type: "session.info",
@@ -2548,7 +2552,8 @@ describe("HermesRunEngine", () => {
       { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
       {
         type: EventType.RUN_ERROR,
-        message: "Hermes could not complete this run.",
+        message:
+          "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
@@ -2569,7 +2574,7 @@ describe("HermesRunEngine", () => {
               message_id: "partial-reply",
               text: "The completed response retained by Hermes",
               status: "error",
-              error: "secret native body",
+              error: "provider rejected the request",
               partial: true,
               recoverable: true,
             },
@@ -2603,7 +2608,8 @@ describe("HermesRunEngine", () => {
       { type: EventType.TEXT_MESSAGE_END, messageId: "partial-reply" },
       {
         type: EventType.RUN_ERROR,
-        message: "Hermes could not complete this run.",
+        message:
+          "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
@@ -2636,7 +2642,7 @@ describe("HermesRunEngine", () => {
               message_id: "partial-reply",
               text: "Retained while streaming and at completion",
               status: "error",
-              error: "secret native body",
+              error: "provider rejected the request",
               partial: true,
             },
           })
@@ -2674,7 +2680,8 @@ describe("HermesRunEngine", () => {
       { type: EventType.TEXT_MESSAGE_END, messageId: "partial-reply" },
       {
         type: EventType.RUN_ERROR,
-        message: "Hermes could not complete this run.",
+        message:
+          "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
@@ -5327,7 +5334,7 @@ describe("HermesRunEngine", () => {
     publish(
       turn.frame("message.complete", {
         status: "error",
-        error: "secret native body",
+        error: "provider rejected the request",
         text: "Before",
       })
     )
@@ -5336,7 +5343,8 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
       type: EventType.RUN_ERROR,
-      message: "Hermes could not complete this run.",
+      message:
+        "Hermes could not complete this run.\nprovider rejected the request",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
   })
@@ -5370,7 +5378,8 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
       type: EventType.RUN_ERROR,
-      message: "Hermes could not start the agent for this Session.",
+      message:
+        "Hermes could not start the agent for this Session.\nagent build timed out",
       code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
     })
     expect(
@@ -5546,7 +5555,8 @@ describe("HermesRunEngine", () => {
       })
     ).resolves.toContainEqual({
       type: EventType.RUN_ERROR,
-      message: "Hermes could not start the agent for this Session.",
+      message:
+        "Hermes could not start the agent for this Session.\nagent build timed out",
       code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
     })
   })
@@ -5585,6 +5595,76 @@ describe("HermesRunEngine", () => {
     })
   })
 
+  it("never publishes Hermes' failure copy as assistant text", async () => {
+    // With nothing streamed Hermes composes its own failure copy into `text`
+    // and leaves `partial` absent: that copy explains the failure, so it is
+    // published as one instead of as an assistant message.
+    const events = await failedTurn({
+      text: "AWS Bedrock didn't answer after 3 attempts. Provider said: An error occurred (ValidationException)",
+      error:
+        "An error occurred (ValidationException) when calling the InvokeModel operation",
+      error_surface: {
+        layer: "provider",
+        code: "validation_exception",
+        retryable: true,
+      },
+    })
+
+    expect(ofType(events, EventType.TEXT_MESSAGE_CONTENT)).toEqual([])
+    expect(JSON.stringify(events)).not.toContain("AWS Bedrock")
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_ERROR,
+      message:
+        "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    })
+  })
+
+  it("keeps the prose a partial failed completion streamed and still fails", async () => {
+    const events = await failedTurn({
+      text: "I read the filing and then",
+      partial: true,
+      error: "connection reset by peer",
+    })
+
+    expect(ofType(events, EventType.TEXT_MESSAGE_CONTENT)).toEqual([
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "reply",
+        delta: "I read the filing and then",
+      },
+    ])
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_ERROR,
+      message: "Hermes could not complete this run.\nconnection reset by peer",
+      code: "AOS_PROVIDER_RUN_FAILED",
+    })
+  })
+
+  it("bounds the native cause a failed run publishes", async () => {
+    const events = (await failedTurn({ error: "boom ".repeat(200) })) as Array<{
+      type: string
+      message?: string
+    }>
+
+    expect(
+      events.find((event) => event.type === EventType.RUN_ERROR)?.message
+    ).toBe(`Hermes could not complete this run.\n${"boom ".repeat(100).trim()}`)
+  })
+
+  it("drops a native cause that carries a credential-shaped value", async () => {
+    const events = await failedTurn({
+      error: "provider rejected authorization=Bearer sk-live-native-secret",
+    })
+
+    expect(JSON.stringify(events)).not.toContain("sk-live-native-secret")
+    expect(events.at(-1)).toEqual({
+      type: EventType.RUN_ERROR,
+      message: "Hermes could not complete this run.",
+      code: "AOS_PROVIDER_RUN_FAILED",
+    })
+  })
+
   it("restores a retained failed turn exactly as the live turn failed", async () => {
     const errorSurface = {
       layer: "provider",
@@ -5597,6 +5677,7 @@ describe("HermesRunEngine", () => {
     const assistant = "I could not finish this answer."
     const events = (await failedTurn({
       text: assistant,
+      partial: true,
       error: nativeError,
       error_surface: errorSurface,
     })) as Array<{
@@ -5639,7 +5720,51 @@ describe("HermesRunEngine", () => {
     expect(restored?.metadata?.custom).toEqual({
       aos: { runErrorCode: liveFailure?.code },
     })
-    expect(JSON.stringify(restored)).not.toContain(nativeError)
+    // The operator acts on the provider's own words, so the same bounded cause
+    // reads on both paths rather than staying in the server log alone.
+    expect(liveFailure?.message).toContain(nativeError)
+  })
+
+  it("restores a non-partial failed turn with no assistant text either way", async () => {
+    const errorSurface = {
+      layer: "provider",
+      code: "validation_exception",
+      retryable: true,
+    }
+    const nativeError = "An error occurred (ValidationException)"
+    const events = (await failedTurn({
+      // Hermes' composed failure copy, which neither path may render as prose.
+      text: `AWS Bedrock didn't answer after 3 attempts. Provider said: ${nativeError}`,
+      error: nativeError,
+      error_surface: errorSurface,
+    })) as Array<{ type: string; message?: string; code?: string }>
+    const liveFailure = events.find(
+      (event) => event.type === EventType.RUN_ERROR
+    )
+
+    const inflight = hermesInflightTurn({
+      user: "Ask",
+      assistant: "",
+      streaming: false,
+      status: "error",
+      error: nativeError,
+      error_surface: errorSurface,
+    })
+    if (!inflight) throw new Error("Expected a validated inflight snapshot")
+    const restored = restoredHermesFailedTurn(inflight, {
+      id: "aos-inflight:stored-session",
+      userText: "Ask",
+      createdAt: "2026-09-15T19:41:41.000Z",
+    })
+
+    expect(ofType(events, EventType.TEXT_MESSAGE_CONTENT)).toEqual([])
+    expect(JSON.stringify(events)).not.toContain("AWS Bedrock")
+    expect(restored?.content).toEqual([])
+    expect(restored?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: liveFailure?.message,
+    })
   })
 
   it("logs one redacted, bounded native cause per failed run", async () => {

@@ -50,7 +50,58 @@ describe("Hermes retained turn", () => {
     ).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "I could not reach the model." }],
-      status: { type: "incomplete", reason: "error" },
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error:
+          "Hermes could not complete this run.\nProvider rejected the request",
+      },
+    })
+  })
+
+  it("restores no text for a failed turn that streamed nothing", () => {
+    expect(
+      restore({
+        // Hermes retains an empty assistant text when the model streamed no
+        // prose before failing: the failure is the whole of that turn.
+        assistant: "",
+        status: "error",
+        streaming: false,
+        error: "An error occurred (ValidationException)",
+        error_surface: {
+          layer: "provider",
+          code: "validation_exception",
+          retryable: true,
+        },
+      })
+    ).toMatchObject({
+      role: "assistant",
+      content: [],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error:
+          "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException)",
+      },
+      metadata: {
+        custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+      },
+    })
+  })
+
+  it("drops a retained cause that carries a credential-shaped value", () => {
+    const restored = restore({
+      assistant: "",
+      status: "error",
+      streaming: false,
+      error: "provider rejected authorization=Bearer sk-live-native-secret",
+    })
+
+    expect(JSON.stringify(restored)).not.toContain("sk-live-native-secret")
+    expect(restored?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: "Hermes could not complete this run.",
     })
   })
 

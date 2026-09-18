@@ -449,6 +449,37 @@ describe("AOS run stream reconnect policy", () => {
     })
   })
 
+  it("keeps the provider detail under a localized run error headline", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      sse([
+        started,
+        frame({
+          type: "RUN_ERROR",
+          code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+          message:
+            "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException)",
+        }),
+      ])
+    )
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: THREAD_ID,
+      fetcher,
+      resolveRunError: (code, fallback) =>
+        code === "AOS_PROVIDER_RETRYABLE_FAILURE"
+          ? "שגיאת ספק זמנית"
+          : fallback,
+    })
+
+    const events = await collect(agent, runInput)
+
+    expect(events.at(-1)).toMatchObject({
+      type: "RUN_ERROR",
+      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      message: "שגיאת ספק זמנית\nAn error occurred (ValidationException)",
+    })
+  })
+
   it("reloads the Session once and redials from cursor 0 when a live run resets", async () => {
     vi.useFakeTimers()
     const fetcher = vi

@@ -1704,10 +1704,35 @@ describe("Hermes server adapter", () => {
           custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
         },
       })
+      // This retained cause names a credential and an internal host, so the
+      // detail is dropped whole and the headline stands alone.
       const serialized = JSON.stringify(history)
       expect(serialized).not.toContain("AWS Bedrock")
       expect(serialized).not.toContain("native-secret")
       expect(serialized).not.toContain("ValidationException")
+    })
+
+    it("carries the bounded native cause of a restored failed turn", async () => {
+      const { adapter } = failedTurnAdapter(unansweredPrompt, {
+        ...inflight,
+        error:
+          "An error occurred (ValidationException) when calling the InvokeModel operation",
+      })
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error:
+            "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+        },
+        metadata: {
+          custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+        },
+      })
     })
 
     it("resumes once for a burst of history loads on the same Session", async () => {

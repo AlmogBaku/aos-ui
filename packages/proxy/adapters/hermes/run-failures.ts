@@ -1,14 +1,20 @@
 /**
  * What a Hermes run may say about a failure, and to whom.
  *
- * The browser only ever sees one of the entries below: a stable AOS code and a
- * message AOS authored. Hermes' own error text is diagnosable in the server log
- * alone, redacted and bounded, and is never part of a public failure.
+ * Every public failure is one of the entries below: a stable AOS code and the
+ * headline AOS authored for it. A failure the operator has to act on also needs
+ * the provider's own words, so Hermes' error text follows the headline as a
+ * second line — bounded, and dropped whole when it carries anything the
+ * adapter's redaction rule keeps private. The server log keeps its own shorter,
+ * redacted copy.
  */
 import { redactForLog } from "../../redaction"
+import { containsPrivateValue, trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
 
 const MAX_LOGGED_NATIVE_CHARS = 200
+/** How much of Hermes' own error text a public failure may carry. */
+const MAX_PUBLIC_DETAIL_CHARS = 500
 
 /** The public shape of every terminal AOS failure: a code and its message. */
 export type RunFailure = {
@@ -17,8 +23,9 @@ export type RunFailure = {
 }
 
 /**
- * The parts of a terminal Hermes failure AOS may act on. `nativeMessage` is
- * kept only for the redacted server log and never reaches the browser.
+ * The parts of a terminal Hermes failure AOS may act on. `nativeMessage` is the
+ * longer copy only the redacted server log sees; `detail` is the bounded,
+ * redaction-checked cause a public failure may carry.
  */
 export type NativeFailure = {
   layer?: string
@@ -26,6 +33,7 @@ export type NativeFailure = {
   retryable?: boolean
   failureReason?: string
   nativeMessage?: string
+  detail?: string
 }
 
 export class HermesRunPublicError extends Error {
@@ -144,8 +152,21 @@ export function stopUncertain() {
 }
 
 /**
+ * Hermes' own error text, bounded and only when it carries nothing private. The
+ * bounded text is what the check reads, because that is all that ever leaves:
+ * a value that trips the rule is dropped whole rather than masked.
+ */
+function publicDetail(value: unknown) {
+  const native = trimmedText(value)
+  if (native === undefined) return undefined
+  const detail = native.slice(0, MAX_PUBLIC_DETAIL_CHARS).trim()
+  return containsPrivateValue(detail) ? undefined : detail
+}
+
+/**
  * Hermes' own classification of a failure (`error_surface`, `failure_reason`)
- * plus the native text, which only the server log may see.
+ * plus its native text, bounded once for the server log and once for the public
+ * detail a failure may carry.
  */
 export function nativeFailure(payload: Record<string, unknown>): NativeFailure {
   const surface = payload.error_surface
@@ -164,6 +185,7 @@ export function nativeFailure(payload: Record<string, unknown>): NativeFailure {
       typeof native === "string" && native
         ? native.slice(0, MAX_LOGGED_NATIVE_CHARS)
         : undefined,
+    detail: publicDetail(native),
   })
 }
 
@@ -182,10 +204,20 @@ export function loggedNativeMessage(failure: NativeFailure | undefined) {
 }
 
 /**
- * The public explanation of a failed native turn. Hermes' classification picks
- * the message; its own error text never leaves the server.
+ * The public explanation of a failed native turn: the headline Hermes'
+ * classification picks, followed by the bounded native cause when there is one
+ * to act on. The headline stays the first line, so a client that localizes by
+ * code replaces exactly that line and keeps the provider's own words.
  */
 export function publicRunFailure(failure: NativeFailure): RunFailure {
+  const headline = runFailureHeadline(failure)
+  return failure.detail === undefined
+    ? headline
+    : { code: headline.code, message: `${headline.message}\n${failure.detail}` }
+}
+
+/** Hermes' classification, mapped to the one catalogue entry that explains it. */
+function runFailureHeadline(failure: NativeFailure): RunFailure {
   const code = failure.code?.toLowerCase() ?? ""
   if (code === "agent_init_failed") return RUN_FAILURES.agentUnavailable
   if (failure.layer === "billing" || /billing|quota|insufficient/u.test(code))

@@ -1429,7 +1429,9 @@ const MessageError: FC = () => {
   return (
     <MessagePrimitive.Error>
       <ErrorPrimitive.Root className="aui-message-error-root mt-2 rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive dark:bg-destructive/5 dark:text-red-200">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
+        {/* A normalized failure reads as its headline over the provider's own
+            detail, so the line break between them is preserved. */}
+        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-3 whitespace-pre-line" />
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   )
