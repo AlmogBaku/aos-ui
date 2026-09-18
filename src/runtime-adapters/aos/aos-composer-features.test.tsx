@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import type { AosWorkspaceCapabilities } from "./aos-client"
@@ -208,6 +208,43 @@ describe("AOS composer features", () => {
     })
     expect(models).toHaveBeenCalledWith("session-1")
     expect(context).toHaveBeenCalledWith("session-1")
+  })
+
+  it("never asks the provider to switch to the model already selected", async () => {
+    const selectModel = vi.fn(async () => ({ selectedId: "small" }))
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models: vi.fn(async () => ({
+        selectedId: "small",
+        options: [
+          { id: "small", label: "Small", group: "Native" },
+          { id: "large", label: "Large", group: "Native" },
+        ],
+      })),
+      context: vi.fn(),
+      selectModel,
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
+    await act(async () => {
+      await result.current.model?.select("small")
+    })
+    expect(selectModel).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await result.current.model?.select("large")
+    })
+    expect(selectModel).toHaveBeenCalledExactlyOnceWith("session-1", "large")
   })
 
   it("exposes provider-neutral steering only when the Session capability is available", async () => {

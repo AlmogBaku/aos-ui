@@ -581,6 +581,31 @@ describe("Thread accessibility", () => {
     expect(screen.getByText("The reference is ready.")).toBeVisible()
   })
 
+  it("renders both roles' prose through one Markdown mechanism", async () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "asked",
+            role: "user",
+            content: [{ type: "text", text: "Read **README.md** first." }],
+          },
+          {
+            id: "answered",
+            role: "assistant",
+            content: [{ type: "text", text: "Reading **README.md** now." }],
+          },
+        ]}
+      />
+    )
+
+    const emphasized = await screen.findAllByText("README.md", {
+      selector: "strong",
+    })
+    expect(emphasized).toHaveLength(2)
+    for (const element of emphasized) expect(element).toBeVisible()
+  })
+
   it("copies assistant text when the Clipboard API is unavailable", async () => {
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(
       navigator,
@@ -1145,10 +1170,7 @@ describe("Thread accessibility", () => {
 
     const player = screen.getByLabelText("Audio attachment: voice-note.mp3")
     expect(player).toBeInstanceOf(HTMLAudioElement)
-    expect(player).toHaveAttribute(
-      "src",
-      "data:audio/mpeg;base64,YXVkaW8="
-    )
+    expect(player).toHaveAttribute("src", "data:audio/mpeg;base64,YXVkaW8=")
     expect(player).toHaveAttribute("controls")
     expect(player).toHaveAttribute("preload", "metadata")
     expect(player).not.toHaveAttribute("autoplay")
@@ -1291,7 +1313,9 @@ describe("Thread accessibility", () => {
       />
     )
 
-    expect(screen.getByRole("button", { name: "Video attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Video attachment" })
+    ).toBeVisible()
     expect(document.querySelector("video")).toBeNull()
   })
 
@@ -1326,7 +1350,9 @@ describe("Thread accessibility", () => {
       />
     )
 
-    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Audio attachment" })
+    ).toBeVisible()
     expect(document.querySelector("audio")).toBeNull()
   })
 
@@ -1357,7 +1383,9 @@ describe("Thread accessibility", () => {
       })
     )
 
-    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Audio attachment" })
+    ).toBeVisible()
     expect(document.querySelector("audio")).toBeNull()
     expect(
       screen.getByRole("button", { name: "Remove attachment" })

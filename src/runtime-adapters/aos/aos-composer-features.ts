@@ -155,6 +155,10 @@ export function useAosComposerFeatures(
               selection,
               options: models.options,
               async select(selectedId: string) {
+                // Selecting the model the Session already runs is not a
+                // mutation: Hermes would rebuild the agent for nothing, and a
+                // repeated no-op could sustain itself one round trip at a time.
+                if (selectedId === models.selectedId) return
                 setSelection({ status: "pending", targetId: selectedId })
                 try {
                   const result = await client.selectModel(threadId, selectedId)

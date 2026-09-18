@@ -49,6 +49,14 @@ type ModelSelectorContextValue = {
   readonly setEffort: ((effort: string) => void) | undefined
 }
 
+/**
+ * The one change reason that means the operator activated an item, by pointer
+ * or by keyboard. Typed against the Select's own reason union so a future
+ * upstream rename fails the build instead of silently switching models on the
+ * library's own bookkeeping.
+ */
+const OPERATOR_PICKED: Select.Root.ChangeEventReason = "item-press"
+
 const ModelSelectorContext = createContext<ModelSelectorContextValue | null>(
   null
 )
@@ -95,8 +103,17 @@ export function ModelSelectorRoot({
       >
         <Select.Root
           value={value}
-          onValueChange={(nextValue) => {
-            if (nextValue !== null) onValueChange(nextValue)
+          // Only a deliberate pick may switch the Session's model. The Select
+          // also emits for its own bookkeeping with reason "none": when a
+          // filtered item set no longer holds the controlled value it restores
+          // the value captured at first render, and closed-trigger typeahead
+          // label-matches a keystroke against the whole option list. Either one
+          // commits a model the operator never chose, and because the trigger
+          // renders the controlled value the picker follows it. "itemPress"
+          // covers pointer and keyboard activation alike.
+          onValueChange={(nextValue, details) => {
+            if (nextValue !== null && details.reason === OPERATOR_PICKED)
+              onValueChange(nextValue)
           }}
         >
           {children}

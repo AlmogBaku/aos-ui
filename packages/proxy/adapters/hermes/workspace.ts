@@ -216,8 +216,21 @@ function projectModels(
   const selectedModel = stringValue(value.model, 256)
   if (!selectedProvider || !selectedModel)
     throw new HermesWorkspaceUnavailableError()
+  const selectedId = JSON.stringify([selectedProvider, selectedModel])
+  // The selected model must be one of the offered options. A browser select
+  // holding a value no item carries is the state that makes it restore some
+  // other value on its own, so publish the Session's own model as a choice
+  // even when Hermes leaves it out of the catalog it advertises.
+  if (!native.some((choice) => choice.id === selectedId))
+    native.unshift({
+      id: selectedId,
+      label: selectedModel,
+      group: selectedProvider,
+      provider: selectedProvider,
+      model: selectedModel,
+    })
   return {
-    selectedId: JSON.stringify([selectedProvider, selectedModel]),
+    selectedId,
     options: native.map(({ id, label, group }) => ({ id, label, group })),
     native,
   }

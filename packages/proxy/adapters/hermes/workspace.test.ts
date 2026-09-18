@@ -150,6 +150,36 @@ describe("Hermes workspace operations", () => {
     })
   })
 
+  it("offers the model a Session already runs even when Hermes omits it", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "retired",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                authenticated: true,
+                models: ["small"],
+              },
+            ],
+          }
+      },
+    })
+
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      selectedId: '["native","retired"]',
+      options: [
+        { id: '["native","retired"]', label: "retired", group: "native" },
+        { id: '["native","small"]', label: "small", group: "Native models" },
+      ],
+    })
+  })
+
   it("only changes a selected provider-reported model with Hermes' Session scope", async () => {
     const { operations, request } = harness({
       request(method) {

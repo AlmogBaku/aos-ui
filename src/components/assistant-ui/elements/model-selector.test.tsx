@@ -54,6 +54,63 @@ describe("ModelSelector", () => {
     expect(screen.getByText("Claude Careful")).toBeVisible()
   })
 
+  it("switches the model only when the operator picks one", async () => {
+    const user = userEvent.setup()
+    const select = vi.fn()
+    render(
+      <ModelSelectorRoot
+        models={[
+          { id: "gpt-fast", name: "GPT Fast", group: "OpenAI" },
+          { id: "claude-careful", name: "Claude Careful", group: "Anthropic" },
+        ]}
+        value="gpt-fast"
+        onValueChange={select}
+      >
+        <ModelSelectorTrigger aria-label="Choose model" />
+        <ModelSelectorContent searchable />
+      </ModelSelectorRoot>
+    )
+
+    const trigger = screen.getByRole("combobox", { name: "Choose model" })
+    await user.click(trigger)
+    // A query that hides the Session's own model must not switch it.
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search models" }),
+      "anthropic"
+    )
+    expect(select).not.toHaveBeenCalled()
+
+    // Typing against a closed trigger must not switch it either.
+    await user.keyboard("{Escape}")
+    await user.type(trigger, "claude")
+    expect(select).not.toHaveBeenCalled()
+  })
+
+  it("switches the model when the operator picks another one", async () => {
+    const user = userEvent.setup()
+    const select = vi.fn()
+    render(
+      <ModelSelectorRoot
+        models={[
+          { id: "gpt-fast", name: "GPT Fast", group: "OpenAI" },
+          { id: "claude-careful", name: "Claude Careful", group: "Anthropic" },
+        ]}
+        value="gpt-fast"
+        onValueChange={select}
+      >
+        <ModelSelectorTrigger aria-label="Choose model" />
+        <ModelSelectorContent searchable />
+      </ModelSelectorRoot>
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    await user.click(
+      await screen.findByRole("option", { name: /Claude Careful/ })
+    )
+
+    expect(select).toHaveBeenCalledExactlyOnceWith("claude-careful")
+  })
+
   it("keeps the authoritative selection while a controlled switch is pending and offers retry after failure", async () => {
     const user = userEvent.setup()
     const select = vi.fn()

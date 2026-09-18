@@ -1701,6 +1701,10 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
 )
 
 const USER_MESSAGE_PART_COMPONENTS = {
+  // The user's own words render through the same Markdown mechanism and the
+  // same body type scale as the assistant's, so neither role carries its own
+  // typography or a second text renderer.
+  Text: MarkdownText,
   File: UserFilePart,
   Image: UserImagePart,
 }
