@@ -23,7 +23,13 @@ class EventSource implements ServerRunHandle {
   #resolveSettled!: () => void
   #closed = false
 
-  constructor(readonly position = { epoch: "epoch-1", lastSeen: 0 }) {
+  constructor(
+    /** `null` for a segment that names no position a recovery can continue. */
+    readonly position: { epoch: string; lastSeen: number } | null = {
+      epoch: "epoch-1",
+      lastSeen: 0,
+    }
+  ) {
     this.settled = new Promise((resolve) => {
       this.#resolveSettled = resolve
     })
@@ -65,7 +71,7 @@ class EventSource implements ServerRunHandle {
   }
 
   recoveryPosition() {
-    return this.position
+    return this.position ?? undefined
   }
 }
 
@@ -184,6 +190,73 @@ async function neighborRun(sessions: SessionCoordinator, source: EventSource) {
   await read()
   subscription.close()
   return () => reloadedHead(sessions, otherScope, "neighbor-run")
+}
+
+/**
+ * One run that streamed far more single-character deltas than a journal may
+ * retain. Returns every event it delivered, in run sequence order.
+ */
+async function deltaFlood(
+  sessions: SessionCoordinator,
+  source: EventSource,
+  deltas: number
+) {
+  const subscription = await sessions.start(
+    scope,
+    input("run-1"),
+    access("initial")
+  )
+  const read = reader(subscription)
+  const emitted: AGUIEvent[] = [
+    runStarted("run-1"),
+    {
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: "assistant-1",
+      role: "assistant",
+    },
+    ...Array.from({ length: deltas }, (_, index) => ({
+      type: EventType.TEXT_MESSAGE_CONTENT as const,
+      messageId: "assistant-1",
+      delta: String(index % 10),
+    })),
+  ]
+  for (const event of emitted) {
+    source.emit(event)
+    await read()
+  }
+  subscription.close()
+  return emitted
+}
+
+/**
+ * The oldest cursor a journal still replays, probed the way a browser redials.
+ * Every cursor before it is answered with one reset instead of a partial run.
+ */
+async function oldestReplayableCursor(
+  sessions: SessionCoordinator,
+  highest: number
+) {
+  const resets = async (after: number) => {
+    const probe = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after },
+      access(`probe-${after}`)
+    )
+    const head = await reader(probe)()
+    probe.close()
+    const event = head.value?.event
+    return (
+      event?.type === EventType.RUN_ERROR && event.code === "AOS_RESET_REQUIRED"
+    )
+  }
+  let low = 1
+  let high = highest
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (await resets(middle)) low = middle + 1
+    else high = middle
+  }
+  return low
 }
 
 describe("SessionCoordinator", () => {
@@ -817,8 +890,10 @@ describe("SessionCoordinator", () => {
       }),
     }
     // Every raw delta event costs more than its delta, so 120 of them exceed
-    // this bound long before the one event they compact into does.
-    const sessions = coordinator(engine, { maxReplayBytes: 4 * 1024 })
+    // the event bound long before the one event they compact into does. The
+    // bytes bound is the retention cap of the raw entries too, so it is set
+    // where this run's own raw events still fit inside it.
+    const sessions = coordinator(engine, { maxReplayBytes: 32 * 1024 })
     const initial = await sessions.start(
       scope,
       input("run-1"),
@@ -867,6 +942,165 @@ describe("SessionCoordinator", () => {
     ])
     expect(engine.recover).not.toHaveBeenCalled()
     reload.close()
+  })
+
+  it("holds a delta flood to the retention cap and replays a cursor inside it", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a journaled run")
+      }),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const emitted = await deltaFlood(sessions, source, 400)
+    const total = emitted.length
+
+    const redial = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: total - 3 },
+      access("redial")
+    )
+    const readRedial = reader(redial)
+    // A cursor the journal still holds replays exactly the deltas after it.
+    await expect(readRedial()).resolves.toMatchObject({
+      value: {
+        sequence: total,
+        event: { type: EventType.TEXT_MESSAGE_CONTENT, delta: "789" },
+      },
+    })
+    redial.close()
+
+    // What one journal retains is bounded by the cap and not by the length of
+    // the run: this flood streamed an order of magnitude more raw events.
+    const oldest = await oldestReplayableCursor(sessions, total)
+    const entryBytes = new TextEncoder().encode(
+      JSON.stringify(emitted.at(-1))
+    ).byteLength
+    expect(total - oldest).toBeLessThanOrEqual(
+      Math.ceil((2 * 1024) / entryBytes)
+    )
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("returns reset-required once for a redial before the retained prefix", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a journaled run")
+      }),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    await deltaFlood(sessions, source, 400)
+
+    const redial = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 1 },
+      access("redial")
+    )
+    const readRedial = reader(redial)
+    await expect(readRedial()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+    await expect(readRedial()).resolves.toMatchObject({ done: true })
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("returns reset-required once for a cursorless reload of a pruned run", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a journaled run")
+      }),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    await deltaFlood(sessions, source, 400)
+
+    // The journal no longer holds this run from its beginning, so a reload that
+    // owns nothing is owed authoritative history instead of a partial replay.
+    const reload = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("reload")
+    )
+    const readReload = reader(reload)
+    await expect(readReload()).resolves.toMatchObject({
+      value: {
+        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      },
+    })
+    await expect(readReload()).resolves.toMatchObject({ done: true })
+    expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("serves the redial after a reset from the live segment of a pruned run", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a live segment")
+      }),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const emitted = await deltaFlood(sessions, source, 400)
+
+    // The browser reloaded the authoritative history after the one reset, so
+    // the run it is still watching answers this cursor with its live events.
+    const redial = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 0 },
+      access("redial")
+    )
+    const readRedial = reader(redial)
+    const tail = {
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: "assistant-1",
+    } as const
+    source.emit(tail)
+
+    await expect(readRedial()).resolves.toMatchObject({
+      value: { sequence: emitted.length + 1, event: tail },
+    })
+    expect(sessions.state(scope)).toBe("running")
+    expect(engine.recover).not.toHaveBeenCalled()
+    redial.close()
+  })
+
+  it("answers a retried admission of a pruned run from its live segment", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a live segment")
+      }),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const emitted = await deltaFlood(sessions, source, 400)
+
+    // A retry of the same admission reads the run from its beginning, and a
+    // pruned journal no longer holds that beginning: replaying its surviving
+    // deltas would open with content of a message this reader never saw start.
+    const retried = await sessions.start(
+      scope,
+      input("run-1"),
+      access("retried")
+    )
+    const readRetried = reader(retried)
+    const tail = {
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: "assistant-1",
+    } as const
+    source.emit(tail)
+
+    await expect(readRetried()).resolves.toMatchObject({
+      value: { sequence: emitted.length + 1, event: tail },
+    })
+    expect(engine.start).toHaveBeenCalledOnce()
+    retried.close()
   })
 
   it("drops the fresh replay journal after publishing a terminal event", async () => {
@@ -1934,6 +2168,34 @@ describe("SessionCoordinator", () => {
     expect(engine.start).toHaveBeenCalledTimes(2)
   })
 
+  it("recovers without a position when the replaced segment names none", async () => {
+    const restored = new EventSource(null)
+    const recovered = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => restored),
+      recover: vi.fn(async () => recovered),
+    }
+    const sessions = coordinator(engine)
+    await sessions.start(scope, input("run-1"), access("one"))
+    restored.emit(interruptedError)
+    restored.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+
+    const redial = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1", after: 1 },
+      access("two")
+    )
+
+    // A fabricated position could never match a provider epoch, so the recovery
+    // asks for the run itself rather than for an interval nothing owns.
+    expect(engine.recover).toHaveBeenCalledWith(scope, {
+      threadId: scope.threadId,
+      runId: "run-1",
+    })
+    redial.close()
+  })
+
   it("refuses a new turn when the recovered run is still running", async () => {
     const interrupted = new EventSource()
     const recovered = new EventSource()
@@ -1961,6 +2223,46 @@ describe("SessionCoordinator", () => {
     ).rejects.toThrow("already active")
     expect(engine.recover).toHaveBeenCalledOnce()
     expect(sessions.state(scope)).toBe("running")
+  })
+
+  it("admits a new turn when a recovered terminal needs more than one macrotask", async () => {
+    vi.useFakeTimers()
+    try {
+      const interrupted = new EventSource()
+      const recovered = new EventSource()
+      const admitted = new EventSource()
+      const engine: ServerRunEngine = {
+        start: vi
+          .fn<ServerRunEngine["start"]>()
+          .mockResolvedValueOnce(interrupted)
+          .mockResolvedValueOnce(admitted),
+        recover: vi.fn(async () => recovered),
+      }
+      const sessions = coordinator(engine)
+      await sessions.start(scope, input("run-1"), access("one"))
+      interrupted.emit(interruptedError)
+      interrupted.finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sessions.state(scope)).toBe("uncertain")
+
+      const turn = sessions.start(scope, input("run-2"), access("one"))
+      // The provider answers the recovery with a run that finished, and it
+      // takes more than the one event-loop turn a timer would have allowed.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+      recovered.emit({
+        type: EventType.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-1",
+        outcome: { type: "success" },
+      })
+      recovered.finish()
+
+      await expect(turn).resolves.toMatchObject({ runId: "run-2" })
+      expect(engine.start).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("refuses a new turn when recovering an uncertain execution fails", async () => {

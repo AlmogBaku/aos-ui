@@ -8,14 +8,15 @@ import {
   type ResumeEntry,
 } from "@ag-ui/core"
 
-import type {
-  NewTurnRunInput,
-  RecoveryRequest,
-  ResumeRunInput,
-  ServerRunEngine,
-  ServerRunHandle,
-  ServerAttachmentStage,
-  SessionScope,
+import {
+  ServerRunConflictError,
+  type NewTurnRunInput,
+  type RecoveryRequest,
+  type ResumeRunInput,
+  type ServerRunEngine,
+  type ServerRunHandle,
+  type ServerAttachmentStage,
+  type SessionScope,
 } from "../../core/runtime"
 import {
   OpenCodeClientError,
@@ -395,10 +396,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
           })(),
           settled: Promise.resolve(),
           stop: async () => "idle" as const,
-          recoveryPosition: () => ({
-            epoch: "restored-interrupt",
-            lastSeen: 0,
-          }),
+          // A restored wait was never streamed, so it holds no native position
+          // a later recovery could continue from.
+          recoveryPosition: () => undefined,
         },
       }
     } finally {
@@ -429,7 +429,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         throw new Error("OpenCode interaction resume is unavailable")
       await this.#options.resume.validate(scope, resume)
     } else if (await this.#active(scope.sessionId)) {
-      throw new Error("OpenCode is already running this Session")
+      // The native Session owns a turn AOS did not admit, which the browser
+      // resolves by reloading this run rather than by reading a failure.
+      throw new ServerRunConflictError()
     }
 
     const before = await this.#readHistory(scope.sessionId)

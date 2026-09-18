@@ -23,6 +23,14 @@ export function reconnectDelayMs(
   return Math.floor(ceiling * random())
 }
 
+/**
+ * The journal behind a run stream can no longer serve the cursor that stream
+ * holds. Unlike a recoverable interrupt, redialing with the same cursor can
+ * never succeed, so this code is deliberately not recoverable: the browser first
+ * reloads authoritative history and only then reads the run from its beginning.
+ */
+export const RESET_REQUIRED_CODE = "AOS_RESET_REQUIRED"
+
 export const RECONNECT_EXHAUSTED_CODE = "AOS_RECONNECT_EXHAUSTED"
 export const RECONNECT_EXHAUSTED_MESSAGE =
   "This run stream could not be reconnected."

@@ -6,6 +6,7 @@ import type {
   OpenCodeDurableEvent,
   OpenCodeSessionEvents,
 } from "./client"
+import { ServerRunConflictError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeContent } from "./content"
@@ -283,6 +284,9 @@ describe("OpenCodeRunEngine", () => {
 
     expect(waiting?.state).toBe("waiting-for-input")
     expect(waiting?.interrupts).toEqual([interrupt])
+    // A restored wait was never streamed, so it names no position: a fabricated
+    // one would force the next recovery to reset.
+    expect(waiting?.handle.recoveryPosition()).toBeUndefined()
     const waitingEvents = await collect(waiting!.handle)
     expect(waitingEvents).toEqual([
       {
@@ -492,6 +496,21 @@ describe("OpenCodeRunEngine", () => {
       type: EventType.RUN_FINISHED,
     })
     expect(state.sessions.wait).toHaveBeenCalledOnce()
+  })
+
+  it("refuses a new turn as a run conflict while the native Session is running", async () => {
+    const state = client({
+      active: vi.fn(async () => ({
+        data: { [scope.sessionId]: { type: "running" } },
+      })),
+    })
+
+    // The browser owns this answer: a Session OpenCode is still running is a
+    // conflict the workspace resolves by reloading, not a provider failure.
+    await expect(
+      new OpenCodeRunEngine(state.native).start(scope, input())
+    ).rejects.toBeInstanceOf(ServerRunConflictError)
+    expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
   it("validates a bound resume before bypassing active conflict, subscribes before its void mutation, and invents no cursor", async () => {

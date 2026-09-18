@@ -204,6 +204,9 @@ function ReadyAosRuntimeProvider({
             onEvent: (threadId, event) =>
               client.acceptRunEvent(threadId, event),
             resolveRunError,
+            reloadHistory: remoteId
+              ? () => client.loadHistory(remoteId)
+              : undefined,
             getCapabilities:
               remoteId && agentId
                 ? () =>

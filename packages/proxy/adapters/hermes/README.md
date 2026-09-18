@@ -14,21 +14,36 @@ native `/api/ws` turn boundaries and their AG-UI mapping.
 - `adapter.ts` composes normalized workspace, run, command, rewind, interaction,
   content, and capability operations.
 - `dashboard-client.ts` owns validated HTTP reads and durable mutations.
-- `transport.ts` owns the multiplexed JSON-RPC WebSocket, request correlation,
-  native event routing, heartbeat, and reconnect.
-- `attachment-registry.ts` maps durable Sessions to live Hermes Sessions and
-  applies retention and warm-idle release.
-- `run.ts` converts native execution frames into ordered AG-UI segments.
+- `vendor/hermes-shared/` is a byte-identical copy of the `JsonRpcGatewayClient`
+  and its companions from upstream `apps/shared` at the pinned commit. It owns
+  correlation, per-call timeouts, heartbeat, socket generations, and
+  server-to-client request routing. See `vendor/hermes-shared/UPSTREAM.md`.
+- `gateway.ts` wraps the vendored client with the token dial, eager dial and
+  jittered redial, 20 s heal grace, auth-close stop, bounded wire decoding, and
+  three-way error classification.
+- `gateway-socket.ts` enforces the 8 MiB frame guard and supplies the
+  socket factory used by `gateway.ts`.
+- `http.ts` provides bounded REST helpers for all non-WebSocket Hermes calls.
+- `attachment-registry.ts` maps durable Sessions to live Hermes Sessions,
+  rebinds after a heal, invalidates on 4001/4007 rejection, clears on restart,
+  and applies running-aware warm-idle release.
+- `run-native.ts` defines typed native outcomes and the Hermes rejection-code
+  table used to classify run errors.
+- `run.ts` owns the single attach path, per-Session contiguity and catch-up,
+  discovery by open-turn ring scan, one turn outcome, the settlement watcher,
+  and the failure catalogue.
 - `history.ts` converts authoritative native history and strips native context
   envelopes and filesystem details.
 - `interactions.ts` answers Hermes' server-to-client `clarify` and `approval`
-  JSON-RPC requests: it validates them, presents AG-UI interrupts, and responds
-  on the request handle Hermes is waiting on.
+  JSON-RPC requests: it validates them, re-delivers `open_requests` on
+  reattach, presents AG-UI interrupts, and responds on the request handle
+  Hermes is waiting on. A `request.cancel` subscription expires pending
+  requests.
 - `slash-commands.ts` validates and bounds the native command catalog.
-- `tool-data.ts` owns tool projection: `run.ts` and `history.ts` both read a
-  tool call through `projectHermesToolCall` and its outcome through
+- `tool-data.ts` is the single tool projection owner: `run.ts` and `history.ts`
+  both read a tool call through `projectHermesToolCall` and its outcome through
   `projectHermesToolOutcome`, so a live turn and a refreshed transcript cannot
-  disagree about a tool's public name, arguments, error state, result or
+  disagree about a tool's public name, arguments, error state, result, or
   artifacts. `media-artifacts.ts` remains the artifact authority behind it.
 - `content.ts` and `workspace.ts` normalize their corresponding provider
   surfaces.

@@ -938,3 +938,56 @@ research agents:
 | `upstream-contract`   | Upstream Hermes server API contract             |
 | `dry-structure`       | Code duplication and structure analysis         |
 | `fix-history`         | History of previous fixes and regressions       |
+
+---
+
+## Status after implementation
+
+The implementation spans commits `7420ae2` through `857ec5a` on branch
+`worktree-hermes-vendored-gateway`. The raw audit JSON lives outside the
+repository at the path shown in the Appendix; it is not part of the AOS
+source tree.
+
+`MAX_ACTIVE_RUN_JOURNALS` and `journalComplete` no longer exist in
+`session-coordinator.ts`; those symbols were removed when the coordinator was
+refactored to a single compacted journal.
+
+| Finding | Status   | Notes                                                                                                                                                  |
+| ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F1      | Fixed    | Discovery now scans only the open-turn ring; catch-up uses the run cursor, not the full retained ring.                                                 |
+| F2      | Fixed    | Typed native outcomes (`HermesSubmitOutcome`) distinguish rejected from uncertain; definitive rejections no longer become `AOS_SEND_UNCERTAIN`.        |
+| F3      | Fixed    | Coordinator one subscribe path and journal eliminate the pre-submit status race.                                                                       |
+| F4      | Fixed    | Vendored `JsonRpcGatewayClient` owns `gateway.ping` heartbeat.                                                                                         |
+| F5      | Fixed    | Vendored client owns socket-generation tracking; observers do not accumulate across redials.                                                           |
+| F6      | Fixed    | One turn-outcome rule maps `status:"interrupted"` to stopped, not success.                                                                             |
+| F7      | Fixed    | Duplicate of F4; fixed by vendoring.                                                                                                                   |
+| F8      | Fixed    | `gateway.ts` drops events exceeding 2 MiB before they reach the shared socket.                                                                         |
+| F9      | Fixed    | `attachment-registry.ts` invalidates the binding on 4001 and 4007 rejection.                                                                           |
+| F10     | Fixed    | Duplicate of F5; fixed by vendoring.                                                                                                                   |
+| F11     | Fixed    | Vendored client owns frame-decode state; it is scoped to the socket generation.                                                                        |
+| F12     | Fixed    | Vendored client handles `close()` during an in-flight dial.                                                                                            |
+| F13     | Fixed    | Duplicate of F1; fixed by open-turn ring scan.                                                                                                         |
+| F14     | Fixed    | Bounded pre-active queue management prevents emit-into-closed-queue overflow.                                                                          |
+| F15     | Fixed    | Duplicate of F5/F10; fixed by vendoring.                                                                                                               |
+| F16     | Fixed    | Coordinator compacted journal covers recovered segments; no journalless recovery path remains.                                                         |
+| F17     | Fixed    | Coordinator issues monotonic sequences per run across segments; stale cursors no longer skip events.                                                   |
+| F18     | Fixed    | `gateway.ts` detects epoch changes and emits the reset signal; `run.ts` classifies them as `AOS_RESET_REQUIRED`.                                       |
+| F19     | Fixed    | `interactions.ts` registers `onRequest` for `clarify` and `approval`; it re-delivers `open_requests` on reattach and responds over the request handle. |
+| F20     | Fixed    | Settlement watcher and one turn-outcome rule handle Stop during the agent-build window correctly.                                                      |
+| F21     | Fixed    | One turn-outcome rule; redirect-chain flags do not override a native `status:"error"`.                                                                 |
+| F22     | Fixed    | Queued-steer path waits for Hermes to start the drained turn before settling.                                                                          |
+| F23     | Fixed    | Three-way error classification in `gateway.ts`; Stop rejections map to the correct outcome rather than `uncertain`.                                    |
+| F24     | Fixed    | Duplicate of F6; one turn-outcome rule.                                                                                                                |
+| F25     | Fixed    | `attachment-registry.ts` running-aware idle close; the idle timer does not fire while a run is active.                                                 |
+| F26     | Fixed    | `interactions.ts` `request.cancel` subscription expires pending requests; the interaction retainer is released.                                        |
+| F27     | Fixed    | Duplicate of F2; typed native outcomes.                                                                                                                |
+| F28     | Fixed    | Failure catalogue logs one redacted, bounded native cause per failed run.                                                                              |
+| F29     | Fixed    | Duplicate of F20; settlement watcher.                                                                                                                  |
+| F30     | Deferred | Slash-command detection errors are a separate concern; not addressed in this branch.                                                                   |
+| F31     | Deferred | `AOS_STOP_UNCERTAIN` HTTP status mapping is a browser/routes concern; not addressed in this branch.                                                    |
+| F32     | Deferred | Browser reconnect backoff is in `src/runtime-adapters/aos`; not addressed in this branch.                                                              |
+| F33     | Deferred | Browser behavior on reload during a running segment with coordinator-owned journal; not addressed in this branch.                                      |
+| F34     | Deferred | Coordinator side addressed (uncertain executions recover on next Send); browser-side resume path deferred.                                             |
+| F35     | Deferred | Coordinator issues monotonic sequences (server side fixed); browser stale-cursor handling deferred.                                                    |
+| F36     | Deferred | Browser-side sticky status cache; not addressed in this branch.                                                                                        |
+| F37     | Deferred | Browser-side draft-Session first-turn observation; not addressed in this branch.                                                                       |

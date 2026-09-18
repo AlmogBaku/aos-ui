@@ -2,7 +2,8 @@
 
 This document explains how the Hermes `/api/ws` protocol represents one model
 turn and how the AOS Hermes adapter maps that turn to AG-UI. It is a reference
-for contributors changing `transport.ts`, `run.ts`, recovery, or history.
+for contributors changing `gateway.ts`, `gateway-socket.ts`, `run.ts`,
+recovery, or history.
 
 ## The socket is not the turn
 
@@ -13,8 +14,10 @@ model turn.
 
 The layers have separate responsibilities:
 
-1. `transport.ts` authenticates the socket, correlates JSON-RPC responses, and
-   delivers ordered native events.
+1. `vendor/hermes-shared/` (`JsonRpcGatewayClient`) correlates JSON-RPC
+   responses, drives the heartbeat, and manages socket generations.
+   `gateway.ts` / `gateway-socket.ts` wrap it with the token dial, bounded
+   decoding, error classification, and one event fan-out.
 2. `run.ts` validates events for one attached Session and maps their semantics
    to an AG-UI run segment.
 3. The shared run coordinator owns subscriber replay and terminal settlement.
@@ -123,41 +126,45 @@ The Hermes adapter applies these rules:
 - Live mapping and authoritative history must use the same tool-result failure
   classifier so refresh does not erase a failed attempt.
 
-## Why AOS does not import `GatewayClient`
+## How AOS vendors `JsonRpcGatewayClient`
 
-Hermes' web [`GatewayClient`](https://github.com/NousResearch/hermes-agent/blob/b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b/web/src/lib/gatewayClient.ts)
-is a browser-specific wrapper around
-[`JsonRpcGatewayClient`](https://github.com/NousResearch/hermes-agent/blob/b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b/apps/shared/src/json-rpc-gateway.ts).
-The implementation package is a private Hermes workspace package named
-`@hermes/shared`, version `0.0.0`; it is not a supported published dependency.
-AOS also runs its transport server-side and requires boundaries absent from the
-browser client:
+AOS vendors `JsonRpcGatewayClient` and its companions byte-identical from
+`NousResearch/hermes-agent apps/shared` at commit
+`47685348eaca9d673719003b9e03a71becfa6423` into
+`vendor/hermes-shared/`. The vendored client owns correlation, per-call
+timeouts and `AbortSignal`, JSON-RPC error typing, the `gateway.ping`
+heartbeat, socket generations, and server-to-client request routing. The AOS
+`gateway.ts` wrapper owns the token dial, eager dial and jittered redial, 20 s
+heal grace, auth-close stop, 8 MiB wire-fault guard, 2 MiB event drop, bounded
+JSON, three-way error classification (rejected with code / uncertain when
+written / unavailable when nothing was written), one event fan-out, epoch
+changes, and `close()`. Vendored replay is disabled (`replay: false`) because
+`run.ts` owns native replay and catch-up.
 
-- bounded socket frames, decoded JSON depth, node count, and HTTP bodies;
-- server credential handling without exposing the Hermes token;
-- sanitized native errors and explicit uncertain-mutation outcomes;
-- exact Session routing and bounded multi-subscriber fan-out;
-- authoritative HTTP reconciliation under the AOS coordinator.
-
-For those reasons AOS adapts the wire protocol instead of importing the browser
-class. This is intentional adaptation, but it creates compatibility work. When
-the pinned Hermes revision changes, compare `transport.ts` with the upstream
-shared client for authentication, heartbeat, sequence watermark, replay epoch,
-and live/replay race behavior. Compare `run.ts` separately with Hermes Desktop's
+See [`vendor/hermes-shared/UPSTREAM.md`](vendor/hermes-shared/UPSTREAM.md) for
+per-file hashes, the shim rationale, and the sync recipe. When the pinned
+revision changes, compare `gateway.ts` and `gateway-socket.ts` against the
+updated shared client for authentication, dial parameters, sequence watermarks,
+and replay epoch behavior. Compare `run.ts` separately against Hermes Desktop's
 event reducer for message, tool, and terminal semantics. Transport parity does
 not replace correct turn interpretation.
 
 ## Verification contract
 
-Focused tests must cover at least these sequences:
+The following test titles in `run.test.ts` cover the sequences described in
+this document. Changing any of these behaviors requires updating the test.
 
-- failed tool, interim assistant text, successful tools, successful completion;
-- already-streamed interim text without duplication;
-- successful completion emits exactly one terminal run event;
-- terminal message error and idle fallback produce a friendly public error;
-- an advisory `error` while Hermes is running permits later tools and a
-  successful completion;
-- an `error` confirmed by authoritative idle status produces one friendly
-  terminal error;
-- reconnect replay preserves native sequence without duplicating live frames;
-- refreshed history retains both failed and successful tools in source order.
+- `keeps one AOS run while redirecting into a distinct assistant generation`
+- `keeps the run open across a failed tool, interim text, and recovered tools`
+- `seals already-streamed interim text without duplicating it`
+- `settles a run when its native turn later completes`
+- `treats a failed message completion as a safe run error`
+- `keeps Hermes partial output visible when message completion fails`
+- `terminalizes confirmed idle native failures without disclosing provider error bodies`
+- `keeps the run open after an advisory native error while Hermes is running`
+- `completes the advisory-error sequence without a run error`
+- `fails the terminal-error sequence once at the idle edge`
+- `replays missed events from the same Hermes epoch before buffered live events`
+- `reattaches an interrupted active run and replays without resubmitting the prompt`
+- `classifies a changed Hermes replay epoch as reset-required`
+- `live and refreshed Hermes tool projection agree` (describe block with multiple cases)

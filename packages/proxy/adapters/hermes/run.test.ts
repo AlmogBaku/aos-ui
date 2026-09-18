@@ -2999,6 +2999,9 @@ describe("HermesRunEngine", () => {
 
     expect(discovered?.state).toBe("waiting-for-input")
     expect(discovered?.interrupts).toEqual([interrupt])
+    // A restored wait was never streamed, so it names no position: a fabricated
+    // one would force the next recovery to reset.
+    expect(discovered?.handle.recoveryPosition()).toBeUndefined()
     await expect(collect(discovered!.handle)).resolves.toEqual([
       {
         type: EventType.RUN_STARTED,

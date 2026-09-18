@@ -526,8 +526,14 @@ function publicToolResult(
   // An artifact receipt AOS could not publish keeps only its status fields: the
   // rest of a native receipt is a filesystem path.
   const receipt: HermesPublicJsonRecord = {}
-  for (const key of PUBLIC_ARTIFACT_RECEIPT_KEYS)
-    if (key in projected) receipt[key] = projected[key]!
+  for (const key of PUBLIC_ARTIFACT_RECEIPT_KEYS) {
+    if (!(key in projected)) continue
+    const value = projected[key]!
+    // A native status message is prose that may name the very location this
+    // collapse drops, so it is held to the same rule as a recorded answer.
+    if (typeof value === "string" && containsPrivateValue(value)) continue
+    receipt[key] = value
+  }
   return Object.keys(receipt).length
     ? receipt
     : { status: isError ? "failed" : "completed" }

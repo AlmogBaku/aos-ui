@@ -13,9 +13,11 @@ AG-UI data.
 - Bun, or Docker with Compose
 - `uv` only when building or testing the optional native plugin
 
-The adapter is tested against Hermes checkout
-`b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b`; its required RPC surface was also
-verified in unmodified Hermes `v2026.9.7`.
+The minimum supported Hermes revision is
+`47685348eaca9d673719003b9e03a71becfa6423`; the vendored gateway client and the
+interactions protocol both require the server-to-client request behavior present
+at that pin. The separately tested compatibility revision is
+`b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b` (`v2026.9.7`).
 
 ## Start Hermes independently
 
@@ -187,6 +189,43 @@ The integration reads this metadata; it does not grant creator authority itself.
   idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
 - Voice controls appear only for native STT/TTS interfaces; see [Chat voice](../chat-voice.md).
+- The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
+  Hermes accepts this only on loopback or when started with `--insecure`; do
+  not expose a `--insecure` Hermes instance beyond a trusted private network.
+  The close code Hermes sends on token rejection (documented as 4401 or 4403)
+  is unverified; treat an immediate WebSocket close after dial as a possible
+  authentication failure and check the Hermes server log.
+- A Hermes restart resets every active run once: the next attach produces
+  `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
+  history from the Hermes transcript. No prompt is re-sent.
+
+## Live operator checks
+
+These checks require a disposable Session and real credentials. Run them
+against a new pin or before confirming a deployment.
+
+- **Network cut 5 s mid-turn**: sever the proxy-to-Hermes connection for 5
+  seconds while a long run is in progress, then restore it. The browser should
+  show no error; the run should resume and complete normally. The
+  `AOS_CONNECTION_INTERRUPTED` event should not reach the browser.
+- **Network cut 30 s mid-turn**: sever for 30 seconds (beyond the 20 s heal
+  grace). The adapter should produce one `AOS_RESET_REQUIRED` and reload
+  history. No prompt should be re-sent.
+- **Hermes restart mid-turn**: stop and restart `hermes serve` while a run is
+  active. The adapter should attach to the restarted instance and emit
+  `AOS_RESET_REQUIRED` exactly once. The run indicator should clear; history
+  should reload.
+- **Clarify and approval with mid-question reload**: start a Session that asks
+  a question or approval. Reload the browser tab mid-question. The interrupt
+  should reconstruct from history. Answer the question; the run should
+  continue.
+- **Invalid token**: set a wrong token in the config and start the proxy.
+  Connection should fail immediately with a recognizable authentication error
+  in the server log. No token value should appear in any browser-facing
+  response.
+- **Confirm close code on auth rejection**: observe the actual WebSocket close
+  code Hermes sends for a bad token (expected 4401 or 4403, but unverified at
+  the pinned revision). Record the observed code here once confirmed.
 
 ## Verify
 

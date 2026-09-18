@@ -13,7 +13,7 @@ import {
 } from "../../../packages/protocol"
 import type { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry } from "./aos-drafts"
-import type { RunErrorResolver } from "./aos-reconnect"
+import { RESET_REQUIRED_CODE, type RunErrorResolver } from "./aos-reconnect"
 
 const PAGE_SIZE = 50
 type RemoteThreadMetadata = Awaited<
@@ -215,7 +215,7 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
           }
       }
       if (event.type === "RUN_ERROR") {
-        if (event.code === "AOS_RESET_REQUIRED")
+        if (event.code === RESET_REQUIRED_CODE)
           return {
             kind: "reset",
             content: [...content],

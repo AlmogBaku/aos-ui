@@ -58,6 +58,7 @@ import type {
 import type { AosEventScope } from "./aos-reconciliation"
 import {
   isRecoverableRunError,
+  RESET_REQUIRED_CODE,
   reconnectDelay,
   reconnectDelayMs,
   RECONNECT_EXHAUSTED_CODE,
@@ -290,6 +291,13 @@ type ReconnectingSseOptions = {
   onRunFinished?: (event: RunFinishedEvent) => Promise<void>
   onEvent?: (event: AosSessionSignalEvent) => void
   resolveRunError?: RunErrorResolver
+  /**
+   * Answers whether a run whose journal can no longer serve this stream's cursor
+   * is still live. Consulted at most once per stream: a live run is redialed
+   * from the beginning of its replacement segment, and every other answer ends
+   * this run with the reset the proxy sent.
+   */
+  onResetRequired?: () => Promise<boolean>
 }
 
 /**
@@ -327,6 +335,7 @@ async function* reconnectingSse(
     onRunFinished,
     onEvent,
     resolveRunError,
+    onResetRequired,
   }: ReconnectingSseOptions
 ) {
   const encoder = new TextEncoder()
@@ -336,6 +345,7 @@ async function* reconnectingSse(
   let after = initialAfter
   let sent = initialAfter
   let failures = 0
+  let reloadedAfterReset = false
   const exhausted = () => {
     const event = {
       type: "RUN_ERROR",
@@ -359,6 +369,9 @@ async function* reconnectingSse(
     // interrupt made no progress, so it must be paced like a failed redial.
     let progressed = 0
     let renumbered = false
+    // The reset this attempt delivered, held back while the authoritative
+    // reload decides whether one more redial can still recover the run.
+    let reset: { frame: Uint8Array; event?: AosSessionSignalEvent } | undefined
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -378,6 +391,29 @@ async function* reconnectingSse(
               renumbered = true
               after = 0
             } else after = position
+          }
+          if (
+            event?.type === "RUN_ERROR" &&
+            event.code === RESET_REQUIRED_CODE &&
+            onResetRequired &&
+            !reloadedAfterReset &&
+            !signal?.aborted
+          ) {
+            const localized = runErrorFrame(
+              frame,
+              event as Record<string, unknown>,
+              boundary.separator,
+              resolveRunError
+            )
+            const signalEvent = sessionSignalEvent(event)
+            reset = {
+              frame: encoder.encode(
+                localized ?? `${frame}${boundary.separator}`
+              ),
+              ...(signalEvent ? { event: signalEvent } : {}),
+            }
+            interrupted = true
+            break
           }
           if (
             event?.type === "RUN_ERROR" &&
@@ -424,6 +460,22 @@ async function* reconnectingSse(
     } finally {
       if (interrupted) await reader.cancel().catch(() => undefined)
       reader.releaseLock()
+    }
+    if (reset && !signal?.aborted) {
+      // The cursor this stream holds is gone from the journal, so exactly one
+      // authoritative reload decides what follows: a run the provider still
+      // reports as running is read again from the beginning of its replacement
+      // segment, and anything else is this run's failure. A second reset is
+      // surfaced like any other terminal run error.
+      reloadedAfterReset = true
+      const live = await onResetRequired?.().catch(() => false)
+      if (signal?.aborted) return
+      if (!live) {
+        if (reset.event) onEvent?.(reset.event)
+        yield reset.frame
+        return
+      }
+      after = 0
     }
     if (terminal || signal?.aborted) {
       if (buffered) yield encoder.encode(buffered)
@@ -506,6 +558,7 @@ export function createAosRunAgent({
   onRunFinished,
   onEvent,
   resolveRunError,
+  reloadHistory,
   getCapabilities,
 }: {
   agentId: string
@@ -528,6 +581,13 @@ export function createAosRunAgent({
   onRunFinished?: (event: RunFinishedEvent) => Promise<void>
   onEvent?: (threadId: string, event: AosSessionSignalEvent) => void
   resolveRunError?: RunErrorResolver
+  /**
+   * Reads authoritative Session state. A live run whose journal can no longer
+   * serve this browser's cursor is reloaded exactly once: a Session the provider
+   * still reports as running is read again from the beginning of its replacement
+   * segment, and any other status ends the run with the normalized reset.
+   */
+  reloadHistory?: () => Promise<{ execution?: { status: string } }>
   getCapabilities?: () => Promise<AgentCapabilities>
 }) {
   const url = `${basePath}/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs`
@@ -644,6 +704,12 @@ export function createAosRunAgent({
       signal: init.signal,
       resolveRunError,
       onEvent: onEvent && ((event) => onEvent(resolvedThreadId, event)),
+      ...(reloadHistory
+        ? {
+            onResetRequired: async () =>
+              (await reloadHistory()).execution?.status === "running",
+          }
+        : {}),
       onRunFinished: async (event) => {
         try {
           if (event.outcome?.type !== "success") return

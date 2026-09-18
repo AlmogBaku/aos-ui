@@ -34,13 +34,13 @@ browser presentation and drafts
         -> native adapter clients and transports
 ```
 
-| Owner | Responsibilities |
-| --- | --- |
-| Browser | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue. |
-| Normalized routes | Input validation, authorized resource scope, protocol encoding, and friendly errors. |
-| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, AG-UI segment identities, subscriber fanout, bounded replay, and authoritative settlement. |
-| Runtime adapter | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention. |
-| Native runtime | Durable Agents, Sessions, history, executions, interactions, tools, and content. |
+| Owner                | Responsibilities                                                                                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                        |
+| Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                      |
+| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, AG-UI segment identities, subscriber fanout, bounded replay, and authoritative settlement.    |
+| Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention. |
+| Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                          |
 
 The coordinator must not learn native WebSocket methods, live Session IDs, or
 provider event shapes. The adapter must not create a second run coordinator or
@@ -97,13 +97,13 @@ replace provider history during recovery.
 
 These operations have different authority and retry semantics:
 
-| Operation | Owner | Meaning |
-| --- | --- | --- |
-| Send while idle | Coordinator and adapter | Admit one new native user turn. |
-| Browser follow-up queue | Assistant UI | Retain FIFO user intent until the Session can accept it. |
-| Active-turn steering | Coordinator control lane | Correct the current native execution without starting another run. |
-| Provider-queued steering | Native runtime | The steering request was accepted for later application; do not send another copy. |
-| Native command | Adapter | Execute a catalog-recognized provider operation with its native result semantics. |
+| Operation                | Owner                    | Meaning                                                                            |
+| ------------------------ | ------------------------ | ---------------------------------------------------------------------------------- |
+| Send while idle          | Coordinator and adapter  | Admit one new native user turn.                                                    |
+| Browser follow-up queue  | Assistant UI             | Retain FIFO user intent until the Session can accept it.                           |
+| Active-turn steering     | Coordinator control lane | Correct the current native execution without starting another run.                 |
+| Provider-queued steering | Native runtime           | The steering request was accepted for later application; do not send another copy. |
+| Native command           | Adapter                  | Execute a catalog-recognized provider operation with its native result semantics.  |
 
 Steering requires an exact active `runId`, a unique request ID, text-only
 input, and the controller's authorization. Stop and steering serialize through
@@ -236,6 +236,16 @@ An adapter is ready when:
 - reconnect restores observation and state without resending prompts;
 - provider payloads and paths cannot enter normalized or guest output;
 - focused adapter tests and provider-neutral conformance tests pass.
+
+When a runtime's native client is open source and the AOS server-side
+requirements (bounded decoding, credential isolation, uncertain-mutation
+handling, reconciliation) can be satisfied with a thin wrapper, vendor the
+upstream client files byte-identical rather than reimplementing the wire
+protocol. Place the copy in a `vendor/` subdirectory, record the upstream pin,
+per-file hashes, and a sync recipe in that directory's `UPSTREAM.md`, and
+enforce the snapshot with a dedicated test. Keep replay ownership inside the
+adapter — if the upstream client offers a replay mode, disable it and let the
+adapter drive recovery from authoritative history.
 
 Use the Hermes adapter and its tests as a worked example, not as a transport
 template. Its package map is in

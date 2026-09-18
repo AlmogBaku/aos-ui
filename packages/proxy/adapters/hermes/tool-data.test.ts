@@ -274,6 +274,16 @@ describe("projectHermesToolOutcome", () => {
     expect(JSON.stringify(outcome)).not.toContain("/srv/private")
   })
 
+  it("drops an artifact receipt message that names a private location", () => {
+    const outcome = projectHermesToolOutcome("call-3b", "present_artifact", {
+      ok: false,
+      status: "failed",
+      message: "Could not write /home/alice/reports/report.md",
+    })
+    expect(outcome.result).toEqual({ ok: false, status: "failed" })
+    expect(JSON.stringify(outcome)).not.toContain("/home/alice")
+  })
+
   it("collapses a text_to_speech receipt to a status and trusts its media", () => {
     const audio = "/home/alice/voice/brief.mp3"
     const outcome = projectHermesToolOutcome("call-4", "text_to_speech", {

@@ -59,6 +59,9 @@ export type SessionCoordinatorOptions = {
   maxReplayBytes: number
 }
 
+/** One journaled event and the memory its raw form occupies. */
+type JournalEntry = { value: SequencedRunEvent; bytes: number }
+
 /**
  * The one replay store of a run segment: every event it delivered, keyed by run
  * sequence, so a cursor-bearing redial and a cursorless reload read the same
@@ -66,11 +69,18 @@ export type SessionCoordinatorOptions = {
  * cursor exact and still spares a reload thousands of single-character events.
  */
 type SegmentJournal = {
-  entries: SequencedRunEvent[]
+  entries: JournalEntry[]
   /** Bytes a replay of the whole journal occupies once deltas merge. */
   bytes: number
   /** Events a replay of the whole journal emits once deltas merge. */
   events: number
+  /** Bytes the raw entries still held occupy, which is what memory costs. */
+  retained: number
+  /**
+   * First run sequence this journal still holds contiguously, or zero while
+   * nothing has been pruned and every cursor of the run is answerable.
+   */
+  firstSequence: number
   /**
    * The compacted trailing event of the journal. A delta that merges into it
    * replaces its bytes instead of adding a whole event, so both bounds measure
@@ -91,6 +101,13 @@ type Segment = {
   terminal: boolean
   interrupts: Interrupt[]
   onTerminal?: (event: AGUIEvent) => void | Promise<void>
+  /**
+   * Resolves once the provider has spoken for this segment: its first event, or
+   * the outcome this coordinator applied when its stream ended. An uncertain
+   * turn waits for that signal instead of for a timer.
+   */
+  spoken: Promise<void>
+  announce: () => void
 }
 
 /** How a segment relates to the replayable history of its run. */
@@ -103,7 +120,14 @@ type SegmentHistory =
   | { journal: "none" }
 
 function freshJournal(fromStart: boolean): SegmentJournal {
-  return { entries: [], bytes: 0, events: 0, fromStart }
+  return {
+    entries: [],
+    bytes: 0,
+    events: 0,
+    retained: 0,
+    firstSequence: 0,
+    fromStart,
+  }
 }
 
 /**
@@ -238,12 +262,12 @@ function compactedEvent(
  * one per token, and a cursor never repeats a delta already delivered.
  */
 function compactedReplay(
-  entries: readonly SequencedRunEvent[],
+  entries: readonly JournalEntry[],
   after: number
 ): SequencedRunEvent[] {
   const replay: SequencedRunEvent[] = []
   let runStarted = false
-  for (const value of entries) {
+  for (const { value } of entries) {
     if (value.sequence <= after) continue
     // One run replays as one run: a recovered segment repeats RUN_STARTED, and
     // a second one would make the replay an invalid AG-UI stream.
@@ -261,20 +285,32 @@ function compactedReplay(
   return replay
 }
 
+/** What one segment can still answer for a subscriber positioned at `after`. */
+type ReplayPlan =
+  /** The journal replays from the cursor, then the live stream continues. */
+  | "history"
+  /** The browser owns the run so far, so its live events alone answer it. */
+  | "live"
+  /** Only authoritative history can answer this cursor. */
+  | "reset"
+
 /**
- * Whether one journal can still answer a subscriber positioned at `after`.
+ * How one journal answers a subscriber positioned at `after`.
  *
  * A cursorless reload owns no part of the run, so only a journal that holds the
- * run from its first event answers it. A cursor of zero comes from a browser
- * that owns no events either: a fresh reader, or one that just reloaded the
- * authoritative history after a reset, so a segment that is still streaming
- * answers it from its live events alone. Any other cursor needs the journal to
- * prove the events after it are contiguous.
+ * run from its first event answers it. Any other cursor needs the journal to
+ * prove the events after it are contiguous, which a pruned prefix no longer
+ * does. A cursor of zero comes from a browser that owns no events of this
+ * stream either: a fresh reader, or one that just reloaded the authoritative
+ * history after a reset, so a segment that is still streaming answers it from
+ * its live events alone.
  */
-function replayable(segment: Segment, after: number | undefined) {
-  if (after === undefined) return segment.journal?.fromStart === true
-  if (segment.journal) return true
-  return after === 0 && !segment.terminal
+function replayPlan(segment: Segment, after: number | undefined): ReplayPlan {
+  const journal = segment.journal
+  if (after === undefined) return journal?.fromStart ? "history" : "reset"
+  if (journal && after + 1 >= journal.firstSequence) return "history"
+  if (after === 0 && !segment.terminal) return "live"
+  return "reset"
 }
 
 function admissionFingerprint(value: unknown): string {
@@ -325,6 +361,11 @@ function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
  * A provider stream can end without a terminal AG-UI event. The provider's own
  * settlement decides the turn then; only an unresolved one stays uncertain.
  * One macrotask lets a settlement raced with the stream ending arrive first.
+ *
+ * This race is the one timer core keeps, and it is deliberate: a settlement that
+ * never arrives must still leave the turn uncertain, so the decision cannot wait
+ * on the settlement signal alone. A test on fake timers therefore has to advance
+ * the clock to observe a segment whose stream ended without a terminal event.
  */
 function settledNow(settled: Promise<void>) {
   return Promise.race([
@@ -468,7 +509,19 @@ export class SessionCoordinator {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerRunConflictError()
       if (access.canControl) existing.controllers.add(access.controllerId)
-      return this.#subscribe(existing.segment, 0, access)
+      // A retried admission reads the run from its beginning, so a journal that
+      // no longer holds that beginning answers it with its live events alone.
+      // For an already-terminal segment that plan is `reset`, and this path
+      // deliberately answers it as an empty live stream rather than a reset: the
+      // duplicate admission is not the browser's live reader, and the reader's
+      // own redial is where a reset is authoritative and acted upon.
+      const plan = replayPlan(existing.segment, 0)
+      return this.#subscribe(
+        existing.segment,
+        0,
+        access,
+        plan === "history" ? "history" : "live"
+      )
     }
 
     if (isResume(input)) {
@@ -538,11 +591,12 @@ export class SessionCoordinator {
       existing?.segment.runId === request.runId &&
       existing.state !== "uncertain"
     ) {
-      if (!replayable(existing.segment, request.after))
+      const plan = replayPlan(existing.segment, request.after)
+      if (plan === "reset")
         return this.#resetSubscription(existing.segment, access)
       if (access.canControl) existing.controllers.add(access.controllerId)
       this.#touchJournal(existing.segment)
-      return this.#subscribe(existing.segment, request.after ?? 0, access)
+      return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
 
     if (existing && existing.segment.runId !== request.runId)
@@ -554,10 +608,11 @@ export class SessionCoordinator {
     // browser cursor still applies. A recovery of a run this coordinator never
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
-    if (!replayable(recovered.segment, after))
+    const plan = replayPlan(recovered.segment, after)
+    if (plan === "reset")
       return this.#resetSubscription(recovered.segment, access)
     if (access.canControl) recovered.controllers.add(access.controllerId)
-    return this.#subscribe(recovered.segment, after ?? 0, access)
+    return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
   #recovery(
@@ -592,8 +647,9 @@ export class SessionCoordinator {
     access: CoordinatorAccess
   ) {
     const key = scopeKey(scope)
+    let recovered: Execution
     try {
-      await this.#recovery(
+      recovered = await this.#recovery(
         scope,
         { threadId: scope.threadId, runId: execution.segment.runId },
         access,
@@ -602,9 +658,11 @@ export class SessionCoordinator {
     } catch {
       return false
     }
-    // One macrotask lets an already-terminal recovery reach this coordinator
-    // before the new turn is admitted.
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The provider answers this: the recovered segment either reports the
+    // outcome of the run or speaks as a run that is still streaming. Waiting on
+    // that signal is what keeps an already-terminal recovery, however many
+    // turns of the event loop it takes, from reading as a conflict.
+    await recovered.segment.spoken
     return this.#executions.get(key)?.state === "idle"
   }
 
@@ -617,12 +675,13 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     this.#admissions.add(key)
     try {
+      // A handle that cannot name where this browser stopped reading recovers
+      // without a position: a fabricated one would never match a real epoch.
+      const position = existing?.segment.handle.recoveryPosition()
       const providerRequest: RecoveryRequest = {
         threadId: request.threadId,
         runId: request.runId,
-        ...(existing
-          ? { position: existing.segment.handle.recoveryPosition() }
-          : {}),
+        ...(position ? { position } : {}),
       }
       const handle = await this.options.engine.recover(scope, providerRequest)
       const replaced = existing?.segment
@@ -795,7 +854,13 @@ export class SessionCoordinator {
   #createSegment(init: SegmentInit): Segment {
     const previous =
       init.history.journal === "continue" ? init.history.previous : undefined
+    let announce = () => {}
+    const spoken = new Promise<void>((resolve) => {
+      announce = resolve
+    })
     return {
+      spoken,
+      announce,
       cacheKey: init.cacheKey,
       runId: init.runId,
       handle: init.handle,
@@ -836,6 +901,7 @@ export class SessionCoordinator {
           const interrupted = uncertainError(event)
           if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
+          segment.announce()
           if (event.type === EventType.RUN_FINISHED) {
             this.#forgetJournal(segment)
             terminal = true
@@ -866,6 +932,7 @@ export class SessionCoordinator {
           if (execution.segment === segment)
             execution.state = settled ? "idle" : "uncertain"
         }
+        segment.announce()
       }
     })()
   }
@@ -890,19 +957,43 @@ export class SessionCoordinator {
     const bytes =
       journal.bytes - (merged && previous ? previous.bytes : 0) + tail.bytes
     const events = journal.events + (merged ? 0 : 1)
+    // The raw event is what a cursor replays exactly, so what it retains is its
+    // own size and not the compacted one it merges into.
+    const retained = merged ? safeEventBytes(value.event) : tail.bytes
     if (
       !Number.isSafeInteger(tail.bytes) ||
+      !Number.isSafeInteger(retained) ||
       events > this.options.maxReplayEvents ||
       bytes > this.options.maxReplayBytes
     ) {
       this.#forgetJournal(segment)
       return
     }
-    journal.entries.push(value)
+    journal.entries.push({ value, bytes: retained })
     journal.bytes = bytes
     journal.events = events
+    journal.retained += retained
     journal.tail = tail
+    this.#prune(journal)
     this.#touchJournal(segment)
+  }
+
+  /**
+   * Compaction bounds the replay one journal delivers, not the raw events it
+   * keeps to make a cursor exact, so a flood of single-character deltas is held
+   * to the same byte ceiling by dropping the oldest of them. What survives
+   * still replays a cursor inside it exactly; every older cursor, and every
+   * cursorless reload, is owed authoritative history instead.
+   */
+  #prune(journal: SegmentJournal) {
+    while (journal.retained > this.options.maxReplayBytes) {
+      const oldest = journal.entries.shift()
+      if (!oldest) break
+      journal.retained -= oldest.bytes
+      journal.fromStart = false
+      journal.firstSequence =
+        journal.entries[0]?.value.sequence ?? oldest.value.sequence + 1
+    }
   }
 
   #trackJournal(segment: Segment) {
@@ -953,15 +1044,24 @@ export class SessionCoordinator {
 
   /**
    * One subscribe path for every browser: the journal answers from `after` (0
-   * for a reload that owns nothing yet), then the live stream continues.
+   * for a reload that owns nothing yet), then the live stream continues. A
+   * browser that already owns the run so far reads the live stream alone.
    */
-  #subscribe(segment: Segment, after: number, access: CoordinatorAccess) {
+  #subscribe(
+    segment: Segment,
+    after: number,
+    access: CoordinatorAccess,
+    plan: Exclude<ReplayPlan, "reset"> = "history"
+  ) {
     const project = (value: SequencedRunEvent) => {
       const event = access.project ? access.project(value.event) : value.event
       return event ? { sequence: value.sequence, event } : undefined
     }
     const live = segment.fanout.subscribe(project, access.onDetach)
-    const replay = compactedReplay(segment.journal?.entries ?? [], after)
+    const replay =
+      plan === "history"
+        ? compactedReplay(segment.journal?.entries ?? [], after)
+        : []
     const events: AsyncIterable<SequencedRunEvent> = {
       [Symbol.asyncIterator]: async function* () {
         let last = after

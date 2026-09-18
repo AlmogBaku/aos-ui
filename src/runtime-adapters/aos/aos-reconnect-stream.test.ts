@@ -53,6 +53,12 @@ function unsettled(code = "AOS_CONNECTION_INTERRUPTED") {
   return frame({ type: "RUN_ERROR", code, message: "Reconnect" })
 }
 
+const resetRequired = frame({
+  type: "RUN_ERROR",
+  code: "AOS_RESET_REQUIRED",
+  message: "This run could not be resumed from where it stopped.",
+})
+
 const runInput: RunAgentInput = {
   threadId: THREAD_ID,
   runId: "run-1",
@@ -437,6 +443,106 @@ describe("AOS run stream reconnect policy", () => {
       type: "RUN_ERROR",
       message: "Proxy described this failure.",
     })
+  })
+
+  it("reloads the Session once and redials from cursor 0 when a live run resets", async () => {
+    vi.useFakeTimers()
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(sse(["id: 41", started, resetRequired]))
+      .mockResolvedValueOnce(sse([started, ...answer, finished]))
+    const reloadHistory = vi.fn(async () => ({
+      execution: { status: "running" },
+    }))
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: THREAD_ID,
+      fetcher,
+      reloadHistory,
+    })
+
+    const pending = collect(agent, runInput)
+    await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY_MS)
+    const events = await pending
+
+    expect(reloadHistory).toHaveBeenCalledTimes(1)
+    expect(types(events)).not.toContain("RUN_ERROR")
+    expect(types(events)).toContain("RUN_FINISHED")
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(String(fetcher.mock.calls[1]?.[0])).toBe(RECONNECT_URL)
+    // The journal can no longer serve the cursor this stream holds, so the
+    // replacement segment is read from its beginning.
+    expect(bodyOf(fetcher.mock.calls[1])).toEqual({
+      threadId: THREAD_ID,
+      runId: "run-1",
+      after: 0,
+    })
+  })
+
+  it("surfaces one localized reset when the reload no longer reports a running run", async () => {
+    vi.useFakeTimers()
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(sse(["id: 41", started, resetRequired]))
+    const reloadHistory = vi.fn(async () => ({
+      execution: { status: "failed" },
+    }))
+    const onEvent = vi.fn()
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: THREAD_ID,
+      fetcher,
+      reloadHistory,
+      onEvent,
+      resolveRunError: (code, fallback) =>
+        code === "AOS_RESET_REQUIRED"
+          ? "לא ניתן להמשיך את ההרצה מהמקום שבו נעצרה."
+          : fallback,
+    })
+
+    const pending = collect(agent, runInput)
+    await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY_MS)
+    const events = await pending
+
+    expect(reloadHistory).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([
+      expect.objectContaining({
+        code: "AOS_RESET_REQUIRED",
+        message: "לא ניתן להמשיך את ההרצה מהמקום שבו נעצרה.",
+      }),
+    ])
+    expect(onEvent).toHaveBeenCalledWith(
+      THREAD_ID,
+      expect.objectContaining({ code: "AOS_RESET_REQUIRED" })
+    )
+  })
+
+  it("stops on a second reset instead of reloading the Session again", async () => {
+    vi.useFakeTimers()
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(sse(["id: 41", started, resetRequired]))
+      .mockResolvedValueOnce(sse([resetRequired]))
+    const reloadHistory = vi.fn(async () => ({
+      execution: { status: "running" },
+    }))
+    const agent = createAosRunAgent({
+      agentId: "researcher",
+      threadId: THREAD_ID,
+      fetcher,
+      reloadHistory,
+    })
+
+    const pending = collect(agent, runInput)
+    await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY_MS * 20)
+    const events = await pending
+
+    expect(reloadHistory).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(events.filter((event) => event.type === "RUN_ERROR")).toEqual([
+      expect.objectContaining({ code: "AOS_RESET_REQUIRED" }),
+    ])
   })
 
   it("observes the first turn of a draft Session through the resolved thread id", async () => {
