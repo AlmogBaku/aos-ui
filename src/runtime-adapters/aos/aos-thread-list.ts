@@ -10,6 +10,7 @@ import {
 import {
   SESSION_CATALOG_MAX_WINDOW,
   type Session,
+  type SessionMessage,
 } from "../../../packages/protocol"
 import type { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry } from "./aos-drafts"
@@ -39,6 +40,18 @@ function cursorOffset(cursor: string | undefined) {
   if (!Number.isSafeInteger(offset))
     throw new Error("Invalid AOS Session cursor")
   return offset
+}
+
+/** The normalized failure code a restored message carries, when it carries one. */
+function runErrorCode(
+  custom: NonNullable<SessionMessage["metadata"]>["custom"] | undefined
+) {
+  const aos = custom?.aos
+  const code =
+    typeof aos === "object" && aos !== null && !Array.isArray(aos)
+      ? (aos as { runErrorCode?: unknown }).runErrorCode
+      : undefined
+  return typeof code === "string" ? code : undefined
 }
 
 type ResumedSegment =
@@ -71,15 +84,36 @@ class AosThreadHistoryAdapter implements ThreadHistoryAdapter {
       messages.pop()
     }
     const repository = ExportedMessageRepository.fromArray(
-      messages.map((message): ThreadMessageLike => ({
-        ...message,
-        createdAt: new Date(message.createdAt),
-      }))
+      messages.map((message): ThreadMessageLike => {
+        const failure = this.#restoredFailure(message)
+        return {
+          ...message,
+          ...(failure ? { status: failure } : {}),
+          createdAt: new Date(message.createdAt),
+        }
+      })
     )
     return {
       ...repository,
       headId: repository.messages.at(-1)?.message.id ?? null,
       ...(this.#activeRunId ? { unstable_resume: true } : {}),
+    }
+  }
+
+  /**
+   * A restored failed turn carries the normalized code beside the proxy's own
+   * description, so the workspace prefers its localized copy exactly as it does
+   * for a live failure.
+   */
+  #restoredFailure(message: SessionMessage) {
+    if (message.status?.type !== "incomplete") return undefined
+    const code = runErrorCode(message.metadata?.custom)
+    return {
+      ...message.status,
+      error: this.#error(
+        { ...(code ? { code } : {}), message: message.status.error },
+        message.status.error
+      ),
     }
   }
 

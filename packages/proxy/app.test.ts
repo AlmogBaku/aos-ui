@@ -852,4 +852,38 @@ describe("AOS V1 proxy", () => {
       503
     )
   })
+
+  it("logs the request path without its query on a completed and a failed request", async () => {
+    const runtime = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesHttpError(503)
+      }),
+    })
+    const logger = { info: vi.fn(), error: vi.fn() }
+    const proxy = createProxyApp({
+      publicOrigin: origin,
+      runtimeInstance: runtimeInstance(runtime),
+      logger,
+    })
+
+    expect(
+      (await proxy.request(`${origin}/api/aos/v1/agents?token=secret`)).status
+    ).toBe(503)
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "request.failed",
+        code: "temporarily_unavailable",
+        path: "/api/aos/v1/agents",
+      })
+    )
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "request.completed",
+        method: "GET",
+        status: 503,
+        path: "/api/aos/v1/agents",
+      })
+    )
+  })
 })

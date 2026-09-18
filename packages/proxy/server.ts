@@ -184,27 +184,35 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
     activeEventPeers.clear()
     shutdownPromise = new Promise<void>((resolve) => {
       let settled = false
-      let resourcesClosed = false
-      const closeResources = async () => {
-        if (resourcesClosed) return
-        resourcesClosed = true
-        await options.close?.()
-      }
-      const finish = async () => {
+      let closing: Promise<void> | undefined
+      const closeResources = () =>
+        (closing ??= Promise.resolve(options.close?.()).then(
+          () => undefined,
+          () => undefined
+        ))
+      const finish = () => {
         if (settled) return
         settled = true
-        clearTimeout(forceTimer)
+        clearTimeout(graceTimer)
         if (onSignal) {
           process.removeListener("SIGINT", onSignal)
           process.removeListener("SIGTERM", onSignal)
         }
-        await closeResources().catch(() => undefined)
         resolve()
       }
-      const forceTimer = setTimeout(() => {
-        void Promise.resolve(server.stop(true)).then(finish, finish)
+      // The grace bounds the whole shutdown, not only the drain: a resource
+      // close that cannot finish (a native call with no socket left to answer
+      // it) must never hold shutdown open past the operator's deadline.
+      const graceTimer = setTimeout(() => {
+        void Promise.resolve(server.stop(true)).catch(() => undefined)
+        void closeResources()
+        finish()
       }, options.shutdownGraceMs)
-      void Promise.resolve(server.stop(false)).then(finish, finish)
+      void (async () => {
+        await Promise.resolve(server.stop(false)).catch(() => undefined)
+        await closeResources()
+        finish()
+      })()
     })
     return shutdownPromise
   }

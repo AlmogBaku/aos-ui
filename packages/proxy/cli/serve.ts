@@ -82,6 +82,7 @@ export async function serveProxy(
     port: configured.config.listen.port,
     shutdownGraceMs: configured.config.shutdownGraceMs,
     maxEventPeers: configured.config.limits.operatorEventPeers,
+    installSignalHandlers: false,
   })
   const guestLifecycle = configured.guest
     ? start({
@@ -102,6 +103,7 @@ export async function serveProxy(
         host: configured.config.guest!.listen.host,
         port: configured.config.guest!.listen.port,
         shutdownGraceMs: configured.config.shutdownGraceMs,
+        installSignalHandlers: false,
       })
     : undefined
 
@@ -118,21 +120,49 @@ export async function serveProxy(
   })
 
   let shutdownPromise: Promise<void> | undefined
+  const shutdown = () => {
+    shutdownPromise ??= (async () => {
+      try {
+        await Promise.all([
+          lifecycle.shutdown(),
+          ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
+        ])
+      } finally {
+        await configured.runtimeInstance.close()
+      }
+    })()
+    return shutdownPromise
+  }
+
+  // A signal has to close the runtime, not only the listeners: the native
+  // transport socket, its heartbeat and every attachment timer outlive a stopped
+  // listener, so a process that only stopped serving keeps running until the
+  // service manager kills it. This whole lifecycle owns the signal, so the
+  // individual listeners do not install handlers of their own.
+  const install =
+    dependencies.onShutdownSignal ??
+    ((handler: () => void) => {
+      process.once("SIGINT", handler)
+      process.once("SIGTERM", handler)
+    })
+  const exit = dependencies.exit ?? ((code: number) => process.exit(code))
+  install(() => {
+    // Last resort, logged: the listeners get their full drain grace, and a
+    // native handle that outlives close() cannot hold the unit open after it.
+    // The deadline is unref'd, so a clean shutdown still exits on its own.
+    const forced = setTimeout(() => {
+      dependencies.logger.error({ event: "proxy.shutdown_forced" })
+      exit(0)
+    }, configured.config.shutdownGraceMs * 2)
+    if (typeof forced !== "number") forced.unref()
+    void shutdown().catch((error: unknown) => {
+      dependencies.logger.error({ event: "proxy.shutdown_failed", error })
+    })
+  })
+
   return {
     server: lifecycle.server,
     ...(guestLifecycle ? { guestServer: guestLifecycle.server } : {}),
-    shutdown() {
-      shutdownPromise ??= (async () => {
-        try {
-          await Promise.all([
-            lifecycle.shutdown(),
-            ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
-          ])
-        } finally {
-          await configured.runtimeInstance.close()
-        }
-      })()
-      return shutdownPromise
-    },
+    shutdown,
   }
 }

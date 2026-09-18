@@ -1,6 +1,7 @@
 import { EventType, type AGUIEvent } from "@ag-ui/core"
 import { describe, expect, it } from "vitest"
 
+import { guestErrorDescription } from "./guest-projection"
 import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   createGuestRunAccess,
@@ -140,6 +141,95 @@ describe("guest AG-UI projection", () => {
     expect(projected.messages).toHaveLength(2)
     expect(projected.messages[1]).toMatchObject({
       content: [{ type: "text", text: envelope }],
+    })
+  })
+
+  it("keeps a restored failed turn failed for a guest", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "ask",
+            role: "user",
+            content: [{ type: "text", text: "Summarize the filing" }],
+            createdAt: "2026-09-15T00:00:00.000Z",
+          },
+          {
+            id: "failed",
+            role: "assistant",
+            content: [{ type: "text", text: "I could not reach the model." }],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error:
+                "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
+            },
+            metadata: {
+              custom: {
+                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+              },
+            },
+          },
+        ],
+        total: 2,
+        limit: 200,
+        offset: 0,
+        nextOffset: 2,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[1]).toMatchObject({
+      id: "failed",
+      role: "assistant",
+      content: [{ type: "text", text: "I could not reach the model." }],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("temporarily_unavailable"),
+      },
+    })
+    expect(projected.messages[1]).not.toHaveProperty("metadata")
+    expect(JSON.stringify(projected)).not.toContain("Hermes")
+  })
+
+  it("keeps a restored failed turn that streamed no text", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "silent",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "Hermes could not complete this run.",
+            },
+          },
+        ],
+        total: 1,
+        limit: 200,
+        offset: 0,
+        nextOffset: 1,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[0]).toMatchObject({
+      id: "silent",
+      content: [],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("request_failed"),
+      },
     })
   })
 

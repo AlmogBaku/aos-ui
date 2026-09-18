@@ -115,9 +115,13 @@ export const RUN_FAILURES = {
     code: "AOS_PROVIDER_BILLING_FAILED",
     message: "Hermes reported a billing or quota problem.",
   },
+  // Hermes marks a rejection retryable without knowing whether it is
+  // deterministic (a model that refuses this request shape rejects it again),
+  // so the copy instructs rather than promising a successful retry.
   retryableFailure: {
     code: "AOS_PROVIDER_RETRYABLE_FAILURE",
-    message: "Hermes hit a temporary provider error. Retry the message.",
+    message:
+      "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
   },
   runFailed: {
     code: "AOS_PROVIDER_RUN_FAILED",

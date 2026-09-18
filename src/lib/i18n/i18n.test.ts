@@ -120,6 +120,21 @@ describe("run error messages", () => {
     }
   })
 
+  it("names no provider slash command the browser cannot know exists", async () => {
+    const english = await getDictionary("en")
+    const hebrew = await getDictionary("he")
+
+    for (const dictionary of [english, hebrew])
+      for (const code of Object.keys(dictionary.runErrors) as RunErrorCode[])
+        expect(dictionary.runErrors[code]).not.toMatch(/\/[A-Za-z]/u)
+    expect(english.runErrors.AOS_PROVIDER_RETRYABLE_FAILURE).toBe(
+      "The model provider returned an error for this turn. Retry, switch models, or continue in a new Session."
+    )
+    expect(hebrew.runErrors.AOS_PROVIDER_RETRYABLE_FAILURE).toBe(
+      "ספק המודל החזיר שגיאה בפנייה הזו. נסו שוב, החליפו מודל, או המשיכו בשיחה חדשה."
+    )
+  })
+
   it("keeps the proxy description for an unknown or absent run error code", async () => {
     const english = await getDictionary("en")
 

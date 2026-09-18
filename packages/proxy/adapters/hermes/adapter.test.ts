@@ -1635,6 +1635,181 @@ describe("Hermes server adapter", () => {
     }
   })
 
+  describe("retained failed turn", () => {
+    const inflight = {
+      user: "Summarize the filing",
+      assistant: "I could not reach the model.",
+      streaming: false,
+      status: "error",
+      recoverable: true,
+      error:
+        "AWS Bedrock did not answer after 3 attempts. Provider said: ValidationException at https://bedrock.internal/model/invoke?token=native-secret",
+      error_surface: {
+        layer: "provider",
+        code: "validation_exception",
+        retryable: true,
+        provider: "bedrock",
+        model: "sonnet",
+      },
+    }
+
+    function failedTurnAdapter(
+      rows: readonly unknown[],
+      snapshot: Record<string, unknown> | undefined = inflight
+    ) {
+      const request = vi.fn(async (method: string) => {
+        if (method === "session.resume")
+          return {
+            session_id: "live-secret",
+            running: false,
+            status: "idle",
+            ...(snapshot ? { inflight: snapshot } : {}),
+          }
+        throw new Error(`unexpected ${method}`)
+      })
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher", title: "Owned" }
+        if (path.includes("/messages?"))
+          return { session_id: "stored", messages: rows }
+        throw new Error(`unexpected ${path}`)
+      })
+      return { adapter: new HermesServerAdapter({ request, http }), request }
+    }
+
+    const unansweredPrompt = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "Summarize the filing",
+        timestamp: 1,
+      },
+    ]
+
+    it("restores the failed turn Hermes kept out of its transcript", async () => {
+      const { adapter } = failedTurnAdapter(unansweredPrompt)
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "I could not reach the model." }],
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error:
+            "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
+        },
+        metadata: {
+          custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+        },
+      })
+      const serialized = JSON.stringify(history)
+      expect(serialized).not.toContain("AWS Bedrock")
+      expect(serialized).not.toContain("native-secret")
+      expect(serialized).not.toContain("ValidationException")
+    })
+
+    it("resumes once for a burst of history loads on the same Session", async () => {
+      const { adapter, request } = failedTurnAdapter(unansweredPrompt)
+
+      const [first, second] = await Promise.all([
+        adapter.history("researcher", "stored", 200, 0),
+        adapter.history("researcher", "stored", 200, 0),
+      ])
+      const third = await adapter.history("researcher", "stored", 200, 0)
+
+      for (const history of [first, second, third])
+        expect(history!.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          status: { type: "incomplete", reason: "error" },
+        })
+      expect(
+        request.mock.calls.filter(([method]) => method === "session.resume")
+      ).toHaveLength(1)
+    })
+
+    it("truncates an oversized retained turn instead of failing the load", async () => {
+      const { adapter } = failedTurnAdapter(unansweredPrompt, {
+        ...inflight,
+        // Inside the native byte bound, past the protocol's character bound.
+        assistant: "a".repeat(1_048_000),
+      })
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "a".repeat(1_000_000) }],
+        status: { type: "incomplete", reason: "error" },
+      })
+    })
+
+    it("restores nothing while Hermes is still streaming the retained turn", async () => {
+      const { adapter } = failedTurnAdapter(unansweredPrompt, {
+        ...inflight,
+        streaming: true,
+      })
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.map(({ role }) => role)).toEqual(["user"])
+    })
+
+    it("never resumes a Session whose transcript ends with an answer", async () => {
+      const { adapter, request } = failedTurnAdapter([
+        ...unansweredPrompt,
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Here is the summary.",
+          timestamp: 2,
+        },
+      ])
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.at(-1)).toMatchObject({
+        id: "assistant-1",
+        role: "assistant",
+      })
+      expect(history.messages.at(-1)).not.toHaveProperty("status")
+      expect(request).not.toHaveBeenCalled()
+    })
+
+    it("restores nothing for a retained turn belonging to another prompt", async () => {
+      const { adapter, request } = failedTurnAdapter(unansweredPrompt, {
+        ...inflight,
+        user: "A different prompt",
+      })
+
+      const history = await adapter.history("researcher", "stored", 200, 0)
+
+      expect(history.messages.map(({ role }) => role)).toEqual(["user"])
+      expect(request).toHaveBeenCalled()
+    })
+
+    it("serves the authoritative transcript when Hermes cannot be resumed", async () => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher", title: "Owned" }
+        if (path.includes("/messages?"))
+          return { session_id: "stored", messages: unansweredPrompt }
+        throw new Error(`unexpected ${path}`)
+      })
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(async () => {
+          throw new HermesHttpError(503)
+        }),
+        http,
+      })
+
+      await expect(
+        adapter.history("researcher", "stored", 200, 0)
+      ).resolves.toMatchObject({ messages: [{ role: "user" }] })
+    })
+  })
+
   it("reports a missing Agent separately from a Hermes outage", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(async () => ({ profiles: [profile()] })),

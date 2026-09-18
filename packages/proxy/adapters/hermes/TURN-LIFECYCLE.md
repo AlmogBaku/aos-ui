@@ -125,6 +125,12 @@ The Hermes adapter applies these rules:
   rule.
 - Live mapping and authoritative history must use the same tool-result failure
   classifier so refresh does not erase a failed attempt.
+- Hermes retains a failed turn (`error_retained=True`) in the Session's inflight
+  snapshot instead of its transcript, and only `session.resume` returns that
+  snapshot. A history load whose last page ends with an unanswered prompt
+  therefore resumes the Session once and restores the retained turn with the
+  same public failure code and message the live run published. No other history
+  load resumes anything, and Hermes' own error text stays in the server log.
 
 ## How AOS vendors `JsonRpcGatewayClient`
 

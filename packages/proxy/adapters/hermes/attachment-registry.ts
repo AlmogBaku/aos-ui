@@ -65,6 +65,8 @@ type Entry = {
   observers: Set<AttachmentObserver>
   /** Last known native turn state; a running Session is never closed. */
   running: boolean
+  /** When Hermes last answered a resume for this entry. */
+  resumedAt?: number
   idle?: ReturnType<typeof setTimeout>
   /** A running entry already spent its extra idle window without a frame. */
   graced?: boolean
@@ -117,6 +119,8 @@ export class HermesAttachmentRegistry {
   readonly #entries = new Map<string, Entry>()
   readonly #byLiveId = new Map<string, Entry>()
   readonly #idleMs: number
+  readonly #closeFlushMs: number
+  readonly #now: () => number
   readonly #log: HermesLog | undefined
   readonly #stopEvents: () => void
   readonly #stopConnection: () => void
@@ -124,9 +128,17 @@ export class HermesAttachmentRegistry {
   constructor(
     private readonly native: RegistryNative,
     gateway: RegistryGateway,
-    options: { idleMs?: number; log?: HermesLog } = {}
+    options: {
+      idleMs?: number
+      /** How long `close()` waits for its best-effort native closes (1 s). */
+      closeFlushMs?: number
+      now?: () => number
+      log?: HermesLog
+    } = {}
   ) {
     this.#idleMs = options.idleMs ?? 300_000
+    this.#closeFlushMs = options.closeFlushMs ?? 1_000
+    this.#now = options.now ?? Date.now
     this.#log = options.log
     this.#stopEvents = gateway.onEvent((event) => this.#route(event))
     this.#stopConnection = gateway.onConnection({
@@ -140,20 +152,35 @@ export class HermesAttachmentRegistry {
    * The live Session behind a durable one, resuming it when AOS has no usable
    * binding. `refresh` asks Hermes again even when one exists: a caller that
    * needs the authoritative Session state (what is still waiting on it, whether
-   * it is running) cannot read it from a cached binding.
+   * it is running) cannot read it from a cached binding. `freshForMs` bounds
+   * that cost for a caller whose refresh only has to be recent, not immediate:
+   * a binding Hermes answered for that recently is accepted as it stands, so a
+   * burst of such callers costs one `session.resume` rather than one each.
    */
   async ensure(
     scope: HermesAttachmentScope,
-    options: { refresh?: boolean } = {}
+    options: { refresh?: boolean; freshForMs?: number } = {}
   ): Promise<HermesAttachment> {
     const entry = this.#entry(scope)
     this.#cancelIdle(entry)
     // A heal keeps the old live id until its resume answers. Joining the
     // in-flight call means no caller leaves with an id this heal replaces.
     if (entry.resuming) return entry.resuming
-    if (entry.attachment.liveSessionId && !entry.stale && !options.refresh)
+    if (
+      entry.attachment.liveSessionId &&
+      !entry.stale &&
+      (!options.refresh || this.#resumedWithin(entry, options.freshForMs))
+    )
       return entry.attachment
     return this.#resumeOnce(entry)
+  }
+
+  #resumedWithin(entry: Entry, freshForMs: number | undefined) {
+    return (
+      freshForMs !== undefined &&
+      entry.resumedAt !== undefined &&
+      this.#now() - entry.resumedAt < freshForMs
+    )
   }
 
   async retain(scope: HermesAttachmentScope, reason: string) {
@@ -239,6 +266,7 @@ export class HermesAttachmentRegistry {
   async close() {
     this.#stopEvents()
     this.#stopConnection()
+    const closing: Array<Promise<void>> = []
     for (const entry of this.#entries.values()) {
       this.#cancelIdle(entry)
       // Shutdown detaches work. A retained or running Session can still be
@@ -249,12 +277,33 @@ export class HermesAttachmentRegistry {
         !entry.running &&
         entry.attachment.liveSessionId
       )
-        await this.native
-          .close(entry.attachment.liveSessionId)
-          .catch(() => undefined)
+        closing.push(
+          this.native
+            .close(entry.attachment.liveSessionId)
+            .catch(() => undefined)
+        )
     }
     this.#entries.clear()
     this.#byLiveId.clear()
+    await this.#flushCloses(closing)
+  }
+
+  /**
+   * The courtesy close of every idle live Session, together and bounded. A
+   * shutdown has already stopped observing Hermes, so a native call no socket
+   * will answer must never hold the process open; Hermes reaps the orphan.
+   */
+  async #flushCloses(closing: ReadonlyArray<Promise<void>>) {
+    if (closing.length === 0) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.all(closing),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, this.#closeFlushMs)
+        if (typeof timer !== "number") timer.unref()
+      }),
+    ])
+    clearTimeout(timer)
   }
 
   #entry(scope: HermesAttachmentScope) {
@@ -292,6 +341,7 @@ export class HermesAttachmentRegistry {
     if (previous) this.#byLiveId.delete(previous)
     entry.attachment = { ...entry.attachment, liveSessionId }
     entry.stale = false
+    entry.resumedAt = this.#now()
     if (typeof resumed.running === "boolean") entry.running = resumed.running
     this.#byLiveId.set(liveSessionId, entry)
     this.#scheduleIdle(entry)
@@ -390,7 +440,7 @@ export class HermesAttachmentRegistry {
     this.#cancelIdle(entry)
     if (!afterGrace) entry.graced = false
     if (entry.retainers.size > 0 || !entry.attachment.liveSessionId) return
-    entry.idle = setTimeout(() => {
+    const idle = setTimeout(() => {
       entry.idle = undefined
       if (entry.retainers.size > 0 || !entry.attachment.liveSessionId) return
       // Closing a running Session tears its turn down after a short native
@@ -413,5 +463,9 @@ export class HermesAttachmentRegistry {
       entry.attachment = { ...entry.attachment, liveSessionId: "" }
       void this.native.close(liveSessionId).catch(() => undefined)
     }, this.#idleMs)
+    // Idle retention is housekeeping: it must never be the reason the process
+    // stays alive after everything else has been closed.
+    if (typeof idle !== "number") idle.unref()
+    entry.idle = idle
   }
 }

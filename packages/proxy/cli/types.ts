@@ -10,6 +10,9 @@ export type ProxyCliDependencies = ConfiguredProxyDependencies & {
   clock?: () => number
   writeOut?: (value: string) => void
   writeErr?: (value: string) => void
+  /** Install the process shutdown signal handler; overridden in tests. */
+  onShutdownSignal?: (handler: () => void) => void
+  exit?: (code: number) => void
 }
 
 export type ProxyLifecycle = {

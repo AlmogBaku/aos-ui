@@ -375,6 +375,57 @@ describe("HermesAttachmentRegistry", () => {
     expect(resume).toHaveBeenCalledTimes(2)
   })
 
+  it("accepts a binding Hermes answered inside the caller's freshness window", async () => {
+    const gateway = fakeGateway()
+    const resume = vi.fn(async () => ({ liveSessionId: "live-stored" }))
+    let clock = 1_000
+    const registry = new HermesAttachmentRegistry(
+      { resume, close: async () => undefined },
+      gateway.transport,
+      { now: () => clock }
+    )
+
+    await registry.ensure(scope, { refresh: true, freshForMs: 3_000 })
+    clock += 2_999
+    await registry.ensure(scope, { refresh: true, freshForMs: 3_000 })
+    expect(resume).toHaveBeenCalledTimes(1)
+
+    clock += 1
+    await registry.ensure(scope, { refresh: true, freshForMs: 3_000 })
+    expect(resume).toHaveBeenCalledTimes(2)
+
+    await registry.ensure(scope, { refresh: true })
+    expect(resume).toHaveBeenCalledTimes(3)
+  })
+
+  it("stops waiting for a native close no socket will answer", async () => {
+    vi.useFakeTimers()
+    try {
+      const gateway = fakeGateway()
+      const close = vi.fn(() => new Promise<void>(() => undefined))
+      const registry = new HermesAttachmentRegistry(
+        { resume: async () => ({ liveSessionId: "live-stored" }), close },
+        gateway.transport,
+        { closeFlushMs: 1_000 }
+      )
+      await registry.ensure(scope)
+
+      const closed = registry.close()
+      let settled = false
+      void closed.then(() => {
+        settled = true
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(close).toHaveBeenCalledWith("live-stored")
+      expect(settled).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(closed).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("closes only an idle exact native Session", async () => {
     vi.useFakeTimers()
     const gateway = fakeGateway()

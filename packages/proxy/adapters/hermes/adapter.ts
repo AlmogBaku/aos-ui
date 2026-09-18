@@ -23,6 +23,7 @@ import {
   type HermesRpcTransport,
 } from "./gateway"
 import { projectHermesHistory } from "./history"
+import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
 import {
   HermesRunEngine,
@@ -210,6 +211,12 @@ function storedSessionIdentity(_profile: string, publicId: string) {
 function attachmentInfoKey(agentId: string, sessionId: string) {
   return `${agentId}\u0000${sessionId}`
 }
+
+/**
+ * How recent a binding snapshot has to be for a history load to restore the
+ * retained turn from it instead of resuming the Session again.
+ */
+const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
   readonly #dashboard?: HermesDashboardClient
@@ -1125,6 +1132,15 @@ export class HermesServerAdapter implements ServerRuntime {
           content: { todos: NonNullable<ReturnType<typeof latestHermesTodos>> }
         }
     > = projectHermesHistory(payload.messages)
+    // Hermes keeps a turn that failed out of its transcript, so a last page
+    // ending with an unanswered prompt is the one history load that asks Hermes
+    // for the retained turn. Every other load leaves the Session alone.
+    const trailing = messages.at(-1)
+    const restored =
+      pagination.total === pagination.nextOffset && trailing?.role === "user"
+        ? await this.#restoredFailedTurn(profile, storedId, trailing)
+        : undefined
+    if (restored) messages.push(restored)
     const todos = latestHermesTodos(payload.messages)
     if (todos !== undefined)
       messages.push({
@@ -1143,6 +1159,53 @@ export class HermesServerAdapter implements ServerRuntime {
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
+  }
+
+  /**
+   * The failed turn Hermes retained for the prompt this transcript ends with,
+   * read from the Session's own inflight snapshot.
+   */
+  async #restoredFailedTurn(
+    agentId: string,
+    storedId: string,
+    trailing: SessionMessage
+  ) {
+    const prompt = trailing.content.find((part) => part.type === "text")
+    if (prompt?.type !== "text") return undefined
+    try {
+      // The registry single-flights `session.resume`: a Session someone is
+      // already resuming costs no second RPC, and a bound one is re-read
+      // because a binding snapshot taken before the turn failed carries no
+      // retained turn at all. A binding Hermes answered for moments ago already
+      // carries it, so a burst of history loads costs one resume, not one each.
+      await this.#attachments.ensure(
+        {
+          agentId,
+          sessionId: storedId,
+          threadId: sessionId(agentId, storedId),
+        },
+        { refresh: true, freshForMs: RESTORE_SNAPSHOT_FRESH_MS }
+      )
+    } catch {
+      // A Session Hermes cannot resume restores nothing; the authoritative
+      // transcript is still served.
+      return undefined
+    }
+    const inflight = this.#resumedInflight(agentId, storedId)
+    return inflight === undefined
+      ? undefined
+      : restoredHermesFailedTurn(inflight, {
+          id: `aos-inflight:${sessionId(agentId, storedId)}`,
+          userText: prompt.text,
+          createdAt: trailing.createdAt,
+        })
+  }
+
+  /** The retained turn from this Session's last `session.resume`, validated. */
+  #resumedInflight(agentId: string, storedId: string) {
+    return hermesInflightTurn(
+      this.#attachmentInfo.get(attachmentInfoKey(agentId, storedId))?.inflight
+    )
   }
 
   async getSession(profile: string, storedId: string) {

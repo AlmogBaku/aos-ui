@@ -65,6 +65,38 @@ describe("Bun proxy server lifecycle", () => {
     expect(close).toHaveBeenCalledOnce()
   })
 
+  it("resolves shutdown at the grace deadline when a resource close cannot finish", async () => {
+    vi.useFakeTimers()
+    try {
+      const stop = vi.fn(async () => undefined)
+      const close = vi.fn(() => new Promise<void>(() => undefined))
+      const server = startProxyServer({
+        app: { fetch: vi.fn() },
+        host: "127.0.0.1",
+        port: 4100,
+        shutdownGraceMs: 1_000,
+        close,
+        serve: vi.fn(() => ({ stop })),
+        installSignalHandlers: false,
+      })
+
+      const shutdown = server.shutdown()
+      let settled = false
+      void shutdown.then(() => {
+        settled = true
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(close).toHaveBeenCalledOnce()
+      expect(settled).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(shutdown).resolves.toBeUndefined()
+      expect(stop).toHaveBeenCalledWith(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("authorizes event upgrades before opening a bounded event socket", async () => {
     const eventSocket = { receive: vi.fn(), close: vi.fn() }
     const eventService = {

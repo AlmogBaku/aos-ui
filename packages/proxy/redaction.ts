@@ -1,5 +1,11 @@
+/**
+ * Credential-bearing field names. `code` is deliberately absent: it is the
+ * classification an operator diagnoses a failure by, and the only credential
+ * spelled that way is an OAuth `?code=` query value, which `redactUrl` strips
+ * from every logged URL.
+ */
 const SECRET_KEY =
-  /^(?:authorization|cookie|set-cookie|token|accessToken|refreshToken|secret|clientSecret|code)$/iu
+  /^(?:authorization|cookie|set-cookie|token|accessToken|refreshToken|secret|clientSecret)$/iu
 
 function redactUrl(value: string) {
   try {

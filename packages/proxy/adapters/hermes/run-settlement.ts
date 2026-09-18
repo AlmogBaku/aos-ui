@@ -170,7 +170,12 @@ function recheckSettlement(
   delayMs: number,
   rereads = QUEUED_START_REREADS
 ) {
-  setTimeout(() => void settleIfIdle(host, active, rereads), delayMs)
+  const timer = setTimeout(
+    () => void settleIfIdle(host, active, rereads),
+    delayMs
+  )
+  // A re-read is reconciliation, never a reason to keep the process alive.
+  if (typeof timer !== "number") timer.unref()
 }
 
 async function settleIfIdle(

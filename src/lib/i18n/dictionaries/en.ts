@@ -143,7 +143,7 @@ export const en = {
     AOS_PROVIDER_BILLING_FAILED:
       "The provider reported a billing or quota problem.",
     AOS_PROVIDER_RETRYABLE_FAILURE:
-      "The provider hit a temporary error. Send the message again.",
+      "The model provider returned an error for this turn. Retry, switch models, or continue in a new Session.",
     AOS_PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable.",
     AOS_SESSION_BUSY: "This Session is still busy with an earlier turn.",
     AOS_RESET_REQUIRED:

@@ -116,6 +116,7 @@ describe("proxy executable", () => {
               : undefined,
           start,
           staticHandler,
+          onShutdownSignal: () => undefined,
         }
       )
 
@@ -182,6 +183,52 @@ describe("proxy executable", () => {
       expect(transportClose).toHaveBeenCalledOnce()
     }
   )
+
+  it("closes the runtime on a shutdown signal and forces the exit after the grace", async () => {
+    const configFile = await proxyConfig()
+    const transportClose = vi.fn(async () => undefined)
+    const listenerShutdown = vi.fn(async () => undefined)
+    const logger = { info: vi.fn(), error: vi.fn() }
+    const exit = vi.fn()
+    let raise: (() => void) | undefined
+    vi.useFakeTimers()
+    try {
+      await runProxyCli(["bun", "proxy", "serve", "--config", configFile], {
+        runtimeFactory: (config, limits) =>
+          createHermesRuntime(config, limits, {
+            transportFactory: () => ({
+              request: vi.fn(),
+              close: transportClose,
+            }),
+          }),
+        logger,
+        start: () => ({
+          server: { stop: vi.fn() },
+          shutdown: listenerShutdown,
+        }),
+        onShutdownSignal: (handler) => {
+          raise = handler
+        },
+        exit,
+      })
+      expect(raise).toBeTypeOf("function")
+
+      raise!()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(listenerShutdown).toHaveBeenCalledTimes(2)
+      expect(transportClose).toHaveBeenCalledOnce()
+      expect(exit).not.toHaveBeenCalled()
+
+      // The listeners keep their full drain grace before anything is forced.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(exit).toHaveBeenCalledWith(0)
+      expect(logger.error).toHaveBeenCalledWith({
+        event: "proxy.shutdown_forced",
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it("documents the invite command and flags", async () => {
     let output = ""

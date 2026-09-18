@@ -15,6 +15,7 @@ import {
   SessionPlanActivityMessageSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type SessionHistoryResponse,
+  type SessionMessage,
 } from "../../protocol"
 import type {
   GuestAuthorization,
@@ -92,6 +93,15 @@ export function projectGuestError(
     : new Response(null, { status })
 }
 
+/** The normalized run failure code a restored failed turn carries, if any. */
+function restoredRunErrorCode(metadata: SessionMessage["metadata"]) {
+  const aos = metadata?.custom.aos
+  if (typeof aos !== "object" || aos === null || Array.isArray(aos))
+    return undefined
+  const code = (aos as Record<string, unknown>).runErrorCode
+  return typeof code === "string" ? code : undefined
+}
+
 export function projectGuestHistory(
   history: SessionHistoryResponse,
   authorization: GuestAuthorization,
@@ -151,9 +161,17 @@ export function projectGuestHistory(
           authorization
         )
       : undefined
+    // A turn the provider failed reaches a guest as a failed turn, never as an
+    // ordinary reply: its public text is projected like any other, and its
+    // status carries the guest catalogue's description of the mapped failure.
+    const failure =
+      message.role === "assistant" && message.status?.type === "incomplete"
+        ? publicRunError(restoredRunErrorCode(message.metadata))
+        : undefined
     if (
       content.length === 0 &&
       projectedInterrupts?.payload.type !== "interrupt" &&
+      failure === undefined &&
       !message.attachments?.length
     )
       continue
@@ -164,6 +182,15 @@ export function projectGuestHistory(
       createdAt: message.createdAt,
       ...(message.role === "user" && message.attachments?.length
         ? { attachments: message.attachments }
+        : {}),
+      ...(failure
+        ? {
+            status: {
+              type: "incomplete" as const,
+              reason: "error" as const,
+              error: guestErrorDescription(failure.code),
+            },
+          }
         : {}),
       ...(projectedInterrupts?.payload.type === "interrupt"
         ? {

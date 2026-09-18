@@ -576,4 +576,94 @@ describe("AOS remote thread-list adapter", () => {
       },
     })
   })
+
+  it("localizes a restored failed turn from its normalized failure code", async () => {
+    const adapter = new AosThreadListAdapter(
+      {
+        loadHistory: vi.fn(async () => ({
+          sessionId: "session-1",
+          messages: [
+            {
+              id: "user-1",
+              role: "user" as const,
+              content: [{ type: "text" as const, text: "Question" }],
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+            {
+              id: "aos-inflight:session-1",
+              role: "assistant" as const,
+              content: [{ type: "text" as const, text: "Partial answer" }],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              status: {
+                type: "incomplete" as const,
+                reason: "error" as const,
+                error: "Proxy described the provider failure",
+              },
+              metadata: {
+                custom: {
+                  aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+                },
+              },
+            },
+          ],
+          total: 2,
+          limit: 200,
+          offset: 0,
+          nextOffset: 2,
+          execution: { status: "idle" as const },
+        })),
+      } as unknown as AosRemoteClient,
+      undefined,
+      (code, fallback) =>
+        code === "AOS_PROVIDER_RETRYABLE_FAILURE" ? "שגיאת ספק" : fallback
+    )
+
+    const history = await adapter.historyFor("session-1").load()
+
+    expect(history.messages.at(-1)?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Partial answer" }],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: "שגיאת ספק",
+      },
+    })
+  })
+
+  it("keeps the proxy description of a restored failure this build cannot localize", async () => {
+    const adapter = new AosThreadListAdapter({
+      loadHistory: vi.fn(async () => ({
+        sessionId: "session-1",
+        messages: [
+          {
+            id: "aos-inflight:session-1",
+            role: "assistant" as const,
+            content: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            status: {
+              type: "incomplete" as const,
+              reason: "error" as const,
+              error: "Proxy described the provider failure",
+            },
+          },
+        ],
+        total: 1,
+        limit: 200,
+        offset: 0,
+        nextOffset: 1,
+        execution: { status: "idle" as const },
+      })),
+    } as unknown as AosRemoteClient)
+
+    const history = await adapter.historyFor("session-1").load()
+
+    expect(history.messages.at(-1)?.message).toMatchObject({
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: "Proxy described the provider failure",
+      },
+    })
+  })
 })

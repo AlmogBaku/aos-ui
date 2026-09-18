@@ -22,6 +22,7 @@ import type {
   HermesSubmitPrompt,
 } from "./run-native"
 import { projectHermesHistory } from "./history"
+import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import {
   advisoryErrorThenComplete,
   failedToolThenRecovery,
@@ -5578,9 +5579,67 @@ describe("HermesRunEngine", () => {
       })
     ).resolves.toContainEqual({
       type: EventType.RUN_ERROR,
-      message: "Hermes hit a temporary provider error. Retry the message.",
+      message:
+        "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
       code: "AOS_PROVIDER_RETRYABLE_FAILURE",
     })
+  })
+
+  it("restores a retained failed turn exactly as the live turn failed", async () => {
+    const errorSurface = {
+      layer: "provider",
+      code: "validation_exception",
+      retryable: true,
+      provider: "bedrock",
+      model: "sonnet",
+    }
+    const nativeError = "This model does not support assistant message prefill"
+    const assistant = "I could not finish this answer."
+    const events = (await failedTurn({
+      text: assistant,
+      error: nativeError,
+      error_surface: errorSurface,
+    })) as Array<{
+      type: string
+      delta?: string
+      message?: string
+      code?: string
+    }>
+    const liveText = events
+      .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .map((event) => event.delta ?? "")
+      .join("")
+    const liveFailure = events.find(
+      (event) => event.type === EventType.RUN_ERROR
+    )
+
+    const inflight = hermesInflightTurn({
+      user: "Ask",
+      assistant: liveText,
+      streaming: false,
+      status: "error",
+      recoverable: true,
+      error: nativeError,
+      error_surface: errorSurface,
+    })
+    if (!inflight) throw new Error("Expected a validated inflight snapshot")
+    const restored = restoredHermesFailedTurn(inflight, {
+      id: "aos-inflight:stored-session",
+      userText: "Ask",
+      createdAt: "2026-09-15T19:41:41.000Z",
+    })
+
+    expect(liveText).toBe(assistant)
+    expect(restored?.content).toEqual([{ type: "text", text: liveText }])
+    expect(restored?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: liveFailure?.message,
+    })
+    expect(restored?.metadata?.custom).toEqual({
+      aos: { runErrorCode: liveFailure?.code },
+    })
+    expect(JSON.stringify(restored)).not.toContain(nativeError)
   })
 
   it("logs one redacted, bounded native cause per failed run", async () => {
