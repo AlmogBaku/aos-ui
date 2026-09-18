@@ -433,6 +433,15 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return { selectedId }
   }
 
+  async selectEffort(
+    _agentId: string,
+    _publicSessionId: string,
+    _effortId: string
+  ): Promise<unknown> {
+    void [_agentId, _publicSessionId, _effortId]
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
   async context(agentId: string, publicSessionId: string) {
     await this.getSession(agentId, publicSessionId)
     // The pinned SDK's session.context response is `data: SessionMessage[]`,

@@ -843,6 +843,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     return this.#workspace.selectModel(agentId, sessionId, selectedId)
   }
 
+  selectEffort(agentId: string, sessionId: string, effortId: string) {
+    return this.#workspace.selectEffort(agentId, sessionId, effortId)
+  }
+
   context(agentId: string, sessionId: string) {
     return this.#workspace.context(agentId, sessionId)
   }

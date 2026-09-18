@@ -5,10 +5,8 @@ export type ComposerModelOption = {
   readonly label: string
   readonly description?: string | undefined
   readonly group?: string | undefined
-  readonly efforts?:
-    | true
-    | readonly { readonly id: string; readonly label: string }[]
-    | undefined
+  /** Provider-reported reasoning effort ids; the UI localizes their labels. */
+  readonly efforts?: readonly string[] | undefined
 }
 
 export type ComposerModelSelectionState =
@@ -66,6 +64,12 @@ export type ComposerFeatureViewModel = {
         readonly select: (id: string) => Promise<void>
         /** Repeats only the current failed request; stale failures have no retry. */
         readonly retry?: (() => Promise<void>) | undefined
+        /** Provider-authoritative reasoning effort; absent = provider default. */
+        readonly effortId?: string | undefined
+        readonly effortSelection?: ComposerModelSelectionState | undefined
+        /** Present only when the selected option reports `efforts`. */
+        readonly selectEffort?: ((effortId: string) => Promise<void>) | undefined
+        readonly retryEffort?: (() => Promise<void>) | undefined
       }
     | undefined
   readonly context?:

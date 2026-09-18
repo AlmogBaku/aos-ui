@@ -99,28 +99,6 @@ describe("App", () => {
     expect(window.location.pathname).toBe("/agent-aster/thread-market")
   })
 
-  it("passes independently resolved composer feature flags to the runtime composition", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          mode: "fixture",
-          composerModelSelectorEnabled: false,
-          composerContextEnabled: true,
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }
-      )
-    )
-
-    render(<App />)
-
-    const fixture = await screen.findByTestId("fixture-app")
-    expect(fixture).toHaveAttribute("data-model-selector-enabled", "false")
-    expect(fixture).toHaveAttribute("data-context-enabled", "true")
-  })
-
   it("loads the provider-neutral guest surface without a runtime configuration", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(

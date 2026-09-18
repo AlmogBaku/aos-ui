@@ -549,12 +549,16 @@ export type GuestRuntimeCapabilitiesResponse = z.infer<
 
 export const SessionModelsResponseSchema = z.strictObject({
   selectedId: IdentifierSchema,
+  /** The provider-reported reasoning effort of the Session; absent = provider default. */
+  effortId: IdentifierSchema.optional(),
   options: z
     .array(
       z.strictObject({
         id: IdentifierSchema,
         label: z.string().min(1).max(256),
         group: z.string().min(1).max(256),
+        /** Provider-reported reasoning effort ids; absent when the model has none. */
+        efforts: z.array(IdentifierSchema).min(1).max(16).optional(),
       })
     )
     .max(4_096),
@@ -563,6 +567,10 @@ export type SessionModelsResponse = z.infer<typeof SessionModelsResponseSchema>
 
 export const SessionModelSelectRequestSchema = z.strictObject({
   selectedId: IdentifierSchema,
+})
+
+export const SessionModelEffortSelectRequestSchema = z.strictObject({
+  effortId: IdentifierSchema,
 })
 
 export const SessionContextResponseSchema = z.strictObject({

@@ -130,6 +130,7 @@ describe("AOS composer features", () => {
       models,
       context,
       selectModel: vi.fn(),
+      selectEffort: vi.fn(),
       steerRun: vi.fn(),
     }
 
@@ -184,6 +185,7 @@ describe("AOS composer features", () => {
       models,
       context,
       selectModel: vi.fn(),
+      selectEffort: vi.fn(),
       steerRun: vi.fn(),
     }
     const { result } = renderHook(() => {
@@ -210,6 +212,170 @@ describe("AOS composer features", () => {
     expect(context).toHaveBeenCalledWith("session-1")
   })
 
+  it("projects effortId and selectEffort when selected option has efforts", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "a",
+      effortId: "medium",
+      options: [
+        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+      ],
+    }))
+    const selectEffortMock = vi.fn(async () => ({ effortId: "high" }))
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      selectModel: vi.fn(),
+      selectEffort: selectEffortMock,
+      steerRun: vi.fn(),
+    }
+    const onError = vi.fn()
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities,
+        onError
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.effortId).toBe("medium"))
+    expect(result.current.model?.selectEffort).toBeDefined()
+
+    await result.current.model?.selectEffort?.("high")
+    expect(selectEffortMock).toHaveBeenCalledWith("session-1", "high")
+    await waitFor(() => expect(result.current.model?.effortId).toBe("high"))
+  })
+
+  it("sets effortSelection to error and calls onError when selectEffort rejects", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "a",
+      effortId: "medium",
+      options: [
+        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+      ],
+    }))
+    const failure = new Error("effort-fail")
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      selectModel: vi.fn(),
+      selectEffort: vi.fn(async () => {
+        throw failure
+      }),
+      steerRun: vi.fn(),
+    }
+    const onError = vi.fn()
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities,
+        onError
+      )
+    })
+
+    await waitFor(() =>
+      expect(result.current.model?.selectEffort).toBeDefined()
+    )
+    await result.current.model?.selectEffort?.("high")
+
+    await waitFor(() =>
+      expect(result.current.model?.effortSelection?.status).toBe("error")
+    )
+    expect(result.current.model?.effortSelection).toMatchObject({
+      status: "error",
+      targetId: "high",
+    })
+    expect(onError).toHaveBeenCalledWith(failure)
+
+    // Retry repeats only the failed request; the authoritative effort stays put.
+    expect(result.current.model?.effortId).toBe("medium")
+    await result.current.model?.retryEffort?.()
+    expect(client.selectEffort).toHaveBeenCalledTimes(2)
+    expect(client.selectEffort).toHaveBeenLastCalledWith("session-1", "high")
+  })
+
+  it("drops an effort switch that settles after the selected Session changed", async () => {
+    let settle: ((value: { effortId: string }) => void) | undefined
+    const models = vi.fn(async (threadId: string) => ({
+      selectedId: "a",
+      effortId: threadId === "session-1" ? "medium" : "low",
+      options: [
+        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+      ],
+    }))
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      selectModel: vi.fn(),
+      selectEffort: vi.fn(
+        () =>
+          new Promise<{ effortId: string }>((resolve) => {
+            settle = resolve
+          })
+      ),
+      steerRun: vi.fn(),
+    }
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) => {
+        const sessionCapabilities = useAosSessionCapabilities(client, threadId)
+        return useAosComposerFeatures(
+          client,
+          { modelSelectorEnabled: true, contextEnabled: false },
+          threadId,
+          sessionCapabilities
+        )
+      },
+      { initialProps: { threadId: "session-1" } }
+    )
+
+    await waitFor(() =>
+      expect(result.current.model?.selectEffort).toBeDefined()
+    )
+    const pending = result.current.model?.selectEffort?.("high")
+    rerender({ threadId: "session-2" })
+    await waitFor(() => expect(result.current.model?.effortId).toBe("low"))
+
+    settle?.({ effortId: "high" })
+    await pending
+    expect(result.current.model?.effortId).toBe("low")
+    expect(result.current.model?.effortSelection?.status).toBe("idle")
+  })
+
+  it("does not expose selectEffort when selected option has no efforts", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "a",
+      options: [{ id: "a", label: "A", group: "G" }],
+    }))
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      selectModel: vi.fn(),
+      selectEffort: vi.fn(),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("a"))
+    expect(result.current.model?.selectEffort).toBeUndefined()
+  })
+
   it("exposes provider-neutral steering only when the Session capability is available", async () => {
     const steerRun = vi.fn(async () => ({ status: "steered" as const }))
     const client = {
@@ -217,6 +383,7 @@ describe("AOS composer features", () => {
       models: vi.fn(),
       context: vi.fn(),
       selectModel: vi.fn(),
+      selectEffort: vi.fn(),
       steerRun,
     }
     const { result } = renderHook(() =>

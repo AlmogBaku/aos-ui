@@ -33,6 +33,7 @@ import {
   SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
+  SessionModelEffortSelectRequestSchema,
   SessionModelSelectRequestSchema,
   SessionModelsResponseSchema,
   SessionSchema,
@@ -1156,6 +1157,22 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return result
   }
 
+  async selectEffort(threadId: string, effortId: string) {
+    const result = await this.#sessionRead(
+      threadId,
+      "/workspace/models/effort",
+      SessionModelEffortSelectRequestSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effortId }),
+      }
+    )
+    if (result.effortId !== effortId)
+      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+    return result
+  }
+
   context(threadId: string) {
     return this.#sessionRead(
       threadId,
@@ -1323,11 +1340,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     return this.transcribeForAgent(this.#owner(threadId), audio, signal)
   }
 
-  async transcribeForAgent(
-    agentId: string,
-    audio: Blob,
-    signal?: AbortSignal
-  ) {
+  async transcribeForAgent(agentId: string, audio: Blob, signal?: AbortSignal) {
     if (!audio.size || !audio.type)
       throw new AosClientError("proxy-failure", "Invalid audio recording")
     const request = SessionTranscriptionRequestSchema.safeParse({
@@ -1359,15 +1372,12 @@ export class AosRemoteClient implements WorkspaceAdapter {
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid speech input")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
-    return this.#readBlob(
-      path,
-      {
-        method: "POST",
-        signal,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request.data),
-      }
-    )
+    return this.#readBlob(path, {
+      method: "POST",
+      signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+    })
   }
 
   async #patchSession(

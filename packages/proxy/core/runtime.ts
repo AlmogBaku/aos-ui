@@ -227,6 +227,11 @@ export interface ServerRuntime {
     publicSessionId: string,
     selectedId: string
   ): Promise<unknown>
+  selectEffort(
+    agentId: string,
+    publicSessionId: string,
+    effortId: string
+  ): Promise<unknown>
   context(agentId: string, publicSessionId: string): Promise<unknown>
   subscribeSessionInvalidation(
     agentId: string,

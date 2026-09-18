@@ -1,34 +1,45 @@
 "use client"
 
-import { Select } from "@base-ui/react/select"
+import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
 import {
   DirectionProvider,
   useDirection,
   type TextDirection,
 } from "@base-ui/react/direction-provider"
-import { CheckIcon, ChevronDownIcon } from "lucide-react"
+import { RotateCcwIcon } from "lucide-react"
 import {
   createContext,
+  useCallback,
   useContext,
   useMemo,
-  useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react"
 
+import {
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxValue,
+} from "@/components/ui/combobox"
 import { cn } from "@/lib/utils"
 
 /**
- * Presentational-only subset of the Assistant UI registry ModelSelector API.
- * Runtime selection remains owned by the caller's opaque view model.
+ * Presentational-only model picker. Runtime selection stays owned by the
+ * caller's opaque view model; this component never mutates provider state.
  */
 export type ModelOption = {
   readonly id: string
   readonly name: string
   readonly description?: string | undefined
   readonly group?: string | undefined
-  readonly efforts?:
-    true | readonly { readonly id: string; readonly name: string }[] | undefined
 }
 
 export type ModelSelectorSelectionState =
@@ -41,12 +52,55 @@ export type ModelSelectorSelectionState =
       readonly retry?: (() => void | Promise<void>) | undefined
     }
 
+export type ModelSelectorLabels = {
+  /** Trigger text when the authoritative selection matches no offered option. */
+  readonly placeholder: string
+  readonly search: string
+  readonly searchPlaceholder: string
+  readonly empty: string
+  readonly switching: string
+  readonly retry: string
+}
+
+/** Base UI reads `items` from group objects; the label lives on `value`. */
+type ModelOptionGroup = {
+  readonly value: string
+  readonly items: readonly ModelOption[]
+}
+
+/** Search matches the provider id and group too, not just the display name. */
+function modelSearchText(model: ModelOption) {
+  return [model.id, model.name, model.group, model.description]
+    .filter((part): part is string => Boolean(part))
+    .join(" ")
+}
+
+/** Ungrouped models lead, then each group in provider-reported order. */
+function toModelGroups(
+  models: readonly ModelOption[]
+): readonly ModelOptionGroup[] {
+  const ungrouped: ModelOption[] = []
+  const grouped = new Map<string, ModelOption[]>()
+  for (const model of models) {
+    if (!model.group) {
+      ungrouped.push(model)
+      continue
+    }
+    const existing = grouped.get(model.group)
+    if (existing) existing.push(model)
+    else grouped.set(model.group, [model])
+  }
+
+  const groups: ModelOptionGroup[] = []
+  if (ungrouped.length > 0) groups.push({ value: "", items: ungrouped })
+  for (const [value, items] of grouped) groups.push({ value, items })
+  return groups
+}
+
 type ModelSelectorContextValue = {
   readonly models: readonly ModelOption[]
-  readonly value: string
   readonly selection: ModelSelectorSelectionState
-  readonly effort: string | undefined
-  readonly setEffort: ((effort: string) => void) | undefined
+  readonly labels: ModelSelectorLabels
 }
 
 const ModelSelectorContext = createContext<ModelSelectorContextValue | null>(
@@ -68,46 +122,62 @@ export function ModelSelectorRoot({
   value,
   onValueChange,
   selection = { status: "idle" },
-  effort,
-  onEffortChange,
   direction = "ltr",
+  labels,
   children,
 }: {
   models: readonly ModelOption[]
   value: string
   onValueChange: (value: string) => void
   selection?: ModelSelectorSelectionState | undefined
-  effort?: string | undefined
-  onEffortChange?: ((effort: string) => void) | undefined
   direction?: TextDirection | undefined
+  labels: ModelSelectorLabels
   children: ReactNode
 }) {
+  const groups = useMemo(() => toModelGroups(models), [models])
+  const selected = useMemo(
+    () => models.find((model) => model.id === value) ?? null,
+    [models, value]
+  )
+  const filter = ComboboxPrimitive.useFilter({
+    locale: direction === "rtl" ? "he" : "en",
+  })
+  const matchesQuery = useCallback(
+    (model: ModelOption, query: string) =>
+      filter.contains(model, query, modelSearchText),
+    [filter]
+  )
+  const context = useMemo(
+    () => ({ models, selection, labels }),
+    [models, selection, labels]
+  )
+
   return (
     <DirectionProvider direction={direction}>
-      <ModelSelectorContext.Provider
-        value={{
-          models,
-          value,
-          selection,
-          effort,
-          setEffort: onEffortChange,
-        }}
-      >
-        <Select.Root
-          value={value}
-          onValueChange={(nextValue) => {
-            if (nextValue !== null) onValueChange(nextValue)
+      <ModelSelectorContext.Provider value={context}>
+        <Combobox
+          autoHighlight
+          filter={matchesQuery}
+          isItemEqualToValue={(candidate, current) =>
+            candidate.id === current.id
+          }
+          items={groups}
+          itemToStringLabel={(model) => model.name}
+          modal={false}
+          onValueChange={(next) => {
+            if (next) onValueChange(next.id)
           }}
+          value={selected}
         >
           {children}
-        </Select.Root>
+        </Combobox>
       </ModelSelectorContext.Provider>
     </DirectionProvider>
   )
 }
 
 export type ModelSelectorTriggerProps = ComponentPropsWithoutRef<
-  typeof Select.Trigger
+  typeof ComboboxTrigger
 >
 
 export function ModelSelectorTrigger({
@@ -115,216 +185,124 @@ export function ModelSelectorTrigger({
   children,
   ...props
 }: ModelSelectorTriggerProps) {
+  const { labels } = useModelSelectorContext()
   return (
-    <Select.Trigger
+    <ComboboxTrigger
       data-slot="model-selector-trigger"
       className={cn(
         "flex h-11 max-w-56 min-w-0 items-center justify-between gap-1.5 rounded-md px-1.5 text-xs font-medium text-foreground transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none @min-[64rem]/workspace:h-7",
+        // The wrapper supplies the chevron; keep the design-lock icon weight.
+        "[&>svg]:size-3.5 [&>svg]:text-current [&>svg]:opacity-60",
         className
       )}
       {...props}
     >
-      {children ?? <ModelSelectorValue />}
-      <Select.Icon>
-        <ChevronDownIcon className="size-3.5 opacity-60" />
-      </Select.Icon>
-    </Select.Trigger>
+      {children ?? (
+        <ComboboxValue>
+          {(model: ModelOption | null) => (
+            <span className="truncate">{model?.name ?? labels.placeholder}</span>
+          )}
+        </ComboboxValue>
+      )}
+    </ComboboxTrigger>
   )
 }
 
-export function ModelSelectorValue() {
-  const { effort, models, value } = useModelSelectorContext()
-  const model = models.find((candidate) => candidate.id === value)
-  const efforts = model?.efforts === true ? DEFAULT_EFFORTS : model?.efforts
-  const effortLabel = efforts?.find(
-    (candidate) => candidate.id === effort
-  )?.name
+/** Shared pending/error presentation for model and effort popups. */
+export function ModelSelectorStatus({
+  labels,
+  selection,
+}: {
+  labels: Pick<ModelSelectorLabels, "switching" | "retry">
+  selection: ModelSelectorSelectionState
+}) {
+  if (selection.status === "pending") {
+    return (
+      <div
+        aria-live="polite"
+        className="px-2 py-1 text-xs text-muted-foreground"
+      >
+        {labels.switching}
+      </div>
+    )
+  }
+  if (selection.status !== "error") return null
+  const retry = selection.retry
   return (
-    <Select.Value className="truncate">
-      {model?.name}
-      {effortLabel ? ` · ${effortLabel}` : ""}
-    </Select.Value>
+    <div
+      className="flex items-center gap-2 px-2 py-1 text-xs text-destructive"
+      role="alert"
+    >
+      <span className="min-w-0 flex-1">{selection.error}</span>
+      {retry ? (
+        <button
+          aria-label={labels.retry}
+          className="rounded-sm p-0.5 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40"
+          onClick={() => void retry()}
+          type="button"
+        >
+          <RotateCcwIcon aria-hidden className="size-3.5" />
+        </button>
+      ) : null}
+    </div>
   )
 }
 
 export function ModelSelectorContent({
   className,
-  searchable = false,
+  searchable,
 }: {
   className?: string | undefined
+  /** Defaults to searching only once the roster stops fitting on screen. */
   searchable?: boolean | undefined
 }) {
-  const { models, selection } = useModelSelectorContext()
+  const { labels, models, selection } = useModelSelectorContext()
   const direction = useDirection()
-  const [query, setQuery] = useState("")
-  const filteredModels = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase()
-    if (!normalized) return models
-    return models.filter((model) =>
-      [model.id, model.name, model.description, model.group].some((value) =>
-        value?.toLocaleLowerCase().includes(normalized)
-      )
-    )
-  }, [models, query])
-  const ungrouped = filteredModels.filter((model) => !model.group)
-  const groups = new Map<string, ModelOption[]>()
-  for (const model of filteredModels) {
-    if (!model.group) continue
-    groups.set(model.group, [...(groups.get(model.group) ?? []), model])
-  }
+  const showSearch = searchable ?? models.length > 8
 
   return (
-    <Select.Portal>
-      <Select.Positioner
-        side="top"
-        align="start"
-        sideOffset={6}
-        className="isolate z-50"
-      >
-        <Select.Popup
-          data-slot="model-selector-content"
-          dir={direction}
-          className={cn(
-            "min-w-(--anchor-width) rounded-xl bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none motion-reduce:animate-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-            className
+    <ComboboxContent
+      align="start"
+      className={cn("min-w-64 motion-reduce:animate-none", className)}
+      data-slot="model-selector-content"
+      dir={direction}
+      side="top"
+      sideOffset={6}
+    >
+      {showSearch ? (
+        <ComboboxInput
+          aria-label={labels.search}
+          placeholder={labels.searchPlaceholder}
+          showTrigger={false}
+        />
+      ) : null}
+      <ModelSelectorStatus labels={labels} selection={selection} />
+      <ComboboxList>
+        <ComboboxCollection>
+          {(group: ModelOptionGroup) => (
+            <ComboboxGroup items={group.items} key={group.value}>
+              {group.value ? (
+                <ComboboxLabel>{group.value}</ComboboxLabel>
+              ) : null}
+              <ComboboxCollection>
+                {(model: ModelOption) => (
+                  <ComboboxItem key={model.id} value={model}>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{model.name}</span>
+                      {model.description ? (
+                        <span className="truncate text-xs text-muted-foreground">
+                          {model.description}
+                        </span>
+                      ) : null}
+                    </span>
+                  </ComboboxItem>
+                )}
+              </ComboboxCollection>
+            </ComboboxGroup>
           )}
-        >
-          <Select.List className="max-h-72 overflow-y-auto py-1 outline-none">
-            {searchable ? (
-              <input
-                aria-label="Search models"
-                className="mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                onChange={(event) => setQuery(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (!event.key.startsWith("Arrow") && event.key !== "Enter")
-                    event.stopPropagation()
-                }}
-                placeholder="Search models..."
-                role="searchbox"
-                value={query}
-              />
-            ) : null}
-            {selection.status === "error" ? (
-              <div
-                className="flex items-center gap-2 px-2 py-1 text-xs text-destructive"
-                role="alert"
-              >
-                <span>{selection.error}</span>
-                {selection.retry ? (
-                  <button
-                    aria-label="Retry model selection"
-                    className="underline"
-                    onClick={() => void selection.retry?.()}
-                    type="button"
-                  >
-                    Retry
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {selection.status === "pending" ? (
-              <div
-                aria-live="polite"
-                className="px-2 py-1 text-xs text-muted-foreground"
-              >
-                Switching model…
-              </div>
-            ) : null}
-            {ungrouped.map((model) => (
-              <ModelSelectorItem key={model.id} model={model} />
-            ))}
-            {[...groups].map(([group, options]) => (
-              <ModelSelectorGroup key={group} label={group}>
-                {options.map((model) => (
-                  <ModelSelectorItem key={model.id} model={model} />
-                ))}
-              </ModelSelectorGroup>
-            ))}
-            {filteredModels.length === 0 ? (
-              <p className="px-2 py-1 text-sm text-muted-foreground">
-                No models found.
-              </p>
-            ) : null}
-            <ModelSelectorEffort />
-          </Select.List>
-        </Select.Popup>
-      </Select.Positioner>
-    </Select.Portal>
-  )
-}
-
-const DEFAULT_EFFORTS = [
-  { id: "low", name: "Low" },
-  { id: "medium", name: "Medium" },
-  { id: "high", name: "High" },
-] as const
-
-export function ModelSelectorEffort() {
-  const { effort, models, setEffort, value } = useModelSelectorContext()
-  const model = models.find((candidate) => candidate.id === value)
-  const efforts = model?.efforts === true ? DEFAULT_EFFORTS : model?.efforts
-  if (!efforts?.length || !setEffort) return null
-
-  return (
-    <div
-      aria-label="Reasoning effort"
-      className="mt-1 flex items-center justify-between gap-2 border-t px-2 py-2"
-      role="radiogroup"
-    >
-      <span className="text-xs text-muted-foreground">Thinking</span>
-      <span className="flex gap-1">
-        {efforts.map((option) => (
-          <button
-            aria-checked={option.id === effort}
-            className="rounded px-1.5 py-1 text-xs hover:bg-muted aria-checked:bg-muted"
-            key={option.id}
-            onClick={() => setEffort(option.id)}
-            role="radio"
-            type="button"
-          >
-            {option.name}
-          </button>
-        ))}
-      </span>
-    </div>
-  )
-}
-
-export function ModelSelectorGroup({
-  label,
-  children,
-}: {
-  label: string
-  children: ReactNode
-}) {
-  return (
-    <Select.Group>
-      <Select.GroupLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">
-        {label}
-      </Select.GroupLabel>
-      {children}
-    </Select.Group>
-  )
-}
-
-export function ModelSelectorItem({ model }: { model: ModelOption }) {
-  return (
-    <Select.Item
-      value={model.id}
-      label={model.name}
-      className="relative flex cursor-default items-start rounded-lg py-1.5 ps-2 pe-8 text-sm outline-none data-highlighted:bg-muted data-selected:font-medium"
-    >
-      <span className="flex min-w-0 flex-col">
-        <Select.ItemText>{model.name}</Select.ItemText>
-        {model.description ? (
-          <span className="truncate text-xs text-muted-foreground">
-            {model.description}
-          </span>
-        ) : null}
-      </span>
-      <Select.ItemIndicator className="absolute end-2 flex size-4 items-center justify-center">
-        <CheckIcon className="size-3.5" />
-      </Select.ItemIndicator>
-    </Select.Item>
+        </ComboboxCollection>
+        <ComboboxEmpty>{labels.empty}</ComboboxEmpty>
+      </ComboboxList>
+    </ComboboxContent>
   )
 }

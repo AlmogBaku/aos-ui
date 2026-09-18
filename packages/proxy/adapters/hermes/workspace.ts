@@ -74,14 +74,29 @@ export type HermesWorkspaceCapabilities = {
     | { status: "unavailable"; reason: "session-info-unavailable" }
 }
 
+/** Hermes' native reasoning-effort ladder, weakest to strongest. */
+const HERMES_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const
+/** Hermes' native value for a model whose reasoning can be turned off. */
+const HERMES_REASONING_DISABLED = "none"
+
 export type HermesModelChoice = {
   id: string
   label: string
   group: string
+  efforts?: readonly string[]
 }
 
 export type HermesModelChoices = {
   selectedId: string
+  effortId?: string
   options: HermesModelChoice[]
 }
 
@@ -199,6 +214,29 @@ function projectContext(value: unknown): HermesContext | undefined {
 
 type NativeModel = HermesModelChoice & { provider: string; model: string }
 
+/**
+ * Hermes reports reasoning support per model but never sends the ladder, so an
+ * unknown model reports no efforts rather than an assumed ladder.
+ */
+function projectEfforts(capability: unknown) {
+  if (!isRecord(capability) || capability.reasoning !== true) return undefined
+  return [
+    ...(capability.can_disable_reasoning === true
+      ? [HERMES_REASONING_DISABLED]
+      : []),
+    ...HERMES_REASONING_EFFORTS,
+  ]
+}
+
+function projectEffortId(value: unknown) {
+  const effort = stringValue(value, 64)
+  if (!effort) return undefined
+  return effort === HERMES_REASONING_DISABLED ||
+    (HERMES_REASONING_EFFORTS as readonly string[]).includes(effort)
+    ? effort
+    : undefined
+}
+
 function projectModels(
   value: unknown
 ): HermesModelChoices & { native: NativeModel[] } {
@@ -215,21 +253,53 @@ function projectModels(
     const provider = stringValue(row.slug, 256)
     if (!provider || !/^[\w.-]+$/u.test(provider)) continue
     const group = stringValue(row.name, 256) ?? provider
+    const capabilities = isRecord(row.capabilities)
+      ? row.capabilities
+      : undefined
     for (const rawModel of row.models) {
       const model = stringValue(rawModel, 256)
       if (!model || /\s|^[-\u2012-\u2015]/u.test(model)) continue
       const id = JSON.stringify([provider, model])
       if (native.some((choice) => choice.id === id)) continue
-      native.push({ id, label: model, group, provider, model })
+      const efforts = capabilities
+        ? projectEfforts(capabilities[model])
+        : undefined
+      native.push({
+        id,
+        label: model,
+        group,
+        ...(efforts ? { efforts } : {}),
+        provider,
+        model,
+      })
     }
   }
   const selectedProvider = stringValue(value.provider, 256)
   const selectedModel = stringValue(value.model, 256)
   if (!selectedProvider || !selectedModel)
     throw new HermesWorkspaceUnavailableError()
+  const selectedId = JSON.stringify([selectedProvider, selectedModel])
+  // The selected model must be one of the offered options. A picker holding a
+  // value no item carries renders an empty selection, so publish the Session's
+  // own model as a choice even when Hermes leaves it out of the catalog it
+  // advertises. An unlisted model reports no capabilities, so it gets no
+  // efforts: unknown is not the same as supported.
+  if (!native.some((choice) => choice.id === selectedId))
+    native.unshift({
+      id: selectedId,
+      label: selectedModel,
+      group: selectedProvider,
+      provider: selectedProvider,
+      model: selectedModel,
+    })
   return {
-    selectedId: JSON.stringify([selectedProvider, selectedModel]),
-    options: native.map(({ id, label, group }) => ({ id, label, group })),
+    selectedId,
+    options: native.map(({ id, label, group, efforts }) => ({
+      id,
+      label,
+      group,
+      ...(efforts ? { efforts } : {}),
+    })),
     native,
   }
 }
@@ -345,6 +415,11 @@ export type HermesWorkspaceOperations = {
     sessionId: string,
     selectedId: string
   ): Promise<{ selectedId: string }>
+  selectEffort(
+    agentId: string,
+    sessionId: string,
+    effortId: string
+  ): Promise<{ effortId: string }>
   context(agentId: string, sessionId: string): Promise<HermesContext>
   todos(agentId: string, sessionId: string): Promise<HermesTodo[]>
   activity(agentId: string, sessionId: string): Promise<HermesActivity>
@@ -381,7 +456,10 @@ export function createHermesWorkspaceOperations(input: {
       throw new HermesWorkspaceUnavailableError()
     }
   }
-  const models = async (agentId: string, sessionId: string) => {
+  const models = async (
+    agentId: string,
+    sessionId: string
+  ): Promise<HermesModelChoices> => {
     const session = await requireScope(agentId, sessionId)
     if (!session.attached) throw new HermesWorkspaceUnavailableError()
     const value = await request("model.options", {
@@ -389,7 +467,17 @@ export function createHermesWorkspaceOperations(input: {
       profile: session.agentId,
     })
     const projected = projectModels(value)
-    return { selectedId: projected.selectedId, options: projected.options }
+    const info = await input.transport
+      .sessionInfo?.(session)
+      .catch(() => undefined)
+    const effortId = isRecord(info)
+      ? projectEffortId(info.reasoning_effort)
+      : undefined
+    return {
+      selectedId: projected.selectedId,
+      ...(effortId ? { effortId } : {}),
+      options: projected.options,
+    }
   }
 
   return {
@@ -453,6 +541,34 @@ export function createHermesWorkspaceOperations(input: {
       return {
         selectedId: JSON.stringify([selected.provider, confirmation.value]),
       }
+    },
+    async selectEffort(agentId, sessionId, effortId) {
+      const session = await requireScope(agentId, sessionId)
+      if (!session.attached) throw new HermesWorkspaceUnavailableError()
+      const catalog = projectModels(
+        await request("model.options", {
+          session_id: session.liveSessionId,
+          profile: session.agentId,
+        })
+      )
+      const selected = catalog.native.find(
+        (option) => option.id === catalog.selectedId
+      )
+      if (!selected?.efforts?.includes(effortId))
+        throw new HermesWorkspaceUnavailableError()
+      // Hermes scopes the `reasoning` key to the given Session by default.
+      const confirmation = await request("config.set", {
+        session_id: session.liveSessionId,
+        key: "reasoning",
+        value: effortId,
+      })
+      if (
+        !isRecord(confirmation) ||
+        confirmation.key !== "reasoning" ||
+        confirmation.value !== effortId
+      )
+        throw new HermesWorkspaceUnavailableError()
+      return { effortId }
     },
     async context(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)

@@ -39,7 +39,12 @@ describe("fixture composer features", () => {
     )
     expect(features.model?.selectedId).toBe("fixture-balanced")
     expect(features.model?.options).toEqual([
-      { id: "fixture-balanced", label: "Fixture Balanced", group: "Fixture" },
+      {
+        id: "fixture-balanced",
+        label: "Fixture Balanced",
+        group: "Fixture",
+        efforts: ["low", "medium", "high"],
+      },
       { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
     ])
     expect(features.context).toEqual({

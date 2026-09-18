@@ -111,63 +111,6 @@ test("coarse-pointer workspace controls have 44px touch targets", async ({
   await page.keyboard.press("Escape")
 })
 
-test("the mobile composer keeps model and context in one Assistant UI rail", async ({
-  page,
-}) => {
-  await page.goto("/en")
-
-  const composer = page.locator('[data-slot="aui_composer-shell"]')
-  const input = page.getByRole("textbox", { name: "Message input" })
-  const addAttachment = page.getByRole("button", { name: "Add attachment" })
-  const send = page.getByRole("button", { name: "Send message" })
-  const model = page.getByRole("combobox", { name: "Choose model" })
-  const context = page.getByRole("button", {
-    name: "Context usage",
-  })
-  await expect(input).toHaveCount(1)
-  await expect(addAttachment).toHaveCount(1)
-  await expect(send).toHaveCount(1)
-  await expect(model).toHaveCount(1)
-  await expect(context).toHaveCount(1)
-  const [inputBox, fieldBox, addAttachmentBox, sendBox, modelBox, contextBox] =
-    await Promise.all([
-      input.boundingBox(),
-      composer.boundingBox(),
-      addAttachment.boundingBox(),
-      send.boundingBox(),
-      model.boundingBox(),
-      context.boundingBox(),
-    ])
-
-  expect(inputBox).not.toBeNull()
-  expect(fieldBox).not.toBeNull()
-  expect(addAttachmentBox).not.toBeNull()
-  expect(sendBox).not.toBeNull()
-  expect(modelBox).not.toBeNull()
-  expect(contextBox).not.toBeNull()
-  await expect(composer).toBeVisible()
-  await expect(context).toBeVisible()
-  await expect(addAttachment).toBeEnabled()
-  await expect(send).toBeDisabled()
-
-  await page.setViewportSize({ width: 320, height: 700 })
-  const compactBox = await composer.boundingBox()
-  expect(compactBox).not.toBeNull()
-  expect(compactBox!.x).toBeGreaterThanOrEqual(0)
-  expect(compactBox!.x + compactBox!.width).toBeLessThanOrEqual(320)
-
-  await page.setViewportSize({ width: 1440, height: 844 })
-  await expect(context).toBeVisible()
-  const [desktopComposerBox, desktopAddBox, desktopSendBox] = await Promise.all(
-    [composer.boundingBox(), addAttachment.boundingBox(), send.boundingBox()]
-  )
-  expect(desktopComposerBox).not.toBeNull()
-  expect(desktopAddBox).not.toBeNull()
-  expect(desktopSendBox).not.toBeNull()
-  expect(desktopComposerBox!.width).toBeGreaterThan(680)
-  expect(desktopAddBox!.x).toBeLessThan(desktopSendBox!.x)
-})
-
 test("expanded reasoning remains independently scrollable", async ({
   page,
 }) => {

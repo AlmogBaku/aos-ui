@@ -6,7 +6,12 @@ import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { FIXTURE_SLASH_COMMANDS } from "./fixture-slash-commands"
 
 const FIXTURE_MODEL_OPTIONS = [
-  { id: "fixture-balanced", label: "Fixture Balanced", group: "Fixture" },
+  {
+    id: "fixture-balanced",
+    label: "Fixture Balanced",
+    group: "Fixture",
+    efforts: ["low", "medium", "high"] as readonly string[],
+  },
   { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
 ] as const
 
@@ -44,6 +49,8 @@ function contextFor(threadId: string, messageCount: number, modelId: string) {
   }
 }
 
+const DEFAULT_EFFORT_ID = "medium"
+
 export function useFixtureComposerFeatures({
   threadId,
   config,
@@ -54,6 +61,9 @@ export function useFixtureComposerFeatures({
   runtime: AssistantRuntime
 }): ComposerFeatureViewModel {
   const [selectedByThread, setSelectedByThread] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map())
+  const [effortByThread, setEffortByThread] = useState<
     ReadonlyMap<string, string>
   >(() => new Map())
   const select = useCallback(
@@ -71,6 +81,23 @@ export function useFixtureComposerFeatures({
     },
     [threadId]
   )
+  const selectEffort = useCallback(
+    async (effortId: string) => {
+      if (!threadId) return
+      const currentSelectedId =
+        selectedByThread.get(threadId) ?? DEFAULT_MODEL_ID
+      const selectedOption = FIXTURE_MODEL_OPTIONS.find(
+        (option) => option.id === currentSelectedId
+      )
+      if (!selectedOption || !("efforts" in selectedOption)) return
+      setEffortByThread((current) => {
+        const next = new Map(current)
+        next.set(threadId, effortId)
+        return next
+      })
+    },
+    [threadId, selectedByThread]
+  )
   const subscribe = useCallback(
     (listener: () => void) => runtime.thread.subscribe(listener),
     [runtime]
@@ -87,9 +114,15 @@ export function useFixtureComposerFeatures({
   const selectedId = threadId
     ? (selectedByThread.get(threadId) ?? DEFAULT_MODEL_ID)
     : DEFAULT_MODEL_ID
+  const effortId = threadId
+    ? (effortByThread.get(threadId) ?? DEFAULT_EFFORT_ID)
+    : DEFAULT_EFFORT_ID
 
   return useMemo(() => {
     if (!threadId) return {}
+    const selectedOption = FIXTURE_MODEL_OPTIONS.find(
+      (option) => option.id === selectedId
+    )
     return {
       slashCommands: FIXTURE_SLASH_COMMANDS,
       ...(config.modelSelectorEnabled
@@ -99,6 +132,13 @@ export function useFixtureComposerFeatures({
               selectedId,
               selection: { status: "idle" },
               select,
+              ...(selectedOption && "efforts" in selectedOption
+                ? {
+                    effortId,
+                    effortSelection: { status: "idle" },
+                    selectEffort,
+                  }
+                : {}),
             },
           }
         : {}),
@@ -109,9 +149,11 @@ export function useFixtureComposerFeatures({
   }, [
     config.contextEnabled,
     config.modelSelectorEnabled,
+    effortId,
     messageCount,
     select,
     selectedId,
+    selectEffort,
     threadId,
   ])
 }

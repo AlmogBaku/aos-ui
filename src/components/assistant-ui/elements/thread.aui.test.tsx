@@ -1394,62 +1394,54 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(input).toHaveFocus())
   })
 
-  it("renders an optional model selector and exact authoritative context usage", async () => {
+  it("offers reasoning effort only for a model whose provider reports it", async () => {
     const user = userEvent.setup()
-    const select = vi.fn(async () => undefined)
+    const selectEffort = vi.fn(async () => undefined)
     render(
       <LocalThread
         initialMessages={[]}
         composerFeatures={{
           model: {
             options: [
-              { id: "opaque-balanced", label: "Balanced", group: "Fixture" },
-              { id: "opaque-fast", label: "Fast", group: "Fixture" },
+              {
+                id: "opaque-balanced",
+                label: "Balanced",
+                efforts: ["low", "high"],
+              },
+              { id: "opaque-fast", label: "Fast" },
             ],
             selectedId: "opaque-balanced",
-            select,
-          },
-          context: {
-            usage: { system: 1, tools: 1, messages: 2, total: 8 },
+            select: async () => undefined,
+            effortId: "low",
+            selectEffort,
           },
         }}
       />
     )
 
-    const model = screen.getByRole("combobox", { name: "Choose model" })
-    expect(model).toHaveTextContent("Balanced")
-    const context = screen.getByRole("button", { name: "Context usage" })
-    expect(context).toBeInTheDocument()
-    expect(screen.getByText("Context")).toBeInTheDocument()
-    expect(screen.getByText("System")).toBeInTheDocument()
-    expect(screen.getByText("Tools")).toBeInTheDocument()
-    expect(screen.getByText("Messages")).toBeInTheDocument()
-    expect(screen.getByText("4k / 8k")).toBeInTheDocument()
-    expect(model).toBeInTheDocument()
-    expect(context).toBeInTheDocument()
-
-    model.focus()
-    await user.keyboard("{ArrowDown}")
-    expect(await screen.findByRole("listbox")).toBeVisible()
-    expect(screen.getByRole("group", { name: "Fixture" })).toBeInTheDocument()
-    await user.keyboard("{ArrowDown}{Enter}")
-    expect(select).toHaveBeenCalledWith("opaque-fast")
+    const effort = screen.getByRole("combobox", { name: "Thinking" })
+    expect(effort).toHaveTextContent("Low")
+    await user.click(effort)
+    await user.click(screen.getByRole("option", { name: "High" }))
+    expect(selectEffort).toHaveBeenCalledWith("high")
   })
 
-  it("allows model and context composer features to be omitted independently", () => {
+  it("hides reasoning effort when the provider reports none", () => {
     render(
       <LocalThread
         initialMessages={[]}
         composerFeatures={{
-          context: { usage: { system: 0, tools: 0, messages: 0, total: 4 } },
+          model: {
+            options: [{ id: "opaque-fast", label: "Fast" }],
+            selectedId: "opaque-fast",
+            select: async () => undefined,
+            selectEffort: async () => undefined,
+          },
         }}
       />
     )
 
-    expect(screen.queryByRole("combobox", { name: "Choose model" })).toBeNull()
-    expect(
-      screen.getByRole("button", { name: "Context usage" })
-    ).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: "Thinking" })).toBeNull()
   })
 
   it("omits categories the runtime did not provide", () => {

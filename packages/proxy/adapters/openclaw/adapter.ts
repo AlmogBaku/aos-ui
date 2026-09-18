@@ -288,6 +288,15 @@ export class OpenClawServerAdapter implements ServerRuntime {
     throw new OpenClawAdapterUnavailableError()
   }
 
+  async selectEffort(
+    _agentId: string,
+    _publicSessionId: string,
+    _effortId: string
+  ): Promise<unknown> {
+    void [_agentId, _publicSessionId, _effortId]
+    throw new OpenClawAdapterUnavailableError()
+  }
+
   async context(agentId: string, publicSessionId: string) {
     await this.#start()
     return this.#history.context(agentId, publicSessionId)

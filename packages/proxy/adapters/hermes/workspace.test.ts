@@ -14,6 +14,32 @@ const scope = {
   active: true,
 }
 
+const reasoningLadder = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]
+
+/** A Hermes catalog whose only model reports reasoning it cannot disable. */
+function modelOptions(method: string) {
+  if (method !== "model.options") return undefined
+  return {
+    provider: "native",
+    model: "small",
+    providers: [
+      {
+        slug: "native",
+        models: ["small"],
+        capabilities: { small: { fast: false, reasoning: true } },
+      },
+    ],
+  }
+}
+
 function harness(overrides?: {
   scope?: Partial<typeof scope>
   request?: (
@@ -220,6 +246,172 @@ describe("Hermes workspace operations", () => {
         "hermes:research:stored-1",
         '["native","large"]'
       )
+    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+  })
+
+  it("reports a reasoning ladder only for models Hermes says support reasoning", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                models: ["small", "large", "plain", "fast-only", "vague"],
+                capabilities: {
+                  small: {
+                    fast: true,
+                    reasoning: true,
+                    can_disable_reasoning: true,
+                  },
+                  large: { fast: false, reasoning: true },
+                  "fast-only": { fast: true, reasoning: false },
+                  vague: { fast: true, reasoning: "yes" },
+                  unlisted: { fast: false, reasoning: true },
+                },
+              },
+            ],
+          }
+      },
+    })
+
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      selectedId: '["native","small"]',
+      options: [
+        {
+          id: '["native","small"]',
+          label: "small",
+          group: "Native models",
+          efforts: ["none", ...reasoningLadder],
+        },
+        {
+          id: '["native","large"]',
+          label: "large",
+          group: "Native models",
+          efforts: reasoningLadder,
+        },
+        { id: '["native","plain"]', label: "plain", group: "Native models" },
+        {
+          id: '["native","fast-only"]',
+          label: "fast-only",
+          group: "Native models",
+        },
+        { id: '["native","vague"]', label: "vague", group: "Native models" },
+      ],
+    })
+  })
+
+  it("offers the Session's own model when Hermes omits its provider row", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "openai-codex",
+            model: "gpt-5.6-terra",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                models: ["small"],
+                capabilities: { small: { fast: true, reasoning: true } },
+              },
+            ],
+          }
+      },
+    })
+
+    // Without this the picker holds a value no option carries and renders blank.
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      selectedId: '["openai-codex","gpt-5.6-terra"]',
+      options: [
+        {
+          id: '["openai-codex","gpt-5.6-terra"]',
+          label: "gpt-5.6-terra",
+          group: "openai-codex",
+        },
+        {
+          id: '["native","small"]',
+          label: "small",
+          group: "Native models",
+          efforts: reasoningLadder,
+        },
+      ],
+    })
+  })
+
+  it("reports the reasoning effort Hermes holds for the Session", async () => {
+    const { operations } = harness({
+      request: modelOptions,
+      sessionInfo: { reasoning_effort: "high" },
+    })
+
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toMatchObject({ effortId: "high" })
+  })
+
+  it("omits a Session reasoning effort Hermes leaves default or does not name", async () => {
+    const providerDefault = harness({
+      request: modelOptions,
+      sessionInfo: { reasoning_effort: "" },
+    })
+    const unknownLevel = harness({
+      request: modelOptions,
+      sessionInfo: { reasoning_effort: "bogus" },
+    })
+
+    await expect(
+      providerDefault.operations.models("research", "hermes:research:stored-1")
+    ).resolves.not.toHaveProperty("effortId")
+    await expect(
+      unknownLevel.operations.models("research", "hermes:research:stored-1")
+    ).resolves.not.toHaveProperty("effortId")
+  })
+
+  it("only changes the Session reasoning effort the selected model reports", async () => {
+    const { operations, request } = harness({
+      request(method) {
+        if (method === "config.set") return { key: "reasoning", value: "high" }
+        return modelOptions(method)
+      },
+    })
+
+    await expect(
+      operations.selectEffort("research", "hermes:research:stored-1", "high")
+    ).resolves.toEqual({ effortId: "high" })
+    expect(request).toHaveBeenLastCalledWith("config.set", {
+      session_id: "live-private-1",
+      key: "reasoning",
+      value: "high",
+    })
+  })
+
+  it("does not pass an unreported reasoning effort through to Hermes", async () => {
+    const { operations, request } = harness({ request: modelOptions })
+
+    await expect(
+      operations.selectEffort("research", "hermes:research:stored-1", "none")
+    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects a Hermes reasoning confirmation for a different effort", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "config.set") return { key: "reasoning", value: "low" }
+        return modelOptions(method)
+      },
+    })
+
+    await expect(
+      operations.selectEffort("research", "hermes:research:stored-1", "high")
     ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
   })
 

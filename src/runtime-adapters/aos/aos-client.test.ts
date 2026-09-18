@@ -324,6 +324,71 @@ describe("provider-neutral AOS browser client", () => {
     ).toHaveLength(0)
   })
 
+  it("selectEffort posts the effort to the Session workspace and returns the confirmed id", async () => {
+    const session = {
+      id: "opaque-session-effort",
+      agentId: "researcher",
+      title: "Effort test",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "waiting-for-input" as const,
+    }
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+          return Response.json({
+            sessions: [session],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          })
+        if (path.endsWith("/workspace/models/effort")) {
+          expect(init?.method).toBe("POST")
+          expect(JSON.parse(String(init?.body))).toEqual({ effortId: "high" })
+          return Response.json({ effortId: "high" })
+        }
+        throw new Error(`Unexpected normalized request: ${path}`)
+      }
+    )
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+
+    await expect(client.selectEffort(session.id, "high")).resolves.toEqual({
+      effortId: "high",
+    })
+  })
+
+  it("selectEffort rejects when the echoed effortId differs from the requested id", async () => {
+    const session = {
+      id: "opaque-session-effort-mismatch",
+      agentId: "researcher",
+      title: "Effort mismatch",
+      archived: false,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      status: "waiting-for-input" as const,
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/agents/researcher/sessions?limit=50&offset=0"))
+        return Response.json({
+          sessions: [session],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      if (path.endsWith("/workspace/models/effort"))
+        return Response.json({ effortId: "low" })
+      throw new Error(`Unexpected normalized request: ${path}`)
+    })
+    const client = new AosRemoteClient({ fetcher })
+    await client.listSessions("researcher")
+
+    await expect(
+      client.selectEffort(session.id, "high")
+    ).rejects.toBeInstanceOf(AosClientError)
+  })
+
   it("uses an Agent directly for draft voice without requiring Session ownership", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)

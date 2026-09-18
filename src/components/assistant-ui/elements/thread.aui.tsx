@@ -19,6 +19,7 @@ import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.a
 import { MessageToolExperience } from "@/components/assistant-ui/elements/message-tool-experience"
 import { isAosRichTool } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import { ModelEffortSelector } from "@/components/assistant-ui/elements/model-effort-selector"
 import {
   ModelSelectorContent,
   ModelSelectorRoot,
@@ -226,6 +227,13 @@ export type ThreadLabels = {
   next: string
   conversationHeading?: string | undefined
   modelSelector: string
+  modelSearch: string
+  modelSearchPlaceholder: string
+  modelEmpty: string
+  modelSwitching: string
+  modelRetry: string
+  effortSelector: string
+  effortLevels: Record<string, string>
   slashCommands?: string | undefined
   contextUsage: string
   contextTitle: string
@@ -237,6 +245,18 @@ export type ThreadLabels = {
   documentSource: string
   conversationSearch?: Partial<ConversationSearchLabels> | undefined
   attachments?: Partial<AttachmentLabels> | undefined
+}
+
+/** Effort ids are provider-reported; unknown ids fall back to the raw id. */
+const DEFAULT_EFFORT_LEVEL_LABELS: Record<string, string> = {
+  none: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra",
 }
 
 const DEFAULT_LABELS: ThreadLabels = {
@@ -277,6 +297,13 @@ const DEFAULT_LABELS: ThreadLabels = {
   next: "Next",
   conversationHeading: "Conversation",
   modelSelector: "Choose model",
+  modelSearch: "Search models",
+  modelSearchPlaceholder: "Search models…",
+  modelEmpty: "No models found.",
+  modelSwitching: "Switching model…",
+  modelRetry: "Retry model selection",
+  effortSelector: "Thinking",
+  effortLevels: DEFAULT_EFFORT_LEVEL_LABELS,
   slashCommands: "Slash commands",
   contextUsage: "Context usage",
   contextTitle: "Context",
@@ -1291,7 +1318,24 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
 }) => {
   const features = useContext(ThreadComposerFeaturesContext)
   const labels = useContext(ThreadLabelsContext)
+  const modelOptions = features.model?.options
+  const models = useMemo(
+    () =>
+      (modelOptions ?? []).map((option) => ({
+        id: option.id,
+        name: option.label,
+        description: option.description,
+        group: option.group,
+      })),
+    [modelOptions]
+  )
   if (!features.model && !features.context) return null
+
+  const selectedModel = modelOptions?.find(
+    (option) => option.id === features.model?.selectedId
+  )
+  const efforts = selectedModel?.efforts
+  const selectEffort = features.model?.selectEffort
 
   return (
     <div
@@ -1301,19 +1345,15 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
       {features.model ? (
         <ModelSelectorRoot
           direction={direction}
-          models={features.model.options.map((option) => ({
-            id: option.id,
-            name: option.label,
-            description: option.description,
-            group: option.group,
-            efforts:
-              option.efforts === true
-                ? true
-                : option.efforts?.map((effort) => ({
-                    id: effort.id,
-                    name: effort.label,
-                  })),
-          }))}
+          labels={{
+            placeholder: labels.modelSelector,
+            search: labels.modelSearch,
+            searchPlaceholder: labels.modelSearchPlaceholder,
+            empty: labels.modelEmpty,
+            switching: labels.modelSwitching,
+            retry: labels.modelRetry,
+          }}
+          models={models}
           value={features.model.selectedId}
           selection={
             features.model.selection?.status === "error"
@@ -1328,11 +1368,36 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             aria-label={labels.modelSelector}
             className="max-w-36 @min-[64rem]/workspace:max-w-56"
           />
-          <ModelSelectorContent searchable />
+          <ModelSelectorContent />
         </ModelSelectorRoot>
       ) : (
         <span />
       )}
+      {selectEffort && efforts?.length ? (
+        <ModelEffortSelector
+          className="max-w-36 @min-[64rem]/workspace:max-w-56"
+          direction={direction}
+          efforts={efforts}
+          labels={{
+            trigger: labels.effortSelector,
+            levels: labels.effortLevels,
+            switching: labels.modelSwitching,
+            retry: labels.modelRetry,
+          }}
+          onValueChange={(effortId) => {
+            void selectEffort(effortId)
+          }}
+          selection={
+            features.model?.effortSelection?.status === "error"
+              ? {
+                  ...features.model.effortSelection,
+                  retry: features.model.retryEffort,
+                }
+              : features.model?.effortSelection
+          }
+          value={features.model?.effortId}
+        />
+      ) : null}
       {features.context ? (
         <ComposerContext
           className="ms-auto"
