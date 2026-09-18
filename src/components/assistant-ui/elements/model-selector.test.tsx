@@ -19,7 +19,17 @@ const labels: ModelSelectorLabels = {
   empty: "No models found.",
   switching: "Switching model…",
   retry: "Retry model selection",
+  effort: "Thinking",
+  effortLevels: { none: "Off", low: "Low", medium: "Medium", high: "High" },
 }
+
+const EFFORTS = ["none", "low", "medium", "high"] as const
+
+/** Short enough that the popup offers no search box. */
+const SHORT_ROSTER: readonly ModelOption[] = [
+  { id: "balanced", name: "Balanced" },
+  { id: "fast", name: "Fast" },
+]
 
 const GROUPS = ["OpenAI", "Anthropic", "Local"] as const
 
@@ -49,20 +59,35 @@ function largeRoster(): readonly ModelOption[] {
 }
 
 function renderSelector({
+  direction,
+  efforts,
+  effortSelection,
+  effortValue,
   models,
+  onEffortChange,
   onValueChange = () => undefined,
   selection,
   value = "openai-0",
 }: {
+  direction?: Parameters<typeof ModelSelectorRoot>[0]["direction"]
+  efforts?: readonly string[]
+  effortSelection?: Parameters<typeof ModelSelectorRoot>[0]["effortSelection"]
+  effortValue?: string
   models: readonly ModelOption[]
+  onEffortChange?: (next: string) => void
   onValueChange?: (next: string) => void
   selection?: Parameters<typeof ModelSelectorRoot>[0]["selection"]
   value?: string
 }) {
   return render(
     <ModelSelectorRoot
+      direction={direction}
+      efforts={efforts}
+      effortSelection={effortSelection}
+      effortValue={effortValue}
       labels={labels}
       models={models}
+      onEffortChange={onEffortChange}
       onValueChange={onValueChange}
       selection={selection}
       value={value}
@@ -140,10 +165,7 @@ describe("ModelSelector", () => {
   it("keeps the authoritative selection while a switch is pending", async () => {
     const user = userEvent.setup()
     renderSelector({
-      models: [
-        { id: "balanced", name: "Balanced" },
-        { id: "fast", name: "Fast" },
-      ],
+      models: SHORT_ROSTER,
       selection: { status: "pending", targetId: "fast" },
       value: "balanced",
     })
@@ -154,12 +176,20 @@ describe("ModelSelector", () => {
     expect(await screen.findByText("Switching model…")).toBeVisible()
   })
 
+  it("commits the model a pointer clicks while the search box holds focus", async () => {
+    const user = userEvent.setup()
+    const onValueChange = vi.fn()
+    renderSelector({ models: largeRoster(), onValueChange })
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    await user.click(await screen.findByText("Anthropic Model 2"))
+
+    expect(onValueChange).toHaveBeenCalledWith("anthropic-2")
+  })
+
   it("names the control instead of reading as empty for an unoffered selection", async () => {
     renderSelector({
-      models: [
-        { id: "balanced", name: "Balanced" },
-        { id: "fast", name: "Fast" },
-      ],
+      models: SHORT_ROSTER,
       value: "retired-model",
     })
 
@@ -168,15 +198,72 @@ describe("ModelSelector", () => {
     ).toHaveTextContent("Choose model")
   })
 
+  it("changes reasoning effort from the model popup, which stays open", async () => {
+    const user = userEvent.setup()
+    const onEffortChange = vi.fn()
+    renderSelector({
+      efforts: EFFORTS,
+      effortValue: "medium",
+      models: SHORT_ROSTER,
+      onEffortChange,
+      value: "balanced",
+    })
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    const efforts = await screen.findByRole("group", { name: "Thinking" })
+
+    await user.click(screen.getByRole("button", { name: "High" }))
+    expect(onEffortChange).toHaveBeenCalledWith("high")
+    expect(efforts).toBeVisible()
+  })
+
+  it("offers no effort control for a model that reports no efforts", async () => {
+    const user = userEvent.setup()
+    renderSelector({
+      models: SHORT_ROSTER,
+      onEffortChange: () => undefined,
+      value: "balanced",
+    })
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    expect(await screen.findByRole("listbox")).toBeVisible()
+    expect(screen.queryByRole("group", { name: "Thinking" })).toBeNull()
+  })
+
+  it("retries a failed effort switch", async () => {
+    const user = userEvent.setup()
+    const retry = vi.fn()
+    renderSelector({
+      efforts: EFFORTS,
+      effortSelection: {
+        status: "error",
+        targetId: "high",
+        error: "Effort switch failed",
+        retry,
+      },
+      effortValue: "medium",
+      models: SHORT_ROSTER,
+      onEffortChange: () => undefined,
+      value: "balanced",
+    })
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Effort switch failed"
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Retry model selection" })
+    )
+    expect(retry).toHaveBeenCalledOnce()
+  })
+
   it("surfaces a failed switch with a retry that repeats only that request", async () => {
     const user = userEvent.setup()
     const onValueChange = vi.fn()
     const retry = vi.fn()
     renderSelector({
-      models: [
-        { id: "balanced", name: "Balanced" },
-        { id: "fast", name: "Fast" },
-      ],
+      models: SHORT_ROSTER,
       onValueChange,
       selection: {
         status: "error",

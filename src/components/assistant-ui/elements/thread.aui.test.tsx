@@ -1419,14 +1419,16 @@ describe("Thread accessibility", () => {
       />
     )
 
-    const effort = screen.getByRole("combobox", { name: "Thinking" })
-    expect(effort).toHaveTextContent("Low")
-    await user.click(effort)
-    await user.click(screen.getByRole("option", { name: "High" }))
+    // One control owns both halves of a model choice.
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    await screen.findByRole("group", { name: "Thinking" })
+    await user.click(screen.getByRole("button", { name: "High" }))
+
     expect(selectEffort).toHaveBeenCalledWith("high")
   })
 
-  it("hides reasoning effort when the provider reports none", () => {
+  it("hides reasoning effort when the provider reports none", async () => {
+    const user = userEvent.setup()
     render(
       <LocalThread
         initialMessages={[]}
@@ -1441,7 +1443,9 @@ describe("Thread accessibility", () => {
       />
     )
 
-    expect(screen.queryByRole("combobox", { name: "Thinking" })).toBeNull()
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    expect(await screen.findByRole("listbox")).toBeVisible()
+    expect(screen.queryByRole("group", { name: "Thinking" })).toBeNull()
   })
 
   it("omits categories the runtime did not provide", () => {

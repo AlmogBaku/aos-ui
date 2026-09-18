@@ -19,7 +19,6 @@ import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.a
 import { MessageToolExperience } from "@/components/assistant-ui/elements/message-tool-experience"
 import { isAosRichTool } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
-import { ModelEffortSelector } from "@/components/assistant-ui/elements/model-effort-selector"
 import {
   ModelSelectorContent,
   ModelSelectorRoot,
@@ -1352,6 +1351,8 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             empty: labels.modelEmpty,
             switching: labels.modelSwitching,
             retry: labels.modelRetry,
+            effort: labels.effortSelector,
+            effortLevels: labels.effortLevels,
           }}
           models={models}
           value={features.model.selectedId}
@@ -1363,44 +1364,32 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           onValueChange={(value) => {
             void features.model?.select(value)
           }}
+          {...(selectEffort && efforts?.length
+            ? {
+                efforts,
+                effortValue: features.model.effortId,
+                onEffortChange: (effortId: string) => {
+                  void selectEffort(effortId)
+                },
+                effortSelection:
+                  features.model.effortSelection?.status === "error"
+                    ? {
+                        ...features.model.effortSelection,
+                        retry: features.model.retryEffort,
+                      }
+                    : features.model.effortSelection,
+              }
+            : {})}
         >
-          <ModelSelectorTrigger
-            aria-label={labels.modelSelector}
-            className="max-w-36 @min-[64rem]/workspace:max-w-56"
-          />
+          <ModelSelectorTrigger aria-label={labels.modelSelector} />
           <ModelSelectorContent />
         </ModelSelectorRoot>
       ) : (
         <span />
       )}
-      {selectEffort && efforts?.length ? (
-        <ModelEffortSelector
-          className="max-w-36 @min-[64rem]/workspace:max-w-56"
-          direction={direction}
-          efforts={efforts}
-          labels={{
-            trigger: labels.effortSelector,
-            levels: labels.effortLevels,
-            switching: labels.modelSwitching,
-            retry: labels.modelRetry,
-          }}
-          onValueChange={(effortId) => {
-            void selectEffort(effortId)
-          }}
-          selection={
-            features.model?.effortSelection?.status === "error"
-              ? {
-                  ...features.model.effortSelection,
-                  retry: features.model.retryEffort,
-                }
-              : features.model?.effortSelection
-          }
-          value={features.model?.effortId}
-        />
-      ) : null}
       {features.context ? (
         <ComposerContext
-          className="ms-auto"
+          className="ms-auto shrink-0"
           usage={features.context.usage}
           visibleSegments={features.context.segments}
           labels={{

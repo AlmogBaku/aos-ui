@@ -29,6 +29,7 @@ import {
   ComboboxTrigger,
   ComboboxValue,
 } from "@/components/ui/combobox"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 
 /**
@@ -60,6 +61,10 @@ export type ModelSelectorLabels = {
   readonly empty: string
   readonly switching: string
   readonly retry: string
+  /** Names the reasoning-effort group the popup carries under the roster. */
+  readonly effort: string
+  /** Provider-reported effort ids mapped to localized names. */
+  readonly effortLevels: Record<string, string>
 }
 
 /** Base UI reads `items` from group objects; the label lives on `value`. */
@@ -101,6 +106,11 @@ type ModelSelectorContextValue = {
   readonly models: readonly ModelOption[]
   readonly selection: ModelSelectorSelectionState
   readonly labels: ModelSelectorLabels
+  /** Reasoning efforts of the selected model; absent when it reports none. */
+  readonly efforts?: readonly string[] | undefined
+  readonly effortValue?: string | undefined
+  readonly onEffortChange?: ((effortId: string) => void) | undefined
+  readonly effortSelection: ModelSelectorSelectionState
 }
 
 const ModelSelectorContext = createContext<ModelSelectorContextValue | null>(
@@ -122,6 +132,10 @@ export function ModelSelectorRoot({
   value,
   onValueChange,
   selection = { status: "idle" },
+  efforts,
+  effortValue,
+  onEffortChange,
+  effortSelection = { status: "idle" },
   direction = "ltr",
   labels,
   children,
@@ -130,6 +144,11 @@ export function ModelSelectorRoot({
   value: string
   onValueChange: (value: string) => void
   selection?: ModelSelectorSelectionState | undefined
+  /** Efforts of the selected model; the popup omits the group without them. */
+  efforts?: readonly string[] | undefined
+  effortValue?: string | undefined
+  onEffortChange?: ((effortId: string) => void) | undefined
+  effortSelection?: ModelSelectorSelectionState | undefined
   direction?: TextDirection | undefined
   labels: ModelSelectorLabels
   children: ReactNode
@@ -148,8 +167,24 @@ export function ModelSelectorRoot({
     [filter]
   )
   const context = useMemo(
-    () => ({ models, selection, labels }),
-    [models, selection, labels]
+    () => ({
+      models,
+      selection,
+      labels,
+      efforts,
+      effortValue,
+      onEffortChange,
+      effortSelection,
+    }),
+    [
+      models,
+      selection,
+      labels,
+      efforts,
+      effortValue,
+      onEffortChange,
+      effortSelection,
+    ]
   )
 
   return (
@@ -190,7 +225,9 @@ export function ModelSelectorTrigger({
     <ComboboxTrigger
       data-slot="model-selector-trigger"
       className={cn(
-        "flex h-11 max-w-56 min-w-0 items-center justify-between gap-1.5 rounded-md px-1.5 text-xs font-medium text-foreground transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none @min-[64rem]/workspace:h-7",
+        // Model names carry provider-qualified prefixes, so the trigger keeps
+        // its full width and truncates only when the rail actually runs out.
+        "flex h-11 min-w-0 items-center justify-between gap-1.5 rounded-md px-1.5 text-xs font-medium text-foreground transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none @min-[64rem]/workspace:h-7",
         // The wrapper supplies the chevron; keep the design-lock icon weight.
         "[&>svg]:size-3.5 [&>svg]:text-current [&>svg]:opacity-60",
         className
@@ -303,6 +340,48 @@ export function ModelSelectorContent({
         </ComboboxCollection>
         <ComboboxEmpty>{labels.empty}</ComboboxEmpty>
       </ComboboxList>
+      <ModelSelectorEfforts />
     </ComboboxContent>
+  )
+}
+
+/**
+ * Reasoning effort of the selected model, inside the model popup: one control
+ * owns both halves of a model choice. Toggle buttons keep the group free of a
+ * nested popup and outside the roster's listbox.
+ */
+function ModelSelectorEfforts() {
+  const { effortSelection, efforts, effortValue, labels, onEffortChange } =
+    useModelSelectorContext()
+  if (!onEffortChange || !efforts?.length) return null
+
+  // A pending level shows as pressed so the group reflects the operator's pick
+  // while the provider settles it.
+  const pressed =
+    effortSelection.status === "pending" ? effortSelection.targetId : effortValue
+  return (
+    <div
+      className="border-t border-border/60 p-1.5"
+      data-slot="model-selector-efforts"
+    >
+      <p className="px-1 pb-1 text-xs text-muted-foreground">{labels.effort}</p>
+      <ModelSelectorStatus labels={labels} selection={effortSelection} />
+      <ToggleGroup
+        aria-label={labels.effort}
+        className="flex-wrap"
+        onValueChange={(next) => {
+          const [level] = next
+          if (level && level !== effortValue) onEffortChange(level)
+        }}
+        size="sm"
+        value={pressed ? [pressed] : []}
+      >
+        {efforts.map((effortId) => (
+          <ToggleGroupItem className="text-xs" key={effortId} value={effortId}>
+            {labels.effortLevels[effortId] ?? effortId}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   )
 }
