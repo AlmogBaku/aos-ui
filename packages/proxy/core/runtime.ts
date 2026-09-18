@@ -222,6 +222,10 @@ export interface ServerRuntime {
     publicSessionId: string
   ): Promise<unknown>
   models(agentId: string, publicSessionId: string): Promise<unknown>
+  /**
+   * A provider may resolve the request to a different model, so the response
+   * carries the selection it actually settled on.
+   */
   selectModel(
     agentId: string,
     publicSessionId: string,

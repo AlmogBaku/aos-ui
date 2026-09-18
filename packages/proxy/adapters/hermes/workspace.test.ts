@@ -226,7 +226,68 @@ describe("Hermes workspace operations", () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
-  it("rejects a Hermes model confirmation for a different model", async () => {
+  it("reports the model Hermes resolved a pick to over the requested one", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+        // Hermes answers with its own canonical name for the chosen model.
+        if (method === "config.set")
+          return { key: "model", scope: "session", value: "large-2026-09" }
+      },
+    })
+
+    await expect(
+      operations.selectModel(
+        "research",
+        "hermes:research:stored-1",
+        '["native","large"]'
+      )
+    ).resolves.toEqual({ selectedId: '["native","large-2026-09"]' })
+  })
+
+  it("answers a guarded model pick rather than reporting a failed switch", async () => {
+    const { operations, request } = harness({
+      request(method, params) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [{ slug: "native", models: ["small", "large"] }],
+          }
+        if (method !== "config.set") return undefined
+        // Hermes guards some picks and switches nothing until one is answered.
+        if (params.confirm_expensive_model !== true)
+          return {
+            key: "model",
+            value: "large",
+            confirm_required: true,
+            confirm_message: "This model is billed per token. Continue?",
+          }
+        return { key: "model", scope: "session", value: "large" }
+      },
+    })
+
+    await expect(
+      operations.selectModel(
+        "research",
+        "hermes:research:stored-1",
+        '["native","large"]'
+      )
+    ).resolves.toEqual({ selectedId: '["native","large"]' })
+    expect(request).toHaveBeenLastCalledWith("config.set", {
+      session_id: "live-private-1",
+      key: "model",
+      value: "large --provider native --session",
+      confirm_expensive_model: true,
+    })
+  })
+
+  it("does not report a switch Hermes withholds after it is confirmed", async () => {
     const { operations } = harness({
       request(method) {
         if (method === "model.options")
@@ -236,7 +297,7 @@ describe("Hermes workspace operations", () => {
             providers: [{ slug: "native", models: ["small", "large"] }],
           }
         if (method === "config.set")
-          return { key: "model", scope: "session", value: "small" }
+          return { key: "model", value: "large", confirm_required: true }
       },
     })
 

@@ -212,6 +212,62 @@ describe("AOS composer features", () => {
     expect(context).toHaveBeenCalledWith("session-1")
   })
 
+  it("follows the model a provider resolved a switch to, with its own efforts", async () => {
+    let switched = false
+    const models = vi.fn(async () =>
+      switched
+        ? {
+            selectedId: "small-2026-09",
+            effortId: "medium",
+            options: [
+              {
+                id: "small-2026-09",
+                label: "Small (2026-09)",
+                group: "Native",
+                efforts: ["low", "medium", "high"],
+              },
+            ],
+          }
+        : {
+            selectedId: "small",
+            options: [
+              { id: "small", label: "Small", group: "Native" },
+              { id: "large", label: "Large", group: "Native" },
+            ],
+          }
+    )
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      selectModel: vi.fn(async () => {
+        switched = true
+        return { selectedId: "small-2026-09" }
+      }),
+      selectEffort: vi.fn(),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
+    await result.current.model?.select("large")
+
+    expect(client.selectModel).toHaveBeenCalledWith("session-1", "large")
+    await waitFor(() =>
+      expect(result.current.model?.selectedId).toBe("small-2026-09")
+    )
+    await waitFor(() => expect(result.current.model?.selectEffort).toBeDefined())
+    expect(result.current.model?.selection?.status).toBe("idle")
+  })
+
   it("projects effortId and selectEffort when selected option has efforts", async () => {
     const models = vi.fn(async () => ({
       selectedId: "a",

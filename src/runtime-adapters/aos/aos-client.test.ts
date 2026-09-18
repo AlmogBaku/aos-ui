@@ -212,7 +212,8 @@ describe("provider-neutral AOS browser client", () => {
           expect(init?.body).toBe(
             JSON.stringify({ selectedId: "native/small" })
           )
-          return Response.json({ selectedId: "native/small" })
+          // A provider may settle on a model it resolved the request to.
+          return Response.json({ selectedId: "native/small-2026-09" })
         }
         if (path.endsWith("/workspace/context"))
           return Response.json({
@@ -284,7 +285,7 @@ describe("provider-neutral AOS browser client", () => {
     })
     await expect(
       client.selectModel(session.id, "native/small")
-    ).resolves.toEqual({ selectedId: "native/small" })
+    ).resolves.toEqual({ selectedId: "native/small-2026-09" })
     await expect(client.context(session.id)).resolves.toMatchObject({
       usedTokens: 1200,
     })

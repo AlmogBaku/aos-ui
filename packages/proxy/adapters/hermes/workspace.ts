@@ -525,22 +525,33 @@ export function createHermesWorkspaceOperations(input: {
         (option) => option.id === selectedId
       )
       if (!selected) throw new HermesWorkspaceUnavailableError()
-      const confirmation = await request("config.set", {
-        session_id: session.liveSessionId,
-        key: "model",
-        value: `${selected.model} --provider ${selected.provider} --session`,
-      })
+      const apply = (confirmed: boolean) =>
+        request("config.set", {
+          session_id: session.liveSessionId,
+          key: "model",
+          value: `${selected.model} --provider ${selected.provider} --session`,
+          ...(confirmed ? { confirm_expensive_model: true } : {}),
+        })
+      let applied = await apply(false)
+      // Hermes guards some picks — priced models, data-training tiers, leaving a
+      // large cached context — with a confirm round-trip written for its own
+      // interactive surfaces, and switches nothing until it is answered.
+      // Choosing the model from the offered catalog is that answer here, so the
+      // request repeats as confirmed instead of reporting a failed switch.
+      if (isRecord(applied) && applied.confirm_required === true)
+        applied = await apply(true)
       if (
-        !isRecord(confirmation) ||
-        confirmation.key !== "model" ||
-        confirmation.scope !== "session" ||
-        confirmation.value !== selected.model ||
-        confirmation.confirm_required === true
+        !isRecord(applied) ||
+        applied.key !== "model" ||
+        applied.scope !== "session" ||
+        applied.confirm_required === true
       )
         throw new HermesWorkspaceUnavailableError()
-      return {
-        selectedId: JSON.stringify([selected.provider, confirmation.value]),
-      }
+      // Hermes resolves a pick to its own canonical model name, which need not
+      // be the catalog label that was chosen; its answer is authoritative.
+      const value = stringValue(applied.value, 256)
+      if (!value) throw new HermesWorkspaceUnavailableError()
+      return { selectedId: JSON.stringify([selected.provider, value]) }
     },
     async selectEffort(agentId, sessionId, effortId) {
       const session = await requireScope(agentId, sessionId)

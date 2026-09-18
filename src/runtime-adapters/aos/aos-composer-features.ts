@@ -193,12 +193,22 @@ export function useAosComposerFeatures(
           setSelection({ status: "pending", targetId: selectedId })
           try {
             const result = await client.selectModel(threadId, selectedId)
-            if (currentThreadId.current === threadId)
+            if (currentThreadId.current === threadId) {
               setModels((previous) =>
                 previous
                   ? { ...previous, selectedId: result.selectedId }
                   : previous
               )
+              // The provider may settle on a model it resolved the request to,
+              // carrying its own efforts and catalog entry, so the whole
+              // projection is re-read rather than patching the id alone.
+              void client.models(threadId).then(
+                (next) => {
+                  if (currentThreadId.current === threadId) setModels(next)
+                },
+                () => undefined
+              )
+            }
             setSelection({ status: "idle" })
           } catch (reason) {
             const error =

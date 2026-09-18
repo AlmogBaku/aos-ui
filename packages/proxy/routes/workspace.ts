@@ -2,8 +2,10 @@ import {
   RuntimeInfoSchema,
   SessionContextResponseSchema,
   SessionModelEffortSelectRequestSchema,
+  SessionModelEffortSelectResponseSchema,
   SessionModelsResponseSchema,
   SessionModelSelectRequestSchema,
+  SessionModelSelectResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "../../protocol"
@@ -90,7 +92,7 @@ export function registerWorkspaceRoutes(
       context.req.param("sessionId")
     )
     return context.json(
-      SessionModelSelectRequestSchema.parse(
+      SessionModelSelectResponseSchema.parse(
         await runtime.selectModel(
           context.req.param("agentId"),
           context.req.param("sessionId"),
@@ -114,7 +116,7 @@ export function registerWorkspaceRoutes(
       context.req.param("sessionId")
     )
     return context.json(
-      SessionModelEffortSelectRequestSchema.parse(
+      SessionModelEffortSelectResponseSchema.parse(
         await runtime.selectEffort(
           context.req.param("agentId"),
           context.req.param("sessionId"),

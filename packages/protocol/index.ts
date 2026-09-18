@@ -569,7 +569,19 @@ export const SessionModelSelectRequestSchema = z.strictObject({
   selectedId: IdentifierSchema,
 })
 
+/**
+ * The selection the provider settled on, which may be a model it resolved the
+ * request to rather than the requested id.
+ */
+export const SessionModelSelectResponseSchema = z.strictObject({
+  selectedId: IdentifierSchema,
+})
+
 export const SessionModelEffortSelectRequestSchema = z.strictObject({
+  effortId: IdentifierSchema,
+})
+
+export const SessionModelEffortSelectResponseSchema = z.strictObject({
   effortId: IdentifierSchema,
 })
 

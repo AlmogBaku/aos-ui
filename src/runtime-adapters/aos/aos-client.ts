@@ -34,7 +34,7 @@ import {
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
   SessionModelEffortSelectRequestSchema,
-  SessionModelSelectRequestSchema,
+  SessionModelSelectResponseSchema,
   SessionModelsResponseSchema,
   SessionSchema,
   SessionSpeechRequestSchema,
@@ -1141,20 +1141,21 @@ export class AosRemoteClient implements WorkspaceAdapter {
     )
   }
 
+  /**
+   * The response is authoritative: a provider may settle on a model it resolved
+   * the request to rather than the requested id.
+   */
   async selectModel(threadId: string, selectedId: string) {
-    const result = await this.#sessionRead(
+    return this.#sessionRead(
       threadId,
       "/workspace/models/select",
-      SessionModelSelectRequestSchema,
+      SessionModelSelectResponseSchema,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ selectedId }),
       }
     )
-    if (result.selectedId !== selectedId)
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
-    return result
   }
 
   async selectEffort(threadId: string, effortId: string) {
