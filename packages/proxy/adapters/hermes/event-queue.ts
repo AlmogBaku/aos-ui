@@ -9,7 +9,7 @@
 import { EventType, type AGUIEvent } from "@ag-ui/core"
 
 import type { SessionScope } from "../../core/runtime"
-import { boundedGraphBytes } from "./native"
+import { boundedNativeBytes } from "./native"
 
 const MAX_QUEUED_EVENTS = 4_096
 const MAX_QUEUED_BYTES = 4_194_304
@@ -30,7 +30,7 @@ export class EventQueue implements AsyncIterable<AGUIEvent> {
     if (waiter) waiter.resolve({ done: false, value })
     else {
       if (this.#values.length >= MAX_QUEUED_EVENTS) return false
-      const bytes = boundedGraphBytes(value, MAX_QUEUED_BYTES - this.#bytes)
+      const bytes = boundedNativeBytes(value, MAX_QUEUED_BYTES - this.#bytes)
       if (bytes === undefined) return false
       this.#values.push({ event: value, bytes })
       this.#bytes += bytes
@@ -46,15 +46,25 @@ export class EventQueue implements AsyncIterable<AGUIEvent> {
         : undefined
     this.#values.splice(0, this.#values.length)
     this.#bytes = 0
-    if (started) this.#values.push(started)
-    if (started) this.#bytes += started.bytes
-    const terminalBytes = boundedGraphBytes(
+    if (started) {
+      this.#values.push(started)
+      this.#bytes += started.bytes
+    }
+    const terminalBytes = boundedNativeBytes(
       value,
       MAX_QUEUED_BYTES - this.#bytes
     )
     if (terminalBytes !== undefined) {
       this.#values.push({ event: value, bytes: terminalBytes })
       this.#bytes += terminalBytes
+    }
+    // A reader parked in its own `next()` is served before the queue reports
+    // done: closing first would end the stream with no terminal event at all.
+    while (this.#waiters.length > 0 && this.#values.length > 0) {
+      const waiter = this.#waiters.shift()!
+      const entry = this.#values.shift()!
+      this.#bytes -= entry.bytes
+      waiter.resolve({ done: false, value: entry.event })
     }
     this.close()
   }

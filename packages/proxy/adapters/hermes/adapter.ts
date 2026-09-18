@@ -308,8 +308,15 @@ export class HermesServerAdapter implements ServerRuntime {
       },
       { idleMs: options.sessionIdleMs, log: options.log }
     )
-    const ensureAttached = async (scope: HermesRunScope) => ({
-      liveSessionId: (await this.#attachments.ensure(scope)).liveSessionId,
+    // `refresh` must reach the registry: a caller reconciling a Session (an
+    // interactions `resume`) needs Hermes' own answer, whose `open_requests`
+    // re-deliver whatever is still waiting on it.
+    const ensureAttached = async (
+      scope: HermesRunScope,
+      attach: { refresh?: boolean } = {}
+    ) => ({
+      liveSessionId: (await this.#attachments.ensure(scope, attach))
+        .liveSessionId,
       running: this.#attachedRunning(scope.agentId, scope.sessionId),
     })
     this.interactions = new HermesInteractions(

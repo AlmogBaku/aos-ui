@@ -81,6 +81,7 @@ const publicErrorCodes = [
   "AOS_CONNECTION_INTERRUPTED",
   "AOS_INTERACTION_UNCERTAIN",
   "AOS_SEND_UNCERTAIN",
+  "AOS_STOP_UNCERTAIN",
   "forbidden",
   "not_found",
   "rate_limited",
@@ -97,6 +98,7 @@ const publicErrorDescriptions: Record<GuestPublicErrorCode, string> = {
     "The response may have been accepted. Reconnect to confirm.",
   AOS_SEND_UNCERTAIN:
     "The message may have been accepted. Reconnect to confirm.",
+  AOS_STOP_UNCERTAIN: "Stop may have been accepted. Reconnect to confirm.",
   forbidden: "You do not have permission to do that.",
   not_found: "The requested item was not found.",
   rate_limited: "Too many requests. Please try again shortly.",

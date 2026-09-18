@@ -373,7 +373,7 @@ describe("HermesInteractions server requests", () => {
     expect(requests.answer(id)).toEqual({ choice: "deny" })
   })
 
-  it("declines a server request AOS cannot answer so Hermes stops waiting", () => {
+  it("holds a server request AOS cannot answer instead of cancelling it", () => {
     const { requests, interactions, bind } = harness()
     bind()
 
@@ -382,8 +382,36 @@ describe("HermesInteractions server requests", () => {
       command: "sudo apt install",
     })
 
-    expect(requests.refusal(id)).toMatchObject({ code: -32601 })
+    // Hermes raised this prompt on a Session AOS may share with its own
+    // renderer, and `-32601` would cancel it there: AOS claims the request,
+    // answers nothing, and presents nothing.
+    expect(requests.refusal(id)).toBeUndefined()
+    expect(requests.frames()).toEqual([])
     expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("writes nothing when a resume re-delivers an unsupported open request", () => {
+    const { requests, interactions, bind } = harness({
+      resumeResult: {
+        open_requests: [
+          {
+            id: "srq-00000000000f",
+            method: "vault.code",
+            params: { session_id: LIVE },
+          },
+        ],
+      },
+    })
+    bind()
+
+    // Every reconnect re-delivers what is still open, so answering once would
+    // cancel the same prompt on every heal or reload.
+    return expect(interactions.resume(scope))
+      .resolves.toMatchObject({ status: "idle" })
+      .then(() => {
+        expect(requests.frames()).toEqual([])
+        expect(interactions.pending(scope)).toEqual([])
+      })
   })
 
   it("declines a request addressed to a live Session AOS has not bound", () => {
@@ -396,6 +424,49 @@ describe("HermesInteractions server requests", () => {
 
     expect(requests.refusal(id)).toMatchObject({ code: -32601 })
     expect(interactions.pending(scope)).toEqual([])
+  })
+
+  it("claims a recognized request AOS has no room for", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    for (let index = 0; index < 64; index += 1)
+      requests.deliver("clarify", {
+        session_id: LIVE,
+        question: `Which region ${index}?`,
+      })
+    expect(interactions.pending(scope)).toHaveLength(64)
+
+    const overflowing = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region now?",
+    })
+
+    // A full AOS may not answer for the user: `-32601` would cancel this prompt
+    // for every renderer of a shared Session.
+    expect(requests.refusal(overflowing)).toBeUndefined()
+    expect(requests.frames()).toEqual([])
+    expect(interactions.pending(scope)).toHaveLength(64)
+  })
+
+  it("logs a declined and a claimed request of the same method apart", () => {
+    const warn = vi.fn()
+    const { requests, bind } = harness({ log: { warn } })
+
+    requests.deliver("clarify", {
+      session_id: "live-unknown",
+      question: "Which region?",
+    })
+    bind()
+    for (let index = 0; index < 65; index += 1)
+      requests.deliver("clarify", {
+        session_id: LIVE,
+        question: `Which region ${index}?`,
+      })
+
+    expect(warn.mock.calls).toEqual([
+      ["hermes.interactions.request_declined", { method: "clarify" }],
+      ["hermes.interactions.request_unanswered", { method: "clarify" }],
+    ])
   })
 
   it("declines a malformed or oversized recognized request payload", () => {
@@ -677,10 +748,11 @@ describe("HermesInteractions server requests", () => {
       command: "deploy",
     })
 
+    // A Hermes Session carries exactly one thread, so Agent and Session are the
+    // two dimensions an answer may not cross.
     for (const foreign of [
       { ...scope, agentId: "other" },
       { ...scope, sessionId: "session-2" },
-      { ...scope, threadId: "thread-2" },
     ])
       await expect(
         interactions.respond(foreign, {
@@ -876,16 +948,17 @@ describe("HermesInteractions server requests", () => {
     expect(ensure).toHaveBeenLastCalledWith(scope, { refresh: true })
   })
 
-  it("logs a bounded, truncated set of declined server-request methods", () => {
+  it("logs a bounded, truncated set of unanswerable server-request methods", () => {
     const warn = vi.fn()
     const { requests, bind } = harness({ log: { warn } })
     bind()
 
     const long = `sudo.${"x".repeat(200)}`
     requests.deliver(long, { session_id: LIVE })
-    expect(warn).toHaveBeenCalledWith("hermes.interactions.request_declined", {
-      method: long.slice(0, 64),
-    })
+    expect(warn).toHaveBeenCalledWith(
+      "hermes.interactions.request_unanswered",
+      { method: long.slice(0, 64) }
+    )
     // Hermes owns the method text and the volume: one line per distinct method,
     // truncated, and the remembered set is capped.
     requests.deliver(long, { session_id: LIVE })

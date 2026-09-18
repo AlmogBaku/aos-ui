@@ -1,4 +1,9 @@
-import { EventType, type AGUIEvent, type Interrupt } from "@ag-ui/core"
+import {
+  EventType,
+  type AGUIEvent,
+  type AGUIEventByType,
+  type Interrupt,
+} from "@ag-ui/core"
 
 import {
   ServerRunConflictError,
@@ -219,6 +224,26 @@ function safeEventBytes(event: AGUIEvent) {
   }
 }
 
+/** The only events a journal merges; everything else replays as it arrived. */
+const MERGED_DELTA_TYPES = [
+  EventType.TEXT_MESSAGE_CONTENT,
+  EventType.REASONING_MESSAGE_CONTENT,
+  EventType.TOOL_CALL_ARGS,
+] as const
+
+type DeltaEvent = AGUIEventByType[(typeof MERGED_DELTA_TYPES)[number]]
+
+function isDeltaEvent(event: AGUIEvent): event is DeltaEvent {
+  return (MERGED_DELTA_TYPES as readonly EventType[]).includes(event.type)
+}
+
+/** What two adjacent deltas must share to be one stream of the same text. */
+function deltaStream(event: DeltaEvent) {
+  return event.type === EventType.TOOL_CALL_ARGS
+    ? event.toolCallId
+    : event.messageId
+}
+
 function compactedEvent(
   previous: AGUIEvent,
   next: AGUIEvent
@@ -232,28 +257,13 @@ function compactedEvent(
     next.metadata !== undefined
   )
     return undefined
-  if (
-    previous.type === EventType.TEXT_MESSAGE_CONTENT &&
-    next.type === EventType.TEXT_MESSAGE_CONTENT &&
-    previous.messageId === next.messageId &&
+  return isDeltaEvent(previous) &&
+    isDeltaEvent(next) &&
+    previous.type === next.type &&
+    deltaStream(previous) === deltaStream(next) &&
     previous.subagentRunId === next.subagentRunId
-  )
-    return { ...previous, delta: previous.delta + next.delta }
-  if (
-    previous.type === EventType.REASONING_MESSAGE_CONTENT &&
-    next.type === EventType.REASONING_MESSAGE_CONTENT &&
-    previous.messageId === next.messageId &&
-    previous.subagentRunId === next.subagentRunId
-  )
-    return { ...previous, delta: previous.delta + next.delta }
-  if (
-    previous.type === EventType.TOOL_CALL_ARGS &&
-    next.type === EventType.TOOL_CALL_ARGS &&
-    previous.toolCallId === next.toolCallId &&
-    previous.subagentRunId === next.subagentRunId
-  )
-    return { ...previous, delta: previous.delta + next.delta }
-  return undefined
+    ? { ...previous, delta: previous.delta + next.delta }
+    : undefined
 }
 
 /**
@@ -377,12 +387,23 @@ function settledNow(settled: Promise<void>) {
   ])
 }
 
+/**
+ * The codes an adapter publishes when it stopped consuming a run that may still
+ * be alive in the provider. The turn is not over, so the journal outlives the
+ * error and the browser reconciles by redialing with the same run id.
+ */
+const UNCERTAIN_RUN_ERROR_CODES = new Set([
+  "AOS_SEND_UNCERTAIN",
+  "AOS_INTERACTION_UNCERTAIN",
+  "AOS_STOP_UNCERTAIN",
+  "AOS_CONNECTION_INTERRUPTED",
+])
+
 function uncertainError(event: AGUIEvent) {
   return (
     event.type === EventType.RUN_ERROR &&
-    (event.code === "AOS_SEND_UNCERTAIN" ||
-      event.code === "AOS_INTERACTION_UNCERTAIN" ||
-      event.code === "AOS_CONNECTION_INTERRUPTED")
+    typeof event.code === "string" &&
+    UNCERTAIN_RUN_ERROR_CODES.has(event.code)
   )
 }
 

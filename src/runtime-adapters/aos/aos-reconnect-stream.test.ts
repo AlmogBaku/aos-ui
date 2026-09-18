@@ -373,7 +373,11 @@ describe("AOS run stream reconnect policy", () => {
     ])
   })
 
-  it.each(["AOS_SEND_UNCERTAIN", "AOS_INTERACTION_UNCERTAIN"])(
+  it.each([
+    "AOS_SEND_UNCERTAIN",
+    "AOS_INTERACTION_UNCERTAIN",
+    "AOS_STOP_UNCERTAIN",
+  ])(
     "redials an uncertain run (%s) instead of failing the message",
     async (code) => {
       vi.useFakeTimers()

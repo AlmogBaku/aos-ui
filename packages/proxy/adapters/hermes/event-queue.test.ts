@@ -85,6 +85,34 @@ describe("the bounded run event queue", () => {
     expect(await drain(queue)).toEqual([])
   })
 
+  it("hands a parked reader the terminal event before it reports done", async () => {
+    const queue = startedQueue(scope, "run-1")
+    const iterator = queue[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: EventType.RUN_STARTED },
+    })
+    const parked = iterator.next()
+
+    queue.terminal({
+      type: EventType.RUN_ERROR,
+      message: "Hermes produced more events than AOS can safely buffer.",
+      code: "AOS_STREAM_OVERFLOW",
+    })
+
+    await expect(parked).resolves.toEqual({
+      done: false,
+      value: {
+        type: EventType.RUN_ERROR,
+        message: "Hermes produced more events than AOS can safely buffer.",
+        code: "AOS_STREAM_OVERFLOW",
+      },
+    })
+    await expect(iterator.next()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    })
+  })
+
   it("hands a pending reader the next event without queueing it", async () => {
     const queue = new EventQueue()
     const iterator = queue[Symbol.asyncIterator]()

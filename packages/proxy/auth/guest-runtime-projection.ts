@@ -248,6 +248,7 @@ const guestRunErrors: Readonly<
     code: "AOS_INTERACTION_UNCERTAIN",
     retryable: true,
   },
+  AOS_STOP_UNCERTAIN: { code: "AOS_STOP_UNCERTAIN", retryable: true },
   AOS_RESET_REQUIRED: { code: "temporarily_unavailable", retryable: true },
   AOS_STREAM_OVERFLOW: { code: "temporarily_unavailable", retryable: true },
   AOS_PROVIDER_RETRYABLE_FAILURE: {

@@ -28,11 +28,9 @@ import {
   nativeSlashInvocation,
   type HermesSlashExecution,
 } from "./slash-commands"
-import {
-  HermesRunRewindConflictError,
-  type HermesRecovery,
-  type HermesRunScope,
-} from "./run"
+import { HermesRunRewindConflictError } from "./run-failures"
+import type { HermesRecovery } from "./run-frames"
+import type { HermesRunScope } from "./run-state"
 import { ServerRunSteerUncertainError } from "../../core/runtime"
 
 /** Hermes' own five native turn states; `absent` means Hermes does not list it. */
@@ -44,6 +42,21 @@ export type HermesSubmitPrompt = {
   text: string
   runId: string
   rewindSourceId?: string
+  /**
+   * Re-send exactly the write Hermes refused, as that refusal reported it. Only
+   * the single "that live Session is gone" retry sets it, and it repeats the
+   * `prompt.submit` alone: a native command is never executed twice.
+   */
+  refused?: HermesRefusedPrompt
+}
+
+/**
+ * The `prompt.submit` params Hermes refused. The run keeps it opaque: it
+ * carries the already expanded prompt text, which is the only part of a
+ * rejected write that may be repeated.
+ */
+export type HermesRefusedPrompt = {
+  readonly params: Readonly<Record<string, unknown>>
 }
 
 export type HermesSubmitCompletion = {
@@ -76,7 +89,12 @@ export type HermesSubmitOutcome =
       status: HermesSubmitStatus
       completion?: HermesSubmitCompletion
     }
-  | { acknowledgement: "rejected"; reason: HermesSubmitRejection }
+  | {
+      acknowledgement: "rejected"
+      reason: HermesSubmitRejection
+      /** Set when a `prompt.submit` was refused, so nothing it carried ran. */
+      refused?: HermesRefusedPrompt
+    }
   | { acknowledgement: "uncertain" }
 
 export type HermesInteractionSnapshot = {
@@ -294,6 +312,12 @@ export class HermesNativeRuntime implements HermesRunNative {
     liveSessionId: string,
     prompt: HermesSubmitPrompt
   ): Promise<HermesSubmitOutcome> {
+    // A re-send repeats the refused write and nothing else: the command that
+    // produced this text, if any, already ran, and its params — including a
+    // rewind the history read validated moments earlier — are re-sent unchanged
+    // rather than derived again against the rebound Session.
+    if (prompt.refused)
+      return this.#submitPrompt(liveSessionId, prompt.refused.params)
     let invocation: Awaited<ReturnType<typeof nativeSlashInvocation>>
     if (prompt.text.startsWith("/")) {
       try {
@@ -335,24 +359,38 @@ export class HermesNativeRuntime implements HermesRunNative {
           invocation.args
         )
       } catch (error) {
-        // One label for the whole command path: `slash.exec`, its
-        // `command.dispatch` fallback and the expansion's `prompt.submit`.
+        // One label for the command itself: `slash.exec` and its
+        // `command.dispatch` fallback. Its expansion is an ordinary submit.
         return this.#writeOutcome("slash.command", liveSessionId, error)
       }
-      return execution.kind === "submitted"
-        ? submittedOutcome(execution.result)
+      return execution.kind === "expanded"
+        ? this.#submitPrompt(liveSessionId, { text: execution.text })
         : completionOutcome(execution)
     }
 
+    return this.#submitPrompt(liveSessionId, { text: prompt.text, ...rewind })
+  }
+
+  /**
+   * The one `prompt.submit` write. A refusal reports the params it carried, so
+   * the single session-gone re-send repeats that write against the rebound
+   * live Session instead of running the command path a second time.
+   */
+  async #submitPrompt(
+    liveSessionId: string,
+    params: Readonly<Record<string, unknown>>
+  ): Promise<HermesSubmitOutcome> {
     let result: unknown
     try {
       result = await this.#transport.request("prompt.submit", {
         session_id: liveSessionId,
-        text: prompt.text,
-        ...rewind,
+        ...params,
       })
     } catch (error) {
-      return this.#writeOutcome("prompt.submit", liveSessionId, error)
+      const outcome = this.#writeOutcome("prompt.submit", liveSessionId, error)
+      return outcome.acknowledgement === "rejected"
+        ? { ...outcome, refused: { params } }
+        : outcome
     }
     return submittedOutcome(result)
   }

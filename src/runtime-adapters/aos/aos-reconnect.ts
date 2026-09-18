@@ -43,6 +43,7 @@ const RECOVERABLE_RUN_ERROR_CODES = new Set([
   "AOS_CONNECTION_INTERRUPTED",
   "AOS_SEND_UNCERTAIN",
   "AOS_INTERACTION_UNCERTAIN",
+  "AOS_STOP_UNCERTAIN",
 ])
 
 export function isRecoverableRunError(code: unknown) {

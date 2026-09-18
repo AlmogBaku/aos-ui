@@ -1107,6 +1107,31 @@ describe("provider-neutral AOS browser client", () => {
     })
   })
 
+  it("keeps a Session running when Stop could not be confirmed", async () => {
+    const client = new AosRemoteClient({
+      fetcher: vi.fn<typeof fetch>(async () => Response.json({})),
+    })
+    const activities: string[] = []
+    client.subscribeActivity((activity) => activities.push(activity.type))
+    client.adoptSessionOwnership("session-1", "researcher")
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_STARTED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+
+    // Hermes may still be running this turn, so the browser reconciles from the
+    // cursor instead of reporting a failed Session.
+    client.acceptRunEvent("session-1", {
+      type: EventType.RUN_ERROR,
+      code: "AOS_STOP_UNCERTAIN",
+      message: "Stop could not be confirmed.",
+    })
+
+    expect(client.sessionStatus("session-1")).toBe("running")
+    expect(activities).not.toContain("run-failed")
+  })
+
   it("forgets the observed run on Stop so steering cannot target it", async () => {
     let providerStatus: "running" | "idle" = "running"
     const fetcher = vi.fn<typeof fetch>(async (input) => {

@@ -8,7 +8,7 @@
 import type { TokenUsage } from "@ag-ui/core"
 
 import {
-  boundedGraphBytes,
+  boundedNativeBytes,
   isRecord,
   nativeId,
   utf8BytesWithin,
@@ -120,7 +120,7 @@ export function bufferNativeEvent(
   value: unknown
 ) {
   if (buffer.overflow) return
-  const bytes = boundedGraphBytes(value, MAX_PREACTIVE_BYTES - buffer.bytes)
+  const bytes = boundedNativeBytes(value, MAX_PREACTIVE_BYTES - buffer.bytes)
   if (bytes === undefined || buffer.events.length >= MAX_PREACTIVE_EVENTS) {
     buffer.overflow = true
     buffer.events.splice(0, buffer.events.length)

@@ -362,6 +362,7 @@ describe("guest AG-UI projection", () => {
     ["AOS_CONNECTION_INTERRUPTED", "AOS_CONNECTION_INTERRUPTED"],
     ["AOS_SEND_UNCERTAIN", "AOS_SEND_UNCERTAIN"],
     ["AOS_INTERACTION_UNCERTAIN", "AOS_INTERACTION_UNCERTAIN"],
+    ["AOS_STOP_UNCERTAIN", "AOS_STOP_UNCERTAIN"],
     ["AOS_RESET_REQUIRED", "temporarily_unavailable"],
     ["AOS_STREAM_OVERFLOW", "temporarily_unavailable"],
     ["AOS_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],

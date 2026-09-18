@@ -7,10 +7,14 @@
  * interrupt the browser already renders, and answers through the request handle
  * the vendored channel hands it.
  *
- * A request AOS cannot answer is declined: the channel replies `-32601`, which
- * Hermes treats as "skipped" for a clarify and as "unanswered" for a queue
- * backed approval, so the agent proceeds instead of waiting out its 300 s
- * deadline. Native ids, commands, URLs and paths never reach public output.
+ * A request whose method AOS cannot render is claimed and never answered: the
+ * prompt belongs to whichever Hermes renderer raised it, and `-32601` would
+ * cancel it — on every reconnect, because `open_requests` are re-delivered. Only
+ * a request AOS can render but cannot use (no bound Session, an unusable
+ * payload) is declined, which Hermes treats as "skipped" for a clarify and as
+ * "unanswered" for a queue backed approval, so the agent proceeds instead of
+ * waiting out its 300 s deadline. Native ids, commands, URLs and paths never
+ * reach public output.
  */
 import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
 
@@ -24,9 +28,15 @@ import {
   nativeId,
   parseJson,
   publicReason,
+  sessionKey,
   utf8BytesWithin,
 } from "./native"
 
+/**
+ * The run scope an interaction belongs to. `threadId` travels with it for the
+ * caller's benefit; interactions themselves are Session-scoped, because a
+ * Hermes Session carries exactly one thread.
+ */
 export type HermesInteractionScope = {
   agentId: string
   sessionId: string
@@ -120,7 +130,7 @@ type ApprovalChoice = (typeof APPROVAL_CHOICES)[number]
 /** Choices whose answer applies past this one request (`ApprovalResult.all`). */
 const BROAD_APPROVAL_CHOICES = new Set<ApprovalChoice>(["session", "always"])
 
-/** The server→client requests AOS renders; everything else is declined. */
+/** The server→client requests AOS renders; everything else is held unanswered. */
 const ANSWERED_METHODS = ["clarify", "approval"] as const
 type AnsweredMethod = (typeof ANSWERED_METHODS)[number]
 
@@ -134,7 +144,7 @@ export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxPending: 64,
 })
 
-/** Bound for the declined-method log: Hermes chooses the method. */
+/** Bound for the per-method log: Hermes chooses both method and volume. */
 const MAX_LOGGED_METHODS = 32
 const MAX_LOGGED_METHOD_CHARS = 64
 
@@ -568,23 +578,21 @@ function cancellation(event: Record<string, unknown>) {
 // Public response validation
 // ---------------------------------------------------------------------------
 
-function sameScope(
+/**
+ * A Hermes Session carries exactly one thread, so every interaction key is the
+ * Session key retainers, listeners and resumes already use: keying a pending
+ * request by `threadId` as well would let one of the two release the other's
+ * binding.
+ */
+function sameSession(
   left: HermesInteractionScope,
   right: HermesInteractionScope
 ) {
-  return (
-    left.agentId === right.agentId &&
-    left.sessionId === right.sessionId &&
-    left.threadId === right.threadId
-  )
+  return sessionKey(left) === sessionKey(right)
 }
 
 function interactionKey(scope: HermesInteractionScope, id: string) {
-  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId, id])
-}
-
-function sessionKey(scope: HermesInteractionScope) {
-  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId])
+  return `${sessionKey(scope)}\u0000${id}`
 }
 
 function strictResume(value: unknown) {
@@ -776,7 +784,7 @@ export class HermesInteractions {
   /** Every interrupt still waiting for this Session, oldest first. */
   pending(scope: HermesInteractionScope) {
     return [...this.#pending.values()]
-      .filter((interaction) => sameScope(interaction.scope, scope))
+      .filter((interaction) => sameSession(interaction.scope, scope))
       .sort((left, right) => left.sequence - right.sequence)
       .map(({ outcome }) => outcome)
   }
@@ -913,13 +921,15 @@ export class HermesInteractions {
   /**
    * The one `onRequest` handler. Returning `false` declines: the vendored
    * channel answers `-32601`, which Hermes reads as a skipped question rather
-   * than a client that will answer later.
+   * than a client that will answer later. A method AOS cannot render is
+   * therefore claimed instead: whichever renderer raised that prompt is still
+   * waiting on it, and AOS may not cancel it on that user's behalf.
    */
   #deliver(request: ServerRequest): boolean {
     const method = ANSWERED_METHODS.find(
       (candidate) => candidate === request.method
     )
-    if (!method) return this.#decline(request.method)
+    if (!method) return this.#hold(request.method)
     const liveSessionId = nativeId(request.params.session_id, 256)
     if (!liveSessionId) return this.#decline(request.method)
     const scope = this.attachments.scopeFor(liveSessionId)
@@ -953,8 +963,12 @@ export class HermesInteractions {
       if (!request.replayed) return true
       this.#completed.delete(key)
     }
+    // AOS being full is AOS' own limit, never a reason to cancel a prompt a
+    // shared Session's other renderer may still answer; the next resume
+    // re-delivers what is still open, so a claimed request can be presented
+    // once this Session has room again.
     if (this.#pending.size >= HERMES_INTERACTION_LIMITS.maxPending)
-      return this.#decline(method)
+      return this.#hold(method)
     if (!boundedJson(request.params)) return this.#decline(method)
     let projected: ProjectedInteraction
     try {
@@ -1060,7 +1074,7 @@ export class HermesInteractions {
   #expireUnconfirmed(scope: HermesInteractionScope, reconciliation: number) {
     for (const [key, interaction] of [...this.#pending])
       if (
-        sameScope(interaction.scope, scope) &&
+        sameSession(interaction.scope, scope) &&
         interaction.confirmed < reconciliation
       ) {
         this.#pending.delete(key)
@@ -1086,7 +1100,7 @@ export class HermesInteractions {
     if (
       !held ||
       [...this.#pending.values()].some((interaction) =>
-        sameScope(interaction.scope, scope)
+        sameSession(interaction.scope, scope)
       )
     )
       return
@@ -1105,17 +1119,36 @@ export class HermesInteractions {
       }
   }
 
-  /** Decline and log the method once: Hermes chooses both method and volume. */
+  /** Decline: the vendored channel answers `-32601` on AOS' behalf. */
   #decline(method: string): false {
-    const name = method.slice(0, MAX_LOGGED_METHOD_CHARS)
-    if (
-      !this.#loggedMethods.has(name) &&
-      this.#loggedMethods.size < MAX_LOGGED_METHODS
-    ) {
-      this.#loggedMethods.add(name)
-      this.#log?.warn("hermes.interactions.request_declined", { method: name })
-    }
+    this.#logMethod("hermes.interactions.request_declined", method)
     return false
+  }
+
+  /**
+   * Claim a request AOS cannot render and never answer it. The Session may be
+   * shared with Hermes' own renderer, which is still waiting on that prompt.
+   */
+  #hold(method: string): true {
+    this.#logMethod("hermes.interactions.request_unanswered", method)
+    return true
+  }
+
+  /**
+   * Log one line per distinct method and outcome, truncated and bounded: the
+   * same method can be declined for one Session and claimed for another, and
+   * one line must not hide the other.
+   */
+  #logMethod(event: string, method: string) {
+    const name = method.slice(0, MAX_LOGGED_METHOD_CHARS)
+    const key = `${event}\u0000${name}`
+    if (
+      this.#loggedMethods.has(key) ||
+      this.#loggedMethods.size >= MAX_LOGGED_METHODS
+    )
+      return
+    this.#loggedMethods.add(key)
+    this.#log?.warn(event, { method: name })
   }
 
   #complete(

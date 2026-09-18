@@ -306,6 +306,44 @@ describe("Hermes server adapter", () => {
     expect(router.requests.refusal("srq-00000000000b")).toBeUndefined()
   })
 
+  it("reconciles interactions through a fresh resume that re-delivers what is still open", async () => {
+    // A heal rebinds the Session, so reconciliation must ask Hermes again: only
+    // its own `open_requests` re-delivery confirms the request is still open,
+    // and a cached binding would expire a card the user can still answer.
+    const router = rpcRouter({
+      "session.resume": async () => ({
+        session_id: "live-secret",
+        running: true,
+        open_requests: [
+          {
+            id: "srq-00000000000c",
+            method: "clarify",
+            params: { session_id: "live-secret", question: "Which region?" },
+          },
+        ],
+      }),
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ ...router, http })
+
+    await adapter.pendingInteractions("researcher", "stored")
+    const reconciled = await adapter.pendingInteractions("researcher", "stored")
+
+    expect(router.calls("session.resume")).toHaveLength(2)
+    expect(reconciled).toMatchObject({
+      status: "waiting-for-input",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "srq-00000000000c", reason: "question" }],
+      },
+    })
+    expect(router.requests.refusal("srq-00000000000c")).toBeUndefined()
+  })
+
   it("implements the server-only native run boundary over exact Hermes operations", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "session.resume")

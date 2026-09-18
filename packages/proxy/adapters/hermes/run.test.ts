@@ -3928,45 +3928,25 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("stops walking provider tool graphs when the traversal budget is exhausted", async () => {
-    let reads = 0
-    const wide: Record<string, string> = {}
-    for (let index = 0; index < 10_000; index += 1)
-      Object.defineProperty(wide, `field${index}`, {
-        enumerable: true,
-        get() {
-          reads += 1
-          return "safe"
-        },
-      })
+  it("projects a wide provider tool result instead of refusing it for its item count", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
       runtime({
         observe: attachment.observe,
         submit: async () => {
-          publish({
-            type: "message.start",
-            session_id: "live-secret",
-            seq: 1,
-            payload: { message_id: "message-42" },
-          })
-          publish({
-            type: "tool.complete",
-            session_id: "live-secret",
-            seq: 2,
-            payload: {
-              tool_id: "call-7",
-              name: "search",
-              result: { results: [wide] },
-            },
-          })
-          publish({
-            type: "message.complete",
-            session_id: "live-secret",
-            seq: 3,
-            payload: {},
-          })
+          const turn = nativeTurn("live-secret", 1)
+          publish(turn.messageStart("message-42"))
+          publish(
+            turn.toolComplete("call-7", "search", {
+              items: Array.from(
+                { length: 3_000 },
+                (_, index) => `row-${index}`
+              ),
+              text: "x".repeat(1_024),
+            })
+          )
+          publish(turn.complete("message-42", "Done"))
           return {
             acknowledgement: "accepted" as const,
             status: "streaming" as const,
@@ -3975,9 +3955,70 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await collect(await engine.start(scope, input()))
+    const events = await collect(await engine.start(scope, input()))
 
-    expect(reads).toBeLessThanOrEqual(1_024)
+    // An ordinary wide result is far below the 4 MiB frame bound: the run
+    // projects it (the projection truncates for public output) and finishes.
+    expect(ofType(events, EventType.TOOL_CALL_RESULT)).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+  })
+
+  it("refuses a native frame past the frame byte bound", async () => {
+    const attachment = observation()
+    const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        submit: async () => {
+          const turn = nativeTurn("live-secret", 1)
+          publish(turn.messageStart("message-42"))
+          publish(turn.delta("x".repeat(4_194_305)))
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+
+    expect(await collect(await engine.start(scope, input()))).toEqual([
+      { type: EventType.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: EventType.RUN_ERROR,
+        message: "Hermes produced more events than AOS can safely buffer.",
+        code: "AOS_STREAM_OVERFLOW",
+      },
+    ])
+  })
+
+  it("terminalizes an overflow that arrives while the reader is parked", async () => {
+    const attachment = observation()
+    const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const engine = new HermesRunEngine(runtime({ observe: attachment.observe }))
+    const handle = await engine.start(scope, input())
+    const iterator = handle.events[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: EventType.RUN_STARTED },
+    })
+    // The coordinator's normal state: parked in `next()` with nothing queued.
+    const parked = iterator.next()
+
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("message-42"))
+    publish(turn.delta("x".repeat(4_194_305)))
+
+    await expect(parked).resolves.toEqual({
+      done: false,
+      value: {
+        type: EventType.RUN_ERROR,
+        message: "Hermes produced more events than AOS can safely buffer.",
+        code: "AOS_STREAM_OVERFLOW",
+      },
+    })
+    await expect(iterator.next()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    })
   })
 
   it("projects validated Hermes usage onto the standard terminal event", async () => {
@@ -5848,6 +5889,57 @@ describe("HermesRunEngine", () => {
         position: { epoch: "epoch-1", lastSeen: 1 },
       })
     ).resolves.toBeDefined()
+  })
+
+  it("replays the frames a Stop-uncertain run stopped consuming", async () => {
+    const attachment = observation()
+    const publish = (frame: unknown) => attachment.publish("live-secret", frame)
+    const turn = nativeTurn("live-secret", 1)
+    const frames = [
+      turn.messageStart("msg-1"),
+      turn.delta("After the Stop"),
+      turn.complete("msg-1", "After the Stop"),
+    ]
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        interrupt: async () => {
+          throw new HermesUnavailableError()
+        },
+        replay: async (_liveSessionId, after) => ({
+          epoch: "epoch-1",
+          lastSeen: 3,
+          truncated: false,
+          events: frames.filter((frame) => frame.seq > after),
+        }),
+      })
+    )
+    const handle = await engine.start(scope, input())
+
+    await expect(handle.stop()).rejects.toMatchObject({
+      code: "AOS_STOP_UNCERTAIN",
+    })
+    for (const frame of frames) publish(frame)
+
+    // The observer was released, so the cursor stayed at the last frame this
+    // run delivered: nothing published after the Stop was consumed and lost.
+    expect(handle.recoveryPosition()).toEqual({ epoch: "epoch-1", lastSeen: 0 })
+    const recovered = await collect(
+      await engine.recover(scope, {
+        threadId: scope.threadId,
+        runId: "run-1",
+      })
+    )
+
+    expect(
+      recovered.map((event) => (event as { type: EventType }).type)
+    ).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ])
   })
 
   it("catches up when a replayed page stops short of the reported watermark", async () => {

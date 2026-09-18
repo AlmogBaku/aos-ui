@@ -174,6 +174,32 @@ describe("guarded Hermes gateway socket", () => {
     expect(onOversizedResponse).not.toHaveBeenCalled()
   })
 
+  it("forwards a large replay reply but drops an event frame of the same size", () => {
+    const { socket, received, onFault, onOversizedResponse, log } = guarded({
+      responseLimit: () => 6 * 1024 * 1024,
+    })
+    const page = 3 * 1024 * 1024
+    const reply = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "aos-1",
+      result: {
+        epoch: "epoch-1",
+        latest_seq: 4,
+        events: [{ payload: { text: "x".repeat(page) } }],
+      },
+    })
+
+    socket.deliverText(reply)
+    socket.deliverText(eventFrame(page))
+
+    // A retained ring page is legitimately large and only its own caller's
+    // bound applies; the same bytes as one live event exceed the event bound.
+    expect(received).toEqual([{ data: reply }])
+    expect(onOversizedResponse).not.toHaveBeenCalled()
+    expect(onFault).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledTimes(1)
+  })
+
   it("stops forwarding frames from a socket that already faulted", () => {
     const { socket, received, onFault } = guarded()
 

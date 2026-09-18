@@ -22,7 +22,7 @@ import {
 } from "../../core/runtime"
 import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
 import { projectHermesTodos, type HermesTodo } from "./workspace"
-import { boundedGraphBytes, isRecord, sessionKey } from "./native"
+import { boundedNativeBytes, isRecord, sessionKey } from "./native"
 import { startedQueue } from "./event-queue"
 import { attachRun, scheduleCatchUp } from "./run-attach"
 import {
@@ -365,7 +365,9 @@ export class HermesRunEngine {
   /**
    * Submit the authorized user turn. `retried` records the single re-send a
    * "that live Session is gone" rejection allows: it rejected the write, so
-   * nothing ran and rebinding the durable Session repeats no mutation.
+   * nothing ran and rebinding the durable Session repeats no mutation. The
+   * re-send carries the refused write itself, so a command whose expansion was
+   * the part Hermes refused is never executed twice.
    */
   async #submit(
     active: ActiveRun,
@@ -421,6 +423,7 @@ export class HermesRunEngine {
     if (outcome.reason !== "session-gone")
       return this.#fail(active, RUN_FAILURES.commandRejected)
     if (retried) return this.#fail(active, RUN_FAILURES.resetRequired)
+    const refused = outcome.refused
     try {
       await attachRun(this.#host, active, { kind: "barrier" })
     } catch (error) {
@@ -428,7 +431,10 @@ export class HermesRunEngine {
       throw error
     }
     if (active.terminal) return
-    await this.#submit(active, prompt, true)
+    // A refusal of the `prompt.submit` itself repeats only that write; a
+    // refusal from the command execution ran nothing at all, so the whole
+    // command path may be dispatched again against the rebound Session.
+    await this.#submit(active, refused ? { ...prompt, refused } : prompt, true)
   }
 
   #handle(active: ActiveRun): HermesRunHandle {
@@ -454,7 +460,7 @@ export class HermesRunEngine {
       return
     }
     if (nativeEventSessionId(value) !== active.liveSessionId) return
-    if (boundedGraphBytes(value, MAX_NATIVE_EVENT_BYTES) === undefined) {
+    if (boundedNativeBytes(value, MAX_NATIVE_EVENT_BYTES) === undefined) {
       this.#overflow(active)
       return
     }

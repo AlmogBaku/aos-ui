@@ -254,6 +254,40 @@ describe("Hermes workspace operations", () => {
     })
   })
 
+  it("truncates a native Todo result no person could read", async () => {
+    const { operations } = harness({
+      history: [
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call-1", function: { name: "todo", arguments: "{}" } },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call-1",
+          tool_name: "todo",
+          content: {
+            todos: Array.from({ length: 5_000 }, (_unused, index) => ({
+              id: `todo-${index}`,
+              content: `Step ${index}`,
+              status: "pending",
+            })),
+          },
+        },
+      ],
+    })
+
+    const todos = await operations.todos("research", "hermes:research:stored-1")
+
+    expect(todos).toHaveLength(256)
+    expect(todos?.at(0)).toEqual({
+      id: "todo-0",
+      label: "Step 0",
+      status: "pending",
+    })
+  })
+
   it("projects only the latest completed native Todo result and never mutates it", async () => {
     const { operations, history } = harness({
       history: [

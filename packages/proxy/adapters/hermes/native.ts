@@ -118,9 +118,9 @@ export function utf8BytesWithin(
 // ---------------------------------------------------------------------------
 
 /** Maximum accepted object/array nesting depth of a decoded native payload. */
-export const MAX_NATIVE_JSON_DEPTH = 32
+const MAX_NATIVE_JSON_DEPTH = 32
 /** Maximum accepted node count of a decoded native payload. */
-export const MAX_NATIVE_JSON_NODES = 200_000
+const MAX_NATIVE_JSON_NODES = 200_000
 
 /**
  * True when `value` stays within `MAX_NATIVE_JSON_DEPTH` nesting levels and
@@ -145,9 +145,37 @@ export function boundedJsonShape(value: unknown) {
   return true
 }
 
+/**
+ * The serialised byte length of a decoded native payload, or `undefined` when it
+ * exceeds `maximum` bytes or the shared shape bound above. Unlike
+ * `boundedGraphBytes` it counts no entries: a native frame and the AG-UI events
+ * projected from it are bounded by size and shape only, so an ordinary wide tool
+ * result is never refused for how many keys or items it carries.
+ */
+export function boundedNativeBytes(
+  value: unknown,
+  maximum: number
+): number | undefined {
+  if (maximum < 0 || !boundedJsonShape(value)) return undefined
+  let json: string | undefined
+  try {
+    json = JSON.stringify(value)
+  } catch {
+    return undefined
+  }
+  if (json === undefined) return undefined
+  const bytes = Buffer.byteLength(json, "utf8")
+  return bytes > maximum ? undefined : bytes
+}
+
 // ---------------------------------------------------------------------------
 // Bounded JSON-graph walk
 // ---------------------------------------------------------------------------
+//
+// The entry-bounded walk. Only a payload AOS unwraps for public output needs it
+// (`tool-data.ts` reads a tool-search bridge envelope this way); everything a
+// native frame merely has to stay within uses `boundedNativeBytes`, which
+// refuses nothing for its width.
 
 /** Maximum object/array nesting depth accepted by `boundedGraphBytes`. */
 export const MAX_GRAPH_DEPTH = 12

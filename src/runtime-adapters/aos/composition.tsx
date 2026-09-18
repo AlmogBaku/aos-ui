@@ -17,9 +17,7 @@ import {
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
-import { en } from "@/lib/i18n/dictionaries/en"
-import { he } from "@/lib/i18n/dictionaries/he"
-import { runErrorMessage } from "@/lib/i18n/run-errors"
+import { useRunErrorResolver } from "@/lib/i18n/bundled"
 
 import type {
   RuntimeAdapterDefinition,
@@ -35,14 +33,9 @@ import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 import { AosReconciler } from "./aos-reconciliation"
-import type { RunErrorResolver } from "./aos-reconnect"
 import { AosThreadListAdapter } from "./aos-thread-list"
 
 const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
-
-// Both locales ship with the workspace bundle, so a failure that arrives before
-// the first paint is already localized.
-const dictionaries = { en, he } as const
 
 function ReadyAosRuntimeProvider({
   children,
@@ -63,12 +56,7 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [reconciler])
-  // Normalized run failures arrive as a stable code with English provider
-  // text; the workspace localizes what it recognizes and keeps the rest.
-  const resolveRunError = useCallback<RunErrorResolver>(
-    (code, fallback) => runErrorMessage(dictionaries[locale], code, fallback),
-    [locale]
-  )
+  const resolveRunError = useRunErrorResolver(locale)
   const client = useMemo(
     () => new AosRemoteClient({ reconciler, resolveRunError }),
     [reconciler, resolveRunError]

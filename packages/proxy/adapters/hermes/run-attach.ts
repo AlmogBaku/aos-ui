@@ -9,7 +9,7 @@
  */
 import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
 
-import { boundedGraphBytes, sessionKey } from "./native"
+import { boundedNativeBytes, sessionKey } from "./native"
 import { providerUnavailable, RUN_FAILURES } from "./run-failures"
 import {
   bufferNativeEvent,
@@ -40,7 +40,7 @@ const MAX_RECOVERY_BYTES = 4_194_304
  * `position`: a browser reconnect from the cursor the run already published.
  * `discover`: a proxy restart where only Hermes' own open turn is this run's.
  */
-export type AttachMode =
+type AttachMode =
   | { kind: "barrier" }
   | { kind: "position"; epoch: string; after: number }
   | { kind: "discover" }
@@ -58,7 +58,7 @@ type AttachCursor = {
 }
 
 /** Why the observed frame stream ended. */
-export type LostReason = "disconnected" | "rebound" | "restart"
+type LostReason = "disconnected" | "rebound" | "restart"
 
 /**
  * The one path that binds a run to a live Hermes Session: a new turn, a
@@ -216,7 +216,7 @@ function validatedReplay(
   let previous = after
   let recoveryBytes = 0
   for (const raw of recovery.events) {
-    const bytes = boundedGraphBytes(raw, MAX_RECOVERY_BYTES - recoveryBytes)
+    const bytes = boundedNativeBytes(raw, MAX_RECOVERY_BYTES - recoveryBytes)
     const event = nativeEvent(raw)
     if (
       bytes === undefined ||
@@ -342,11 +342,7 @@ async function catchUp(host: RunEngineHost, active: ActiveRun) {
 }
 
 /** The observed frame stream ended; how it ended decides what the run does. */
-export function lostRun(
-  host: RunEngineHost,
-  active: ActiveRun,
-  reason: LostReason
-) {
+function lostRun(host: RunEngineHost, active: ActiveRun, reason: LostReason) {
   if (reason === "disconnected")
     host.detach(active, RUN_FAILURES.connectionInterrupted)
   // A rebound or restarted live Session cannot answer for this run's cursor.

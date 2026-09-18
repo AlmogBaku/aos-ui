@@ -42,9 +42,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { WorkspaceConversationShell } from "@/components/workspace"
 import { AgUiInterruptComposer } from "@/components/runtime-interactions/pending-composer"
-import { en } from "@/lib/i18n/dictionaries/en"
-import { he } from "@/lib/i18n/dictionaries/he"
-import { runErrorMessage } from "@/lib/i18n/run-errors"
+import { bundledDictionaries, useRunErrorResolver } from "@/lib/i18n/bundled"
 import type { Locale } from "@/lib/i18n/config"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import { SlashCommandSchema } from "@aos/protocol"
@@ -53,10 +51,7 @@ import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosRemoteClient, createAosRunAgent } from "./aos-client"
 import { reconcileComposerPrefill } from "./aos-composer-prefill"
 import type { AosEventScope } from "./aos-reconciliation"
-import type { RunErrorResolver } from "./aos-reconnect"
 import { AosThreadListAdapter } from "./aos-thread-list"
-
-const dictionaries = { en, he } as const
 
 const GuestCapabilitiesSchema = z.strictObject({
   agent: z.custom<AgentCapabilities>(
@@ -225,7 +220,7 @@ function GuestConversationShell({
   return (
     <WorkspaceConversationShell
       locale={locale}
-      dictionary={dictionaries[locale]}
+      dictionary={bundledDictionaries[locale]}
       header={
         <header className="flex min-h-16 items-center gap-3 border-b border-border/70 px-4 sm:px-6">
           <img
@@ -345,13 +340,8 @@ function ReadyGuestAosSurface({
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const media = useMemo(() => new VoiceMediaController(), [])
-  // A guest failure arrives as a stable code with English text; the invitation
-  // language owns the copy a guest reads.
-  const resolveRunError = useCallback<RunErrorResolver>(
-    (code, fallback) =>
-      runErrorMessage(dictionaries[selectedLocale], code, fallback),
-    [selectedLocale]
-  )
+  // The invitation language owns the copy a guest reads.
+  const resolveRunError = useRunErrorResolver(selectedLocale)
   const client = useMemo(
     () =>
       new AosRemoteClient({

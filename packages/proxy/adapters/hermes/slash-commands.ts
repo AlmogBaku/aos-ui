@@ -109,30 +109,23 @@ export async function nativeSlashInvocation(
   return { ...invocation, name: recognized[0].replace(/^\//u, "") }
 }
 
-export function slashInvocation(
-  text: string,
-  commands: readonly SlashCommand[]
-) {
-  const invocation = parsedSlashInvocation(text)
-  if (!invocation || !commands.some(({ name }) => name === invocation.name))
-    return undefined
-  return invocation
-}
-
 /**
  * What one native command execution produced. A `completion` answered the user
- * in band and no native turn follows; a `submitted` execution expanded into a
- * `prompt.submit`, whose native admission result the caller validates.
+ * in band and no native turn follows; an `expanded` execution produced the
+ * prompt text the caller submits, which is the only part a refused write may
+ * repeat.
  */
 export type HermesSlashExecution =
   | { kind: "completion"; output: string; composerPrefill?: string }
-  | { kind: "submitted"; result: unknown }
+  | { kind: "expanded"; text: string }
 
 /**
- * Execute one recognized native command. `slash.exec` is the current native
- * entry point; `command.dispatch` is attempted only when Hermes states the
- * method is unsupported, and alias traversal is bounded. No dispatched write is
- * ever retried.
+ * Execute one recognized native command and report what it produced; the
+ * expansion is submitted by the caller, so this function performs no
+ * `prompt.submit` of its own. `slash.exec` is the current native entry point;
+ * `command.dispatch` is attempted only when Hermes states the method is
+ * unsupported, and alias traversal is bounded. No dispatched write is ever
+ * retried.
  */
 export async function executeSlashCommand(
   transport: HermesRpcTransport,
@@ -182,13 +175,7 @@ export async function executeSlashCommand(
   if (result.type === "send" || result.type === "skill") {
     if (typeof result.message !== "string" || !result.message.trim())
       throw new HermesUnavailableError()
-    return {
-      kind: "submitted",
-      result: await transport.request("prompt.submit", {
-        session_id: liveSessionId,
-        text: result.message,
-      }),
-    }
+    return { kind: "expanded", text: result.message }
   }
   if (result.type === "prefill") {
     if (

@@ -266,11 +266,18 @@ function completedToolRow(row: NativeRecord) {
   )
 }
 
+/**
+ * Session Todos are a plan a person reads, and the frame carrying them is bound
+ * by bytes alone. A list longer than this is machine noise or a corrupt payload,
+ * so the projection truncates it instead of publishing an unbounded PLAN.
+ */
+const MAX_PROJECTED_TODOS = 256
+
 export function projectHermesTodos(value: unknown): HermesTodo[] | undefined {
   const payload = parseJsonOrValue(value)
   if (!isRecord(payload) || !Array.isArray(payload.todos)) return undefined
   const seen = new Set<string>()
-  return payload.todos.flatMap((raw, index) => {
+  return payload.todos.slice(0, MAX_PROJECTED_TODOS).flatMap((raw, index) => {
     if (!isRecord(raw)) return []
     const id = stringValue(raw.id, 256) ?? String(index)
     const label = stringValue(raw.label ?? raw.content, 4_096)

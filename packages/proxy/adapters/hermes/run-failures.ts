@@ -99,6 +99,10 @@ export const RUN_FAILURES = {
     code: "AOS_PROVIDER_RUN_FAILED",
     message: "Hermes rejected this command.",
   },
+  stopUncertain: {
+    code: "AOS_STOP_UNCERTAIN",
+    message: "Hermes could not confirm Stop; reconcile before sending again.",
+  },
   streamOverflow: {
     code: "AOS_STREAM_OVERFLOW",
     message: "Hermes produced more events than AOS can safely buffer.",
@@ -130,8 +134,8 @@ export function providerUnavailable() {
 
 export function stopUncertain() {
   return new HermesRunPublicError(
-    "AOS_STOP_UNCERTAIN",
-    "Hermes could not confirm Stop; reconcile before sending again."
+    RUN_FAILURES.stopUncertain.code,
+    RUN_FAILURES.stopUncertain.message
   )
 }
 

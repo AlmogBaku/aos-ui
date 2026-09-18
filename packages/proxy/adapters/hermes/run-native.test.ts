@@ -104,7 +104,13 @@ describe("Hermes native submit outcomes", () => {
 
       await expect(
         native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
-      ).resolves.toEqual({ acknowledgement: "rejected", reason })
+      ).resolves.toEqual({
+        acknowledgement: "rejected",
+        reason,
+        // A refused write ran nothing, so the refusal reports it: the single
+        // session-gone re-send repeats that `prompt.submit` and nothing else.
+        refused: { params: { text: "Hello" } },
+      })
       if (reason === "session-gone")
         expect(attachments.invalidate).toHaveBeenCalledWith("live-secret")
       else expect(attachments.invalidate).not.toHaveBeenCalled()

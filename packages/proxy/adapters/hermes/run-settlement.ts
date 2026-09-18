@@ -18,6 +18,7 @@ import {
   publicRunFailure,
   stopUncertain,
   RUN_FAILED_LOG,
+  RUN_FAILURES,
   RUN_NATIVE_ERROR_LOG,
   type NativeFailure,
 } from "./run-failures"
@@ -242,7 +243,11 @@ export async function stopRun(
     try {
       outcome = await host.native.interrupt(active.liveSessionId)
     } catch {
-      active.uncertain = true
+      // AOS cannot say whether Hermes accepted the cancel, so this run stops
+      // consuming exactly like every other uncertain outcome: its cursor
+      // freezes at the last delivered frame and the browser reconciles from
+      // there. Following further frames would strand the turn's own end.
+      host.detach(active, RUN_FAILURES.stopUncertain)
       throw stopUncertain()
     }
     // Hermes stating it has no live Session left is a confirmed Stop.

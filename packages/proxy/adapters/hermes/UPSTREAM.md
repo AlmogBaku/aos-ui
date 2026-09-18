@@ -17,7 +17,6 @@ Contract references:
 - [Web dashboard API reference](https://github.com/NousResearch/hermes-agent/blob/47685348eaca9d673719003b9e03a71becfa6423/web/src/lib/api.ts)
 - [Gateway event contract](https://github.com/NousResearch/hermes-agent/blob/47685348eaca9d673719003b9e03a71becfa6423/apps/shared/src/gateway-events.json)
 - [JSON-RPC request channel](https://github.com/NousResearch/hermes-agent/blob/47685348eaca9d673719003b9e03a71becfa6423/apps/shared/src/json-rpc-channel.ts)
-- [WebSocket ticket subprotocol handling](https://github.com/NousResearch/hermes-agent/blob/47685348eaca9d673719003b9e03a71becfa6423/hermes_cli/web_server_chat.py#L202-L217)
 - [MIT license](https://github.com/NousResearch/hermes-agent/blob/47685348eaca9d673719003b9e03a71becfa6423/LICENSE)
 
 The HTTP client contains only the route, query, and request-body construction
@@ -26,6 +25,7 @@ needed by the server adapter. The vendored `JsonRpcGatewayClient`
 package at the pinned commit; see
 [`vendor/hermes-shared/UPSTREAM.md`](vendor/hermes-shared/UPSTREAM.md) for
 per-file hashes and the sync recipe. Runtime validation, provider-to-AOS
-projection, bounded decoding, ticket subprotocol use, redaction,
-uncertain-send handling, and authoritative reconciliation remain in the adapter
-and content modules.
+projection, bounded decoding, redaction, uncertain-send handling, and
+authoritative reconciliation remain in the adapter and content modules. AOS
+authenticates the socket with a `?token=` query parameter on the dial and uses no
+WebSocket ticket subprotocol.

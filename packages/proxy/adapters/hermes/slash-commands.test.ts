@@ -428,3 +428,52 @@ it("finishes a synchronous command run without waiting for native conversational
   expect(events[2]).toMatchObject({ delta: "Help output" })
   expect(events[4]).toMatchObject({ threadId: "thread", runId: "run" })
 })
+
+it("re-sends only the expansion when Hermes rejects the command's own submit as gone", async () => {
+  let resumes = 0
+  let rejected = false
+  const router = rpcRouter({
+    "session.resume": async () => {
+      resumes += 1
+      return { session_id: `live-${resumes}`, running: false }
+    },
+    "commands.catalog": async () => ({ pairs: [["/skill", "Skill"]] }),
+    "slash.exec": async () => ({
+      type: "skill",
+      name: "skill",
+      message: "Expanded skill",
+    }),
+    "session.events.since": async () => ({
+      epoch: "epoch-1",
+      last_seen: 0,
+      truncated: false,
+      events: [],
+    }),
+    "session.active_list": async () => ({ sessions: [] }),
+    "prompt.submit": async () => {
+      if (rejected) return { status: "streaming" }
+      rejected = true
+      throw new HermesRpcRejectedError(4001)
+    },
+  })
+  const adapter = new HermesServerAdapter(router)
+
+  await adapter.runs.start(scope, {
+    threadId: "stored",
+    runId: "run-1",
+    state: {},
+    messages: [{ id: "user", role: "user", content: "/skill arguments" }],
+    tools: [],
+    context: [],
+    forwardedProps: {},
+  })
+
+  // The command ran once; only the write Hermes refused is repeated, against
+  // the rebound live Session.
+  expect(router.calls("commands.catalog")).toHaveLength(1)
+  expect(router.calls("slash.exec")).toHaveLength(1)
+  expect(router.calls("prompt.submit").map(({ params }) => params)).toEqual([
+    { session_id: "live-1", text: "Expanded skill" },
+    { session_id: "live-2", text: "Expanded skill" },
+  ])
+})

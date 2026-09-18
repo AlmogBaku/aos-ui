@@ -2290,6 +2290,34 @@ describe("SessionCoordinator", () => {
     expect(engine.start).toHaveBeenCalledOnce()
   })
 
+  it("keeps a Session uncertain when a Stop cannot be confirmed", async () => {
+    const stopped = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => stopped),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine)
+    const live = await sessions.start(scope, input("run-1"), access("one"))
+    const readLive = reader(live)
+    stopped.emit(runStarted("run-1"))
+    await readLive()
+    // The adapter stopped consuming a run Hermes may still be running, so the
+    // turn is not over: the journal outlives the error and a new turn waits.
+    stopped.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_STOP_UNCERTAIN",
+      message: "Stop could not be confirmed.",
+    })
+    await readLive()
+    stopped.finish()
+    live.close()
+
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
+      { event: { type: EventType.RUN_STARTED } }
+    )
+  })
+
   it("leaves an execution idle after a provider stream overflow", async () => {
     const overflowed = new EventSource()
     const admitted = new EventSource()

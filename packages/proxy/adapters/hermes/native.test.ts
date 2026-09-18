@@ -4,6 +4,7 @@ import {
   MAX_GRAPH_DEPTH,
   MAX_GRAPH_ENTRIES,
   boundedGraphBytes,
+  boundedNativeBytes,
   isRecord,
   nativeId,
   parseJson,
@@ -211,6 +212,44 @@ describe("boundedGraphBytes", () => {
     const n = boundedGraphBytes(arr, 1_000)
     expect(typeof n).toBe("number")
     expect((n ?? 0) > 0).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// boundedNativeBytes
+// ---------------------------------------------------------------------------
+
+describe("boundedNativeBytes", () => {
+  it("accepts a wide graph an entry bound would refuse", () => {
+    const wide = { items: Array.from({ length: 3_000 }, (_, index) => index) }
+
+    expect(boundedNativeBytes(wide, 4_194_304)).toBe(
+      Buffer.byteLength(JSON.stringify(wide), "utf8")
+    )
+    expect(boundedGraphBytes(wide, 4_194_304)).toBeUndefined()
+  })
+
+  it("refuses a payload past its byte bound", () => {
+    expect(boundedNativeBytes({ text: "x".repeat(4_194_305) }, 4_194_304)).toBe(
+      undefined
+    )
+    expect(boundedNativeBytes("ok", 0)).toBeUndefined()
+  })
+
+  it("refuses a payload outside the shared native shape bound", () => {
+    const deep = JSON.parse(`${"[".repeat(40)}null${"]".repeat(40)}`) as unknown
+    const many = Array.from({ length: 200_001 }, () => 0)
+
+    expect(boundedNativeBytes(deep, 4_194_304)).toBeUndefined()
+    expect(boundedNativeBytes(many, 4_194_304)).toBeUndefined()
+  })
+
+  it("refuses a value JSON cannot serialize", () => {
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+
+    expect(boundedNativeBytes(circular, 4_194_304)).toBeUndefined()
+    expect(boundedNativeBytes(undefined, 4_194_304)).toBeUndefined()
   })
 })
 

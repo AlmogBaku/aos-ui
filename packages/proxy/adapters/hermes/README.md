@@ -71,9 +71,14 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
 - Edit and Retry use authoritative message identities. Commands do not combine
   with rewind.
 - A question or approval arrives as a server-to-client JSON-RPC request, not as
-  an event, and is answered on that request. A request AOS cannot render is
-  declined so the channel answers `-32601` and the agent proceeds; an
-  unanswerable request would otherwise park the turn until its native deadline.
+  an event, and is answered on that request. A request whose method AOS cannot
+  render is claimed and left unanswered, because `-32601` cancels the prompt and
+  another Hermes renderer may be waiting on it for a shared Session. A request
+  AOS renders but cannot use (no bound Session, an unusable payload) is declined
+  so the channel answers `-32601` and the agent proceeds instead of parking the
+  turn until its native deadline. Reaching the pending-request cap claims the
+  request too: that limit is AOS', and the next resume re-delivers whatever is
+  still open.
 - A pending question or approval retains the Session. Its answer is a complete
   AG-UI resume, not a new Hermes prompt.
 - Native attachment/context envelopes and paths are parsed before normalized
