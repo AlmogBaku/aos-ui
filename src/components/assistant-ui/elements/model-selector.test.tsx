@@ -21,6 +21,7 @@ const labels: ModelSelectorLabels = {
   retry: "Retry model selection",
   effort: "Thinking",
   effortLevels: { none: "Off", low: "Low", medium: "Medium", high: "High" },
+  effortUnset: "Provider default",
 }
 
 const EFFORTS = ["none", "low", "medium", "high"] as const
@@ -198,7 +199,7 @@ describe("ModelSelector", () => {
     ).toHaveTextContent("Choose model")
   })
 
-  it("changes reasoning effort from the model popup, which stays open", async () => {
+  it("moves reasoning effort along the ladder the provider reported", async () => {
     const user = userEvent.setup()
     const onEffortChange = vi.fn()
     renderSelector({
@@ -210,11 +211,32 @@ describe("ModelSelector", () => {
     })
 
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
-    const efforts = await screen.findByRole("group", { name: "Thinking" })
+    const effort = await screen.findByRole("slider", { name: "Thinking" })
+    effort.focus()
 
-    await user.click(screen.getByRole("button", { name: "High" }))
+    await user.keyboard("{ArrowUp}")
     expect(onEffortChange).toHaveBeenCalledWith("high")
-    expect(efforts).toBeVisible()
+    // The popup owns both halves of the choice, so it outlives a level change.
+    expect(effort).toBeVisible()
+  })
+
+  it("reads as the provider's default until a level is reported", async () => {
+    const user = userEvent.setup()
+    const onEffortChange = vi.fn()
+    renderSelector({
+      efforts: EFFORTS,
+      models: SHORT_ROSTER,
+      onEffortChange,
+      value: "balanced",
+    })
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    const effort = await screen.findByRole("slider", { name: "Thinking" })
+    expect(effort).toHaveAttribute("aria-valuetext", "Provider default")
+
+    effort.focus()
+    await user.keyboard("{ArrowUp}")
+    expect(onEffortChange).toHaveBeenCalledWith("low")
   })
 
   it("offers no effort control for a model that reports no efforts", async () => {
@@ -227,7 +249,7 @@ describe("ModelSelector", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
     expect(await screen.findByRole("listbox")).toBeVisible()
-    expect(screen.queryByRole("group", { name: "Thinking" })).toBeNull()
+    expect(screen.queryByRole("slider", { name: "Thinking" })).toBeNull()
   })
 
   it("retries a failed effort switch", async () => {

@@ -233,6 +233,7 @@ export type ThreadLabels = {
   modelRetry: string
   effortSelector: string
   effortLevels: Record<string, string>
+  effortUnset: string
   slashCommands?: string | undefined
   contextUsage: string
   contextTitle: string
@@ -303,6 +304,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   modelRetry: "Retry model selection",
   effortSelector: "Thinking",
   effortLevels: DEFAULT_EFFORT_LEVEL_LABELS,
+  effortUnset: "Default",
   slashCommands: "Slash commands",
   contextUsage: "Context usage",
   contextTitle: "Context",
@@ -1353,6 +1355,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             retry: labels.modelRetry,
             effort: labels.effortSelector,
             effortLevels: labels.effortLevels,
+            effortUnset: labels.effortUnset,
           }}
           models={models}
           value={features.model.selectedId}

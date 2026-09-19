@@ -1421,8 +1421,9 @@ describe("Thread accessibility", () => {
 
     // One control owns both halves of a model choice.
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
-    await screen.findByRole("group", { name: "Thinking" })
-    await user.click(screen.getByRole("button", { name: "High" }))
+    const effort = await screen.findByRole("slider", { name: "Thinking" })
+    effort.focus()
+    await user.keyboard("{ArrowUp}")
 
     expect(selectEffort).toHaveBeenCalledWith("high")
   })
@@ -1445,7 +1446,7 @@ describe("Thread accessibility", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
     expect(await screen.findByRole("listbox")).toBeVisible()
-    expect(screen.queryByRole("group", { name: "Thinking" })).toBeNull()
+    expect(screen.queryByRole("slider", { name: "Thinking" })).toBeNull()
   })
 
   it("omits categories the runtime did not provide", () => {

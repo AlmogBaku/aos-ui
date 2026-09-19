@@ -12,6 +12,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react"
@@ -29,7 +30,7 @@ import {
   ComboboxTrigger,
   ComboboxValue,
 } from "@/components/ui/combobox"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/utils"
 
 /**
@@ -61,10 +62,12 @@ export type ModelSelectorLabels = {
   readonly empty: string
   readonly switching: string
   readonly retry: string
-  /** Names the reasoning-effort group the popup carries under the roster. */
+  /** Names the reasoning-effort control the popup carries under the roster. */
   readonly effort: string
   /** Provider-reported effort ids mapped to localized names. */
   readonly effortLevels: Record<string, string>
+  /** Reads for a Session still running on the provider's own default level. */
+  readonly effortUnset: string
 }
 
 /** Base UI reads `items` from group objects; the label lives on `value`. */
@@ -220,7 +223,9 @@ export function ModelSelectorTrigger({
   children,
   ...props
 }: ModelSelectorTriggerProps) {
-  const { labels } = useModelSelectorContext()
+  const context = useModelSelectorContext()
+  const { labels } = context
+  const level = currentEffort(context)
   return (
     <ComboboxTrigger
       data-slot="model-selector-trigger"
@@ -235,14 +240,38 @@ export function ModelSelectorTrigger({
       {...props}
     >
       {children ?? (
-        <ComboboxValue>
-          {(model: ModelOption | null) => (
-            <span className="truncate">{model?.name ?? labels.placeholder}</span>
-          )}
-        </ComboboxValue>
+        <span className="flex min-w-0 items-center gap-1">
+          <ComboboxValue>
+            {(model: ModelOption | null) => (
+              <span className="truncate">
+                {model?.name ?? labels.placeholder}
+              </span>
+            )}
+          </ComboboxValue>
+          {/* The level is only reachable inside the popup, so the collapsed
+              trigger carries it rather than hiding the Session's state. */}
+          {level ? (
+            <span className="shrink-0 font-normal text-muted-foreground">
+              · {labels.effortLevels[level] ?? level}
+            </span>
+          ) : null}
+        </span>
       )}
     </ComboboxTrigger>
   )
+}
+
+/** The level a Session is on, preferring a pick the provider is still settling. */
+function currentEffort({
+  effortSelection,
+  efforts,
+  effortValue,
+  onEffortChange,
+}: ModelSelectorContextValue) {
+  if (!onEffortChange || !efforts?.length) return undefined
+  const level =
+    effortSelection.status === "pending" ? effortSelection.targetId : effortValue
+  return level && efforts.includes(level) ? level : undefined
 }
 
 /** Shared pending/error presentation for model and effort popups. */
@@ -300,7 +329,12 @@ export function ModelSelectorContent({
   return (
     <ComboboxContent
       align="start"
-      className={cn("min-w-64 motion-reduce:animate-none", className)}
+      className={cn(
+        // Wide enough for a provider-qualified name and its description, and
+        // rounded like the rest of the composer's popovers.
+        "w-80 rounded-xl motion-reduce:animate-none",
+        className
+      )}
       data-slot="model-selector-content"
       dir={direction}
       side="top"
@@ -319,15 +353,30 @@ export function ModelSelectorContent({
           {(group: ModelOptionGroup) => (
             <ComboboxGroup items={group.items} key={group.value}>
               {group.value ? (
-                <ComboboxLabel>{group.value}</ComboboxLabel>
+                <ComboboxLabel className="font-medium">
+                  {group.value}
+                </ComboboxLabel>
               ) : null}
               <ComboboxCollection>
                 {(model: ModelOption) => (
-                  <ComboboxItem key={model.id} value={model}>
+                  <ComboboxItem
+                    className="rounded-lg py-1.5 ps-1.5 data-selected:font-medium"
+                    key={model.id}
+                    value={model}
+                  >
+                    {/* A monogram of the provider-reported text, which gives
+                        rows the rhythm of a provider logo without teaching a
+                        provider-neutral component about specific providers. */}
+                    <span
+                      aria-hidden
+                      className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground uppercase"
+                    >
+                      {(model.group ?? model.name).trim().slice(0, 1)}
+                    </span>
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{model.name}</span>
                       {model.description ? (
-                        <span className="truncate text-xs text-muted-foreground">
+                        <span className="truncate text-xs font-normal text-muted-foreground">
                           {model.description}
                         </span>
                       ) : null}
@@ -345,43 +394,64 @@ export function ModelSelectorContent({
   )
 }
 
+/** The wrapper is not generic over its value, so a scalar arrives as a union. */
+function thumbIndex(value: number | readonly number[]) {
+  return Array.isArray(value) ? (value[0] ?? 0) : (value as number)
+}
+
 /**
  * Reasoning effort of the selected model, inside the model popup: one control
- * owns both halves of a model choice. Toggle buttons keep the group free of a
- * nested popup and outside the roster's listbox.
+ * owns both halves of a model choice. The ladder is ordered, so it reads as a
+ * slider, and it sits outside the roster's listbox to keep that list valid.
  */
 function ModelSelectorEfforts() {
+  const context = useModelSelectorContext()
   const { effortSelection, efforts, effortValue, labels, onEffortChange } =
-    useModelSelectorContext()
+    context
+  // Held while a drag is in flight so the thumb follows the pointer without a
+  // provider write per step; a commit hands the level over and clears it.
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
   if (!onEffortChange || !efforts?.length) return null
 
-  // A pending level shows as pressed so the group reflects the operator's pick
-  // while the provider settles it.
-  const pressed =
-    effortSelection.status === "pending" ? effortSelection.targetId : effortValue
+  const settled = currentEffort(context)
+  const settledIndex = settled ? efforts.indexOf(settled) : -1
+  const index = dragIndex ?? Math.max(settledIndex, 0)
+  // A Session can still be on the provider's own default, which is no level on
+  // the ladder; the thumb has to rest somewhere, so say so rather than imply
+  // the level it rests on.
+  const unset = dragIndex === null && settledIndex < 0
+  const levelName = (level: string) => labels.effortLevels[level] ?? level
+  const valueText = unset ? labels.effortUnset : levelName(efforts[index] ?? "")
+
   return (
     <div
-      className="border-t border-border/60 p-1.5"
+      className="border-t border-border/60 p-3"
       data-slot="model-selector-efforts"
     >
-      <p className="px-1 pb-1 text-xs text-muted-foreground">{labels.effort}</p>
+      <p className="flex items-baseline justify-between gap-2 pb-3 text-xs">
+        <span className="text-muted-foreground">{labels.effort}</span>
+        <span className={cn("font-medium", unset && "text-muted-foreground")}>
+          {valueText}
+        </span>
+      </p>
       <ModelSelectorStatus labels={labels} selection={effortSelection} />
-      <ToggleGroup
+      <Slider
         aria-label={labels.effort}
-        className="flex-wrap"
-        onValueChange={(next) => {
-          const [level] = next
+        // The thumb overhangs the track it is centered on, so the row keeps
+        // room for it instead of crowding the popup's edge.
+        className="py-1.5"
+        getAriaValueText={() => valueText}
+        max={efforts.length - 1}
+        min={0}
+        onValueChange={(next) => setDragIndex(thumbIndex(next))}
+        onValueCommitted={(next) => {
+          const level = efforts[thumbIndex(next)]
+          setDragIndex(null)
           if (level && level !== effortValue) onEffortChange(level)
         }}
-        size="sm"
-        value={pressed ? [pressed] : []}
-      >
-        {efforts.map((effortId) => (
-          <ToggleGroupItem className="text-xs" key={effortId} value={effortId}>
-            {labels.effortLevels[effortId] ?? effortId}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
+        step={1}
+        value={index}
+      />
     </div>
   )
 }
