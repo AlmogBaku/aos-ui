@@ -1,4 +1,7 @@
+import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
+
 import type { ArtifactAdapter, ArtifactResolveOptions } from "../contracts"
+import { AosClientError } from "./aos-client"
 
 type ArtifactClient = {
   readArtifact(
@@ -23,6 +26,13 @@ export class AosArtifactAdapter implements ArtifactAdapter {
       artifact.source.reference !== artifact.id
     )
       throw new Error("AOS artifact reference is invalid")
-    return this.client.readArtifact(threadId, artifact.id, signal)
+    try {
+      return await this.client.readArtifact(threadId, artifact.id, signal)
+    } catch (error) {
+      // Pruned bytes are a permanent, presentable state, not a failed request.
+      if (error instanceof AosClientError && error.kind === "artifact-missing")
+        throw new ArtifactMissingError()
+      throw error
+    }
   }
 }

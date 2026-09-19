@@ -11,6 +11,8 @@ export type ArtifactPreviewKind =
   | "html"
   | "unsupported"
 
+export type ArtifactMediaKind = Extract<ArtifactPreviewKind, "audio" | "video">
+
 export type CsvPreview = {
   rows: string[][]
   truncated: boolean
@@ -70,6 +72,18 @@ export function classifyArtifactPreview(
   if (["mp3", "wav", "ogg", "m4a"].includes(extension ?? "")) return "audio"
   if (["mp4", "webm", "mov"].includes(extension ?? "")) return "video"
   return "unsupported"
+}
+
+/**
+ * Audio and video are the artifact kinds the conversation plays inline, so
+ * callers ask for the media kind instead of re-deriving it from the media type.
+ */
+export function artifactMediaKind(
+  mimeType: string | undefined,
+  filename: string
+): ArtifactMediaKind | null {
+  const kind = classifyArtifactPreview(mimeType, filename)
+  return kind === "audio" || kind === "video" ? kind : null
 }
 
 export function parseCsvPreview(

@@ -12,7 +12,11 @@ export type Dictionary = {
     loading: string
     loadFailed: string
     unavailable: string
+    missing: string
+    missingDetail: string
     downloadFailed: string
+    audio: string
+    video: string
     retry: string
     unsupported: string
     fileTooLarge: string

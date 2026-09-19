@@ -14,7 +14,12 @@ export const en = {
     loading: "Loading output…",
     loadFailed: "This output could not be loaded.",
     unavailable: "This runtime cannot open this output.",
+    missing: "This output is no longer available.",
+    missingDetail:
+      "The provider keeps generated audio and video for a limited time and has since removed this file. Ask the agent to generate it again if you still need it.",
     downloadFailed: "This output could not be downloaded.",
+    audio: "Audio output",
+    video: "Video output",
     retry: "Try again",
     unsupported: "Preview is unavailable for this file type.",
     fileTooLarge: "This file is too large to preview.",

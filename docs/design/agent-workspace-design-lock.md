@@ -44,3 +44,6 @@ Any intentional visual departure must be called out before it is introduced.
   count pills. The bell in the Agents heading shows the sole derived unread count.
 - **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
   reading a Session there does not change its read state.
+- **Audio and video Artifacts play in the conversation:** published media renders
+  as an inline native player in the message instead of a card that replaces the
+  inspector with the Artifact viewer. Every other Artifact keeps the viewer.

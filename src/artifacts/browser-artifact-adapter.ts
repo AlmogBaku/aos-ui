@@ -18,6 +18,17 @@ export class ArtifactUnavailableError extends Error {
   }
 }
 
+/**
+ * The receipt outlived the bytes: the provider pruned the artifact it published,
+ * so no retry can recover it. Distinct from a transient provider outage.
+ */
+export class ArtifactMissingError extends Error {
+  constructor(message = "The provider no longer has this artifact") {
+    super(message)
+    this.name = "ArtifactMissingError"
+  }
+}
+
 function isBlockedHost(hostname: string) {
   const host = hostname.toLowerCase().replace(/\.$/, "")
   if (host === "localhost" || host.endsWith(".localhost")) return true

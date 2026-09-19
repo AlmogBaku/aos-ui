@@ -23,9 +23,16 @@ import {
 } from "react"
 
 import { Button } from "@/components/ui/button"
+import {
+  SystemNotice,
+  type SystemNoticeTone,
+} from "@/components/ui/system-notice"
 import { HighlightedCode } from "@/components/code/syntax-highlighter"
 import { syntaxLanguageFromFilename } from "@/components/code/syntax-language"
-import { ArtifactUnavailableError } from "@/artifacts/browser-artifact-adapter"
+import {
+  ArtifactMissingError,
+  ArtifactUnavailableError,
+} from "@/artifacts/browser-artifact-adapter"
 import {
   ARTIFACT_DATA_PART_NAME,
   extractArtifactOccurrences,
@@ -43,8 +50,10 @@ import type {
 } from "@/runtime-adapters/contracts"
 
 import {
+  artifactMediaKind,
   classifyArtifactPreview,
   parseCsvPreview,
+  type ArtifactMediaKind,
   type ArtifactPreviewKind,
 } from "./artifact-renderers"
 import { injectArtifactHtmlCsp } from "./artifact-frame-policy"
@@ -53,12 +62,15 @@ import { ArtifactMarkdown } from "./artifact-markdown"
 export const MAX_ARTIFACT_PREVIEW_BYTES = 25 * 1024 * 1024
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 
+export type ArtifactPreviewFailure =
+  "load" | "unavailable" | "missing" | "file-too-large" | "text-too-large"
+
 export type ArtifactPreviewState =
   | { status: "idle" }
   | { status: "loading" }
   | {
       status: "error"
-      reason: "load" | "unavailable" | "file-too-large" | "text-too-large"
+      reason: ArtifactPreviewFailure
     }
   | {
       status: "ready"
@@ -341,17 +353,38 @@ function formatSize(sizeBytes: number, locale: Locale) {
   return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(sizeBytes / 1024 / 1024)} MB`
 }
 
-export function ArtifactCard({
-  artifact,
-  compact = false,
-  occurrenceKey,
-}: {
-  artifact: ArtifactDescriptor
-  compact?: boolean
-  occurrenceKey?: string
-}) {
-  const { adapter, downloadArtifact, labels, locale, openArtifact } =
-    useArtifactWorkspace()
+function previewFailureMessage(
+  reason: ArtifactPreviewFailure,
+  labels: Dictionary["artifacts"]
+) {
+  if (reason === "file-too-large") return labels.fileTooLarge
+  if (reason === "text-too-large") return labels.textTooLarge
+  if (reason === "unavailable") return labels.unavailable
+  if (reason === "missing") return labels.missing
+  return labels.loadFailed
+}
+
+/** Only pruned bytes need a second line: what happened and what to do next. */
+function previewFailureDetail(
+  reason: ArtifactPreviewFailure,
+  labels: Dictionary["artifacts"]
+) {
+  return reason === "missing" ? labels.missingDetail : undefined
+}
+
+function previewFailureTone(reason: ArtifactPreviewFailure): SystemNoticeTone {
+  if (reason === "load") return "error"
+  if (reason === "missing" || reason === "unavailable") return "warning"
+  return "info"
+}
+
+/** A pruned artifact has no bytes left to download and no retry that can win. */
+function isArtifactGone(state: ArtifactPreviewState) {
+  return state.status === "error" && state.reason === "missing"
+}
+
+function useArtifactDownload(artifact: ArtifactDescriptor) {
+  const { downloadArtifact } = useArtifactWorkspace()
   const [downloadFailed, setDownloadFailed] = useState(false)
 
   const download = async () => {
@@ -362,6 +395,41 @@ export function ArtifactCard({
       setDownloadFailed(true)
     }
   }
+
+  return { download, downloadFailed }
+}
+
+export type ArtifactCardProps = {
+  artifact: ArtifactDescriptor
+  compact?: boolean
+  occurrenceKey?: string
+}
+
+export function ArtifactCard(props: ArtifactCardProps) {
+  // Audio and video are first-class inline outcomes in the conversation. The
+  // compact Artifacts roster stays a list of rows that open the viewer.
+  const mediaKind = props.compact
+    ? null
+    : artifactMediaKind(props.artifact.mimeType, props.artifact.filename)
+
+  return mediaKind ? (
+    <ArtifactMediaPlayer
+      artifact={props.artifact}
+      kind={mediaKind}
+      occurrenceKey={props.occurrenceKey}
+    />
+  ) : (
+    <ArtifactFileCard {...props} />
+  )
+}
+
+function ArtifactFileCard({
+  artifact,
+  compact = false,
+  occurrenceKey,
+}: ArtifactCardProps) {
+  const { adapter, labels, locale, openArtifact } = useArtifactWorkspace()
+  const { download, downloadFailed } = useArtifactDownload(artifact)
 
   const identity = (
     <>
@@ -450,11 +518,125 @@ export function ArtifactCard({
         </Button>
       </div>
       {downloadFailed && (
-        <p className="mt-2 text-sm text-destructive" role="status">
-          {labels.downloadFailed}
-        </p>
+        <SystemNotice
+          className="col-span-2 mt-2"
+          locale={locale}
+          title={labels.downloadFailed}
+          tone="error"
+        />
       )}
     </article>
+  )
+}
+
+/** The one download control, with whatever AOS has to say about a failed one. */
+function ArtifactDownloadAction({
+  artifact,
+}: {
+  artifact: ArtifactDescriptor
+}) {
+  const { adapter, labels, locale } = useArtifactWorkspace()
+  const { download, downloadFailed } = useArtifactDownload(artifact)
+
+  return (
+    <div className="grid gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={!adapter}
+        onClick={() => void download()}
+        className="w-fit motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
+      >
+        <DownloadIcon data-icon="inline-start" />
+        {labels.download}
+      </Button>
+      {downloadFailed && (
+        <SystemNotice
+          locale={locale}
+          title={labels.downloadFailed}
+          tone="error"
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Plays a published audio or video artifact in the conversation, on the same
+ * byte loader, bounds, and abort behavior as the Artifact viewer. Sizing mirrors
+ * a sent media attachment so both conversation surfaces read the same.
+ */
+function ArtifactMediaPlayer({
+  artifact,
+  kind,
+  occurrenceKey,
+}: {
+  artifact: ArtifactDescriptor
+  kind: ArtifactMediaKind
+  occurrenceKey?: string
+}) {
+  const { labels, locale, occurrences } = useArtifactWorkspace()
+  // The provider keeps one descriptor identity per publication while the
+  // conversation streams, so playing bytes are not reloaded on every render.
+  const published =
+    occurrences.find(({ key }) => key === occurrenceKey)?.artifact ?? artifact
+  const { state } = useArtifactPreviewController(published)
+  const mediaLabel = `${kind === "audio" ? labels.audio : labels.video}: ${published.filename}`
+  const playable = state.status === "ready" ? state.url : undefined
+
+  if (state.status === "error") {
+    return (
+      <div className="grid max-w-full gap-1.5">
+        <p className="truncate text-sm font-medium" dir="auto">
+          {published.filename}
+        </p>
+        <SystemNotice
+          detail={previewFailureDetail(state.reason, labels)}
+          locale={locale}
+          title={previewFailureMessage(state.reason, labels)}
+          tone={previewFailureTone(state.reason)}
+        >
+          {!isArtifactGone(state) && (
+            <ArtifactDownloadAction artifact={published} />
+          )}
+        </SystemNotice>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid w-fit max-w-full gap-2">
+      {playable === undefined ? (
+        <p
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+        >
+          <Loader2Icon
+            className="size-4 motion-safe:animate-spin"
+            aria-hidden="true"
+          />
+          {labels.loading}
+        </p>
+      ) : kind === "audio" ? (
+        <audio
+          aria-label={mediaLabel}
+          className="block w-full max-w-[30rem]"
+          controls
+          preload="metadata"
+          src={playable}
+        />
+      ) : (
+        <video
+          aria-label={mediaLabel}
+          className="block h-auto max-h-96 w-full max-w-[30rem] rounded-lg bg-black object-contain"
+          controls
+          preload="metadata"
+          src={playable}
+        />
+      )}
+      <ArtifactDownloadAction artifact={published} />
+    </div>
   )
 }
 
@@ -542,9 +724,11 @@ function ArtifactCopyButton({
   )
 }
 
-export function useArtifactPreviewController() {
+/** Loads one artifact's bytes: the opened viewer by default, or an inline player. */
+export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   const { adapter, agentId, selectedArtifact, threadId } =
     useArtifactWorkspace()
+  const previewArtifact = artifact ?? selectedArtifact
   const [resolved, setResolved] = useState<{
     artifact: ArtifactDescriptor
     adapter: ArtifactAdapter
@@ -555,22 +739,22 @@ export function useArtifactPreviewController() {
   } | null>(null)
   const [retryToken, setRetryToken] = useState(0)
 
-  const kind = selectedArtifact
+  const kind = previewArtifact
     ? classifyArtifactPreview(
-        selectedArtifact.mimeType,
-        selectedArtifact.filename
+        previewArtifact.mimeType,
+        previewArtifact.filename
       )
     : "unsupported"
-  const preflightState: ArtifactPreviewState | null = !selectedArtifact
+  const preflightState: ArtifactPreviewState | null = !previewArtifact
     ? { status: "idle" }
     : !adapter
       ? { status: "error", reason: "unavailable" }
       : isTextPreview(kind) &&
-          selectedArtifact.sizeBytes !== undefined &&
-          selectedArtifact.sizeBytes > MAX_TEXT_PREVIEW_BYTES
+          previewArtifact.sizeBytes !== undefined &&
+          previewArtifact.sizeBytes > MAX_TEXT_PREVIEW_BYTES
         ? { status: "error", reason: "text-too-large" }
-        : selectedArtifact.sizeBytes !== undefined &&
-            selectedArtifact.sizeBytes > MAX_ARTIFACT_PREVIEW_BYTES
+        : previewArtifact.sizeBytes !== undefined &&
+            previewArtifact.sizeBytes > MAX_ARTIFACT_PREVIEW_BYTES
           ? { status: "error", reason: "file-too-large" }
           : kind === "unsupported"
             ? { status: "ready", kind }
@@ -578,13 +762,13 @@ export function useArtifactPreviewController() {
   const shouldResolve = preflightState === null
 
   useEffect(() => {
-    if (!selectedArtifact || !adapter || !shouldResolve) return
+    if (!previewArtifact || !adapter || !shouldResolve) return
 
     const controller = new AbortController()
     let active = true
     let objectUrl: string | undefined
     const request = {
-      artifact: selectedArtifact,
+      artifact: previewArtifact,
       adapter,
       agentId,
       threadId,
@@ -595,7 +779,7 @@ export function useArtifactPreviewController() {
 
     void adapter
       .resolve({
-        artifact: selectedArtifact,
+        artifact: previewArtifact,
         agentId,
         threadId,
         signal: controller.signal,
@@ -623,9 +807,11 @@ export function useArtifactPreviewController() {
           finish({
             status: "error",
             reason:
-              error instanceof ArtifactUnavailableError
-                ? "unavailable"
-                : "load",
+              error instanceof ArtifactMissingError
+                ? "missing"
+                : error instanceof ArtifactUnavailableError
+                  ? "unavailable"
+                  : "load",
           })
         }
       })
@@ -639,16 +825,16 @@ export function useArtifactPreviewController() {
     adapter,
     agentId,
     kind,
+    previewArtifact,
     retryToken,
-    selectedArtifact,
     shouldResolve,
     threadId,
   ])
 
   const isCurrentResolution =
-    selectedArtifact !== null &&
+    previewArtifact !== null &&
     adapter !== undefined &&
-    resolved?.artifact === selectedArtifact &&
+    resolved?.artifact === previewArtifact &&
     resolved.adapter === adapter &&
     resolved.agentId === agentId &&
     resolved.threadId === threadId &&
@@ -712,21 +898,23 @@ export function ArtifactViewerContent({
         {state.status === "ready" && isTextPreview(state.kind) && (
           <ArtifactCopyButton labels={labels} text={state.text ?? ""} />
         )}
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={!adapter}
-          onClick={() => {
-            setDownloadFailed(false)
-            void downloadArtifact(selectedArtifact).catch(() =>
-              setDownloadFailed(true)
-            )
-          }}
-          className="[@media(pointer:coarse)]:min-h-11"
-        >
-          <DownloadIcon data-icon="inline-start" />
-          {labels.download}
-        </Button>
+        {!isArtifactGone(state) && (
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={!adapter}
+            onClick={() => {
+              setDownloadFailed(false)
+              void downloadArtifact(selectedArtifact).catch(() =>
+                setDownloadFailed(true)
+              )
+            }}
+            className="[@media(pointer:coarse)]:min-h-11"
+          >
+            <DownloadIcon data-icon="inline-start" />
+            {labels.download}
+          </Button>
+        )}
         {showCloseButton && (
           <Button
             ref={closeButtonRef}
@@ -742,17 +930,18 @@ export function ArtifactViewerContent({
         )}
       </header>
       {downloadFailed && (
-        <p
-          className="border-b border-border px-4 py-2 text-sm text-destructive"
-          role="status"
-        >
-          {labels.downloadFailed}
-        </p>
+        <SystemNotice
+          className="mx-4 mt-3"
+          locale={locale}
+          title={labels.downloadFailed}
+          tone="error"
+        />
       )}
       <div className="min-h-64 flex-1 overflow-auto bg-muted/30 p-4">
         <ArtifactPreview
           state={state}
           labels={labels}
+          locale={locale}
           filename={selectedArtifact.filename}
           onRetry={retry}
         />
@@ -764,11 +953,13 @@ export function ArtifactViewerContent({
 function ArtifactPreview({
   state,
   labels,
+  locale,
   filename,
   onRetry,
 }: {
   state: ArtifactPreviewState
   labels: Dictionary["artifacts"]
+  locale: Locale
   filename: string
   onRetry: () => void
 }) {
@@ -785,23 +976,21 @@ function ArtifactPreview({
     )
   }
   if (state.status === "error") {
-    const message =
-      state.reason === "file-too-large"
-        ? labels.fileTooLarge
-        : state.reason === "text-too-large"
-          ? labels.textTooLarge
-          : state.reason === "unavailable"
-            ? labels.unavailable
-            : labels.loadFailed
     return (
-      <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
-        <p className="text-sm text-muted-foreground">{message}</p>
-        {state.reason === "load" && (
-          <Button type="button" variant="outline" onClick={onRetry}>
-            <RotateCcwIcon data-icon="inline-start" />
-            {labels.retry}
-          </Button>
-        )}
+      <div className="flex min-h-56 flex-col items-center justify-center">
+        <SystemNotice
+          detail={previewFailureDetail(state.reason, labels)}
+          locale={locale}
+          title={previewFailureMessage(state.reason, labels)}
+          tone={previewFailureTone(state.reason)}
+        >
+          {state.reason === "load" && (
+            <Button type="button" variant="outline" onClick={onRetry}>
+              <RotateCcwIcon data-icon="inline-start" />
+              {labels.retry}
+            </Button>
+          )}
+        </SystemNotice>
       </div>
     )
   }

@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -16,6 +17,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react"
 
+import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
 import type { ArtifactAdapter } from "@/runtime-adapters/contracts"
 
@@ -841,5 +843,221 @@ describe("artifact workspace", () => {
     expect(
       screen.getAllByRole("button", { name: "Download" })[0]
     ).toBeDisabled()
+  })
+
+  const audioArtifact = {
+    id: "voice-note",
+    filename: "intro.mp3",
+    mimeType: "audio/mpeg",
+    source: { type: "provider", reference: "voice-note" },
+  }
+  const videoArtifact = {
+    id: "walkthrough",
+    filename: "walkthrough.mp4",
+    mimeType: "video/mp4",
+    source: { type: "provider", reference: "walkthrough" },
+  }
+
+  /** One published artifact on the conversation surface that carries it. */
+  const renderPublishedArtifact = ({
+    artifact,
+    resolve,
+    locale = "en",
+    messageId = "media-message",
+  }: {
+    artifact: unknown
+    resolve: ArtifactAdapter["resolve"]
+    locale?: "en" | "he"
+    messageId?: string
+  }) =>
+    render(
+      <ArtifactWorkspaceProvider
+        locale={locale}
+        adapter={{ resolve }}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={[
+          {
+            id: messageId,
+            role: "assistant",
+            content: [{ type: "data", name: "aos.artifact", data: artifact }],
+          },
+        ]}
+      >
+        <ArtifactToolResultCard
+          result={artifact}
+          occurrenceKey={`${messageId}:0`}
+        />
+        <ArtifactViewerContent />
+      </ArtifactWorkspaceProvider>
+    )
+
+  it("plays a published audio artifact inline instead of opening the viewer", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audio-artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    renderPublishedArtifact({
+      artifact: audioArtifact,
+      resolve: async () => new Blob(["ID3"], { type: "audio/mpeg" }),
+    })
+
+    const player = await screen.findByLabelText("Audio output: intro.mp3")
+    expect(player).toBeInstanceOf(HTMLAudioElement)
+    expect(player).toHaveAttribute("src", "blob:audio-artifact")
+    expect(player).toHaveAttribute("controls")
+    expect(player).toHaveAttribute("preload", "metadata")
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: /^Open/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("region", { name: "Output preview" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("plays a published video artifact inline", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:video-artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    renderPublishedArtifact({
+      artifact: videoArtifact,
+      resolve: async () => new Blob(["ftyp"], { type: "video/mp4" }),
+    })
+
+    const player = await screen.findByLabelText("Video output: walkthrough.mp4")
+    expect(player).toBeInstanceOf(HTMLVideoElement)
+    expect(player).toHaveAttribute("src", "blob:video-artifact")
+    expect(player).toHaveAttribute("controls")
+    expect(player).toHaveAttribute("preload", "metadata")
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("region", { name: "Output preview" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("names an inline player in the selected locale", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audio-artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    renderPublishedArtifact({
+      artifact: audioArtifact,
+      locale: "he",
+      resolve: async () => new Blob(["ID3"], { type: "audio/mpeg" }),
+    })
+
+    expect(await screen.findByLabelText("קובץ שמע: intro.mp3")).toBeInstanceOf(
+      HTMLAudioElement
+    )
+  })
+
+  it("keeps an unreadable audio artifact honest and still downloadable", async () => {
+    renderPublishedArtifact({
+      artifact: audioArtifact,
+      resolve: async () => {
+        throw new Error("offline")
+      },
+    })
+
+    expect(
+      await screen.findByText("This output could not be loaded.")
+    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(screen.queryByLabelText(/^Audio output/)).not.toBeInTheDocument()
+  })
+
+  it("explains a pruned inline player without retry or download", async () => {
+    renderPublishedArtifact({
+      artifact: audioArtifact,
+      resolve: async () => {
+        throw new ArtifactMissingError()
+      },
+    })
+
+    expect(
+      await screen.findByText("This output is no longer available.")
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        "The provider keeps generated audio and video for a limited time and has since removed this file. Ask the agent to generate it again if you still need it."
+      )
+    ).toBeVisible()
+    expect(screen.getByText("intro.mp3")).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("explains a pruned inline player in Hebrew", async () => {
+    renderPublishedArtifact({
+      artifact: audioArtifact,
+      locale: "he",
+      resolve: async () => {
+        throw new ArtifactMissingError()
+      },
+    })
+
+    expect(await screen.findByText("הפלט הזה כבר לא זמין.")).toBeVisible()
+    expect(
+      screen.getByText(
+        "הספק שומר אודיו ווידאו שנוצרו לזמן מוגבל ומאז הסיר את הקובץ הזה. אם עדיין צריך אותו, אפשר לבקש מהסוכן ליצור אותו שוב."
+      )
+    ).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "הורדה" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("drops retry and download from the viewer of a pruned output", async () => {
+    renderPublishedArtifact({
+      artifact: {
+        id: "notes",
+        filename: "notes.txt",
+        mimeType: "text/plain",
+        source: { type: "provider", reference: "notes" },
+      },
+      messageId: "notes-message",
+      resolve: async () => {
+        throw new ArtifactMissingError()
+      },
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Open: notes.txt" }))
+
+    const viewer = await screen.findByRole("region", {
+      name: "Output preview",
+    })
+    expect(
+      within(viewer).getByText("This output is no longer available.")
+    ).toBeVisible()
+    expect(
+      within(viewer).getByText(
+        "The provider keeps generated audio and video for a limited time and has since removed this file. Ask the agent to generate it again if you still need it."
+      )
+    ).toBeVisible()
+    expect(within(viewer).getByText("notes.txt")).toBeVisible()
+    expect(
+      within(viewer).queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument()
+    expect(
+      within(viewer).queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("renders an artifact without a media type as an ordinary card", () => {
+    renderPublishedArtifact({
+      artifact: {
+        id: "capture",
+        filename: "capture.bin",
+        source: { type: "provider", reference: "capture" },
+      },
+      resolve: vi.fn<ArtifactAdapter["resolve"]>(),
+    })
+
+    expect(
+      screen.getByRole("button", { name: "Open: capture.bin" })
+    ).toBeVisible()
+    expect(
+      screen.queryByLabelText(/^(Audio|Video) output/)
+    ).not.toBeInTheDocument()
   })
 })

@@ -30,7 +30,11 @@ export type AosModelChoices = z.infer<typeof SessionModelsResponseSchema>
 export type AosContext = z.infer<typeof SessionContextResponseSchema>
 
 export type AosClientFailure =
-  "connection-interrupted" | "provider-unavailable" | "proxy-failure"
+  | "connection-interrupted"
+  | "provider-unavailable"
+  | "proxy-failure"
+  /** The provider no longer holds the bytes a published receipt points at. */
+  | "artifact-missing"
 
 export class AosClientError extends Error {
   constructor(
@@ -172,7 +176,9 @@ export class AosRemoteClient {
         threadId,
         `/artifacts/${encodeURIComponent(artifactId)}`
       ),
-      { signal }
+      { signal },
+      // A published artifact the provider has since pruned is gone for good.
+      "artifact-missing"
     )
   }
 
@@ -225,7 +231,12 @@ export class AosRemoteClient {
     return `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}${suffix}`
   }
 
-  async #readBlob(path: string, init?: RequestInit) {
+  async #readBlob(
+    path: string,
+    init?: RequestInit,
+    /** How this route reads an absent resource; 503 always stays an outage. */
+    notFound: AosClientFailure = "proxy-failure"
+  ) {
     let response: Response
     try {
       const headers = new Headers(init?.headers)
@@ -242,7 +253,11 @@ export class AosRemoteClient {
     if (!response.ok) {
       const error = await normalizedError(response)
       throw new AosClientError(
-        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        response.status === 503
+          ? "provider-unavailable"
+          : response.status === 404
+            ? notFound
+            : "proxy-failure",
         error?.description
       )
     }

@@ -248,4 +248,40 @@ describe("normalized AOS REST byte client", () => {
       client.readArtifact(SESSION_ID, "artifact-1")
     ).rejects.toMatchObject({ kind: "proxy-failure" })
   })
+
+  it("separates a pruned artifact from a proxy failure and a provider outage", async () => {
+    const pruned = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json(
+          { error: { code: "not_found", description: "Artifact not found" } },
+          { status: 404 }
+        )
+      ),
+    })
+    pruned.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+    const outage = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json(
+          { error: { code: "temporarily_unavailable", description: "Later" } },
+          { status: 503 }
+        )
+      ),
+    })
+    outage.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+    await expect(
+      pruned.readArtifact(SESSION_ID, "artifact-1")
+    ).rejects.toMatchObject({
+      name: "AosClientError",
+      kind: "artifact-missing",
+      message: "Artifact not found",
+    } satisfies Partial<AosClientError>)
+    // Only the artifact read reads a 404 as bytes the provider no longer holds.
+    await expect(pruned.speak(SESSION_ID, "Hello")).rejects.toMatchObject({
+      kind: "proxy-failure",
+    })
+    await expect(
+      outage.readArtifact(SESSION_ID, "artifact-1")
+    ).rejects.toMatchObject({ kind: "provider-unavailable" })
+  })
 })

@@ -278,6 +278,13 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   lightweight, while deferred Markdown retains a localized raw-text fallback.
 - **Safety:** charts, maps, Mermaid, tool results, and generated content retain
   textual alternatives. Never execute generated browser code or arbitrary HTML.
+- **Published artifacts:** audio and video are first-class inline outcomes. They
+  play in the message as native, downloadable players sized like a sent media
+  attachment, and nothing about them opens the Artifact viewer. Every other
+  artifact stays a compact card that opens the viewer, and the Artifacts roster
+  stays a list of openable rows. A failure states what happened in place, and a
+  provider that no longer holds the bytes says so and drops the retry and
+  download it cannot honor.
 
 ### Conversation and Execution
 
@@ -296,6 +303,10 @@ assistant's answer.
   signals remain consistent across tools. Summary rows communicate what
   happened; details remain available without turning the trace into a stack of
   cards.
+- **System notices:** anything AOS or a provider says about a failure or an
+  unavailable output renders in the System Notice panel with the AOS source
+  label, never as message prose. The operator cannot then mistake it for the
+  Agent's words.
 - **Protect reading orientation:** search, expansion, live updates, and
   responsive reflow preserve the user's place. The same information hierarchy
   and interaction model holds across keyboard and pointer use, narrow and wide
