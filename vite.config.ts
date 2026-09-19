@@ -148,6 +148,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve(import.meta.dirname, "src"),
         "@shared": path.resolve(import.meta.dirname, "shared"),
+        "@aos/protocol/acp": path.resolve(
+          import.meta.dirname,
+          "packages/protocol/acp.ts"
+        ),
         "@aos/protocol": path.resolve(
           import.meta.dirname,
           "packages/protocol/index.ts"

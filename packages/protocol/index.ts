@@ -89,6 +89,8 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionRun: OperationCapabilitySchema,
     sessionStop: OperationCapabilitySchema,
     sessionSteer: OperationCapabilitySchema,
+    // Optional only until every runtime literal declares it (Phase A, lane A5).
+    sessionReadState: OperationCapabilitySchema.optional(),
   }),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
@@ -151,6 +153,8 @@ export const SessionSchema = z.strictObject({
   archived: z.boolean(),
   updatedAt: z.string().datetime(),
   status: SessionStatusSchema,
+  /** Provider read state; absent when untracked or unknowable on this read. */
+  unread: z.boolean().optional(),
 })
 export type Session = z.infer<typeof SessionSchema>
 export const SessionCatalogResponseSchema = z.strictObject({
@@ -287,9 +291,14 @@ export const SessionPatchRequestSchema = z
   .strictObject({
     title: z.string().min(1).max(4096).optional(),
     archived: z.boolean().optional(),
+    unread: z.boolean().optional(),
   })
   .refine(
-    (value) => (value.title !== undefined) !== (value.archived !== undefined)
+    (value) =>
+      [value.title, value.archived, value.unread].filter(
+        (intent) => intent !== undefined
+      ).length === 1,
+    "Exactly one of title, archived, unread"
   )
 
 export const RunStopResponseSchema = z.strictObject({

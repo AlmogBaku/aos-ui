@@ -1,9 +1,9 @@
 import type {
-  AGUIEvent,
-  Interrupt,
-  ResumeEntry,
-  RunAgentInput,
-} from "@ag-ui/core"
+  PendingRequest,
+  RequestReply,
+  RunEvent,
+  TurnInput,
+} from "./events"
 import type {
   AgentCatalogResponse,
   RuntimeAuthState,
@@ -29,18 +29,18 @@ export type SessionScope = {
 
 export type ServerRunScope = SessionScope
 
-export type NewTurnRunInput = RunAgentInput & {
+export type NewTurnRunInput = TurnInput & {
   resume?: undefined
   /** User turn to rewind before Edit or Retry; validated authoritatively. */
   rewindSourceId?: string
 }
-export type ResumeRunInput = RunAgentInput & {
+export type ResumeRunInput = TurnInput & {
   messages: []
-  resume: ResumeEntry[]
+  resume: RequestReply[]
 }
 
 export type ServerRunHandle = {
-  events: AsyncIterable<AGUIEvent>
+  events: AsyncIterable<RunEvent>
   /** Resolves only when the provider segment is terminal. */
   settled: Promise<void>
   /** Idempotently requests Stop or rechecks an already-stopping native run. */
@@ -82,7 +82,7 @@ export type ServerRunEngine = {
     | {
         handle: ServerRunHandle
         state: "running" | "waiting-for-input"
-        interrupts?: Interrupt[]
+        interrupts?: PendingRequest[]
       }
     | undefined
   >
@@ -240,6 +240,11 @@ export interface ServerRuntime {
     listener: () => void,
     reset?: () => void
   ): Promise<() => void>
+  /**
+   * Payload-less wake when the provider's Session catalog changed (Hermes
+   * `sessions.changed`). Absent when the provider has no such signal.
+   */
+  subscribeCatalogChanges?(listener: () => void): Promise<() => void>
   stageAttachments(
     agentId: string,
     publicSessionId: string,

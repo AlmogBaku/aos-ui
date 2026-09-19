@@ -14,6 +14,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@shared/*": ["./shared/*"],
+      "@aos/protocol/acp": ["./packages/protocol/acp.ts"],
       "@aos/protocol": ["./packages/protocol/index.ts"]
     }
   }

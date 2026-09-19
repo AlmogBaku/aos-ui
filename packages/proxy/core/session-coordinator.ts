@@ -1,4 +1,10 @@
-import { EventType, type AGUIEvent, type Interrupt } from "@ag-ui/core"
+import {
+  RunEventKind,
+  isUncertainError,
+  pendingRequestsOf,
+  type PendingRequest,
+  type RunEvent,
+} from "./events"
 
 import {
   ServerRunConflictError,
@@ -22,7 +28,7 @@ export type SessionExecutionState =
 
 export type SequencedRunEvent = {
   sequence: number
-  event: AGUIEvent
+  event: RunEvent
 }
 
 export type CoordinatorAccess = {
@@ -30,10 +36,10 @@ export type CoordinatorAccess = {
   controllerId: string
   lane: "operator" | "guest"
   canControl: boolean
-  project?(event: AGUIEvent): AGUIEvent | undefined
+  project?(event: RunEvent): RunEvent | undefined
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
-  onTerminal?(event: AGUIEvent): void | Promise<void>
+  onTerminal?(event: RunEvent): void | Promise<void>
 }
 
 export type CoordinatorRecoveryRequest = Pick<
@@ -73,8 +79,8 @@ type Segment = {
   replayOverflow: boolean
   nextSequence: number
   terminal: boolean
-  interrupts: Interrupt[]
-  onTerminal?: (event: AGUIEvent) => void | Promise<void>
+  interrupts: PendingRequest[]
+  onTerminal?: (event: RunEvent) => void | Promise<void>
 }
 
 type Execution = {
@@ -99,7 +105,7 @@ function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\u0000${scope.sessionId}`
 }
 
-function safeEventBytes(event: AGUIEvent) {
+function safeEventBytes(event: RunEvent) {
   try {
     return new TextEncoder().encode(JSON.stringify(event)).byteLength
   } catch {
@@ -108,9 +114,9 @@ function safeEventBytes(event: AGUIEvent) {
 }
 
 function compactedEvent(
-  previous: AGUIEvent,
-  next: AGUIEvent
-): AGUIEvent | undefined {
+  previous: RunEvent,
+  next: RunEvent
+): RunEvent | undefined {
   if (
     previous.timestamp !== undefined ||
     previous.rawEvent !== undefined ||
@@ -121,22 +127,22 @@ function compactedEvent(
   )
     return undefined
   if (
-    previous.type === EventType.TEXT_MESSAGE_CONTENT &&
-    next.type === EventType.TEXT_MESSAGE_CONTENT &&
+    previous.type === RunEventKind.TEXT_MESSAGE_CONTENT &&
+    next.type === RunEventKind.TEXT_MESSAGE_CONTENT &&
     previous.messageId === next.messageId &&
     previous.subagentRunId === next.subagentRunId
   )
     return { ...previous, delta: previous.delta + next.delta }
   if (
-    previous.type === EventType.REASONING_MESSAGE_CONTENT &&
-    next.type === EventType.REASONING_MESSAGE_CONTENT &&
+    previous.type === RunEventKind.REASONING_MESSAGE_CONTENT &&
+    next.type === RunEventKind.REASONING_MESSAGE_CONTENT &&
     previous.messageId === next.messageId &&
     previous.subagentRunId === next.subagentRunId
   )
     return { ...previous, delta: previous.delta + next.delta }
   if (
-    previous.type === EventType.TOOL_CALL_ARGS &&
-    next.type === EventType.TOOL_CALL_ARGS &&
+    previous.type === RunEventKind.TOOL_CALL_ARGS &&
+    next.type === RunEventKind.TOOL_CALL_ARGS &&
     previous.toolCallId === next.toolCallId &&
     previous.subagentRunId === next.subagentRunId
   )
@@ -163,21 +169,6 @@ function isResume(
   return Array.isArray(input.resume) && input.resume.length > 0
 }
 
-function eventInterrupts(event: AGUIEvent): Interrupt[] {
-  if (event.type !== EventType.RUN_FINISHED) return []
-  const outcome = event.outcome
-  if (
-    !outcome ||
-    typeof outcome !== "object" ||
-    !("type" in outcome) ||
-    outcome.type !== "interrupt" ||
-    !("interrupts" in outcome) ||
-    !Array.isArray(outcome.interrupts)
-  )
-    return []
-  return outcome.interrupts
-}
-
 function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
   const received = input.resume.map(({ interruptId }) => interruptId)
   return (
@@ -185,16 +176,6 @@ function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
     expected.length === received.length &&
     expected.every((id) => received.includes(id)) &&
     new Set(received).size === received.length
-  )
-}
-
-function uncertainError(event: AGUIEvent) {
-  return (
-    event.type === EventType.RUN_ERROR &&
-    (event.code === "AOS_SEND_UNCERTAIN" ||
-      event.code === "AOS_INTERACTION_UNCERTAIN" ||
-      event.code === "AOS_CONNECTION_INTERRUPTED" ||
-      event.code === "AOS_RESET_REQUIRED")
   )
 }
 
@@ -231,7 +212,7 @@ export class SessionCoordinator {
           runId: execution.segment.runId,
           interrupts: structuredClone(execution.segment.interrupts),
         }
-      : { state: "idle" as const, interrupts: [] as Interrupt[] }
+      : { state: "idle" as const, interrupts: [] as PendingRequest[] }
   }
 
   async discover(scope: SessionScope) {
@@ -539,7 +520,7 @@ export class SessionCoordinator {
         text: request.text,
       })
       this.#publish(execution.segment, {
-        type: EventType.CUSTOM,
+        type: RunEventKind.CUSTOM,
         name: "aos.steer.accepted",
         value: {
           requestId: request.requestId,
@@ -595,7 +576,7 @@ export class SessionCoordinator {
     cacheKey: string,
     runId: string,
     handle: ServerRunHandle,
-    onTerminal?: (event: AGUIEvent) => void | Promise<void>,
+    onTerminal?: (event: RunEvent) => void | Promise<void>,
     journalComplete = true
   ): Segment {
     return {
@@ -625,8 +606,8 @@ export class SessionCoordinator {
         for await (const event of segment.handle.events) {
           if (execution.segment !== segment) return
           if (
-            event.type === EventType.RUN_FINISHED ||
-            event.type === EventType.RUN_ERROR
+            event.type === RunEventKind.RUN_FINISHED ||
+            event.type === RunEventKind.RUN_ERROR
           )
             try {
               await segment.onTerminal?.(event)
@@ -640,21 +621,21 @@ export class SessionCoordinator {
           this.#rememberJournal(segment, sequenced)
           this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
-          if (event.type === EventType.RUN_FINISHED) {
+          if (event.type === RunEventKind.RUN_FINISHED) {
             this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
-            segment.interrupts = eventInterrupts(event)
+            segment.interrupts = pendingRequestsOf(event)
             execution.state = segment.interrupts.length
               ? "waiting-for-input"
               : "idle"
             break
           }
-          if (event.type === EventType.RUN_ERROR) {
+          if (event.type === RunEventKind.RUN_ERROR) {
             this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
-            execution.state = uncertainError(event) ? "uncertain" : "idle"
+            execution.state = isUncertainError(event) ? "uncertain" : "idle"
             break
           }
         }
@@ -741,7 +722,7 @@ export class SessionCoordinator {
     segment.journal = undefined
   }
 
-  #publish(segment: Segment, event: AGUIEvent) {
+  #publish(segment: Segment, event: RunEvent) {
     const sequenced = { sequence: ++segment.nextSequence, event }
     this.#rememberJournal(segment, sequenced)
     this.#remember(segment, sequenced)
@@ -826,7 +807,7 @@ export class SessionCoordinator {
     const candidate: SequencedRunEvent = {
       sequence: segment.nextSequence + 1,
       event: {
-        type: EventType.RUN_ERROR,
+        type: RunEventKind.RUN_ERROR,
         code: "AOS_RESET_REQUIRED",
         message: "AOS run history must be reloaded before continuing.",
       },

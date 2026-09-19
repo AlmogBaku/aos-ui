@@ -26,6 +26,7 @@
     "@ag-ui/client": "0.0.59",
     "@ag-ui/core": "0.0.59",
     "@ag-ui/encoder": "0.0.59",
+    "@agentclientprotocol/sdk": "1.4.0",
     "@assistant-ui/react": "0.15.18",
     "@assistant-ui/react-ag-ui": "0.0.58",
     "@assistant-ui/react-markdown": "0.14.14",
