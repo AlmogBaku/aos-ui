@@ -203,9 +203,9 @@ describe("translateRunEvent messages", () => {
     expect(state.messageId).toBe("m1")
   })
 
-  it("streams reasoning as thought chunks under its own message id", () => {
-    const { outbound } = translate([
-      { type: RunEventKind.REASONING_START, messageId: "m1" },
+  it("collapses a reasoning-first segment onto one assistant message", () => {
+    const { state, outbound } = translate([
+      { type: RunEventKind.REASONING_START, messageId: "m1:reasoning" },
       {
         type: RunEventKind.REASONING_MESSAGE_START,
         messageId: "m1:reasoning",
@@ -217,14 +217,99 @@ describe("translateRunEvent messages", () => {
         delta: "think",
       },
       { type: RunEventKind.REASONING_MESSAGE_END, messageId: "m1:reasoning" },
-      { type: RunEventKind.REASONING_END, messageId: "m1" },
+      { type: RunEventKind.REASONING_END, messageId: "m1:reasoning" },
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+      { type: RunEventKind.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "he" },
+      {
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "c1",
+        toolCallName: "read_file",
+      },
     ])
 
     expect(updatesOf(outbound)).toEqual([
       {
         sessionUpdate: "agent_thought_chunk",
-        messageId: "m1:reasoning",
+        messageId: "m1",
         content: { type: "text", text: "think" },
+        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "m1",
+        content: { type: "text", text: "he" },
+        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c1",
+        title: "read_file",
+        status: "in_progress",
+        _meta: {
+          [AOS_META_KEY]: { sequence: 7, runId: "run-1", messageId: "m1" },
+        },
+      },
+    ])
+    expect(state.messageId).toBe("m1")
+  })
+
+  it("streams reasoning under the message id the prose opened", () => {
+    const { outbound } = translate([
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+      { type: RunEventKind.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "he" },
+      {
+        type: RunEventKind.REASONING_MESSAGE_START,
+        messageId: "m1:reasoning",
+        role: "reasoning",
+      },
+      {
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
+        messageId: "m1:reasoning",
+        delta: "think",
+      },
+    ])
+
+    expect(updatesOf(outbound)[1]).toEqual({
+      sessionUpdate: "agent_thought_chunk",
+      messageId: "m1",
+      content: { type: "text", text: "think" },
+      _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+    })
+  })
+
+  it("keeps one message id across the segment's later message boundaries", () => {
+    const { outbound } = translate([
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m2",
+        role: "assistant",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "m2",
+        delta: "more",
+      },
+    ])
+
+    expect(updatesOf(outbound)).toEqual([
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "m1",
+        content: { type: "text", text: "more" },
         _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
       },
     ])

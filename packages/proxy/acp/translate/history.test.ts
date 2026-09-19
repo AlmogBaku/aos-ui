@@ -112,11 +112,18 @@ describe("translateHistory", () => {
     })
   })
 
-  it("gives replayed reasoning its own message id", () => {
-    expect(translateHistory(history, "operator")[1]).toEqual({
+  it("replays reasoning and prose on one assistant message", () => {
+    const [, thought, prose] = translateHistory(history, "operator")
+
+    expect(thought).toEqual({
       sessionUpdate: "agent_thought",
-      messageId: "a1:reasoning",
+      messageId: "a1",
       content: [{ type: "text", text: "weigh the options" }],
+    })
+    expect(prose).toEqual({
+      sessionUpdate: "agent_message",
+      messageId: "a1",
+      content: [{ type: "text", text: "Done." }],
     })
   })
 

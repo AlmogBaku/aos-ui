@@ -231,7 +231,6 @@ const script = {
     messageId: "reconnect-answer",
     text: "Recovered after reconnect.",
   },
-  /** Each chunk stays its own content block, so each one is asserted. */
   reply: ["Streamed by AOS.", "Both chunks arrived."],
   usage: { used: 1, size: 100 },
 }
@@ -521,8 +520,13 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
 
   await input.fill("Send once")
   await page.getByRole("button", { name: "Send message" }).click()
-  await expect(page.getByText("Streamed by AOS.")).toBeVisible()
-  await expect(page.getByText("Both chunks arrived.")).toBeVisible()
+  // The chunks extend one content part, so the turn reads as one paragraph.
+  await expect(
+    page.getByText("Streamed by AOS.Both chunks arrived.")
+  ).toBeVisible()
+  await expect(
+    page.getByText("Both chunks arrived.", { exact: true })
+  ).toHaveCount(0)
   expect(await recorded(page, "session/prompt")).toHaveLength(1)
 
   // Stop: the scripted turn stays running until the cancel notification.

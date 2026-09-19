@@ -42,6 +42,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+const REASONING_SUFFIX = ":reasoning"
+
+/** Adapters name the reasoning half of a turn `<assistant id>:reasoning`. */
+function assistantIdOf(messageId: string) {
+  return messageId.endsWith(REASONING_SUFFIX)
+    ? messageId.slice(0, -REASONING_SUFFIX.length)
+    : messageId
+}
+
+/**
+ * One ACP assistant message per run segment: the first text or reasoning start
+ * of the segment fixes its id, and every later chunk and tool call of the
+ * segment carries that one id, so reasoning stays on the turn it answers with.
+ * `RUN_FINISHED` and `RUN_ERROR` reset it with the rest of the segment state.
+ */
+function segmentMessage(state: TranslateState, messageId: string) {
+  const id = state.messageId ?? messageId
+  return {
+    state: state.messageId === undefined ? { ...state, messageId: id } : state,
+    messageId: id,
+  }
+}
+
 /** The assistant message a tool call hangs off; a run id always exists. */
 function attachedTo(
   state: TranslateState,
@@ -258,17 +281,30 @@ export const translateRunEvent = ((state, event: RunEvent, context) => {
     case RunEventKind.RUN_STARTED:
       return { state, outbound: [stateOutbound(context, { state: "running" })] }
     case RunEventKind.TEXT_MESSAGE_START:
-      return { state: { ...state, messageId: event.messageId }, outbound: [] }
+      return {
+        state: segmentMessage(state, event.messageId).state,
+        outbound: [],
+      }
+    case RunEventKind.REASONING_START:
+    case RunEventKind.REASONING_MESSAGE_START:
+      return {
+        state: segmentMessage(state, assistantIdOf(event.messageId)).state,
+        outbound: [],
+      }
     case RunEventKind.TEXT_MESSAGE_CONTENT:
     case RunEventKind.REASONING_MESSAGE_CONTENT: {
       const prose = event.type === RunEventKind.TEXT_MESSAGE_CONTENT
-      return {
+      const segment = segmentMessage(
         state,
+        prose ? event.messageId : assistantIdOf(event.messageId)
+      )
+      return {
+        state: segment.state,
         outbound: [
           chunkOutbound(
             context,
             prose ? "agent_message_chunk" : "agent_thought_chunk",
-            event.messageId,
+            segment.messageId,
             event.delta
           ),
         ],

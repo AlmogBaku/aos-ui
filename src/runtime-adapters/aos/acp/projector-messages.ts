@@ -91,12 +91,38 @@ export function toolCallOwner(
   )
 }
 
+/**
+ * The block a chunk extends: the message's last part when it holds text of the
+ * same source. Anything else in between — a tool call, a data part, the other
+ * source — leaves the open part closed behind it.
+ */
+function extendedBlock(
+  message: ProjectedMessage,
+  source: BlockSource,
+  block: ContentBlock
+): ContentBlock | undefined {
+  const last = message.parts.at(-1)
+  const delta = blockText(block)
+  if (last === undefined || delta === undefined) return undefined
+  if (last.source === "tool" || last.source === "data") return undefined
+  if (last.source !== source) return undefined
+  const text = blockText(last.block)
+  return text === undefined ? undefined : { ...last.block, text: text + delta }
+}
+
+/** Appends a chunk, extending the open part of its source when there is one. */
 export function appendBlock(
   message: ProjectedMessage,
   source: BlockSource,
   block: ContentBlock
 ): ProjectedMessage {
-  return { ...message, parts: [...message.parts, { source, block }] }
+  const extended = extendedBlock(message, source, block)
+  return {
+    ...message,
+    parts: extended
+      ? [...message.parts.slice(0, -1), { source, block: extended }]
+      : [...message.parts, { source, block }],
+  }
 }
 
 /** Replaces one source's blocks in place, leaving tool calls and data parts. */

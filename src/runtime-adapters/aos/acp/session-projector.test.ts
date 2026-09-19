@@ -47,6 +47,15 @@ const agentChunk = (messageId: string, text: string): Entry => [
   RUN_META,
 ]
 
+const thoughtChunk = (messageId: string, text: string): Entry => [
+  {
+    sessionUpdate: "agent_thought_chunk",
+    messageId,
+    content: { type: "text", text },
+  },
+  RUN_META,
+]
+
 const toolCall = (patch: Record<string, unknown>, meta: unknown): Entry => [
   { sessionUpdate: "tool_call_update", toolCallId: "t1", ...patch },
   meta,
@@ -78,42 +87,85 @@ describe("applyUpdate messages", () => {
       ],
     },
     {
-      name: "chunks append in arrival order",
+      name: "chunks of one kind extend one part in arrival order",
       entries: [agentChunk("a1", "Hel"), agentChunk("a1", "lo")],
       expected: [
         {
           id: "a1",
           role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+        },
+      ],
+    },
+    {
+      name: "streamed thoughts and prose share the turn they belong to",
+      entries: [
+        thoughtChunk("a1", "Think"),
+        thoughtChunk("a1", "ing"),
+        agentChunk("a1", "Ans"),
+        agentChunk("a1", "wer"),
+      ],
+      expected: [
+        {
+          id: "a1",
+          role: "assistant",
           content: [
-            { type: "text", text: "Hel" },
-            { type: "text", text: "lo" },
+            { type: "reasoning", text: "Thinking" },
+            { type: "text", text: "Answer" },
           ],
         },
       ],
     },
     {
-      name: "a thought becomes reasoning on its own message",
+      name: "a whole thought upsert and a whole message upsert compose",
       entries: [
         [
           {
-            sessionUpdate: "agent_thought_chunk",
-            messageId: "a1:reasoning",
-            content: { type: "text", text: "Thinking" },
+            sessionUpdate: "agent_thought",
+            messageId: "a1",
+            content: [{ type: "text", text: "Weigh it" }],
           },
-          RUN_META,
         ],
-        agentChunk("a1", "Answer"),
+        [
+          {
+            sessionUpdate: "agent_message",
+            messageId: "a1",
+            content: [{ type: "text", text: "Done." }],
+          },
+        ],
       ],
       expected: [
         {
-          id: "a1:reasoning",
+          id: "a1",
           role: "assistant",
-          content: [{ type: "reasoning", text: "Thinking" }],
+          content: [
+            { type: "reasoning", text: "Weigh it" },
+            { type: "text", text: "Done." },
+          ],
         },
+      ],
+    },
+    {
+      name: "a whole upsert leaves the other kind's parts alone",
+      entries: [
+        thoughtChunk("a1", "Thinking"),
+        agentChunk("a1", "draft"),
+        [
+          {
+            sessionUpdate: "agent_message",
+            messageId: "a1",
+            content: [{ type: "text", text: "final" }],
+          },
+        ],
+      ],
+      expected: [
         {
           id: "a1",
           role: "assistant",
-          content: [{ type: "text", text: "Answer" }],
+          content: [
+            { type: "reasoning", text: "Thinking" },
+            { type: "text", text: "final" },
+          ],
         },
       ],
     },
@@ -261,6 +313,17 @@ describe("applyUpdate tool calls", () => {
         ],
       },
     ])
+  })
+
+  it("starts a new part for a chunk that follows a tool call", () => {
+    const resumed = fold([agentChunk("a1", "Done")], started)
+    expect(toThreadMessages(resumed)[0]).toMatchObject({
+      content: [
+        { type: "text", text: "Working" },
+        { type: "tool-call", toolCallId: "t1" },
+        { type: "text", text: "Done" },
+      ],
+    })
   })
 
   it("falls back to the latest assistant turn without meta", () => {

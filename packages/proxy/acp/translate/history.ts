@@ -61,12 +61,13 @@ function agentUpdates(message: SessionMessage, lane: Lane): SessionUpdate[] {
   const reasoning: ContentBlock[] = message.content.flatMap((part) =>
     part.type === "reasoning" ? [{ type: "text", text: part.text }] : []
   )
-  // The run stream gives reasoning its own message id and streams it before the
-  // prose; replay keeps that identity and order.
+  // One message carries the turn, as the run stream sends it: the thought
+  // upsert sets its reasoning, the message upsert its prose, and reasoning
+  // replays first because that is the order the provider produced it in.
   if (lane !== "guest" && reasoning.length > 0)
     updates.push({
       sessionUpdate: "agent_thought",
-      messageId: `${message.id}:reasoning`,
+      messageId: message.id,
       content: reasoning,
     })
   const content = contentBlocks(message.content)

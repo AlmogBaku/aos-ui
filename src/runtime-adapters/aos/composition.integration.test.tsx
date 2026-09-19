@@ -312,7 +312,10 @@ function createProxyAgentApp() {
               {
                 id: "native-assistant-1",
                 role: "assistant" as const,
-                content: [{ type: "text" as const, text: "Ready" }],
+                content: [
+                  { type: "reasoning" as const, text: "Recall the thread." },
+                  { type: "text" as const, text: "Ready" },
+                ],
                 createdAt: NOW,
               },
             ]
@@ -910,6 +913,98 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
         "next?"
       )
     )
+    await proxy.close()
+  })
+
+  it("keeps a turn's reasoning and prose on one assistant message", async () => {
+    const { proxy, runtime } = await mount()
+    const assistantParts = () =>
+      runtime()
+        .assistantRuntime.thread.getState()
+        .messages.filter((message) => message.role === "assistant")
+        .map((message) => message.content.map((part) => part.type))
+
+    // The replayed turn composes the reasoning and the prose it answered with.
+    expect(await screen.findByText("Ready")).toBeVisible()
+    await waitFor(() =>
+      expect(assistantParts()).toEqual([["reasoning", "text"]])
+    )
+
+    await send(runtime(), "Think it through")
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    const segment = proxy.segments[0]!
+    const runId = proxy.inputs[0]!.runId
+    // Hermes streams the reasoning half of a turn under `<id>:reasoning`,
+    // before the prose it belongs to.
+    act(() => {
+      segment.emit({
+        type: RunEventKind.RUN_STARTED,
+        threadId: SESSION_ID,
+        runId,
+      })
+      segment.emit({
+        type: RunEventKind.REASONING_MESSAGE_START,
+        messageId: "assistant-1:reasoning",
+        role: "reasoning",
+      })
+      segment.emit({
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
+        messageId: "assistant-1:reasoning",
+        delta: "Weigh ",
+      })
+      segment.emit({
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
+        messageId: "assistant-1:reasoning",
+        delta: "the options.",
+      })
+      segment.emit({
+        type: RunEventKind.REASONING_MESSAGE_END,
+        messageId: "assistant-1:reasoning",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "Shipping ",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "it.",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_END,
+        messageId: "assistant-1",
+      })
+      segment.emit({
+        type: RunEventKind.RUN_FINISHED,
+        threadId: SESSION_ID,
+        runId,
+        outcome: { type: "success" },
+      })
+      segment.finish()
+    })
+
+    expect(await screen.findByText("Shipping it.")).toBeVisible()
+    await waitFor(() =>
+      expect(assistantParts()).toEqual([
+        ["reasoning", "text"],
+        ["reasoning", "text"],
+      ])
+    )
+    expect(messageTexts(runtime())).toEqual([
+      "Open it",
+      "Ready",
+      "Think it through",
+      "Shipping it.",
+    ])
+    // One execution disclosure per assistant turn, not one per streamed id.
+    expect(screen.getAllByText("Reasoning")).toHaveLength(2)
+    expect(screen.getAllByText("Shipping it.")).toHaveLength(1)
     await proxy.close()
   })
 })
