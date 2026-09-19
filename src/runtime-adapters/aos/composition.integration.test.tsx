@@ -777,6 +777,16 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
       resumed.finish()
     })
     expect(await screen.findByText("Allowed")).toBeVisible()
+    // The turn that hosted the permission request is the turn the run resumed
+    // into, so the answered interrupt leaves no empty assistant row behind.
+    await waitFor(() =>
+      expect(messageTexts(runtime())).toEqual([
+        "Open it",
+        "Ready",
+        "Ship it",
+        "Allowed",
+      ])
+    )
     await proxy.close()
   })
 

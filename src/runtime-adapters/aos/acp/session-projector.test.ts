@@ -438,6 +438,14 @@ describe("applyUpdate execution", () => {
     [stateUpdate({ state: "running" }), agentChunk("a2", "Sure")],
     replayed
   )
+  /** A run blocked before it wrote anything, and the turn hosting its ask. */
+  const interrupted = fold(
+    [
+      stateUpdate({ state: "running" }),
+      stateUpdate({ state: "requires_action" }),
+    ],
+    replayed
+  )
 
   it("opens the turn the running run streams into", () => {
     expect(answering.execution).toEqual({ status: "running", runId: "run-1" })
@@ -480,14 +488,7 @@ describe("applyUpdate execution", () => {
   })
 
   it("hosts an interrupt that arrives before the run's first turn", () => {
-    const blocked = fold(
-      [
-        stateUpdate({ state: "running" }),
-        stateUpdate({ state: "requires_action" }),
-      ],
-      replayed
-    )
-    const messages = toThreadMessages(blocked)
+    const messages = toThreadMessages(interrupted)
     expect(messages).toHaveLength(3)
     expect(messages[2]).toMatchObject({
       role: "assistant",
@@ -498,9 +499,68 @@ describe("applyUpdate execution", () => {
     // The hosted turn is the one the run settles when it ends.
     const ended = fold(
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
-      blocked
+      interrupted
     )
     expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
+  })
+
+  it("replaces an empty interrupt host with the resumed run's first turn", () => {
+    const resumed = fold(
+      [stateUpdate({ state: "running" }), agentChunk("a2", "Allowed")],
+      interrupted
+    )
+    const messages = toThreadMessages(resumed)
+    expect(messages).toHaveLength(3)
+    expect(messages[2]).toMatchObject({
+      id: "a2",
+      role: "assistant",
+      content: [{ type: "text", text: "Allowed" }],
+      status: { type: "running" },
+    })
+    expect(messages[1]).toMatchObject(COMPLETE)
+    const ended = fold(
+      [stateUpdate({ state: "idle", stopReason: "end_turn" })],
+      resumed
+    )
+    expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
+
+    // A resumed run streams its answer without announcing a new running state,
+    // so the host it takes over keeps the pending status until the run settles.
+    const unannounced = fold([agentChunk("a2", "Allowed")], interrupted)
+    expect(toThreadMessages(unannounced)).toHaveLength(3)
+    expect(toThreadMessages(unannounced)[2]).toMatchObject({
+      id: "a2",
+      content: [{ type: "text", text: "Allowed" }],
+      status: { type: "requires-action", reason: "interrupt" },
+    })
+    const settled = fold(
+      [stateUpdate({ state: "idle", stopReason: "end_turn" })],
+      unannounced
+    )
+    expect(toThreadMessages(settled)[2]).toMatchObject(COMPLETE)
+  })
+
+  it("keeps an interrupt host the run has already written into", () => {
+    // The call the interrupt asked about belongs to the hosted turn, so the
+    // turn the run opens next is its own.
+    const resumed = fold(
+      [
+        toolCall({ title: "grep" }, undefined),
+        stateUpdate({ state: "running" }),
+        agentChunk("a2", "Allowed"),
+      ],
+      interrupted
+    )
+    const messages = toThreadMessages(resumed)
+    expect(messages).toHaveLength(4)
+    expect(messages[2]).toMatchObject({
+      content: [{ type: "tool-call", toolCallId: "t1" }],
+    })
+    expect(messages[3]).toMatchObject({
+      id: "a2",
+      content: [{ type: "text", text: "Allowed" }],
+      status: { type: "running" },
+    })
   })
 
   it("completes the turn when the run ends its turn", () => {

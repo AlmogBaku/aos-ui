@@ -112,10 +112,12 @@ function withMessages(
 }
 
 /**
- * Upserts the addressed turn, creating it with `role` when it is new. The one
- * place a turn's status is opened: an assistant turn the running run creates is
- * born running and becomes the turn that run's later state settles, so a run
- * that has written nothing yet never re-opens the finished turn behind it.
+ * Upserts the addressed turn, creating it with `role` when it is new, and the
+ * one place a turn's status is opened. An assistant turn a running run creates
+ * is born running, and either way the turn the run creates becomes the one its
+ * later state settles — so a run that has written nothing yet never re-opens the
+ * finished turn behind it, and an empty turn synthesized to host this run's
+ * interrupt is taken over rather than left beside the answer it asked for.
  */
 function onMessage(
   state: ProjectorState,
@@ -123,19 +125,22 @@ function onMessage(
   role: MessageRole,
   patch: (message: ProjectedMessage) => ProjectedMessage
 ): ProjectorState {
-  const opened =
-    role === "assistant" &&
-    state.execution.status === "running" &&
-    !state.messages.some((message) => message.id === id)
+  const fresh =
+    role === "assistant" && !state.messages.some((message) => message.id === id)
+  const host = fresh ? emptyInterruptHostId(state) : undefined
+  // Re-keying the host keeps its place and the pending status it carries; the
+  // run's own state settles it under the id the provider streamed.
+  const source = host === undefined ? state : renameMessage(state, host, id)
+  const opened = fresh && state.execution.status === "running"
   const next = withMessages(
-    state,
-    // `opened` already proved the id is new, so only the created turn is patched
-    // with the status of the run that opened it.
-    withMessage(state.messages, id, role, (message) =>
+    source,
+    withMessage(source.messages, id, role, (message) =>
       patch(opened ? withStatus(message, { type: "running" }) : message)
     )
   )
-  return opened ? { ...next, activeAssistantId: id } : next
+  return opened || host !== undefined
+    ? { ...next, activeAssistantId: id }
+    : next
 }
 
 function withLastAssistant(
@@ -154,9 +159,24 @@ function activeAssistantId(state: ProjectorState): string | undefined {
     : undefined
 }
 
+const INTERRUPT_HOST_PREFIX = "aos-interrupt-"
+
 /** An interrupt before the run's first update still needs a turn to host it. */
 const interruptHostId = (runId: string | undefined) =>
-  `aos-interrupt-${runId ?? "current"}`
+  `${INTERRUPT_HOST_PREFIX}${runId ?? "current"}`
+
+/**
+ * The hosted turn the run's own first turn takes over: one this projection
+ * synthesized for an interrupt and the run has written nothing into. A host
+ * that already carries content is the run's turn, so it stays where it is.
+ */
+function emptyInterruptHostId(state: ProjectorState): string | undefined {
+  const id = state.activeAssistantId
+  if (id === undefined || !id.startsWith(INTERRUPT_HOST_PREFIX))
+    return undefined
+  const host = state.messages.find((message) => message.id === id)
+  return host?.parts.length === 0 ? id : undefined
+}
 
 /** The owning message comes from `_meta.aos`; without it, the latest turn. */
 function applyToolCall(
