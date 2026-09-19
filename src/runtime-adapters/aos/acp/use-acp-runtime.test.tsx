@@ -53,6 +53,8 @@ function createFakeConnection() {
 
   const connection: AcpConnection = {
     status: "ready",
+    // Already connected: nothing here owns a transport to open.
+    start: () => {},
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},
     login: unused,

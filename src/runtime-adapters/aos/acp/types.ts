@@ -66,6 +66,13 @@ export type AcpResumeOptions = {
 
 export interface AcpConnection {
   readonly status: AcpConnectionStatus
+  /**
+   * Opens the transport. Creating a connection performs no I/O, so a render
+   * React discards leaks no socket; an effect owns the transport's lifetime.
+   * Calling it again while the connection lives, or after `close`, does
+   * nothing: reconnection belongs to the connection alone.
+   */
+  start(): void
   /** Resolves with `InitializeResponse._meta.aos` once the handshake settles. */
   readonly initialized: Promise<z.infer<typeof AosInitializeMetaSchema>>
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void

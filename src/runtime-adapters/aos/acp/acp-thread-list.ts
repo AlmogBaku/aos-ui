@@ -126,10 +126,26 @@ export function createAcpThreadListAdapter({
       }
     },
 
+    /**
+     * Resolves a Session this adapter has not listed, which is how Assistant UI
+     * opens one named before any page was read — a reloaded deep link. The
+     * catalog is the only authority for it, and it may sit past page one, so the
+     * pages are read until it appears.
+     */
     async fetch(threadId: string) {
       const metadata = listed.get(threadId)
-      if (!metadata) throw new Error("Unknown AOS Session")
-      return metadata
+      if (metadata) return metadata
+      let cursor: string | undefined
+      for (;;) {
+        const page = await connection.listSessions({}, cursor)
+        for (const info of page.sessions) remember(metadataOf(info))
+        const found = listed.get(threadId)
+        if (found) return found
+        // A cursor the provider does not advance cannot reach another page.
+        if (page.nextCursor === undefined || page.nextCursor === cursor)
+          throw new Error("Unknown AOS Session")
+        cursor = page.nextCursor
+      }
     },
 
     async initialize(threadId: string) {

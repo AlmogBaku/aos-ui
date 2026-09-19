@@ -1,6 +1,7 @@
 import {
   agent,
   methods,
+  RequestError,
   type AgentApp,
   type AgentContext,
   type AnyWireMessage,
@@ -10,21 +11,55 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { lazy, Suspense, type ReactElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
-import { AOS_METHODS, AOS_META_KEY } from "@aos/protocol/acp"
+import {
+  AOS_JSONRPC_ERRORS,
+  AOS_METHODS,
+  AOS_META_KEY,
+} from "@aos/protocol/acp"
 
+import { AosUiWorkspace } from "../../components/aos-ui-workspace"
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
+import { en } from "../../lib/i18n/dictionaries/en"
 import type { HarnessRuntime } from "../contracts"
 import { runtimeAdapter } from "./composition"
+
+vi.mock("react-router", () => ({
+  useLocation: () => ({ pathname: window.location.pathname }),
+  useNavigate: () => (href: string, options?: { replace?: boolean }) => {
+    window.history[options?.replace ? "replaceState" : "pushState"](
+      null,
+      "",
+      href
+    )
+  },
+}))
 
 type PromptParams = PromptRequest
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "session-1"
 const SECOND_SESSION_ID = "session-2"
+/** Older than the active window, so only a URL names it. */
+const BOOKMARKED_SESSION_ID = "session-3"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
+const BOOKMARKED_UPDATED_AT = "2026-09-17T09:00:00.000Z"
+
+/** The catalog is paged, so a Session a URL names may sit past page one. */
+const CATALOG_PAGES: readonly (readonly string[])[] = [
+  [SESSION_ID, SECOND_SESSION_ID],
+  [BOOKMARKED_SESSION_ID],
+]
+
+const SESSION_TITLES: Readonly<Record<string, string>> = {
+  [SESSION_ID]: "Older",
+  [SECOND_SESSION_ID]: "Newer",
+  [BOOKMARKED_SESSION_ID]: "Bookmarked",
+}
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
@@ -67,23 +102,48 @@ function createProxyAgent() {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
-  // The proxy streams a Session only to a client attached to it, so updates
-  // raised before an attach wait for the resume that replays them.
-  const waiting = new Map<string, SessionUpdate[]>()
+  // The proxy keeps each Session's transcript and replays it from the start on
+  // every such resume; it streams live updates only to an attached client.
+  const history = new Map<string, SessionUpdate[]>()
   const attached = new Set<string>()
+  const busy = new Set<string>()
 
   function push(sessionId: string, update: SessionUpdate) {
+    history.set(sessionId, [...(history.get(sessionId) ?? []), update])
     if (attached.has(sessionId))
       void peer?.notify(methods.client.session.update, { sessionId, update })
-    else waiting.set(sessionId, [...(waiting.get(sessionId) ?? []), update])
   }
 
-  waiting.set(SESSION_ID, [
+  history.set(SESSION_ID, [
     {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Ready" }],
       _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+    },
+  ])
+
+  history.set(BOOKMARKED_SESSION_ID, [
+    {
+      sessionUpdate: "agent_message",
+      messageId: "history-4",
+      content: [{ type: "text", text: "Bookmarked answer" }],
+      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+    },
+  ])
+
+  history.set(SECOND_SESSION_ID, [
+    {
+      sessionUpdate: "user_message",
+      messageId: "history-2",
+      content: [{ type: "text", text: "Draft the plan" }],
+      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+    },
+    {
+      sessionUpdate: "agent_message",
+      messageId: "history-3",
+      content: [{ type: "text", text: "First answer" }],
+      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 1 } },
     },
   ])
 
@@ -110,25 +170,35 @@ function createProxyAgent() {
         },
       },
     }))
-    .onRequest(methods.agent.session.list, () => ({
-      sessions: [SESSION_ID, SECOND_SESSION_ID].map((sessionId) => ({
-        sessionId,
-        cwd: "/workspace",
-        title: sessionId === SESSION_ID ? "Older" : "Newer",
-        updatedAt: UPDATED_AT,
-        _meta: { [AOS_META_KEY]: sessionInfo },
-      })),
-    }))
+    .onRequest(methods.agent.session.list, ({ params }) => {
+      const page = params.cursor === undefined ? 0 : Number(params.cursor)
+      return {
+        sessions: (CATALOG_PAGES[page] ?? []).map((sessionId) => ({
+          sessionId,
+          cwd: "/workspace",
+          title: SESSION_TITLES[sessionId],
+          updatedAt:
+            sessionId === BOOKMARKED_SESSION_ID
+              ? BOOKMARKED_UPDATED_AT
+              : UPDATED_AT,
+          _meta: { [AOS_META_KEY]: sessionInfo },
+        })),
+        ...(page + 1 < CATALOG_PAGES.length
+          ? { nextCursor: String(page + 1) }
+          : {}),
+      }
+    })
     .onRequest(methods.agent.session.resume, ({ params }) => {
       const { sessionId } = params
+      const replayFromStart = params.replayFrom?.type === "start"
       queueMicrotask(() => {
         attached.add(sessionId)
-        for (const update of waiting.get(sessionId) ?? [])
+        if (!replayFromStart) return
+        for (const update of history.get(sessionId) ?? [])
           void peer?.notify(methods.client.session.update, {
             sessionId,
             update,
           })
-        waiting.delete(sessionId)
       })
       return {
         configOptions,
@@ -142,6 +212,12 @@ function createProxyAgent() {
       }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
+      // Exactly what the proxy refuses a prompt with while a Session is not idle.
+      if (busy.has(params.sessionId))
+        throw new RequestError(
+          AOS_JSONRPC_ERRORS.runInProgress,
+          "run_in_progress"
+        )
       prompts.push(params)
       const messageId = `prompt-${prompts.length}`
       queueMicrotask(() => {
@@ -184,6 +260,7 @@ function createProxyAgent() {
     prompts,
     cancelled,
     push,
+    busy,
     /** One question interrupt, exactly as the proxy issues it. */
     ask: (sessionId: string, interruptId: string) =>
       peer?.request(methods.client.elicitation.create, {
@@ -420,5 +497,141 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(supplied.interactions?.getPending(SESSION_ID)).toMatchObject({
       requestId: "interrupt-1",
     })
+  })
+})
+
+/** The operator workspace over the fake proxy, opened at one compact URL. */
+function mountWorkspace(pathname: string) {
+  window.history.replaceState(null, "", pathname)
+  const proxy = createProxyAgent()
+  const sockets: unknown[] = []
+  const socket = pipedSocket(proxy.app)
+  vi.stubGlobal(
+    "WebSocket",
+    class extends socket {
+      constructor() {
+        super()
+        sockets.push(this)
+      }
+    }
+  )
+  const Provider = runtimeAdapter.Provider
+  const view = render(
+    <Provider
+      config={{
+        status: "ready",
+        mode: "aos",
+        composerFeatures: { modelSelectorEnabled: true, contextEnabled: true },
+      }}
+      locale="en"
+    >
+      {(runtime) => (
+        <AosUiWorkspace
+          runtime={runtime}
+          locale="en"
+          dictionary={en}
+          now={new Date(UPDATED_AT)}
+        />
+      )}
+    </Provider>
+  )
+  return { proxy, sockets, view }
+}
+
+describe("the workspace over one ACP connection", () => {
+  it("renders the Session a URL names on a cold load", async () => {
+    mountWorkspace(`/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`)
+
+    // The Session sits past the first catalog page, so nothing has listed it
+    // when the URL names it.
+    expect(await screen.findByText("Bookmarked answer")).toBeVisible()
+    expect(screen.queryByText("Ready")).toBeNull()
+    expect(window.location.pathname).toBe(
+      `/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`
+    )
+  })
+
+  it("keeps the Session selected when Retry re-runs its first turn", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+    expect(await screen.findByText("First answer")).toBeVisible()
+
+    await user.click(screen.getByRole("button", { name: "Retry response" }))
+
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(proxy.prompts[0]).toMatchObject({
+      sessionId: SECOND_SESSION_ID,
+      prompt: [{ type: "text", text: "Draft the plan" }],
+    })
+    expect(await screen.findByText("Shipping it")).toBeVisible()
+    expect(window.location.pathname).toBe(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+  })
+
+  it("keeps the transcript and reports a turn the provider refuses", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mountWorkspace(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+    expect(await screen.findByText("First answer")).toBeVisible()
+    proxy.busy.add(SECOND_SESSION_ID)
+
+    await user.click(screen.getByRole("button", { name: "Retry response" }))
+
+    expect(await screen.findByText(en.runErrors.AOS_SESSION_BUSY)).toBeVisible()
+    expect(proxy.prompts).toHaveLength(0)
+    expect(screen.getByText("Draft the plan")).toBeVisible()
+    expect(screen.getByText("First answer")).toBeVisible()
+    expect(window.location.pathname).toBe(`/${AGENT_ID}/${SECOND_SESSION_ID}`)
+  })
+
+  it("opens one ACP socket when React discards the provider's render", async () => {
+    const proxy = createProxyAgent()
+    const sockets: { readyState: number }[] = []
+    const socket = pipedSocket(proxy.app)
+    vi.stubGlobal(
+      "WebSocket",
+      class extends socket {
+        constructor() {
+          super()
+          sockets.push(this)
+        }
+      }
+    )
+    // The app renders the workspace behind `lazy`, so the provider's first
+    // render suspends on its own child and React throws that render away.
+    let loadWorkspace = () => {}
+    const Workspace = lazy(
+      () =>
+        new Promise<{ default: () => ReactElement }>((resolve) => {
+          loadWorkspace = () =>
+            resolve({ default: () => <main>Workspace mounted</main> })
+        })
+    )
+    const Provider = runtimeAdapter.Provider
+    const view = render(
+      <Suspense fallback={<span>Loading workspace</span>}>
+        <Provider
+          config={{
+            status: "ready",
+            mode: "aos",
+            composerFeatures: {
+              modelSelectorEnabled: true,
+              contextEnabled: true,
+            },
+          }}
+          locale="en"
+        >
+          {() => <Workspace />}
+        </Provider>
+      </Suspense>
+    )
+    expect(await screen.findByText("Loading workspace")).toBeVisible()
+    act(() => loadWorkspace())
+    expect(await screen.findByRole("main")).toHaveTextContent(
+      "Workspace mounted"
+    )
+
+    expect(sockets).toHaveLength(1)
+
+    view.unmount()
+    await waitFor(() => expect(sockets[0]?.readyState).toBe(3))
   })
 })

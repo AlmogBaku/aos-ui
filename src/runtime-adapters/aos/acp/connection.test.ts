@@ -340,13 +340,65 @@ function pipedSocketConstructor(app: AgentApp): WebSocketConstructor {
 }
 
 function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
-  return createAcpConnection({
+  const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
     connectAgent: proxy.app,
   })
+  connection.start()
+  return connection
 }
 
 describe("ACP connection", () => {
+  it("constructs no transport until it is started, and only one", async () => {
+    const proxy = createProxyAgent()
+    const sockets: unknown[] = []
+    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/aos/v1/acp",
+      socketConstructor: class extends socketConstructor {
+        constructor(url: string) {
+          super(url)
+          sockets.push(this)
+        }
+      },
+    })
+
+    expect(sockets).toHaveLength(0)
+
+    connection.start()
+    connection.start()
+    await connection.initialized
+
+    expect(sockets).toHaveLength(1)
+    connection.close()
+    connection.close()
+    expect(connection.status).toBe("closed")
+  })
+
+  it("stays closed when a connection is closed before it starts", async () => {
+    const proxy = createProxyAgent()
+    const sockets: unknown[] = []
+    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/aos/v1/acp",
+      socketConstructor: class extends socketConstructor {
+        constructor(url: string) {
+          super(url)
+          sockets.push(this)
+        }
+      },
+    })
+
+    connection.close()
+    connection.start()
+
+    expect(sockets).toHaveLength(0)
+    expect(connection.status).toBe("closed")
+    await expect(connection.initialized).rejects.toThrow()
+  })
+
   it("initializes with the negotiated AOS extension metadata", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
@@ -659,6 +711,7 @@ describe("ACP connection", () => {
         task()
       },
     })
+    connection.start()
     await connection.initialized
     connection.onSessionUpdate(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, {
@@ -707,6 +760,7 @@ describe("ACP connection", () => {
       },
       schedule: (_delayMs, task) => task(),
     })
+    connection.start()
     await connection.initialized
     await connection.login("invitation-token")
     connection.onSessionUpdate(SESSION_ID, () => {})
@@ -749,6 +803,7 @@ describe("ACP connection", () => {
       },
       schedule: (_delayMs, task) => task(),
     })
+    connection.start()
     await connection.initialized
     await connection.login("invitation-token")
     connection.onSessionUpdate(SESSION_ID, () => {})

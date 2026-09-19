@@ -18,6 +18,9 @@ import {
 } from "@assistant-ui/react"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
+import { en } from "@/lib/i18n/dictionaries/en"
+import { he } from "@/lib/i18n/dictionaries/he"
+import { runErrorMessage } from "@/lib/i18n/run-errors"
 
 import type {
   RuntimeAdapterDefinition,
@@ -51,6 +54,13 @@ const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
 const CLIENT_INFO = { name: "aos-ui", version: "1" }
 
 /**
+ * Both locales ship with the runtime, so a failure raised before the workspace
+ * has loaded its dictionary — a refused turn on a deep link — is already
+ * localized.
+ */
+const runtimeDictionaries = { en, he }
+
+/**
  * Shows the next turn the provider suggested, once the run that suggested it has
  * settled. Text the operator has already composed outranks the suggestion.
  */
@@ -76,8 +86,12 @@ function ReadyAosRuntimeProvider({
     []
   )
   const connectionMounted = useRef(false)
+  // Connecting is an effect, never a render side effect: React discards whole
+  // renders (a Suspense retry from the lazy provider, a replayed mount), and a
+  // socket opened by one of those would stay open for the tab's lifetime.
   useEffect(() => {
     connectionMounted.current = true
+    connection.start()
     return () => {
       connectionMounted.current = false
       // Strict Mode immediately replays effects while preserving hook state.
@@ -109,6 +123,11 @@ function ReadyAosRuntimeProvider({
     [connection]
   )
   const media = useMemo(() => new VoiceMediaController(), [])
+  const describeRunError = useCallback(
+    (code: string | undefined, fallback: string) =>
+      runErrorMessage(runtimeDictionaries[locale], code, fallback),
+    [locale]
+  )
   // A Session's capabilities, config options, and usage exist only once it is
   // attached, so the composition reads them from the Session it has attached.
   const [attachedSessions, setAttachedSessions] = useState<ReadonlySet<string>>(
@@ -199,6 +218,7 @@ function ReadyAosRuntimeProvider({
         stageAttachments,
         messageRewind: (sourceUserId) => ({ rewindSourceId: sourceUserId }),
         onComposerPrefill,
+        describeRunError,
       })
       useEffect(() => {
         threadRuntime.current = runtime
@@ -210,6 +230,7 @@ function ReadyAosRuntimeProvider({
       attachments,
       client,
       connection,
+      describeRunError,
       drafts,
       locale,
       media,

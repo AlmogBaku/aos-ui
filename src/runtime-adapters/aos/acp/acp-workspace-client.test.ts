@@ -187,6 +187,8 @@ function createFakeConnection() {
 
   const connection: AcpConnection = {
     status: "ready",
+    // Already connected: nothing here owns a transport to open.
+    start: () => {},
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},

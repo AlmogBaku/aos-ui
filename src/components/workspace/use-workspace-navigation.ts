@@ -441,19 +441,25 @@ export function useWorkspaceNavigation({
         return
       }
 
-      const exactSession = requested?.sessionId
-        ? sessions.find(
-            ({ agentId: ownerId, threadId }) =>
-              ownerId === agentId && threadId === requested.sessionId
-          )
+      const knownSession = requested?.sessionId
+        ? sessions.find(({ threadId }) => threadId === requested.sessionId)
         : undefined
+      // A Session the browser has not listed is known only to the URL: the
+      // runtime resolves it from the provider's catalog, and one the catalog
+      // cannot answer for normalizes below like any stale route.
+      const unlistedSession =
+        requested?.sessionId && !knownSession ? requested.sessionId : undefined
+      const fallbackThreadId = resolveSessionSelection({
+        agentId,
+        sessions,
+        activeSessions: [],
+      })
       const threadId =
-        exactSession?.threadId ??
-        resolveSessionSelection({
-          agentId,
-          sessions,
-          activeSessions: [],
-        })
+        (knownSession?.agentId === agentId
+          ? knownSession.threadId
+          : undefined) ??
+        unlistedSession ??
+        fallbackThreadId
       setPreferredAgentId(agentId)
       if (threadId) {
         setDismissedTabs((current) => ({
@@ -487,6 +493,12 @@ export function useWorkspaceNavigation({
         .catch((reason: unknown) => {
           if (routeTransitionPathname.current !== pathname) return
           routeTransitionPathname.current = null
+          // A URL can name a Session the provider no longer has. Normalize to
+          // what the Agent does have instead of stranding the operator.
+          if (threadId === unlistedSession) {
+            updateRoute({ agentId, sessionId: fallbackThreadId }, "replace")
+            return
+          }
           setActionError(toError(reason))
         })
       return

@@ -165,6 +165,7 @@ export function createAcpConnection(
   const owners = new Map<string, string>()
 
   let status: AcpConnectionStatus = "connecting"
+  let started = false
   let closed = false
   let live: { connection: ClientConnection; ready: Promise<void> } | undefined
   let reconnectDelayMs = INITIAL_RECONNECT_MS
@@ -249,6 +250,10 @@ export function createAcpConnection(
     })
 
   async function withAgent(): Promise<ClientContext> {
+    // React commits children before their parent, so a consumer's effect can
+    // reach the wire before the effect that owns the transport. The first call
+    // opens it; `start` stays the only place that decides to.
+    start()
     const current = live
     if (closed || !current) throw new Error("The ACP connection is not open")
     await current.ready
@@ -388,6 +393,17 @@ export function createAcpConnection(
     void connection.closed.then(onClosed, onClosed)
   }
 
+  /**
+   * Opens the transport, once. Creating a connection performs no I/O, so a
+   * render React discards leaves no socket behind, and a closed connection
+   * stays closed. Recovery after a drop belongs to `scheduleReconnect`.
+   */
+  function start() {
+    if (started || closed) return
+    started = true
+    open()
+  }
+
   function closeConnection() {
     if (closed) return
     closed = true
@@ -399,12 +415,11 @@ export function createAcpConnection(
     live = undefined
   }
 
-  open()
-
   return {
     get status() {
       return status
     },
+    start,
     initialized,
     subscribeStatus: (listener) => subscribeTo(statusListeners, listener),
 

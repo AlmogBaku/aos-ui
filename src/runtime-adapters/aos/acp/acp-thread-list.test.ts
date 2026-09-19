@@ -157,6 +157,53 @@ describe("ACP remote thread-list adapter", () => {
     expect(adapter.agentFor("remote-session")).toBe("researcher")
   })
 
+  it("resolves a Session it has not listed from a later catalog page", async () => {
+    const pages = [
+      [sessionInfo({ sessionId: "session-1", agentId: "researcher" })],
+      [
+        sessionInfo({
+          sessionId: "session-9",
+          agentId: "builder",
+          title: "Bookmarked",
+          updatedAt: "2026-09-10T08:00:00.000Z",
+        }),
+      ],
+    ]
+    const listSessions = vi.fn(async (_meta: unknown, cursor?: string) => {
+      const index = cursor === undefined ? 0 : Number(cursor)
+      return {
+        sessions: pages[index] ?? [],
+        ...(index + 1 < pages.length ? { nextCursor: String(index + 1) } : {}),
+      }
+    })
+    const { adapter } = harness({ listSessions })
+
+    await expect(adapter.fetch("session-9")).resolves.toEqual({
+      status: "regular",
+      remoteId: "session-9",
+      title: "Bookmarked",
+      lastMessageAt: new Date("2026-09-10T08:00:00.000Z"),
+    })
+    expect(adapter.agentFor("session-9")).toBe("builder")
+    expect(listSessions).toHaveBeenCalledTimes(2)
+
+    // The resolved Session is remembered, so opening it again costs no read.
+    await expect(adapter.fetch("session-9")).resolves.toMatchObject({
+      remoteId: "session-9",
+    })
+    expect(listSessions).toHaveBeenCalledTimes(2)
+  })
+
+  it("reports a Session the catalog does not carry", async () => {
+    const listSessions = vi.fn(async () => ({
+      sessions: [sessionInfo({ sessionId: "session-1", agentId: "one" })],
+    }))
+    const { adapter } = harness({ listSessions })
+
+    await expect(adapter.fetch("session-missing")).rejects.toThrow()
+    expect(listSessions).toHaveBeenCalledTimes(1)
+  })
+
   it("initializes an already listed Session without a remote write", async () => {
     const { adapter, connection } = harness({
       listSessions: vi.fn(async () => ({
@@ -173,16 +220,22 @@ describe("ACP remote thread-list adapter", () => {
   })
 
   it("writes one Session intent per rename, archive, unarchive, and delete", async () => {
+    // The catalog is what a Session exists in, so a deleted one leaves it.
+    const catalog = new Map([
+      [
+        "session-1",
+        sessionInfo({
+          sessionId: "session-1",
+          agentId: "one",
+          title: "Before",
+        }),
+      ],
+    ])
     const { adapter, connection } = harness({
-      listSessions: vi.fn(async () => ({
-        sessions: [
-          sessionInfo({
-            sessionId: "session-1",
-            agentId: "one",
-            title: "Before",
-          }),
-        ],
-      })),
+      listSessions: vi.fn(async () => ({ sessions: [...catalog.values()] })),
+      deleteSession: vi.fn(async (sessionId: string) => {
+        catalog.delete(sessionId)
+      }),
     })
     await adapter.list()
 

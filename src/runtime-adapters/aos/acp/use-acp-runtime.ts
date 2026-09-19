@@ -7,6 +7,8 @@ import type {
 import {
   createMessageQueue,
   ExportedMessageRepository,
+  isMessageNotSentError,
+  MessageNotSentError,
 } from "@assistant-ui/core"
 import type {
   AppendMessage,
@@ -30,6 +32,7 @@ import type { z } from "zod"
 
 import {
   AOS_ATTACHMENT_URI_SCHEME,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
   type AosPromptMetaSchema,
@@ -41,10 +44,10 @@ import type { AcpConnection } from "./types"
 import {
   applyNotification,
   applyUpdate,
+  failLatestTurn,
   initialProjectorState,
   messageBlocks,
   renameMessage,
-  retainBefore,
   retainMessages,
   toThreadMessages,
   type ProjectorExecution,
@@ -117,6 +120,11 @@ export type UseAcpRuntimeOptions = {
   onStateChange?: (state: ProjectorState) => void
   /** The next turn the provider suggests for this Session's composer. */
   onComposerPrefill?: (text: string) => void
+  /**
+   * Localizes a normalized failure code, keeping the proxy's own description
+   * for a code this build does not know.
+   */
+  describeRunError?: (code: string | undefined, fallback: string) => string
 }
 
 export const acpExtras = createRuntimeExtras<AcpRuntimeExtras>("useAcpRuntime")
@@ -151,6 +159,43 @@ function promptBlocks(
   return [...text, ...links]
 }
 
+/**
+ * Keeps the turns before the one the provider replaced, plus the turn just
+ * echoed for it, which the rewind's own span would otherwise take with it.
+ */
+function rewound(
+  state: ProjectorState,
+  rewoundFrom: string | undefined,
+  localId: string
+) {
+  if (rewoundFrom === undefined) return state
+  const ids = state.messages.map((message) => message.id)
+  const at = ids.indexOf(rewoundFrom)
+  return at < 0 ? state : retainMessages(state, [...ids.slice(0, at), localId])
+}
+
+/** The normalized failure behind a refusal the operator can act on. */
+const REFUSAL_CODES: Readonly<Record<number, string>> = {
+  [AOS_JSONRPC_ERRORS.runInProgress]: "AOS_SESSION_BUSY",
+}
+
+/**
+ * What the proxy refused a turn with, as copy the operator can read. The
+ * normalized code carries the workspace's own wording; anything else keeps the
+ * proxy's description rather than inventing one.
+ */
+function refusalText(
+  error: unknown,
+  describe: ControllerCallbacks["describeRunError"]
+) {
+  const code =
+    isRecord(error) && typeof error.code === "number"
+      ? REFUSAL_CODES[error.code]
+      : undefined
+  const reported = error instanceof Error ? error.message : String(error)
+  return describe?.(code, reported) ?? reported
+}
+
 type ControllerOptions = {
   connection: AcpConnection
   /** The Session this thread opened with; a local draft has none yet. */
@@ -163,7 +208,7 @@ type ControllerOptions = {
 /** The callers' latest callbacks, handed over each render like AG-UI's core. */
 type ControllerCallbacks = Pick<
   UseAcpRuntimeOptions,
-  "messageRewind" | "onStateChange" | "onComposerPrefill"
+  "messageRewind" | "onStateChange" | "onComposerPrefill" | "describeRunError"
 >
 
 function createAcpController({
@@ -279,9 +324,6 @@ function createAcpController({
     meta: PromptMeta,
     rewoundFrom?: string
   ) => {
-    // The provider drops the replaced turns; the projection follows it here so
-    // the rewound tail does not linger beside the resent one.
-    if (rewoundFrom !== undefined) commit(retainBefore(state, rewoundFrom))
     locals += 1
     const localId = `aos-local-${locals}`
     const content = [...blocks]
@@ -294,13 +336,22 @@ function createAcpController({
     )
     try {
       const { messageId } = await connection.prompt(sessionId, content, meta)
-      commit(renameMessage(state, localId, messageId))
+      // Only an accepted turn replaces anything: the provider has dropped the
+      // turns this one replaces, so the projection follows it here and the
+      // rewound tail stops lingering beside the resent one. A refused prompt
+      // leaves the transcript exactly as the provider still holds it.
+      commit(
+        renameMessage(rewound(state, rewoundFrom, localId), localId, messageId)
+      )
     } catch (error) {
       const kept = state.messages
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
-      commit(retainMessages(state, kept))
-      throw error
+      const reported = refusalText(error, callbacks.describeRunError)
+      commit(failLatestTurn(retainMessages(state, kept), reported))
+      // Nothing ran and nothing is recoverable from the thread, which is the
+      // signal Assistant UI hands back to the composer with the operator's text.
+      throw new MessageNotSentError(reported)
     }
   }
 
@@ -359,12 +410,18 @@ function createAcpController({
       if (!parentId || blocks.length === 0)
         throw new Error("An ACP retry needs the user turn it replaces")
       const rewound = rewindFor(parentId)
+      const sessionId = await boundSession()
+      // Assistant UI's Retry is fire-and-forget, so no caller can observe a
+      // rejection here. The refusal reaches the operator on the turn the prompt
+      // reported it on; rethrowing would only raise an unobserved rejection.
       await prompt(
-        await boundSession(),
+        sessionId,
         blocks,
         { ...rewound?.meta },
         rewound?.sourceId
-      )
+      ).catch((error: unknown) => {
+        if (!isMessageNotSentError(error)) throw error
+      })
     },
     cancel: () => {
       if (bound !== undefined) connection.cancel(bound)
@@ -433,6 +490,7 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       messageRewind: options.messageRewind,
       onStateChange: options.onStateChange,
       onComposerPrefill: options.onComposerPrefill,
+      describeRunError: options.describeRunError,
     })
   })
   useEffect(() => {

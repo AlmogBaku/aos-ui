@@ -518,6 +518,7 @@ export function GuestAosSurface({
       url: acpSocketUrl(AOS_ACP_GUEST_PATH),
       clientInfo: CLIENT_INFO,
     })
+    connection.start()
     // The verified presentation context and the redeemed invitation together
     // make the conversation reachable; neither alone opens it.
     const open = async () => {

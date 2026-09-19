@@ -509,6 +509,23 @@ export function retainMessages(
     : { ...state, messages }
 }
 
+/**
+ * Reports a turn the provider refused. Nothing ran, so the refusal reads beside
+ * the Session's latest answer — the host a wait no run owns already uses — and a
+ * turn already awaiting the operator keeps the status it is waiting with.
+ */
+export function failLatestTurn(
+  state: ProjectorState,
+  error: string
+): ProjectorState {
+  const id = latestAssistantId(state.messages)
+  const host = state.messages.find((message) => message.id === id)
+  if (id === undefined || host?.status?.type === "requires-action") return state
+  return onMessage(state, id, "assistant", (message) =>
+    withStatus(message, { type: "incomplete", reason: "error", error })
+  )
+}
+
 /** Drops the turn a rewind replaces, and everything after it. */
 export function retainBefore(
   state: ProjectorState,

@@ -104,6 +104,20 @@ export function createAcpWorkspaceClient({
     }
   }
 
+  /**
+   * Reads catalog pages until every named Session has a row. A reloaded deep
+   * link names a Session before any page was read, and it may sit past page one.
+   */
+  async function readRows(threadIds: readonly string[]) {
+    let cursor: string | undefined
+    while (threadIds.some((threadId) => !store.knows(threadId))) {
+      const page = await listSessions(undefined, cursor)
+      // A cursor the provider does not advance cannot reach another page.
+      if (page.nextCursor === undefined || page.nextCursor === cursor) return
+      cursor = page.nextCursor
+    }
+  }
+
   let relistTimer: ReturnType<typeof setTimeout> | undefined
   let relisting = false
 
@@ -168,8 +182,7 @@ export function createAcpWorkspaceClient({
     // Sessions
     listSessions,
     async getSessionMetadata(threadIds: string[]) {
-      if (threadIds.some((threadId) => !store.knows(threadId)))
-        await listSessions()
+      await readRows(threadIds)
       return store.rowsFor(threadIds)
     },
     subscribeSessionMetadata: store.subscribeMetadata,
