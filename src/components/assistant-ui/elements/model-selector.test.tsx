@@ -62,7 +62,6 @@ function largeRoster(): readonly ModelOption[] {
 function renderSelector({
   direction,
   efforts,
-  effortSelection,
   effortValue,
   models,
   onEffortChange,
@@ -72,7 +71,6 @@ function renderSelector({
 }: {
   direction?: Parameters<typeof ModelSelectorRoot>[0]["direction"]
   efforts?: readonly string[]
-  effortSelection?: Parameters<typeof ModelSelectorRoot>[0]["effortSelection"]
   effortValue?: string
   models: readonly ModelOption[]
   onEffortChange?: (next: string) => void
@@ -84,7 +82,6 @@ function renderSelector({
     <ModelSelectorRoot
       direction={direction}
       efforts={efforts}
-      effortSelection={effortSelection}
       effortValue={effortValue}
       labels={labels}
       models={models}
@@ -163,18 +160,31 @@ describe("ModelSelector", () => {
     expect(screen.queryByRole("combobox", { name: "Search models" })).toBeNull()
   })
 
-  it("keeps the authoritative selection while a switch is pending", async () => {
+  it("shows the picked model and announces that the switch is in flight", async () => {
     const user = userEvent.setup()
     renderSelector({
+      efforts: EFFORTS,
+      effortValue: "high",
       models: SHORT_ROSTER,
-      selection: { status: "pending", targetId: "fast" },
-      value: "balanced",
+      onEffortChange: () => undefined,
+      selection: { status: "pending" },
+      value: "fast",
     })
 
     const trigger = screen.getByRole("combobox", { name: "Choose model" })
-    expect(trigger).toHaveTextContent("Balanced")
+    expect(trigger).toHaveTextContent("Fast")
+    expect(trigger).toHaveTextContent("High")
+    expect(trigger).toHaveAttribute("aria-busy", "true")
     await user.click(trigger)
     expect(await screen.findByText("Switching model…")).toBeVisible()
+  })
+
+  it("reads as settled once no switch is in flight", () => {
+    renderSelector({ models: SHORT_ROSTER, value: "fast" })
+
+    expect(
+      screen.getByRole("combobox", { name: "Choose model" })
+    ).not.toHaveAttribute("aria-busy")
   })
 
   it("commits the model a pointer clicks while the search box holds focus", async () => {
@@ -252,27 +262,26 @@ describe("ModelSelector", () => {
     expect(screen.queryByRole("slider", { name: "Thinking" })).toBeNull()
   })
 
-  it("retries a failed effort switch", async () => {
+  it("reports a failed effort switch on the one status the choice shares", async () => {
     const user = userEvent.setup()
     const retry = vi.fn()
     renderSelector({
       efforts: EFFORTS,
-      effortSelection: {
-        status: "error",
-        targetId: "high",
-        error: "Effort switch failed",
-        retry,
-      },
       effortValue: "medium",
       models: SHORT_ROSTER,
       onEffortChange: () => undefined,
+      selection: {
+        status: "error",
+        error: "Effort switch failed",
+        retry,
+      },
       value: "balanced",
     })
 
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Effort switch failed"
-    )
+    const alerts = await screen.findAllByRole("alert")
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toHaveTextContent("Effort switch failed")
 
     await user.click(
       screen.getByRole("button", { name: "Retry model selection" })
@@ -287,12 +296,7 @@ describe("ModelSelector", () => {
     renderSelector({
       models: SHORT_ROSTER,
       onValueChange,
-      selection: {
-        status: "error",
-        targetId: "fast",
-        error: "Switch failed",
-        retry,
-      },
+      selection: { status: "error", error: "Switch failed", retry },
       value: "balanced",
     })
 

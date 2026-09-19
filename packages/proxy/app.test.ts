@@ -785,6 +785,63 @@ describe("AOS V1 proxy", () => {
     expect(engine.discover).toHaveBeenCalledTimes(2)
   })
 
+  it("writes both halves of a Session model choice through one models PATCH", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(runtime, "getSession").mockResolvedValue(session())
+    const updateModel = vi
+      .spyOn(runtime, "updateModel")
+      .mockResolvedValue({ selectedId: '["native","large"]', effortId: "high" })
+    const proxy = app(runtime)
+    const models = `${origin}/api/aos/v1/agents/researcher/sessions/stored/workspace/models`
+    const json = { origin, "content-type": "application/json" }
+
+    const response = await proxy.request(models, {
+      method: "PATCH",
+      headers: json,
+      body: JSON.stringify({
+        selectedId: '["native","large"]',
+        effortId: "high",
+      }),
+    })
+    const empty = await proxy.request(models, {
+      method: "PATCH",
+      headers: json,
+      body: "{}",
+    })
+    const foreign = await proxy.request(models, {
+      method: "PATCH",
+      headers: {
+        origin: "https://attacker.example.test",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ selectedId: '["native","large"]' }),
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      selectedId: '["native","large"]',
+      effortId: "high",
+    })
+    expect(updateModel).toHaveBeenCalledWith("researcher", "stored", {
+      selectedId: '["native","large"]',
+      effortId: "high",
+    })
+    expect(empty.status).toBe(400)
+    expect(foreign.status).toBe(403)
+    // One resource, one write: the RPC-verb endpoints are gone.
+    for (const path of ["/select", "/effort"])
+      expect(
+        (
+          await proxy.request(`${models}${path}`, {
+            method: "POST",
+            headers: json,
+            body: JSON.stringify({ selectedId: '["native","large"]' }),
+          })
+        ).status
+      ).toBe(404)
+    expect(updateModel).toHaveBeenCalledTimes(1)
+  })
+
   it("does not expose the replaced polling endpoints", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)

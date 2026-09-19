@@ -13,6 +13,8 @@ import {
   type RuntimeAuthState,
   type RuntimeInfo,
   type SessionMessage,
+  type SessionModelUpdateRequest,
+  type SessionPlanActivityMessage,
   type VisibilityUpdateResponse,
 } from "../../../protocol"
 import {
@@ -240,6 +242,17 @@ function historyPagination(
     throw new HermesUnavailableError()
   return { total: continuationTotal, nextOffset }
 }
+
+/**
+ * Hermes has no `display_kind` predicate on its messages route, so a page of
+ * durable rows can be entirely display chrome that the projection drops. The
+ * adapter keeps reading older pages to fill the requested conversation page, and
+ * this bounds that scan: a store that is almost entirely chrome costs a few
+ * seconds once (a live page is roughly 100ms) instead of hanging the request,
+ * while at the usual limit of 200 the budget still reaches past 6,000 chrome
+ * rows. A healthy Session spends none of the budget.
+ */
+const MAX_EXTRA_HISTORY_PAGE_FETCHES = 32
 
 const MAX_OBSERVED_EVENT_BYTES = 4_194_304
 const MAX_OBSERVED_EVENT_DEPTH = 12
@@ -483,6 +496,8 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
+  /** Live Session id to retained-record key, for events that carry only the id. */
+  readonly #liveInfoKeys = new Map<string, string>()
   readonly #invitedSessionCreates = new Map<
     string,
     Promise<{ sessionId: string; created: boolean }>
@@ -505,8 +520,17 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       transport: {
         request: (method, params) => this.transport.request(method, params),
         history: (scope) => this.#rawHistory(scope),
-        sessionInfo: async (scope) =>
-          (scope as HermesWorkspaceSession & { info?: unknown }).info,
+        // Read the retained record, not the snapshot the scope was built from:
+        // Hermes pushes `session.info` after every model or effort change, and a
+        // read taken right after a write must see what this server just applied.
+        sessionInfo: async (scope) => {
+          const retained = this.#retainedInfo(scope.agentId, scope.sessionId)
+          if (retained)
+            return isRecord(retained.info) ? retained.info : retained
+          return (scope as HermesWorkspaceSession & { info?: unknown }).info
+        },
+        recordSessionInfo: (scope, patch) =>
+          this.#recordSessionInfo(scope.agentId, scope.sessionId, patch),
       },
     })
     this.#content = createHermesContentOperations({
@@ -559,7 +583,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
         observe: async (listener, disconnected) => {
           if (!this.transport.observeEvents) throw new HermesUnavailableError()
-          return this.transport.observeEvents(listener, disconnected)
+          return this.transport.observeEvents((event) => {
+            this.#retainObservedInfo(event)
+            listener(event)
+          }, disconnected)
         },
       },
       { idleMs: options.sessionIdleMs }
@@ -717,6 +744,53 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     return undefined
   }
 
+  #retainedInfo(agentId: string, publicSessionId: string) {
+    const storedId = storedSessionIdentity(agentId, publicSessionId)
+    return storedId
+      ? this.#attachmentInfo.get(attachmentInfoKey(agentId, storedId))
+      : undefined
+  }
+
+  /**
+   * Folds a Session-info change this server applied into the retained record, so
+   * the Session's own model state is fresh before Hermes echoes it back.
+   */
+  #recordSessionInfo(
+    agentId: string,
+    publicSessionId: string,
+    patch: Readonly<NativeRecord>
+  ) {
+    const storedId = storedSessionIdentity(agentId, publicSessionId)
+    if (!storedId) return
+    const key = attachmentInfoKey(agentId, storedId)
+    const retained = this.#attachmentInfo.get(key)
+    this.#attachmentInfo.set(key, {
+      ...retained,
+      info: { ...(isRecord(retained?.info) ? retained.info : {}), ...patch },
+    })
+  }
+
+  /**
+   * Hermes pushes `session.info` after every model, effort, and activity change.
+   * Retaining the latest one keeps workspace reads off the attach-time snapshot,
+   * which would otherwise report the Session's model for the life of the socket.
+   */
+  #retainObservedInfo(event: unknown) {
+    if (!isRecord(event) || event.type !== "session.info") return
+    if (!validLiveSessionId(event.session_id)) return
+    const key = this.#liveInfoKeys.get(event.session_id)
+    const payload = isRecord(event.payload) ? event.payload : undefined
+    if (!key || !payload) return
+    const retained = this.#attachmentInfo.get(key)
+    this.#attachmentInfo.set(key, {
+      ...retained,
+      info: payload,
+      ...(typeof payload.running === "boolean"
+        ? { running: payload.running }
+        : {}),
+    })
+  }
+
   async #requireAttachedSession(agentId: string, publicSessionId: string) {
     const storedId = storedSessionIdentity(agentId, publicSessionId)
     if (!storedId) throw new HermesSessionNotFoundError()
@@ -839,12 +913,12 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     return this.#workspace.models(agentId, sessionId)
   }
 
-  selectModel(agentId: string, sessionId: string, selectedId: string) {
-    return this.#workspace.selectModel(agentId, sessionId, selectedId)
-  }
-
-  selectEffort(agentId: string, sessionId: string, effortId: string) {
-    return this.#workspace.selectEffort(agentId, sessionId, effortId)
+  updateModel(
+    agentId: string,
+    sessionId: string,
+    patch: SessionModelUpdateRequest
+  ) {
+    return this.#workspace.updateModel(agentId, sessionId, patch)
   }
 
   context(agentId: string, sessionId: string) {
@@ -1171,10 +1245,14 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         ? payload.session_id
         : undefined
     if (!liveSessionId || !isRecord(payload)) throw new HermesUnavailableError()
-    this.#attachmentInfo.set(
-      attachmentInfoKey(scope.agentId, scope.sessionId),
-      payload
-    )
+    const key = attachmentInfoKey(scope.agentId, scope.sessionId)
+    this.#attachmentInfo.set(key, payload)
+    // A re-resumed Session answers under a new live id; the previous one can
+    // never name this Session again.
+    for (const [observed, mapped] of this.#liveInfoKeys)
+      if (mapped === key && observed !== liveSessionId)
+        this.#liveInfoKeys.delete(observed)
+    this.#liveInfoKeys.set(liveSessionId, key)
     return { liveSessionId }
   }
 
@@ -1515,52 +1593,80 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
     limit: number,
     offset: number
   ) {
-    if (!this.#dashboard) throw new HermesUnavailableError()
+    const dashboard = this.#dashboard
+    if (!dashboard) throw new HermesUnavailableError()
     await this.getSession(profile, storedId)
-    let payload: unknown
-    try {
-      payload = await this.#dashboard.getSessionMessages(
-        profile,
-        storedId,
-        limit,
-        offset
-      )
-    } catch (error) {
-      if (error instanceof HermesHttpError && error.status === 404) {
-        await this.#unpersistedDraft(profile, storedId)
-        return SessionHistoryResponseSchema.parse({
-          sessionId: sessionId(profile, storedId),
-          messages: [],
-          total: 0,
+    // This contract pages in conversation messages while Hermes pages in durable
+    // rows, and an unbounded number of those rows are display chrome the
+    // projection drops. A page that projects to nothing therefore means "keep
+    // reading older rows", not "the conversation is empty".
+    let rows: unknown[] = []
+    let messages: Array<SessionMessage | SessionPlanActivityMessage> = []
+    let pagination: { total: number; nextOffset: number } | undefined
+    let scanOffset = offset
+    for (
+      let fetches = 0;
+      fetches <= MAX_EXTRA_HISTORY_PAGE_FETCHES;
+      fetches += 1
+    ) {
+      let payload: unknown
+      try {
+        payload = await dashboard.getSessionMessages(
+          profile,
+          storedId,
           limit,
-          offset,
-          nextOffset: offset,
-        })
-      }
-      throwUnavailable(error)
-    }
-    if (
-      !isRecord(payload) ||
-      nonEmptyString(payload.session_id) !== storedId ||
-      !Array.isArray(payload.messages)
-    )
-      throw new HermesUnavailableError()
-    const pagination = historyPagination(
-      limit,
-      offset,
-      payload.messages.length,
-      payload.pagination
-    )
-    const messages: Array<
-      | SessionMessage
-      | {
-          id: string
-          role: "activity"
-          activityType: "PLAN"
-          content: { todos: NonNullable<ReturnType<typeof latestHermesTodos>> }
+          scanOffset
+        )
+      } catch (error) {
+        // Only the first fetch can mean "nothing persisted yet"; a 404 part way
+        // through the scan contradicts the pages Hermes already served.
+        if (
+          error instanceof HermesHttpError &&
+          error.status === 404 &&
+          scanOffset === offset
+        ) {
+          await this.#unpersistedDraft(profile, storedId)
+          return SessionHistoryResponseSchema.parse({
+            sessionId: sessionId(profile, storedId),
+            messages: [],
+            total: 0,
+            limit,
+            offset,
+            nextOffset: offset,
+          })
         }
-    > = projectHermesHistory(payload.messages)
-    const todos = latestHermesTodos(payload.messages)
+        throwUnavailable(error)
+      }
+      if (
+        !isRecord(payload) ||
+        nonEmptyString(payload.session_id) !== storedId ||
+        !Array.isArray(payload.messages)
+      )
+        throw new HermesUnavailableError()
+      const page = payload.messages
+      // Validate every fetch against the offset it asked for. The last fetch's
+      // arithmetic also carries the whole scan, because its offset already
+      // includes every row read before it.
+      pagination = historyPagination(
+        limit,
+        scanOffset,
+        page.length,
+        payload.pagination
+      )
+      scanOffset = pagination.nextOffset
+      // `order=latest` pages backwards, so each extra fetch holds the rows just
+      // older than the ones already read. Projecting the accumulated array as a
+      // whole also lets a tool row pair with an assistant tool call that landed
+      // on an older page. Every page but the last projects to nothing, and one
+      // page holds at most `limit` rows, so the projection stays within `limit`.
+      rows = [...page, ...rows]
+      messages = projectHermesHistory(rows)
+      // A short page means Hermes has no older rows left; an empty page says the
+      // same even if a caller passed a degenerate limit.
+      if (messages.length > 0 || page.length === 0 || page.length < limit) break
+    }
+    if (!pagination) throw new HermesUnavailableError()
+    const todos = latestHermesTodos(rows)
     if (todos !== undefined)
       messages.push({
         id: `aos-plan:${sessionId(profile, storedId)}`,

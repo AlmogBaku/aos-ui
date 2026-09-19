@@ -1,11 +1,9 @@
 import {
   RuntimeInfoSchema,
   SessionContextResponseSchema,
-  SessionModelEffortSelectRequestSchema,
-  SessionModelEffortSelectResponseSchema,
   SessionModelsResponseSchema,
-  SessionModelSelectRequestSchema,
-  SessionModelSelectResponseSchema,
+  SessionModelUpdateRequestSchema,
+  SessionModelUpdateResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "../../protocol"
@@ -78,11 +76,13 @@ export function registerWorkspaceRoutes(
     )
   })
 
-  app.post(`${sessionWorkspacePath}/models/select`, async (context) => {
+  // One resource, one write: the model and its reasoning effort are halves of
+  // the same Session model state, and the response is that state afterwards.
+  app.patch(`${sessionWorkspacePath}/models`, async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
-    const body = SessionModelSelectRequestSchema.safeParse(
+    const body = SessionModelUpdateRequestSchema.safeParse(
       await boundedJson(context.req.raw)
     )
     if (!body.success) return errorResponse("invalid_request", 400)
@@ -92,35 +92,11 @@ export function registerWorkspaceRoutes(
       context.req.param("sessionId")
     )
     return context.json(
-      SessionModelSelectResponseSchema.parse(
-        await runtime.selectModel(
+      SessionModelUpdateResponseSchema.parse(
+        await runtime.updateModel(
           context.req.param("agentId"),
           context.req.param("sessionId"),
-          body.data.selectedId
-        )
-      )
-    )
-  })
-
-  app.post(`${sessionWorkspacePath}/models/effort`, async (context) => {
-    const runtime = await requireRuntime(context.req.raw)
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
-    const body = SessionModelEffortSelectRequestSchema.safeParse(
-      await boundedJson(context.req.raw)
-    )
-    if (!body.success) return errorResponse("invalid_request", 400)
-    await requireScopedSession(
-      runtime,
-      context.req.param("agentId"),
-      context.req.param("sessionId")
-    )
-    return context.json(
-      SessionModelEffortSelectResponseSchema.parse(
-        await runtime.selectEffort(
-          context.req.param("agentId"),
-          context.req.param("sessionId"),
-          body.data.effortId
+          body.data
         )
       )
     )

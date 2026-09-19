@@ -565,25 +565,35 @@ export const SessionModelsResponseSchema = z.strictObject({
 })
 export type SessionModelsResponse = z.infer<typeof SessionModelsResponseSchema>
 
-export const SessionModelSelectRequestSchema = z.strictObject({
-  selectedId: IdentifierSchema,
-})
+/**
+ * A partial update of the Session's model state: the model, its reasoning
+ * effort, or both. At least one half must be present.
+ */
+export const SessionModelUpdateRequestSchema = z
+  .strictObject({
+    selectedId: IdentifierSchema.optional(),
+    effortId: IdentifierSchema.optional(),
+  })
+  .refine(
+    (patch) => patch.selectedId !== undefined || patch.effortId !== undefined,
+    { message: "empty model update" }
+  )
+export type SessionModelUpdateRequest = z.infer<
+  typeof SessionModelUpdateRequestSchema
+>
 
 /**
- * The selection the provider settled on, which may be a model it resolved the
- * request to rather than the requested id.
+ * The Session's model state after the update, which is authoritative: a
+ * provider may resolve the request to a model other than the requested id, and
+ * the effort is absent while the Session runs on the provider's own default.
  */
-export const SessionModelSelectResponseSchema = z.strictObject({
+export const SessionModelUpdateResponseSchema = z.strictObject({
   selectedId: IdentifierSchema,
+  effortId: IdentifierSchema.optional(),
 })
-
-export const SessionModelEffortSelectRequestSchema = z.strictObject({
-  effortId: IdentifierSchema,
-})
-
-export const SessionModelEffortSelectResponseSchema = z.strictObject({
-  effortId: IdentifierSchema,
-})
+export type SessionModelUpdateResponse = z.infer<
+  typeof SessionModelUpdateResponseSchema
+>
 
 export const SessionContextResponseSchema = z.strictObject({
   usedTokens: z.number().int().min(0),

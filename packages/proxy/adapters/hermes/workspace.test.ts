@@ -56,17 +56,34 @@ function harness(overrides?: {
   )
   const requireSession = vi.fn(async () => ({ ...scope, ...overrides?.scope }))
   const history = vi.fn(async () => overrides?.history ?? [])
-  const sessionInfo = vi.fn(async () => overrides?.sessionInfo)
+  // The retained Session info the adapter holds, write-through included.
+  let retained = overrides?.sessionInfo
+  const sessionInfo = vi.fn(async () => retained)
+  const recordSessionInfo = vi.fn(
+    (_scope: unknown, patch: Readonly<Record<string, unknown>>) => {
+      retained = {
+        ...(typeof retained === "object" && retained !== null ? retained : {}),
+        ...patch,
+      }
+    }
+  )
   return {
     request,
     requireSession,
     history,
+    recordSessionInfo,
+    /** Stands in for a Hermes `session.info` push replacing the record. */
+    setSessionInfo: (value: unknown) => {
+      retained = value
+    },
     operations: createHermesWorkspaceOperations({
       authority: { requireSession },
       transport: {
         request,
         ...(overrides?.historyAvailable === false ? {} : { history }),
-        ...(overrides?.sessionInfo === undefined ? {} : { sessionInfo }),
+        ...(overrides?.sessionInfo === undefined
+          ? {}
+          : { sessionInfo, recordSessionInfo }),
       },
     }),
   }
@@ -176,89 +193,94 @@ describe("Hermes workspace operations", () => {
     })
   })
 
-  it("only changes a selected provider-reported model with Hermes' Session scope", async () => {
+  it("changes a Session's model with Hermes' own Session-scoped config key", async () => {
     const { operations, request } = harness({
       request(method) {
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [{ slug: "native", models: ["small", "large"] }],
-          }
+        if (method === "config.set")
+          return { key: "model", scope: "session", value: "large" }
+      },
+      sessionInfo: { provider: "native", model: "small" },
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
+    ).resolves.toEqual({ selectedId: '["native","large"]' })
+    // The id is the pair this module minted, so the write never pays for the
+    // catalog handler only to split it again.
+    expect(request.mock.calls).toEqual([
+      [
+        "config.set",
+        {
+          session_id: "live-private-1",
+          key: "model",
+          value: "large --provider native --session",
+        },
+      ],
+    ])
+  })
+
+  it("reports the model Hermes resolved a pick to over the requested one", async () => {
+    const { operations } = harness({
+      request(method) {
+        // Hermes answers with its own canonical name for the chosen model.
+        if (method === "config.set")
+          return { key: "model", scope: "session", value: "large-2026-09" }
+      },
+      sessionInfo: { provider: "native", model: "small" },
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
+    ).resolves.toEqual({ selectedId: '["native","large-2026-09"]' })
+  })
+
+  it("reports the applied pick when Hermes retains no Session info", async () => {
+    const { operations } = harness({
+      request(method) {
         if (method === "config.set")
           return { key: "model", scope: "session", value: "large" }
       },
     })
 
     await expect(
-      operations.selectModel(
-        "research",
-        "hermes:research:stored-1",
-        '["native","large"]'
-      )
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
     ).resolves.toEqual({ selectedId: '["native","large"]' })
-    expect(request).toHaveBeenLastCalledWith("config.set", {
-      session_id: "live-private-1",
-      key: "model",
-      value: "large --provider native --session",
-    })
   })
 
-  it("does not pass an unreported model identifier through to Hermes", async () => {
-    const { operations, request } = harness({
-      request(method) {
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [{ slug: "native", models: ["small"] }],
-          }
-      },
-    })
+  it.each([
+    '["native","large"]junk',
+    "native/large",
+    '["native"]',
+    '["native","large","extra"]',
+    '["native","large --session"]',
+    '["native lab","large"]',
+  ])(
+    "does not pass the malformed model identifier %s to Hermes",
+    async (selectedId) => {
+      const { operations, request } = harness({
+        sessionInfo: { provider: "native", model: "small" },
+      })
 
-    await expect(
-      operations.selectModel(
-        "research",
-        "hermes:research:stored-1",
-        '["native","large --session"]'
-      )
-    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
-    expect(request).toHaveBeenCalledTimes(1)
-  })
-
-  it("reports the model Hermes resolved a pick to over the requested one", async () => {
-    const { operations } = harness({
-      request(method) {
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [{ slug: "native", models: ["small", "large"] }],
-          }
-        // Hermes answers with its own canonical name for the chosen model.
-        if (method === "config.set")
-          return { key: "model", scope: "session", value: "large-2026-09" }
-      },
-    })
-
-    await expect(
-      operations.selectModel(
-        "research",
-        "hermes:research:stored-1",
-        '["native","large"]'
-      )
-    ).resolves.toEqual({ selectedId: '["native","large-2026-09"]' })
-  })
+      await expect(
+        operations.updateModel("research", "hermes:research:stored-1", {
+          selectedId,
+          // Neither half is written when the other is rejected.
+          effortId: "high",
+        })
+      ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+      expect(request).not.toHaveBeenCalled()
+    }
+  )
 
   it("answers a guarded model pick rather than reporting a failed switch", async () => {
     const { operations, request } = harness({
       request(method, params) {
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [{ slug: "native", models: ["small", "large"] }],
-          }
         if (method !== "config.set") return undefined
         // Hermes guards some picks and switches nothing until one is answered.
         if (params.confirm_expensive_model !== true)
@@ -270,14 +292,13 @@ describe("Hermes workspace operations", () => {
           }
         return { key: "model", scope: "session", value: "large" }
       },
+      sessionInfo: { provider: "native", model: "small" },
     })
 
     await expect(
-      operations.selectModel(
-        "research",
-        "hermes:research:stored-1",
-        '["native","large"]'
-      )
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
     ).resolves.toEqual({ selectedId: '["native","large"]' })
     expect(request).toHaveBeenLastCalledWith("config.set", {
       session_id: "live-private-1",
@@ -290,24 +311,40 @@ describe("Hermes workspace operations", () => {
   it("does not report a switch Hermes withholds after it is confirmed", async () => {
     const { operations } = harness({
       request(method) {
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [{ slug: "native", models: ["small", "large"] }],
-          }
         if (method === "config.set")
           return { key: "model", value: "large", confirm_required: true }
       },
+      sessionInfo: { provider: "native", model: "small" },
     })
 
     await expect(
-      operations.selectModel(
-        "research",
-        "hermes:research:stored-1",
-        '["native","large"]'
-      )
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
     ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+  })
+
+  it("accepts a pick Hermes defers to the next turn of a streaming Session", async () => {
+    const { operations } = harness({
+      request(method) {
+        // A pick made mid-turn is stashed, and its answer names the model the
+        // Session is on from here.
+        if (method === "config.set")
+          return {
+            key: "model",
+            scope: "session",
+            value: "large",
+            deferred: true,
+          }
+      },
+      sessionInfo: { provider: "native", model: "small" },
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+      })
+    ).resolves.toEqual({ selectedId: '["native","large"]' })
   })
 
   it("reports a reasoning ladder only for models Hermes says support reasoning", async () => {
@@ -452,40 +489,6 @@ describe("Hermes workspace operations", () => {
     ).resolves.toMatchObject({ selectedId: '["native","small"]' })
   })
 
-  it("offers a reasoning level for the model the Session reports", async () => {
-    const { operations, request } = harness({
-      request(method) {
-        if (method === "config.set") return { key: "reasoning", value: "high" }
-        if (method === "model.options")
-          return {
-            provider: "native",
-            model: "small",
-            providers: [
-              {
-                slug: "native",
-                name: "Native models",
-                models: ["small", "large"],
-                capabilities: {
-                  small: { fast: true, reasoning: false },
-                  large: { fast: false, reasoning: true },
-                },
-              },
-            ],
-          }
-      },
-      sessionInfo: { model: "large", provider: "native" },
-    })
-
-    await expect(
-      operations.selectEffort("research", "hermes:research:stored-1", "high")
-    ).resolves.toEqual({ effortId: "high" })
-    expect(request).toHaveBeenLastCalledWith("config.set", {
-      session_id: "live-private-1",
-      key: "reasoning",
-      value: "high",
-    })
-  })
-
   it("reports the reasoning effort Hermes holds for the Session", async () => {
     const { operations } = harness({
       request: modelOptions,
@@ -515,44 +518,170 @@ describe("Hermes workspace operations", () => {
     ).resolves.not.toHaveProperty("effortId")
   })
 
-  it("only changes the Session reasoning effort the selected model reports", async () => {
+  it("changes the Session reasoning effort to a level on Hermes' ladder", async () => {
     const { operations, request } = harness({
+      request(method) {
+        if (method === "config.set") return { key: "reasoning", value: "high" }
+      },
+      sessionInfo: { provider: "native", model: "small", reasoning_effort: "" },
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "high",
+      })
+    ).resolves.toEqual({ selectedId: '["native","small"]', effortId: "high" })
+    expect(request.mock.calls).toEqual([
+      [
+        "config.set",
+        { session_id: "live-private-1", key: "reasoning", value: "high" },
+      ],
+    ])
+  })
+
+  it("still names the model after an effort write Hermes accepted", async () => {
+    const { operations } = harness({
       request(method) {
         if (method === "config.set") return { key: "reasoning", value: "high" }
         return modelOptions(method)
       },
+      // Hermes names no model for this Session, and a write it accepted must
+      // not be reported as a failure.
+      sessionInfo: { running: false },
     })
 
     await expect(
-      operations.selectEffort("research", "hermes:research:stored-1", "high")
-    ).resolves.toEqual({ effortId: "high" })
-    expect(request).toHaveBeenLastCalledWith("config.set", {
-      session_id: "live-private-1",
-      key: "reasoning",
-      value: "high",
-    })
+      operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "high",
+      })
+    ).resolves.toEqual({ selectedId: '["native","small"]', effortId: "high" })
   })
 
-  it("does not pass an unreported reasoning effort through to Hermes", async () => {
-    const { operations, request } = harness({ request: modelOptions })
+  it("does not pass an off-ladder reasoning effort through to Hermes", async () => {
+    const { operations, request } = harness({
+      sessionInfo: { provider: "native", model: "small" },
+    })
 
     await expect(
-      operations.selectEffort("research", "hermes:research:stored-1", "none")
+      operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "turbo",
+      })
     ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
-    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).not.toHaveBeenCalled()
   })
 
   it("rejects a Hermes reasoning confirmation for a different effort", async () => {
     const { operations } = harness({
       request(method) {
         if (method === "config.set") return { key: "reasoning", value: "low" }
-        return modelOptions(method)
+      },
+      sessionInfo: { provider: "native", model: "small" },
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "high",
+      })
+    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+  })
+
+  it("applies both halves of one model update in the order it received them", async () => {
+    const { operations, request } = harness({
+      request(method, params) {
+        if (method !== "config.set") return undefined
+        return params.key === "model"
+          ? { key: "model", scope: "session", value: "large" }
+          : { key: "reasoning", value: "max" }
+      },
+      sessionInfo: {
+        provider: "native",
+        model: "small",
+        reasoning_effort: "low",
       },
     })
 
     await expect(
-      operations.selectEffort("research", "hermes:research:stored-1", "high")
-    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+        effortId: "max",
+      })
+    ).resolves.toEqual({ selectedId: '["native","large"]', effortId: "max" })
+    expect(request.mock.calls).toEqual([
+      [
+        "config.set",
+        {
+          session_id: "live-private-1",
+          key: "model",
+          value: "large --provider native --session",
+        },
+      ],
+      [
+        "config.set",
+        { session_id: "live-private-1", key: "reasoning", value: "max" },
+      ],
+    ])
+  })
+
+  it("names what it applied when Hermes pushes older info between the writes", async () => {
+    const olderInfo = {
+      provider: "native",
+      model: "small",
+      reasoning_effort: "low",
+    }
+    const { operations, request, setSessionInfo } = harness({
+      sessionInfo: olderInfo,
+    })
+    request.mockImplementation(async (method, params) => {
+      if (method !== "config.set") return modelOptions(method)
+      if (params.key === "model")
+        return { key: "model", scope: "session", value: "large" }
+      // A push for an unrelated event lands between the two writes, still
+      // carrying the model the Session is leaving.
+      setSessionInfo({ ...olderInfo, running: true })
+      return { key: "reasoning", value: "high" }
+    })
+
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+        effortId: "high",
+      })
+    ).resolves.toEqual({ selectedId: '["native","large"]', effortId: "high" })
+  })
+
+  it("reports the Session state Hermes settled on after a write", async () => {
+    const { operations, recordSessionInfo } = harness({
+      request(method, params) {
+        if (method !== "config.set") return modelOptions(method)
+        return params.key === "model"
+          ? { key: "model", scope: "session", value: "large-2026-09" }
+          : { key: "reasoning", value: "xhigh" }
+      },
+      sessionInfo: {
+        provider: "native",
+        model: "small",
+        reasoning_effort: "low",
+      },
+    })
+
+    // A read taken before Hermes echoes `session.info` must already report the
+    // state this write settled on, or the browser snaps back to the old model.
+    await expect(
+      operations.updateModel("research", "hermes:research:stored-1", {
+        selectedId: '["native","large"]',
+        effortId: "xhigh",
+      })
+    ).resolves.toEqual({
+      selectedId: '["native","large-2026-09"]',
+      effortId: "xhigh",
+    })
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toMatchObject({
+      selectedId: '["native","large-2026-09"]',
+      effortId: "xhigh",
+    })
+    expect(recordSessionInfo).toHaveBeenCalledTimes(2)
   })
 
   it("projects strict provider context without native metadata", async () => {

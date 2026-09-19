@@ -13,6 +13,7 @@ import type {
   SessionHistoryResponse,
   SessionAttachmentStageRequest,
   SessionAttachmentStageResponse,
+  SessionModelUpdateRequest,
   VisibilityUpdateResponse,
 } from "../../protocol"
 
@@ -223,18 +224,14 @@ export interface ServerRuntime {
   ): Promise<unknown>
   models(agentId: string, publicSessionId: string): Promise<unknown>
   /**
-   * A provider may resolve the request to a different model, so the response
-   * carries the selection it actually settled on.
+   * Updates the model, its reasoning effort, or both in one write. A provider
+   * may resolve the request to a different model, so the response carries the
+   * Session's model state the write actually settled on.
    */
-  selectModel(
+  updateModel(
     agentId: string,
     publicSessionId: string,
-    selectedId: string
-  ): Promise<unknown>
-  selectEffort(
-    agentId: string,
-    publicSessionId: string,
-    effortId: string
+    patch: SessionModelUpdateRequest
   ): Promise<unknown>
   context(agentId: string, publicSessionId: string): Promise<unknown>
   subscribeSessionInvalidation(

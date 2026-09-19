@@ -266,10 +266,14 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
       return route.fulfill({ json: sessionCapabilities })
     if (path.endsWith("/workspace/models"))
       return route.fulfill({
-        json: {
-          selectedId: "default",
-          options: [{ id: "default", label: "Default", group: "Hermes" }],
-        },
+        // A model update answers with the Session's state after the write.
+        json:
+          request.method() === "PATCH"
+            ? { selectedId: "default" }
+            : {
+                selectedId: "default",
+                options: [{ id: "default", label: "Default", group: "Hermes" }],
+              },
       })
     if (path.endsWith("/workspace/context"))
       return route.fulfill({

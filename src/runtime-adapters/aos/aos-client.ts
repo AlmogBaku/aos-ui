@@ -33,9 +33,8 @@ import {
   SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
-  SessionModelEffortSelectRequestSchema,
-  SessionModelSelectResponseSchema,
   SessionModelsResponseSchema,
+  SessionModelUpdateResponseSchema,
   SessionSchema,
   SessionSpeechRequestSchema,
   SessionTodosResponseSchema,
@@ -48,6 +47,8 @@ import type {
   Session,
   SessionHistoryResponse,
   SessionMessage,
+  SessionModelUpdateRequest,
+  SessionModelUpdateResponse,
 } from "@aos/protocol"
 import type {
   AgentCatalogEntry,
@@ -1070,9 +1071,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   async stopRun(threadId: string) {
-    const agentId = this.#owner(threadId)
-    const result = await this.#read(
-      `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/stop`,
+    const result = await this.#sessionWrite(
+      threadId,
+      "/runs/stop",
       RunStopResponseSchema,
       { method: "POST" }
     )
@@ -1087,7 +1088,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
     threadId: string,
     request: { requestId: string; text: string }
   ) {
-    const agentId = this.#owner(threadId)
+    this.#owner(threadId)
     const expectedRunId = this.#runIds.get(threadId)
     if (!expectedRunId)
       throw new AosClientError(
@@ -1096,8 +1097,9 @@ export class AosRemoteClient implements WorkspaceAdapter {
         "run_conflict"
       )
     const body = RunSteerRequestSchema.parse({ ...request, expectedRunId })
-    const response = await this.#read(
-      `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}/runs/steer`,
+    const response = await this.#sessionWrite(
+      threadId,
+      "/runs/steer",
       RunSteerResponseSchema,
       {
         method: "POST",
@@ -1142,36 +1144,25 @@ export class AosRemoteClient implements WorkspaceAdapter {
   }
 
   /**
-   * The response is authoritative: a provider may settle on a model it resolved
-   * the request to rather than the requested id.
+   * Updates the model, its reasoning effort, or both. The response is the
+   * Session's model state after the write and is authoritative: a provider may
+   * settle on a model it resolved the request to rather than the requested id,
+   * and an absent effort means the Session runs on the provider's own default.
    */
-  async selectModel(threadId: string, selectedId: string) {
-    return this.#sessionRead(
+  updateModel(
+    threadId: string,
+    patch: SessionModelUpdateRequest
+  ): Promise<SessionModelUpdateResponse> {
+    return this.#sessionWrite(
       threadId,
-      "/workspace/models/select",
-      SessionModelSelectResponseSchema,
+      "/workspace/models",
+      SessionModelUpdateResponseSchema,
       {
-        method: "POST",
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ selectedId }),
+        body: JSON.stringify(patch),
       }
     )
-  }
-
-  async selectEffort(threadId: string, effortId: string) {
-    const result = await this.#sessionRead(
-      threadId,
-      "/workspace/models/effort",
-      SessionModelEffortSelectRequestSchema,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ effortId }),
-      }
-    )
-    if (result.effortId !== effortId)
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
-    return result
   }
 
   context(threadId: string) {
@@ -1311,7 +1302,7 @@ export class AosRemoteClient implements WorkspaceAdapter {
         "proxy-failure",
         "Invalid attachment staging request"
       )
-    return this.#sessionRead(
+    return this.#sessionWrite(
       threadId,
       "/attachments/stage",
       SessionAttachmentStageResponseSchema,
@@ -1445,6 +1436,21 @@ export class AosRemoteClient implements WorkspaceAdapter {
   ) {
     const { path, scope } = this.#sessionPath(threadId, suffix)
     return this.#read(path, schema, init, scope)
+  }
+
+  /**
+   * Session writes are not idempotent and a successful write invalidates its
+   * own Session stream, so they never reach the reconciler, which re-runs a
+   * read whose stream was invalidated while it was in flight.
+   */
+  #sessionWrite<T>(
+    threadId: string,
+    suffix: string,
+    schema: Schema<T>,
+    init: RequestInit
+  ) {
+    const { path } = this.#sessionPath(threadId, suffix)
+    return this.#readDirect(path, schema, init)
   }
 
   async #readBlob(path: string, init?: RequestInit, scope?: AosEventScope) {

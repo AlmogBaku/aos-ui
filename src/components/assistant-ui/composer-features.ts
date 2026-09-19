@@ -9,12 +9,18 @@ export type ComposerModelOption = {
   readonly efforts?: readonly string[] | undefined
 }
 
+/** A partial model change: the model, its reasoning effort, or both. */
+export type ComposerModelUpdate = {
+  readonly selectedId?: string | undefined
+  readonly effortId?: string | undefined
+}
+
 export type ComposerModelSelectionState =
   | { readonly status: "idle" }
-  | { readonly status: "pending"; readonly targetId: string }
+  | { readonly status: "pending"; readonly target: ComposerModelUpdate }
   | {
       readonly status: "error"
-      readonly targetId: string
+      readonly target: ComposerModelUpdate
       readonly error: string
     }
 
@@ -58,18 +64,14 @@ export type ComposerFeatureViewModel = {
   readonly model?:
     | {
         readonly options: readonly ComposerModelOption[]
+        /** The displayed model: the in-flight target while a write is pending. */
         readonly selectedId: string
-        /** The in-flight request is separate from the provider-authoritative id. */
-        readonly selection?: ComposerModelSelectionState | undefined
-        readonly select: (id: string) => Promise<void>
-        /** Repeats only the current failed request; stale failures have no retry. */
-        readonly retry?: (() => Promise<void>) | undefined
-        /** Provider-authoritative reasoning effort; absent = provider default. */
+        /** The displayed reasoning effort; absent = provider default. */
         readonly effortId?: string | undefined
-        readonly effortSelection?: ComposerModelSelectionState | undefined
-        /** Present only when the selected option reports `efforts`. */
-        readonly selectEffort?: ((effortId: string) => Promise<void>) | undefined
-        readonly retryEffort?: (() => Promise<void>) | undefined
+        readonly selection?: ComposerModelSelectionState | undefined
+        readonly update: (patch: ComposerModelUpdate) => Promise<void>
+        /** Repeats only the failed patch; a settled selection has no retry. */
+        readonly retry?: (() => Promise<void>) | undefined
       }
     | undefined
   readonly context?:

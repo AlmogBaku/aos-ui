@@ -1,3 +1,8 @@
+import type {
+  SessionModelUpdateRequest,
+  SessionModelUpdateResponse,
+} from "../../../protocol"
+
 type NativeRecord = Record<string, unknown>
 
 export type HermesWorkspaceSession = {
@@ -27,6 +32,15 @@ export interface HermesWorkspaceTransport {
   history?(scope: HermesWorkspaceSession): Promise<readonly unknown[]>
   /** A server-side current Session-info reader when the connection retains one. */
   sessionInfo?(scope: HermesWorkspaceSession): Promise<unknown>
+  /**
+   * Writes a Session-info change this server just applied back into the
+   * retained record, so a read taken before Hermes pushes its own
+   * `session.info` still reports the state the write settled on.
+   */
+  recordSessionInfo?(
+    scope: HermesWorkspaceSession,
+    patch: Readonly<Record<string, unknown>>
+  ): void
 }
 
 export class HermesWorkspaceScopeError extends Error {
@@ -250,6 +264,30 @@ function projectSessionModel(info: unknown) {
   return provider && model ? { provider, model } : undefined
 }
 
+function nativeProviderSlug(value: unknown) {
+  const provider = stringValue(value, 256)
+  return provider && /^[\w.-]+$/u.test(provider) ? provider : undefined
+}
+
+/** A model name Hermes can be asked for, without option-like leading dashes. */
+function nativeModelName(value: unknown) {
+  const model = stringValue(value, 256)
+  return model && !/\s|^[-\u2012-\u2015]/u.test(model) ? model : undefined
+}
+
+/**
+ * Reads back the `[provider, model]` pair this module mints as a model id. A
+ * write that splits the id itself never pays for Hermes' catalog handler, and
+ * the pair is held to the same shape the catalog projection accepts.
+ */
+function parseModelId(selectedId: string) {
+  const parsed = parseJson(selectedId)
+  if (!Array.isArray(parsed) || parsed.length !== 2) return undefined
+  const provider = nativeProviderSlug(parsed[0])
+  const model = nativeModelName(parsed[1])
+  return provider && model ? { provider, model } : undefined
+}
+
 function projectModels(
   value: unknown,
   /** Overrides the catalog's own idea of the current model, when reported. */
@@ -265,15 +303,15 @@ function projectModels(
       row.authenticated === false
     )
       continue
-    const provider = stringValue(row.slug, 256)
-    if (!provider || !/^[\w.-]+$/u.test(provider)) continue
+    const provider = nativeProviderSlug(row.slug)
+    if (!provider) continue
     const group = stringValue(row.name, 256) ?? provider
     const capabilities = isRecord(row.capabilities)
       ? row.capabilities
       : undefined
     for (const rawModel of row.models) {
-      const model = stringValue(rawModel, 256)
-      if (!model || /\s|^[-\u2012-\u2015]/u.test(model)) continue
+      const model = nativeModelName(rawModel)
+      if (!model) continue
       const id = JSON.stringify([provider, model])
       if (native.some((choice) => choice.id === id)) continue
       const efforts = capabilities
@@ -427,16 +465,11 @@ function activityState(value: unknown): HermesActivityState {
 export type HermesWorkspaceOperations = {
   capabilities(): HermesWorkspaceCapabilities
   models(agentId: string, sessionId: string): Promise<HermesModelChoices>
-  selectModel(
+  updateModel(
     agentId: string,
     sessionId: string,
-    selectedId: string
-  ): Promise<{ selectedId: string }>
-  selectEffort(
-    agentId: string,
-    sessionId: string,
-    effortId: string
-  ): Promise<{ effortId: string }>
+    patch: SessionModelUpdateRequest
+  ): Promise<SessionModelUpdateResponse>
   context(agentId: string, sessionId: string): Promise<HermesContext>
   todos(agentId: string, sessionId: string): Promise<HermesTodo[]>
   activity(agentId: string, sessionId: string): Promise<HermesActivity>
@@ -534,78 +567,97 @@ export function createHermesWorkspaceOperations(input: {
       }
     },
     models,
-    async selectModel(agentId, sessionId, selectedId) {
+    async updateModel(agentId, sessionId, patch) {
       const session = await requireScope(agentId, sessionId)
       if (!session.attached) throw new HermesWorkspaceUnavailableError()
-      const catalog = await request("model.options", {
-        session_id: session.liveSessionId,
-        profile: session.agentId,
-      })
-      const selected = projectModels(catalog).native.find(
-        (option) => option.id === selectedId
-      )
-      if (!selected) throw new HermesWorkspaceUnavailableError()
-      const apply = (confirmed: boolean) =>
-        request("config.set", {
-          session_id: session.liveSessionId,
-          key: "model",
-          value: `${selected.model} --provider ${selected.provider} --session`,
-          ...(confirmed ? { confirm_expensive_model: true } : {}),
-        })
-      let applied = await apply(false)
-      // Hermes guards some picks — priced models, data-training tiers, leaving a
-      // large cached context — with a confirm round-trip written for its own
-      // interactive surfaces, and switches nothing until it is answered.
-      // Choosing the model from the offered catalog is that answer here, so the
-      // request repeats as confirmed instead of reporting a failed switch.
-      if (isRecord(applied) && applied.confirm_required === true)
-        applied = await apply(true)
-      if (
-        !isRecord(applied) ||
-        applied.key !== "model" ||
-        applied.scope !== "session" ||
-        applied.confirm_required === true
-      )
+      // Both halves are validated before either is written: the id is the pair
+      // this module minted, so splitting it here keeps a write off Hermes'
+      // catalog handler, and the ladder is Hermes' own constant one.
+      const requested =
+        patch.selectedId === undefined
+          ? undefined
+          : parseModelId(patch.selectedId)
+      if (patch.selectedId !== undefined && !requested)
         throw new HermesWorkspaceUnavailableError()
-      // Hermes resolves a pick to its own canonical model name, which need not
-      // be the catalog label that was chosen; its answer is authoritative.
-      const value = stringValue(applied.value, 256)
-      if (!value) throw new HermesWorkspaceUnavailableError()
-      return { selectedId: JSON.stringify([selected.provider, value]) }
-    },
-    async selectEffort(agentId, sessionId, effortId) {
-      const session = await requireScope(agentId, sessionId)
-      if (!session.attached) throw new HermesWorkspaceUnavailableError()
+      const effortId =
+        patch.effortId === undefined
+          ? undefined
+          : projectEffortId(patch.effortId)
+      if (patch.effortId !== undefined && !effortId)
+        throw new HermesWorkspaceUnavailableError()
+
+      let applied: { provider: string; model: string } | undefined
+      if (requested) {
+        const apply = (confirmed: boolean) =>
+          request("config.set", {
+            session_id: session.liveSessionId,
+            key: "model",
+            value: `${requested.model} --provider ${requested.provider} --session`,
+            ...(confirmed ? { confirm_expensive_model: true } : {}),
+          })
+        let answer = await apply(false)
+        // Hermes guards some picks — priced models, data-training tiers, leaving
+        // a large cached context — with a confirm round-trip written for its own
+        // interactive surfaces, and switches nothing until it is answered.
+        // Choosing the model from the offered catalog is that answer here, so
+        // the request repeats as confirmed instead of reporting a failed switch.
+        if (isRecord(answer) && answer.confirm_required === true)
+          answer = await apply(true)
+        if (
+          !isRecord(answer) ||
+          answer.key !== "model" ||
+          answer.scope !== "session" ||
+          answer.confirm_required === true
+        )
+          throw new HermesWorkspaceUnavailableError()
+        // Hermes resolves a pick to its own canonical model name, which need not
+        // be the label that was chosen; its answer is authoritative. A pick made
+        // mid-turn is answered as deferred and names the model Hermes stashed
+        // for the next turn, which is the model the Session is on from here.
+        const model = stringValue(answer.value, 256)
+        if (!model) throw new HermesWorkspaceUnavailableError()
+        applied = { provider: requested.provider, model }
+        input.transport.recordSessionInfo?.(session, applied)
+      }
+      if (effortId) {
+        // Hermes scopes the `reasoning` key to the given Session by default.
+        const answer = await request("config.set", {
+          session_id: session.liveSessionId,
+          key: "reasoning",
+          value: effortId,
+        })
+        if (
+          !isRecord(answer) ||
+          answer.key !== "reasoning" ||
+          answer.value !== effortId
+        )
+          throw new HermesWorkspaceUnavailableError()
+        input.transport.recordSessionInfo?.(session, {
+          reasoning_effort: effortId,
+        })
+      }
+      // Each write's own answer is the authority for the half it applied: a
+      // `session.info` push for an unrelated event can land between the two
+      // writes still carrying the model the Session is leaving, so a re-read
+      // here would report the very state this write replaced. Only the half the
+      // patch left alone comes from the retained record, which the
+      // write-throughs above keep current until Hermes pushes its own.
       const info = await input.transport
         .sessionInfo?.(session)
         .catch(() => undefined)
-      // The level is offered for the model the Session reports, which is the one
-      // the roster shows it on, pick stashed mid-turn included.
-      const catalog = projectModels(
-        await request("model.options", {
-          session_id: session.liveSessionId,
-          profile: session.agentId,
-        }),
-        projectSessionModel(info)
-      )
-      const selected = catalog.native.find(
-        (option) => option.id === catalog.selectedId
-      )
-      if (!selected?.efforts?.includes(effortId))
-        throw new HermesWorkspaceUnavailableError()
-      // Hermes scopes the `reasoning` key to the given Session by default.
-      const confirmation = await request("config.set", {
-        session_id: session.liveSessionId,
-        key: "reasoning",
-        value: effortId,
-      })
-      if (
-        !isRecord(confirmation) ||
-        confirmation.key !== "reasoning" ||
-        confirmation.value !== effortId
-      )
-        throw new HermesWorkspaceUnavailableError()
-      return { effortId }
+      const current = applied ?? projectSessionModel(info)
+      const currentEffort =
+        effortId ??
+        projectEffortId(isRecord(info) ? info.reasoning_effort : undefined)
+      return {
+        // An effort-only write still reports the pair, so a Session whose info
+        // names no model reads the catalog rather than failing a write Hermes
+        // has already accepted.
+        selectedId: current
+          ? JSON.stringify([current.provider, current.model])
+          : (await models(agentId, sessionId)).selectedId,
+        ...(currentEffort ? { effortId: currentEffort } : {}),
+      }
     },
     async context(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)

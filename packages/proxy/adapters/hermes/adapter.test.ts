@@ -104,6 +104,73 @@ describe("Hermes server adapter", () => {
     ).not.toContain("live-secret")
   })
 
+  it("refreshes the Session's reported model from its own writes and events", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return {
+          session_id: "live-secret",
+          running: false,
+          info: { provider: "native", model: "small" },
+        }
+      if (method === "config.set")
+        return { key: "model", scope: "session", value: "large" }
+      if (method === "model.options")
+        return {
+          provider: "native",
+          model: "small",
+          providers: [
+            { slug: "native", name: "Native", models: ["small", "large"] },
+          ],
+        }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      throw new Error(`unexpected ${path}`)
+    })
+    let nativeListener: ((event: unknown) => void) | undefined
+    const adapter = new HermesServerAdapter({
+      request,
+      http,
+      observeEvents: vi.fn(async (next) => {
+        nativeListener = next
+        return vi.fn()
+      }),
+    })
+
+    await adapter.subscribeSessionInvalidation("researcher", "stored", vi.fn())
+    await expect(adapter.models("researcher", "stored")).resolves.toMatchObject(
+      { selectedId: '["native","small"]' }
+    )
+    // A write is authoritative for its own answer, before Hermes echoes it.
+    await expect(
+      adapter.updateModel("researcher", "stored", {
+        selectedId: '["native","large"]',
+      })
+    ).resolves.toEqual({ selectedId: '["native","large"]' })
+    // Hermes then pushes session.info for every model or effort change, and
+    // attach-time state would otherwise name the model for the life of the
+    // connection.
+    nativeListener!({
+      type: "session.info",
+      session_id: "live-secret",
+      payload: {
+        provider: "native",
+        model: "large-2026-09",
+        reasoning_effort: "high",
+        running: false,
+      },
+    })
+
+    await expect(adapter.models("researcher", "stored")).resolves.toMatchObject(
+      {
+        selectedId: '["native","large-2026-09"]',
+        effortId: "high",
+      }
+    )
+  })
+
   it("stages owned attachments and reads only a published same-Session artifact", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "session.resume")
@@ -1259,6 +1326,183 @@ describe("Hermes server adapter", () => {
           offset
         )
       ).rejects.toBeInstanceOf(HermesUnavailableError)
+    })
+  })
+
+  describe("native history pages of display chrome", () => {
+    const chrome = (index: number) => ({
+      id: `chrome-${index}`,
+      role: "user",
+      display_kind: "model_switch",
+      content:
+        "[System: The active model for this chat has changed to anthropic/small]",
+      timestamp: index + 1,
+    })
+
+    /** Serves a distinct native page per requested offset and records the scan. */
+    const scanAdapter = (
+      limit: number,
+      page: (offset: number) => readonly unknown[]
+    ) => {
+      const offsets: number[] = []
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher" }
+        const query = new URL(`http://hermes${path}`).searchParams
+        const offset = Number(query.get("offset"))
+        offsets.push(offset)
+        const rows = page(offset)
+        return {
+          session_id: "stored",
+          messages: rows,
+          pagination: {
+            limit: Number(query.get("limit")),
+            offset,
+            order: query.get("order"),
+            returned: rows.length,
+          },
+        }
+      })
+      return {
+        adapter: new HermesServerAdapter({ request: vi.fn(), http }),
+        offsets,
+      }
+    }
+
+    it("reads older native pages until the conversation page is filled", async () => {
+      const { adapter, offsets } = scanAdapter(2, (offset) => {
+        if (offset === 0) return [chrome(0), chrome(1)]
+        if (offset === 2)
+          return [
+            {
+              id: "user-old",
+              role: "user",
+              content: "old question",
+              timestamp: 1,
+            },
+            {
+              id: "assistant-old",
+              role: "assistant",
+              content: "old answer",
+              timestamp: 2,
+            },
+          ]
+        return []
+      })
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages.map(({ id }) => id)).toEqual([
+        "user-old",
+        "assistant-old",
+      ])
+      expect(history).toMatchObject({ offset: 0, nextOffset: 4, total: 5 })
+      expect(offsets).toEqual([0, 2])
+    })
+
+    it("returns a page that mixes chrome with conversation after one fetch", async () => {
+      const { adapter, offsets } = scanAdapter(2, (offset) =>
+        offset === 0
+          ? [
+              chrome(0),
+              {
+                id: "user-new",
+                role: "user",
+                content: "new question",
+                timestamp: 2,
+              },
+            ]
+          : [{ id: "user-old", role: "user", content: "older", timestamp: 1 }]
+      )
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages.map(({ id }) => id)).toEqual(["user-new"])
+      expect(history).toMatchObject({ nextOffset: 2, total: 3 })
+      expect(offsets).toEqual([0])
+    })
+
+    it("stops at the scan budget instead of reading an all-chrome store forever", async () => {
+      const { adapter, offsets } = scanAdapter(2, (offset) => [
+        chrome(offset),
+        chrome(offset + 1),
+      ])
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages).toEqual([])
+      expect(offsets.length).toBeGreaterThan(1)
+      expect(offsets.length).toBeLessThanOrEqual(33)
+      expect(offsets).toEqual(
+        Array.from({ length: offsets.length }, (_, index) => index * 2)
+      )
+      expect(history).toMatchObject({
+        nextOffset: offsets.length * 2,
+        total: offsets.length * 2 + 1,
+      })
+    })
+
+    it("reports an exhausted chrome-only history without a further fetch", async () => {
+      const { adapter, offsets } = scanAdapter(2, () => [chrome(0)])
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages).toEqual([])
+      expect(history.nextOffset).toBe(1)
+      expect(history.total).toBe(history.nextOffset)
+      expect(offsets).toEqual([0])
+    })
+
+    it("pairs a tool result with its assistant tool call from an older page", async () => {
+      const { adapter, offsets } = scanAdapter(2, (offset) => {
+        if (offset === 0)
+          return [
+            chrome(9),
+            {
+              role: "tool",
+              tool_call_id: "skill-call",
+              tool_name: "use_skill",
+              content: JSON.stringify({ success: true }),
+            },
+          ]
+        if (offset === 2)
+          return [
+            chrome(8),
+            {
+              id: "assistant-skill",
+              role: "assistant",
+              tool_calls: [
+                {
+                  id: "skill-call",
+                  function: {
+                    name: "use_skill",
+                    arguments: JSON.stringify({ name: "grilling" }),
+                  },
+                },
+              ],
+              timestamp: 1,
+            },
+          ]
+        return []
+      })
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages).toMatchObject([
+        {
+          id: "assistant-skill",
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "skill-call",
+              toolName: "use_skill",
+              result: { success: true },
+            },
+          ],
+        },
+      ])
+      expect(offsets).toEqual([0, 2])
     })
   })
 

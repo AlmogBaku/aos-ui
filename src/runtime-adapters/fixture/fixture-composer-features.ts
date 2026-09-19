@@ -1,7 +1,10 @@
 import type { AssistantRuntime } from "@assistant-ui/react"
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerFeatureViewModel,
+  ComposerModelUpdate,
+} from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { FIXTURE_SLASH_COMMANDS } from "./fixture-slash-commands"
 
@@ -66,30 +69,30 @@ export function useFixtureComposerFeatures({
   const [effortByThread, setEffortByThread] = useState<
     ReadonlyMap<string, string>
   >(() => new Map())
-  const select = useCallback(
-    async (id: string) => {
-      if (
-        !threadId ||
-        !FIXTURE_MODEL_OPTIONS.some((option) => option.id === id)
-      )
-        return
-      setSelectedByThread((current) => {
-        const next = new Map(current)
-        next.set(threadId, id)
-        return next
-      })
-    },
-    [threadId]
-  )
-  const selectEffort = useCallback(
-    async (effortId: string) => {
+  // The preview settles a pick synchronously: it has no provider to wait for,
+  // so it never shows a pending state.
+  const update = useCallback(
+    async (patch: ComposerModelUpdate) => {
       if (!threadId) return
-      const currentSelectedId =
-        selectedByThread.get(threadId) ?? DEFAULT_MODEL_ID
-      const selectedOption = FIXTURE_MODEL_OPTIONS.find(
-        (option) => option.id === currentSelectedId
+      const selectedId =
+        patch.selectedId !== undefined &&
+        FIXTURE_MODEL_OPTIONS.some((option) => option.id === patch.selectedId)
+          ? patch.selectedId
+          : undefined
+      if (selectedId)
+        setSelectedByThread((current) => {
+          const next = new Map(current)
+          next.set(threadId, selectedId)
+          return next
+        })
+      if (patch.effortId === undefined) return
+      const option = FIXTURE_MODEL_OPTIONS.find(
+        (candidate) =>
+          candidate.id ===
+          (selectedId ?? selectedByThread.get(threadId) ?? DEFAULT_MODEL_ID)
       )
-      if (!selectedOption || !("efforts" in selectedOption)) return
+      if (!option || !("efforts" in option)) return
+      const effortId = patch.effortId
       setEffortByThread((current) => {
         const next = new Map(current)
         next.set(threadId, effortId)
@@ -131,13 +134,9 @@ export function useFixtureComposerFeatures({
               options: FIXTURE_MODEL_OPTIONS,
               selectedId,
               selection: { status: "idle" },
-              select,
+              update,
               ...(selectedOption && "efforts" in selectedOption
-                ? {
-                    effortId,
-                    effortSelection: { status: "idle" },
-                    selectEffort,
-                  }
+                ? { effortId }
                 : {}),
             },
           }
@@ -151,9 +150,8 @@ export function useFixtureComposerFeatures({
     config.modelSelectorEnabled,
     effortId,
     messageCount,
-    select,
     selectedId,
-    selectEffort,
     threadId,
+    update,
   ])
 }

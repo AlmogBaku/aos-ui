@@ -105,12 +105,19 @@ describe("OpenCode server adapter", () => {
       options: [{ id: '["openai","gpt-5"]', label: "GPT-5", group: "openai" }],
     })
     await expect(
-      adapter.selectModel("research", "session-1", '["openai","gpt-5"]')
+      adapter.updateModel("research", "session-1", {
+        selectedId: '["openai","gpt-5"]',
+      })
     ).resolves.toEqual({ selectedId: '["openai","gpt-5"]' })
     expect(native.sessions.switchModel).toHaveBeenCalledWith("session-1", {
       providerID: "openai",
       id: "gpt-5",
     })
+    // OpenCode reports no reasoning ladder, so an effort is never settled here.
+    await expect(
+      adapter.updateModel("research", "session-1", { effortId: "high" })
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    expect(native.sessions.switchModel).toHaveBeenCalledTimes(1)
     await expect(
       adapter.context("research", "session-1")
     ).rejects.toMatchObject({

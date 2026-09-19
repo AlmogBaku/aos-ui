@@ -6,7 +6,7 @@ import {
   useDirection,
   type TextDirection,
 } from "@base-ui/react/direction-provider"
-import { RotateCcwIcon } from "lucide-react"
+import { CircleAlertIcon, Loader2Icon, RotateCcwIcon } from "lucide-react"
 import {
   createContext,
   useCallback,
@@ -44,12 +44,15 @@ export type ModelOption = {
   readonly group?: string | undefined
 }
 
+/**
+ * The displayed value and level are already the picked ones, so a pending
+ * switch carries no target of its own.
+ */
 export type ModelSelectorSelectionState =
   | { readonly status: "idle" }
-  | { readonly status: "pending"; readonly targetId: string }
+  | { readonly status: "pending" }
   | {
       readonly status: "error"
-      readonly targetId: string
       readonly error: string
       readonly retry?: (() => void | Promise<void>) | undefined
     }
@@ -113,7 +116,6 @@ type ModelSelectorContextValue = {
   readonly efforts?: readonly string[] | undefined
   readonly effortValue?: string | undefined
   readonly onEffortChange?: ((effortId: string) => void) | undefined
-  readonly effortSelection: ModelSelectorSelectionState
 }
 
 const ModelSelectorContext = createContext<ModelSelectorContextValue | null>(
@@ -138,7 +140,6 @@ export function ModelSelectorRoot({
   efforts,
   effortValue,
   onEffortChange,
-  effortSelection = { status: "idle" },
   direction = "ltr",
   labels,
   children,
@@ -146,12 +147,12 @@ export function ModelSelectorRoot({
   models: readonly ModelOption[]
   value: string
   onValueChange: (value: string) => void
+  /** One in-flight state for the whole choice: the model, its level, or both. */
   selection?: ModelSelectorSelectionState | undefined
   /** Efforts of the selected model; the popup omits the group without them. */
   efforts?: readonly string[] | undefined
   effortValue?: string | undefined
   onEffortChange?: ((effortId: string) => void) | undefined
-  effortSelection?: ModelSelectorSelectionState | undefined
   direction?: TextDirection | undefined
   labels: ModelSelectorLabels
   children: ReactNode
@@ -177,17 +178,8 @@ export function ModelSelectorRoot({
       efforts,
       effortValue,
       onEffortChange,
-      effortSelection,
     }),
-    [
-      models,
-      selection,
-      labels,
-      efforts,
-      effortValue,
-      onEffortChange,
-      effortSelection,
-    ]
+    [models, selection, labels, efforts, effortValue, onEffortChange]
   )
 
   return (
@@ -226,15 +218,26 @@ export function ModelSelectorTrigger({
   const context = useModelSelectorContext()
   const { labels } = context
   const level = currentEffort(context)
+  const pending = context.selection.status === "pending"
   return (
     <ComboboxTrigger
+      aria-busy={pending || undefined}
       data-slot="model-selector-trigger"
       className={cn(
         // Model names carry provider-qualified prefixes, so the trigger keeps
         // its full width and truncates only when the rail actually runs out.
         "flex h-11 min-w-0 items-center justify-between gap-1.5 rounded-md px-1.5 text-xs font-medium text-foreground transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none @min-[64rem]/workspace:h-7",
         // The wrapper supplies the chevron; keep the design-lock icon weight.
-        "[&>svg]:size-3.5 [&>svg]:text-current [&>svg]:opacity-60",
+        // Only the resting chevron is dimmed: the spinner below is the whole
+        // signal that a switch is in flight, and under `motion-reduce` it is a
+        // still ring, so it has to read at full strength.
+        "[&>svg]:size-3.5 [&>svg]:text-current [&>svg:last-child]:opacity-60",
+        // A pending switch trades the wrapper's own trailing chevron for the
+        // spinner below rather than crowding the rail with both affordances.
+        // This assumes `ComboboxTrigger` keeps rendering that chevron as its
+        // last direct svg child (see `src/components/ui/combobox.tsx`), which
+        // it offers no prop or render seam to omit.
+        pending && "[&>svg:last-child]:hidden",
         className
       )}
       {...props}
@@ -243,7 +246,11 @@ export function ModelSelectorTrigger({
         <span className="flex min-w-0 items-center gap-1">
           <ComboboxValue>
             {(model: ModelOption | null) => (
-              <span className="truncate">
+              // A pick shows here at once, at reduced emphasis until the
+              // provider confirms it, so the trigger never overstates it.
+              <span
+                className={cn("truncate", pending && "text-muted-foreground")}
+              >
                 {model?.name ?? labels.placeholder}
               </span>
             )}
@@ -257,24 +264,27 @@ export function ModelSelectorTrigger({
           ) : null}
         </span>
       )}
+      {pending ? (
+        <Loader2Icon
+          aria-hidden
+          className="shrink-0 animate-spin motion-reduce:animate-none"
+        />
+      ) : null}
     </ComboboxTrigger>
   )
 }
 
-/** The level a Session is on, preferring a pick the provider is still settling. */
+/** The level a Session is on, when the provider still offers it. */
 function currentEffort({
-  effortSelection,
   efforts,
   effortValue,
   onEffortChange,
 }: ModelSelectorContextValue) {
   if (!onEffortChange || !efforts?.length) return undefined
-  const level =
-    effortSelection.status === "pending" ? effortSelection.targetId : effortValue
-  return level && efforts.includes(level) ? level : undefined
+  return effortValue && efforts.includes(effortValue) ? effortValue : undefined
 }
 
-/** Shared pending/error presentation for model and effort popups. */
+/** The one pending/error line for a model choice, shown once in the popup. */
 export function ModelSelectorStatus({
   labels,
   selection,
@@ -282,35 +292,52 @@ export function ModelSelectorStatus({
   labels: Pick<ModelSelectorLabels, "switching" | "retry">
   selection: ModelSelectorSelectionState
 }) {
-  if (selection.status === "pending") {
-    return (
+  const failure = selection.status === "error" ? selection : null
+  const retry = failure?.retry
+  return (
+    <>
+      {/* The region stays mounted while the popup is open so a switch that
+          starts here is announced, rather than arriving together with its own
+          container. */}
       <div
         aria-live="polite"
-        className="px-2 py-1 text-xs text-muted-foreground"
+        className={cn(
+          "px-3 text-xs text-muted-foreground",
+          selection.status === "pending" && "py-1.5"
+        )}
       >
-        {labels.switching}
+        {selection.status === "pending" ? labels.switching : null}
       </div>
-    )
-  }
-  if (selection.status !== "error") return null
-  const retry = selection.retry
-  return (
-    <div
-      className="flex items-center gap-2 px-2 py-1 text-xs text-destructive"
-      role="alert"
-    >
-      <span className="min-w-0 flex-1">{selection.error}</span>
-      {retry ? (
-        <button
-          aria-label={labels.retry}
-          className="rounded-sm p-0.5 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40"
-          onClick={() => void retry()}
-          type="button"
+      {failure ? (
+        <div
+          className="flex items-start gap-2 px-3 py-1.5 text-xs"
+          role="alert"
         >
-          <RotateCcwIcon aria-hidden className="size-3.5" />
-        </button>
+          {/* The destructive role clears 4.5:1 on neither popover surface at
+              this size, so the icon carries the semantic color and the
+              sentence itself stays on the readable foreground pair. */}
+          <CircleAlertIcon
+            aria-hidden
+            className="mt-px size-3.5 shrink-0 text-destructive"
+          />
+          <span className="min-w-0 flex-1 text-foreground">
+            {failure.error}
+          </span>
+          {retry ? (
+            <button
+              aria-label={labels.retry}
+              // -my-0.5 keeps the larger pointer target from stretching the
+              // line it sits on.
+              className="-my-0.5 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+              onClick={() => void retry()}
+              type="button"
+            >
+              <RotateCcwIcon aria-hidden className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -348,19 +375,26 @@ export function ModelSelectorContent({
         />
       ) : null}
       <ModelSelectorStatus labels={labels} selection={selection} />
-      <ComboboxList>
+      {/* A provider roster outgrows the popup, and the registry list hides the
+          scrollbar, so without this the roster ends in a row sliced flat
+          against the effort divider. `scroll-fade-y` is the registry's own
+          scroll-driven answer: it fades only the edge that still has rows
+          behind it, and maps position rather than time. */}
+      <ComboboxList className="scroll-fade-y">
         <ComboboxCollection>
           {(group: ModelOptionGroup) => (
             <ComboboxGroup items={group.items} key={group.value}>
               {group.value ? (
-                <ComboboxLabel className="font-medium">
+                // A group heading takes more room above than below, so each
+                // provider reads as introducing the rows under it.
+                <ComboboxLabel className="pt-3 pb-1 font-medium">
                   {group.value}
                 </ComboboxLabel>
               ) : null}
               <ComboboxCollection>
                 {(model: ModelOption) => (
                   <ComboboxItem
-                    className="rounded-lg py-1.5 ps-1.5 data-selected:font-medium"
+                    className="rounded-lg py-1.5 ps-1.5 data-selected:font-medium [@media(pointer:coarse)]:min-h-11"
                     key={model.id}
                     value={model}
                   >
@@ -369,7 +403,7 @@ export function ModelSelectorContent({
                         provider-neutral component about specific providers. */}
                     <span
                       aria-hidden
-                      className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground uppercase"
+                      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground uppercase"
                     >
                       {(model.group ?? model.name).trim().slice(0, 1)}
                     </span>
@@ -406,8 +440,7 @@ function thumbIndex(value: number | readonly number[]) {
  */
 function ModelSelectorEfforts() {
   const context = useModelSelectorContext()
-  const { effortSelection, efforts, effortValue, labels, onEffortChange } =
-    context
+  const { efforts, effortValue, labels, onEffortChange } = context
   // Held while a drag is in flight so the thumb follows the pointer without a
   // provider write per step; a commit hands the level over and clears it.
   const [dragIndex, setDragIndex] = useState<number | null>(null)
@@ -434,7 +467,7 @@ function ModelSelectorEfforts() {
           {valueText}
         </span>
       </p>
-      <ModelSelectorStatus labels={labels} selection={effortSelection} />
+      {/* One status line for the whole choice already sits above the roster. */}
       <Slider
         aria-label={labels.effort}
         // The thumb overhangs the track it is centered on, so the row keeps
@@ -452,6 +485,18 @@ function ModelSelectorEfforts() {
         step={1}
         value={index}
       />
+      {/* The ladder is a handful of named levels, not a range, and a bare
+          track hides that. One mark per reported level says how many stops the
+          provider offers; the thumb is centered on the track's own ends, so the
+          marks span it edge to edge. */}
+      <div aria-hidden className="flex justify-between">
+        {efforts.map((level) => (
+          <span
+            className="h-1 w-px rounded-full bg-muted-foreground/40"
+            key={level}
+          />
+        ))}
+      </div>
     </div>
   )
 }

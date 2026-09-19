@@ -17,7 +17,7 @@ import {
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
   SessionContextResponseSchema,
-  SessionModelSelectRequestSchema,
+  SessionModelUpdateRequestSchema,
   SessionModelsResponseSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -280,10 +280,15 @@ describe("AOS v1 normalized protocol", () => {
       })
     ).toMatchObject({ selectedId: '["native","small"]' })
     expect(
-      SessionModelSelectRequestSchema.parse({
+      SessionModelUpdateRequestSchema.parse({
         selectedId: '["native","small"]',
       })
     ).toEqual({ selectedId: '["native","small"]' })
+    expect(SessionModelUpdateRequestSchema.parse({ effortId: "high" })).toEqual(
+      { effortId: "high" }
+    )
+    // One resource, one write: a patch that changes neither half is not a write.
+    expect(SessionModelUpdateRequestSchema.safeParse({}).success).toBe(false)
     expect(
       SessionContextResponseSchema.parse({
         usedTokens: 12,

@@ -1145,10 +1145,7 @@ describe("Thread accessibility", () => {
 
     const player = screen.getByLabelText("Audio attachment: voice-note.mp3")
     expect(player).toBeInstanceOf(HTMLAudioElement)
-    expect(player).toHaveAttribute(
-      "src",
-      "data:audio/mpeg;base64,YXVkaW8="
-    )
+    expect(player).toHaveAttribute("src", "data:audio/mpeg;base64,YXVkaW8=")
     expect(player).toHaveAttribute("controls")
     expect(player).toHaveAttribute("preload", "metadata")
     expect(player).not.toHaveAttribute("autoplay")
@@ -1291,7 +1288,9 @@ describe("Thread accessibility", () => {
       />
     )
 
-    expect(screen.getByRole("button", { name: "Video attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Video attachment" })
+    ).toBeVisible()
     expect(document.querySelector("video")).toBeNull()
   })
 
@@ -1326,7 +1325,9 @@ describe("Thread accessibility", () => {
       />
     )
 
-    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Audio attachment" })
+    ).toBeVisible()
     expect(document.querySelector("audio")).toBeNull()
   })
 
@@ -1357,7 +1358,9 @@ describe("Thread accessibility", () => {
       })
     )
 
-    expect(screen.getByRole("button", { name: "Audio attachment" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Audio attachment" })
+    ).toBeVisible()
     expect(document.querySelector("audio")).toBeNull()
     expect(
       screen.getByRole("button", { name: "Remove attachment" })
@@ -1396,7 +1399,7 @@ describe("Thread accessibility", () => {
 
   it("offers reasoning effort only for a model whose provider reports it", async () => {
     const user = userEvent.setup()
-    const selectEffort = vi.fn(async () => undefined)
+    const update = vi.fn(async () => undefined)
     render(
       <LocalThread
         initialMessages={[]}
@@ -1411,9 +1414,8 @@ describe("Thread accessibility", () => {
               { id: "opaque-fast", label: "Fast" },
             ],
             selectedId: "opaque-balanced",
-            select: async () => undefined,
             effortId: "low",
-            selectEffort,
+            update,
           },
         }}
       />
@@ -1425,7 +1427,10 @@ describe("Thread accessibility", () => {
     effort.focus()
     await user.keyboard("{ArrowUp}")
 
-    expect(selectEffort).toHaveBeenCalledWith("high")
+    expect(update).toHaveBeenCalledWith({ effortId: "high" })
+
+    await user.click(await screen.findByText("Fast"))
+    expect(update).toHaveBeenLastCalledWith({ selectedId: "opaque-fast" })
   })
 
   it("hides reasoning effort when the provider reports none", async () => {
@@ -1437,8 +1442,7 @@ describe("Thread accessibility", () => {
           model: {
             options: [{ id: "opaque-fast", label: "Fast" }],
             selectedId: "opaque-fast",
-            select: async () => undefined,
-            selectEffort: async () => undefined,
+            update: async () => undefined,
           },
         }}
       />
@@ -1447,6 +1451,75 @@ describe("Thread accessibility", () => {
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
     expect(await screen.findByRole("listbox")).toBeVisible()
     expect(screen.queryByRole("slider", { name: "Thinking" })).toBeNull()
+  })
+
+  it("shows the model a pending switch is settling and announces it", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          model: {
+            options: [
+              { id: "opaque-balanced", label: "Balanced" },
+              { id: "opaque-fast", label: "Fast" },
+            ],
+            selectedId: "opaque-fast",
+            selection: {
+              status: "pending",
+              target: { selectedId: "opaque-fast" },
+            },
+            update: async () => undefined,
+          },
+        }}
+      />
+    )
+
+    const trigger = screen.getByRole("combobox", { name: "Choose model" })
+    expect(trigger).toHaveTextContent("Fast")
+    expect(trigger).toHaveAttribute("aria-busy", "true")
+
+    await user.click(trigger)
+    expect(await screen.findByText("Switching model…")).toBeVisible()
+  })
+
+  it("retries the model update that failed", async () => {
+    const user = userEvent.setup()
+    const retry = vi.fn(async () => undefined)
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          model: {
+            options: [
+              { id: "opaque-balanced", label: "Balanced" },
+              { id: "opaque-fast", label: "Fast" },
+            ],
+            selectedId: "opaque-balanced",
+            selection: {
+              status: "error",
+              target: { selectedId: "opaque-fast" },
+              error: "The provider rejected the model",
+            },
+            update: async () => undefined,
+            retry,
+          },
+        }}
+      />
+    )
+
+    const trigger = screen.getByRole("combobox", { name: "Choose model" })
+    // A failed switch leaves the Session on the model it is still running.
+    expect(trigger).toHaveTextContent("Balanced")
+    await user.click(trigger)
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The provider rejected the model"
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Retry model selection" })
+    )
+    expect(retry).toHaveBeenCalledOnce()
   })
 
   it("omits categories the runtime did not provide", () => {
@@ -1480,7 +1553,7 @@ describe("Thread accessibility", () => {
           model: {
             options: [{ id: "opaque-balanced", label: "מאוזן" }],
             selectedId: "opaque-balanced",
-            select: async () => undefined,
+            update: async () => undefined,
           },
           context: {
             usage: { system: 0, tools: 0, messages: 1, total: 4 },
@@ -1511,7 +1584,7 @@ describe("Thread accessibility", () => {
               { id: "opaque-fast", label: "מהיר" },
             ],
             selectedId: "opaque-balanced",
-            select: async () => undefined,
+            update: async () => undefined,
           },
         }}
       />

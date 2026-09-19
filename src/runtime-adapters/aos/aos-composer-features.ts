@@ -5,9 +5,15 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   composerUsageFromTokens,
   type ComposerFeatureViewModel,
+  type ComposerModelSelectionState,
+  type ComposerModelUpdate,
 } from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
-import type { SlashCommand } from "@aos/protocol"
+import type {
+  SessionModelUpdateRequest,
+  SessionModelUpdateResponse,
+  SlashCommand,
+} from "@aos/protocol"
 import type {
   AosContext,
   AosModelChoices,
@@ -21,14 +27,10 @@ type SessionCapabilityClient = {
 type ComposerClient = SessionCapabilityClient & {
   models(threadId: string): Promise<AosModelChoices>
   context(threadId: string): Promise<AosContext>
-  selectModel(
+  updateModel(
     threadId: string,
-    selectedId: string
-  ): Promise<{ selectedId: string }>
-  selectEffort(
-    threadId: string,
-    effortId: string
-  ): Promise<{ effortId: string }>
+    patch: SessionModelUpdateRequest
+  ): Promise<SessionModelUpdateResponse>
   steerRun(
     threadId: string,
     request: { requestId: string; text: string }
@@ -37,19 +39,17 @@ type ComposerClient = SessionCapabilityClient & {
 
 const EMPTY_SLASH_COMMANDS: readonly SlashCommand[] = []
 
-type SelectionState =
-  | { status: "idle" }
-  | { status: "pending"; targetId: string }
-  | { status: "error"; targetId: string; error: string }
+type SelectionRecord = {
+  threadId: string
+  state: ComposerModelSelectionState
+}
 
-type SelectionRecord = { threadId: string; state: SelectionState }
-
-const IDLE_SELECTION: SelectionState = { status: "idle" }
+const IDLE_SELECTION: ComposerModelSelectionState = { status: "idle" }
 
 function selectionFor(
   record: SelectionRecord | undefined,
   threadId: string | undefined
-): SelectionState {
+): ComposerModelSelectionState {
   return record && record.threadId === threadId ? record.state : IDLE_SELECTION
 }
 
@@ -115,10 +115,11 @@ export function useAosComposerFeatures(
   // In-flight switch state is tagged with its Session so a switch that settles
   // after the selected Session changed neither shows nor lands in the new one.
   const [selectionRecord, setSelectionRecord] = useState<SelectionRecord>()
-  const [effortSelectionRecord, setEffortSelectionRecord] =
-    useState<SelectionRecord>()
   const selection = selectionFor(selectionRecord, threadId)
-  const effortSelection = selectionFor(effortSelectionRecord, threadId)
+  // Only a Session's newest update may write: two rapid picks would otherwise
+  // let the first one's late answer overwrite what the second settled on. The
+  // keys are provider-opaque Session ids, so the record carries no prototype.
+  const updateSerials = useRef<Record<string, number>>(Object.create(null))
   const currentThreadId = useRef(threadId)
   useEffect(() => {
     currentThreadId.current = threadId
@@ -182,85 +183,67 @@ export function useAosComposerFeatures(
           !threadId
         )
           return undefined
-        const selectedOption = models.options.find(
-          (o) => o.id === models.selectedId
-        )
-        const setSelection = (state: SelectionState) =>
+        const setSelection = (state: ComposerModelSelectionState) =>
           setSelectionRecord({ threadId, state })
-        const setEffortSelection = (state: SelectionState) =>
-          setEffortSelectionRecord({ threadId, state })
-        const select = async (selectedId: string) => {
-          setSelection({ status: "pending", targetId: selectedId })
+        const show = (state: { selectedId: string; effortId?: string }) =>
+          setModels((previous) =>
+            previous ? { ...previous, ...state } : previous
+          )
+        const update = async (patch: ComposerModelUpdate) => {
+          const target: ComposerModelUpdate = {
+            ...(patch.selectedId === undefined
+              ? {}
+              : { selectedId: patch.selectedId }),
+            ...(patch.effortId === undefined
+              ? {}
+              : { effortId: patch.effortId }),
+          }
+          const previous = {
+            selectedId: models.selectedId,
+            effortId: models.effortId,
+          }
+          const serial = (updateSerials.current[threadId] ?? 0) + 1
+          updateSerials.current[threadId] = serial
+          const latest = () => updateSerials.current[threadId] === serial
+          // The picked half shows at once; the write's own response, not a
+          // re-read of a projection the provider may not have settled yet,
+          // decides what the Session ends up on.
+          show({ ...previous, ...target })
+          setSelection({ status: "pending", target })
           try {
-            const result = await client.selectModel(threadId, selectedId)
-            if (currentThreadId.current === threadId) {
-              setModels((previous) =>
-                previous
-                  ? { ...previous, selectedId: result.selectedId }
-                  : previous
-              )
-              // The provider may settle on a model it resolved the request to,
-              // carrying its own efforts and catalog entry, so the whole
-              // projection is re-read rather than patching the id alone.
-              void client.models(threadId).then(
-                (next) => {
-                  if (currentThreadId.current === threadId) setModels(next)
-                },
-                () => undefined
-              )
-            }
+            const result = await client.updateModel(threadId, target)
+            // An answer overtaken by a newer pick is dropped, and so is one
+            // that settles after the Session changed: the projection on screen
+            // belongs to the newest pick in the Session now selected.
+            if (!latest()) return
+            if (currentThreadId.current === threadId)
+              show({
+                selectedId: result.selectedId,
+                effortId: result.effortId,
+              })
             setSelection({ status: "idle" })
           } catch (reason) {
             const error =
               reason instanceof Error ? reason : new Error(String(reason))
-            setSelection({
-              status: "error",
-              targetId: selectedId,
-              error: error.message,
-            })
-            onError?.(error)
-          }
-        }
-        const selectEffort = async (effortId: string) => {
-          setEffortSelection({ status: "pending", targetId: effortId })
-          try {
-            const result = await client.selectEffort(threadId, effortId)
-            if (currentThreadId.current === threadId)
-              setModels((previous) =>
-                previous ? { ...previous, effortId: result.effortId } : previous
-              )
-            setEffortSelection({ status: "idle" })
-          } catch (reason) {
-            const error =
-              reason instanceof Error ? reason : new Error(String(reason))
-            setEffortSelection({
-              status: "error",
-              targetId: effortId,
-              error: error.message,
-            })
-            onError?.(error)
+            // A superseded failure reverts nothing: the values on screen are
+            // the newer pick's, not this one's to restore.
+            if (!latest()) return
+            if (currentThreadId.current === threadId) {
+              show(previous)
+              onError?.(error)
+            }
+            setSelection({ status: "error", target, error: error.message })
           }
         }
         return {
-          selectedId: models.selectedId,
-          selection,
           options: models.options,
-          select,
-          // Retry repeats only the request that failed; stale failures have none.
-          ...(selection.status === "error"
-            ? { retry: () => select(selection.targetId) }
-            : {}),
+          selectedId: models.selectedId,
           effortId: models.effortId,
-          effortSelection,
-          ...(selectedOption?.efforts
-            ? {
-                selectEffort,
-                ...(effortSelection.status === "error"
-                  ? {
-                      retryEffort: () => selectEffort(effortSelection.targetId),
-                    }
-                  : {}),
-              }
+          selection,
+          update,
+          // Retry repeats only the patch that failed; a settled pick has none.
+          ...(selection.status === "error"
+            ? { retry: () => update(selection.target) }
             : {}),
         }
       })(),
@@ -287,7 +270,6 @@ export function useAosComposerFeatures(
       config.modelSelectorEnabled,
       context,
       contextAvailable,
-      effortSelection,
       models,
       modelsAvailable,
       onError,

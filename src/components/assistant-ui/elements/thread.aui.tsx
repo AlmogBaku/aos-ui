@@ -1336,7 +1336,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
     (option) => option.id === features.model?.selectedId
   )
   const efforts = selectedModel?.efforts
-  const selectEffort = features.model?.selectEffort
+  const update = features.model?.update
 
   return (
     <div
@@ -1361,26 +1361,23 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           value={features.model.selectedId}
           selection={
             features.model.selection?.status === "error"
-              ? { ...features.model.selection, retry: features.model.retry }
+              ? {
+                  status: "error",
+                  error: features.model.selection.error,
+                  retry: features.model.retry,
+                }
               : features.model.selection
           }
-          onValueChange={(value) => {
-            void features.model?.select(value)
+          onValueChange={(selectedId) => {
+            void update?.({ selectedId })
           }}
-          {...(selectEffort && efforts?.length
+          {...(update && efforts?.length
             ? {
                 efforts,
                 effortValue: features.model.effortId,
                 onEffortChange: (effortId: string) => {
-                  void selectEffort(effortId)
+                  void update({ effortId })
                 },
-                effortSelection:
-                  features.model.effortSelection?.status === "error"
-                    ? {
-                        ...features.model.effortSelection,
-                        retry: features.model.retryEffort,
-                      }
-                    : features.model.effortSelection,
               }
             : {})}
         >

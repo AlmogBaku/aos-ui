@@ -129,8 +129,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities,
       models,
       context,
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(),
+      updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
 
@@ -184,8 +183,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context,
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(),
+      updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
     const { result } = renderHook(() => {
@@ -212,39 +210,32 @@ describe("AOS composer features", () => {
     expect(context).toHaveBeenCalledWith("session-1")
   })
 
-  it("follows the model a provider resolved a switch to, with its own efforts", async () => {
-    let switched = false
-    const models = vi.fn(async () =>
-      switched
-        ? {
-            selectedId: "small-2026-09",
-            effortId: "medium",
-            options: [
-              {
-                id: "small-2026-09",
-                label: "Small (2026-09)",
-                group: "Native",
-                efforts: ["low", "medium", "high"],
-              },
-            ],
-          }
-        : {
-            selectedId: "small",
-            options: [
-              { id: "small", label: "Small", group: "Native" },
-              { id: "large", label: "Large", group: "Native" },
-            ],
-          }
-    )
+  it("shows the picked model at once and settles on the provider's own answer", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "small",
+      effortId: "medium",
+      options: [
+        { id: "small", label: "Small", group: "Native" },
+        {
+          id: "large",
+          label: "Large",
+          group: "Native",
+          efforts: ["low", "medium", "high"],
+        },
+      ],
+    }))
+    let settle:
+      ((value: { selectedId: string; effortId?: string }) => void) | undefined
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
-      selectModel: vi.fn(async () => {
-        switched = true
-        return { selectedId: "small-2026-09" }
-      }),
-      selectEffort: vi.fn(),
+      updateModel: vi.fn(
+        () =>
+          new Promise<{ selectedId: string; effortId?: string }>((resolve) => {
+            settle = resolve
+          })
+      ),
       steerRun: vi.fn(),
     }
     const { result } = renderHook(() => {
@@ -258,31 +249,103 @@ describe("AOS composer features", () => {
     })
 
     await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
-    await result.current.model?.select("large")
+    const pending = result.current.model?.update({ selectedId: "large" })
 
-    expect(client.selectModel).toHaveBeenCalledWith("session-1", "large")
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("large"))
+    expect(result.current.model?.selection).toEqual({
+      status: "pending",
+      target: { selectedId: "large" },
+    })
+    expect(client.updateModel).toHaveBeenCalledWith("session-1", {
+      selectedId: "large",
+    })
+
+    // The provider may resolve the pick to a canonical id, and an absent effort
+    // means the Session runs on the provider's own default.
+    settle?.({ selectedId: "large-2026-09" })
+    await pending
+
     await waitFor(() =>
-      expect(result.current.model?.selectedId).toBe("small-2026-09")
+      expect(result.current.model?.selectedId).toBe("large-2026-09")
     )
-    await waitFor(() => expect(result.current.model?.selectEffort).toBeDefined())
+    expect(result.current.model?.effortId).toBeUndefined()
     expect(result.current.model?.selection?.status).toBe("idle")
+    // The write already answered authoritatively; a re-read would race it.
+    expect(models).toHaveBeenCalledTimes(1)
   })
 
-  it("projects effortId and selectEffort when selected option has efforts", async () => {
+  it("lets the last pick win when an earlier one answers after it", async () => {
     const models = vi.fn(async () => ({
-      selectedId: "a",
-      effortId: "medium",
+      selectedId: "small",
       options: [
-        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+        { id: "small", label: "Small", group: "Native" },
+        { id: "medium", label: "Medium", group: "Native" },
+        { id: "large", label: "Large", group: "Native" },
       ],
     }))
-    const selectEffortMock = vi.fn(async () => ({ effortId: "high" }))
+    const settlers: ((value: { selectedId: string }) => void)[] = []
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
-      selectModel: vi.fn(),
-      selectEffort: selectEffortMock,
+      updateModel: vi.fn(
+        () =>
+          new Promise<{ selectedId: string }>((resolve) => {
+            settlers.push(resolve)
+          })
+      ),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
+    const first = result.current.model?.update({ selectedId: "medium" })
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("medium"))
+    const second = result.current.model?.update({ selectedId: "large" })
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("large"))
+
+    // The second pick answers first, then the first pick's answer arrives late.
+    settlers[1]?.({ selectedId: "large-2026-09" })
+    await second
+    settlers[0]?.({ selectedId: "medium-2026-09" })
+    await first
+
+    await waitFor(() =>
+      expect(result.current.model?.selectedId).toBe("large-2026-09")
+    )
+    expect(result.current.model?.selection?.status).toBe("idle")
+  })
+
+  it("keeps the last pick on screen when an earlier one fails after it", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "small",
+      options: [
+        { id: "small", label: "Small", group: "Native" },
+        { id: "medium", label: "Medium", group: "Native" },
+        { id: "large", label: "Large", group: "Native" },
+      ],
+    }))
+    const rejecters: ((reason: Error) => void)[] = []
+    const settlers: ((value: { selectedId: string }) => void)[] = []
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      updateModel: vi.fn(
+        () =>
+          new Promise<{ selectedId: string }>((resolve, reject) => {
+            settlers.push(resolve)
+            rejecters.push(reject)
+          })
+      ),
       steerRun: vi.fn(),
     }
     const onError = vi.fn()
@@ -297,15 +360,29 @@ describe("AOS composer features", () => {
       )
     })
 
-    await waitFor(() => expect(result.current.model?.effortId).toBe("medium"))
-    expect(result.current.model?.selectEffort).toBeDefined()
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
+    const first = result.current.model?.update({ selectedId: "medium" })
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("medium"))
+    const second = result.current.model?.update({ selectedId: "large" })
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("large"))
 
-    await result.current.model?.selectEffort?.("high")
-    expect(selectEffortMock).toHaveBeenCalledWith("session-1", "high")
-    await waitFor(() => expect(result.current.model?.effortId).toBe("high"))
+    rejecters[0]?.(new Error("superseded-fail"))
+    await first
+
+    // A failure the newer pick already replaced reverts nothing and reports
+    // nothing; the newer pick is still the one in flight.
+    expect(result.current.model?.selectedId).toBe("large")
+    expect(result.current.model?.selection?.status).toBe("pending")
+    expect(onError).not.toHaveBeenCalled()
+
+    settlers[1]?.({ selectedId: "large" })
+    await second
+    await waitFor(() =>
+      expect(result.current.model?.selection?.status).toBe("idle")
+    )
+    expect(result.current.model?.selectedId).toBe("large")
   })
-
-  it("sets effortSelection to error and calls onError when selectEffort rejects", async () => {
+  it("settles the reasoning effort half from the same authoritative response", async () => {
     const models = vi.fn(async () => ({
       selectedId: "a",
       effortId: "medium",
@@ -313,13 +390,49 @@ describe("AOS composer features", () => {
         { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
       ],
     }))
-    const failure = new Error("effort-fail")
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(async () => {
+      updateModel: vi.fn(async () => ({ selectedId: "a", effortId: "high" })),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: false },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.effortId).toBe("medium"))
+    await result.current.model?.update({ effortId: "high" })
+
+    expect(client.updateModel).toHaveBeenCalledWith("session-1", {
+      effortId: "high",
+    })
+    await waitFor(() => expect(result.current.model?.effortId).toBe("high"))
+    expect(result.current.model?.selectedId).toBe("a")
+    expect(models).toHaveBeenCalledTimes(1)
+  })
+
+  it("restores the previous choice and offers a retry when an update fails", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "a",
+      effortId: "medium",
+      options: [
+        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+        { id: "b", label: "B", group: "G" },
+      ],
+    }))
+    const failure = new Error("update-fail")
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: vi.fn(),
+      updateModel: vi.fn(async () => {
         throw failure
       }),
       steerRun: vi.fn(),
@@ -336,44 +449,46 @@ describe("AOS composer features", () => {
       )
     })
 
-    await waitFor(() =>
-      expect(result.current.model?.selectEffort).toBeDefined()
-    )
-    await result.current.model?.selectEffort?.("high")
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("a"))
+    await result.current.model?.update({ selectedId: "b" })
 
     await waitFor(() =>
-      expect(result.current.model?.effortSelection?.status).toBe("error")
+      expect(result.current.model?.selection?.status).toBe("error")
     )
-    expect(result.current.model?.effortSelection).toMatchObject({
+    expect(result.current.model?.selection).toEqual({
       status: "error",
-      targetId: "high",
+      target: { selectedId: "b" },
+      error: "update-fail",
     })
     expect(onError).toHaveBeenCalledWith(failure)
-
-    // Retry repeats only the failed request; the authoritative effort stays put.
+    // The failed pick reverts to what the Session is still on.
+    expect(result.current.model?.selectedId).toBe("a")
     expect(result.current.model?.effortId).toBe("medium")
-    await result.current.model?.retryEffort?.()
-    expect(client.selectEffort).toHaveBeenCalledTimes(2)
-    expect(client.selectEffort).toHaveBeenLastCalledWith("session-1", "high")
+
+    await result.current.model?.retry?.()
+    expect(client.updateModel).toHaveBeenCalledTimes(2)
+    expect(client.updateModel).toHaveBeenLastCalledWith("session-1", {
+      selectedId: "b",
+    })
   })
 
-  it("drops an effort switch that settles after the selected Session changed", async () => {
-    let settle: ((value: { effortId: string }) => void) | undefined
+  it("drops an update that settles after the selected Session changed", async () => {
+    let settle: ((value: { selectedId: string }) => void) | undefined
     const models = vi.fn(async (threadId: string) => ({
-      selectedId: "a",
+      selectedId: threadId === "session-1" ? "a" : "b",
       effortId: threadId === "session-1" ? "medium" : "low",
       options: [
         { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+        { id: "b", label: "B", group: "G", efforts: ["low", "medium", "high"] },
       ],
     }))
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(
+      updateModel: vi.fn(
         () =>
-          new Promise<{ effortId: string }>((resolve) => {
+          new Promise<{ selectedId: string }>((resolve) => {
             settle = resolve
           })
       ),
@@ -392,20 +507,19 @@ describe("AOS composer features", () => {
       { initialProps: { threadId: "session-1" } }
     )
 
-    await waitFor(() =>
-      expect(result.current.model?.selectEffort).toBeDefined()
-    )
-    const pending = result.current.model?.selectEffort?.("high")
+    await waitFor(() => expect(result.current.model?.selectedId).toBe("a"))
+    const pending = result.current.model?.update({ effortId: "high" })
     rerender({ threadId: "session-2" })
     await waitFor(() => expect(result.current.model?.effortId).toBe("low"))
 
-    settle?.({ effortId: "high" })
+    settle?.({ selectedId: "a" })
     await pending
+    expect(result.current.model?.selectedId).toBe("b")
     expect(result.current.model?.effortId).toBe("low")
-    expect(result.current.model?.effortSelection?.status).toBe("idle")
+    expect(result.current.model?.selection?.status).toBe("idle")
   })
 
-  it("does not expose selectEffort when selected option has no efforts", async () => {
+  it("exposes one update for a selected option that reports no efforts", async () => {
     const models = vi.fn(async () => ({
       selectedId: "a",
       options: [{ id: "a", label: "A", group: "G" }],
@@ -414,8 +528,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(),
+      updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
     const { result } = renderHook(() => {
@@ -429,7 +542,11 @@ describe("AOS composer features", () => {
     })
 
     await waitFor(() => expect(result.current.model?.selectedId).toBe("a"))
-    expect(result.current.model?.selectEffort).toBeUndefined()
+    expect(result.current.model?.update).toBeTypeOf("function")
+    expect(result.current.model?.effortId).toBeUndefined()
+    expect(result.current.model?.options.some((option) => option.efforts)).toBe(
+      false
+    )
   })
 
   it("exposes provider-neutral steering only when the Session capability is available", async () => {
@@ -438,8 +555,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models: vi.fn(),
       context: vi.fn(),
-      selectModel: vi.fn(),
-      selectEffort: vi.fn(),
+      updateModel: vi.fn(),
       steerRun,
     }
     const { result } = renderHook(() =>

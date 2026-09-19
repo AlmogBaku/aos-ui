@@ -2,6 +2,7 @@ import type {
   RuntimeAuthState,
   RuntimeInfo,
   SessionAttachmentStageRequest,
+  SessionModelUpdateRequest,
   VisibilityUpdateResponse,
 } from "../../../protocol"
 import {
@@ -279,21 +280,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#history.models(agentId, publicSessionId)
   }
 
-  async selectModel(
+  async updateModel(
     _agentId: string,
     _publicSessionId: string,
-    _selectedId: string
+    _patch: SessionModelUpdateRequest
   ): Promise<unknown> {
-    void [_agentId, _publicSessionId, _selectedId]
-    throw new OpenClawAdapterUnavailableError()
-  }
-
-  async selectEffort(
-    _agentId: string,
-    _publicSessionId: string,
-    _effortId: string
-  ): Promise<unknown> {
-    void [_agentId, _publicSessionId, _effortId]
+    void [_agentId, _publicSessionId, _patch]
     throw new OpenClawAdapterUnavailableError()
   }
 

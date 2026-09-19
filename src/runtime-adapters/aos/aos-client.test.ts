@@ -202,18 +202,18 @@ describe("provider-neutral AOS browser client", () => {
               speech: { status: "unavailable", reason: "not-supported" },
             },
           })
-        if (path.endsWith("/workspace/models"))
+        if (path.endsWith("/workspace/models")) {
+          if (init?.method === "PATCH") {
+            expect(init.body).toBe(
+              JSON.stringify({ selectedId: "native/small" })
+            )
+            // A provider may settle on a model it resolved the request to.
+            return Response.json({ selectedId: "native/small-2026-09" })
+          }
           return Response.json({
             selectedId: "native/small",
             options: [{ id: "native/small", label: "Small", group: "Native" }],
           })
-        if (path.endsWith("/workspace/models/select")) {
-          expect(init?.method).toBe("POST")
-          expect(init?.body).toBe(
-            JSON.stringify({ selectedId: "native/small" })
-          )
-          // A provider may settle on a model it resolved the request to.
-          return Response.json({ selectedId: "native/small-2026-09" })
         }
         if (path.endsWith("/workspace/context"))
           return Response.json({
@@ -284,7 +284,7 @@ describe("provider-neutral AOS browser client", () => {
       selectedId: "native/small",
     })
     await expect(
-      client.selectModel(session.id, "native/small")
+      client.updateModel(session.id, { selectedId: "native/small" })
     ).resolves.toEqual({ selectedId: "native/small-2026-09" })
     await expect(client.context(session.id)).resolves.toMatchObject({
       usedTokens: 1200,
@@ -325,14 +325,22 @@ describe("provider-neutral AOS browser client", () => {
     ).toHaveLength(0)
   })
 
-  it("selectEffort posts the effort to the Session workspace and returns the confirmed id", async () => {
+  it("sends a Session write once even where the reconciler re-runs a read", async () => {
     const session = {
-      id: "opaque-session-effort",
+      id: "opaque-session-write",
       agentId: "researcher",
-      title: "Effort test",
+      title: "Model update",
       archived: false,
       updatedAt: "2026-01-02T00:00:00.000Z",
-      status: "waiting-for-input" as const,
+      status: "running" as const,
+    }
+    // A Session stream invalidated mid-flight makes the reconciler repeat the
+    // read it was serving; a write must never be repeated with it.
+    const reconciler = {
+      async read<T>(_scope: unknown, operation: () => Promise<T>) {
+        await operation()
+        return operation()
+      },
     }
     const fetcher = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -344,30 +352,78 @@ describe("provider-neutral AOS browser client", () => {
             limit: 50,
             offset: 0,
           })
-        if (path.endsWith("/workspace/models/effort")) {
-          expect(init?.method).toBe("POST")
-          expect(JSON.parse(String(init?.body))).toEqual({ effortId: "high" })
-          return Response.json({ effortId: "high" })
+        if (path.endsWith("/workspace/models")) {
+          if (init?.method === "PATCH")
+            // The provider settles the whole choice, resolving the model to a
+            // canonical id and reporting the effort it ended up on.
+            return Response.json({
+              selectedId: "native/small-2026-09",
+              effortId: "high",
+            })
+          return Response.json({
+            selectedId: "native/small",
+            options: [{ id: "native/small", label: "Small", group: "Native" }],
+          })
         }
+        if (path.endsWith("/runs/steer"))
+          return Response.json({ status: "steered" })
         throw new Error(`Unexpected normalized request: ${path}`)
       }
     )
-    const client = new AosRemoteClient({ fetcher })
+    const client = new AosRemoteClient({ fetcher, reconciler })
     await client.listSessions("researcher")
+    client.acceptRunEvent(session.id, {
+      type: EventType.RUN_STARTED,
+      threadId: session.id,
+      runId: "run-1",
+    })
 
-    await expect(client.selectEffort(session.id, "high")).resolves.toEqual({
+    await client.models(session.id)
+    await expect(
+      client.updateModel(session.id, { selectedId: "native/small" })
+    ).resolves.toEqual({
+      selectedId: "native/small-2026-09",
       effortId: "high",
     })
+    await expect(
+      client.steerRun(session.id, {
+        requestId: "queue-item-1",
+        text: "Use the newer API",
+      })
+    ).resolves.toEqual({ status: "steered" })
+
+    const requests = fetcher.mock.calls.map(([input, init]) => ({
+      path: new URL(String(input), "http://proxy.invalid").pathname,
+      method: init?.method,
+      body: init?.body,
+    }))
+    // The reconciled read repeats; neither write does.
+    expect(
+      requests.filter(
+        ({ path, method }) =>
+          path.endsWith("/workspace/models") && method === undefined
+      )
+    ).toHaveLength(2)
+    expect(requests.filter(({ method }) => method === "PATCH")).toEqual([
+      {
+        path: `/api/aos/v1/agents/researcher/sessions/${encodeURIComponent(session.id)}/workspace/models`,
+        method: "PATCH",
+        body: JSON.stringify({ selectedId: "native/small" }),
+      },
+    ])
+    expect(
+      requests.filter(({ path }) => path.endsWith("/runs/steer"))
+    ).toHaveLength(1)
   })
 
-  it("selectEffort rejects when the echoed effortId differs from the requested id", async () => {
+  it("rejects an unparsable model update response instead of trusting it", async () => {
     const session = {
-      id: "opaque-session-effort-mismatch",
+      id: "opaque-session-invalid-update",
       agentId: "researcher",
-      title: "Effort mismatch",
+      title: "Invalid update",
       archived: false,
       updatedAt: "2026-01-02T00:00:00.000Z",
-      status: "waiting-for-input" as const,
+      status: "idle" as const,
     }
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
@@ -378,15 +434,15 @@ describe("provider-neutral AOS browser client", () => {
           limit: 50,
           offset: 0,
         })
-      if (path.endsWith("/workspace/models/effort"))
-        return Response.json({ effortId: "low" })
+      if (path.endsWith("/workspace/models"))
+        return Response.json({ effortId: "high" })
       throw new Error(`Unexpected normalized request: ${path}`)
     })
     const client = new AosRemoteClient({ fetcher })
     await client.listSessions("researcher")
 
     await expect(
-      client.selectEffort(session.id, "high")
+      client.updateModel(session.id, { effortId: "high" })
     ).rejects.toBeInstanceOf(AosClientError)
   })
 

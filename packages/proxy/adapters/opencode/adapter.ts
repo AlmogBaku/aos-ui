@@ -10,6 +10,7 @@ import {
   type SessionAttachmentStageRequest,
   type SessionCatalogResponse,
   type SessionHistoryResponse,
+  type SessionModelUpdateRequest,
   type VisibilityUpdateResponse,
 } from "../../../protocol"
 import type {
@@ -421,25 +422,20 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return { selectedId, options }
   }
 
-  async selectModel(
+  async updateModel(
     agentId: string,
     publicSessionId: string,
-    selectedId: string
+    patch: SessionModelUpdateRequest
   ) {
+    // OpenCode reports no reasoning ladder, so it can never settle an effort.
+    if (patch.effortId !== undefined || patch.selectedId === undefined)
+      throw new OpenCodeWorkspaceUnavailableError()
+    const selectedId = patch.selectedId
     const options = await this.#models(agentId, publicSessionId)
     const selected = options.native.get(selectedId)
     if (!selected) throw new OpenCodeWorkspaceUnavailableError()
     await this.options.client.sessions.switchModel(publicSessionId, selected)
     return { selectedId }
-  }
-
-  async selectEffort(
-    _agentId: string,
-    _publicSessionId: string,
-    _effortId: string
-  ): Promise<unknown> {
-    void [_agentId, _publicSessionId, _effortId]
-    throw new OpenCodeWorkspaceUnavailableError()
   }
 
   async context(agentId: string, publicSessionId: string) {
