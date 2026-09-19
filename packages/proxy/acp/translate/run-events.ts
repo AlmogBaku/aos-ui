@@ -35,8 +35,8 @@ const SteerAcceptedSchema = AosSteerAcceptedNotificationSchema.pick({
 })
 
 type ActivityEvent =
-  | RunEventOf<RunEventKind.ACTIVITY_SNAPSHOT>
-  | RunEventOf<RunEventKind.ACTIVITY_DELTA>
+  | RunEventOf<typeof RunEventKind.ACTIVITY_SNAPSHOT>
+  | RunEventOf<typeof RunEventKind.ACTIVITY_DELTA>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -105,7 +105,7 @@ function planTodos(event: ActivityEvent) {
 function customOutbound(
   state: TranslateState,
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.CUSTOM>
+  event: RunEventOf<typeof RunEventKind.CUSTOM>
 ): AcpOutbound[] {
   if (event.name === "aos.artifact") {
     const artifact = AosArtifactDescriptorSchema.safeParse(event.value)
@@ -128,7 +128,7 @@ function customOutbound(
 
 function finishedOutbound(
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.RUN_FINISHED>
+  event: RunEventOf<typeof RunEventKind.RUN_FINISHED>
 ): AcpOutbound[] {
   const requests = pendingRequestsOf(event)
   if (requests.length > 0)
@@ -159,7 +159,7 @@ function finishedOutbound(
 
 function errorOutbound(
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.RUN_ERROR>
+  event: RunEventOf<typeof RunEventKind.RUN_ERROR>
 ): AcpOutbound[] {
   return [
     stateOutbound(
@@ -183,7 +183,7 @@ type Step = { state: TranslateState; outbound: AcpOutbound[] }
 function toolStarted(
   state: TranslateState,
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.TOOL_CALL_START>
+  event: RunEventOf<typeof RunEventKind.TOOL_CALL_START>
 ): Step {
   const call = {
     toolCallId: event.toolCallId,
@@ -200,7 +200,7 @@ function toolStarted(
 function toolArgs(
   state: TranslateState,
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.TOOL_CALL_ARGS>
+  event: RunEventOf<typeof RunEventKind.TOOL_CALL_ARGS>
 ): Step {
   const argsText = (state.toolArgsText[event.toolCallId] ?? "") + event.delta
   const call = { toolCallId: event.toolCallId }
@@ -217,7 +217,7 @@ function toolArgs(
 function toolEnded(
   state: TranslateState,
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.TOOL_CALL_END>
+  event: RunEventOf<typeof RunEventKind.TOOL_CALL_END>
 ): Step {
   const { [event.toolCallId]: argsText = "", ...toolArgsText } =
     state.toolArgsText
@@ -236,7 +236,7 @@ function toolEnded(
 function toolSettled(
   state: TranslateState,
   context: TranslateContext,
-  event: RunEventOf<RunEventKind.TOOL_CALL_RESULT>
+  event: RunEventOf<typeof RunEventKind.TOOL_CALL_RESULT>
 ): Step {
   const output = jsonOr(event.content, event.content)
   const call = {

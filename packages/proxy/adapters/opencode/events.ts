@@ -1,9 +1,5 @@
-import {
-  EventType,
-  aggregateTokenUsage,
-  type AGUIEvent,
-  type TokenUsage,
-} from "@ag-ui/core"
+import { EventType, aggregateTokenUsage, type TokenUsage } from "@ag-ui/core"
+import type { RunEvent } from "../../core/events"
 
 import type { OpenCodeDurableEvent } from "./client"
 
@@ -20,7 +16,7 @@ type ProjectorScope = Readonly<{
 }>
 
 type Projection = Readonly<{
-  events: AGUIEvent[]
+  events: RunEvent[]
   terminal?: "finished" | "error"
   admissionId?: string
   admissionBoundary?: boolean
@@ -620,7 +616,7 @@ export class OpenCodeEventProjector {
 
   #project(event: ValidatedOpenCodeEvent): Projection {
     const { type, data } = event
-    const events: AGUIEvent[] = []
+    const events: RunEvent[] = []
     if (type === "session.next.prompt.admitted") {
       const id = data.messageID as string
       if (!this.#admissionMatched) {
@@ -743,7 +739,7 @@ export class OpenCodeEventProjector {
     return { events }
   }
 
-  #openReasoning(events: AGUIEvent[], messageId: string, reasoningId: string) {
+  #openReasoning(events: RunEvent[], messageId: string, reasoningId: string) {
     if (this.#reasoningOpen) {
       if (this.#messageId !== messageId || this.#reasoningId !== reasoningId)
         throw new OpenCodeEventValidationError()
@@ -759,7 +755,7 @@ export class OpenCodeEventProjector {
     })
   }
 
-  #openText(events: AGUIEvent[], messageId: string) {
+  #openText(events: RunEvent[], messageId: string) {
     if (this.#textOpen) {
       if (this.#messageId !== messageId)
         throw new OpenCodeEventValidationError()
@@ -775,7 +771,7 @@ export class OpenCodeEventProjector {
   }
 
   #openTool(
-    events: AGUIEvent[],
+    events: RunEvent[],
     callId: string,
     messageId: string,
     name: string
@@ -797,7 +793,7 @@ export class OpenCodeEventProjector {
     return tool
   }
 
-  #closeReasoning(events: AGUIEvent[]) {
+  #closeReasoning(events: RunEvent[]) {
     if (!this.#reasoningOpen || !this.#reasoningId) return
     events.push({
       type: EventType.REASONING_MESSAGE_END,
@@ -806,7 +802,7 @@ export class OpenCodeEventProjector {
     this.#reasoningOpen = false
   }
 
-  #closeText(events: AGUIEvent[]) {
+  #closeText(events: RunEvent[]) {
     if (!this.#textOpen || !this.#messageId) return
     events.push({
       type: EventType.TEXT_MESSAGE_END,
@@ -816,7 +812,7 @@ export class OpenCodeEventProjector {
   }
 
   #closeOpenContent(toolStatus?: "completed" | "stopped") {
-    const events: AGUIEvent[] = []
+    const events: RunEvent[] = []
     this.#closeReasoning(events)
     this.#closeText(events)
     for (const [callId, tool] of this.#tools) {

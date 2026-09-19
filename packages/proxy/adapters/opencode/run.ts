@@ -3,10 +3,10 @@ import { createHash } from "node:crypto"
 import {
   EventType,
   RunAgentInputSchema,
-  type AGUIEvent,
   type Interrupt,
   type ResumeEntry,
 } from "@ag-ui/core"
+import type { RunEvent } from "../../core/events"
 
 import type {
   NewTurnRunInput,
@@ -100,8 +100,8 @@ type ScopedNativeSettlement = Settlement & {
   stopRequested: boolean
 }
 
-class EventQueue implements AsyncIterable<AGUIEvent> {
-  readonly #values: AGUIEvent[] = []
+class EventQueue implements AsyncIterable<RunEvent> {
+  readonly #values: RunEvent[] = []
   readonly #waiters: Array<() => void> = []
   readonly #maximum: number
   #closed = false
@@ -110,7 +110,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     this.#maximum = maximum
   }
 
-  push(event: AGUIEvent) {
+  push(event: RunEvent) {
     if (this.#closed) return true
     if (this.#values.length >= this.#maximum) return false
     this.#values.push(event)
@@ -118,7 +118,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     return true
   }
 
-  resetWith(event: AGUIEvent) {
+  resetWith(event: RunEvent) {
     if (this.#closed) return
     const started = this.#values.find(
       (value) => value.type === EventType.RUN_STARTED
@@ -377,7 +377,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       } while (dirty)
       if (!discovered?.length) return undefined
       const interrupts = structuredClone([...discovered])
-      const events: AGUIEvent[] = [
+      const events: RunEvent[] = [
         { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
         {
           type: EventType.RUN_FINISHED,

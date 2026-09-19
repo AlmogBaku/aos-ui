@@ -1,7 +1,11 @@
-import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
-import type { ExecutionEvent } from "./events"
+import {
+  RunEventKind,
+  type ExecutionEvent,
+  type RunEvent,
+  type TurnInput,
+} from "./events"
 import {
   ServerRunStopNotDispatchedError,
   type ServerRunEngine,
@@ -15,8 +19,8 @@ import {
 } from "./session-coordinator"
 
 class EventSource implements ServerRunHandle {
-  readonly #values: AGUIEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<AGUIEvent>) => void> = []
+  readonly #values: RunEvent[] = []
+  readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
@@ -29,7 +33,7 @@ class EventSource implements ServerRunHandle {
     })
   }
 
-  readonly events: AsyncIterable<AGUIEvent> = {
+  readonly events: AsyncIterable<RunEvent> = {
     [Symbol.asyncIterator]: () => ({
       next: () => {
         const value = this.#values.shift()
@@ -41,7 +45,7 @@ class EventSource implements ServerRunHandle {
     }),
   }
 
-  emit(event: AGUIEvent) {
+  emit(event: RunEvent) {
     const waiter = this.#waiters.shift()
     if (waiter) waiter({ done: false, value: event })
     else this.#values.push(event)
@@ -65,7 +69,7 @@ const scope: SessionScope = {
   threadId: "stored-1",
 }
 
-function input(runId: string, resume = false): RunAgentInput {
+function input(runId: string, resume = false): TurnInput {
   return {
     threadId: scope.threadId,
     runId,
@@ -147,12 +151,12 @@ describe("SessionCoordinator", () => {
     const readFirst = reader(first)
 
     source.emit({
-      type: EventType.RUN_STARTED,
+      type: RunEventKind.RUN_STARTED,
       threadId: scope.threadId,
       runId: "run-1",
     })
     await expect(readFirst()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: EventType.RUN_STARTED } },
+      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
     })
 
     const second = await sessions.recover(
@@ -162,11 +166,11 @@ describe("SessionCoordinator", () => {
     )
     const readSecond = reader(second)
     await expect(readSecond()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: EventType.RUN_STARTED } },
+      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
     })
 
     source.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: { type: "success" },
@@ -174,10 +178,10 @@ describe("SessionCoordinator", () => {
     source.finish()
 
     await expect(readFirst()).resolves.toMatchObject({
-      value: { sequence: 2, event: { type: EventType.RUN_FINISHED } },
+      value: { sequence: 2, event: { type: RunEventKind.RUN_FINISHED } },
     })
     await expect(readSecond()).resolves.toMatchObject({
-      value: { sequence: 2, event: { type: EventType.RUN_FINISHED } },
+      value: { sequence: 2, event: { type: RunEventKind.RUN_FINISHED } },
     })
     expect(engine.start).toHaveBeenCalledOnce()
     expect(engine.recover).not.toHaveBeenCalled()
@@ -198,19 +202,19 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const emitted: AGUIEvent[] = [
+    const emitted: RunEvent[] = [
       {
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: scope.threadId,
         runId: "run-1",
       },
       {
-        type: EventType.TEXT_MESSAGE_START,
+        type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "assistant-1",
         role: "assistant",
       },
       ...Array.from({ length: 40 }, (_, index) => ({
-        type: EventType.TEXT_MESSAGE_CONTENT as const,
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
         messageId: "assistant-1",
         delta: String(index % 10),
       })),
@@ -218,19 +222,19 @@ describe("SessionCoordinator", () => {
         const toolCallId = `tool-${index + 1}`
         return [
           {
-            type: EventType.TOOL_CALL_START as const,
+            type: RunEventKind.TOOL_CALL_START,
             toolCallId,
             toolCallName: "search",
             parentMessageId: "assistant-1",
           },
           {
-            type: EventType.TOOL_CALL_ARGS as const,
+            type: RunEventKind.TOOL_CALL_ARGS,
             toolCallId,
             delta: `{"query":"${index + 1}"}`,
           },
-          { type: EventType.TOOL_CALL_END as const, toolCallId },
+          { type: RunEventKind.TOOL_CALL_END, toolCallId },
           {
-            type: EventType.TOOL_CALL_RESULT as const,
+            type: RunEventKind.TOOL_CALL_RESULT,
             messageId: `tool-result-${index + 1}`,
             toolCallId,
             content: `result-${index + 1}`,
@@ -259,7 +263,7 @@ describe("SessionCoordinator", () => {
       emitted[0],
       emitted[1],
       {
-        type: EventType.TEXT_MESSAGE_CONTENT,
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
         messageId: "assistant-1",
         delta: "0123456789012345678901234567890123456789",
       },
@@ -283,34 +287,34 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const events: AGUIEvent[] = [
+    const events: RunEvent[] = [
       {
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: scope.threadId,
         runId: "run-1",
       },
       {
-        type: EventType.REASONING_MESSAGE_START,
+        type: RunEventKind.REASONING_MESSAGE_START,
         messageId: "reasoning-1",
         role: "reasoning",
       },
       ...Array.from({ length: 20 }, () => ({
-        type: EventType.REASONING_MESSAGE_CONTENT as const,
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
         messageId: "reasoning-1",
         delta: "r",
       })),
       {
-        type: EventType.REASONING_MESSAGE_END,
+        type: RunEventKind.REASONING_MESSAGE_END,
         messageId: "reasoning-1",
       },
       {
-        type: EventType.TOOL_CALL_START,
+        type: RunEventKind.TOOL_CALL_START,
         toolCallId: "tool-1",
         toolCallName: "search",
         parentMessageId: "assistant-1",
       },
       ...Array.from({ length: 20 }, () => ({
-        type: EventType.TOOL_CALL_ARGS as const,
+        type: RunEventKind.TOOL_CALL_ARGS,
         toolCallId: "tool-1",
         delta: "a",
       })),
@@ -335,14 +339,14 @@ describe("SessionCoordinator", () => {
       events[0],
       events[1],
       {
-        type: EventType.REASONING_MESSAGE_CONTENT,
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
         messageId: "reasoning-1",
         delta: "r".repeat(20),
       },
       events[22],
       events[23],
       {
-        type: EventType.TOOL_CALL_ARGS,
+        type: RunEventKind.TOOL_CALL_ARGS,
         toolCallId: "tool-1",
         delta: "a".repeat(20),
       },
@@ -379,7 +383,7 @@ describe("SessionCoordinator", () => {
         )
         const source = sources[index]!
         source.emit({
-          type: EventType.RUN_STARTED,
+          type: RunEventKind.RUN_STARTED,
           threadId: sessionScope.threadId,
           runId: runInput.runId,
         })
@@ -400,7 +404,7 @@ describe("SessionCoordinator", () => {
     )
     await expect(reader(evicted)()).resolves.toMatchObject({
       value: {
-        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
       },
     })
 
@@ -433,13 +437,13 @@ describe("SessionCoordinator", () => {
     )
     const readInitial = reader(initial)
     source.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: { type: "success" },
     })
     await expect(readInitial()).resolves.toMatchObject({
-      value: { event: { type: EventType.RUN_FINISHED } },
+      value: { event: { type: RunEventKind.RUN_FINISHED } },
     })
 
     const refreshed = await sessions.recover(
@@ -449,7 +453,7 @@ describe("SessionCoordinator", () => {
     )
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -468,7 +472,7 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     source.emit({
-      type: EventType.RUN_STARTED,
+      type: RunEventKind.RUN_STARTED,
       threadId: scope.threadId,
       runId: "run-1",
     })
@@ -481,10 +485,10 @@ describe("SessionCoordinator", () => {
       {
         ...access("refreshed"),
         project(event) {
-          if (!published && event.type === EventType.RUN_STARTED) {
+          if (!published && event.type === RunEventKind.RUN_STARTED) {
             published = true
             source.emit({
-              type: EventType.TEXT_MESSAGE_CONTENT,
+              type: RunEventKind.TEXT_MESSAGE_CONTENT,
               messageId: "assistant-1",
               delta: "tail",
             })
@@ -496,12 +500,12 @@ describe("SessionCoordinator", () => {
     const readRefreshed = reader(refreshed)
 
     await expect(readRefreshed()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: EventType.RUN_STARTED } },
+      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
     })
     await expect(readRefreshed()).resolves.toMatchObject({
       value: {
         sequence: 2,
-        event: { type: EventType.TEXT_MESSAGE_CONTENT, delta: "tail" },
+        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "tail" },
       },
     })
   })
@@ -519,7 +523,7 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     source.emit({
-      type: EventType.TEXT_MESSAGE_CONTENT,
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId: "assistant-1",
       delta: "private",
     })
@@ -532,7 +536,7 @@ describe("SessionCoordinator", () => {
       {
         ...access("guest", "guest"),
         project(event) {
-          return event.type === EventType.TEXT_MESSAGE_CONTENT
+          return event.type === RunEventKind.TEXT_MESSAGE_CONTENT
             ? { ...event, delta: "public" }
             : event
         },
@@ -541,7 +545,7 @@ describe("SessionCoordinator", () => {
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: EventType.TEXT_MESSAGE_CONTENT, delta: "public" },
+        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "public" },
       },
     })
   })
@@ -561,7 +565,7 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     source.emit({
-      type: EventType.TEXT_MESSAGE_CONTENT,
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId: "assistant-1",
       delta: "x".repeat(300 * 1024),
     })
@@ -576,7 +580,7 @@ describe("SessionCoordinator", () => {
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -698,7 +702,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, original, access("one"))
     const reordered = Object.fromEntries(
       Object.entries(original).reverse()
-    ) as RunAgentInput
+    ) as TurnInput
 
     await expect(
       sessions.start(scope, reordered, access("two"))
@@ -719,7 +723,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("operator"))
     interrupted.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: {
@@ -842,7 +846,7 @@ describe("SessionCoordinator", () => {
       value: {
         sequence: 1,
         event: {
-          type: EventType.CUSTOM,
+          type: RunEventKind.CUSTOM,
           name: "aos.steer.accepted",
           value: {
             requestId: "queue-item-1",
@@ -952,7 +956,7 @@ describe("SessionCoordinator", () => {
       onTerminal,
     })
     initial.emit({
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message: "Delivery uncertain",
       code: "AOS_SEND_UNCERTAIN",
     })
@@ -965,7 +969,7 @@ describe("SessionCoordinator", () => {
       access("operator")
     )
     const terminal = {
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message: "Slash commands cannot be sent with attachments.",
       code: "AOS_COMMAND_WITH_ATTACHMENTS",
     } as const
@@ -1048,14 +1052,14 @@ describe("SessionCoordinator", () => {
       access("refreshed")
     )
     source.emit({
-      type: EventType.TEXT_MESSAGE_CONTENT,
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId: "assistant-1",
       delta: "future-only",
     })
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: EventType.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -1074,7 +1078,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("operator"))
     first.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: { type: "success" },
@@ -1100,7 +1104,7 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"))
     source.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: { type: "success" },
@@ -1135,7 +1139,7 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-1",
       outcome: {
@@ -1182,7 +1186,7 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"))
     first.emit({
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       code: "AOS_PROVIDER_FAILED",
       message: "The provider rejected the turn.",
     })
@@ -1197,7 +1201,7 @@ describe("SessionCoordinator", () => {
     unobserve()
     await sessions.start(scope, input("run-2"), access("one"))
     second.emit({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: scope.threadId,
       runId: "run-2",
       outcome: { type: "success" },

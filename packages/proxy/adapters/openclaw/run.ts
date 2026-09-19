@@ -1,12 +1,12 @@
 import {
   EventType,
   RunAgentInputSchema,
-  type AGUIEvent,
   type ResumeEntry,
   type RunAgentInput,
   type RunFinishedInterruptOutcome,
   type TokenUsage,
 } from "@ag-ui/core"
+import type { RunEvent } from "../../core/events"
 import { readSessionMessageIdentity } from "@openclaw/gateway-client"
 import {
   AgentEventSchema,
@@ -94,10 +94,10 @@ export class OpenClawRunPublicError extends Error {
   }
 }
 
-type QueueWaiter = (value: IteratorResult<AGUIEvent>) => void
+type QueueWaiter = (value: IteratorResult<RunEvent>) => void
 
-class EventQueue implements AsyncIterable<AGUIEvent> {
-  readonly #events: Array<{ event: AGUIEvent; bytes: number }> = []
+class EventQueue implements AsyncIterable<RunEvent> {
+  readonly #events: Array<{ event: RunEvent; bytes: number }> = []
   readonly #waiters: QueueWaiter[] = []
   readonly #onOverflow?: () => void
   #bytes = 0
@@ -107,7 +107,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     this.#onOverflow = onOverflow
   }
 
-  push(event: AGUIEvent) {
+  push(event: RunEvent) {
     if (this.#closed) return false
     let bytes: number
     try {
@@ -132,7 +132,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     return true
   }
 
-  terminal(event: AGUIEvent) {
+  terminal(event: RunEvent) {
     if (this.#closed) return
     const waiter = this.#waiters.shift()
     if (waiter) {
@@ -181,7 +181,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
       waiter({ done: true, value: undefined })
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<AGUIEvent> {
+  [Symbol.asyncIterator](): AsyncIterator<RunEvent> {
     return {
       next: () => {
         const entry = this.#events.shift()
@@ -1177,7 +1177,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         this.#waiting.set(key, waiting)
         await retireExisting()
         lease = undefined
-        const events: AGUIEvent[] = [
+        const events: RunEvent[] = [
           { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
           {
             type: EventType.RUN_FINISHED,

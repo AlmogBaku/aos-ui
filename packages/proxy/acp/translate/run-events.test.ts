@@ -58,7 +58,7 @@ const started: RunEvent = {
 }
 
 function finished(
-  extra?: Partial<RunEventOf<RunEventKind.RUN_FINISHED>>
+  extra?: Partial<RunEventOf<typeof RunEventKind.RUN_FINISHED>>
 ): RunEvent {
   return {
     type: RunEventKind.RUN_FINISHED,
@@ -231,22 +231,17 @@ describe("translateRunEvent messages", () => {
   })
 
   it.each<[string, RunEvent]>([
-    ["a step boundary", { type: RunEventKind.STEP_STARTED, stepName: "one" }],
-    ["a finished step", { type: RunEventKind.STEP_FINISHED, stepName: "one" }],
-    ["a state snapshot", { type: RunEventKind.STATE_SNAPSHOT, snapshot: {} }],
-    ["a state delta", { type: RunEventKind.STATE_DELTA, delta: [] }],
     [
-      "a messages snapshot",
-      { type: RunEventKind.MESSAGES_SNAPSHOT, messages: [] },
+      "a text message boundary",
+      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
     ],
-    ["a raw provider event", { type: RunEventKind.RAW, event: {} }],
     [
-      "a subagent start",
-      {
-        type: RunEventKind.SUBAGENT_STARTED,
-        subagentRunId: "sub-1",
-        name: "reviewer",
-      },
+      "a reasoning boundary",
+      { type: RunEventKind.REASONING_START, messageId: "m1" },
+    ],
+    [
+      "a reasoning message boundary",
+      { type: RunEventKind.REASONING_MESSAGE_END, messageId: "m1" },
     ],
     [
       "an unrelated custom event",

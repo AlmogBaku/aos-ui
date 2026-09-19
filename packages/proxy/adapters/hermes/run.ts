@@ -1,12 +1,12 @@
 import {
   EventType,
   RunAgentInputSchema,
-  type AGUIEvent,
   type ResumeEntry,
   type RunFinishedInterruptOutcome,
   type RunAgentInput,
   type TokenUsage,
 } from "@ag-ui/core"
+import type { RunEvent } from "../../core/events"
 import {
   ServerRunConflictError,
   ServerRunSteerUncertainError,
@@ -119,7 +119,7 @@ export type HermesRunHandle = ServerRunHandle
 export type HermesReconnectRequest = RecoveryRequest
 
 type QueueWaiter = {
-  resolve(result: IteratorResult<AGUIEvent>): void
+  resolve(result: IteratorResult<RunEvent>): void
 }
 
 function utf8CodePointBytes(codePoint: number) {
@@ -227,13 +227,13 @@ function boundedGraphBytes(value: unknown, maximum: number) {
   return visit(value, 0) ? bytes : undefined
 }
 
-class EventQueue implements AsyncIterable<AGUIEvent> {
-  readonly #values: { event: AGUIEvent; bytes: number }[] = []
+class EventQueue implements AsyncIterable<RunEvent> {
+  readonly #values: { event: RunEvent; bytes: number }[] = []
   readonly #waiters: QueueWaiter[] = []
   #bytes = 0
   #closed = false
 
-  push(value: AGUIEvent) {
+  push(value: RunEvent) {
     if (this.#closed) return false
     const waiter = this.#waiters.shift()
     if (waiter) waiter.resolve({ done: false, value })
@@ -247,7 +247,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
     return true
   }
 
-  terminal(value: AGUIEvent) {
+  terminal(value: RunEvent) {
     if (this.#closed) return
     const started =
       this.#values[0]?.event.type === EventType.RUN_STARTED
@@ -275,7 +275,7 @@ class EventQueue implements AsyncIterable<AGUIEvent> {
       waiter.resolve({ done: true, value: undefined })
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<AGUIEvent> {
+  [Symbol.asyncIterator](): AsyncIterator<RunEvent> {
     return {
       next: () => {
         const value = this.#values.shift()
@@ -1026,7 +1026,7 @@ export class HermesRunEngine {
     if (!this.#native.inspectExecution) return undefined
     const snapshot = await this.#native.inspectExecution({ ...scope, runId })
     if (snapshot.status === "waiting-for-input" && snapshot.outcome) {
-      const events: AGUIEvent[] = [
+      const events: RunEvent[] = [
         { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
         {
           type: EventType.RUN_FINISHED,
@@ -1756,7 +1756,7 @@ export class HermesRunEngine {
     active.queue.close()
   }
 
-  #emit(active: ActiveRun, event: AGUIEvent) {
+  #emit(active: ActiveRun, event: RunEvent) {
     if (active.terminal || active.overflowed) return false
     if (active.detached) return true
     if (active.queue.push(event)) return true
