@@ -1,4 +1,4 @@
-import type { AGUIEvent } from "@ag-ui/core"
+import type { RunEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
 import type { ServerRunEngine, ServerRunHandle } from "../../core/runtime"
@@ -17,7 +17,7 @@ const sessionKey = "agent:research:main"
 
 function idleHandle(): ServerRunHandle {
   return {
-    events: (async function* (): AsyncIterable<AGUIEvent> {})(),
+    events: (async function* (): AsyncIterable<RunEvent> {})(),
     settled: Promise.resolve(),
     stop: async () => "idle",
     recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),

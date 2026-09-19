@@ -1,8 +1,8 @@
 import {
-  ResumeEntrySchema,
-  type ResumeEntry,
-  type RunFinishedInterruptOutcome,
-} from "@ag-ui/core"
+  RequestReplySchema,
+  type RequestReply,
+  type RunInterruptOutcome,
+} from "../../core/events"
 import {
   QuestionGetResultSchema,
   QuestionListResultSchema,
@@ -76,7 +76,7 @@ type Pending = {
   scope: OpenClawInteractionScope
   id: string
   expiresAtMs: number
-  outcome: RunFinishedInterruptOutcome
+  outcome: RunInterruptOutcome
 } & (
   | { kind: "question"; questions: Question[] }
   | {
@@ -217,7 +217,7 @@ function jsonFingerprint(value: unknown) {
   }
   return JSON.stringify(normalize(value))
 }
-function resume(raw: unknown): { entry: ResumeEntry; fingerprint: string } {
+function resume(raw: unknown): { entry: RequestReply; fingerprint: string } {
   if (
     !Array.isArray(raw) ||
     raw.length !== 1 ||
@@ -236,7 +236,7 @@ function resume(raw: unknown): { entry: ResumeEntry; fingerprint: string } {
     )
   )
     invalid()
-  const parsed = ResumeEntrySchema.safeParse(value)
+  const parsed = RequestReplySchema.safeParse(value)
   if (!parsed.success) invalid()
   const entry = parsed.data
   if (!entry || !id(entry.interruptId)) invalid()
@@ -294,7 +294,7 @@ export class OpenClawInteractions {
   async discover(
     scope: OpenClawInteractionDiscoveryScope,
     approvalReplay?: unknown
-  ): Promise<{ outcome: RunFinishedInterruptOutcome } | undefined> {
+  ): Promise<{ outcome: RunInterruptOutcome } | undefined> {
     if (
       !Check(SessionApprovalReplaySchema, approvalReplay) ||
       approvalReplay.sessionKey !== scope.sessionId ||
@@ -342,7 +342,7 @@ export class OpenClawInteractions {
   }
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
     const r = record(scope, raw),
-      outcome: RunFinishedInterruptOutcome = {
+      outcome: RunInterruptOutcome = {
         type: "interrupt",
         interrupts: [
           {
@@ -408,7 +408,7 @@ export class OpenClawInteractions {
       bad()
     const decisions = approvalDecisions(r.presentation.allowedDecisions),
       normalizedDecisions = decisions.map(({ normalized }) => normalized)
-    const outcome: RunFinishedInterruptOutcome = {
+    const outcome: RunInterruptOutcome = {
       type: "interrupt",
       interrupts: [
         {
@@ -446,7 +446,7 @@ export class OpenClawInteractions {
   async reconcile(scope: OpenClawInteractionScope) {
     const qs = await this.transport.request("question.list", {})
     if (!Check(QuestionListResultSchema, qs)) bad()
-    const outcomes: RunFinishedInterruptOutcome[] = []
+    const outcomes: RunInterruptOutcome[] = []
     for (const q of (qs as { questions: unknown[] }).questions) {
       if (!q || typeof q !== "object" || Array.isArray(q)) bad()
       const row = q as Record<string, unknown>
@@ -470,7 +470,7 @@ export class OpenClawInteractions {
   }
   async validate(
     scope: OpenClawResumeScope,
-    raw: readonly ResumeEntry[]
+    raw: readonly RequestReply[]
   ): Promise<{ runId: string }> {
     const { entry, fingerprint } = resume(raw),
       boundKey = bindingKey(scope, entry.interruptId),
@@ -499,7 +499,7 @@ export class OpenClawInteractions {
   }
   async dispatch(
     scope: OpenClawResumeScope,
-    raw: readonly ResumeEntry[]
+    raw: readonly RequestReply[]
   ): Promise<OpenClawInteractionResult> {
     const { entry, fingerprint } = resume(raw),
       boundKey = bindingKey(scope, entry.interruptId),
@@ -574,7 +574,7 @@ export class OpenClawInteractions {
       throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
     return candidates[0]!
   }
-  private resolution(p: Pending, r: ResumeEntry) {
+  private resolution(p: Pending, r: RequestReply) {
     if (p.kind === "question") {
       const expected =
           r.status === "cancelled"

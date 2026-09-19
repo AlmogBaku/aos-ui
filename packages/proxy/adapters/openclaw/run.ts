@@ -1,12 +1,12 @@
 import {
-  EventType,
-  RunAgentInputSchema,
-  type ResumeEntry,
-  type RunAgentInput,
-  type RunFinishedInterruptOutcome,
+  RunEventKind,
+  TurnInputSchema,
+  type RequestReply,
+  type RunEvent,
+  type RunInterruptOutcome,
   type TokenUsage,
-} from "@ag-ui/core"
-import type { RunEvent } from "../../core/events"
+  type TurnInput,
+} from "../../core/events"
 import { readSessionMessageIdentity } from "@openclaw/gateway-client"
 import {
   AgentEventSchema,
@@ -69,18 +69,18 @@ export type OpenClawBoundResume = Readonly<{
   /** Proves the response belongs to one pending native run before observation. */
   validate(
     scope: SessionScope,
-    resume: readonly ResumeEntry[]
+    resume: readonly RequestReply[]
   ): Promise<{ runId: string }>
   /** Rechecks native state and performs at most one response mutation. */
   dispatch(
     scope: SessionScope,
-    resume: readonly ResumeEntry[]
+    resume: readonly RequestReply[]
   ): Promise<OpenClawBoundResumeResult>
   /** Reconstructs one exact native wait from current Gateway authority. */
   discover?(
     scope: SessionScope & { nativeRunId: string },
     approvalReplay: unknown
-  ): Promise<{ outcome: RunFinishedInterruptOutcome } | undefined>
+  ): Promise<{ outcome: RunInterruptOutcome } | undefined>
 }>
 
 export class OpenClawRunPublicError extends Error {
@@ -152,7 +152,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
         this.#bytes += bytes
       } else {
         const started =
-          this.#events[0]?.event.type === EventType.RUN_STARTED
+          this.#events[0]?.event.type === RunEventKind.RUN_STARTED
             ? this.#events[0]
             : undefined
         this.#events.splice(0)
@@ -288,7 +288,7 @@ function scopeKey(scope: SessionScope) {
   return `${scope.agentId}\u0000${scope.sessionId}`
 }
 
-function userText(input: RunAgentInput) {
+function userText(input: TurnInput) {
   const message = input.messages[0]
   if (!message || message.role !== "user") return undefined
   if (typeof message.content === "string") return message.content
@@ -643,7 +643,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
     candidate: Parameters<ServerRunEngine["start"]>[1],
     attachmentStage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
-    const input = RunAgentInputSchema.parse(candidate)
+    const input = TurnInputSchema.parse(candidate)
     const text = userText(input)
     const resume = input.resume?.length ? input.resume : undefined
     const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
@@ -776,7 +776,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           )
       })
       queue.push({
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: input.threadId,
         runId: input.runId,
       })
@@ -961,7 +961,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         )
       )
       existing.queue.push({
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: scope.threadId,
         runId: request.runId,
       })
@@ -1020,7 +1020,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           )
       })
       queue.push({
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: scope.threadId,
         runId: request.runId,
       })
@@ -1178,9 +1178,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
         await retireExisting()
         lease = undefined
         const events: RunEvent[] = [
-          { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
+          { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
           {
-            type: EventType.RUN_FINISHED,
+            type: RunEventKind.RUN_FINISHED,
             threadId: scope.threadId,
             runId,
             outcome: discovered.outcome,
@@ -1509,16 +1509,16 @@ export class OpenClawRunEngine implements ServerRunEngine {
     if (!active.reasoningStarted) {
       active.reasoningStarted = true
       const messageId = `${active.runId}:reasoning`
-      active.queue.push({ type: EventType.REASONING_START, messageId })
+      active.queue.push({ type: RunEventKind.REASONING_START, messageId })
       active.queue.push({
-        type: EventType.REASONING_MESSAGE_START,
+        type: RunEventKind.REASONING_MESSAGE_START,
         messageId,
         role: "reasoning",
       })
     }
     active.reasoning += delta
     active.queue.push({
-      type: EventType.REASONING_MESSAGE_CONTENT,
+      type: RunEventKind.REASONING_MESSAGE_CONTENT,
       messageId: `${active.runId}:reasoning`,
       delta,
     })
@@ -1528,8 +1528,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
     if (!active.reasoningStarted || active.reasoningEnded) return
     active.reasoningEnded = true
     const messageId = `${active.runId}:reasoning`
-    active.queue.push({ type: EventType.REASONING_MESSAGE_END, messageId })
-    active.queue.push({ type: EventType.REASONING_END, messageId })
+    active.queue.push({ type: RunEventKind.REASONING_MESSAGE_END, messageId })
+    active.queue.push({ type: RunEventKind.REASONING_END, messageId })
   }
 
   #appendText(active: ActiveRun, delta: string | undefined) {
@@ -1552,14 +1552,14 @@ export class OpenClawRunEngine implements ServerRunEngine {
     if (!active.textStarted) {
       active.textStarted = true
       active.queue.push({
-        type: EventType.TEXT_MESSAGE_START,
+        type: RunEventKind.TEXT_MESSAGE_START,
         messageId,
         role: "assistant",
       })
     }
     active.projectedText += delta
     active.queue.push({
-      type: EventType.TEXT_MESSAGE_CONTENT,
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId,
       delta,
     })
@@ -1575,7 +1575,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
     if (projected === active.projectedText) return
     if (active.textStarted)
       active.queue.push({
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: this.#messageId(active),
       })
     if (active.textStarted) active.textGeneration += 1
@@ -1592,7 +1592,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
   #emitProgress(active: ActiveRun, content: Record<string, unknown>) {
     active.queue.push({
-      type: EventType.ACTIVITY_SNAPSHOT,
+      type: RunEventKind.ACTIVITY_SNAPSHOT,
       messageId: `${active.runId}:progress`,
       activityType: "OPENCLAW_PROGRESS",
       content,
@@ -1612,7 +1612,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       active.planFingerprint = fingerprint
     }
     active.queue.push({
-      type: EventType.ACTIVITY_SNAPSHOT,
+      type: RunEventKind.ACTIVITY_SNAPSHOT,
       messageId: `${active.runId}:plan`,
       activityType: "PLAN",
       content: {
@@ -1636,13 +1636,13 @@ export class OpenClawRunEngine implements ServerRunEngine {
       }
       active.tools.set(toolCallId, tool)
       active.queue.push({
-        type: EventType.TOOL_CALL_START,
+        type: RunEventKind.TOOL_CALL_START,
         toolCallId,
         toolCallName: name,
         parentMessageId: tool.messageId,
       })
       active.queue.push({
-        type: EventType.TOOL_CALL_ARGS,
+        type: RunEventKind.TOOL_CALL_ARGS,
         toolCallId,
         delta: this.#toolEvents ? safeJson(data.args) : "{}",
       })
@@ -1663,7 +1663,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           )
         : undefined
       active.queue.push({
-        type: EventType.ACTIVITY_SNAPSHOT,
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
         messageId: `${active.runId}:tool-progress:${toolCallId}`,
         activityType: "OPENCLAW_TOOL_PROGRESS",
         content: {
@@ -1687,22 +1687,22 @@ export class OpenClawRunEngine implements ServerRunEngine {
       }
       active.tools.set(toolCallId, tool)
       active.queue.push({
-        type: EventType.TOOL_CALL_START,
+        type: RunEventKind.TOOL_CALL_START,
         toolCallId,
         toolCallName: name,
         parentMessageId: tool.messageId,
       })
       active.queue.push({
-        type: EventType.TOOL_CALL_ARGS,
+        type: RunEventKind.TOOL_CALL_ARGS,
         toolCallId,
         delta: "{}",
       })
     }
     if (tool.ended) return
     tool.ended = true
-    active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+    active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
     active.queue.push({
-      type: EventType.TOOL_CALL_RESULT,
+      type: RunEventKind.TOOL_CALL_RESULT,
       messageId: `${active.runId}:tool:${toolCallId}`,
       toolCallId,
       content: this.#toolEvents
@@ -1882,7 +1882,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
   #markUncertain(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     active.uncertain = true
-    active.queue.push({ type: EventType.RUN_ERROR, code, message })
+    active.queue.push({ type: RunEventKind.RUN_ERROR, code, message })
     active.queue.close()
   }
 
@@ -1893,9 +1893,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
-      active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+      active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
       active.queue.push({
-        type: EventType.TOOL_CALL_RESULT,
+        type: RunEventKind.TOOL_CALL_RESULT,
         messageId: `${active.runId}:tool:${toolCallId}`,
         toolCallId,
         content: safeJson({
@@ -1906,11 +1906,11 @@ export class OpenClawRunEngine implements ServerRunEngine {
     }
     if (active.textStarted)
       active.queue.push({
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: this.#messageId(active),
       })
     active.queue.terminal({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: active.scope.threadId,
       runId: active.runId,
       outcome: { type: "success" },
@@ -1929,9 +1929,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
-      active.queue.push({ type: EventType.TOOL_CALL_END, toolCallId })
+      active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
       active.queue.push({
-        type: EventType.TOOL_CALL_RESULT,
+        type: RunEventKind.TOOL_CALL_RESULT,
         messageId: `${active.runId}:tool:${toolCallId}`,
         toolCallId,
         content: safeJson({ status: "error" }),
@@ -1940,11 +1940,11 @@ export class OpenClawRunEngine implements ServerRunEngine {
     }
     if (active.textStarted)
       active.queue.push({
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: this.#messageId(active),
       })
     active.queue.terminal({
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       code,
       message,
       ...(active.usage ? { usage: active.usage } : {}),
