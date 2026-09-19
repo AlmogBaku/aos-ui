@@ -2,6 +2,7 @@ import {
   RunEventKind,
   isUncertainError,
   pendingRequestsOf,
+  type ExecutionEvent,
   type PendingRequest,
   type RunEvent,
 } from "./events"
@@ -185,6 +186,7 @@ export class SessionCoordinator {
   readonly #admissions = new Set<string>()
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
+  readonly #observers = new Set<(event: ExecutionEvent) => void>()
   #closed = false
 
   constructor(private readonly options: SessionCoordinatorOptions) {
@@ -213,6 +215,18 @@ export class SessionCoordinator {
           interrupts: structuredClone(execution.segment.interrupts),
         }
       : { state: "idle" as const, interrupts: [] as PendingRequest[] }
+  }
+
+  /**
+   * Workspace-wide execution feed: one listener sees the lifecycle of every
+   * Session this coordinator drives, independent of the per-segment run
+   * subscriptions and their replay.
+   */
+  observe(listener: (event: ExecutionEvent) => void) {
+    this.#observers.add(listener)
+    return () => {
+      this.#observers.delete(listener)
+    }
   }
 
   async discover(scope: SessionScope) {
@@ -250,6 +264,7 @@ export class SessionCoordinator {
       const discovered = await this.options.engine.discover!(scope, runId)
       if (!discovered) {
         if (existing && this.#executions.get(key) === existing) {
+          this.#resolveAttention(existing)
           this.#forgetJournal(existing.segment)
           existing.segment.fanout.close()
           this.#executions.delete(key)
@@ -469,6 +484,8 @@ export class SessionCoordinator {
       try {
         const status = await execution.segment.handle.stop()
         execution.state = status === "idle" ? "idle" : "stopping"
+        // Stopping a wait ends it without an answer.
+        if (status === "idle") this.#resolveAttention(execution)
         return status
       } catch (error) {
         if (error instanceof ServerRunStopNotDispatchedError) {
@@ -556,6 +573,7 @@ export class SessionCoordinator {
     try {
       const handle = await this.options.engine.start(execution.scope, input)
       const segment = this.#segment(key, input.runId, handle)
+      this.#resolveAttention(execution)
       this.#forgetJournal(execution.segment)
       execution.segment = segment
       execution.control = Promise.resolve()
@@ -570,6 +588,35 @@ export class SessionCoordinator {
     } finally {
       this.#admissions.delete(key)
     }
+  }
+
+  /** Scope and clock every observed `ExecutionEvent` carries. */
+  #origin(scope: SessionScope, runId: string) {
+    return {
+      agentId: scope.agentId,
+      // Observers project to the browser, which knows only public identity.
+      sessionId: scope.threadId,
+      runId,
+      occurredAt: new Date().toISOString(),
+    }
+  }
+
+  #announce(event: ExecutionEvent) {
+    for (const observer of [...this.#observers])
+      try {
+        observer(event)
+      } catch {
+        // An observer must not rewrite the provider outcome.
+      }
+  }
+
+  /** A wait answered elsewhere, ended, or cleared resolves its requests. */
+  #resolveAttention(execution: Execution) {
+    const { interrupts, runId } = execution.segment
+    if (interrupts.length === 0) return
+    const origin = this.#origin(execution.scope, runId)
+    for (const { id } of interrupts)
+      this.#announce({ ...origin, type: "attention-resolved", interruptId: id })
   }
 
   #segment(
@@ -600,6 +647,13 @@ export class SessionCoordinator {
   }
 
   #consume(execution: Execution, segment: Segment) {
+    // One start per consumed segment: a new turn, a resume, or a recovered
+    // run. A rediscovered wait is not a start, so it announces nothing here.
+    if (execution.state === "running")
+      this.#announce({
+        ...this.#origin(execution.scope, segment.runId),
+        type: "run-started",
+      })
     void (async () => {
       let terminal = false
       try {
@@ -629,6 +683,15 @@ export class SessionCoordinator {
             execution.state = segment.interrupts.length
               ? "waiting-for-input"
               : "idle"
+            const origin = this.#origin(execution.scope, segment.runId)
+            if (segment.interrupts.length)
+              for (const request of segment.interrupts)
+                this.#announce({
+                  ...origin,
+                  type: "attention-requested",
+                  request: structuredClone(request),
+                })
+            else this.#announce({ ...origin, type: "run-finished" })
             break
           }
           if (event.type === RunEventKind.RUN_ERROR) {
@@ -636,6 +699,10 @@ export class SessionCoordinator {
             terminal = true
             segment.terminal = true
             execution.state = isUncertainError(event) ? "uncertain" : "idle"
+            this.#announce({
+              ...this.#origin(execution.scope, segment.runId),
+              type: "run-failed",
+            })
             break
           }
         }

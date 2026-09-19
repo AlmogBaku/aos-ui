@@ -1,6 +1,7 @@
 import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { describe, expect, it, vi } from "vitest"
 
+import type { ExecutionEvent } from "./events"
 import {
   ServerRunStopNotDispatchedError,
   type ServerRunEngine,
@@ -1085,5 +1086,125 @@ describe("SessionCoordinator", () => {
       sessions.start(scope, input("run-2"), access("operator"))
     ).resolves.toBeDefined()
     expect(engine.start).toHaveBeenCalledTimes(2)
+  })
+
+  it("observes the lifecycle of a run it drives under public identity", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    sessions.observe((event) => observed.push(event))
+
+    await sessions.start(scope, input("run-1"), access("one"))
+    source.emit({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    source.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
+      ["run-started", "run-1"],
+      ["run-finished", "run-1"],
+    ])
+    expect(observed[0]).toMatchObject({
+      agentId: scope.agentId,
+      sessionId: scope.threadId,
+    })
+    expect(Number.isNaN(Date.parse(observed[0]!.occurredAt))).toBe(false)
+  })
+
+  it("observes one attention request per interrupt and resolves it on resume", async () => {
+    const interrupted = new EventSource()
+    const resumed = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(interrupted)
+        .mockResolvedValueOnce(resumed),
+      recover: vi.fn(async () => resumed),
+    }
+    const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    sessions.observe((event) => observed.push(event))
+
+    await sessions.start(scope, input("run-1"), access("one"))
+    interrupted.emit({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: "question-1",
+            reason: "question",
+            responseSchema: { type: "object" },
+          },
+        ],
+      },
+    })
+    interrupted.finish()
+    await vi.waitFor(() =>
+      expect(sessions.state(scope)).toBe("waiting-for-input")
+    )
+
+    await sessions.start(scope, input("run-2", true), access("one"))
+
+    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
+      ["run-started", "run-1"],
+      ["attention-requested", "run-1"],
+      ["attention-resolved", "run-1"],
+      ["run-started", "run-2"],
+    ])
+    expect(observed[1]).toMatchObject({ request: { id: "question-1" } })
+    expect(observed[2]).toMatchObject({ interruptId: "question-1" })
+  })
+
+  it("observes a failed run and stops delivering after unsubscribing", async () => {
+    const first = new EventSource()
+    const second = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second),
+      recover: vi.fn(async () => second),
+    }
+    const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    const unobserve = sessions.observe((event) => observed.push(event))
+
+    await sessions.start(scope, input("run-1"), access("one"))
+    first.emit({
+      type: EventType.RUN_ERROR,
+      code: "AOS_PROVIDER_FAILED",
+      message: "The provider rejected the turn.",
+    })
+    first.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
+      ["run-started", "run-1"],
+      ["run-failed", "run-1"],
+    ])
+
+    unobserve()
+    await sessions.start(scope, input("run-2"), access("one"))
+    second.emit({
+      type: EventType.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-2",
+      outcome: { type: "success" },
+    })
+    second.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    expect(observed).toHaveLength(2)
   })
 })

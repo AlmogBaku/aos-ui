@@ -28,3 +28,112 @@ export interface SessionRows {
 }
 
 export const READ_GUARD_MS = 10_000
+
+/**
+ * Fields a merge compares. `unread` is the only one a read may legitimately
+ * omit, so it is resolved before the comparison rather than inside it.
+ */
+const COMPARED: readonly (keyof SessionRow)[] = [
+  "id",
+  "agentId",
+  "title",
+  "archived",
+  "updatedAt",
+  "status",
+  "unread",
+]
+
+function rowKey(agentId: string, sessionId: string) {
+  return `${agentId}\u0000${sessionId}`
+}
+
+function changed(previous: SessionRow | undefined, next: SessionRow) {
+  return (
+    previous === undefined ||
+    COMPARED.some((field) => previous[field] !== next[field])
+  )
+}
+
+/** Settles `unread` on a merged row; an unknown value leaves it absent. */
+function withUnread(row: SessionRow, unread: boolean | undefined): SessionRow {
+  const next: SessionRow = { ...row }
+  if (unread === undefined) delete next.unread
+  else next.unread = unread
+  return next
+}
+
+export function createSessionRows({
+  now = Date.now,
+}: { now?: () => number } = {}): SessionRows {
+  const rows = new Map<string, SessionRow>()
+  const guardedUntil = new Map<string, number>()
+  const listeners = new Set<SessionRowListener>()
+
+  /** True while our own mark-read outranks what a list page may still report. */
+  const guarded = (key: string) => {
+    const until = guardedUntil.get(key)
+    if (until === undefined) return false
+    if (until > now()) return true
+    guardedUntil.delete(key)
+    return false
+  }
+
+  const publish = (row: SessionRow) => {
+    for (const listener of [...listeners]) listener(row)
+  }
+
+  return {
+    get(agentId, sessionId) {
+      return rows.get(rowKey(agentId, sessionId))
+    },
+
+    rememberList(incoming) {
+      const updated: SessionRow[] = []
+      for (const row of incoming) {
+        const key = rowKey(row.agentId, row.id)
+        const previous = rows.get(key)
+        const unread = guarded(key) && row.unread === true ? false : row.unread
+        const merged = withUnread({ ...previous, ...row }, unread)
+        rows.set(key, merged)
+        if (changed(previous, merged)) updated.push(merged)
+      }
+      for (const row of updated) publish(row)
+      return updated
+    },
+
+    rememberDetail(row) {
+      const key = rowKey(row.agentId, row.id)
+      const previous = rows.get(key)
+      const merged = withUnread({ ...previous, ...row }, previous?.unread)
+      rows.set(key, merged)
+      if (changed(previous, merged)) publish(merged)
+      return merged
+    },
+
+    markRead(agentId, sessionId) {
+      const key = rowKey(agentId, sessionId)
+      const previous = rows.get(key)
+      // With no cached row there is no value to defend, and the first list
+      // page that reports one is the only truth we have.
+      if (!previous) return undefined
+      guardedUntil.set(key, now() + READ_GUARD_MS)
+      const merged = withUnread(previous, false)
+      rows.set(key, merged)
+      publish(merged)
+      return merged
+    },
+
+    forget(agentId, sessionId) {
+      const key = rowKey(agentId, sessionId)
+      rows.delete(key)
+      guardedUntil.delete(key)
+    },
+
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+  }
+}
