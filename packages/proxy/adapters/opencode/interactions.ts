@@ -1,4 +1,4 @@
-import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
+import type { RunInterruptOutcome } from "../../core/events"
 
 import { OpenCodeMutationUncertainError } from "./client"
 
@@ -180,7 +180,7 @@ export class OpenCodeInteractions {
   acceptQuestion(
     scope: OpenCodeInteractionScope,
     native: unknown
-  ): RunFinishedInterruptOutcome {
+  ): RunInterruptOutcome {
     const id = text(record(native)?.id, 512)
     if (!id)
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
@@ -207,7 +207,7 @@ export class OpenCodeInteractions {
   acceptPermission(
     scope: OpenCodeInteractionScope,
     native: unknown
-  ): RunFinishedInterruptOutcome {
+  ): RunInterruptOutcome {
     const row = record(native)
     const id = text(row?.id, 512)
     if (
@@ -285,9 +285,7 @@ export class OpenCodeInteractions {
     }
     return this.snapshot(scope)
   }
-  snapshot(
-    scope: OpenCodeInteractionScope
-  ): RunFinishedInterruptOutcome | undefined {
+  snapshot(scope: OpenCodeInteractionScope): RunInterruptOutcome | undefined {
     const s: Scope = {
       agentId: scope.agentId,
       sessionId: scope.sessionId,

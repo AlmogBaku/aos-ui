@@ -1,4 +1,8 @@
-import { EventType, aggregateTokenUsage, type TokenUsage } from "@ag-ui/core"
+import {
+  RunEventKind,
+  aggregateTokenUsage,
+  type TokenUsage,
+} from "../../core/events"
 import type { RunEvent } from "../../core/events"
 
 import type { OpenCodeDurableEvent } from "./client"
@@ -594,7 +598,7 @@ export class OpenCodeEventProjector {
       this.#stopping ? "stopped" : "completed"
     )
     events.push({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: this.#scope.threadId,
       runId: this.#scope.runId,
       ...(this.#stopping ? { result: { stopped: true } } : {}),
@@ -610,7 +614,7 @@ export class OpenCodeEventProjector {
     if (this.#closed) return { events: [] }
     this.#closed = true
     const events = this.#closeOpenContent()
-    events.push({ type: EventType.RUN_ERROR, code, message })
+    events.push({ type: RunEventKind.RUN_ERROR, code, message })
     return { events, terminal: "error" }
   }
 
@@ -639,7 +643,7 @@ export class OpenCodeEventProjector {
       const text = data.text as string
       if (text)
         events.push({
-          type: EventType.REASONING_MESSAGE_CONTENT,
+          type: RunEventKind.REASONING_MESSAGE_CONTENT,
           messageId: reasoningId,
           delta: text,
         })
@@ -654,7 +658,7 @@ export class OpenCodeEventProjector {
       const text = data.text as string
       if (text)
         events.push({
-          type: EventType.TEXT_MESSAGE_CONTENT,
+          type: RunEventKind.TEXT_MESSAGE_CONTENT,
           messageId,
           delta: text,
         })
@@ -674,7 +678,7 @@ export class OpenCodeEventProjector {
       const text = data.text as string
       if (text) {
         events.push({
-          type: EventType.TOOL_CALL_ARGS,
+          type: RunEventKind.TOOL_CALL_ARGS,
           toolCallId: callId,
           delta: text,
         })
@@ -691,7 +695,7 @@ export class OpenCodeEventProjector {
       if (!tool.args) {
         const args = JSON.stringify(data.input)
         events.push({
-          type: EventType.TOOL_CALL_ARGS,
+          type: RunEventKind.TOOL_CALL_ARGS,
           toolCallId: callId,
           delta: args,
         })
@@ -702,7 +706,7 @@ export class OpenCodeEventProjector {
       if (!this.#tools.has(callId)) throw new OpenCodeEventValidationError()
       const text = safeTextContent(data.content)
       events.push({
-        type: EventType.ACTIVITY_SNAPSHOT,
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
         messageId: `${this.#scope.runId}:progress:${callId}`,
         activityType: "PROGRESS",
         content: { callId, status: "running", ...(text ? { text } : {}) },
@@ -716,9 +720,9 @@ export class OpenCodeEventProjector {
       const tool = this.#tools.get(callId)
       if (!tool || tool.ended) throw new OpenCodeEventValidationError()
       tool.ended = true
-      events.push({ type: EventType.TOOL_CALL_END, toolCallId: callId })
+      events.push({ type: RunEventKind.TOOL_CALL_END, toolCallId: callId })
       events.push({
-        type: EventType.TOOL_CALL_RESULT,
+        type: RunEventKind.TOOL_CALL_RESULT,
         messageId: `${tool.messageId}:tool:${callId}`,
         toolCallId: callId,
         content:
@@ -749,7 +753,7 @@ export class OpenCodeEventProjector {
     this.#reasoningId = reasoningId
     this.#reasoningOpen = true
     events.push({
-      type: EventType.REASONING_MESSAGE_START,
+      type: RunEventKind.REASONING_MESSAGE_START,
       messageId: reasoningId,
       role: "reasoning",
     })
@@ -764,7 +768,7 @@ export class OpenCodeEventProjector {
     this.#messageId = messageId
     this.#textOpen = true
     events.push({
-      type: EventType.TEXT_MESSAGE_START,
+      type: RunEventKind.TEXT_MESSAGE_START,
       messageId,
       role: "assistant",
     })
@@ -785,7 +789,7 @@ export class OpenCodeEventProjector {
     const tool = { messageId, name, args: "", ended: false }
     this.#tools.set(callId, tool)
     events.push({
-      type: EventType.TOOL_CALL_START,
+      type: RunEventKind.TOOL_CALL_START,
       toolCallId: callId,
       toolCallName: name,
       parentMessageId: messageId,
@@ -796,7 +800,7 @@ export class OpenCodeEventProjector {
   #closeReasoning(events: RunEvent[]) {
     if (!this.#reasoningOpen || !this.#reasoningId) return
     events.push({
-      type: EventType.REASONING_MESSAGE_END,
+      type: RunEventKind.REASONING_MESSAGE_END,
       messageId: this.#reasoningId,
     })
     this.#reasoningOpen = false
@@ -805,7 +809,7 @@ export class OpenCodeEventProjector {
   #closeText(events: RunEvent[]) {
     if (!this.#textOpen || !this.#messageId) return
     events.push({
-      type: EventType.TEXT_MESSAGE_END,
+      type: RunEventKind.TEXT_MESSAGE_END,
       messageId: this.#messageId,
     })
     this.#textOpen = false
@@ -818,10 +822,10 @@ export class OpenCodeEventProjector {
     for (const [callId, tool] of this.#tools) {
       if (tool.ended) continue
       tool.ended = true
-      events.push({ type: EventType.TOOL_CALL_END, toolCallId: callId })
+      events.push({ type: RunEventKind.TOOL_CALL_END, toolCallId: callId })
       if (toolStatus)
         events.push({
-          type: EventType.TOOL_CALL_RESULT,
+          type: RunEventKind.TOOL_CALL_RESULT,
           messageId: `${tool.messageId}:tool:${callId}`,
           toolCallId: callId,
           content: JSON.stringify({ status: toolStatus }),

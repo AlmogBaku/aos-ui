@@ -1,4 +1,4 @@
-import { EventSchemas, EventType } from "@ag-ui/core"
+import { RunEventKind, RunEventSchema } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
 import { OpenCodeEventProjector, OpenCodeEventValidationError } from "./events"
@@ -122,18 +122,18 @@ describe("OpenCodeEventProjector", () => {
     events.push(...projector.finish().events)
 
     expect(events.map((event) => event.type)).toEqual([
-      EventType.REASONING_MESSAGE_START,
-      EventType.REASONING_MESSAGE_CONTENT,
-      EventType.REASONING_MESSAGE_END,
-      EventType.TEXT_MESSAGE_START,
-      EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TEXT_MESSAGE_END,
-      EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
-      EventType.ACTIVITY_SNAPSHOT,
-      EventType.TOOL_CALL_END,
-      EventType.TOOL_CALL_RESULT,
-      EventType.RUN_FINISHED,
+      RunEventKind.REASONING_MESSAGE_START,
+      RunEventKind.REASONING_MESSAGE_CONTENT,
+      RunEventKind.REASONING_MESSAGE_END,
+      RunEventKind.TEXT_MESSAGE_START,
+      RunEventKind.TEXT_MESSAGE_CONTENT,
+      RunEventKind.TEXT_MESSAGE_END,
+      RunEventKind.TOOL_CALL_START,
+      RunEventKind.TOOL_CALL_ARGS,
+      RunEventKind.ACTIVITY_SNAPSHOT,
+      RunEventKind.TOOL_CALL_END,
+      RunEventKind.TOOL_CALL_RESULT,
+      RunEventKind.RUN_FINISHED,
     ])
     expect(events[8]).toMatchObject({
       activityType: "PROGRESS",
@@ -154,7 +154,7 @@ describe("OpenCodeEventProjector", () => {
       outcome: { type: "success" },
     })
     for (const event of events)
-      expect(EventSchemas.safeParse(event).success).toBe(true)
+      expect(RunEventSchema.safeParse(event).success).toBe(true)
   })
 
   it("accepts the real durable tool failure shape and emits a safe terminal tool result", () => {
@@ -180,9 +180,9 @@ describe("OpenCodeEventProjector", () => {
       )
     ).toEqual({
       events: [
-        { type: EventType.TOOL_CALL_END, toolCallId: "call-1" },
+        { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
         {
-          type: EventType.TOOL_CALL_RESULT,
+          type: RunEventKind.TOOL_CALL_RESULT,
           messageId: "assistant-1:tool:call-1",
           toolCallId: "call-1",
           content: '{"status":"error"}',
@@ -297,9 +297,9 @@ describe("OpenCodeEventProjector", () => {
         })
       ).events
     ).toMatchObject([
-      { type: EventType.TEXT_MESSAGE_START, messageId: "assistant-1" },
-      { type: EventType.TEXT_MESSAGE_CONTENT, delta: "Recovered text" },
-      { type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
+      { type: RunEventKind.TEXT_MESSAGE_START, messageId: "assistant-1" },
+      { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "Recovered text" },
+      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "assistant-1" },
     ])
   })
 
@@ -325,7 +325,7 @@ describe("OpenCodeEventProjector", () => {
       )
 
     expect(projector.finish().events.at(-1)).toMatchObject({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       usage: [
         {
           inputTokens: 30,

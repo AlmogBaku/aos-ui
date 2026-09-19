@@ -1,4 +1,4 @@
-import { EventSchemas, EventType, type RunAgentInput } from "@ag-ui/core"
+import { RunEventKind, RunEventSchema, type TurnInput } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
 import type {
@@ -23,7 +23,7 @@ const admission = {
     "aos_957d880ef3fdbdf4c7672021817c07ee7a619ed7e18b557da7e9b07adad0b12c",
 }
 
-function input(overrides: Partial<RunAgentInput> = {}): RunAgentInput {
+function input(overrides: Partial<TurnInput> = {}): TurnInput {
   return {
     threadId: scope.threadId,
     runId: "run-1",
@@ -286,19 +286,19 @@ describe("OpenCodeRunEngine", () => {
     const waitingEvents = await collect(waiting!.handle)
     expect(waitingEvents).toEqual([
       {
-        type: EventType.RUN_STARTED,
+        type: RunEventKind.RUN_STARTED,
         threadId: scope.threadId,
         runId: "recovered-question",
       },
       {
-        type: EventType.RUN_FINISHED,
+        type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
         runId: "recovered-question",
         outcome: { type: "interrupt", interrupts: [interrupt] },
       },
     ])
     expect(
-      waitingEvents.every((event) => EventSchemas.safeParse(event).success)
+      waitingEvents.every((event) => RunEventSchema.safeParse(event).success)
     ).toBe(true)
 
     await expect(engine.discover(scope, "cleared-question")).resolves.toBe(
@@ -439,14 +439,14 @@ describe("OpenCodeRunEngine", () => {
     expect(state.sessions.prompt).toHaveBeenCalledOnce()
     expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {})
     expect(events.map((value) => (value as { type: string }).type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.TEXT_MESSAGE_START,
-      EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TEXT_MESSAGE_END,
-      EventType.RUN_FINISHED,
+      RunEventKind.RUN_STARTED,
+      RunEventKind.TEXT_MESSAGE_START,
+      RunEventKind.TEXT_MESSAGE_CONTENT,
+      RunEventKind.TEXT_MESSAGE_END,
+      RunEventKind.RUN_FINISHED,
     ])
     for (const value of events)
-      expect(EventSchemas.safeParse(value).success).toBe(true)
+      expect(RunEventSchema.safeParse(value).success).toBe(true)
   })
 
   it("uses a backoff timer for authoritative reconciliation when native wait is unavailable", async () => {
@@ -489,7 +489,7 @@ describe("OpenCodeRunEngine", () => {
 
     await expect(handle.settled).resolves.toBeUndefined()
     expect((await collect(handle)).at(-1)).toMatchObject({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
     })
     expect(state.sessions.wait).toHaveBeenCalledOnce()
   })
@@ -560,7 +560,7 @@ describe("OpenCodeRunEngine", () => {
     expect(JSON.stringify(events)).toContain("Recovered")
     expect(JSON.stringify(events)).not.toContain("Other")
     expect(JSON.stringify(events)).not.toContain("Newer")
-    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
   })
 
   it.each([
@@ -580,10 +580,10 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        EventType.RUN_STARTED,
-        EventType.TEXT_MESSAGE_CONTENT,
-        EventType.TEXT_MESSAGE_END,
-        EventType.RUN_FINISHED,
+        RunEventKind.RUN_STARTED,
+        RunEventKind.TEXT_MESSAGE_CONTENT,
+        RunEventKind.TEXT_MESSAGE_END,
+        RunEventKind.RUN_FINISHED,
       ],
     },
     {
@@ -602,10 +602,10 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        EventType.RUN_STARTED,
-        EventType.REASONING_MESSAGE_CONTENT,
-        EventType.REASONING_MESSAGE_END,
-        EventType.RUN_FINISHED,
+        RunEventKind.RUN_STARTED,
+        RunEventKind.REASONING_MESSAGE_CONTENT,
+        RunEventKind.REASONING_MESSAGE_END,
+        RunEventKind.RUN_FINISHED,
       ],
     },
     {
@@ -633,11 +633,11 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        EventType.RUN_STARTED,
-        EventType.TOOL_CALL_ARGS,
-        EventType.TOOL_CALL_END,
-        EventType.TOOL_CALL_RESULT,
-        EventType.RUN_FINISHED,
+        RunEventKind.RUN_STARTED,
+        RunEventKind.TOOL_CALL_ARGS,
+        RunEventKind.TOOL_CALL_END,
+        RunEventKind.TOOL_CALL_RESULT,
+        RunEventKind.RUN_FINISHED,
       ],
     },
   ])(
@@ -711,11 +711,11 @@ describe("OpenCodeRunEngine", () => {
     const events = await collect(handle)
 
     expect(events.map((event) => (event as { type: string }).type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.RUN_ERROR,
+      RunEventKind.RUN_STARTED,
+      RunEventKind.RUN_ERROR,
     ])
     expect(
-      events.filter((event) => EventSchemas.safeParse(event).success)
+      events.filter((event) => RunEventSchema.safeParse(event).success)
     ).toHaveLength(events.length)
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
@@ -808,7 +808,7 @@ describe("OpenCodeRunEngine", () => {
     await expect(stopped).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     const events = await collect(handle)
-    expect(events.at(-1)).toMatchObject({ type: EventType.RUN_ERROR })
+    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_ERROR })
   })
 
   it("emits valid open-lifecycle closures before transport RUN_ERROR", async () => {
@@ -846,10 +846,10 @@ describe("OpenCodeRunEngine", () => {
     expect(
       (await collect(handle)).map((event) => (event as { type: string }).type)
     ).toEqual([
-      EventType.RUN_STARTED,
-      EventType.REASONING_MESSAGE_START,
-      EventType.REASONING_MESSAGE_END,
-      EventType.RUN_ERROR,
+      RunEventKind.RUN_STARTED,
+      RunEventKind.REASONING_MESSAGE_START,
+      RunEventKind.REASONING_MESSAGE_END,
+      RunEventKind.RUN_ERROR,
     ])
   })
 
@@ -957,7 +957,7 @@ describe("OpenCodeRunEngine", () => {
     await expect(handle.stop()).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     expect((await collect(handle)).at(-1)).toMatchObject({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       result: { stopped: true },
     })
   })
@@ -1045,14 +1045,14 @@ describe("OpenCodeRunEngine", () => {
     if (terminal === "timed-out") throw new Error("run did not settle")
     const [events] = terminal
     expect(events.map((event) => (event as { type: string }).type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.RUN_FINISHED,
+      RunEventKind.RUN_STARTED,
+      RunEventKind.RUN_FINISHED,
     ])
     expect(events.at(-1)).toMatchObject({
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       result: { stopped: true },
     })
-    expect(EventSchemas.safeParse(events.at(-1)).success).toBe(true)
+    expect(RunEventSchema.safeParse(events.at(-1)).success).toBe(true)
     expect(next.runId).toBe("run-2")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
@@ -1088,7 +1088,7 @@ describe("OpenCodeRunEngine", () => {
     expect(first.abort).toHaveBeenCalledOnce()
     const priorEvents = await collect(prior)
     expect(priorEvents).toHaveLength(2)
-    expect(priorEvents.at(-1)).toMatchObject({ type: EventType.RUN_ERROR })
+    expect(priorEvents.at(-1)).toMatchObject({ type: RunEventKind.RUN_ERROR })
   })
 
   it("settles a transport-failed Stop through the authoritative replacement recovery", async () => {
@@ -1162,10 +1162,12 @@ describe("OpenCodeRunEngine", () => {
     await expect(stopped).resolves.toBe("stopping")
     await expect(recovered.stop()).resolves.toBe("idle")
     expect(
-      recoveredEvents.filter((event) => event.type === EventType.RUN_FINISHED)
+      recoveredEvents.filter(
+        (event) => event.type === RunEventKind.RUN_FINISHED
+      )
     ).toEqual([
       expect.objectContaining({
-        type: EventType.RUN_FINISHED,
+        type: RunEventKind.RUN_FINISHED,
         result: { stopped: true },
       }),
     ])
@@ -1247,10 +1249,12 @@ describe("OpenCodeRunEngine", () => {
     const recoveredEvents = await recoveredEventsPromise
 
     expect(
-      recoveredEvents.filter((event) => event.type === EventType.RUN_FINISHED)
+      recoveredEvents.filter(
+        (event) => event.type === RunEventKind.RUN_FINISHED
+      )
     ).toEqual([
       expect.objectContaining({
-        type: EventType.RUN_FINISHED,
+        type: RunEventKind.RUN_FINISHED,
         result: { stopped: true },
       }),
     ])
@@ -1291,7 +1295,7 @@ describe("OpenCodeRunEngine", () => {
     const events = await collect(handle)
     expect(events).toHaveLength(2)
     expect(events.at(-1)).toMatchObject({
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       code: "AOS_RESET_REQUIRED",
     })
   })

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto"
 
 import {
-  EventType,
-  RunAgentInputSchema,
-  type Interrupt,
-  type ResumeEntry,
-} from "@ag-ui/core"
+  RunEventKind,
+  TurnInputSchema,
+  type PendingRequest,
+  type RequestReply,
+} from "../../core/events"
 import type { RunEvent } from "../../core/events"
 
 import type {
@@ -40,11 +40,11 @@ const DEFAULT_WAIT_RETRY_MS = 250
 
 export type OpenCodeBoundResume = Readonly<{
   /** Reads and binds the complete authoritative pending interaction batch. */
-  discover?(scope: SessionScope): Promise<readonly Interrupt[] | undefined>
+  discover?(scope: SessionScope): Promise<readonly PendingRequest[] | undefined>
   /** Must prove every response is still bound to a pending native interaction. */
-  validate(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
+  validate(scope: SessionScope, resume: readonly RequestReply[]): Promise<void>
   /** Performs exactly one native 204 mutation after observation is attached. */
-  dispatch(scope: SessionScope, resume: readonly ResumeEntry[]): Promise<void>
+  dispatch(scope: SessionScope, resume: readonly RequestReply[]): Promise<void>
 }>
 
 type OpenCodeRunClient = Readonly<{
@@ -121,7 +121,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
   resetWith(event: RunEvent) {
     if (this.#closed) return
     const started = this.#values.find(
-      (value) => value.type === EventType.RUN_STARTED
+      (value) => value.type === RunEventKind.RUN_STARTED
     )
     this.#values.length = 0
     if (started && this.#maximum > 1) this.#values.push(started)
@@ -171,7 +171,7 @@ function isEmptyAuthority(value: unknown) {
   return typeof value === "object" && Object.keys(value).length === 0
 }
 
-function userText(input: ReturnType<typeof RunAgentInputSchema.parse>) {
+function userText(input: ReturnType<typeof TurnInputSchema.parse>) {
   const message = input.messages[0]
   if (!message || message.role !== "user") return
   if (typeof message.content === "string") return message.content
@@ -188,7 +188,7 @@ function validateInput(
   scope: SessionScope,
   candidate: NewTurnRunInput | ResumeRunInput
 ) {
-  const input = RunAgentInputSchema.parse(candidate)
+  const input = TurnInputSchema.parse(candidate)
   if (input.threadId !== scope.threadId)
     throw new Error("AOS run scope does not match this Session")
   if (
@@ -364,7 +364,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
           observationFailure = error
         }
       })()
-      let discovered: readonly Interrupt[] | undefined
+      let discovered: readonly PendingRequest[] | undefined
       do {
         dirty = false
         reading = true
@@ -378,9 +378,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       if (!discovered?.length) return undefined
       const interrupts = structuredClone([...discovered])
       const events: RunEvent[] = [
-        { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
+        { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
         {
-          type: EventType.RUN_FINISHED,
+          type: RunEventKind.RUN_FINISHED,
           threadId: scope.threadId,
           runId,
           outcome: { type: "interrupt", interrupts },
@@ -597,7 +597,11 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       }
       this.#nativeSettlements.set(key, nativeSettlement)
     }
-    queue.push({ type: EventType.RUN_STARTED, threadId: scope.threadId, runId })
+    queue.push({
+      type: RunEventKind.RUN_STARTED,
+      threadId: scope.threadId,
+      runId,
+    })
     const projector = new OpenCodeEventProjector(
       { sessionId: scope.sessionId, threadId: scope.threadId, runId },
       after,
