@@ -378,6 +378,33 @@ describe("turn input parity with the AG-UI wire", () => {
     )
   })
 
+  it("rejects unstaged multimodal parts instead of dropping them", () => {
+    const candidate = {
+      ...turnInput,
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          content: [
+            { type: "text", text: "Look" },
+            {
+              type: "image",
+              source: {
+                type: "data",
+                mimeType: "image/png",
+                value: "aGVsbG8=",
+              },
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(TurnInputSchema.safeParse(candidate).success).toBe(false)
+    // AG-UI admits the image; staged media must reach adapters as text.
+    expect(RunAgentInputSchema.safeParse(candidate).success).toBe(true)
+  })
+
   it("drops an unknown top-level field, as AG-UI does", () => {
     const candidate = { ...turnInput, callerOnlyField: "dropped" }
 

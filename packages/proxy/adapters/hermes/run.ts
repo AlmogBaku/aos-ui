@@ -1,12 +1,12 @@
 import {
-  EventType,
-  RunAgentInputSchema,
-  type ResumeEntry,
-  type RunFinishedInterruptOutcome,
-  type RunAgentInput,
+  RunEventKind,
+  TurnInputSchema,
+  type RequestReply,
+  type RunEvent,
+  type RunInterruptOutcome,
+  type TurnInput,
   type TokenUsage,
-} from "@ag-ui/core"
-import type { RunEvent } from "../../core/events"
+} from "../../core/events"
 import {
   ServerRunConflictError,
   ServerRunSteerUncertainError,
@@ -100,16 +100,16 @@ export type HermesRunNative = {
   status(liveSessionId: string): Promise<"running" | "waiting" | "idle">
   inspectExecution?(scope: HermesRunScope & { runId: string }): Promise<{
     status: "waiting-for-input" | "running" | "idle" | "unknown"
-    outcome?: RunFinishedInterruptOutcome
+    outcome?: RunInterruptOutcome
   }>
   acceptInteraction?(
     scope: HermesRunScope & { runId: string },
     liveSessionId: string,
     event: unknown
-  ): RunFinishedInterruptOutcome | { status: string } | undefined
+  ): RunInterruptOutcome | { status: string } | undefined
   respondInteractions?(
     scope: HermesRunScope & { runId: string },
-    resume: readonly ResumeEntry[]
+    resume: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
   clearPendingInteraction?(scope: HermesRunScope): void
 }
@@ -250,7 +250,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
   terminal(value: RunEvent) {
     if (this.#closed) return
     const started =
-      this.#values[0]?.event.type === EventType.RUN_STARTED
+      this.#values[0]?.event.type === RunEventKind.RUN_STARTED
         ? this.#values[0]
         : undefined
     this.#values.splice(0, this.#values.length)
@@ -409,7 +409,7 @@ function scopeKey(scope: HermesRunScope) {
   return `${scope.agentId}\u0000${scope.sessionId}`
 }
 
-function userText(input: RunAgentInput) {
+function userText(input: TurnInput) {
   const message = input.messages[0]
   if (!message || message.role !== "user") return undefined
   if (typeof message.content === "string") return message.content.trim()
@@ -628,7 +628,7 @@ export class HermesRunEngine {
       Object.keys(candidate).some((key) => !RUN_INPUT_FIELDS.has(key))
     )
       throw new Error("AOS received unsupported run fields")
-    const input = RunAgentInputSchema.parse(candidate)
+    const input = TurnInputSchema.parse(candidate)
     const rewindSourceId = (candidate as { rewindSourceId?: unknown })
       .rewindSourceId
     if (
@@ -650,15 +650,8 @@ export class HermesRunEngine {
       )
     const interactionResume =
       input.resume && input.resume.length > 0 ? input.resume : undefined
-    const newMessage = input.messages[0]
-    if (
-      newMessage?.role === "user" &&
-      Array.isArray(newMessage.content) &&
-      newMessage.content.some((part) => part.type !== "text")
-    )
-      throw new Error(
-        "AOS multimodal content must be staged through an authorized workspace operation"
-      )
+    // Unstaged multimodal content never reaches an adapter: the turn input
+    // schema admits text parts only, so staged media arrives appended as text.
     const text = userText(input)
     if (input.threadId !== scope.threadId)
       throw new Error("AOS run scope does not match this Session")
@@ -682,7 +675,7 @@ export class HermesRunEngine {
 
     const queue = new EventQueue()
     queue.push({
-      type: EventType.RUN_STARTED,
+      type: RunEventKind.RUN_STARTED,
       threadId: input.threadId,
       runId: input.runId,
     })
@@ -843,7 +836,7 @@ export class HermesRunEngine {
           active.messageId = `aos-command:${input.runId}`
           this.#startText(active)
           this.#emit(active, {
-            type: EventType.TEXT_MESSAGE_CONTENT,
+            type: RunEventKind.TEXT_MESSAGE_CONTENT,
             messageId: active.messageId,
             delta: result.completion.output,
           })
@@ -918,7 +911,7 @@ export class HermesRunEngine {
 
     const queue = new EventQueue()
     queue.push({
-      type: EventType.RUN_STARTED,
+      type: RunEventKind.RUN_STARTED,
       threadId: request.threadId,
       runId: request.runId,
     })
@@ -1027,9 +1020,9 @@ export class HermesRunEngine {
     const snapshot = await this.#native.inspectExecution({ ...scope, runId })
     if (snapshot.status === "waiting-for-input" && snapshot.outcome) {
       const events: RunEvent[] = [
-        { type: EventType.RUN_STARTED, threadId: scope.threadId, runId },
+        { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
         {
-          type: EventType.RUN_FINISHED,
+          type: RunEventKind.RUN_FINISHED,
           threadId: scope.threadId,
           runId,
           outcome: snapshot.outcome,
@@ -1066,7 +1059,7 @@ export class HermesRunEngine {
   ): Promise<HermesRunHandle> {
     const queue = new EventQueue()
     queue.push({
-      type: EventType.RUN_STARTED,
+      type: RunEventKind.RUN_STARTED,
       threadId: request.threadId,
       runId: request.runId,
     })
@@ -1173,8 +1166,7 @@ export class HermesRunEngine {
     }
     const payload = payloadOf(event)
     if (this.#native.acceptInteraction) {
-      let interaction:
-        RunFinishedInterruptOutcome | { status: string } | undefined
+      let interaction: RunInterruptOutcome | { status: string } | undefined
       try {
         interaction = this.#native.acceptInteraction(
           { ...active.scope, runId: active.runId },
@@ -1292,9 +1284,9 @@ export class HermesRunEngine {
         tool.name === "question"
           ? projectHermesQuestionResult(payload.result)
           : undefined
-      this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
+      this.#emit(active, { type: RunEventKind.TOOL_CALL_END, toolCallId })
       this.#emit(active, {
-        type: EventType.TOOL_CALL_RESULT,
+        type: RunEventKind.TOOL_CALL_RESULT,
         messageId: `${tool.messageId}:tool:${toolCallId}`,
         toolCallId,
         content: artifact
@@ -1314,14 +1306,14 @@ export class HermesRunEngine {
       }
       if (artifact)
         this.#emit(active, {
-          type: EventType.CUSTOM,
+          type: RunEventKind.CUSTOM,
           name: artifact.part.name,
           value: artifact.part.data,
         })
       for (const media of mediaArtifacts) {
         active.mediaFilter.trust(media.reference)
         this.#emit(active, {
-          type: EventType.CUSTOM,
+          type: RunEventKind.CUSTOM,
           name: "aos.artifact",
           value: media.descriptor,
         })
@@ -1421,7 +1413,7 @@ export class HermesRunEngine {
     this.#endReasoning(active)
     this.#startText(active)
     this.#emit(active, {
-      type: EventType.TEXT_MESSAGE_CONTENT,
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId,
       delta,
     })
@@ -1439,13 +1431,13 @@ export class HermesRunEngine {
       return
     const emitted = previous
       ? this.#emit(active, {
-          type: EventType.ACTIVITY_DELTA,
+          type: RunEventKind.ACTIVITY_DELTA,
           messageId,
           activityType: "PLAN",
           patch: [{ op: "replace", path: "/todos", value: todos }],
         })
       : this.#emit(active, {
-          type: EventType.ACTIVITY_SNAPSHOT,
+          type: RunEventKind.ACTIVITY_SNAPSHOT,
           messageId,
           activityType: "PLAN",
           content: { todos },
@@ -1459,7 +1451,7 @@ export class HermesRunEngine {
     if (active.textStarted || !active.messageId) return
     active.textStarted = true
     this.#emit(active, {
-      type: EventType.TEXT_MESSAGE_START,
+      type: RunEventKind.TEXT_MESSAGE_START,
       messageId: active.messageId,
       role: "assistant",
     })
@@ -1492,13 +1484,13 @@ export class HermesRunEngine {
     }
     active.tools.set(toolCallId, tool)
     this.#emit(active, {
-      type: EventType.TOOL_CALL_START,
+      type: RunEventKind.TOOL_CALL_START,
       toolCallId,
       toolCallName: tool.name,
       parentMessageId: messageId,
     })
     this.#emit(active, {
-      type: EventType.TOOL_CALL_ARGS,
+      type: RunEventKind.TOOL_CALL_ARGS,
       toolCallId,
       delta:
         tool.name === "question"
@@ -1514,14 +1506,14 @@ export class HermesRunEngine {
     if (!active.reasoningStarted) {
       active.reasoningStarted = true
       this.#emit(active, {
-        type: EventType.REASONING_MESSAGE_START,
+        type: RunEventKind.REASONING_MESSAGE_START,
         messageId: reasoningId,
         role: "reasoning",
       })
     }
     if (
       this.#emit(active, {
-        type: EventType.REASONING_MESSAGE_CONTENT,
+        type: RunEventKind.REASONING_MESSAGE_CONTENT,
         messageId: reasoningId,
         delta,
       })
@@ -1533,10 +1525,10 @@ export class HermesRunEngine {
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
-      this.#emit(active, { type: EventType.TOOL_CALL_END, toolCallId })
+      this.#emit(active, { type: RunEventKind.TOOL_CALL_END, toolCallId })
       if (status)
         this.#emit(active, {
-          type: EventType.TOOL_CALL_RESULT,
+          type: RunEventKind.TOOL_CALL_RESULT,
           messageId: `${tool.messageId}:tool:${toolCallId}`,
           toolCallId,
           content: JSON.stringify({ status }),
@@ -1550,7 +1542,7 @@ export class HermesRunEngine {
       return
     active.reasoningEnded = true
     this.#emit(active, {
-      type: EventType.REASONING_MESSAGE_END,
+      type: RunEventKind.REASONING_MESSAGE_END,
       messageId: `${active.messageId}:reasoning`,
     })
   }
@@ -1647,7 +1639,7 @@ export class HermesRunEngine {
     this.#endReasoning(active)
     if (active.textStarted && active.messageId)
       this.#emit(active, {
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
     if (active.messageId) active.sealedMessageIds.add(active.messageId)
@@ -1676,11 +1668,11 @@ export class HermesRunEngine {
     )
     if (active.textStarted && active.messageId)
       this.#emit(active, {
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
     this.#emit(active, {
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: active.scope.threadId,
       runId: active.runId,
       ...(result === undefined ? {} : { result }),
@@ -1691,17 +1683,17 @@ export class HermesRunEngine {
     this.#settle(active)
   }
 
-  #finishInterrupt(active: ActiveRun, outcome: RunFinishedInterruptOutcome) {
+  #finishInterrupt(active: ActiveRun, outcome: RunInterruptOutcome) {
     if (active.terminal) return
     this.#endReasoning(active)
     this.#settleOpenTools(active)
     if (active.textStarted && active.messageId)
       this.#emit(active, {
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
     this.#emit(active, {
-      type: EventType.RUN_FINISHED,
+      type: RunEventKind.RUN_FINISHED,
       threadId: active.scope.threadId,
       runId: active.runId,
       outcome,
@@ -1714,10 +1706,10 @@ export class HermesRunEngine {
     this.#endReasoning(active)
     if (active.textStarted && active.messageId)
       this.#emit(active, {
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: active.messageId,
       })
-    this.#emit(active, { type: EventType.RUN_ERROR, message, code })
+    this.#emit(active, { type: RunEventKind.RUN_ERROR, message, code })
     this.#native.clearPendingInteraction?.(active.scope)
     this.#settle(active)
   }
@@ -1725,7 +1717,7 @@ export class HermesRunEngine {
   #markUncertain(active: ActiveRun) {
     active.uncertain = true
     this.#emit(active, {
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message:
         "Hermes may have accepted this turn; reconcile before sending again.",
       code: "AOS_SEND_UNCERTAIN",
@@ -1736,7 +1728,7 @@ export class HermesRunEngine {
   #markUncertainInteraction(active: ActiveRun) {
     active.uncertain = true
     this.#emit(active, {
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message:
         "Hermes may have applied this interaction response; reconcile before responding again.",
       code: "AOS_INTERACTION_UNCERTAIN",
@@ -1748,7 +1740,7 @@ export class HermesRunEngine {
     if (active.terminal || active.uncertain) return
     active.uncertain = true
     this.#emit(active, {
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message:
         "The Hermes connection was interrupted; reconnect to reconcile this run.",
       code: "AOS_CONNECTION_INTERRUPTED",
@@ -1767,7 +1759,7 @@ export class HermesRunEngine {
   #overflow(active: ActiveRun) {
     if (active.terminal || active.overflowed) return
     active.queue.terminal({
-      type: EventType.RUN_ERROR,
+      type: RunEventKind.RUN_ERROR,
       message: "Hermes produced more events than AOS can safely buffer.",
       code: "AOS_STREAM_OVERFLOW",
     })

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { EventType } from "@ag-ui/core"
+import { RunEventKind } from "../../core/events"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesRunEngine, type HermesRunNative } from "./run"
@@ -384,11 +384,11 @@ it("finishes a synchronous command run without waiting for native conversational
   const events = []
   for await (const event of handle.events) events.push(event)
   expect(events.map((event) => event.type)).toEqual([
-    EventType.RUN_STARTED,
-    EventType.TEXT_MESSAGE_START,
-    EventType.TEXT_MESSAGE_CONTENT,
-    EventType.TEXT_MESSAGE_END,
-    EventType.RUN_FINISHED,
+    RunEventKind.RUN_STARTED,
+    RunEventKind.TEXT_MESSAGE_START,
+    RunEventKind.TEXT_MESSAGE_CONTENT,
+    RunEventKind.TEXT_MESSAGE_END,
+    RunEventKind.RUN_FINISHED,
   ])
   expect(events[2]).toMatchObject({ delta: "Help output" })
   expect(events[4]).toMatchObject({ threadId: "thread", runId: "run" })

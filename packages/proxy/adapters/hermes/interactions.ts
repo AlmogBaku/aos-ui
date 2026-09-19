@@ -1,4 +1,4 @@
-import type { RunFinishedInterruptOutcome } from "@ag-ui/core"
+import type { RunInterruptOutcome } from "../../core/events"
 
 export type HermesInteractionScope = {
   agentId: string
@@ -69,7 +69,7 @@ type PendingInteraction = {
   liveSessionId: string
   id: string
   sequence: number
-  outcome: RunFinishedInterruptOutcome
+  outcome: RunInterruptOutcome
   state: "pending" | "dispatching"
   responseFingerprint?: string
 } & (
@@ -95,7 +95,7 @@ export type HermesInteractionResult = {
 type HermesInteractionResumeSnapshot = {
   running: boolean
   status: "waiting-for-input" | "running" | "idle" | "unknown"
-  outcome?: RunFinishedInterruptOutcome
+  outcome?: RunInterruptOutcome
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -463,7 +463,7 @@ export class HermesInteractions {
     scope: HermesInteractionScope,
     liveSessionId: string,
     event: unknown
-  ): RunFinishedInterruptOutcome | HermesInteractionResult | undefined {
+  ): RunInterruptOutcome | HermesInteractionResult | undefined {
     if (!isRecord(event)) return undefined
     if (
       event.type !== "approval.request" &&
@@ -495,7 +495,7 @@ export class HermesInteractions {
     }
     if (event.type === "clarify.request") {
       const { requestId, questions } = parseClarification(event.payload)
-      const outcome: RunFinishedInterruptOutcome = {
+      const outcome: RunInterruptOutcome = {
         type: "interrupt",
         interrupts: [
           {
@@ -564,7 +564,7 @@ export class HermesInteractions {
             : "request",
       ])
     )
-    const outcome: RunFinishedInterruptOutcome = {
+    const outcome: RunInterruptOutcome = {
       type: "interrupt",
       interrupts: [
         {

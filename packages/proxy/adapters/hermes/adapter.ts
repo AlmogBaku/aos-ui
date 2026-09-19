@@ -56,7 +56,7 @@ import {
   ServerRunSteerUncertainError,
   type ServerRuntime,
 } from "../../core/runtime"
-import type { ResumeEntry } from "@ag-ui/core"
+import type { RequestReply } from "../../core/events"
 import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
 
 async function executeSlashCommand(
@@ -1203,7 +1203,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
 
   async respondInteractions(
     scope: HermesRunScope & { runId: string },
-    resume: readonly ResumeEntry[]
+    resume: readonly RequestReply[]
   ) {
     await this.interactions.resume(scope)
     return Promise.all(
