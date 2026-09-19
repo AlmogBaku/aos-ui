@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { ActivityStore } from "../../lib/notifications/store"
-import type { WorkspaceActivityEvent } from "../contracts"
+import type { SessionMetadata, WorkspaceActivityEvent } from "../contracts"
 import { getWorkspaceCapabilities } from "../workspace-state"
 import { fixtureActivityScenarioNames } from "./fixture-activity"
 import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
@@ -73,8 +73,46 @@ describe("FixtureWorkspace", () => {
         agentId: "agent-lumen",
         status: "idle",
         updatedAt: FIXTURE_NOW.toISOString(),
+        unread: false,
       },
     ])
+  })
+
+  it("acknowledges an unread Session once and republishes its metadata", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const published: SessionMetadata[][] = []
+    const stop = workspace.subscribeSessionMetadata(
+      ["thread-lumen-roadmap", "thread-nori-copy"],
+      (metadata) => published.push(metadata)
+    )
+
+    expect(getWorkspaceCapabilities(workspace).sessionReadState).toBe(true)
+    await expect(
+      workspace.getSessionMetadata(["thread-lumen-roadmap"])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        threadId: "thread-lumen-roadmap",
+        unread: true,
+      }),
+    ])
+
+    await workspace.markSessionRead("thread-lumen-roadmap")
+    await expect(
+      workspace.getSessionMetadata(["thread-lumen-roadmap"])
+    ).resolves.toEqual([expect.objectContaining({ unread: false })])
+    expect(published).toEqual([
+      await workspace.getSessionMetadata([
+        "thread-lumen-roadmap",
+        "thread-nori-copy",
+      ]),
+    ])
+
+    await workspace.markSessionRead("thread-lumen-roadmap")
+    await workspace.markSessionRead("missing")
+    expect(published).toHaveLength(1)
+    stop()
+    await workspace.markSessionRead("thread-nori-copy")
+    expect(published).toHaveLength(1)
   })
 
   it("retains localized titles supplied by the locale-aware workspace", async () => {
@@ -302,14 +340,9 @@ describe("FixtureWorkspace", () => {
     const store = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
       getThreadOwner: (threadId) => owners.get(threadId),
+      getSessions: () => workspace.listAllSessionMetadata(),
     })
-    workspace.subscribeActivity((event) =>
-      store.ingest(event, {
-        selection: null,
-        pageVisible: false,
-        pageFocused: false,
-      })
-    )
+    workspace.subscribeActivity((event) => store.ingest(event))
 
     workspace.publishActivityScenario("duplicates")
     workspace.publishActivityScenario("stale-target")

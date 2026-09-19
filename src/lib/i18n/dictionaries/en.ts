@@ -124,6 +124,7 @@ export const en = {
     attention: "Needs attention",
     waitingForInput: "Waiting for input",
     failed: "Failed",
+    unread: "Unread",
   },
   empty: {
     addAgentTitle: "Add an Agent to your workspace.",

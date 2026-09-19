@@ -5,7 +5,12 @@ import type { ActivityContext } from "@/lib/notifications/policy"
 import {
   defaultBrowserPreferences,
   getActivityPolicy,
+  isSelectionExposed,
 } from "@/lib/notifications/policy"
+import {
+  isSessionUnread,
+  workspaceUnreadCount,
+} from "@/lib/workspace-view-model"
 import { ActivityStore } from "@/lib/notifications/store"
 import { activityEventSchema } from "@/lib/notifications/activity"
 import {
@@ -32,6 +37,8 @@ export type ActivityItem = ActivityRecord & {
 export type ActivityNoticeState = { count: number; urgent: boolean }
 export type ActivityView = {
   items: ActivityItem[]
+  /** Sessions the operator has not read, including open attention requests. */
+  unreadCount: number
   notice: ActivityNoticeState | null
   error: boolean
   supported: boolean
@@ -72,7 +79,8 @@ export function useActivityCoordinator(
     (threadId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
   const [records, setRecords] = useState<ActivityRecord[]>([])
-  const [notice, setNotice] = useState<ActivityNoticeState | null>(null)
+  const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
+  const exposedThreadId = useRef<string | null | undefined>(undefined)
   const [error, setError] = useState(false)
   const [unavailableIds, setUnavailableIds] = useState<ReadonlySet<string>>(
     new Set()
@@ -84,22 +92,21 @@ export function useActivityCoordinator(
     pageVisible: document.visibilityState === "visible",
     pageFocused: document.hasFocus(),
   })
+  // The proxy owns read state, so the browser only reports what is exposed.
+  const reportExposure = useEffectEvent(() => {
+    const state = context()
+    const exposed = isSelectionExposed(state)
+      ? (state.selection?.threadId ?? null)
+      : null
+    if (exposedThreadId.current === exposed) return
+    exposedThreadId.current = exposed
+    current.current.workspace.reportFocus?.(exposed)
+  })
   const refresh = useEffectEvent(() => {
+    reportExposure()
     const store = storeRef.current
     if (!store) return
-    const snapshot = store.records()
     const state = context()
-    for (const record of snapshot) {
-      if (
-        getActivityPolicy(
-          record,
-          state,
-          defaultBrowserPreferences,
-          "unsupported"
-        ).markRead
-      )
-        store.markRead(record.id)
-    }
     const nextRecords = store.records()
     setRecords(nextRecords)
     browserRef.current?.publish()
@@ -155,6 +162,7 @@ export function useActivityCoordinator(
     const store = new ActivityStore({
       now: () => current.current.readNow().getTime(),
       getThreadOwner: owner,
+      getSessions: () => current.current.sessions,
     })
     storeRef.current = store
     const browserOptions = current.current.browser
@@ -197,7 +205,7 @@ export function useActivityCoordinator(
           if (!active) return
           if (validatedOwner !== event.agentId) return
           const state = context()
-          const arrival = store.ingest(event, state)
+          const arrival = store.ingest(event)
           browser?.publish(arrival)
           setRecords(store.records())
           setError(false)
@@ -214,10 +222,7 @@ export function useActivityCoordinator(
               arrival.type === "attention-requested" ||
               arrival.type === "run-failed" ||
               arrival.type === "agent-activation-failed"
-            setNotice((previous) => ({
-              count: (previous?.count ?? 0) + 1,
-              urgent: urgent || !!previous?.urgent,
-            }))
+            setNotice((previous) => ({ urgent: urgent || !!previous?.urgent }))
           }
         })
         .catch(() => {
@@ -244,6 +249,12 @@ export function useActivityCoordinator(
     document.addEventListener("visibilitychange", refresh)
     return () => {
       active = false
+      exposedThreadId.current = undefined
+      try {
+        workspace.reportFocus?.(null)
+      } catch {
+        /* A provider that cannot accept the report keeps the workspace usable. */
+      }
       browser?.stop()
       if (browserRef.current === browser) browserRef.current = null
       if (storeRef.current === store) storeRef.current = null
@@ -273,6 +284,15 @@ export function useActivityCoordinator(
     return () => window.clearTimeout(timeout)
   }, [notice])
 
+  const unreadCount = workspaceUnreadCount(options.sessions)
+  /** Reading a Session is a provider write; the browser never stores it. */
+  const markSessionsRead = (threadIds: readonly string[]) => {
+    void Promise.all(
+      threadIds.map((threadId) =>
+        current.current.workspace.markSessionRead?.(threadId)
+      )
+    ).catch(() => setError(true))
+  }
   const view: ActivityView = {
     items: records.map((record) => ({
       ...record,
@@ -287,7 +307,8 @@ export function useActivityCoordinator(
             session.agentId !== record.agentId
         ),
     })),
-    notice,
+    unreadCount,
+    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
     error,
     supported: !!workspace.subscribeActivity,
     async openActivity(id) {
@@ -306,14 +327,13 @@ export function useActivityCoordinator(
         ) {
           setUnavailableIds((previous) => new Set([...previous, id]))
           store.markUnavailable(id)
-          store.markRead(id)
           setRecords(store.records())
           browserRef.current?.publish()
           return false
         }
         await current.current.onOpenTarget(record.agentId, record.threadId)
         if (storeRef.current !== store) return false
-        store.markRead(id)
+        markSessionsRead([record.threadId])
         setUnavailableIds(
           (previous) =>
             new Set([...previous].filter((entryId) => entryId !== id))
@@ -328,9 +348,11 @@ export function useActivityCoordinator(
       }
     },
     markAllRead() {
-      storeRef.current?.markAllRead()
-      setRecords(storeRef.current?.records() ?? [])
-      browserRef.current?.publish()
+      markSessionsRead(
+        current.current.sessions
+          .filter(isSessionUnread)
+          .map(({ threadId }) => threadId)
+      )
       setNotice(null)
     },
     dismissNotice() {

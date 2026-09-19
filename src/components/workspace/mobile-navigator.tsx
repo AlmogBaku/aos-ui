@@ -29,7 +29,7 @@ import {
   AgentSessionHistory,
   type AgentSessionHistoryCopy,
 } from "./agent-session-history"
-import { AttentionDot } from "./activity"
+import { RowIndicators, UnreadDot } from "./status-dots"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -64,11 +64,6 @@ export function mobileNavigatorReducer(
     default:
       return state
   }
-}
-
-export type MobileNavigationActivity = {
-  unreadCount: number
-  needsAttention: boolean
 }
 
 export type MobileAgentSessionCatalog = {
@@ -107,11 +102,8 @@ export type MobileNavigatorProps = {
   activeThreadId: string | null
   sessionsByAgentId: readonly MobileAgentSessionCatalog[]
   threadListRuntime?: ThreadListRuntime
-  agentActivity?: Readonly<Record<string, MobileNavigationActivity | undefined>>
-  otherAgentsActivity?: MobileNavigationActivity
-  sessionActivity?: Readonly<
-    Record<string, MobileNavigationActivity | undefined>
-  >
+  /** True while any other roster Agent holds an unread Session. */
+  otherAgentsUnread?: boolean
   locale: "en" | "he"
   copy: MobileNavigatorCopy
   onStateChange: (event: MobileNavigatorEvent) => void
@@ -233,40 +225,6 @@ function normalizeSearch(value: string, locale: "en" | "he") {
   return value.trim().toLocaleLowerCase(locale)
 }
 
-function ActivityMarker({
-  activity,
-  copy,
-}: {
-  activity: MobileNavigationActivity | undefined
-  copy: MobileNavigatorCopy
-}) {
-  if (!activity || (!activity.unreadCount && !activity.needsAttention)) {
-    return null
-  }
-
-  return (
-    <span className={styles.activity} aria-hidden="true">
-      {activity.needsAttention ? (
-        <AttentionDot label={copy.needsAttention} />
-      ) : null}
-      {activity.unreadCount > 0 ? (
-        <span className={styles.unreadCount}>{activity.unreadCount}</span>
-      ) : null}
-    </span>
-  )
-}
-
-function activityLabel(
-  activity: MobileNavigationActivity | undefined,
-  copy: MobileNavigatorCopy
-) {
-  if (!activity) return []
-  return [
-    activity.unreadCount > 0 ? copy.unread(activity.unreadCount) : null,
-    activity.needsAttention ? copy.needsAttention : null,
-  ].filter(Boolean)
-}
-
 function statusLabel(
   status: WorkspaceAgent["status"] | WorkspaceSession["status"],
   copy: MobileNavigatorCopy
@@ -280,24 +238,6 @@ function statusLabel(
   return copy.status.idle
 }
 
-function StatusDot({
-  status,
-  copy,
-}: {
-  status: WorkspaceAgent["status"] | WorkspaceSession["status"]
-  copy: MobileNavigatorCopy
-}) {
-  if (!status || status === "idle") return null
-  return (
-    <span
-      className={styles.statusDot}
-      data-status={status}
-      title={statusLabel(status, copy)}
-      aria-hidden="true"
-    />
-  )
-}
-
 export function MobileNavigator({
   state,
   agents,
@@ -305,9 +245,7 @@ export function MobileNavigator({
   activeThreadId,
   sessionsByAgentId,
   threadListRuntime,
-  agentActivity = {},
-  otherAgentsActivity,
-  sessionActivity = {},
+  otherAgentsUnread = false,
   locale,
   copy,
   onStateChange,
@@ -410,14 +348,13 @@ export function MobileNavigator({
           <nav className={styles.list} aria-label={copy.agents}>
             {visibleAgents.length ? (
               visibleAgents.map((agent) => {
-                const activity = agentActivity[agent.id]
                 const label = [
                   agent.name,
                   agent.status && agent.status !== "idle"
                     ? statusLabel(agent.status, copy)
                     : null,
                   agent.id === selectedAgentId ? copy.selected : null,
-                  ...activityLabel(activity, copy),
+                  agent.unread ? copy.unread : null,
                 ]
                   .filter(Boolean)
                   .join(", ")
@@ -430,9 +367,6 @@ export function MobileNavigator({
                     aria-current={
                       agent.id === selectedAgentId ? "true" : undefined
                     }
-                    data-needs-attention={
-                      activity?.needsAttention ? "true" : undefined
-                    }
                     onClick={() =>
                       onStateChange({
                         type: "BROWSE_AGENT",
@@ -443,7 +377,6 @@ export function MobileNavigator({
                     <span className={styles.agentIcon}>
                       {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" />}
                     </span>
-                    <ActivityMarker activity={activity} copy={copy} />
                     <span className={styles.rowText}>
                       <bdi className={styles.rowTitle}>{agent.name}</bdi>
                       {agent.description ? (
@@ -452,9 +385,12 @@ export function MobileNavigator({
                         </bdi>
                       ) : null}
                     </span>
-                    {!activity?.needsAttention ? (
-                      <StatusDot status={agent.status} copy={copy} />
-                    ) : null}
+                    <RowIndicators
+                      status={agent.status}
+                      statusLabel={statusLabel(agent.status, copy)}
+                      unread={agent.unread}
+                      unreadLabel={copy.unread}
+                    />
                     <ChevronRight
                       className={styles.chevron}
                       aria-hidden="true"
@@ -496,8 +432,7 @@ export function MobileNavigator({
           lastSelectedThreadId={catalog!.lastSelectedThreadId}
           openSessions={stableSections.openSessions}
           historySessions={stableSections.historySessions}
-          sessionActivity={sessionActivity}
-          otherAgentsActivity={otherAgentsActivity}
+          otherAgentsUnread={otherAgentsUnread}
           query={sessionQueries[state.agentId] ?? ""}
           locale={locale}
           copy={copy}
@@ -545,10 +480,7 @@ type SessionsViewProps = {
   lastSelectedThreadId: string | null
   openSessions: readonly WorkspaceSession[]
   historySessions: readonly WorkspaceSession[]
-  sessionActivity: Readonly<
-    Record<string, MobileNavigationActivity | undefined>
-  >
-  otherAgentsActivity?: MobileNavigationActivity
+  otherAgentsUnread: boolean
   query: string
   locale: "en" | "he"
   copy: MobileNavigatorCopy
@@ -570,8 +502,7 @@ function SessionsView({
   lastSelectedThreadId,
   openSessions,
   historySessions,
-  sessionActivity,
-  otherAgentsActivity,
+  otherAgentsUnread,
   query,
   locale,
   copy,
@@ -594,12 +525,14 @@ function SessionsView({
           type="button"
           aria-label={[
             copy.backToAgents,
-            ...activityLabel(otherAgentsActivity, copy),
-          ].join(", ")}
+            otherAgentsUnread ? copy.unread : null,
+          ]
+            .filter(Boolean)
+            .join(", ")}
           onClick={onBack}
         >
           <ArrowLeft aria-hidden="true" />
-          <ActivityMarker activity={otherAgentsActivity} copy={copy} />
+          {otherAgentsUnread ? <UnreadDot label={copy.unread} /> : null}
           <span>{copy.agents}</span>
         </Button>
         <Button
@@ -648,7 +581,6 @@ function SessionsView({
           lastSelectedThreadId,
         }}
         activeThreadId={activeThreadId}
-        sessionActivity={sessionActivity}
         locale={locale}
         copy={copy}
         query={query}

@@ -34,6 +34,28 @@ export function agentStatusFromSessions(
   return "idle"
 }
 
+/** Navigation rows show provider unread state on its own, beside the status. */
+export function agentUnreadFromSessions(
+  agent: AgentSummary,
+  sessions: readonly SessionMetadata[]
+) {
+  return sessions.some(
+    (session) => session.agentId === agent.id && session.unread === true
+  )
+}
+
+/**
+ * Activity treats an open attention request as unread too, so the bell count and
+ * a drawer item's derived read state always agree.
+ */
+export function isSessionUnread(session: SessionMetadata) {
+  return session.unread === true || session.status === "waiting-for-input"
+}
+
+export function workspaceUnreadCount(sessions: readonly SessionMetadata[]) {
+  return sessions.filter(isSessionUnread).length
+}
+
 type BuildAgentSessionViewOptions = {
   agentId: string
   sessions: readonly SessionMetadata[]

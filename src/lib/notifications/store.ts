@@ -1,19 +1,18 @@
-import type { WorkspaceActivityEvent } from "@/runtime-adapters/contracts"
+import type {
+  SessionMetadata,
+  WorkspaceActivityEvent,
+} from "@/runtime-adapters/contracts"
+import { isSessionUnread } from "@/lib/workspace-view-model"
 import {
   ACTIVITY_MAX_AGE_MS,
   activityEventSchema,
   activityScope,
   activityTimestamp,
-  storedActivityRecordSchema,
   retainActivity,
+  type ActivityEntry,
   type ActivityRecord,
   type VisibleActivityEvent,
 } from "./activity"
-import {
-  defaultBrowserPreferences,
-  getActivityPolicy,
-  type ActivityContext,
-} from "./policy"
 
 type RunTerminal = Extract<
   WorkspaceActivityEvent,
@@ -22,11 +21,13 @@ type RunTerminal = Extract<
 type StoreOptions = {
   now: () => number
   getThreadOwner: (threadId: string) => string | undefined
+  /** Authoritative Session state; read state is derived from it, never stored. */
+  getSessions: () => readonly SessionMetadata[]
 }
 
 export class ActivityStore {
   readonly #options: StoreOptions
-  #records = new Map<string, ActivityRecord>()
+  #records = new Map<string, ActivityEntry>()
   readonly #starts = new Map<string, string>()
   readonly #pendingTerminals = new Map<string, Map<string, RunTerminal>>()
   readonly #closedLifecycles = new Set<string>()
@@ -43,59 +44,8 @@ export class ActivityStore {
     this.#options = options
   }
 
-  /** Merge persisted/tab state without emitting arrivals or restoring live runs. */
-  hydrate(records: unknown) {
-    this.#prune()
-    if (!Array.isArray(records)) return
-    for (const input of records) {
-      const parsed = storedActivityRecordSchema.safeParse(input)
-      if (!parsed.success) continue
-      const incoming = parsed.data
-      const owner = this.#options.getThreadOwner(incoming.threadId)
-      if (owner !== undefined && owner !== incoming.agentId) continue
-      if (
-        [...this.#records.values()].some(
-          (record) =>
-            record.threadId === incoming.threadId &&
-            record.agentId !== incoming.agentId
-        )
-      )
-        continue
-      const existing = this.#records.get(incoming.id)
-      if (
-        existing &&
-        JSON.stringify(activityEventSchema.parse(existing)) !==
-          JSON.stringify(activityEventSchema.parse(incoming))
-      )
-        continue
-      if (!this.#remember(incoming)) continue
-      const record: ActivityRecord = existing
-        ? {
-            ...existing,
-            read: existing.read || incoming.read,
-            resolved: existing.resolved || incoming.resolved,
-            browserDeliveredAt:
-              existing.browserDeliveredAt ?? incoming.browserDeliveredAt,
-          }
-        : incoming
-      this.#records.set(record.id, record)
-      if (record.type === "run-finished" || record.type === "run-failed") {
-        const key = activityScope(record, record.lifecycleId)
-        this.#closedLifecycles.add(key)
-        this.#starts.delete(key)
-        this.#pendingTerminals.delete(key)
-      }
-      if (record.type === "attention-requested") {
-        const key = activityScope(record, record.requestId)
-        record.resolved ||= this.#resolvedRequests.has(key)
-        if (record.resolved) this.#resolvedRequests.add(key)
-      }
-    }
-    this.#prune()
-  }
-
   /** Returns only a newly created entry; bookkeeping/duplicates return null. */
-  ingest(input: unknown, context: ActivityContext): ActivityRecord | null {
+  ingest(input: unknown): ActivityRecord | null {
     this.#prune()
     const parsed = activityEventSchema.safeParse(input)
     if (!parsed.success) return null
@@ -135,7 +85,7 @@ export class ActivityStore {
           (candidate) =>
             Date.parse(candidate.occurredAt) >= Date.parse(startedAt)
         )
-        return terminal ? this.#complete(terminal, context) : null
+        return terminal ? this.#complete(terminal) : null
       }
       if (!this.#starts.has(key)) {
         const candidates =
@@ -151,24 +101,19 @@ export class ActivityStore {
         this.#pendingTerminals.set(key, candidates)
         return null
       }
-      return this.#complete(event, context)
+      return this.#complete(event)
     }
 
-    return this.#insert(event, context)
+    return this.#insert(event)
   }
 
   records(): ActivityRecord[] {
     this.#prune()
-    return [...this.#records.values()].map((record) => ({ ...record }))
-  }
-
-  markRead(id: string) {
-    const record = this.#records.get(id)
-    if (record) record.read = true
-  }
-
-  markAllRead() {
-    for (const record of this.#records.values()) record.read = true
+    const unread = this.#unreadThreads()
+    return [...this.#records.values()].map((entry) => ({
+      ...entry,
+      read: !unread.has(entry.threadId),
+    }))
   }
 
   markBrowserDelivered(id: string, occurredAt: string) {
@@ -191,7 +136,7 @@ export class ActivityStore {
     this.#prune()
   }
 
-  #complete(event: RunTerminal, context: ActivityContext) {
+  #complete(event: RunTerminal) {
     if (this.#records.has(event.id)) return null
     const key = activityScope(event, event.lifecycleId)
     const startedAt = this.#starts.get(key)
@@ -200,29 +145,32 @@ export class ActivityStore {
     this.#starts.delete(key)
     this.#pendingTerminals.delete(key)
     this.#closedLifecycles.add(key)
-    return this.#insert(event, context)
+    return this.#insert(event)
   }
 
-  #insert(
-    event: VisibleActivityEvent,
-    context: ActivityContext
-  ): ActivityRecord | null {
-    const record: ActivityRecord = {
+  #insert(event: VisibleActivityEvent): ActivityRecord | null {
+    const entry: ActivityEntry = {
       ...event,
-      read: getActivityPolicy(
-        event,
-        context,
-        defaultBrowserPreferences,
-        "unsupported"
-      ).markRead,
       resolved:
         event.type === "attention-requested" &&
         this.#resolvedRequests.has(activityScope(event, event.requestId)),
       browserDeliveredAt: null,
     }
-    this.#records.set(record.id, record)
+    this.#records.set(entry.id, entry)
     this.#prune()
-    return this.#records.has(record.id) ? { ...record } : null
+    return this.#records.has(entry.id)
+      ? { ...entry, read: !this.#unreadThreads().has(entry.threadId) }
+      : null
+  }
+
+  /** A Session is unread as a whole, so all of its entries agree. */
+  #unreadThreads() {
+    return new Set(
+      this.#options
+        .getSessions()
+        .filter(isSessionUnread)
+        .map(({ threadId }) => threadId)
+    )
   }
 
   #prune() {

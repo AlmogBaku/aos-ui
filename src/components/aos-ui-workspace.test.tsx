@@ -1172,15 +1172,17 @@ describe("AosUiApp fixture composition", () => {
       render(<ActivityFixture />)
       await screen.findByRole("tab", { name: "Market brief" })
       act(() => provider!.publishActivityScenario("run-completed"))
-      await user.click(
-        screen.getAllByRole("button", { name: "Activity, 0 unread" })[0]!
-      )
+      // The bell counts the two unread fixture Sessions, not arrivals.
+      const bell = (
+        await screen.findAllByRole("button", { name: "Activity, 2 unread" })
+      )[0]!
+      await user.click(bell)
       expect(await screen.findByText("A turn finished")).toBeVisible()
       await user.keyboard("{Escape}")
       act(() => provider!.publishActivityScenario("delayed-non-selected"))
-      const bell = (
-        await screen.findAllByRole("button", { name: "Activity, 1 unread" })
-      )[0]!
+      expect(
+        await screen.findAllByRole("button", { name: "Activity, 2 unread" })
+      ).toHaveLength(2)
       expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
         "aria-selected",
         "true"
@@ -1194,8 +1196,16 @@ describe("AosUiApp fixture composition", () => {
       expect(
         screen.getByRole("tab", { name: "Quarterly synthesis" })
       ).toHaveAttribute("aria-selected", "true")
+
+      // Opening an unread Session's Activity acknowledges it with the provider.
+      act(() => provider!.publishActivityScenario("run-failed"))
+      await user.click(
+        screen.getAllByRole("button", { name: "Activity, 2 unread" })[0]!
+      )
+      await user.click(screen.getByRole("button", { name: /Open: Nori,/ }))
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
       expect(
-        screen.getAllByRole("button", { name: "Activity, 0 unread" })
+        await screen.findAllByRole("button", { name: "Activity, 1 unread" })
       ).toHaveLength(2)
     } finally {
       focus.mockRestore()

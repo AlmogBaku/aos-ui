@@ -6,10 +6,27 @@ import {
 import { DeliveryLeader } from "./delivery-leader"
 import { ActivityStore } from "./store"
 import { deserializeActivity } from "./serialization"
+import type { SessionMetadata } from "@/runtime-adapters/contracts"
 
-it.each([true, false])(
-  "suppresses OS delivery when an exact focused peer observes the event (hidden leader first=%s)",
-  async (leaderFirst) => {
+/** The provider keeps this Session unread, so every alert below stays due. */
+const unreadSessions: SessionMetadata[] = [
+  {
+    threadId: "t",
+    agentId: "a",
+    status: "idle",
+    updatedAt: "2026-09-05T12:00:00.000Z",
+    unread: true,
+  },
+]
+
+it.each([
+  [true, true, ["hidden"]],
+  [true, false, []],
+  [false, true, ["hidden"]],
+  [false, false, []],
+])(
+  "delivers one OS alert only while the provider reports the Session unread (hidden leader first=%s, unread=%s)",
+  async (leaderFirst, unread, expected) => {
     const now = Date.parse("2026-09-05T12:00:00Z")
     let saved: string | null = null
     const messages: (() => void)[] = [],
@@ -26,6 +43,16 @@ it.each([true, false])(
       pageVisible: true,
       pageFocused: true,
     }
+    // Every tab sees the same authoritative Session state.
+    const sessions: SessionMetadata[] = [
+      {
+        threadId: "t",
+        agentId: "a",
+        status: "idle",
+        updatedAt: new Date(now).toISOString(),
+        unread,
+      },
+    ]
     const make = (
       id: string,
       context: typeof background | typeof foreground
@@ -33,6 +60,7 @@ it.each([true, false])(
       const store = new ActivityStore({
         now: () => now,
         getThreadOwner: () => "a",
+        getSessions: () => sessions,
       })
       const platform = {
         read: () => saved,
@@ -94,14 +122,13 @@ it.each([true, false])(
     }
     const first = leaderFirst ? hidden : focused,
       second = leaderFirst ? focused : hidden
-    first.coordinator.publish(first.store.ingest(event, first.context))
+    first.coordinator.publish(first.store.ingest(event))
     while (messages.length) messages.shift()!()
-    second.coordinator.publish(second.store.ingest(event, second.context))
+    second.coordinator.publish(second.store.ingest(event))
     while (messages.length) messages.shift()!()
     while (settlements.length) settlements.shift()!()
-    expect(shown).toEqual([])
-    expect(focused.store.records()[0]?.read).toBe(true)
-    expect(deserializeActivity(saved!)?.records[0]?.read).toBe(true)
+    expect(shown).toEqual(expected)
+    expect(focused.store.records()[0]?.read).toBe(!unread)
     hidden.coordinator.stop()
     focused.coordinator.stop()
   }
@@ -130,7 +157,11 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
     },
   })
   const context = { selection: null, pageVisible: false, pageFocused: false }
-  const store = new ActivityStore({ now: () => now, getThreadOwner: () => "a" })
+  const store = new ActivityStore({
+    now: () => now,
+    getThreadOwner: () => "a",
+    getSessions: () => unreadSessions,
+  })
   const shown: string[] = []
   const delayedDelivery: (() => void)[] = []
   const coordinator = new BrowserActivityCoordinator({
@@ -177,7 +208,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
     type: "agent-ready" as const,
     occurredAt: new Date(now).toISOString(),
   }
-  coordinator.publish(store.ingest(event, context))
+  coordinator.publish(store.ingest(event))
   now += 20000
   tick()
   expect(election.isLeader()).toBe(true)
@@ -188,10 +219,11 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
   expect(shown).toEqual(["A turn finished"])
   now += 20000
   coordinator.publish(
-    store.ingest(
-      { ...event, id: "later", occurredAt: new Date(now).toISOString() },
-      context
-    )
+    store.ingest({
+      ...event,
+      id: "later",
+      occurredAt: new Date(now).toISOString(),
+    })
   )
   now += 20000
   tick()
@@ -202,7 +234,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
   coordinator.stop()
 })
 
-it("synchronizes live arrivals, delivered/read/resolved state and preferences with one lease leader and failover", async () => {
+it("synchronizes live arrivals, delivery announcements, and preferences with one lease leader and failover", async () => {
   let now = Date.parse("2026-09-05T12:00:00Z")
   let saved: string | null = null
   const leases = new Map<string, string>()
@@ -220,6 +252,7 @@ it("synchronizes live arrivals, delivered/read/resolved state and preferences wi
     const store = new ActivityStore({
       now: () => now,
       getThreadOwner: () => "a",
+      getSessions: () => unreadSessions,
     })
     const election = new DeliveryLeader({
       id,
@@ -302,17 +335,12 @@ it("synchronizes live arrivals, delivered/read/resolved state and preferences wi
     threadId: "t",
     occurredAt: new Date(now).toISOString(),
   }
-  b.coordinator.publish(b.store.ingest(event, context))
-  a.coordinator.publish(a.store.ingest(event, context))
+  b.coordinator.publish(b.store.ingest(event))
+  a.coordinator.publish(a.store.ingest(event))
   flush()
   expect(notifications).toEqual(["one"])
   expect(a.store.records()[0]?.browserDeliveredAt).toBe(event.occurredAt)
   expect(b.store.records()[0]?.browserDeliveredAt).toBe(event.occurredAt)
-  b.store.markAllRead()
-  b.store.markUnavailable("ready")
-  b.coordinator.publish()
-  flush()
-  expect(a.store.records()[0]).toMatchObject({ read: true, resolved: true })
   b.coordinator.setCategory("input", false)
   flush()
   expect(a.coordinator.settings().preferences.input).toBe(false)
@@ -323,14 +351,15 @@ it("synchronizes live arrivals, delivered/read/resolved state and preferences wi
   flush()
   expect(notifications).toEqual(["one"])
   b.coordinator.publish(
-    b.store.ingest(
-      { ...event, id: "next", occurredAt: new Date(now).toISOString() },
-      context
-    )
+    b.store.ingest({
+      ...event,
+      id: "next",
+      occurredAt: new Date(now).toISOString(),
+    })
   )
   flush()
   expect(notifications).toEqual(["one", "two"])
-  expect(deserializeActivity(saved!)?.records).toHaveLength(2)
+  expect(deserializeActivity(saved!)?.preferences.input).toBe(false)
   b.coordinator.stop()
   expect(listeners.size).toBe(0)
   expect(ticks.size).toBe(0)

@@ -30,18 +30,21 @@ const agents: WorkspaceAgent[] = [
     name: "Writer",
     description: "Shapes the final answer",
     status: "attention",
+    unread: true,
   },
 ]
 
 const session = (
   threadId: string,
   title: string,
-  status: WorkspaceSession["status"] = "idle"
+  status: WorkspaceSession["status"] = "idle",
+  unread = false
 ): WorkspaceSession => ({
   threadId,
   title,
   status,
   updatedAt: "2026-09-08T09:00:00.000Z",
+  unread,
   canClose: true,
 })
 
@@ -78,8 +81,7 @@ const copy: MobileNavigatorCopy = {
     waitingForInput: "Waiting for input",
     failed: "Failed",
   },
-  unread: (count) => `${count} unread`,
-  needsAttention: "Needs attention",
+  unread: "Unread",
 }
 
 const defaultProps = (): MobileNavigatorProps => ({
@@ -99,18 +101,14 @@ const defaultProps = (): MobileNavigatorProps => ({
     },
     {
       agentId: "agent-b",
-      openSessions: [session("b-1", "Draft release", "waiting-for-input")],
+      openSessions: [
+        session("b-1", "Draft release", "waiting-for-input", true),
+      ],
       historySessions: [],
       lastSelectedThreadId: "b-1",
     },
   ],
-  agentActivity: {
-    "agent-b": { unreadCount: 3, needsAttention: true },
-  },
-  otherAgentsActivity: { unreadCount: 3, needsAttention: true },
-  sessionActivity: {
-    "b-1": { unreadCount: 2, needsAttention: true },
-  },
+  otherAgentsUnread: true,
   locale: "en",
   copy,
   onStateChange: vi.fn(),
@@ -180,13 +178,13 @@ describe("MobileNavigator", () => {
     expect(props.onOpenSession).not.toHaveBeenCalled()
   })
 
-  it("shows aggregate activity and filters Agents by name or description", () => {
+  it("shows aggregate unread state and filters Agents by name or description", () => {
     const props = defaultProps()
     render(<MobileNavigator {...props} />)
 
-    expect(
-      screen.getByRole("button", { name: /Writer.*3 unread/i })
-    ).toBeVisible()
+    const writer = screen.getByRole("button", { name: /Writer.*Unread/ })
+    expect(within(writer).getByTitle("Needs attention")).toBeVisible()
+    expect(within(writer).getByTitle("Unread")).toBeVisible()
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Agents" }), {
       target: { value: "primary sources" },
     })
@@ -312,9 +310,7 @@ describe("MobileNavigator", () => {
 
     expect(container.firstElementChild).toHaveAttribute("dir", "rtl")
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Back to Agents, 3 unread, Needs attention",
-      })
+      screen.getByRole("button", { name: "Back to Agents, Unread" })
     )
     expect(props.onStateChange).toHaveBeenCalledWith({ type: "BACK_TO_AGENTS" })
     fireEvent.click(screen.getByRole("button", { name: "Close navigation" }))

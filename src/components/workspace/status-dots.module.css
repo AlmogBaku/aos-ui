@@ -1,0 +1,71 @@
+.indicators {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 0.375rem;
+}
+
+/* Portaled navigation surfaces may render outside the shell that owns the
+   workspace status tokens, so every role keeps a semantic fallback. */
+.statusDot,
+.unreadDot {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  flex: none;
+  border-radius: 999px;
+}
+
+.statusDot {
+  background: var(--workspace-status-idle, var(--muted-foreground));
+}
+
+.statusDot[data-status="active"],
+.statusDot[data-status="running"] {
+  background: var(--workspace-status-running, var(--chart-2));
+  animation: status-breathe 2.2s ease-in-out infinite;
+}
+
+.statusDot[data-status="attention"],
+.statusDot[data-status="waiting-for-input"] {
+  background: var(--workspace-status-attention, var(--info));
+}
+
+.statusDot[data-status="failed"] {
+  background: var(--destructive);
+}
+
+.unreadDot {
+  background: var(--workspace-status-unread, var(--success));
+}
+
+@keyframes status-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(
+        in oklab,
+        var(--workspace-status-running, var(--chart-2)) 0%,
+        transparent
+      );
+    opacity: 0.62;
+  }
+
+  50% {
+    box-shadow: 0 0 0 0.2rem
+      color-mix(
+        in oklab,
+        var(--workspace-status-running, var(--chart-2)) 16%,
+        transparent
+      );
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusDot[data-status="active"],
+  .statusDot[data-status="running"] {
+    animation: none;
+    opacity: 1;
+  }
+}

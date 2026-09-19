@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 import { cn } from "@/lib/utils"
 
-import type { NavigationActivitySummary } from "./navigation-activity"
 import {
   SessionThreadListItem,
   SessionThreadListTitle,
@@ -19,7 +18,7 @@ import {
 } from "./session-thread-list-item"
 import type { WorkspaceSession } from "./workspace-shell"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
-import { AttentionDot } from "./activity"
+import { RowIndicators } from "./status-dots"
 import styles from "./agent-session-history.module.css"
 
 export type AgentSessionHistoryCopy = {
@@ -43,16 +42,12 @@ export type AgentSessionHistoryCopy = {
     waitingForInput: string
     failed: string
   }
-  unread: (count: number) => string
-  needsAttention: string
+  unread: string
 }
 
 export type AgentSessionHistoryProps = {
   navigation: AgentSessionNavigation
   activeThreadId: string | null
-  sessionActivity?: Readonly<
-    Record<string, NavigationActivitySummary | undefined>
-  >
   locale: Locale
   copy: AgentSessionHistoryCopy
   query: string
@@ -82,28 +77,6 @@ function sessionStatusLabel(
   return copy.status.idle
 }
 
-function ActivityMarker({
-  activity,
-  copy,
-}: {
-  activity: NavigationActivitySummary | undefined
-  copy: AgentSessionHistoryCopy
-}) {
-  if (!activity || (!activity.unreadCount && !activity.needsAttention)) {
-    return null
-  }
-  return (
-    <span className={styles.activity} aria-hidden="true">
-      {activity.needsAttention ? (
-        <AttentionDot label={copy.needsAttention} />
-      ) : null}
-      {activity.unreadCount > 0 ? (
-        <span className={styles.unreadCount}>{activity.unreadCount}</span>
-      ) : null}
-    </span>
-  )
-}
-
 function runAction(
   action: () => void | Promise<unknown>,
   onActionError?: (error: unknown) => void
@@ -120,7 +93,6 @@ function SessionSection({
   sessions,
   navigation,
   activeThreadId,
-  sessionActivity,
   locale,
   copy,
   removable,
@@ -135,9 +107,6 @@ function SessionSection({
   sessions: readonly WorkspaceSession[]
   navigation: AgentSessionNavigation
   activeThreadId: string | null
-  sessionActivity: Readonly<
-    Record<string, NavigationActivitySummary | undefined>
-  >
   locale: Locale
   copy: AgentSessionHistoryCopy
   removable: boolean
@@ -160,7 +129,6 @@ function SessionSection({
       <h3 className="px-2 pt-1 pb-1.5 text-sm">{heading}</h3>
       <div className={styles.list}>
         {sessions.map((session) => {
-          const activity = sessionActivity[session.threadId]
           const parsedDate = new Date(session.updatedAt)
           const isActive = session.threadId === activeThreadId
           const isLastSelected =
@@ -172,8 +140,7 @@ function SessionSection({
               : null,
             isActive ? copy.selected : null,
             !isActive && isLastSelected ? copy.lastSelected : null,
-            activity?.unreadCount ? copy.unread(activity.unreadCount) : null,
-            activity?.needsAttention ? copy.needsAttention : null,
+            session.unread ? copy.unread : null,
           ]
             .filter(Boolean)
             .join(", ")
@@ -198,21 +165,15 @@ function SessionSection({
                 )}
                 aria-label={label}
                 aria-current={isActive ? "true" : undefined}
-                data-needs-attention={
-                  activity?.needsAttention ? "true" : undefined
-                }
               >
                 <span className={cn(styles.rowText, "gap-0.5")}>
                   <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
-                    {session.status !== "idle" && !activity?.needsAttention ? (
-                      <span
-                        className={styles.statusDot}
-                        data-status={session.status}
-                        title={sessionStatusLabel(session.status, copy)}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <ActivityMarker activity={activity} copy={copy} />
+                    <RowIndicators
+                      status={session.status}
+                      statusLabel={sessionStatusLabel(session.status, copy)}
+                      unread={session.unread}
+                      unreadLabel={copy.unread}
+                    />
                     <bdi className={cn(styles.rowTitle, "text-sm")}>
                       <SessionThreadListTitle fallback={session.title} />
                     </bdi>
@@ -277,7 +238,6 @@ function SessionSection({
 export function AgentSessionHistory({
   navigation,
   activeThreadId,
-  sessionActivity = {},
   locale,
   copy,
   query,
@@ -354,7 +314,6 @@ export function AgentSessionHistory({
             sessions={visibleOpen}
             navigation={navigation}
             activeThreadId={activeThreadId}
-            sessionActivity={sessionActivity}
             locale={locale}
             copy={copy}
             removable
@@ -372,7 +331,6 @@ export function AgentSessionHistory({
             sessions={visibleHistory}
             navigation={navigation}
             activeThreadId={activeThreadId}
-            sessionActivity={sessionActivity}
             locale={locale}
             copy={copy}
             removable={false}

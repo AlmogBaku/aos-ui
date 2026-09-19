@@ -101,7 +101,7 @@
   block-size: 0.75rem;
   flex: none;
   border-radius: 999px;
-  background: var(--workspace-status-running, var(--success));
+  background: var(--workspace-status-attention, var(--info));
 }
 .settings {
   margin-block-start: 1.75rem;

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import type { WorkspaceActivityEvent } from "@/runtime-adapters/contracts"
-import { defaultBrowserPreferences, getActivityPolicy } from "./policy"
+import {
+  defaultBrowserPreferences,
+  getActivityPolicy,
+  isSelectionExposed,
+  type ActivityContext,
+} from "./policy"
 
 const event: WorkspaceActivityEvent = {
   id: "event-1",
@@ -10,6 +15,41 @@ const event: WorkspaceActivityEvent = {
   occurredAt: "2026-09-05T12:00:00.000Z",
   type: "agent-ready",
 }
+
+describe("selection exposure", () => {
+  const selection = { agentId: "agent-1", threadId: "thread-1" }
+
+  it.each<[string, ActivityContext, boolean]>([
+    [
+      "visible, focused, and uncovered",
+      { selection, pageVisible: true, pageFocused: true },
+      true,
+    ],
+    [
+      "covered by a drawer",
+      {
+        selection,
+        pageVisible: true,
+        pageFocused: true,
+        conversationExposed: false,
+      },
+      false,
+    ],
+    ["hidden", { selection, pageVisible: false, pageFocused: true }, false],
+    ["blurred", { selection, pageVisible: true, pageFocused: false }, false],
+    [
+      "without a selection",
+      { selection: null, pageVisible: true, pageFocused: true },
+      false,
+    ],
+  ])("reports the selection %s as exposed=%s", (_label, context, exposed) => {
+    expect(isSelectionExposed(context)).toBe(exposed)
+    expect(
+      getActivityPolicy(event, context, defaultBrowserPreferences, "granted")
+        .markRead
+    ).toBe(exposed)
+  })
+})
 
 describe("activity visibility and delivery", () => {
   it.each([

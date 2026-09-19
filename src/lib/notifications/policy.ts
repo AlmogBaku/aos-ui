@@ -24,6 +24,16 @@ export const defaultBrowserPreferences: Readonly<BrowserPreferences> = {
   input: true,
 }
 
+/** True while the operator can actually see the selected conversation. */
+export function isSelectionExposed(context: ActivityContext) {
+  return (
+    context.pageVisible &&
+    context.pageFocused &&
+    context.conversationExposed !== false &&
+    context.selection !== null
+  )
+}
+
 export function getActivityPolicy(
   event: WorkspaceActivityEvent & {
     read?: boolean
@@ -39,8 +49,7 @@ export function getActivityPolicy(
   }
   const foreground = context.pageVisible && context.pageFocused
   const markRead =
-    foreground &&
-    context.conversationExposed !== false &&
+    isSelectionExposed(context) &&
     context.selection?.agentId === event.agentId &&
     context.selection?.threadId === event.threadId
   const eligible = !event.read && !event.resolved

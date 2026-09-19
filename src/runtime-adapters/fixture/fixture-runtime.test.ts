@@ -428,22 +428,16 @@ describe("fixture ChatModelAdapter", () => {
     ])
   })
 
-  it("publishes a new lifecycle after workspace recreation and store hydration", async () => {
+  it("publishes a new lifecycle after workspace recreation", async () => {
     const owner = (threadId: string) =>
       threadId === "thread-mica-quarterly" ? "agent-mica" : undefined
-    const context = {
-      selection: null,
-      pageVisible: false,
-      pageFocused: false,
-    }
+    const firstWorkspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const firstStore = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
       getThreadOwner: owner,
+      getSessions: () => firstWorkspace.listAllSessionMetadata(),
     })
-    const firstWorkspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
-    firstWorkspace.subscribeActivity((event) =>
-      firstStore.ingest(event, context)
-    )
+    firstWorkspace.subscribeActivity((event) => firstStore.ingest(event))
     await collectRun(
       createFixtureChatModel(firstWorkspace, { streamDelayMs: 0 }).run(
         runOptions(
@@ -455,15 +449,13 @@ describe("fixture ChatModelAdapter", () => {
       )
     )
 
+    const secondWorkspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const secondStore = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
       getThreadOwner: owner,
+      getSessions: () => secondWorkspace.listAllSessionMetadata(),
     })
-    secondStore.hydrate(firstStore.records())
-    const secondWorkspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
-    secondWorkspace.subscribeActivity((event) =>
-      secondStore.ingest(event, context)
-    )
+    secondWorkspace.subscribeActivity((event) => secondStore.ingest(event))
     await collectRun(
       createFixtureChatModel(secondWorkspace, { streamDelayMs: 0 }).run(
         runOptions(
@@ -475,17 +467,14 @@ describe("fixture ChatModelAdapter", () => {
       )
     )
 
+    // A recreated workspace starts from an empty in-memory Activity store.
     expect(
       secondStore
         .records()
         .flatMap((record) =>
           record.type === "run-finished" ? [record.lifecycleId] : []
         )
-        .sort()
-    ).toEqual([
-      "fixture:runtime:thread-mica-quarterly:provider-run-one",
-      "fixture:runtime:thread-mica-quarterly:provider-run-two",
-    ])
+    ).toEqual(["fixture:runtime:thread-mica-quarterly:provider-run-two"])
   })
 
   it("closes a failed fixture run without exposing its error content", async () => {
@@ -525,14 +514,11 @@ describe("fixture ChatModelAdapter", () => {
     const store = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
       getThreadOwner: (threadId) => owners.get(threadId),
+      getSessions: () => workspace.listAllSessionMetadata(),
     })
     workspace.subscribeActivity((event) => {
       activity.push(event)
-      store.ingest(event, {
-        selection: null,
-        pageVisible: false,
-        pageFocused: false,
-      })
+      store.ingest(event)
     })
     const model = createFixtureChatModel(workspace, { streamDelayMs: 0 })
 

@@ -1,43 +1,22 @@
 import { z } from "zod"
 
-import {
-  ACTIVITY_LIMIT,
-  activityRecordSchema,
-  storedActivityRecordSchema,
-} from "./activity"
-
 const preferencesSchema = z.object({
   enabled: z.boolean(),
   completion: z.boolean(),
   failure: z.boolean(),
   input: z.boolean(),
 })
+/**
+ * Version 2 keeps notification preferences only. Activity history is provider
+ * state held in memory, so version 1 snapshots and their records are dropped.
+ */
 const snapshotSchema = z.object({
-  version: z.literal(1),
-  records: z.array(activityRecordSchema).max(ACTIVITY_LIMIT),
+  version: z.literal(2),
   preferences: preferencesSchema,
 })
 const storedSnapshotSchema = snapshotSchema
-  .extend({
-    records: z.array(storedActivityRecordSchema).max(ACTIVITY_LIMIT),
-    preferences: preferencesSchema.strict(),
-  })
+  .extend({ preferences: preferencesSchema.strict() })
   .strict()
-  .refine((snapshot) => {
-    const ids = new Set<string>()
-    const owners = new Map<string, string>()
-    for (const record of snapshot.records) {
-      if (
-        ids.has(record.id) ||
-        (owners.has(record.threadId) &&
-          owners.get(record.threadId) !== record.agentId)
-      )
-        return false
-      ids.add(record.id)
-      owners.set(record.threadId, record.agentId)
-    }
-    return true
-  })
 
 export type ActivitySnapshot = z.infer<typeof storedSnapshotSchema>
 

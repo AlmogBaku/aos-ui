@@ -45,38 +45,22 @@ export type VisibleActivityEvent = Exclude<
   WorkspaceActivityEvent,
   { type: "run-started" | "attention-resolved" }
 >
-export type ActivityRecord = VisibleActivityEvent & {
-  read: boolean
+/** Stored Activity; the provider owns read state, so entries never carry it. */
+export type ActivityEntry = VisibleActivityEvent & {
   resolved: boolean
   browserDeliveredAt: string | null
 }
 
-const state = {
-  read: z.boolean(),
-  resolved: z.boolean(),
-  browserDeliveredAt: activityTimestamp.nullable(),
-}
-const recordVariants = [
-  run.extend({ ...state, type: z.enum(["run-finished", "run-failed"]) }),
-  attention.extend(state),
-  activation.extend(state),
-] as const
-
-export const activityRecordSchema = z.discriminatedUnion("type", recordVariants)
-export const storedActivityRecordSchema = z.discriminatedUnion("type", [
-  recordVariants[0].strict(),
-  recordVariants[1].strict(),
-  recordVariants[2].strict(),
-])
+export type ActivityRecord = ActivityEntry & { read: boolean }
 
 export const ACTIVITY_LIMIT = 200
 export const ACTIVITY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
-export function needsAttention(record: ActivityRecord) {
+export function needsAttention(record: ActivityEntry) {
   return record.type === "attention-requested" && !record.resolved
 }
 
-export function sortActivity(records: ActivityRecord[]) {
+export function sortActivity<TEntry extends ActivityEntry>(records: TEntry[]) {
   return records.sort(
     (a, b) =>
       Date.parse(b.occurredAt) - Date.parse(a.occurredAt) ||
@@ -84,7 +68,10 @@ export function sortActivity(records: ActivityRecord[]) {
   )
 }
 
-export function retainActivity(records: ActivityRecord[], now: number) {
+export function retainActivity<TEntry extends ActivityEntry>(
+  records: TEntry[],
+  now: number
+) {
   const eligible = sortActivity(
     records.filter(
       (record) =>

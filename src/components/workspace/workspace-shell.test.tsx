@@ -428,89 +428,79 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Launch review" })).toHaveFocus()
   })
 
-  it("distinguishes unread Activity from run status in Agent and Session navigation", () => {
+  it("shows provider unread state beside run status in Agent and Session navigation", () => {
     renderShell({
-      activity: {
-        items: [
-          {
-            id: "entry",
-            type: "agent-ready",
-            agentId: "agent-aster",
-            threadId: "thread-launch",
-            occurredAt: "2026-09-05T12:00:00Z",
-            read: false,
-            resolved: false,
-            browserDeliveredAt: null,
-            available: true,
-          },
-        ],
-        notice: null,
-        error: false,
-        supported: true,
-        openActivity: async () => true,
-        markAllRead: () => {},
-        dismissNotice: () => {},
-      },
-    })
-    expect(
-      screen.getByRole("button", { name: /Aster, Status: Running.*1 unread/ })
-    ).toBeVisible()
-    expect(
-      screen.getByRole("tab", { name: /Launch review.*1 unread/ })
-    ).toBeVisible()
-  })
-
-  it("labels attention indicators in Agent, history, and tab navigation", () => {
-    renderShell({
-      agents: [{ ...agents[0]!, status: "attention" }, agents[1]!],
-      activity: {
-        items: [
-          {
-            id: "question",
-            type: "attention-requested",
-            attentionKind: "question",
-            requestId: "question-1",
-            agentId: "agent-aster",
-            threadId: "thread-scan",
-            occurredAt: "2026-09-05T12:00:00Z",
-            read: true,
-            resolved: false,
-            browserDeliveredAt: null,
-            available: true,
-          },
-        ],
-        notice: null,
-        error: false,
-        supported: true,
-        openActivity: async () => true,
-        markAllRead: () => {},
-        dismissNotice: () => {},
-      },
+      agents: [{ ...agents[0]!, unread: true }, agents[1]!],
+      openSessions: [
+        { ...openSessions[0]!, unread: true },
+        ...openSessions.slice(1),
+      ],
     })
 
     const agentButton = screen.getByRole("button", {
-      name: /^Aster, Status: Needs attention/,
+      name: "Aster, Status: Running, Selected Agent, Unread",
     })
-    expect(within(agentButton).getAllByTitle("Needs attention")).toHaveLength(1)
+    expect(within(agentButton).getByTitle("Running")).toBeVisible()
+    expect(within(agentButton).getByTitle("Unread")).toBeVisible()
+
+    const tab = screen.getByRole("tab", { name: "Market brief, Unread" })
+    expect(within(tab).getByTitle("Unread")).toBeVisible()
+    expect(screen.getByRole("tab", { name: "Launch review" })).toBeVisible()
+    // Navigation rows no longer carry Activity-derived counts.
+    expect(screen.queryByText(/unread/i)).toBeNull()
+  })
+
+  it("keeps attention and unread indicators together on one navigation row", () => {
+    const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
+    const sessions = [...openSessions.slice(0, 2), scan]
+    renderShell({
+      agents: [
+        { ...agents[0]!, status: "attention", unread: true },
+        agents[1]!,
+      ],
+      openSessions: sessions,
+      navigationCatalog: new Map([
+        [
+          "agent-aster",
+          {
+            agentId: "agent-aster",
+            openSessions: sessions,
+            historySessions: olderSessions,
+            lastSelectedThreadId: "thread-market",
+          },
+        ],
+      ]),
+    })
+
+    const agentButton = screen.getByRole("button", {
+      name: "Aster, Status: Needs attention, Selected Agent, Unread",
+    })
+    expect(within(agentButton).getByTitle("Needs attention")).toBeVisible()
+    expect(within(agentButton).getByTitle("Unread")).toBeVisible()
 
     const inspector = screen.getByRole("complementary", {
       name: "Agent details",
     })
     const sessionButton = within(inspector).getByRole("button", {
-      name: /Open session: Competitive scan/,
+      name: "Open session: Competitive scan, Status: Waiting for input, Unread",
     })
-    expect(within(sessionButton).getByTitle("Needs attention")).toBeVisible()
-    expect(
-      within(sessionButton).queryByTitle("Waiting for input")
-    ).not.toBeInTheDocument()
+    expect(within(sessionButton).getByTitle("Waiting for input")).toBeVisible()
+    expect(within(sessionButton).getByTitle("Unread")).toBeVisible()
 
-    expect(
-      within(
-        screen.getByRole("tab", {
-          name: /Competitive scan.*Needs attention/,
-        })
-      ).getByTitle("Needs attention")
-    ).toBeVisible()
+    const tab = screen.getByRole("tab", { name: "Competitive scan, Unread" })
+    expect(within(tab).getByTitle("Waiting for input")).toBeVisible()
+    expect(within(tab).getByTitle("Unread")).toBeVisible()
+  })
+
+  it("localizes the unread indicator in Hebrew", () => {
+    renderShell({
+      locale: "he",
+      dictionary: he,
+      agents: [{ ...agents[0]!, unread: true }, agents[1]!],
+    })
+
+    const agentButton = screen.getByRole("button", { name: /Aster.*לא נקרא/ })
+    expect(within(agentButton).getByTitle("לא נקרא")).toBeVisible()
   })
 
   it("localizes the Activity drawer in Hebrew and inherits RTL", async () => {

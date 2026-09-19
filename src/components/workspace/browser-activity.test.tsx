@@ -44,12 +44,15 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
       return { close }
     },
   }
+  // The provider reports the Session unread, so a background alert is due.
   const session = {
     agentId: "a",
     threadId: "t",
     status: "idle" as const,
     updatedAt: "2026-09-05T12:00:00Z",
+    unread: true,
   }
+  const markSessionRead = vi.fn(async () => {})
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
@@ -59,6 +62,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
       emit = listener
       return () => {}
     },
+    markSessionRead,
   }
   const props = {
     workspace,
@@ -122,7 +126,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
   expect(close).toHaveBeenCalledOnce()
   expect(focus).toHaveBeenCalledOnce()
   expect(open).toHaveBeenCalledWith("a", "t")
-  expect(result.current.items[0]?.read).toBe(true)
+  expect(markSessionRead).toHaveBeenCalledWith("t")
   await act(async () =>
     emit({
       id: "stale",

@@ -111,8 +111,11 @@ semantic state roles that remain meaningful in both light and dark themes.
 - **Layered cool surfaces:** `canvas`, `background`, and `card` establish the
   tonal hierarchy; `foreground` and `border` keep content and boundaries
   readable without heavy lines.
-- **Semantic state:** `success` represents completed or healthy work, while
-  `destructive` represents failure, cancellation, or destructive intent.
+- **Semantic state:** `success` represents completed or healthy work and the
+  unread signal on navigation rows, `info` represents work waiting on the
+  operator, and `destructive` represents failure, cancellation, or destructive
+  intent. A row states execution status and unread state as two separate dots;
+  neither one hides the other.
 - **Five-series data vocabulary:** `chart-1` through `chart-5` are the sole
   chart-series roles. Chart and rich-tool code uses these semantic roles rather
   than introducing local color literals.

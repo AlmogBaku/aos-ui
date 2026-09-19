@@ -47,13 +47,11 @@ import { SessionActions } from "./session-actions"
 import { neighborAfterClose } from "./session-tab-undo"
 import {
   ActivityBell,
-  ActivityMarker,
   ActivityNotice,
   ActivityPanel,
   type BrowserSettingsView,
 } from "./activity"
 import type { ActivityView } from "./use-activity-coordinator"
-import { needsAttention } from "@/lib/notifications/activity"
 import { WorkspaceKeyboard } from "@/components/keyboard/workspace-keyboard"
 import {
   MobileNavigator,
@@ -63,17 +61,12 @@ import {
 } from "./mobile-navigator"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
 import { AgentSessionHistory } from "./agent-session-history"
-import type { NavigationActivitySummary } from "./navigation-activity"
 import {
   SessionThreadListItem,
   SessionThreadListTitle,
   SessionThreadListTrigger,
 } from "./session-thread-list-item"
-import {
-  getAgentNavigationActivity,
-  getOtherVisibleAgentsNavigationActivity,
-  getSessionNavigationActivity,
-} from "./navigation-activity"
+import { RowIndicators, StatusDot } from "./status-dots"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -95,6 +88,8 @@ type WorkspaceAgentBase = {
   name: string
   description?: string
   status?: WorkspaceAgentStatus
+  /** Provider unread state aggregated from this Agent's Sessions. */
+  unread?: boolean
   icon?: WorkspaceAgentIcon
 }
 
@@ -105,6 +100,7 @@ export type WorkspaceSession = {
   title: string
   status: WorkspaceSessionStatus
   updatedAt: string
+  unread?: boolean
   canClose?: boolean
 }
 
@@ -327,6 +323,17 @@ function agentStatusLabel(
   return dictionary.status.idle
 }
 
+function sessionStatusLabel(
+  status: WorkspaceSessionStatus,
+  dictionary: Dictionary
+) {
+  if (status === "running") return dictionary.status.running
+  if (status === "waiting-for-input") return dictionary.status.waitingForInput
+  if (status === "failed") return dictionary.status.failed
+  if (status === "unknown") return dictionary.status.unknown
+  return dictionary.status.idle
+}
+
 function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
   return {
     agents: dictionary.workspace.agents,
@@ -361,8 +368,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
       waitingForInput: dictionary.status.waitingForInput,
       failed: dictionary.status.failed,
     },
-    unread: (count) => `${count} ${dictionary.activity.unread}`,
-    needsAttention: dictionary.activity.needsAttention,
+    unread: dictionary.status.unread,
   }
 }
 
@@ -414,7 +420,6 @@ type AgentsPanelProps = Pick<
   | "onActionError"
 > & {
   onAfterSelectAgent?: () => void
-  activity?: ActivityView
   activityButton?: ReactNode
   commandsHost?: boolean
 }
@@ -431,7 +436,6 @@ function AgentsPanel({
   onManageAgents,
   onActionError,
   onAfterSelectAgent,
-  activity,
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
@@ -474,9 +478,6 @@ function AgentsPanel({
         aria-label={dictionary.workspace.agents}
       >
         {agents.map((agent) => {
-          const indicator = navigationActivity(activity, dictionary, {
-            agentId: agent.id,
-          })
           const isSelected = agent.id === selectedAgentId
           const statusLabel = agentStatusLabel(agent.status, dictionary)
           const accessibleName = [
@@ -485,7 +486,7 @@ function AgentsPanel({
               ? `${dictionary.status.label}: ${statusLabel}`
               : null,
             isSelected ? dictionary.accessibility.selectedAgent : null,
-            indicator.label,
+            agent.unread ? dictionary.status.unread : null,
           ]
             .filter(Boolean)
             .join(", ")
@@ -509,7 +510,6 @@ function AgentsPanel({
               />
               <span className={styles.agentText}>
                 <span className={cn(styles.agentName, "text-sm leading-5")}>
-                  {indicator.marker}
                   <bdi>{agent.name}</bdi>
                 </span>
                 {agent.description ? (
@@ -520,16 +520,12 @@ function AgentsPanel({
                   </bdi>
                 ) : null}
               </span>
-              {agent.status &&
-              agent.status !== "idle" &&
-              !indicator.attention ? (
-                <span
-                  className={styles.statusDot}
-                  data-status={agent.status}
-                  title={statusLabel}
-                  aria-hidden="true"
-                />
-              ) : null}
+              <RowIndicators
+                status={agent.status}
+                statusLabel={statusLabel}
+                unread={agent.unread}
+                unreadLabel={dictionary.status.unread}
+              />
             </button>
           )
         })}
@@ -568,7 +564,6 @@ type SessionTabsProps = Pick<
   | "onActionError"
   | "threadListRuntime"
 > & {
-  activity?: ActivityView
   inspectorOpen: boolean
   onToggleInspector: () => void
 }
@@ -586,7 +581,6 @@ function SessionTabs({
   threadListRuntime,
   inspectorOpen,
   onToggleInspector,
-  activity,
 }: SessionTabsProps) {
   const tabRefs = useRef(new Map<string, HTMLButtonElement>())
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
@@ -695,9 +689,6 @@ function SessionTabs({
           >
             {openSessions.map((session, index) => {
               const isActive = session.threadId === activeThreadId
-              const indicator = navigationActivity(activity, dictionary, {
-                threadId: session.threadId,
-              })
 
               return (
                 <SessionThreadListItem
@@ -728,8 +719,8 @@ function SessionTabs({
                     aria-selected={isActive}
                     title={session.title}
                     aria-label={
-                      indicator.label
-                        ? `${session.title}, ${indicator.label}`
+                      session.unread
+                        ? `${session.title}, ${dictionary.status.unread}`
                         : undefined
                     }
                     aria-controls="workspace-conversation-panel"
@@ -742,7 +733,15 @@ function SessionTabs({
                     onBlur={() => setFocusedThreadId(null)}
                   >
                     <span className={styles.tabLabel}>
-                      {indicator.marker}
+                      <RowIndicators
+                        status={session.status}
+                        statusLabel={sessionStatusLabel(
+                          session.status,
+                          dictionary
+                        )}
+                        unread={session.unread}
+                        unreadLabel={dictionary.status.unread}
+                      />
                       <bdi>
                         <SessionThreadListTitle fallback={session.title} />
                       </bdi>
@@ -852,9 +851,6 @@ type InspectorPanelProps = Pick<
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
-  sessionActivity: Readonly<
-    Record<string, NavigationActivitySummary | undefined>
-  >
   artifactOutputs?: ReactNode
 }
 
@@ -868,7 +864,6 @@ function InspectorPanel({
   threadListRuntime,
   agent,
   navigation,
-  sessionActivity,
   artifactOutputs,
 }: InspectorPanelProps) {
   const [query, setQuery] = useState("")
@@ -895,13 +890,7 @@ function InspectorPanel({
             {agent.name}
           </bdi>
           <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground">
-            {agent.status && agent.status !== "idle" ? (
-              <span
-                className={styles.statusDot}
-                data-status={agent.status}
-                aria-hidden="true"
-              />
-            ) : null}
+            <StatusDot status={agent.status} label={statusLabel} />
             <span>{statusLabel}</span>
           </div>
         </div>
@@ -918,7 +907,6 @@ function InspectorPanel({
           <AgentSessionHistory
             navigation={navigation}
             activeThreadId={activeThreadId}
-            sessionActivity={sessionActivity}
             locale={locale}
             copy={mobileNavigatorCopy(dictionary)}
             query={query}
@@ -1143,7 +1131,7 @@ export function WorkspaceShell({
     onConversationObscuredChange?.(modalDrawerOpen)
     return () => onConversationObscuredChange?.(false)
   }, [modalDrawerOpen, onConversationObscuredChange])
-  const unread = activity?.items.filter((item) => !item.read).length ?? 0
+  const unread = activity?.unreadCount ?? 0
   const activityButton = (
     <ActivityBell
       dictionary={dictionary}
@@ -1338,7 +1326,6 @@ export function WorkspaceShell({
   )
 
   const agentsPanelProps: AgentsPanelProps = {
-    activity,
     agents: rosterAgents,
     locale,
     selectedAgentId,
@@ -1357,19 +1344,6 @@ export function WorkspaceShell({
     locale,
     dictionary,
     navigation: selectedNavigation,
-    sessionActivity: Object.fromEntries(
-      [
-        ...(selectedNavigation?.openSessions ?? []),
-        ...(selectedNavigation?.historySessions ?? []),
-      ].map((session) => [
-        session.threadId,
-        getSessionNavigationActivity(
-          activity?.items ?? [],
-          selectedNavigation?.agentId ?? "",
-          session.threadId
-        ),
-      ])
-    ),
     threadListRuntime,
     activeThreadId,
     onOpenSession,
@@ -1461,11 +1435,9 @@ export function WorkspaceShell({
                     </bdi>
                   ) : null}
                 </span>
-                <span
-                  className={styles.statusDot}
-                  data-status={selectedAgent.status ?? "idle"}
-                  title={agentStatusLabel(selectedAgent.status, dictionary)}
-                  aria-hidden="true"
+                <StatusDot
+                  status={selectedAgent.status}
+                  label={agentStatusLabel(selectedAgent.status, dictionary)}
                 />
               </div>
             ) : (
@@ -1508,7 +1480,6 @@ export function WorkspaceShell({
           {!navigationHidden ? (
             <div data-keyboard-region="sessions" className="contents">
               <SessionTabs
-                activity={activity}
                 locale={locale}
                 dictionary={dictionary}
                 openSessions={openSessions}
@@ -1656,32 +1627,13 @@ export function WorkspaceShell({
                   ...navigationCatalog.values(),
                 ] satisfies MobileAgentSessionCatalog[]
               }
-              agentActivity={Object.fromEntries(
-                rosterAgents.map((agent) => [
-                  agent.id,
-                  getAgentNavigationActivity(activity?.items ?? [], agent.id),
-                ])
-              )}
-              otherAgentsActivity={getOtherVisibleAgentsNavigationActivity(
-                activity?.items ?? [],
-                mobileNavigator.view === "sessions"
-                  ? mobileNavigator.agentId
-                  : selectedAgentId,
-                rosterAgents.map((agent) => agent.id)
-              )}
-              sessionActivity={Object.fromEntries(
-                [...navigationCatalog.values()].flatMap((catalog) =>
-                  [...catalog.openSessions, ...catalog.historySessions].map(
-                    (session) => [
-                      session.threadId,
-                      getSessionNavigationActivity(
-                        activity?.items ?? [],
-                        catalog.agentId,
-                        session.threadId
-                      ),
-                    ]
-                  )
-                )
+              otherAgentsUnread={rosterAgents.some(
+                (agent) =>
+                  agent.unread &&
+                  agent.id !==
+                    (mobileNavigator.view === "sessions"
+                      ? mobileNavigator.agentId
+                      : selectedAgentId)
               )}
               locale={locale}
               copy={mobileNavigatorCopy(dictionary)}
@@ -1766,37 +1718,4 @@ export function WorkspaceShell({
       </section>
     </div>
   )
-}
-
-function navigationActivity(
-  activity: ActivityView | undefined,
-  dictionary: Dictionary,
-  scope: { agentId?: string; threadId?: string }
-) {
-  const items =
-    activity?.items.filter(
-      (item) =>
-        item.available &&
-        (!scope.agentId || item.agentId === scope.agentId) &&
-        (!scope.threadId || item.threadId === scope.threadId)
-    ) ?? []
-  const unread = items.filter((item) => !item.read).length
-  const attention = items.some(needsAttention)
-  const label = [
-    attention ? dictionary.activity.needsAttention : null,
-    unread ? `${unread} ${dictionary.activity.unread}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ")
-  return {
-    attention,
-    label,
-    marker: (
-      <ActivityMarker
-        unread={unread}
-        attention={attention}
-        dictionary={dictionary}
-      />
-    ),
-  }
 }

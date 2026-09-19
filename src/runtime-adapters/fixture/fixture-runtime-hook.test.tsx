@@ -220,14 +220,9 @@ describe("useFixtureRuntimeBundle", () => {
       now: () => FIXTURE_NOW.getTime(),
       getThreadOwner: (threadId) =>
         threadId === "thread-lumen-roadmap" ? "agent-lumen" : undefined,
+      getSessions: () => bundle!.workspace.listAllSessionMetadata(),
     })
-    bundle!.workspace.subscribeActivity?.((event) =>
-      store.ingest(event, {
-        selection: null,
-        pageVisible: false,
-        pageFocused: false,
-      })
-    )
+    bundle!.workspace.subscribeActivity?.((event) => store.ingest(event))
 
     act(() => {
       bundle!.assistantRuntime.thread.append({

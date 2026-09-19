@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { useMemo, useState } from "react"
 import type {
   WorkspaceActivityEvent,
   WorkspaceAdapter,
@@ -25,12 +26,23 @@ import {
 } from "./activity"
 
 const now = new Date("2026-09-05T12:00:00Z")
-const sessions: SessionMetadata[] = ["one", "two"].map((threadId) => ({
-  threadId,
-  agentId: threadId === "one" ? "a" : "b",
-  status: "idle",
-  updatedAt: now.toISOString(),
-}))
+// "one" is the exposed selection the provider already read; "two" is unread.
+const sessions: SessionMetadata[] = [
+  {
+    threadId: "one",
+    agentId: "a",
+    status: "idle",
+    updatedAt: now.toISOString(),
+    unread: false,
+  },
+  {
+    threadId: "two",
+    agentId: "b",
+    status: "idle",
+    updatedAt: now.toISOString(),
+    unread: true,
+  },
+]
 const agents = [
   { id: "a", name: "Aster" },
   { id: "b", name: "Mica" },
@@ -39,6 +51,8 @@ function source() {
   let receive: (event: WorkspaceActivityEvent) => void = () => {}
   let fail: (error: Error) => void = () => {}
   const unsubscribe = vi.fn()
+  const markSessionRead = vi.fn(async () => {})
+  const reportFocus = vi.fn()
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
@@ -50,6 +64,8 @@ function source() {
       fail = onError!
       return unsubscribe
     }),
+    markSessionRead,
+    reportFocus,
   }
   const emit = (
     id: string,
@@ -70,9 +86,13 @@ function source() {
     emit,
     fail: () => fail(new Error("private error text")),
     unsubscribe,
+    markSessionRead,
+    reportFocus,
   }
 }
-function options(workspace: WorkspaceAdapter) {
+function options(
+  workspace: WorkspaceAdapter
+): Parameters<typeof useActivityCoordinator>[0] {
   return {
     workspace,
     agents,
@@ -104,7 +124,6 @@ describe("Activity coordinator", () => {
     })
     await act(async () => provider.emit("before-deletion"))
     expect(result.current.items).toHaveLength(1)
-    act(() => result.current.markAllRead())
     rerender({ ...props, sessions })
     provider.workspace.getSessionMetadata = async () => []
     rerender(props)
@@ -136,8 +155,8 @@ describe("Activity coordinator", () => {
       expect(await result.current.openActivity("event")).toBe(true)
     })
     expect(props.onOpenTarget).toHaveBeenCalledWith("b", "two")
+    expect(provider.markSessionRead).toHaveBeenCalledWith("two")
     expect(result.current.items[0]).toMatchObject({
-      read: true,
       resolved: false,
       available: true,
     })
@@ -188,7 +207,6 @@ describe("Activity coordinator", () => {
     expect(result.current.items[0]).toMatchObject({
       available: false,
       resolved: true,
-      read: true,
     })
     expect(props.onOpenTarget).not.toHaveBeenCalled()
   })
@@ -221,7 +239,7 @@ describe("Activity coordinator", () => {
     })
     await waitFor(() => expect(result.current.items).toHaveLength(2))
     expect(result.current.items.every((item) => !item.read)).toBe(true)
-    expect(result.current.notice).toEqual({ count: 2, urgent: true })
+    expect(result.current.notice).toEqual({ count: 1, urgent: true })
     expect(document.activeElement).toBe(focused)
     render(
       <ActivityNotice
@@ -234,7 +252,7 @@ describe("Activity coordinator", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent("Second")
   })
   it.each(["hidden", "blurred"])(
-    "keeps %s arrivals unread without a notice, then reads the selected Session on focus",
+    "raises no notice while %s and reports the exposed Session once focus returns",
     async (state) => {
       const provider = source()
       const focus = vi.mocked(document.hasFocus)
@@ -244,16 +262,30 @@ describe("Activity coordinator", () => {
       const { result } = renderHook(useActivityCoordinator, {
         initialProps: options(provider.workspace),
       })
-      act(() => provider.emit("event", "one"))
+      act(() => provider.emit("event", "two"))
       await waitFor(() => expect(result.current.items).toHaveLength(1))
       expect(result.current.items[0]!.read).toBe(false)
       expect(result.current.notice).toBeNull()
+      expect(provider.reportFocus.mock.calls).toEqual([[null]])
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
       focus.mockReturnValue(true)
       act(() => window.dispatchEvent(new Event("focus")))
-      expect(result.current.items[0]!.read).toBe(true)
+      expect(provider.reportFocus.mock.calls).toEqual([[null], ["one"]])
     }
   )
+
+  it("reports no exposure while a drawer covers the selected Session", async () => {
+    const provider = source()
+    const props = options(provider.workspace)
+    const { rerender } = renderHook(useActivityCoordinator, {
+      initialProps: props,
+    })
+    await waitFor(() =>
+      expect(provider.reportFocus.mock.calls).toEqual([["one"]])
+    )
+    rerender({ ...props, conversationExposed: false })
+    expect(provider.reportFocus.mock.calls).toEqual([["one"], [null]])
+  })
   it("isolates subscription errors and accepts later valid events", async () => {
     const provider = source()
     const { result } = renderHook(useActivityCoordinator, {
@@ -296,7 +328,7 @@ describe("Activity coordinator", () => {
       available: false,
     })
   })
-  it("validates and opens the owning Agent and Session then marks read", async () => {
+  it("validates and opens the owning Agent and Session then acknowledges it", async () => {
     const provider = source()
     const props = options(provider.workspace)
     const { result } = renderHook(useActivityCoordinator, {
@@ -304,11 +336,12 @@ describe("Activity coordinator", () => {
     })
     act(() => provider.emit("event"))
     await waitFor(() => expect(result.current.items).toHaveLength(1))
+    expect(result.current.unreadCount).toBe(1)
     await act(async () => {
       expect(await result.current.openActivity("event")).toBe(true)
     })
     expect(props.onOpenTarget).toHaveBeenCalledWith("b", "two")
-    expect(result.current.items[0]!.read).toBe(true)
+    expect(provider.markSessionRead).toHaveBeenCalledWith("two")
   })
 })
 
@@ -344,12 +377,31 @@ describe("Activity presentation", () => {
     expect(screen.getByRole("status")).toBeVisible()
     expect(screen.queryByRole("alert")).toBeNull()
   })
-  it("offers attention/history, marks all read, and keeps unavailable entries inspectable", async () => {
+  it("offers attention/history and marks every unread Session read", async () => {
     const user = userEvent.setup()
     const provider = source()
     const props = options(provider.workspace)
     function Harness() {
-      const activity = useActivityCoordinator(props)
+      const [sessionState, setSessionState] = useState(sessions)
+      const workspace = useMemo<WorkspaceAdapter>(
+        () => ({
+          ...provider.workspace,
+          markSessionRead: async (threadId) =>
+            setSessionState((current) =>
+              current.map((session) =>
+                session.threadId === threadId
+                  ? { ...session, unread: false }
+                  : session
+              )
+            ),
+        }),
+        []
+      )
+      const activity = useActivityCoordinator({
+        ...props,
+        workspace,
+        sessions: sessionState,
+      })
       return (
         <ActivityPanel
           activity={activity}

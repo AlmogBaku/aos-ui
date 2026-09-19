@@ -36,8 +36,7 @@ const copy: AgentSessionHistoryCopy = {
     waitingForInput: "Waiting for input",
     failed: "Failed",
   },
-  unread: (count) => `${count} unread`,
-  needsAttention: "Needs attention",
+  unread: "Unread",
 }
 
 const navigation: AgentSessionNavigation = {
@@ -120,6 +119,36 @@ describe("AgentSessionHistory", () => {
       })
     )
     expect(onOpenSession).toHaveBeenCalledWith("agent-a", "history-match")
+  })
+
+  it("names an unread Session last and shows both of its indicators", () => {
+    render(
+      <AgentSessionHistory
+        navigation={{
+          ...navigation,
+          openSessions: [
+            {
+              ...navigation.openSessions[0]!,
+              status: "waiting-for-input",
+              unread: true,
+            },
+          ],
+          historySessions: [],
+        }}
+        activeThreadId="open-match"
+        locale="en"
+        copy={copy}
+        query=""
+        onQueryChange={vi.fn()}
+        onOpenSession={vi.fn()}
+      />
+    )
+
+    const row = screen.getByRole("button", {
+      name: "Open Session: Shared research, Status: Waiting for input, Selected, Unread",
+    })
+    expect(within(row).getByTitle("Waiting for input")).toBeVisible()
+    expect(within(row).getByTitle("Unread")).toBeVisible()
   })
 
   it("searches both sections and offers a clear action for an empty result", () => {

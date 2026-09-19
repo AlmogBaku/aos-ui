@@ -23,6 +23,7 @@ import {
 import {
   buildAgentSessionView,
   agentStatusFromSessions,
+  agentUnreadFromSessions,
 } from "@/lib/workspace-view-model"
 import {
   buildWorkspacePathname,
@@ -631,6 +632,7 @@ export function useWorkspaceNavigation({
   const displayAgents = agents.map((agent) => ({
     ...agent,
     status: agentStatusFromSessions(agent, sessions),
+    unread: agentUnreadFromSessions(agent, sessions),
   }))
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null

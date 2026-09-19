@@ -117,6 +117,7 @@ export const fixtureSessions: SessionMetadata[] = [
     agentId: "agent-lumen",
     updatedAt: "2026-08-30T12:00:00.000Z",
     status: "waiting-for-input",
+    unread: true,
   },
   {
     threadId: "thread-vela-metrics",
@@ -129,6 +130,7 @@ export const fixtureSessions: SessionMetadata[] = [
     agentId: "agent-nori",
     updatedAt: "2026-08-27T12:00:00.000Z",
     status: "failed",
+    unread: true,
   },
 ]
 
@@ -196,6 +198,10 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   readonly #agentCatalogListeners = new Set<() => void>()
 
   readonly #activityListeners = new Set<ActivitySubscription>()
+  readonly #sessionMetadataListeners = new Set<{
+    threadIds: ReadonlySet<string>
+    listener: (metadata: SessionMetadata[]) => void
+  }>()
   readonly #sessionTitles: Map<string, string>
   #sessionSequence = 0
 
@@ -304,11 +310,28 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   async getSessionMetadata(threadIds: string[]) {
-    const requested = new Set(threadIds)
-    return structuredClone(
-      this.#sessions.filter(({ threadId }) => requested.has(threadId))
-    )
+    return this.#projectSessions(new Set(threadIds))
   }
+
+  subscribeSessionMetadata(
+    threadIds: readonly string[],
+    listener: (metadata: SessionMetadata[]) => void
+  ) {
+    const entry = { threadIds: new Set(threadIds), listener }
+    this.#sessionMetadataListeners.add(entry)
+    return () => this.#sessionMetadataListeners.delete(entry)
+  }
+
+  async markSessionRead(threadId: string) {
+    const session = this.#sessions.find((item) => item.threadId === threadId)
+    if (!session || session.unread === false) return
+    session.unread = false
+    for (const entry of this.#sessionMetadataListeners)
+      entry.listener(this.#projectSessions(entry.threadIds))
+  }
+
+  /** Native runtimes debounce exposure; the preview has no read-state clock. */
+  reportFocus() {}
 
   async createSession(agentId: string, options?: SessionCreationOptions) {
     const agent =
@@ -329,6 +352,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       agentId,
       status: "idle",
       updatedAt: this.#clock().toISOString(),
+      unread: false,
     })
     this.#sessionTitles.set(threadId, options?.title ?? "New session")
     return { threadId }
@@ -470,6 +494,12 @@ export class FixtureWorkspace implements WorkspaceAdapter {
       throw new Error("Agent already exists")
     this.#agents.push(structuredClone(agent))
     this.#publishCatalog()
+  }
+
+  #projectSessions(requested: ReadonlySet<string>) {
+    return structuredClone(
+      this.#sessions.filter(({ threadId }) => requested.has(threadId))
+    )
   }
 
   #publishCatalog() {

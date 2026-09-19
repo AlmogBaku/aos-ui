@@ -7,7 +7,8 @@
   --workspace-accent: oklch(0.68 0.2 285);
   --workspace-accent-strong: oklch(0.75 0.18 285);
   --workspace-status-running: oklch(0.75 0.17 166);
-  --workspace-status-attention: var(--workspace-status-running);
+  --workspace-status-attention: var(--info);
+  --workspace-status-unread: var(--success);
   --workspace-status-idle: oklch(0.67 0 0);
   --workspace-message-content-visibility: visible;
   --workspace-message-contain-intrinsic-size: none;
@@ -301,51 +302,6 @@
 .agentIcon[data-tone="slate"] {
   background: oklch(0.42 0.06 255);
   color: oklch(0.94 0.02 255);
-}
-
-.statusDot {
-  inline-size: 0.5rem;
-  block-size: 0.5rem;
-  flex: none;
-  border-radius: 999px;
-  background: var(--workspace-status-idle);
-}
-
-.statusDot[data-status="active"],
-.statusDot[data-status="running"] {
-  background: var(--workspace-status-running);
-  animation: status-breathe 2.2s ease-in-out infinite;
-}
-
-.statusDot[data-status="attention"],
-.statusDot[data-status="waiting-for-input"] {
-  background: var(--workspace-status-attention);
-}
-
-.statusDot[data-status="failed"] {
-  background: var(--destructive);
-}
-
-@keyframes status-breathe {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0
-      color-mix(in oklab, var(--workspace-status-running) 0%, transparent);
-    opacity: 0.62;
-  }
-
-  50% {
-    box-shadow: 0 0 0 0.2rem
-      color-mix(in oklab, var(--workspace-status-running) 16%, transparent);
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .statusDot[data-status="running"] {
-    animation: none;
-    opacity: 1;
-  }
 }
 
 .preferenceActions {

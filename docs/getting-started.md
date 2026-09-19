@@ -62,7 +62,7 @@ Open <http://localhost:3000>. You should see Aster selected with the **Market br
 1. Select another Agent in the left rail. The Session list changes with the Agent because every Session has exactly one owner.
 2. Return to Aster and inspect the recommendation, completed research subagent, investment chart, and Session Todo list in **Market brief**.
 3. Open **Launch review** and inspect its Plan. Plans belong to the message that produced them; Todos belong to the Session.
-4. Open Activity from the bell. Activity keeps notification history and unread state without becoming the source of truth for runtime work.
+4. Open Activity from the bell. Activity lists this tab's notification history, while the runtime owns which Sessions are still unread; the bell counts those Sessions.
 5. Open settings to switch appearance or language. Hebrew changes the workspace to RTL while preserving the same Agent and Session route.
 6. Press `Ctrl`/`Cmd`+`K` to open the command palette. The keyboard reference in settings lists the current shortcuts.
 

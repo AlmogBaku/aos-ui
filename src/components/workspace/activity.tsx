@@ -77,17 +77,13 @@ export function activityLabel(record: ActivityRecord, dictionary: Dictionary) {
   }
 }
 
-export function AttentionDot({ label }: { label: string }) {
+function AttentionDot({ label }: { label: string }) {
   return (
-    <span
-      className={styles.attentionDot}
-      title={label}
-      aria-hidden="true"
-    />
+    <span className={styles.attentionDot} title={label} aria-hidden="true" />
   )
 }
 
-export function ActivityMarker({
+function ActivityMarker({
   unread,
   attention,
   dictionary,

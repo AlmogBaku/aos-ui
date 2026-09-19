@@ -4,6 +4,8 @@ import type { SessionMetadata } from "@/runtime-adapters/contracts"
 import {
   buildAgentSessionView,
   agentStatusFromSessions,
+  agentUnreadFromSessions,
+  workspaceUnreadCount,
 } from "./workspace-view-model"
 
 it("does not call an Agent idle when owned execution status is unknown", () => {
@@ -17,6 +19,50 @@ it("does not call an Agent idle when owned execution status is unknown", () => {
       },
     ])
   ).toBe("unknown")
+})
+
+it("aggregates provider unread state per owning Agent only", () => {
+  const agent = { kind: "ready", id: "a", name: "A" } as const
+  const owned = {
+    agentId: "a",
+    threadId: "t",
+    updatedAt: "2026-09-07T00:00:00.000Z",
+    status: "idle",
+  } as const
+  expect(agentUnreadFromSessions(agent, [owned])).toBe(false)
+  expect(agentUnreadFromSessions(agent, [{ ...owned, unread: true }])).toBe(
+    true
+  )
+  expect(
+    agentUnreadFromSessions(agent, [
+      { ...owned, agentId: "other", unread: true },
+    ])
+  ).toBe(false)
+  // Waiting for input is a status a row shows on its own, not unread state.
+  expect(
+    agentUnreadFromSessions(agent, [{ ...owned, status: "waiting-for-input" }])
+  ).toBe(false)
+})
+
+it("counts unread and awaiting Sessions once each for the Activity bell", () => {
+  const base = {
+    agentId: "a",
+    updatedAt: "2026-09-07T00:00:00.000Z",
+    status: "idle",
+  } as const
+  expect(
+    workspaceUnreadCount([
+      { ...base, threadId: "read" },
+      { ...base, threadId: "unread", unread: true },
+      { ...base, threadId: "waiting", status: "waiting-for-input" },
+      {
+        ...base,
+        threadId: "both",
+        status: "waiting-for-input",
+        unread: true,
+      },
+    ])
+  ).toBe(3)
 })
 
 const now = new Date("2026-09-03T12:00:00.000Z")

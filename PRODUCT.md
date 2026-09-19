@@ -41,9 +41,16 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 
 ## Activity and Live Notifications
 
-Activity is the source of truth for notification history and unread state, alongside inline conversation state, coalesced in-app notices, and opt-in live browser notifications. Completion in the exact visible, focused Session is already read and suppresses alerts. Other Sessions in a focused workspace produce unread markers and one coalesced notice. Hidden tabs and visible but unfocused windows/apps can deliver eligible generic OS notifications after explicit opt-in and granted permission.
+Session read state is provider-owned: the browser reports which Session is
+exposed, and the runtime decides when that Session becomes read. Activity
+presents the resulting history alongside inline conversation state, coalesced
+in-app notices, and opt-in live browser notifications. Completion in the exact
+visible, focused Session is already read and suppresses alerts. Other Sessions
+in a focused workspace produce unread markers and one coalesced notice. Hidden
+tabs and visible but unfocused windows/apps can deliver eligible generic OS
+notifications after explicit opt-in and granted permission.
 
-Browser notifications require at least one loaded AOS tab; no delivery occurs after all tabs close. V1 includes no service worker, Web Push, backend notification service, email, remote approval, or scheduled-work notifications. Permission denial and unsupported browsers preserve Activity. Multiple tabs synchronize read state and elect one delivery tab; history hydration does not replay OS alerts. Clicks focus AOS and validate provider ownership before selecting the owning Agent and Session; deleted targets remain unavailable.
+Browser notifications require at least one loaded AOS tab; no delivery occurs after all tabs close. V1 includes no service worker, Web Push, backend notification service, email, remote approval, or scheduled-work notifications. Permission denial and unsupported browsers preserve Activity. Multiple tabs elect one delivery tab, announce a raised alert so no peer repeats it, and persist notification preferences only; Activity history stays in memory and never replays OS alerts. Clicks focus AOS and validate provider ownership before selecting the owning Agent and Session; deleted targets remain unavailable.
 
 Stored Activity and OS payloads contain no conversation, tool, question,
 permission, or error content. OS text also omits Agent and Session labels.

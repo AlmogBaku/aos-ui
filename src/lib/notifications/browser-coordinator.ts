@@ -35,6 +35,8 @@ const messageSchema = z
   .object({
     snapshot: z.string().max(1_000_000),
     liveId: z.string().max(512).optional(),
+    /** Announces an OS alert a peer already raised, so no tab repeats it. */
+    deliveredId: z.string().max(512).optional(),
     preferencesChanged: z.boolean(),
   })
   .strict()
@@ -59,12 +61,9 @@ export class BrowserActivityCoordinator {
     try {
       const saved = this.#options.platform.read()
       const snapshot = saved && deserializeActivity(saved)
-      if (snapshot) {
-        this.#options.store.hydrate(snapshot.records)
-        this.#preferences = snapshot.preferences
-      }
+      if (snapshot) this.#preferences = snapshot.preferences
     } catch {
-      /* Storage may be blocked; Activity stays usable. */
+      /* Storage may be blocked; preferences fall back to the defaults. */
     }
     this.recheckPermission()
     try {
@@ -151,31 +150,28 @@ export class BrowserActivityCoordinator {
     this.#scheduleDelivery()
     this.#options.onChange()
   }
-  #save(liveId?: string, preferencesChanged = false, broadcast = true) {
+  #save(liveId?: string, preferencesChanged = false, deliveredId?: string) {
     try {
       try {
         const saved = this.#options.platform.read()
         const previous = saved && deserializeActivity(saved)
-        if (previous) {
-          this.#options.store.hydrate(previous.records)
-          if (!preferencesChanged) this.#preferences = previous.preferences
-        }
+        if (previous && !preferencesChanged)
+          this.#preferences = previous.preferences
       } catch {}
       const snapshot = serializeActivity({
-        version: 1,
-        records: this.#options.store.records(),
+        version: 2,
         preferences: this.#preferences,
       })
       try {
         this.#options.platform.write(snapshot)
       } catch {}
       try {
-        if (broadcast)
-          this.#options.platform.send({
-            snapshot,
-            ...(liveId ? { liveId } : {}),
-            preferencesChanged,
-          })
+        this.#options.platform.send({
+          snapshot,
+          ...(liveId ? { liveId } : {}),
+          ...(deliveredId ? { deliveredId } : {}),
+          preferencesChanged,
+        })
       } catch {}
     } catch {
       /* Never persist unvalidated data. */
@@ -187,22 +183,11 @@ export class BrowserActivityCoordinator {
     if (!parsed.success) return
     const snapshot = deserializeActivity(parsed.data.snapshot)
     if (!snapshot) return
-    this.#options.store.hydrate(snapshot.records)
-    let readChanged = false
-    for (const record of this.#options.store.records()) {
-      if (
-        !record.read &&
-        getActivityPolicy(
-          record,
-          this.#options.context(),
-          this.#preferences,
-          this.#permission
-        ).markRead
-      ) {
-        this.#options.store.markRead(record.id)
-        readChanged = true
-      }
-    }
+    if (parsed.data.deliveredId)
+      this.#options.store.markBrowserDelivered(
+        parsed.data.deliveredId,
+        new Date(this.#options.now()).toISOString()
+      )
     if (parsed.data.preferencesChanged) {
       this.#preferences = snapshot.preferences
       try {
@@ -216,11 +201,8 @@ export class BrowserActivityCoordinator {
         .records()
         .find((item) => item.id === parsed.data.liveId)
       if (record) this.#queueLive(record)
-    }
-    // Persist merged monotonic state without echoing every received snapshot.
-    this.#save(undefined, false, readChanged)
-    if (parsed.data.liveId) this.#scheduleDelivery()
-    else this.#prunePending()
+      this.#scheduleDelivery()
+    } else this.#prunePending()
     this.#options.onChange()
   }
   #queueLive(record: ActivityRecord) {
@@ -265,12 +247,9 @@ export class BrowserActivityCoordinator {
         this.#settling = false
         this.#cancelSettlement = undefined
         if (!this.#active) return
-        // Peers receive the arrival before settlement and can persist exact-
-        // foreground read state. Each attempt rereads that merged snapshot.
         for (const id of this.#pending)
           if (this.#deliver(id)) this.#pending.delete(id)
         this.#prunePending()
-        this.#save()
         this.#options.onChange()
       })
       if (this.#settling) this.#cancelSettlement = cancel
@@ -283,10 +262,7 @@ export class BrowserActivityCoordinator {
     try {
       const saved = platform.read()
       const snapshot = saved && deserializeActivity(saved)
-      if (snapshot) {
-        store.hydrate(snapshot.records)
-        this.#preferences = snapshot.preferences
-      }
+      if (snapshot) this.#preferences = snapshot.preferences
       const record = store.records().find((item) => item.id === id)
       if (!record || !platform.isLeader()) return false
       this.#permission = port.getPermission()
@@ -342,6 +318,9 @@ export class BrowserActivityCoordinator {
         id,
         new Date(this.#options.now()).toISOString()
       )
+      // Peers only learn about a raised alert from this announcement, so a
+      // failover leader never repeats it.
+      this.#save(undefined, false, id)
       return true
     } catch {
       return false

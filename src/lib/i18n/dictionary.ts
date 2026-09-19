@@ -116,6 +116,7 @@ export type Dictionary = {
     attention: string
     waitingForInput: string
     failed: string
+    unread: string
   }
   empty: {
     addAgentTitle: string

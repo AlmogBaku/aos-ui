@@ -119,6 +119,7 @@ export const he = {
     attention: "דורש תשומת לב",
     waitingForInput: "ממתין לתשובה",
     failed: "נכשל",
+    unread: "לא נקרא",
   },
   empty: {
     addAgentTitle: "הוסיפו סוכן לסביבת העבודה.",
