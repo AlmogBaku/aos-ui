@@ -7,7 +7,8 @@ for other harnesses.
 Read the [runtime adapter authoring guide](../../../../docs/development/runtime-adapter-authoring.md)
 for shared obligations. [`UPSTREAM.md`](UPSTREAM.md) records the pinned MIT
 sources and attribution. [`TURN-LIFECYCLE.md`](TURN-LIFECYCLE.md) defines the
-native `/api/ws` turn boundaries and their AG-UI mapping.
+native `/api/ws` turn boundaries and their mapping to the proxy-owned run vocabulary.
+The ACP layer translates that vocabulary to the browser.
 
 ## Package map
 
@@ -18,7 +19,7 @@ native `/api/ws` turn boundaries and their AG-UI mapping.
   native event routing, heartbeat, and reconnect.
 - `attachment-registry.ts` maps durable Sessions to live Hermes Sessions and
   applies retention and warm-idle release.
-- `run.ts` converts native execution frames into ordered AG-UI segments.
+- `run.ts` converts native execution frames into ordered proxy-owned run events.
 - `history.ts` converts authoritative native history and strips native context
   envelopes and filesystem details.
 - `interactions.ts` validates question and approval batches and their resumes.
@@ -48,8 +49,7 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   Unknown slash text remains a prompt, and alias traversal is bounded.
 - Edit and Retry use authoritative message identities. Commands do not combine
   with rewind.
-- A pending question or approval retains the Session. Its answer is a complete
-  AG-UI resume, not a new Hermes prompt.
+- A pending question or approval retains the Session. Its answer is a run resume, not a new Hermes prompt.
 - Native attachment/context envelopes and paths are parsed before normalized
   history is returned.
 - Any lost native mutation acknowledgement is uncertain and is never retried

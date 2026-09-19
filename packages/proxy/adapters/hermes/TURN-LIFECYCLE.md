@@ -1,8 +1,10 @@
 # Hermes turn lifecycle
 
 This document explains how the Hermes `/api/ws` protocol represents one model
-turn and how the AOS Hermes adapter maps that turn to AG-UI. It is a reference
-for contributors changing `transport.ts`, `run.ts`, recovery, or history.
+turn and how the AOS Hermes adapter maps that turn to the proxy-owned run
+vocabulary (currently aliasing AG-UI shapes). The ACP layer then delivers those
+events to the browser. This is a reference for contributors changing
+`transport.ts`, `run.ts`, recovery, or history.
 
 ## The socket is not the turn
 
@@ -16,7 +18,7 @@ The layers have separate responsibilities:
 1. `transport.ts` authenticates the socket, correlates JSON-RPC responses, and
    delivers ordered native events.
 2. `run.ts` validates events for one attached Session and maps their semantics
-   to an AG-UI run segment.
+   to a proxy-owned run segment.
 3. The shared run coordinator owns subscriber replay and terminal settlement.
 4. Authoritative Hermes HTTP history reconciles durable transcript state.
 
@@ -100,11 +102,12 @@ source explicitly keeps the current model and allows the turn to continue. AOS
 therefore reconciles Session status instead of translating the frame directly
 to `RUN_ERROR`.
 
-## AG-UI mapping rules
+## Run vocabulary mapping rules
 
-The Hermes adapter applies these rules:
+The Hermes adapter applies these rules (the proxy-owned vocabulary currently
+aliases AG-UI shapes; the ACP layer translates them for the browser):
 
-- `message.interim` closes only the current AG-UI text message. It does not emit
+- `message.interim` closes only the current text message in the proxy-owned vocabulary. It does not emit
   `RUN_FINISHED` or `RUN_ERROR`.
 - When `already_streamed` is false, the adapter emits the interim text before
   closing that text message. When it is true, the adapter closes the text

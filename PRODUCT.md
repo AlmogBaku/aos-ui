@@ -19,7 +19,7 @@ AOS provides one calm workspace for selecting a primary Agent, resuming its Sess
 AOS is a UI for native harnesses, with Agent creation and rich messages around
 their conversations. Hermes is the primary and first-supported harness;
 OpenClaw and OpenCode use separate integrations behind the same harness-runtime
-boundary. Generic AG-UI and explicit fixtures remain available. Monty is an
+boundary. The browser connects to the proxy over ACP v2 WebSocket; the server adapter seam supports a Generic AG-UI adapter. Explicit fixtures remain available. Monty is an
 independent optional integration.
 
 ## Operating Context
@@ -54,7 +54,7 @@ Browser notifications require at least one loaded AOS tab; no delivery occurs af
 
 Stored Activity and OS payloads contain no conversation, tool, question,
 permission, or error content. OS text also omits Agent and Session labels.
-Hermes and generic AG-UI cover only the active Session, fixtures exercise
+The proxy activity feed covers all Sessions visible to the connection. Fixtures exercise
 deterministic scenarios, and the other native adapters expose Activity only
 when their capability contract reports it. Browser and OS policies can delay
 or suppress delivery. The Activity bell is in the desktop Agents heading and

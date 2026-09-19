@@ -32,7 +32,7 @@ interactions, and durable history.
 ```text
 React + assistant-ui
         |
-        | AOS REST/run control + events WebSocket + AG-UI run streams
+        | normalized AOS REST (bytes/discovery) + ACP v2 WebSocket
         v
 +---------------------------------------------------------------+
 | AOS gateway                                                   |
@@ -279,13 +279,12 @@ The interface covers:
 - runtime status and capability values;
 - Agent catalog and visibility;
 - Session catalog, lifecycle, and history;
-- AG-UI run start, stream, and reconnect;
+- ACP v2 run stream, session lifecycle, and reconnect over WebSocket;
 - typed active-run controls, including Stop and optional steering;
 - questions, approvals, reactions, and feedback;
 - attachments, artifacts, and native audio operations;
 - models and context;
-- Session Todos and structured progress through AG-UI activity and normalized
-  history;
+- Session Todos as ACP `plan_update` notifications with `_meta.aos.todos`, restored through normalized history;
 - scoped invalidation subscriptions;
 - graceful disposal.
 
@@ -304,8 +303,7 @@ Each adapter owns its native implementation:
 Capabilities are structured values containing choices, limits, scopes,
 concurrency rules, and unavailability reasons. They are not reduced to booleans.
 
-AG-UI is the run transport foundation and is not implemented as another runtime
-adapter.
+ACP v2 over WebSocket is the browser run transport. The `packages/proxy/acp/` layer translates the proxy-owned run vocabulary to ACP; it is not implemented as another runtime adapter.
 
 ## Native connection topology
 
@@ -459,10 +457,9 @@ Strict versioned REST operations expose:
 - capabilities, models, and context;
 - reactions, attachments, artifacts, audio, and invitations.
 
-Session Todos and structured progress use AG-UI Activity Messages. An
-authoritative `PLAN` snapshot and its deltas travel with the Session run and
-are restored through normalized history; they are not a parallel polling
-contract. Session execution status derives from coordinator and AG-UI lifecycle
+Session Todos travel as ACP `plan_update` notifications carrying `_meta.aos.todos`
+and are restored through normalized history; they are not a parallel polling
+contract. Session execution status derives from the coordinator and ACP lifecycle
 state.
 
 Representative resource paths are:
@@ -489,40 +486,37 @@ unavailable states.
 
 ### Session run plane
 
-Standard AG-UI concepts represent:
+ACP v2 native methods and events represent:
 
-- messages and multimodal input;
-- run lifecycle and streaming;
-- reasoning;
-- tool calls and custom UI;
-- usage;
-- run interruption, questions, and approvals;
-- terminal outcomes.
+- messages and multimodal input (`session/prompt`, `agent_message_chunk`, `agent_thought_chunk`);
+- run lifecycle and streaming (`session/resume`, `tool_call_update`, `state_update`);
+- session management (`session/new`, `session/list`, `session/cancel`, `session/close`, `session/delete`);
+- config options, usage, pending requests, and plans (`session/set_config_option`, `usage_update`, `session/request_permission`, `elicitation/create`, `plan_update`);
+- terminal outcomes and stop reasons.
 
 The gateway accepts exactly one authorized new user turn or one bound interrupt
 response for a run. Browser history, tools, state, and context are never treated
 as authoritative provider input.
 
-Minimal namespaced `aos.*` extensions are permitted only for run-adjacent
-behavior absent from AG-UI. Raw provider events are rejected.
+`_aos/*` extension methods and `_meta.aos` payloads defined in
+`packages/protocol/acp.ts` are permitted only for run-adjacent behavior absent
+from core ACP. Raw provider events are rejected.
 
 ### Active-run control plane
 
-AG-UI defines the input that starts or resumes a run and the event stream it
-produces. It does not define client-to-server mutations for an already active
-model turn. AOS therefore exposes typed, versioned REST controls alongside the
-AG-UI stream:
+ACP defines the input that starts or resumes a run and the event stream it
+produces. Active-run control travels over the same ACP socket as `_aos`
+extension requests:
 
-- Stop asks the selected adapter to terminate the current native execution;
-- steering delivers a text correction to that same execution when the
-  capability is available.
+- `session/cancel` stops the current native execution;
+- `_aos/session/steer` delivers a text correction to that same execution when
+  the capability is available.
 
 These controls use the same authorization, Session scope, active-run identity,
-and coordinator as the stream. They do not create another AG-UI run or emit a
-second `RUN_STARTED`. The provider-neutral run handle exposes optional steering;
-only a concrete adapter translates it into a native operation. A server-to-
-browser `aos.steer.accepted` custom event makes a successful acknowledgement
-replayable without treating raw provider events as protocol.
+and coordinator as the run stream. They do not create another run. The
+provider-neutral run handle exposes optional steering; only a concrete adapter
+translates it into a native operation. The proxy emits `_aos/steer_accepted`
+as a replayable notification without exposing raw provider events.
 
 ### Invalidation plane
 
@@ -573,8 +567,7 @@ state rather than a false result or automatic retry.
 
 ## Questions and approvals
 
-Questions and approvals are AG-UI interrupts belonging to a run. Each interrupt
-has a stable request ID, response schema, scope, and authorized control policy.
+Questions and approvals are normalized interrupts belonging to a run. The browser receives them as ACP `session/request_permission` or `elicitation/create` requests. Each interrupt has a stable request ID, response schema, scope, and authorized control policy.
 
 When an interrupt occurs:
 
@@ -713,7 +706,7 @@ and browser code separate:
 ```text
 packages/
   protocol/
-    ag-ui/
+    acp/
     workspace/
 
   gateway/
@@ -752,8 +745,8 @@ WebSocket.
 An implementation conforms to this architecture only when all of the following
 remain true:
 
-1. The browser communicates exclusively through normalized AOS and AG-UI
-   protocols.
+1. The browser communicates exclusively through normalized AOS REST (bytes/discovery)
+   and ACP v2 over WebSocket.
 2. Every resource and event is scoped by Tenant and Runtime definition before
    Agent and Session identity.
 3. Native Agent and Session IDs are stable and are not rewritten for security
@@ -768,8 +761,8 @@ remain true:
 9. Browser disconnect never implies native Stop or Session deletion.
 10. Pending questions and approvals remain reconnectable and resume the same
     run.
-11. Active-turn control is a typed AOS extension, never a synthetic second
-    AG-UI run; provider-specific control methods remain adapter-private.
+11. Active-turn control is an `_aos` extension over the ACP socket, never a
+    synthetic second run; provider-specific control methods remain adapter-private.
 12. Uncertain sends, steering, and interaction responses are never retried
     automatically.
 13. REST and provider state remain authoritative after reconnect.

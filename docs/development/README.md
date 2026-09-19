@@ -6,8 +6,8 @@ runtime gateway. Operator setup and product usage remain in the
 
 ## Runtime adapters
 
-- [Author a runtime adapter](runtime-adapter-authoring.md) — preserve AOS and
-  AG-UI semantics while mapping a native harness.
+- [Author a runtime adapter](runtime-adapter-authoring.md) — map a native harness
+  to the proxy-owned run vocabulary; the ACP layer handles browser delivery.
 - [Hermes V1 retrospective](hermes-v1-retrospective.md) — understand the
   implementation choices and the mistakes that exposed the adapter contract.
 - [Gateway architecture](../design/aos-runtime-gateway-architecture.md) — the

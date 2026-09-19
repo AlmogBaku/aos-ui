@@ -17,14 +17,15 @@ boundary.
 | Change Agent visibility         | Temporary    | Native                                   | Unavailable                           | Optional workspace mutation | Unavailable                  |
 | Agent creation                  | No           | Optional integration; safe write blocked | Unavailable                           | No shared support           | Optional native integration  |
 | Session Todos                   | Demo data    | Projected native tool results            | Unavailable                           | No shared support           | Unavailable                  |
-| Workspace-wide Activity         | Demo events  | Active Session only                      | Unavailable                           | Active Session only         | Unavailable                  |
+| Workspace-wide Activity         | Demo events  | Workspace-wide from proxy feed           | Unavailable                           | Unavailable                 | Unavailable                  |
+| Session read state              | Demo data    | Native watermark (Hermes `last_read_at`) | Unavailable                           | Unavailable                 | Unavailable                  |
 | Models                          | Demo choices | Native                                   | Native catalog; selection unavailable | Provider-dependent          | Native catalog and selection |
 | Context usage                   | Demo data    | Native                                   | Native usage/estimate                 | Provider-dependent          | Unavailable                  |
 | Questions and approvals         | Demo flows   | Native                                   | Native                                | Provider-dependent messages | Native                       |
 | Attachments                     | Demo flows   | Native                                   | Supported image/file inputs           | Agent-dependent             | Native                       |
 | Stop and reconnect              | Demo flows   | Native                                   | Native                                | Provider-dependent          | Native                       |
 | Edit/regenerate                 | Demo flows   | Native truncate/resubmit                 | Unavailable                           | Provider-dependent          | Unavailable                  |
-| Active-turn steering            | No           | Native visible redirect                  | Unavailable                           | Not standardized by AG-UI   | Unavailable                  |
+| Active-turn steering            | No           | Native visible redirect                  | Unavailable                           | Not standardized by ACP     | Unavailable                  |
 | Published Artifacts             | Demo data    | Optional AOS integration                 | Unavailable                           | Shared presentation tools   | Unavailable                  |
 | Rich presentation tools         | Demo data    | Optional AOS integration                 | Optional AOS integration              | Shared presentation tools   | Optional AOS integration     |
 | Voice                           | No           | Native STT/TTS                           | Unavailable                           | No                          | Unavailable                  |
@@ -35,7 +36,7 @@ Use fixture mode to evaluate layout, localization, keyboard flow, rich output, a
 
 ## Hermes
 
-Hermes owns profiles, Sessions, authentication, speech providers, tools, and persistence. AOS connects directly to the native HTTP/WebSocket API. Native active-turn steering records a visible user correction and can fall back to Hermes's provider queue. Profile visibility is native. The optional integration can provide a creator interview, but automated profile creation fails closed until Hermes provides an atomic no-overwrite create operation.
+Hermes owns profiles, Sessions, authentication, speech providers, tools, and persistence. AOS connects directly to the native HTTP/WebSocket API over the server adapter; the browser sees ACP v2. Native active-turn steering records a visible user correction and can fall back to Hermes's provider queue. Profile visibility is native. The optional integration can provide a creator interview, but automated profile creation fails closed until Hermes provides an atomic no-overwrite create operation.
 
 ## OpenClaw
 
@@ -43,7 +44,13 @@ The OpenClaw adapter uses the authenticated, negotiated Gateway connection for p
 
 ## Generic AG-UI
 
-Generic AG-UI requires a run endpoint and a separate workspace service for Agent and Session discovery. The shared workspace contract covers listing Agents, listing/loading/creating Sessions, and optionally changing visibility. Core AG-UI does not define a same-run steering command; a future adapter must implement the optional normalized AOS steering operation before the UI exposes it. Native capabilities that are not represented by those services remain unavailable.
+Generic AG-UI is a server-side adapter seam; the browser always communicates over ACP v2 WebSocket
+regardless of the server adapter. A Generic AG-UI adapter requires a run endpoint and a separate
+workspace service for Agent and Session discovery. The shared workspace contract covers listing
+Agents, listing/loading/creating Sessions, and optionally changing visibility. Core AG-UI does not
+define a same-run steering command; a future adapter must implement the optional normalized AOS
+steering operation before the UI exposes it. Session read state, workspace-wide Activity, and
+native capabilities not represented by those services remain unavailable.
 
 ## OpenCode
 

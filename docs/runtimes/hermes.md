@@ -2,8 +2,7 @@
 
 AOS connects to an independently operated `hermes serve` HTTP/WebSocket API
 through the TypeScript proxy. Hermes owns profiles, Sessions, runs, tools,
-credentials, and durable history. The browser sees only normalized AOS and
-AG-UI data.
+credentials, and durable history. The browser connects over ACP v2 WebSocket at `/api/aos/v1/acp`.
 
 ## Prerequisites
 
@@ -174,9 +173,9 @@ The integration reads this metadata; it does not grant creator authority itself.
 - Native profiles form the AOS Agent catalog and can expose visibility changes.
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity coverage is limited to the active Session.
-- AG-UI starts or resumes a run and carries its server-to-browser event stream.
-  Stop and steering are separate normalized AOS REST controls on that existing
-  run; neither submits a second AG-UI run.
+- ACP v2 starts or resumes a run and carries its server-to-browser event stream.
+  Stop (`session/cancel`) and steering (`_aos/session/steer`) travel over the
+  same ACP socket; neither creates another run.
 - Stop uses native `session.interrupt`.
 - Text-only active-turn steering uses native `session.redirect`. Hermes may
   report the correction as immediately redirected or accepted into its native

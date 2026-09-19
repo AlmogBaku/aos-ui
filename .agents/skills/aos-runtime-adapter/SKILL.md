@@ -1,6 +1,6 @@
 ---
 name: aos-runtime-adapter
-description: Add, audit, or debug a server-side AOS runtime adapter while preserving normalized AG-UI execution and native harness semantics.
+description: Add, audit, or debug a server-side AOS runtime adapter while preserving the proxy-owned run vocabulary and native harness semantics.
 ---
 
 # Work on an AOS runtime adapter
@@ -26,12 +26,14 @@ Map native behavior onto `packages/proxy/core/runtime.ts` and the existing
 `SessionCoordinator`. Keep connection topology, live identities, attachment,
 retention, payload validation, and native recovery inside the adapter. Keep
 admission, normalized run state, control serialization, subscriber fanout, and
-AG-UI segment identity in the coordinator.
+run segment identity in the coordinator.
 
-Use standard AG-UI for messages, reasoning, tools, activity, lifecycle, and
-interrupts. Use an AOS extension only for a demonstrated behavior AG-UI does
-not express. Require evidence from the current adapter and another native
-runtime before generalizing provider mechanics into shared core or protocol.
+Emit the proxy-owned run vocabulary for messages, reasoning, tools, activity,
+lifecycle, and interrupts (it currently aliases AG-UI shapes; the ACP layer
+delivers them to the browser). Use an AOS extension only for a demonstrated
+behavior the vocabulary does not express. Require evidence from the current
+adapter and another native runtime before generalizing provider mechanics into
+shared core or protocol.
 
 ## Separate attachment and media planes
 
@@ -79,7 +81,7 @@ rewind, and interrupt resume remain distinct operations.
 ## Complete the work
 
 Run the focused adapter tests and the affected provider-neutral conformance and
-browser tests. Confirm capability fidelity, stable ownership, AG-UI event
+browser tests. Confirm capability fidelity, stable ownership, proxy-vocabulary event
 ordering, cross-Session isolation, reconnect without prompt replay, and native
 data non-disclosure. For attachments or delivered media, cover split stream
 markers, history restoration, exact receipt correlation, opaque retrieval,

@@ -252,6 +252,19 @@ standard component cannot express and record that reason.
 - **Narrow capacity:** use the established drawers and preserve focus
   restoration rather than creating parallel mobile navigation.
 
+#### Session status dots
+
+Two independent dots may appear together on a navigation row; neither hides the other.
+
+| State   | Color                        | Meaning                                                            |
+| ------- | ---------------------------- | ------------------------------------------------------------------ |
+| Unread  | `--success` (green)          | Session has content the user has not seen. Clears on focused view. |
+| Waiting | `--info` (blue)              | Session is waiting for user input.                                 |
+| Running | `--success` (teal-breathing) | Active model turn in progress.                                     |
+
+Row count pills (violet) were removed; the bell count replaces them as the sole
+derived unread count. Browsing the Activity drawer marks nothing read.
+
 ### Rich Output
 
 **Character:** informative when available and inspectable when it is not.

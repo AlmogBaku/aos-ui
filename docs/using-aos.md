@@ -54,9 +54,16 @@ The dedicated creator identity and provider/system definitions never appear in n
 
 ## Use Activity and notifications
 
-Activity is the persistent browser inbox for run completion, failures, questions, permissions, and Agent-creation outcomes. Provider state remains authoritative for the underlying work.
+Activity is the browser inbox for run completion, failures, questions, permissions, and Agent-creation outcomes. Provider state remains authoritative for the underlying work.
 
-The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from another Session add unread markers and an in-app notice. A hidden tab or an unfocused browser window can show a generic operating-system notification after you enable notifications in Activity settings and grant browser permission.
+Session status dots on navigation rows communicate two independent signals that may appear together:
+
+- **Green (unread):** the Session has content you have not yet seen. Clears when you view the Session in a focused window. Browsing the Activity drawer does not mark anything read.
+- **Blue (waiting):** the Session is waiting for your input. Clears when you respond or the run finishes.
+
+The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from other Sessions add unread markers and an in-app notice. A hidden tab or an unfocused browser window can show a generic operating-system notification after you enable notifications in Activity settings and grant browser permission.
+
+Activity history lives in the proxy's in-memory feed; it does not survive a proxy restart by design.
 
 > [!IMPORTANT]
 > Browser notifications require at least one loaded AOS tab. There is no service worker, Web Push service, email delivery, or closed-app delivery.

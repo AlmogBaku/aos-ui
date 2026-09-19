@@ -73,7 +73,8 @@ runtime should receive once when the invited Session is created.
 
 The command prints a URL whose fragment contains the invitation. The fragment
 stays in the guest URL so refresh can authenticate again; URL fragments are not
-sent in HTTP requests. The browser sends the token as guest API authorization.
+sent in HTTP requests. The browser authenticates by sending the token as the
+`_meta.aos.token` of an `auth/login` ACP request on the guest connection.
 
 > [!WARNING]
 > The JWT is signed, not encrypted. Its holder can read the Agent ID,
@@ -92,7 +93,7 @@ sent in HTTP requests. The browser sends the token as guest API authorization.
 - Attachments are selected before the first Send and staged only after the
   invited Session resolves.
 - Streaming, Stop, questions, cancellation, reload, and reconnect use the same
-  normalized AG-UI path as operator conversations.
+  normalized ACP v2 path as operator conversations.
 - Voice transcription and speech are Agent-scoped and do not create a Session.
 - Expiry detaches the guest only; it does not stop provider work.
 - Invalid or expired links ask the guest to request a new invitation.

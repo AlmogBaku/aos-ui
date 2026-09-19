@@ -15,8 +15,8 @@ The output is written to `dist/`. Serve it through a static host that:
 - serves `/runtime-config.json` without long-lived caching;
 - gives hashed assets immutable caching;
 - exposes `/api/health` for the web service; and
-- forwards only `/api/aos/v1` to the private TypeScript runtime proxy,
-  preserving HTTP streaming and WebSocket upgrades without turning proxy
+- forwards `/api/aos/v1` and `/api/guest/v1` to the private TypeScript runtime proxy,
+  passing WebSocket upgrades on `/api/*/acp` without turning proxy
   failures into SPA responses.
 
 The Bun listener implements these behaviors alongside the normalized runtime API.
@@ -49,8 +49,9 @@ AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing
 Hermes remains independently operated. The overlay runs one Bun process that
 serves static assets and the private TypeScript proxy on separate operator and
 guest listeners. External ingress owns TLS; the browser uses the normalized
-`/api/aos/v1` API for catalogs and history, AG-UI/SSE run streams, and separate
-AOS REST controls such as Stop and capability-gated steering.
+`/api/aos/v1` API for catalogs, history, and ACP v2 WebSocket run streams at
+`/api/aos/v1/acp`. External reverse proxies must pass WebSocket upgrades on
+`/api/*/acp`.
 The operator listener has no application authentication: anyone who can reach
 it has full operator access. The operator listener has no guest API route, and
 the guest listener has no operator API route.
@@ -175,7 +176,7 @@ it starts owns both distinct listeners:
   port `3001` by default.
 
 An external reverse proxy may expose only the guest listener for invited chat.
-It must preserve SSE flushing and WebSocket upgrades and must not route the
+It must pass WebSocket upgrades on `/api/*/acp` and must not route the
 operator API or any native Hermes endpoint. Nginx is optional.
 
 Copy and substitute the templates outside the checkout; they are not an

@@ -12,7 +12,7 @@ V1 provides one working Hermes-backed AOS workspace:
 ```text
 React + assistant-ui
         |
-        | AOS REST/run control + events WebSocket + AG-UI run streams
+        | normalized AOS REST (bytes/discovery) + ACP v2 WebSocket
         v
 TypeScript gateway
         |
@@ -25,7 +25,7 @@ Hermes adapter
 Hermes dashboard API
 ```
 
-The browser communicates only with normalized AOS and AG-UI endpoints. Hermes
+The browser communicates only with normalized AOS REST (bytes/discovery) and the ACP v2 WebSocket. Hermes
 URLs, credentials, live Session IDs, payloads, and native event positions stay
 server-side.
 
@@ -69,7 +69,7 @@ Hermes' WebSocket or attachment registry.
 Adding either known adapter should require one configuration variant, one new
 adapter package, one factory case, and adapter-specific deployment
 documentation. It must not require changes to the coordinator, normalized
-routes, guest policy, AG-UI schemas, or browser runtime. V1 proves this seam
+routes, guest policy, ACP schemas, or browser runtime. V1 proves this seam
 with a provider-neutral conformance runtime in tests; it does not add empty
 production adapter packages.
 
@@ -179,14 +179,13 @@ V1 supports:
   Session IDs;
 - rename and delete where the native operation supports them;
 - models, context, and suggestions where Hermes exposes them;
-- Session Todos as AG-UI `PLAN` activity snapshots and deltas restored through
-  normalized history;
+- Session Todos as ACP `plan_update` notifications with `_meta.aos.todos`, restored through normalized history;
 - attachments, artifacts, images, and native audio operations where supported;
 - capability-driven unavailable states for unsupported native operations.
 
 Capabilities are cached for the selected Agent and Session scope. Ordinary
 renders and generic Session invalidations do not refetch them. Execution status
-derives from coordinator and AG-UI lifecycle state rather than a separate
+derives from the coordinator and ACP lifecycle state rather than a separate
 activity request, and audio transforms run only after an explicit user action.
 
 `New Session` creates a browser draft only. On first Send, Assistant UI queues
@@ -202,33 +201,33 @@ not encoded into Session IDs for URL formatting.
 
 ## Runs and interactions
 
-Standard AG-UI represents run input, messages, streaming, reasoning, tool
-calls, custom UI, usage, lifecycle, and run interruption. It does not define a
-browser command that mutates an already active model turn. The gateway accepts
+ACP v2 represents run input, messages, streaming, reasoning, tool
+calls, usage, lifecycle, session management, and run interruption from the browser's perspective. `_aos` extension methods handle active-turn control and workspace events. The gateway accepts
 exactly one authorized new user turn or one response bound to an existing
 interrupt. Browser history, state, tools, and context are not authoritative
 provider input.
 
-Stop and active-turn steering are typed AOS REST controls alongside the AG-UI
-stream. They target the coordinator's existing logical run; neither submits a
-second AG-UI run nor emits another `RUN_STARTED`. Both require the existing
+Stop (`session/cancel`) and active-turn steering (`_aos/session/steer`) are ACP
+requests over the same WebSocket as the run stream. They target the coordinator's
+existing logical run; neither creates another run. Both require the existing
 controller identity and serialize through the coordinator so Stop cannot race
 with steering.
 
-The V1 run transport is:
+The V1 browser wire is ACP v2 over WebSocket:
 
-| Method | Path                                                               | Contract                                    |
-| ------ | ------------------------------------------------------------------ | ------------------------------------------- |
-| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs`           | AG-UI `RunAgentInput`; SSE event response   |
-| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/reconnect` | Reattach to the named run position; SSE     |
-| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/stop`      | AOS control; `idle` or `stopping`           |
-| `POST` | `/api/aos/v1/agents/{agentId}/sessions/{sessionId}/runs/steer`     | AOS control; `steered` or provider `queued` |
+| Endpoint                  | Contract                                               |
+| ------------------------- | ------------------------------------------------------ |
+| `GET /api/aos/v1/acp`     | WebSocket upgrade; `Acp-Connection-Id` response header |
+| `GET /api/guest/v1/acp`   | Guest lane; same upgrade contract                      |
+| `GET /api/aos/v1/runtime` | Discovery: capabilities and available models           |
 
-The strict steering body is
-`{ requestId, expectedRunId, text }`. `requestId` provides mutation
-idempotency, `expectedRunId` prevents stale UI from controlling a newer run,
-and `text` is non-empty UTF-8 limited to 1 MiB. `steered` returns HTTP `200`;
-provider-accepted `queued` returns `202`.
+Run lifecycle over ACP uses `session/prompt` (new turn), `session/resume` (reconnect with `_meta.aos.after`
+sequence cursor), `session/cancel` (Stop), and `_aos/session/steer` (active-turn steering).
+REST remains only for bytes: attachment staging, artifact download, audio transcription and synthesis.
+
+The `_aos/session/steer` request carries `{ sessionId, requestId, text }`.
+`requestId` provides mutation idempotency and `text` is non-empty UTF-8.
+`steered` or provider-accepted `queued` arrives as `_aos/steer_accepted`.
 
 Steering is optional and capability-gated. It accepts non-empty text only,
 requires the browser's expected active `runId`, and deduplicates a bounded set
@@ -239,8 +238,8 @@ again. Definite conflicts preserve the queued copy; uncertain dispatch is never
 retried automatically.
 
 Questions and approvals remain part of the same logical Hermes execution. An
-interrupted AG-UI segment ends with `RUN_FINISHED` and an interrupt outcome. An
-authorized response starts a fresh AG-UI `runId` carrying `resume[]`, while the
+interrupted run segment ends with a `state_update { state: "idle" }` and an interrupt outcome. An
+authorized response resumes the run, while the
 coordinator retains the logical execution and streams the eventual final
 assistant response. Operator and guest lanes share admission state but retain
 distinct control permissions.
@@ -272,13 +271,12 @@ authorize scope
 ```
 
 The coordinator preserves one logical execution across start, interrupt,
-response, steering, Stop, and reconnect while each AG-UI segment keeps its own
-stable `runId`. Steering does not create a segment. Pending questions and
+response, steering, Stop, and reconnect while each ACP run segment carries its own stable sequence cursor. Steering does not create a segment. Pending questions and
 approvals reappear after reload and remain answerable. Completed output and
 steering acknowledgements that arrived while disconnected are recovered without
 resending the prompt or correction.
 
-Workspace invalidations use the normalized events WebSocket. REST remains
+Workspace invalidations travel over the ACP connection via `_aos/catalog_invalidated` and `_aos/session_invalidated` notifications. REST remains
 authoritative: subscribe before reading, mark overlapping reads dirty, reject
 stale generations, and repeat until the read completes cleanly.
 

@@ -29,3 +29,18 @@ Session dismisses the drawer immediately. Activity remains visible at both
 levels, while merely browsing the drawer does not mark a conversation read.
 
 Any intentional visual departure must be called out before it is introduced.
+
+## Intentional departures introduced 2026-09
+
+- **Attention color shifted from teal to blue (`--info`):** waiting-for-input state
+  uses `--info` (blue) rather than teal to distinguish it from the unread signal.
+- **Unread dot uses `--success` (green):** a separate green dot marks Sessions with
+  content the user has not yet seen, independent of execution state.
+- **Running indicator uses a breathing teal dot:** an active model turn uses a
+  breathing animation on a teal dot, not a violet one.
+- **Status and read state appear as two independent dots:** both dots may coexist
+  on a row; neither hides the other.
+- **Row Activity count pills removed:** navigation rows no longer carry violet
+  count pills. The bell in the Agents heading shows the sole derived unread count.
+- **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
+  reading a Session there does not change its read state.

@@ -4,7 +4,7 @@ AOS UI is the business-agent workspace and UI companion to the [AOS capability k
 
 ## Ownership model
 
-A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, and optional capabilities. Session Todos arrive as AG-UI PLAN activity, and execution status derives from the normalized run lifecycle.
+A deployment selects one runtime engine. That runtime owns Agents, Sessions, messages, runs, credentials, tools, configuration, and durable history. AOS projects those records into Assistant UI and adds a small workspace boundary for Agent catalogs, verified Session ownership, and optional capabilities. Session Todos arrive as ACP `plan_update` notifications, and execution status derives from the normalized run lifecycle.
 
 The core relationships are strict:
 
@@ -30,19 +30,17 @@ implement the same normalized server boundary without adding provider branches
 to the browser. Each native adapter keeps its own transport, credentials,
 recovery positions, and provider payloads private.
 
-The browser uses AG-UI to start or resume Session runs and receive their event
-streams. Namespaced AOS REST operations provide workspace resources and the
-active-run controls that AG-UI does not standardize, including Stop and
-capability-gated steering. The AOS WebSocket carries invalidations, not native
-run events. Fixture mode remains explicit synthetic data for evaluation and
-tests; invalid real-runtime configuration renders an unavailable screen rather
-than falling back to fixtures.
+The browser communicates with the proxy through normalized AOS REST for bytes and
+discovery, and through the ACP v2 WebSocket at `/api/aos/v1/acp` for run
+streams, session lifecycle, agent catalog, and active-run controls. Fixture mode
+remains explicit synthetic data for evaluation and tests; invalid real-runtime
+configuration renders an unavailable screen rather than falling back to fixtures.
 
 Assistant UI owns queued messages. While a run is busy, an ordinary Send adds
-one FIFO follow-up; a supported text-only steering action targets the existing
-logical run through AOS REST. It does not create another AG-UI run. The proxy
-correlates the acknowledgement into the existing event stream, and provider
-history remains authoritative after settlement or reconnect.
+one FIFO follow-up; a supported text-only steering action delivers an
+`_aos/session/steer` request over the same ACP socket. It does not create
+another run. The proxy correlates the acknowledgement into the existing event
+stream, and provider history remains authoritative after settlement or reconnect.
 
 Browser code never imports native filesystem writers or provider implementations. Native packages install presentation tools and, only where the harness exposes the required safe authority, creator support. Agent profiles, worktrees, secrets, and runtime state remain outside the frontend checkout.
 

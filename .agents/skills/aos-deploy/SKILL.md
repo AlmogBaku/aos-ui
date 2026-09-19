@@ -68,7 +68,7 @@ routes do not reach the native runtime.
 
 Verify that both listeners resolve the same configured Runtime instance while
 retaining distinct route and projection policies. Exercise one normalized
-AG-UI stream and reconnect without prompt replay, and confirm guest output is
+ACP run stream and reconnect without prompt replay, and confirm guest output is
 projected before delivery. Inspect the browser bundle and network boundary for
 native provider routes, URLs, and credentials. Confirm the deployed guest
 origin matches invite minting before issuing a link. Report all changed service

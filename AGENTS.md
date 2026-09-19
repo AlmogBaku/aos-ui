@@ -17,7 +17,8 @@
   Execution** before changing tool timelines, reasoning, rich tool placement,
   conversation search, or their responsive presentation.
 - `src/runtime-adapters/contracts.ts` is the browser runtime boundary;
-  `packages/proxy/core/runtime.ts` is the server adapter boundary. Read
+  `packages/proxy/core/runtime.ts` is the server adapter boundary;
+  `packages/protocol/acp.ts` is the browser-wire contract. Read
   `docs/development/runtime-adapter-authoring.md` before adding, auditing, or
   debugging a server runtime adapter, and keep provider details behind the
   corresponding boundary.
@@ -69,7 +70,7 @@ external reverse proxy is optional.
 - Assistant UI owns threads, messages, runs, branches, composer state, and
   thread lifecycle. `WorkspaceAdapter` adds only Agent ownership, Session
   metadata, creator identity, and provider capabilities. Session Todos arrive
-  as AG-UI PLAN activity. Creation uses
+  as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation uses
   an ordinary creator-owned Session opened through `New Agent`; the hidden
   creator is excluded from normal roster and management surfaces. There are no
   provisional Agents or ownership promotion.

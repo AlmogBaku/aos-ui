@@ -23,7 +23,7 @@ Hermes cookies or credentials.
 
 ## Hermes HTTP works but live updates fail
 
-- Confirm Nginx forwards WebSocket upgrades on `/api/aos/v1/events` and keeps
+- Confirm Nginx forwards WebSocket upgrades on `/api/aos/v1/acp` and keeps
   buffering disabled for `/api/aos/v1`.
 - Verify the proxy config's Hermes base URL is reachable from the proxy
   container; it is never a browser-facing URL.
@@ -41,7 +41,7 @@ same-origin `/api/aos/v1` path.
 
 ## Generic AG-UI Agents or Sessions do not load
 
-- Verify the workspace service implements every required endpoint in the [AG-UI guide](runtimes/ag-ui.md).
+- Verify the workspace service implements every required endpoint in the [ACP guide](runtimes/acp.md).
 
 ## OpenClaw is unavailable
 
