@@ -18,6 +18,7 @@ import {
   SessionAttachmentStageResponseSchema,
   SessionContextResponseSchema,
   SessionModelUpdateRequestSchema,
+  SessionPatchRequestSchema,
   SessionModelsResponseSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -466,6 +467,7 @@ describe("AOS v1 normalized protocol", () => {
           sessionRun: { status: "available" },
           sessionStop: { status: "available" },
           sessionSteer: { status: "available" },
+          sessionReadState: { status: "available" },
         },
       }).status
     ).toBe("ready")
@@ -592,6 +594,16 @@ describe("AOS v1 normalized protocol", () => {
         offset: 0,
       })
     ).toThrow()
+  })
+
+  it("admits exactly one Session mutation intent per patch", () => {
+    expect(SessionPatchRequestSchema.parse({ unread: false })).toEqual({
+      unread: false,
+    })
+    expect(() =>
+      SessionPatchRequestSchema.parse({ unread: false, archived: true })
+    ).toThrow()
+    expect(() => SessionPatchRequestSchema.parse({})).toThrow()
   })
 
   it("accepts only normalized history parts and stable Session creation identities", () => {

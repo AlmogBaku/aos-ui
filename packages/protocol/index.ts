@@ -89,8 +89,7 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionRun: OperationCapabilitySchema,
     sessionStop: OperationCapabilitySchema,
     sessionSteer: OperationCapabilitySchema,
-    // Optional only until every runtime literal declares it (Phase A, lane A5).
-    sessionReadState: OperationCapabilitySchema.optional(),
+    sessionReadState: OperationCapabilitySchema,
   }),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>

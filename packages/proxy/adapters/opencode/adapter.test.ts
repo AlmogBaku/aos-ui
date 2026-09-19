@@ -172,6 +172,11 @@ describe("OpenCode server adapter", () => {
       name: "OpenCodeWorkspaceUnavailableError",
     })
     await expect(
+      adapter.mutateSession("research", "session-1", "PATCH", { unread: false })
+    ).rejects.toMatchObject({
+      name: "OpenCodeWorkspaceUnavailableError",
+    })
+    await expect(
       adapter.artifact("research", "session-1", "artifact-1")
     ).rejects.toMatchObject({
       name: "OpenCodeContentUnavailableError",
@@ -195,6 +200,10 @@ describe("OpenCode server adapter", () => {
         sessionSteer: {
           status: "unavailable",
           reason: "native-steering-unproven",
+        },
+        sessionReadState: {
+          status: "unavailable",
+          reason: "native-session-read-state-unavailable",
         },
       },
     })

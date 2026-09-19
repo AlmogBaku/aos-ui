@@ -1079,6 +1079,10 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
+          sessionReadState: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
         },
       })
     }
@@ -1114,6 +1118,7 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         sessionRun: { status: "available" },
         sessionStop: { status: "available" },
         sessionSteer: { status: "available" },
+        sessionReadState: { status: "available" },
       },
     })
   }
@@ -1284,6 +1289,28 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       () => listener(),
       () => reset?.()
     )
+  }
+
+  /**
+   * Hermes broadcasts a debounced, payload-less `sessions.changed` on the same
+   * multiplexed socket whenever its Session store moves. The frame carries no
+   * Session id, so it is observed beside the per-Session attachment routing
+   * rather than through it.
+   */
+  async subscribeCatalogChanges(listener: () => void) {
+    if (!this.transport.observeEvents) throw new HermesUnavailableError()
+    try {
+      return await this.transport.observeEvents(
+        (event) => {
+          if (isRecord(event) && event.type === "sessions.changed") listener()
+        },
+        // A lost connection is not a catalog change, and this observer survives
+        // it: the next authoritative read reconciles whatever was missed.
+        () => undefined
+      )
+    } catch (error) {
+      throwUnavailable(error)
+    }
   }
 
   async observe(
@@ -1503,7 +1530,8 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         !storedId ||
         nonEmptyString(row.profile) !== profile ||
         seen.has(storedId) ||
-        (row.is_active !== undefined && typeof row.is_active !== "boolean")
+        (row.is_active !== undefined && typeof row.is_active !== "boolean") ||
+        (row.unread !== undefined && typeof row.unread !== "boolean")
       )
         throw new HermesUnavailableError()
       seen.add(storedId)
@@ -1515,6 +1543,9 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
         updatedAt: timestamp(row.last_active ?? row.started_at),
         status:
           row.is_active === true ? ("running" as const) : ("idle" as const),
+        // Read state is derived per catalog row; an older Hermes omits it, and
+        // absent must stay absent rather than collapse to "read".
+        ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
       }
     })
     const result = SessionCatalogResponseSchema.safeParse({
@@ -1713,6 +1744,8 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       updatedAt: timestamp(payload.last_active ?? payload.started_at),
       status:
         payload.is_active === true ? ("running" as const) : ("idle" as const),
+      // `unread` is omitted: the Session detail read carries no derived
+      // activity timestamp, so read state is unknowable here.
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
@@ -1749,6 +1782,8 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       archived: false,
       updatedAt: timestamp(undefined),
       status: "idle" as const,
+      // `unread` is omitted: an unpersisted draft has no derived activity
+      // timestamp for Hermes to compare a read marker against.
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data

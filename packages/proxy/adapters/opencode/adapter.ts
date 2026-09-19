@@ -142,6 +142,10 @@ function unavailableRuntimeInfo(): RuntimeInfo {
         status: "unavailable",
         reason: "native-steering-unproven",
       },
+      sessionReadState: {
+        status: "unavailable",
+        reason: "native-session-read-state-unavailable",
+      },
     },
   })
 }
@@ -191,6 +195,10 @@ function readyRuntimeInfo(): RuntimeInfo {
       sessionSteer: {
         status: "unavailable",
         reason: "native-steering-unproven",
+      },
+      sessionReadState: {
+        status: "unavailable",
+        reason: "native-session-read-state-unavailable",
       },
     },
   })

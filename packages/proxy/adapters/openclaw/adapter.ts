@@ -402,6 +402,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
         sessionRun: operation,
         sessionStop: operation,
         sessionSteer: unavailable("native-active-turn-steering-unavailable"),
+        sessionReadState: unavailable("native-session-read-state-unavailable"),
       },
     }
   }

@@ -1056,6 +1056,132 @@ describe("Hermes server adapter", () => {
     })
   })
 
+  it("projects the native derived read state per catalog row and omits it when absent", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [
+          { id: "stored/1", profile: "researcher", title: "One", unread: true },
+          {
+            id: "stored/2",
+            profile: "researcher",
+            title: "Two",
+            unread: false,
+          },
+          { id: "stored/3", profile: "researcher", title: "Three" },
+        ],
+        total: 3,
+      })),
+    })
+
+    const page = await adapter.listSessions("researcher", 50, 0)
+
+    expect(page.sessions.map((entry) => entry.unread)).toEqual([
+      true,
+      false,
+      undefined,
+    ])
+    expect(Object.keys(page.sessions[2])).not.toContain("unread")
+  })
+
+  it("treats a non-boolean native read state as a malformed catalog payload", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [
+          { id: "stored/1", profile: "researcher", title: "One", unread: 1 },
+        ],
+        total: 1,
+      })),
+    })
+
+    await expect(
+      adapter.listSessions("researcher", 50, 0)
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("omits read state from the Session detail read that cannot derive it", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        id: "stored/1",
+        profile: "researcher",
+        title: "One",
+        unread: true,
+      })),
+    })
+
+    const session = await adapter.getSession("researcher", "stored/1")
+
+    expect(Object.keys(session)).not.toContain("unread")
+  })
+
+  it("marks a Session read with the exact native profile-scoped patch body", async () => {
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored%2F1?"))
+        return { id: "stored/1", profile: "researcher", title: "One" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+
+    await adapter.mutateSession("researcher", "stored/1", "PATCH", {
+      unread: false,
+    })
+
+    expect(http).toHaveBeenLastCalledWith(
+      "/api/sessions/stored%2F1?profile=researcher",
+      { method: "PATCH", body: { unread: false, profile: "researcher" } }
+    )
+  })
+
+  it("declares native read state available and temporarily unavailable during an outage", async () => {
+    const ready = new HermesServerAdapter({
+      request: vi.fn(async () => ({ profiles: [profile()] })),
+    })
+    expect((await ready.runtimeInfo()).capabilities.sessionReadState).toEqual({
+      status: "available",
+    })
+
+    const offline = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new Error("Hermes request failed")
+      }),
+    })
+    expect((await offline.runtimeInfo()).capabilities.sessionReadState).toEqual(
+      {
+        status: "unavailable",
+        reason: "temporarily-unavailable",
+      }
+    )
+  })
+
+  it("wakes catalog observers only on the native sessions.changed broadcast", async () => {
+    let nativeListener: ((event: unknown) => void) | undefined
+    const stop = vi.fn()
+    const listener = vi.fn()
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      observeEvents: vi.fn(async (next) => {
+        nativeListener = next
+        return stop
+      }),
+    })
+
+    const unsubscribe = await adapter.subscribeCatalogChanges(listener)
+    nativeListener!({
+      type: "message",
+      session_id: "live-session",
+      payload: { text: "unrelated" },
+    })
+    expect(listener).not.toHaveBeenCalled()
+
+    nativeListener!({ type: "sessions.changed", session_id: "", payload: {} })
+    expect(listener).toHaveBeenCalledOnce()
+
+    unsubscribe()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
   it("rejects duplicate stored Session IDs and projects owned compacted chronological history", async () => {
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions?profile=researcher"))

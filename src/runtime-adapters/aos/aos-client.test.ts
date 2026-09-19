@@ -629,6 +629,7 @@ describe("provider-neutral AOS browser client", () => {
               sessionRun: { status: "available" },
               sessionStop: { status: "available" },
               sessionSteer: { status: "available" },
+              sessionReadState: { status: "available" },
             },
           }
         : catalog
@@ -685,6 +686,7 @@ describe("provider-neutral AOS browser client", () => {
             sessionRun: { status: "unavailable", reason: "offline" },
             sessionStop: { status: "unavailable", reason: "offline" },
             sessionSteer: { status: "unavailable", reason: "offline" },
+            sessionReadState: { status: "unavailable", reason: "offline" },
           },
         })
       if (path.endsWith("/sessions?limit=50&offset=0"))

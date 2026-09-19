@@ -197,6 +197,7 @@ function harness(
         sessionRun: { status: "available" },
         sessionStop: { status: "available" },
         sessionSteer: { status: "available" },
+        sessionReadState: { status: "available" },
       },
     })),
     workspaceCapabilities: vi.fn(workspaceCapabilities),

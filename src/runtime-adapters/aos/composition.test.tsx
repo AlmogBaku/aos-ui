@@ -278,6 +278,7 @@ describe("provider-neutral AOS runtime composition", () => {
               sessionRun: { status: "available" },
               sessionStop: { status: "available" },
               sessionSteer: { status: "available" },
+              sessionReadState: { status: "available" },
             },
           })
         if (path === "/api/aos/v1/sessions?limit=50&offset=0")

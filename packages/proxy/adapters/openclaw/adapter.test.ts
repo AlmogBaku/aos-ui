@@ -164,6 +164,17 @@ describe("OpenClaw ServerRuntime assembly", () => {
     await expect(
       adapter.mutateSession("research", sessionKey, "DELETE")
     ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+    await expect(
+      adapter.mutateSession("research", sessionKey, "PATCH", { unread: false })
+    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+    await expect(adapter.runtimeInfo()).resolves.toMatchObject({
+      capabilities: {
+        sessionReadState: {
+          status: "unavailable",
+          reason: "native-session-read-state-unavailable",
+        },
+      },
+    })
     expect(
       adapter.publicError(
         new OpenClawClientConnectionError("credential-rejected")

@@ -39,6 +39,7 @@ const runtime = {
     sessionRun: { status: "available" },
     sessionStop: { status: "available" },
     sessionSteer: { status: "available" },
+    sessionReadState: { status: "available" },
   },
 }
 

@@ -329,6 +329,35 @@ describe("AOS V1 proxy", () => {
     expect(runtime.updateAgentVisibility).not.toHaveBeenCalled()
   })
 
+  it("forwards one Session read-state intent and rejects a mixed patch", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    const mutateSession = vi
+      .spyOn(runtime, "mutateSession")
+      .mockResolvedValue(undefined)
+    const proxy = app(runtime)
+    const patch = (body: unknown) =>
+      proxy.request(`${origin}/api/aos/v1/agents/researcher/sessions/stored`, {
+        method: "PATCH",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })
+
+    const marked = await patch({ unread: false })
+
+    expect(marked.status).toBe(204)
+    expect(mutateSession).toHaveBeenCalledWith(
+      "researcher",
+      "stored",
+      "PATCH",
+      { unread: false }
+    )
+
+    const mixed = await patch({ unread: false, archived: true })
+
+    expect(mixed.status).toBe(400)
+    expect(mutateSession).toHaveBeenCalledOnce()
+  })
+
   it("does not expose invitation signing when the guest surface is disabled", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)
