@@ -459,6 +459,38 @@ export const Thread: FC<ThreadProps> = ({
   )
 }
 
+/**
+ * Overlay surfaces that own Escape themselves. Each entry is the role the
+ * surface publishes, so the guard never depends on a library's private markup.
+ */
+const OVERLAY_SURFACE_SELECTOR = [
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="menu"]',
+  '[role="listbox"]',
+  '[role="combobox"][aria-expanded="true"]',
+].join(", ")
+
+/**
+ * Whether an Escape keydown was aimed at the conversation rather than at an
+ * overlay: the key has to land on the Thread's own DOM (a portaled popover or
+ * dialog fails this even though its React events still bubble here) and not
+ * inside an overlay surface that dismisses itself on the same keypress.
+ */
+function escapeAimsAtConversation(event: KeyboardEvent<HTMLDivElement>) {
+  const root = event.currentTarget
+  const target = event.target
+  if (!(target instanceof Element) || !root.contains(target)) return false
+  for (
+    let node: Element | null = target;
+    node !== null && node !== root;
+    node = node.parentElement
+  ) {
+    if (node.matches(OVERLAY_SURFACE_SELECTOR)) return false
+  }
+  return true
+}
+
 const ThreadRoot: FC<{
   isEmpty: boolean
   autoFocus: boolean
@@ -486,7 +518,8 @@ const ThreadRoot: FC<{
       if (
         event.defaultPrevented ||
         event.key !== "Escape" ||
-        keyboardEventSafetyReason(event)
+        keyboardEventSafetyReason(event) ||
+        !escapeAimsAtConversation(event)
       ) {
         return
       }

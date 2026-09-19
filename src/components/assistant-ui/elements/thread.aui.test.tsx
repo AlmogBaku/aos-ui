@@ -19,6 +19,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { createPortal } from "react-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createComposerHistorySelector,
@@ -26,6 +27,7 @@ import {
   Thread,
   THREAD_VIEWPORT_SCROLL_BEHAVIOR,
   type ThreadComponents,
+  type ThreadComposerOverrideProps,
   type ThreadLabels,
 } from "./thread.aui"
 import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
@@ -384,6 +386,52 @@ const INITIAL_MESSAGES = [
     content: [{ type: "text" as const, text: "The reference is ready." }],
   },
 ]
+
+/** A run that parks until the runtime aborts it, so a cancel is observable. */
+function parkedRun(stop: () => void): ChatModelAdapter {
+  return {
+    async *run({ abortSignal }) {
+      yield { content: [{ type: "text", text: "Waiting on native run" }] }
+      await new Promise<void>((resolve) =>
+        abortSignal.addEventListener(
+          "abort",
+          () => {
+            stop()
+            resolve()
+          },
+          { once: true }
+        )
+      )
+    },
+  }
+}
+
+/** Sends one message through `parkedRun` and returns the composer input. */
+async function startParkedRun(user: ReturnType<typeof userEvent.setup>) {
+  const input = await screen.findByRole("textbox", { name: "Message input" })
+  await user.type(input, "Run")
+  await user.click(screen.getByRole("button", { name: "Send message" }))
+  await screen.findByText("Waiting on native run")
+  return input
+}
+
+/**
+ * Two overlays with the same dialog role: one inside the Thread, one whose DOM
+ * leaves it through a portal while its React events still bubble to the
+ * viewport.
+ */
+function OverlayComposer({ fallback }: ThreadComposerOverrideProps) {
+  return (
+    <>
+      {fallback}
+      <div role="dialog" aria-label="Inline overlay" />
+      {createPortal(
+        <div role="dialog" aria-label="Portaled overlay" />,
+        document.body
+      )}
+    </>
+  )
+}
 
 function messageText(message: ThreadMessage | ThreadMessageLike) {
   const content =
@@ -1026,6 +1074,95 @@ describe("Thread accessibility", () => {
     expect(search).not.toBeInTheDocument()
     expect(stop).not.toHaveBeenCalled()
   })
+
+  it("cancels a running response when Escape is aimed at the composer", async () => {
+    const user = userEvent.setup()
+    const stop = vi.fn()
+    render(<LocalThread model={parkedRun(stop)} initialMessages={[]} />)
+    const input = await startParkedRun(user)
+
+    input.focus()
+    await user.keyboard("{Escape}")
+
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not cancel a running response when Escape closes the model selector", async () => {
+    const user = userEvent.setup()
+    const stop = vi.fn()
+    render(
+      <LocalThread
+        model={parkedRun(stop)}
+        initialMessages={[]}
+        composerFeatures={{
+          model: {
+            options: [
+              { id: "opaque-balanced", label: "Balanced" },
+              { id: "opaque-fast", label: "Fast" },
+            ],
+            selectedId: "opaque-balanced",
+            update: async () => undefined,
+          },
+        }}
+      />
+    )
+    await startParkedRun(user)
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    const roster = await screen.findByRole("listbox")
+    await user.keyboard("{Escape}")
+
+    await waitFor(() => expect(roster).not.toBeInTheDocument())
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it("does not cancel a running response when Escape closes the slash command popover", async () => {
+    const user = userEvent.setup()
+    const stop = vi.fn()
+    render(
+      <LocalThread
+        model={parkedRun(stop)}
+        initialMessages={[]}
+        composerFeatures={{
+          slashCommands: [{ name: "review", description: "Review the diff" }],
+        }}
+      />
+    )
+    const input = await startParkedRun(user)
+
+    input.focus()
+    await user.keyboard("/rev")
+    const commands = await screen.findByRole("listbox", {
+      name: "Slash commands",
+    })
+    await user.keyboard("{Escape}")
+
+    await waitFor(() => expect(commands).not.toBeInTheDocument())
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it.each(["Inline overlay", "Portaled overlay"])(
+    "does not cancel a running response when Escape comes from an open dialog (%s)",
+    async (overlay) => {
+      const user = userEvent.setup()
+      const stop = vi.fn()
+      render(
+        <LocalThread
+          model={parkedRun(stop)}
+          initialMessages={[]}
+          composer={OverlayComposer}
+        />
+      )
+      await startParkedRun(user)
+
+      fireEvent.keyDown(screen.getByRole("dialog", { name: overlay }), {
+        key: "Escape",
+        bubbles: true,
+      })
+
+      expect(stop).not.toHaveBeenCalled()
+    }
+  )
 
   it("localizes attachment controls and image descriptions through Thread labels", async () => {
     const user = userEvent.setup()
