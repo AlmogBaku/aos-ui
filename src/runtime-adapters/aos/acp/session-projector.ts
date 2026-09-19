@@ -266,7 +266,14 @@ function applyState(
       ...state,
       execution: { status: "waiting-for-input", ...carried },
     }
-    const id = activeAssistantId(state) ?? interruptHostId(runId)
+    // A wait this projection did not watch start is a replayed one: its turn is
+    // already in the transcript and owns the request. A live run that asks
+    // before writing anything owns no turn yet, so that one is hosted.
+    const replayed = state.execution.status !== "running"
+    const id =
+      activeAssistantId(state) ??
+      (replayed ? latestAssistantId(state.messages) : undefined) ??
+      interruptHostId(runId)
     return {
       ...onMessage(blocked, id, "assistant", (message) =>
         withStatus(message, { type: "requires-action", reason: "interrupt" })

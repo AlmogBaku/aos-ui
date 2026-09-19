@@ -1,6 +1,8 @@
 import {
   client,
+  ElicitationPropertySchema,
   methods,
+  type CreateElicitationResponse,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
@@ -21,6 +23,7 @@ import {
   AOS_PLAN_ID,
   AosActivityNotificationSchema,
   AosArtifactNotificationSchema,
+  AosElicitationMetaSchema,
   AosInitializeMetaSchema,
   AosPermissionMetaSchema,
   AosPlanMetaSchema,
@@ -54,6 +57,7 @@ import type { AcpConnectionContext } from "./types"
 const AGENT = "researcher"
 const SESSION = "session-1"
 const CREATED = "session-created"
+const CLARIFY = "clarify-1"
 const NOW = "2026-01-01T00:00:00.000Z"
 
 function sessionRow(overrides: Partial<Session> = {}): Session {
@@ -339,7 +343,8 @@ const TurnInputSchema = z.object({
       z.object({
         interruptId: z.string(),
         status: z.string(),
-        payload: z.unknown(),
+        // A cancelled reply answers with no payload at all.
+        payload: z.unknown().optional(),
       })
     )
     .optional(),
@@ -349,6 +354,7 @@ type HarnessOptions = {
   rows?: Session[]
   history?: SessionHistoryResponse
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
+  elicitation?: (params: unknown) => Promise<CreateElicitationResponse>
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -490,6 +496,10 @@ async function harness(options: HarnessOptions = {}) {
         }
       )
     })
+    .onRequest(methods.client.elicitation.create, async ({ params }) => {
+      recorder.add({ method: methods.client.elicitation.create, params })
+      return (await options.elicitation?.(params)) ?? { action: "decline" }
+    })
   for (const method of Object.values(AOS_METHODS.notify))
     clientApp.onNotification(
       method,
@@ -546,6 +556,21 @@ async function runningTurn(test: Harness, text: string) {
   }
 }
 
+/**
+ * The one `elicitation/create` request the client received. An elicitation the
+ * SDK rejects never arrives at all: the attachment reports the rejection as
+ * `_aos/error`, so this waits for whichever came first and names it.
+ */
+async function askedElicitation(test: Harness) {
+  const asked = await test.recorder.wait(
+    (entry) =>
+      entry.method === methods.client.elicitation.create ||
+      entry.method === AOS_METHODS.notify.error
+  )
+  expect(asked.method).toBe(methods.client.elicitation.create)
+  return asked
+}
+
 /** The `_meta.aos` payload an ACP response, request, or update carries. */
 function aosMetaOf(value: unknown): unknown {
   return z
@@ -556,6 +581,16 @@ function aosMetaOf(value: unknown): unknown {
 /** The `_meta.aos` of the update inside one `session/update` notification. */
 function updateMetaOf(params: unknown): unknown {
   return aosMetaOf(z.object({ update: z.unknown() }).parse(params).update)
+}
+
+/** The form fields one `elicitation/create` request asks the operator for. */
+function formFieldsOf(params: unknown) {
+  const Schema = z.object({
+    requestedSchema: z.object({
+      properties: z.record(z.string(), z.custom<ElicitationPropertySchema>()),
+    }),
+  })
+  return Schema.parse(params).requestedSchema.properties
 }
 
 function updates(recorder: Recorder) {
@@ -607,6 +642,63 @@ function runFinished(runId: string, threadId: string): RunEvent {
     threadId,
     runId,
     outcome: { type: "success" },
+  }
+}
+
+/**
+ * The clarification Hermes raises: one question interrupt whose prefixed answer
+ * schemas are a single choice, a multi-select, and a free-text question.
+ */
+function runQuestioned(runId: string, threadId: string): RunEvent {
+  return {
+    type: RunEventKind.RUN_FINISHED,
+    threadId,
+    runId,
+    outcome: {
+      type: "interrupt",
+      interrupts: [
+        {
+          id: CLARIFY,
+          reason: "question",
+          message: "3 questions require answers",
+          responseSchema: {
+            type: "object",
+            properties: {
+              answers: {
+                type: "array",
+                prefixItems: [
+                  {
+                    type: "array",
+                    title: "Which environment?",
+                    items: { type: "string", enum: ["staging", "production"] },
+                    minItems: 0,
+                    maxItems: 1,
+                  },
+                  {
+                    type: "array",
+                    title: "Which services?",
+                    items: { type: "string", enum: ["api", "worker", "web"] },
+                    minItems: 0,
+                    maxItems: 3,
+                  },
+                  {
+                    type: "array",
+                    title: "Anything else to watch?",
+                    items: { type: "string", maxLength: 4096 },
+                    minItems: 0,
+                    maxItems: 64,
+                  },
+                ],
+                minItems: 3,
+                maxItems: 3,
+              },
+            },
+            required: ["answers"],
+            additionalProperties: false,
+          },
+        },
+      ],
+    },
   }
 }
 
@@ -820,6 +912,114 @@ describe("operator ACP lane", () => {
     ])
     expect(resumed.resume?.[0]?.payload).toBeDefined()
     expect(resumed.runId).not.toBe(admitted.runId)
+    test.close()
+  })
+
+  it("delivers a multi-select question the SDK accepts", async () => {
+    const test = await harness({
+      elicitation: async () => ({
+        action: "accept",
+        content: {
+          q0: "production",
+          q1: ["api", "the nightly billing job"],
+          q2: "watch the queue depth",
+        },
+      }),
+    })
+    const { source } = await runningTurn(test, "Clarify it")
+
+    source.emit(runStarted("run-1", CREATED))
+    source.emit(runQuestioned("run-1", CREATED))
+    source.finish()
+
+    const asked = await askedElicitation(test)
+    expect(asked.params).toMatchObject({
+      sessionId: CREATED,
+      mode: "form",
+      message: "3 questions require answers",
+      requestedSchema: {
+        properties: {
+          q0: { type: "string", title: "Which environment?" },
+          q1: {
+            type: "array",
+            title: "Which services?",
+            items: { type: "string", enum: ["api", "worker", "web"] },
+          },
+          q2: { type: "string", title: "Anything else to watch?" },
+        },
+        required: ["q0", "q1", "q2"],
+      },
+    })
+    const fields = formFieldsOf(asked.params)
+    expect(Object.keys(fields)).toEqual(["q0", "q1", "q2"])
+
+    // `items.enum` is what the SDK validates a multi-select against: the same
+    // field without it is no longer an ACP multi-select, and an elicitation
+    // carrying it is rejected whole rather than delivered.
+    const multiSelect = fields.q1!
+    expect(ElicitationPropertySchema.isArray(multiSelect)).toBe(true)
+    expect(
+      ElicitationPropertySchema.isArray({
+        ...multiSelect,
+        items: { type: "string" },
+      })
+    ).toBe(false)
+
+    const meta = AosElicitationMetaSchema.parse(aosMetaOf(asked.params))
+    expect(meta.interruptId).toBe(CLARIFY)
+    expect(meta.questions).toMatchObject([
+      { header: "Which environment?", multiple: false, custom: true },
+      {
+        header: "Which services?",
+        multiple: true,
+        custom: true,
+        options: [{ label: "api" }, { label: "worker" }, { label: "web" }],
+      },
+      {
+        header: "Anything else to watch?",
+        multiple: true,
+        custom: true,
+        options: [],
+      },
+    ])
+
+    // Every answer resumes the run, including the choice no question offered.
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    const resumed = TurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(resumed.resume).toEqual([
+      {
+        interruptId: CLARIFY,
+        status: "resolved",
+        payload: {
+          answers: [
+            ["production"],
+            ["api", "the nightly billing job"],
+            ["watch the queue depth"],
+          ],
+        },
+      },
+    ])
+    test.close()
+  })
+
+  it("cancels the interrupt when the operator declines", async () => {
+    const test = await harness({
+      elicitation: async () => ({ action: "decline" }),
+    })
+    const { source } = await runningTurn(test, "Clarify it")
+
+    source.emit(runStarted("run-1", CREATED))
+    source.emit(runQuestioned("run-1", CREATED))
+    source.finish()
+
+    await askedElicitation(test)
+
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    const resumed = TurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(resumed.messages).toEqual([])
+    expect(resumed.resume).toEqual([
+      { interruptId: CLARIFY, status: "cancelled" },
+    ])
     test.close()
   })
 

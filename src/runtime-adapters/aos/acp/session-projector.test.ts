@@ -545,6 +545,20 @@ describe("applyUpdate execution", () => {
     expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
   })
 
+  it("gives a replayed wait to the turn that asked instead of an empty one", () => {
+    // Reopening a Session that is waiting replays its turns and only then
+    // reports the wait: nothing streamed, so the request belongs to the turn
+    // already in the transcript rather than to a turn of its own.
+    const reopened = fold([stateUpdate({ state: "requires_action" })], replayed)
+
+    const messages = toThreadMessages(reopened)
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      status: { type: "requires-action", reason: "interrupt" },
+    })
+  })
+
   it("replaces an empty interrupt host with the resumed run's first turn", () => {
     const resumed = fold(
       [stateUpdate({ state: "running" }), agentChunk("a2", "Allowed")],
