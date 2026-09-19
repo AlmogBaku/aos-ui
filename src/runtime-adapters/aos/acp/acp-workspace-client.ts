@@ -231,6 +231,10 @@ export function createAcpWorkspaceClient({
     speakForAgent: rest.speakForAgent.bind(rest),
     /** REST authorizes byte reads per Agent, so ownership must be known. */
     agentIdOf: agentOf,
+    /** Ownership for callers that can proceed without knowing it yet. */
+    knownAgentIdOf: knownAgentOf,
+    /** The provider's newest Session title, once a Session is attached. */
+    sessionTitle: store.title,
   }
 
   return client

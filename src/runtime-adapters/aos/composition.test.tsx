@@ -1,11 +1,267 @@
+import {
+  agent,
+  methods,
+  type AgentApp,
+  type AgentContext,
+  type AnyWireMessage,
+  type PromptRequest,
+  type SessionConfigOption,
+  type SessionUpdate,
+} from "@agentclientprotocol/sdk/experimental/v2"
+import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { AssistantRuntimeProvider } from "@assistant-ui/react"
+import { z } from "zod"
 
-import type { HarnessRuntime } from "../contracts"
+import { AOS_METHODS, AOS_META_KEY } from "@aos/protocol/acp"
+
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
-import { AosRemoteClient } from "./aos-client"
+import type { HarnessRuntime } from "../contracts"
 import { runtimeAdapter } from "./composition"
+
+type PromptParams = PromptRequest
+
+const AGENT_ID = "researcher"
+const SESSION_ID = "session-1"
+const UPDATED_AT = "2026-09-19T10:00:00.000Z"
+
+const unavailable = { status: "unavailable", reason: "not-supported" } as const
+
+/** The capability snapshot `session/resume` reports for the opened Session. */
+function capabilities() {
+  return {
+    agent: {},
+    workspace: {
+      slashCommands: unavailable,
+      models: unavailable,
+      context: unavailable,
+      todos: unavailable,
+      activity: unavailable,
+    },
+    interactions: {
+      steering: unavailable,
+      approvals: unavailable,
+      questions: unavailable,
+      reactions: unavailable,
+    },
+    content: {
+      attachments: unavailable,
+      artifacts: unavailable,
+      transcription: unavailable,
+      speech: unavailable,
+    },
+  }
+}
+
+const sessionInfo = {
+  agentId: AGENT_ID,
+  status: "idle",
+  archived: false,
+  unread: false,
+} as const
+
+const configOptions: SessionConfigOption[] = []
+
+/** The AOS proxy end of the operator connection, in process. */
+function createProxyAgent() {
+  let peer: AgentContext | undefined
+  const prompts: PromptParams[] = []
+  // The proxy streams a Session only to a client attached to it, so updates
+  // raised before an attach wait for the resume that replays them.
+  const waiting = new Map<string, SessionUpdate[]>()
+  const attached = new Set<string>()
+
+  function push(sessionId: string, update: SessionUpdate) {
+    if (attached.has(sessionId))
+      void peer?.notify(methods.client.session.update, { sessionId, update })
+    else waiting.set(sessionId, [...(waiting.get(sessionId) ?? []), update])
+  }
+
+  waiting.set(SESSION_ID, [
+    {
+      sessionUpdate: "agent_message",
+      messageId: "history-1",
+      content: [{ type: "text", text: "Ready" }],
+      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+    },
+  ])
+
+  const app = agent({ name: "fake-aos-proxy" })
+    .onRequest(methods.agent.initialize, () => ({
+      protocolVersion: 2,
+      info: { name: "aos-proxy", version: "1" },
+      _meta: {
+        [AOS_META_KEY]: {
+          version: 1,
+          lane: "operator",
+          extensions: {
+            steer: true,
+            rewind: true,
+            artifacts: true,
+            composerPrefill: true,
+            agents: true,
+            invalidation: true,
+            activity: true,
+            readState: true,
+            focus: true,
+            guestProjection: false,
+          },
+        },
+      },
+    }))
+    .onRequest(methods.agent.session.list, () => ({
+      sessions: [
+        {
+          sessionId: SESSION_ID,
+          cwd: "/workspace",
+          title: "Older",
+          updatedAt: UPDATED_AT,
+          _meta: { [AOS_META_KEY]: sessionInfo },
+        },
+      ],
+    }))
+    .onRequest(methods.agent.session.resume, ({ params }) => {
+      const { sessionId } = params
+      queueMicrotask(() => {
+        attached.add(sessionId)
+        for (const update of waiting.get(sessionId) ?? [])
+          void peer?.notify(methods.client.session.update, {
+            sessionId,
+            update,
+          })
+        waiting.delete(sessionId)
+      })
+      return {
+        configOptions,
+        _meta: {
+          [AOS_META_KEY]: {
+            session: sessionInfo,
+            execution: { status: "idle" },
+            capabilities: capabilities(),
+          },
+        },
+      }
+    })
+    .onRequest(methods.agent.session.prompt, ({ params }) => {
+      prompts.push(params)
+      const messageId = `prompt-${prompts.length}`
+      queueMicrotask(() => {
+        push(params.sessionId, {
+          sessionUpdate: "user_message",
+          messageId,
+          content: params.prompt,
+          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 1 } },
+        })
+        push(params.sessionId, {
+          sessionUpdate: "agent_message",
+          messageId: `answer-${prompts.length}`,
+          content: [{ type: "text", text: "Shipping it" }],
+          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 2 } },
+        })
+      })
+      return { _meta: { [AOS_META_KEY]: { messageId } } }
+    })
+    .onRequest(AOS_METHODS.agents.list, z.unknown().optional(), () => ({
+      revision: "revision-1",
+      agents: [
+        {
+          summary: { kind: "ready", id: AGENT_ID, name: "Researcher" },
+          visibility: "visible",
+          selectable: true,
+          editable: true,
+          revision: "revision-1",
+        },
+      ],
+    }))
+    .onNotification(AOS_METHODS.session.focus, z.unknown(), () => undefined)
+    .onConnect((connection) => {
+      peer = connection.client
+    })
+  return { app, prompts }
+}
+
+/** A WebSocket-shaped pipe to the in-process proxy agent. */
+function pipedSocket(app: AgentApp) {
+  return class PipedSocket extends EventTarget {
+    readyState = 0
+    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
+
+    constructor() {
+      super()
+      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+      app.connect({
+        readable: this.#inbound.readable,
+        writable: outbound.writable,
+      })
+      this.#writer = this.#inbound.writable.getWriter()
+      void this.#pump(outbound.readable.getReader())
+      queueMicrotask(() => {
+        this.readyState = 1
+        this.dispatchEvent(new Event("open"))
+      })
+    }
+
+    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) return
+        this.dispatchEvent(
+          new MessageEvent("message", { data: JSON.stringify(value) })
+        )
+      }
+    }
+
+    send(data: string) {
+      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
+    }
+
+    close() {
+      this.readyState = 3
+      this.dispatchEvent(new Event("close"))
+    }
+  }
+}
+
+function mount() {
+  const proxy = createProxyAgent()
+  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  let supplied: HarnessRuntime | undefined
+  const Provider = runtimeAdapter.Provider
+  render(
+    <Provider
+      config={{
+        status: "ready",
+        mode: "aos",
+        composerFeatures: {
+          modelSelectorEnabled: true,
+          contextEnabled: true,
+        },
+      }}
+      locale="en"
+    >
+      {(runtime) => {
+        supplied = runtime
+        return (
+          <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
+            <main>Workspace mounted</main>
+            <Thread autoFocus={false} messageRewind={runtime.messageRewind} />
+          </AssistantRuntimeProvider>
+        )
+      }}
+    </Provider>
+  )
+  return { proxy, runtime: () => supplied }
+}
+
+const messageTexts = (runtime: HarnessRuntime) =>
+  runtime.assistantRuntime.thread
+    .getState()
+    .messages.map((message) =>
+      message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("")
+    )
 
 afterEach(() => {
   cleanup()
@@ -13,333 +269,50 @@ afterEach(() => {
 })
 
 describe("provider-neutral AOS runtime composition", () => {
-  it("promotes a local draft before dispatching its first queued run", async () => {
-    let title = "Hello"
-    const titleInvalidations: Array<() => void> = []
-    vi.spyOn(
-      AosRemoteClient.prototype,
-      "subscribeSessionInvalidation"
-    ).mockImplementation((_threadId, listener) => {
-      titleInvalidations.push(listener)
-      return () => undefined
-    })
-    vi.spyOn(AosRemoteClient.prototype, "getSession").mockImplementation(
-      async (threadId) => ({
-        id: threadId,
-        agentId: "researcher",
-        title,
-        archived: false,
-        updatedAt: "2026-09-15T18:00:00.000Z",
-        status: "idle",
-      })
-    )
-    let resolveSession: ((response: Response) => void) | undefined
-    const session = new Promise<Response>((resolve) => {
-      resolveSession = resolve
-    })
-    let resolveHistory: ((response: Response) => void) | undefined
-    const history = new Promise<Response>((resolve) => {
-      resolveHistory = resolve
-    })
-    const browserFetch = vi.fn(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = String(input)
-        if (path === "/api/aos/v1/sessions?limit=50&offset=0")
-          return Response.json({
-            sessions: [],
-            total: 0,
-            limit: 50,
-            offset: 0,
-          })
-        if (
-          path === "/api/aos/v1/agents/researcher/sessions" &&
-          init?.method === "POST"
-        )
-          return session
-        if (
-          path ===
-          "/api/aos/v1/agents/researcher/sessions/remote-session/history?limit=200&offset=0"
-        )
-          return history
-        if (path.endsWith("/workspace/capabilities"))
-          return Response.json(
-            {
-              error: {
-                code: "unavailable",
-                description: "Unavailable in this test",
-              },
-            },
-            { status: 503 }
-          )
-        if (path.endsWith("/runs")) {
-          const body = JSON.parse(String(init?.body)) as {
-            threadId: string
-            runId: string
-          }
-          return new Response(
-            [
-              {
-                type: "RUN_STARTED",
-                threadId: body.threadId,
-                runId: body.runId,
-              },
-              {
-                type: "TEXT_MESSAGE_START",
-                messageId: "assistant-1",
-                role: "assistant",
-              },
-              {
-                type: "TEXT_MESSAGE_CONTENT",
-                messageId: "assistant-1",
-                delta: "Draft response",
-              },
-              {
-                type: "TEXT_MESSAGE_END",
-                messageId: "assistant-1",
-              },
-              {
-                type: "RUN_FINISHED",
-                threadId: body.threadId,
-                runId: body.runId,
-                outcome: { type: "success" },
-              },
-            ]
-              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
-              .join(""),
-            { headers: { "content-type": "text/event-stream" } }
-          )
-        }
-        throw new Error(`Unexpected request: ${path}`)
-      }
-    )
-    vi.stubGlobal("fetch", browserFetch)
-
-    let supplied: HarnessRuntime | undefined
-    const Provider = runtimeAdapter.Provider
-    render(
-      <Provider
-        config={{
-          status: "ready",
-          mode: "aos",
-          composerFeatures: {
-            modelSelectorEnabled: true,
-            contextEnabled: true,
-          },
-        }}
-        locale="en"
-      >
-        {(runtime) => {
-          supplied = runtime
-          return (
-            <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
-              <Thread autoFocus={false} />
-            </AssistantRuntimeProvider>
-          )
-        }}
-      </Provider>
-    )
-
-    await supplied!.assistantRuntime.threads.getLoadThreadsPromise()
-    await act(async () => {
-      await supplied!.createSessionDraft?.("researcher")
-    })
-    expect(
-      supplied!.assistantRuntime.thread.getState().capabilities.dictation
-    ).toBe(true)
-    expect(supplied!.media?.getSnapshot()).toMatchObject({
-      scopeId: supplied!.assistantRuntime.threads.getState().mainThreadId,
-      safelyIdle: true,
-      availability: {
-        transcription: "unverified",
-        speech: "unverified",
-      },
-    })
-    act(() => {
-      supplied!.assistantRuntime.thread.composer.setText("Hello")
-      supplied!.assistantRuntime.thread.composer.send()
-    })
-
-    expect(await screen.findByText("Hello")).toBeVisible()
-    expect(
-      browserFetch.mock.calls.some(([input]) => String(input).endsWith("/runs"))
-    ).toBe(false)
-    await act(async () => {
-      resolveSession?.(
-        Response.json(
-          { session: { id: "remote-session", agentId: "researcher" } },
-          { status: 201 }
-        )
-      )
-      await session
-    })
-    await waitFor(() =>
-      expect(
-        browserFetch.mock.calls.some(([input]) =>
-          String(input).endsWith("/runs")
-        )
-      ).toBe(true)
-    )
-    await waitFor(() =>
-      expect(supplied!.media?.getSnapshot().scopeId).toBe("remote-session")
-    )
-    const [runUrl, runInit] = browserFetch.mock.calls.find(([input]) =>
-      String(input).endsWith("/runs")
-    )!
-    expect(String(runUrl)).toBe(
-      "/api/aos/v1/agents/researcher/sessions/remote-session/runs"
-    )
-    expect(JSON.parse(String(runInit?.body))).toMatchObject({
-      threadId: "remote-session",
-      messages: [expect.objectContaining({ role: "user", content: "Hello" })],
-    })
-    expect(await screen.findByText("Draft response")).toBeVisible()
-    await act(async () => {
-      resolveHistory?.(
-        Response.json({
-          sessionId: "remote-session",
-          messages: [],
-          total: 0,
-          limit: 200,
-          offset: 0,
-          nextOffset: 0,
-          execution: { status: "idle" },
-        })
-      )
-      await history
-    })
-    expect(screen.getByText("Draft response")).toBeVisible()
-    await waitFor(() =>
-      expect(supplied!.assistantRuntime.thread.getState().isRunning).toBe(false)
-    )
-    await waitFor(() =>
-      expect(
-        supplied!.assistantRuntime.threads.mainItem.getState().title
-      ).toBe("Hello")
-    )
-    title = "Harness-generated title"
-    expect(titleInvalidations).toHaveLength(1)
-    act(() => {
-      supplied!.assistantRuntime.thread.composer.setText("Follow up")
-      supplied!.assistantRuntime.thread.composer.send()
-    })
-    await waitFor(() =>
-      expect(
-        browserFetch.mock.calls.filter(([input]) =>
-          String(input).endsWith("/runs")
-        )
-      ).toHaveLength(2)
-    )
-    await waitFor(() =>
-      expect(supplied!.assistantRuntime.thread.getState().isRunning).toBe(false)
-    )
-    await waitFor(() =>
-      expect(
-        supplied!.assistantRuntime.threads.mainItem.getState().title
-      ).toBe("Harness-generated title")
-    )
-  })
-
-  it("mounts the existing workspace runtime with normalized Agents and no provider URL", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const path = String(input)
-        if (path === "/api/aos/v1/runtime")
-          return Response.json({
-            runtime: { id: "hermes", name: "Hermes" },
-            status: "ready",
-            capabilities: {
-              agentCatalog: { status: "available" },
-              agentVisibility: {
-                status: "available",
-                concurrency: "revision",
-              },
-              sessionCatalog: {
-                status: "available",
-                scope: "workspace",
-                order: "recent",
-                defaultPageSize: 50,
-                maxPageSize: 100,
-                maxWindow: 1_000,
-              },
-              sessionHistory: {
-                status: "available",
-                order: "chronological",
-                compacted: true,
-                loading: "on-open",
-                defaultPageSize: 200,
-                maxPageSize: 500,
-              },
-              sessionDetail: { status: "available" },
-              sessionCreation: { status: "available" },
-              sessionTitle: { status: "available" },
-              sessionArchival: { status: "available" },
-              sessionDeletion: { status: "available" },
-              sessionRun: { status: "available" },
-              sessionStop: { status: "available" },
-              sessionSteer: { status: "available" },
-              sessionReadState: { status: "available" },
-            },
-          })
-        if (path === "/api/aos/v1/sessions?limit=50&offset=0")
-          return Response.json({
-            sessions: [],
-            total: 0,
-            limit: 50,
-            offset: 0,
-          })
-        if (path !== "/api/aos/v1/agents")
-          throw new Error(`Unexpected request: ${String(input)}`)
-        return Response.json({
-          revision: "profiles:researcher@hermes-bots:7",
-          agents: [
-            {
-              summary: {
-                kind: "ready",
-                id: "researcher",
-                name: "Researcher",
-                activity: "unknown",
-                visibility: "visible",
-              },
-              visibility: "visible",
-              selectable: true,
-              editable: true,
-              revision: "hermes-bots:7",
-            },
-          ],
-        })
-      })
-    )
-    let supplied: HarnessRuntime | undefined
-    const Provider = runtimeAdapter.Provider
-    render(
-      <Provider
-        config={{
-          status: "ready",
-          mode: "aos",
-          composerFeatures: {
-            modelSelectorEnabled: true,
-            contextEnabled: true,
-          },
-        }}
-        locale="en"
-      >
-        {(runtime) => {
-          supplied = runtime
-          return <main>Workspace mounted</main>
-        }}
-      </Provider>
-    )
+  it("mounts the workspace over one ACP connection and lists its Agents", async () => {
+    const { runtime } = mount()
 
     expect(await screen.findByRole("main")).toHaveTextContent(
       "Workspace mounted"
     )
-    expect(await supplied!.workspace.listAgents()).toMatchObject([
-      { id: "researcher", name: "Researcher" },
+    await waitFor(() => expect(runtime()).toBeDefined())
+    expect(await runtime()!.workspace.listAgents()).toMatchObject([
+      { id: AGENT_ID, name: "Researcher" },
     ])
-    expect(supplied!.assistantRuntime.threads.getState().threadIds).toEqual([])
-    expect(supplied!.interactions).toBeUndefined()
-    expect(supplied!.agUiInterrupts).toBe(true)
-    expect(supplied!.activityCoverage).toBe("active-session")
+    expect(runtime()!.interactions).toBeDefined()
+    expect(runtime()!.activityCoverage).toBe("workspace")
+  })
+
+  it("opens a listed Session and round-trips one prompt", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const supplied = runtime()!
+    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
+    expect(supplied.assistantRuntime.threads.getState().threadIds).toEqual([
+      SESSION_ID,
+    ])
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    expect(await screen.findByText("Ready")).toBeVisible()
+
+    act(() => {
+      supplied.assistantRuntime.thread.composer.setText("Ship it")
+      supplied.assistantRuntime.thread.composer.send()
+    })
+    expect(await screen.findByText("Shipping it")).toBeVisible()
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(proxy.prompts[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      prompt: [{ type: "text", text: "Ship it" }],
+    })
+    await waitFor(() =>
+      expect(messageTexts(supplied)).toEqual([
+        "Ready",
+        "Ship it",
+        "Shipping it",
+      ])
+    )
   })
 })

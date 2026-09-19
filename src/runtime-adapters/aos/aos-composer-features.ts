@@ -26,7 +26,8 @@ type SessionCapabilityClient = {
 
 type ComposerClient = SessionCapabilityClient & {
   models(threadId: string): Promise<AosModelChoices>
-  context(threadId: string): Promise<AosContext>
+  /** Absent until the provider reports usage for the attached Session. */
+  context(threadId: string): Promise<AosContext | undefined>
   updateModel(
     threadId: string,
     patch: SessionModelUpdateRequest

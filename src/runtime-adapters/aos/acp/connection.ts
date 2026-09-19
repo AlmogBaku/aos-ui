@@ -67,7 +67,10 @@ const SERVER_OWNED_CWD = "/"
 /** Run position of one `session/update`; richer metas carry more fields. */
 const RunPositionSchema = z.object(AosChunkMetaSchema.shape)
 
-const AosMetaSchema = z.record(z.string(), z.unknown())
+/** An ACP payload's `_meta`, keyed by extension; only AOS's half is read. */
+const AosEnvelopeSchema = z.object({
+  [AOS_META_KEY]: z.record(z.string(), z.unknown()),
+})
 
 /** Session-scoped elicitations name their Session; request-scoped ones do not. */
 const ElicitationScopeSchema = z.object({ sessionId: z.string().min(1) })
@@ -95,11 +98,9 @@ export type AcpConnectionOptions = {
 }
 
 /** `_meta.aos` of an ACP payload, when it carries one. */
-function aosMetaOf(
-  meta: Record<string, unknown> | null | undefined
-): Record<string, unknown> | undefined {
-  const parsed = AosMetaSchema.safeParse(meta?.[AOS_META_KEY])
-  return parsed.success ? parsed.data : undefined
+function aosMetaOf(meta: unknown): Record<string, unknown> | undefined {
+  const parsed = AosEnvelopeSchema.safeParse(meta)
+  return parsed.success ? parsed.data[AOS_META_KEY] : undefined
 }
 
 function operatorUrl() {
@@ -201,7 +202,9 @@ export function createAcpConnection(
 
   const app = client({ name: clientInfo.name })
     .onNotification(methods.client.session.update, ({ params }) => {
-      const meta = aosMetaOf(params._meta)
+      // Every `_meta.aos` the protocol defines for an update belongs to the
+      // update itself, not to the notification carrying it.
+      const meta = aosMetaOf(params.update._meta)
       const position = RunPositionSchema.safeParse(meta)
       if (position.success)
         positions.set(params.sessionId, {

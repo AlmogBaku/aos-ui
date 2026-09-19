@@ -10,6 +10,7 @@ import {
   DEFAULT_ATTACHMENT_LABELS,
   type AttachmentLabels,
 } from "@/components/assistant-ui/elements/attachment-labels"
+import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
 import { File } from "@/components/assistant-ui/elements/file"
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui"
 import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
@@ -86,7 +87,6 @@ import {
   makeAssistantDataUI,
   unstable_useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
-import { useAgUiInterrupts } from "@assistant-ui/react-ag-ui"
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -723,7 +723,7 @@ const Composer: FC<{
   const historyCancelLabel = labels.historyCancel ?? "Cancel history search"
   const queuedMessagesLabel = labels.queuedMessages ?? "Queued messages"
   const features = useContext(ThreadComposerFeaturesContext)
-  const hasPendingInteraction = useAgUiInterrupts().length > 0
+  const hasPendingInteraction = usePendingInteractionGate()
   const isTouchPrimaryInput = useTouchPrimaryInput()
   const aui = useAui()
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -1626,7 +1626,7 @@ const AssistantActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const messageRewind = useContext(MessageRewindContext)
   const retrySourceId = useAuiState((state) => state.message.parentId)
-  const hasPendingInteraction = useAgUiInterrupts().length > 0
+  const hasPendingInteraction = usePendingInteractionGate()
   const aui = useAui()
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
@@ -1790,7 +1790,7 @@ const UserMessage: FC = () => {
 const UserActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const messageRewind = useContext(MessageRewindContext)
-  const hasPendingInteraction = useAgUiInterrupts().length > 0
+  const hasPendingInteraction = usePendingInteractionGate()
   if (messageRewind === false) return null
   return (
     <ActionBarPrimitive.Root

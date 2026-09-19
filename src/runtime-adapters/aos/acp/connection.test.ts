@@ -255,8 +255,10 @@ function createProxyAgent(options: { resyncOnResume?: number } = {}) {
     pushUpdate(update: SessionUpdate, meta?: Record<string, unknown>) {
       return peer?.notify(methods.client.session.update, {
         sessionId: SESSION_ID,
-        update,
-        ...(meta ? { _meta: { [AOS_META_KEY]: meta } } : {}),
+        update: {
+          ...update,
+          ...(meta ? { _meta: { [AOS_META_KEY]: meta } } : {}),
+        },
       })
     },
     notify(method: string, params: unknown) {

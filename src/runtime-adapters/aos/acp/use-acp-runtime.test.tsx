@@ -12,7 +12,12 @@ import { describe, expect, it, vi } from "vitest"
 import { AOS_METHODS, AOS_PLAN_ID } from "@aos/protocol/acp"
 
 import type { AcpConnection, AcpSessionUpdateListener } from "./types"
-import { useAcpExecution, useAcpRuntime, useAcpTodos } from "./use-acp-runtime"
+import {
+  useAcpExecution,
+  useAcpRuntime,
+  useAcpTodos,
+  type UseAcpRuntimeOptions,
+} from "./use-acp-runtime"
 
 const SESSION_ID = "session-1"
 const RUN_META = { sequence: 0, runId: "run-1" }
@@ -108,7 +113,10 @@ const textUpdate = (
 const messageText = (part: { type: string }) =>
   part.type === "text" && "text" in part ? String(part.text) : ""
 
-async function mount(fake: Fake, options?: { enableMessageQueue?: boolean }) {
+async function mount(
+  fake: Fake,
+  options?: Pick<UseAcpRuntimeOptions, "attach" | "enableMessageQueue">
+) {
   const hook = renderHook(() =>
     useAcpRuntime({
       connection: fake.connection,
@@ -147,6 +155,20 @@ describe("useAcpRuntime", () => {
     expect(visible(result.current)).toEqual([
       { id: "u1", role: "user", text: "Ship it" },
       { id: "a1", role: "assistant", text: "On it" },
+    ])
+  })
+
+  it("attaches through the injected attach instead of resuming itself", async () => {
+    const fake = createFakeConnection()
+    const attach = vi.fn(async () => undefined)
+    const { result } = await mount(fake, { attach })
+    expect(attach).toHaveBeenCalledWith(SESSION_ID)
+    expect(fake.resumeSession).not.toHaveBeenCalled()
+    act(() => {
+      fake.emit(textUpdate("agent_message", "a1", "Attached"))
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "a1", role: "assistant", text: "Attached" },
     ])
   })
 

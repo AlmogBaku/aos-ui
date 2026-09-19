@@ -111,6 +111,7 @@ export function createAcpSessionStore({
   now = Date.now,
 }: AcpSessionStoreOptions) {
   const rows = new Map<string, SessionMetadata>()
+  const titles = new Map<string, string>()
   const todos = new Map<string, TodoItem[]>()
   const observed = new Map<string, () => void>()
   const subscriptions = new Set<MetadataSubscription>()
@@ -175,6 +176,7 @@ export function createAcpSessionStore({
     if (SessionUpdate.isStateUpdate(update))
       return patch(threadId, { status: statusFromState(update) })
     if (SessionUpdate.isSessionInfoUpdate(update)) {
+      if (update.title) titles.set(threadId, update.title)
       const info = AosSessionInfoMetaSchema.safeParse(meta)
       if (info.success) put(threadId, info.data, update.updatedAt)
       return
@@ -228,6 +230,8 @@ export function createAcpSessionStore({
       patch(threadId, { status }),
     knows: (threadId: string) => rows.has(threadId),
     agentIdOf: (threadId: string) => rows.get(threadId)?.agentId,
+    /** The newest title the provider reported, for the thread list to stream. */
+    title: (threadId: string) => titles.get(threadId),
     status: (threadId: string): SessionStatus =>
       rows.get(threadId)?.status ?? "unknown",
 

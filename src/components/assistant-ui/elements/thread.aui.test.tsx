@@ -20,14 +20,6 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type {
-  AgentSubscriber,
-  AgentSubscriberParams,
-  HttpAgent,
-} from "@ag-ui/client"
-import { EventType } from "@ag-ui/core"
-import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
-
 import {
   createComposerHistorySelector,
   SteerAcceptedDataUI,
@@ -37,6 +29,11 @@ import {
   type ThreadLabels,
 } from "./thread.aui"
 import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
+import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
+import type {
+  RuntimeInteractionAdapter,
+  RuntimeQuestionRequest,
+} from "@/runtime-adapters/contracts"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 
 const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
@@ -814,99 +811,65 @@ describe("Thread accessibility", () => {
     )
   })
 
-  it("disables run-changing actions and queues follow-ups while an AG-UI question is pending", async () => {
+  it("disables run-changing actions and queues follow-ups while an interaction is pending", async () => {
     const user = userEvent.setup()
     const steer = vi.fn(async () => ({ status: "steered" as const }))
-    const runAgent = vi.fn(
-      async (_input: unknown, subscriber: AgentSubscriber) => {
-        const subscriberParams = {} as AgentSubscriberParams
-        const interrupts = [
-          {
-            id: "question-1",
-            reason: "input_required",
-            message: "Choose one",
-          },
-        ]
-        subscriber.onTextMessageStartEvent?.({
-          ...subscriberParams,
-          event: {
-            type: EventType.TEXT_MESSAGE_START,
-            messageId: "assistant-question",
-            role: "assistant",
-          },
-        })
-        subscriber.onTextMessageContentEvent?.({
-          ...subscriberParams,
-          textMessageBuffer: "I need your answer.",
-          event: {
-            type: EventType.TEXT_MESSAGE_CONTENT,
-            messageId: "assistant-question",
-            delta: "I need your answer.",
-          },
-        })
-        subscriber.onTextMessageEndEvent?.({
-          ...subscriberParams,
-          textMessageBuffer: "I need your answer.",
-          event: {
-            type: EventType.TEXT_MESSAGE_END,
-            messageId: "assistant-question",
-          },
-        })
-        subscriber.onRunFinishedEvent?.({
-          ...subscriberParams,
-          outcome: "interrupt",
-          interrupts,
-          event: {
-            type: EventType.RUN_FINISHED,
-            threadId: "thread-question",
-            runId: "question-run",
-            outcome: {
-              type: "interrupt",
-              interrupts,
-            },
-          },
-        })
-        subscriber.onRunFinalized?.(subscriberParams)
-      }
-    )
-    const agent = {
-      runAgent,
-      abortRun: vi.fn(),
-    } as unknown as HttpAgent
-    function PendingQuestionThread() {
-      const runtime = useAgUiRuntime({
-        agent,
-        unstable_enableMessageQueue: true,
-      })
-      return (
-        <AssistantRuntimeProvider runtime={runtime}>
-          <Thread autoFocus={false} composerFeatures={{ steer }} />
-        </AssistantRuntimeProvider>
-      )
+    const pending: RuntimeQuestionRequest = {
+      kind: "question",
+      requestId: "question-1",
+      // The gate reads the mounted thread's own id, so the fake answers for it.
+      sessionId: "pending",
+      questions: [
+        {
+          header: "Choice",
+          prompt: "Choose one",
+          options: [{ label: "Proceed" }],
+        },
+      ],
+    }
+    const interactions: RuntimeInteractionAdapter = {
+      respond: vi.fn(async () => undefined),
+      reject: vi.fn(async () => undefined),
+      getPending: () => pending,
+      subscribe: () => () => undefined,
+    }
+    const model: ChatModelAdapter = {
+      run: async () => {
+        await new Promise(() => undefined)
+        return { content: [] }
+      },
     }
 
-    render(<PendingQuestionThread />)
-    await user.type(
-      await screen.findByRole("textbox", { name: "Message input" }),
-      "Start"
+    render(
+      <PendingInteractionProvider interactions={interactions}>
+        <LocalThread
+          model={model}
+          enableMessageQueue
+          composerFeatures={{ steer }}
+        />
+      </PendingInteractionProvider>
     )
-    await user.click(screen.getByRole("button", { name: "Send message" }))
-    await screen.findByText("I need your answer.")
 
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
     expect(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: "Answer the pending question before changing this conversation",
       })
     ).toBeDisabled()
 
     const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, "Start")
+    await user.click(screen.getByRole("button", { name: "Send message" }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Stop generating" })
+      ).toBeVisible()
+    )
+
     await user.type(input, "Follow up")
     await user.keyboard("{Control>}{Enter}{/Control}")
     expect(
       await screen.findByRole("region", { name: "Queued messages" })
     ).toBeVisible()
-    expect(runAgent).toHaveBeenCalledOnce()
     expect(steer).not.toHaveBeenCalled()
     expect(
       screen.queryByRole("button", { name: "Steer queued message" })

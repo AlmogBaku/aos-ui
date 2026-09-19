@@ -5,16 +5,10 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react"
-import {
-  useAuiState,
-  useAui,
-  useRemoteThreadListRuntime,
-  type AssistantRuntime,
-  type ThreadMessageLike,
-} from "@assistant-ui/react"
-import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
+import { useAuiState, useRemoteThreadListRuntime } from "@assistant-ui/react"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 
@@ -22,54 +16,94 @@ import type {
   RuntimeAdapterDefinition,
   RuntimeAdapterProps,
 } from "../definition"
+import { createAcpInteractions } from "./acp/acp-interactions"
+import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
+import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
+import { createAcpConnection } from "./acp/connection"
+import { useAcpRuntime } from "./acp/use-acp-runtime"
 import { AosAttachmentAdapter } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import {
   useAosComposerFeatures,
   useAosSessionCapabilities,
 } from "./aos-composer-features"
-import { AosRemoteClient, createAosRunAgent } from "./aos-client"
-import { reconcileComposerPrefill } from "./aos-composer-prefill"
+import { AosRemoteClient } from "./aos-client"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
-import { AosReconciler } from "./aos-reconciliation"
-import { AosThreadListAdapter } from "./aos-thread-list"
+
+/**
+ * The operator surface over one ACP connection to the proxy. The connection
+ * owns the wire, the workspace client owns Agent and Session ownership, and the
+ * Session projector owns the thread; REST carries only bytes.
+ */
 
 const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
+
+const CLIENT_INFO = { name: "aos-ui", version: "1" }
 
 function ReadyAosRuntimeProvider({
   children,
   config,
   locale,
 }: RuntimeAdapterProps<"aos">) {
-  const reconciler = useMemo(() => new AosReconciler(), [])
-  const assistantRuntimeRef = useRef<AssistantRuntime | null>(null)
-  const reconcilerMounted = useRef(false)
+  const rest = useMemo(() => new AosRemoteClient(), [])
+  const connection = useMemo(
+    () => createAcpConnection({ clientInfo: CLIENT_INFO }),
+    []
+  )
+  const connectionMounted = useRef(false)
   useEffect(() => {
-    reconcilerMounted.current = true
+    connectionMounted.current = true
     return () => {
-      reconcilerMounted.current = false
+      connectionMounted.current = false
       // Strict Mode immediately replays effects while preserving hook state.
       // Dispose only if this instance is still unmounted after that replay.
       queueMicrotask(() => {
-        if (!reconcilerMounted.current) reconciler.close()
+        if (!connectionMounted.current) connection.close()
       })
     }
-  }, [reconciler])
+  }, [connection])
   const client = useMemo(
-    () => new AosRemoteClient({ reconciler }),
-    [reconciler]
+    () => createAcpWorkspaceClient({ connection, rest }),
+    [connection, rest]
   )
   const drafts = useMemo(() => new AosDraftRegistry(), [])
   const threadList = useMemo(
-    () => new AosThreadListAdapter(client, drafts),
-    [client, drafts]
+    () =>
+      createAcpThreadListAdapter({
+        connection,
+        drafts,
+        titleFor: client.sessionTitle,
+        agentIdFor: client.knownAgentIdOf,
+      }),
+    [client, connection, drafts]
   )
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
-  const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
+  const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
+  const interactions = useMemo(
+    () => createAcpInteractions({ connection }),
+    [connection]
+  )
   const media = useMemo(() => new VoiceMediaController(), [])
+  // A Session's capabilities, config options, and usage exist only once it is
+  // attached, so the composition reads them from the Session it has attached.
+  const [attachedSessions, setAttachedSessions] = useState<ReadonlySet<string>>(
+    new Set()
+  )
+  // The workspace client records what an attach reports, so it performs it.
+  const attach = useCallback(
+    async (sessionId: string) => {
+      const attached = await client.attachSession(sessionId, {
+        replayFromStart: true,
+      })
+      setAttachedSessions((previous) =>
+        previous.has(sessionId) ? previous : new Set(previous).add(sessionId)
+      )
+      return attached
+    },
+    [client]
+  )
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {
-      const aui = useAui()
       const remoteId = useAuiState((state) => state.threadListItem.remoteId)
       const localId = useAuiState((state) => state.threadListItem.id)
       const metadataAgentId = useAuiState((state) => {
@@ -84,167 +118,36 @@ function ReadyAosRuntimeProvider({
       const agentId = remoteId
         ? (threadList.agentFor(remoteId) ?? metadataAgentId)
         : (draftAgentId ?? metadataAgentId)
-      if (remoteId && agentId) client.adoptSessionOwnership(remoteId, agentId)
-      const agent = useMemo(
-        () =>
-          createAosRunAgent({
-            agentId: agentId ?? "",
-            threadId: remoteId ?? localId ?? "",
-            resolveThreadId: remoteId
-              ? undefined
-              : async () => (await aui.threadListItem.initialize()).remoteId,
-            stageAttachments: client.stageAttachments.bind(client),
-            onComposerPrefill: remoteId
-              ? async (text) => {
-                  const runtime = assistantRuntimeRef.current
-                  if (!runtime) return
-                  await reconcileComposerPrefill(
-                    runtime.threads.getById(localId),
-                    () => client.loadHistory(remoteId),
-                    text
-                  )
-                }
-              : undefined,
-            resolveRewindSourceId: remoteId
-              ? (sourceId, replacement, sourceText) =>
-                  client.resolveRewindSourceId(
-                    remoteId,
-                    sourceId,
-                    replacement,
-                    sourceText
-                  )
-              : undefined,
-            onRewindCompleted: remoteId
-              ? async (replacement) => {
-                  const history = await client.reconcileRewindReplacement(
-                    remoteId,
-                    replacement
-                  )
-                  const runtime = assistantRuntimeRef.current
-                  if (!runtime) return
-                  const messages: ThreadMessageLike[] = history.messages.map(
-                    (message) => ({
-                      ...message,
-                      createdAt: new Date(message.createdAt),
-                    })
-                  )
-                  let unsubscribe: () => void = () => undefined
-                  const resetWhenIdle = () => {
-                    const threads = runtime.threads.getState()
-                    const selected = threads.threadItems[threads.mainThreadId]
-                    if (
-                      (selected?.remoteId ?? selected?.externalId) !== remoteId
-                    ) {
-                      unsubscribe()
-                      return
-                    }
-                    if (runtime.thread.getState().isRunning) return
-                    unsubscribe()
-                    runtime.thread.reset(messages)
-                  }
-                  unsubscribe = runtime.thread.subscribe(resetWhenIdle)
-                  queueMicrotask(resetWhenIdle)
-                }
-              : undefined,
-            onRunFinished:
-              localId
-                ? async () => {
-                    const runtime = assistantRuntimeRef.current
-                    if (!runtime) return
-                    const target = runtime.threads.getById(localId)
-                    const item = runtime.threads.getItemById(localId)
-                    if (drafts.agentFor(localId)) {
-                      let unsubscribeTitle: () => void = () => undefined
-                      const refreshTitleWhenIdle = () => {
-                        if (target.getState().isRunning) return
-                        unsubscribeTitle()
-                        void item.generateTitle().catch(() => {
-                          // A later native invalidation retries the provider title.
-                        })
-                      }
-                      unsubscribeTitle = target.subscribe(refreshTitleWhenIdle)
-                      queueMicrotask(refreshTitleWhenIdle)
-                    }
-                    if (!remoteId) return
-                    if (!client.needsSteeringReconciliation(remoteId)) return
-                    const history = await client.loadHistory(remoteId)
-                    const messages: ThreadMessageLike[] = history.messages.map(
-                      (message) => ({
-                        ...message,
-                        createdAt: new Date(message.createdAt),
-                      })
-                    )
-                    let unsubscribe: () => void = () => undefined
-                    const resetWhenIdle = () => {
-                      if (target.getState().isRunning) return
-                      unsubscribe()
-                      target.reset(messages)
-                      client.completeSteeringReconciliation(remoteId)
-                    }
-                    unsubscribe = target.subscribe(resetWhenIdle)
-                    queueMicrotask(resetWhenIdle)
-                  }
-                : undefined,
-            onEvent: remoteId
-              ? (event) => client.acceptRunEvent(remoteId, event)
-              : undefined,
-            getCapabilities:
-              remoteId && agentId
-                ? () =>
-                    client
-                      .workspaceCapabilities(remoteId)
-                      .then((value) => value.agent)
-                : undefined,
-          }),
-        [agentId, aui, localId, remoteId]
-      )
-      const history = useMemo(
-        () =>
-          remoteId && agentId ? threadList.historyFor(remoteId) : undefined,
-        [agentId, remoteId]
-      )
-      const mediaAdapters = useMemo(
-        () => {
-          const scopeId = remoteId ?? localId
-          return scopeId && agentId
-            ? media.createAdapters(scopeId, {
-                transcribe: (recording, signal) =>
-                  client.transcribeForAgent(agentId, recording, signal),
-                synthesize: (text, signal) =>
-                  client.speakForAgent(agentId, text, signal),
-                projectText: (text) => projectSpeechText(text, locale),
-              })
-            : undefined
-        },
-        [agentId, localId, remoteId]
-      )
-      return useAgUiRuntime({
-        agent,
+      const mediaAdapters = useMemo(() => {
+        const scopeId = remoteId ?? localId
+        return scopeId && agentId
+          ? media.createAdapters(scopeId, {
+              transcribe: (recording, signal) =>
+                client.transcribeForAgent(agentId, recording, signal),
+              synthesize: (text, signal) =>
+                client.speakForAgent(agentId, text, signal),
+              projectText: (text) => projectSpeechText(text, locale),
+            })
+          : undefined
+      }, [agentId, localId, remoteId])
+      return useAcpRuntime({
+        connection,
+        sessionId: remoteId,
+        agentId: agentId ?? "",
         // A locally-created draft has an Agent before it has a remote Session.
-        // Its run transport awaits thread-list initialization, while leaving
-        // the first user turn optimistic and immediately visible.
         isDisabled: !agentId,
-        unstable_enableMessageQueue: Boolean(remoteId),
-        adapters: { history, attachments, ...mediaAdapters },
-        onCancel: () => {
-          if (remoteId && agentId)
-            void client.stopRun(remoteId).catch(() => undefined)
-        },
+        enableMessageQueue: Boolean(remoteId),
+        adapters: { attachments, ...mediaAdapters },
+        attach,
+        messageRewind: (sourceUserId) => ({ rewindSourceId: sourceUserId }),
       })
     },
-    [attachments, client, drafts, locale, media, threadList]
+    [attach, attachments, client, connection, drafts, locale, media, threadList]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadList,
     runtimeHook,
   })
-  useEffect(() => {
-    assistantRuntimeRef.current = assistantRuntime
-    return () => {
-      if (assistantRuntimeRef.current === assistantRuntime)
-        assistantRuntimeRef.current = null
-    }
-  }, [assistantRuntime])
   const createSessionDraft = useCallback(
     (agentId: string) =>
       createAosSessionDraft(assistantRuntime, drafts, agentId),
@@ -355,9 +258,11 @@ function ReadyAosRuntimeProvider({
     : undefined
   const selectedDraftId = selectedDraft?.[0]
   const mediaScopeId = selectedSessionId ?? selectedDraftId
-  if (selectedScope)
-    client.adoptSessionOwnership(selectedScope[0], selectedScope[1])
-  const capabilities = useAosSessionCapabilities(client, selectedSessionId)
+  const attachedSessionId =
+    selectedSessionId && attachedSessions.has(selectedSessionId)
+      ? selectedSessionId
+      : undefined
+  const capabilities = useAosSessionCapabilities(client, attachedSessionId)
   const selectedSessionStatus = useSyncExternalStore(
     useCallback(
       (listener) =>
@@ -373,32 +278,18 @@ function ReadyAosRuntimeProvider({
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    selectedSessionId,
+    attachedSessionId,
     capabilities
   )
+  // The Session projector rewinds locally from the `messageRewind` option; the
+  // run config is what the Thread carries into Edit and Retry.
   const messageRewind = useMemo(
     () => ({
       runConfig(sourceUserId: string) {
-        const source = assistantRuntime.thread
-          .getMessageById(sourceUserId)
-          .getState()
-        const sourceText =
-          source?.role === "user"
-            ? source.content
-                .flatMap((part) => (part.type === "text" ? [part.text] : []))
-                .join("\n")
-            : undefined
-        return {
-          custom: {
-            "aos.rewindSourceId": sourceUserId,
-            ...(sourceText === undefined
-              ? {}
-              : { "aos.rewindSourceText": sourceText }),
-          },
-        }
+        return { custom: { "aos.rewindSourceId": sourceUserId } }
       },
     }),
-    [assistantRuntime]
+    []
   )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =
@@ -437,12 +328,12 @@ function ReadyAosRuntimeProvider({
     assistantRuntime,
     workspace: client,
     createSessionDraft,
-    agUiInterrupts: true,
+    interactions,
     artifacts: { resolver: artifacts },
     composer,
     messageRewind,
     media,
-    activityCoverage: "active-session",
+    activityCoverage: "workspace",
   })
 }
 

@@ -78,6 +78,11 @@ export type UseAcpRuntimeOptions = {
     voice?: RealtimeVoiceAdapter
     feedback?: FeedbackAdapter
   }
+  /**
+   * Attaches the Session instead of resuming it directly, so a caller that
+   * already records what an attach reports stays the one that performs it.
+   */
+  attach?: (sessionId: string) => Promise<unknown>
   /** Resolves the provider turn a rewind replaces before Edit or Retry. */
   messageRewind?: (
     sourceUserId: string
@@ -122,6 +127,7 @@ function promptBlocks(message: AppendMessage, stageId: string | undefined) {
 type ControllerOptions = {
   connection: AcpConnection
   sessionId: string | undefined
+  attach?: UseAcpRuntimeOptions["attach"]
 }
 
 /** The callers' latest callbacks, handed over each render like AG-UI's core. */
@@ -130,7 +136,14 @@ type ControllerCallbacks = Pick<
   "messageRewind" | "onStateChange"
 >
 
-function createAcpController({ connection, sessionId }: ControllerOptions) {
+function createAcpController({
+  connection,
+  sessionId,
+  attach,
+}: ControllerOptions) {
+  const resume =
+    attach ??
+    ((id: string) => connection.resumeSession(id, { replayFromStart: true }))
   let callbacks: ControllerCallbacks = {}
   let state = initialProjectorState
   let loading = sessionId !== undefined
@@ -232,8 +245,7 @@ function createAcpController({ connection, sessionId }: ControllerOptions) {
       ]
       // A resume rejection surfaces through the connection's status and
       // `_aos/error`; the thread only stops waiting for its history.
-      void connection
-        .resumeSession(sessionId, { replayFromStart: true })
+      void resume(sessionId)
         .catch(() => undefined)
         .finally(() => {
           loading = false
@@ -297,10 +309,11 @@ function createQueue(controller: AcpController) {
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
-  const { connection, sessionId, enableMessageQueue, isDisabled } = options
+  const { attach, connection, sessionId, enableMessageQueue, isDisabled } =
+    options
   const controller = useMemo(
-    () => createAcpController({ connection, sessionId }),
-    [connection, sessionId]
+    () => createAcpController({ connection, sessionId, attach }),
+    [attach, connection, sessionId]
   )
   // Ordered before the subscription so a replayed update already reports.
   useEffect(() => {

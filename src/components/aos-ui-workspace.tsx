@@ -59,10 +59,8 @@ import type { ArtifactMessage } from "@/artifacts/artifacts"
 import { getWorkspaceCapabilities } from "@/runtime-adapters/workspace-state"
 import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
-import {
-  AgUiInterruptComposer,
-  PendingInteractionComposer,
-} from "@/components/runtime-interactions/pending-composer"
+import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
+import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
 import { useRuntimeErrorReporter } from "@/runtime-adapters/runtime-error-context"
 
 type AosUiWorkspaceProps = {
@@ -78,7 +76,6 @@ type AosUiWorkspaceProps = {
 export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
   const interactions = runtime.interactions
   const locale = props.locale
-  const isAgUiRuntime = runtime.agUiInterrupts === true
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>
       interactions
@@ -96,17 +93,13 @@ export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
               />
             )
           }
-        : isAgUiRuntime
-          ? function AgUiComposer({ fallback }) {
-              return (
-                <AgUiInterruptComposer locale={locale} fallback={fallback} />
-              )
-            }
-          : undefined,
-    [interactions, isAgUiRuntime, locale]
+        : undefined,
+    [interactions, locale]
   )
   const workspace = (
-    <WorkspaceContent {...props} harness={runtime} composer={composer} />
+    <PendingInteractionProvider interactions={interactions}>
+      <WorkspaceContent {...props} harness={runtime} composer={composer} />
+    </PendingInteractionProvider>
   )
   return runtime.media ? (
     <VoiceMediaProvider media={runtime.media} locale={props.locale}>
