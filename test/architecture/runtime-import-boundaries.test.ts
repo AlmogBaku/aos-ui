@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { readdir, readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { ESLint } from "eslint"
 import { beforeAll, describe, expect, it } from "vitest"
 
@@ -9,6 +11,10 @@ async function boundaryErrors(filePath: string, code: string) {
     ({ ruleId }) => ruleId === "aos/runtime-package-boundaries"
   )
 }
+
+/** Any module specifier, however it is written: import, export, or require. */
+const AG_UI_SPECIFIER =
+  /["'`](?:@ag-ui\/[^"'`]*|@assistant-ui\/react-ag-ui)["'`]/u
 
 describe("runtime package import boundaries", () => {
   beforeAll(async () => {
@@ -47,6 +53,23 @@ describe("runtime package import boundaries", () => {
     'const adapter = import("../runtime-adapters/aos/index.ts")',
   ])("allows consumers to use public package indexes: %s", async (code) => {
     expect(await boundaryErrors("src/components/example.tsx", code)).toEqual([])
+  })
+
+  it("keeps the retired AG-UI browser packages out of the frontend", async () => {
+    const files = (await readdir("src", { recursive: true })).filter((entry) =>
+      /\.tsx?$/u.test(entry)
+    )
+    expect(files.length).toBeGreaterThan(0)
+    const importers: string[] = []
+    for (const file of files) {
+      const path = join("src", file)
+      if (AG_UI_SPECIFIER.test(await readFile(path, "utf8")))
+        importers.push(path)
+    }
+
+    // The browser speaks ACP v2 to the proxy; only server adapters still map
+    // native providers through the AG-UI event shapes.
+    expect(importers).toEqual([])
   })
 
   it("allows internal imports inside the owning package", async () => {

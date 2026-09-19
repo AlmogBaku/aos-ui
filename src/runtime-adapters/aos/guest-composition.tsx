@@ -5,13 +5,8 @@ import {
   useAui,
   useAuiState,
   type AssistantState,
-  type AssistantRuntime,
+  type CompleteAttachment,
 } from "@assistant-ui/react"
-import { useAgUiRuntime } from "@assistant-ui/react-ag-ui"
-import {
-  AgentCapabilitiesSchema as AgUiAgentCapabilitiesSchema,
-  type AgentCapabilities,
-} from "@ag-ui/core"
 import {
   useCallback,
   useEffect,
@@ -19,7 +14,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type ReactNode,
 } from "react"
 import { z } from "zod"
 
@@ -31,75 +25,63 @@ import {
   createArtifactMessageStabilizer,
   useArtifactWorkspace,
 } from "@/components/artifacts"
-import { Thread } from "@/components/assistant-ui/elements/thread.aui"
+import {
+  Thread,
+  type ThreadComponents,
+} from "@/components/assistant-ui/elements/thread.aui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 import { DocumentLocale } from "@/components/document-locale"
+import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { WorkspaceConversationShell } from "@/components/workspace"
-import { AgUiInterruptComposer } from "./guest-agui-interrupts"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type { Locale } from "@/lib/i18n/config"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
-import { SlashCommandSchema } from "@aos/protocol"
-import { AosAttachmentAdapter } from "./aos-attachment-adapter"
+import {
+  AOS_ACP_GUEST_PATH,
+  AOS_JSONRPC_ERRORS,
+  type AosSessionResumeResponseMetaSchema,
+} from "@aos/protocol/acp"
+import { createAcpInteractions } from "./acp/acp-interactions"
+import { acpSocketUrl, createAcpConnection } from "./acp/connection"
+import type { AcpConnection } from "./acp/types"
+import { useAcpRuntime } from "./acp/use-acp-runtime"
+import {
+  AosAttachmentAdapter,
+  stagedAttachmentOf,
+} from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
-import { AosRemoteClient, createAosRunAgent } from "./aos-client"
-import { reconcileComposerPrefill } from "./aos-composer-prefill"
-import type { AosEventScope } from "./aos-reconciliation"
-import { AosThreadListAdapter } from "./aos-thread-list"
+import { AosRemoteClient } from "./aos-client"
+
+/**
+ * The invited guest surface: one ACP connection to the proxy's guest lane, one
+ * Session — the invitation's conversation reference — and the same Thread,
+ * interactions, and artifacts the operator workspace composes. REST carries
+ * only the verified presentation context and bytes.
+ */
 
 const dictionaries = { en, he } as const
 
-const GuestCapabilitiesSchema = z.strictObject({
-  agent: z.custom<AgentCapabilities>(
-    (value) => AgUiAgentCapabilitiesSchema.safeParse(value).success
-  ),
-  workspace: z
-    .strictObject({
-      slashCommands: z.union([
-        z.strictObject({
-          status: z.literal("available"),
-          scope: z.literal("attached-session"),
-          commands: z.array(SlashCommandSchema),
-        }),
-        z.strictObject({
-          status: z.literal("unavailable"),
-          reason: z.string(),
-        }),
-      ]),
-    })
-    .optional()
-    .default({
-      slashCommands: {
-        status: "unavailable",
-        reason: "runtime-does-not-advertise-slash-commands",
-      },
-    }),
-  content: z.strictObject({
-    attachments: z.unknown(),
-    artifacts: z.unknown(),
-    transcription: z.object({ status: z.enum(["available", "unavailable"]) }),
-    speech: z.object({ status: z.enum(["available", "unavailable"]) }),
-  }),
-  interactions: z.unknown(),
-})
+const CLIENT_INFO = { name: "aos-ui-guest", version: "1" }
 
-const GuestRuntimeContextSchema = z.strictObject({
-  runtimeId: z.string().min(1).max(256),
+/** What one `session/resume` reports about the invited Session. */
+type GuestSessionCapabilities = z.infer<
+  typeof AosSessionResumeResponseMetaSchema
+>["capabilities"]
+
+/**
+ * Only the presentation context the guest surface renders: the invited
+ * Session's capabilities arrive on the ACP resume, not on this read.
+ */
+const GuestRuntimeContextSchema = z.object({
   agentId: z.string().min(1).max(256),
   conversationRef: z.string().min(1).max(128),
-  session: z
-    .strictObject({
-      id: z.string().min(1).max(128),
-      created: z.boolean(),
-    })
-    .optional(),
   ui: z
     .strictObject({
       lang: z.enum(["en", "he"]).optional(),
@@ -114,18 +96,28 @@ const GuestRuntimeContextSchema = z.strictObject({
     })
     .optional(),
   prefill: z.string().max(2_000).optional(),
-  capabilities: GuestCapabilitiesSchema,
-  expiresAt: z.string().datetime(),
 })
 
-type GuestRuntimeContext = z.infer<typeof GuestRuntimeContextSchema> & {
-  scope: AosEventScope
-}
+type GuestRuntimeContext = z.infer<typeof GuestRuntimeContextSchema>
+
+type GuestFailure = "inactive" | "unavailable"
 
 class GuestRuntimeContextError extends Error {
-  constructor(readonly kind: "inactive" | "unavailable") {
+  constructor(readonly kind: GuestFailure) {
     super(kind)
   }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+/** An invitation the proxy refuses is finished; anything else may recover. */
+function failureOf(cause: unknown): GuestFailure {
+  if (cause instanceof GuestRuntimeContextError) return cause.kind
+  return isRecord(cause) &&
+    cause.code === AOS_JSONRPC_ERRORS.authenticationRequired
+    ? "inactive"
+    : "unavailable"
 }
 
 /** The gateway, not decoded bearer claims, selects the guest's public scope. */
@@ -149,14 +141,7 @@ export async function fetchGuestRuntimeContext(
     await response.json().catch(() => undefined)
   )
   if (!parsed.success) throw new Error("Guest runtime context is invalid")
-  return {
-    ...parsed.data,
-    scope: {
-      workspaceId: "guest",
-      agentId: parsed.data.agentId,
-      sessionId: parsed.data.conversationRef,
-    },
-  }
+  return parsed.data
 }
 
 function GuestArtifactShell({
@@ -169,6 +154,7 @@ function GuestArtifactShell({
   brandName,
   logoUrl,
   composerFeatures,
+  composer,
 }: {
   locale: Locale
   agentId: string
@@ -179,6 +165,7 @@ function GuestArtifactShell({
   brandName: string
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
+  composer: ThreadComponents["Composer"]
 }) {
   const stabilize = useMemo(() => createArtifactMessageStabilizer(), [])
   const messages = useAuiState((state: AssistantState) =>
@@ -199,6 +186,7 @@ function GuestArtifactShell({
         brandName={brandName}
         logoUrl={logoUrl}
         composerFeatures={composerFeatures}
+        composer={composer}
       />
     </ArtifactWorkspaceProvider>
   )
@@ -211,6 +199,7 @@ function GuestConversationShell({
   brandName,
   logoUrl,
   composerFeatures,
+  composer,
 }: {
   locale: Locale
   title?: string
@@ -218,6 +207,7 @@ function GuestConversationShell({
   brandName: string
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
+  composer: ThreadComponents["Composer"]
 }) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
   return (
@@ -258,12 +248,7 @@ function GuestConversationShell({
             ...(message ? { welcome: message } : {}),
           }}
           messageRewind={false}
-          components={{
-            ToolFallback: AosToolPresentation,
-            Composer: ({ fallback }: { fallback: ReactNode }) => (
-              <AgUiInterruptComposer locale={locale} fallback={fallback} />
-            ),
-          }}
+          components={{ ToolFallback: AosToolPresentation, Composer: composer }}
         />
       </ToolUiLocaleProvider>
     </WorkspaceConversationShell>
@@ -301,128 +286,137 @@ function invitationAccentStyle(accent?: string): CSSProperties | undefined {
 function GuestVoiceState({
   media,
   scopeId,
-  transcription,
-  speech,
+  capabilities,
 }: {
   media: VoiceMediaController
   scopeId: string
-  transcription: boolean
-  speech: boolean
+  capabilities: GuestSessionCapabilities | undefined
 }) {
   const running = useAuiState((state) => state.thread.isRunning)
   useEffect(() => {
     media.setScope(scopeId)
     media.setSafelyIdle(!running)
+    // Voice belongs to the attached Session, so it waits for its capabilities.
+    if (!capabilities) return
     media.setAvailability(scopeId, {
-      transcription: transcription ? "unverified" : "unavailable",
-      speech: speech ? "unverified" : "unavailable",
+      transcription:
+        capabilities.content.transcription.status === "available"
+          ? "unverified"
+          : "unavailable",
+      speech:
+        capabilities.content.speech.status === "available"
+          ? "unverified"
+          : "unavailable",
     })
-  }, [media, running, scopeId, speech, transcription])
+  }, [capabilities, media, running, scopeId])
   return null
 }
 
 function ReadyGuestAosSurface({
   config,
+  connection,
+  context,
   inviteToken,
   locale,
-  context,
 }: {
   config: GuestSurfaceConfiguration
+  connection: AcpConnection
+  context: GuestRuntimeContext
   inviteToken: string
   locale: Locale
-  context: GuestRuntimeContext
 }) {
-  const authorization = useMemo(() => `Bearer ${inviteToken}`, [inviteToken])
-  const runtimeRef = useRef<{
-    runtime: AssistantRuntime
-    sessionId: string
-  } | null>(null)
-  const { scope } = context
+  const { agentId } = context
+  const sessionId = context.conversationRef
   const selectedLocale = context.ui?.lang ?? locale
   const brandName = context.ui?.name ?? "AOS"
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
+  const rest = useMemo(() => {
+    const client = new AosRemoteClient({
+      basePath: config.basePath,
+      authorization: `Bearer ${inviteToken}`,
+    })
+    // REST authorizes byte reads per Agent; the invitation names the owner.
+    client.adoptSessionOwnership(sessionId, agentId)
+    return client
+  }, [agentId, config.basePath, inviteToken, sessionId])
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
+  const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
+  const interactions = useMemo(
+    () => createAcpInteractions({ connection }),
+    [connection]
+  )
   const media = useMemo(() => new VoiceMediaController(), [])
-  const client = useMemo(
-    () =>
-      new AosRemoteClient({
-        basePath: config.basePath,
-        authorization,
-        scope,
-      }),
-    [authorization, config.basePath, scope]
-  )
-  const history = useMemo(
-    () => new AosThreadListAdapter(client).historyFor(scope.sessionId),
-    [client, scope.sessionId]
-  )
-  const onComposerPrefill = useCallback(
-    async (text: string) => {
-      const current = runtimeRef.current
-      if (!current || current.sessionId !== scope.sessionId) return
-      await reconcileComposerPrefill(
-        current.runtime.thread,
-        () => client.loadHistory(scope.sessionId),
-        text
-      )
+  // The invited Session reports what it supports only once it is attached.
+  const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
+  const attach = useCallback(
+    async (attachedId: string) => {
+      const resumed = await connection.resumeSession(attachedId, {
+        replayFromStart: true,
+      })
+      setCapabilities(resumed.meta.capabilities)
+      return resumed
     },
-    [client, scope.sessionId]
+    [connection]
   )
-  const agent = useMemo(
-    () =>
-      // The factory stores this callback; it reads the ref only after a terminal event.
-      // eslint-disable-next-line react-hooks/refs
-      createAosRunAgent({
-        agentId: scope.agentId,
-        threadId: scope.sessionId,
-        basePath: config.basePath,
-        authorization,
-        onComposerPrefill,
-        stageAttachments: client.stageAttachments.bind(client),
-        getCapabilities: async () => context.capabilities.agent,
-      }),
-    [
-      authorization,
-      client,
-      config.basePath,
-      context.capabilities.agent,
-      onComposerPrefill,
-      scope.agentId,
-      scope.sessionId,
-    ]
+  // The invited Session owns the batch, so its bytes are staged per turn and
+  // the prompt links whatever the proxy accepted.
+  const stageAttachments = useCallback(
+    async (staged: string, composed: readonly CompleteAttachment[]) => {
+      const { stageId } = await rest.stageAttachments(
+        staged,
+        composed.map(stagedAttachmentOf)
+      )
+      return {
+        stageId,
+        attachments: composed.map(({ id, name, contentType }) => ({
+          id,
+          name,
+          ...(contentType === undefined ? {} : { contentType }),
+        })),
+      }
+    },
+    [rest]
   )
-  const artifacts = useMemo(() => new AosArtifactAdapter(client), [client])
-  const slashCommands =
-    config.composerSlashCommandsEnabled &&
-    context.capabilities.workspace.slashCommands.status === "available"
-      ? context.capabilities.workspace.slashCommands.commands
-      : undefined
-  const composerFeatures = useMemo(() => ({ slashCommands }), [slashCommands])
-  const transcription =
-    context.capabilities.content.transcription.status === "available"
-  const speech = context.capabilities.content.speech.status === "available"
   const mediaAdapters = useMemo(
     () =>
-      media.createAdapters(scope.sessionId, {
+      media.createAdapters(sessionId, {
         transcribe: (recording, signal) =>
-          client.transcribe(scope.sessionId, recording, signal),
-        synthesize: (text, signal) =>
-          client.speak(scope.sessionId, text, signal),
+          rest.transcribe(sessionId, recording, signal),
+        synthesize: (text, signal) => rest.speak(sessionId, text, signal),
         projectText: (text) => projectSpeechText(text, selectedLocale),
       }),
-    [client, media, scope.sessionId, selectedLocale]
+    [media, rest, selectedLocale, sessionId]
   )
-  const runtime = useAgUiRuntime({
-    agent,
-    adapters: { history, attachments, ...mediaAdapters },
-    onCancel: () => void client.stopRun(scope.sessionId).catch(() => undefined),
+  const runtime = useAcpRuntime({
+    connection,
+    sessionId,
+    agentId,
+    attach,
+    stageAttachments,
+    // An invitation exposes one conversation, so no turn queues behind a run.
+    enableMessageQueue: false,
+    adapters: { attachments, ...mediaAdapters },
   })
-  useEffect(() => {
-    runtimeRef.current = { runtime, sessionId: scope.sessionId }
-    return () => {
-      runtimeRef.current = null
-    }
-  }, [runtime, scope.sessionId])
+  const slashCommands =
+    config.composerSlashCommandsEnabled &&
+    capabilities?.workspace.slashCommands.status === "available"
+      ? capabilities.workspace.slashCommands.commands
+      : undefined
+  const composerFeatures = useMemo(() => ({ slashCommands }), [slashCommands])
+  const composer = useMemo<ThreadComponents["Composer"]>(
+    () =>
+      function GuestPendingComposer({ fallback }) {
+        return (
+          <PendingInteractionComposer
+            locale={selectedLocale}
+            threadId={sessionId}
+            interactions={interactions}
+            fallback={fallback}
+          />
+        )
+      },
+    [interactions, selectedLocale, sessionId]
+  )
 
   return (
     <ThemeProvider>
@@ -432,21 +426,21 @@ function ReadyGuestAosSurface({
           <GuestPrefill value={context.prefill} />
           <GuestVoiceState
             media={media}
-            scopeId={scope.sessionId}
-            transcription={transcription}
-            speech={speech}
+            scopeId={sessionId}
+            capabilities={capabilities}
           />
           <VoiceMediaProvider media={media} locale={selectedLocale}>
             <GuestArtifactShell
               locale={selectedLocale}
-              agentId={scope.agentId}
-              sessionId={scope.sessionId}
+              agentId={agentId}
+              sessionId={sessionId}
               artifacts={artifacts}
               title={context.ui?.title}
               message={context.ui?.message}
               brandName={brandName}
               logoUrl={logoUrl}
               composerFeatures={composerFeatures}
+              composer={composer}
             />
           </VoiceMediaProvider>
         </AssistantRuntimeProvider>
@@ -454,6 +448,51 @@ function ReadyGuestAosSurface({
     </ThemeProvider>
   )
 }
+
+function GuestNotice({
+  locale,
+  failure,
+  onRetry,
+}: {
+  locale: Locale
+  failure: GuestFailure
+  onRetry?: () => void
+}) {
+  return (
+    <main
+      role="alert"
+      className="grid min-h-dvh place-items-center bg-background p-6 text-center"
+      dir={locale === "he" ? "rtl" : "ltr"}
+    >
+      <div className="max-w-md">
+        <p className="text-sm leading-6 text-muted-foreground">
+          {failure === "unavailable"
+            ? locale === "he"
+              ? "לא הצלחנו להתחבר לשיחה כרגע. אפשר לנסות שוב."
+              : "We couldn’t connect to the conversation right now. Please try again."
+            : locale === "he"
+              ? "קישור ההזמנה הזה כבר אינו פעיל. אפשר לבקש ממי שהזמין אתכם לשלוח קישור חדש."
+              : "This invitation link is no longer active. Please ask the person who invited you to send a new one."}
+        </p>
+        {onRetry && failure === "unavailable" ? (
+          <button
+            className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            type="button"
+            onClick={onRetry}
+          >
+            {locale === "he" ? "ניסיון נוסף" : "Try again"}
+          </button>
+        ) : null}
+      </div>
+    </main>
+  )
+}
+
+type GuestAttempt = { key: string } & (
+  | { state: "loading" }
+  | { state: "failed"; failure: GuestFailure }
+  | { state: "ready"; context: GuestRuntimeContext; connection: AcpConnection }
+)
 
 export function GuestAosSurface({
   config,
@@ -466,73 +505,71 @@ export function GuestAosSurface({
 }) {
   const contextKey = `${config.basePath}\u0000${inviteToken ?? ""}`
   const [attempt, setAttempt] = useState(0)
-  const [loaded, setLoaded] = useState<{
-    key: string
-    context?: GuestRuntimeContext
-    failure?: "inactive" | "unavailable"
-  }>(() => ({
-    key: contextKey,
-    failure: !inviteToken ? "inactive" : undefined,
-  }))
+  const [loaded, setLoaded] = useState<GuestAttempt>(() =>
+    inviteToken
+      ? { key: contextKey, state: "loading" }
+      : { key: contextKey, state: "failed", failure: "inactive" }
+  )
 
   useEffect(() => {
     if (!inviteToken) return
     let disposed = false
-    void fetchGuestRuntimeContext(fetch, config.basePath, inviteToken).then(
+    const connection = createAcpConnection({
+      url: acpSocketUrl(AOS_ACP_GUEST_PATH),
+      clientInfo: CLIENT_INFO,
+    })
+    // The verified presentation context and the redeemed invitation together
+    // make the conversation reachable; neither alone opens it.
+    const open = async () => {
+      const resolved = await fetchGuestRuntimeContext(
+        fetch,
+        config.basePath,
+        inviteToken
+      )
+      await connection.initialized
+      await connection.login(inviteToken)
+      return resolved
+    }
+    void open().then(
       (resolved) => {
-        if (!disposed) setLoaded({ key: contextKey, context: resolved })
+        if (disposed) return
+        setLoaded({
+          key: contextKey,
+          state: "ready",
+          context: resolved,
+          connection,
+        })
       },
-      (cause) => {
-        if (!disposed)
-          setLoaded({
-            key: contextKey,
-            failure:
-              cause instanceof GuestRuntimeContextError
-                ? cause.kind
-                : "unavailable",
-          })
+      (cause: unknown) => {
+        connection.close()
+        if (disposed) return
+        setLoaded({
+          key: contextKey,
+          state: "failed",
+          failure: failureOf(cause),
+        })
       }
     )
     return () => {
       disposed = true
+      connection.close()
     }
   }, [attempt, config.basePath, contextKey, inviteToken])
 
-  const failure = loaded.key === contextKey ? loaded.failure : undefined
-  if (!inviteToken || failure)
+  if (!inviteToken) return <GuestNotice locale={locale} failure="inactive" />
+  const current = loaded.key === contextKey ? loaded : undefined
+  if (current?.state === "failed")
     return (
-      <main
-        role="alert"
-        className="grid min-h-dvh place-items-center bg-background p-6 text-center"
-        dir={locale === "he" ? "rtl" : "ltr"}
-      >
-        <div className="max-w-md">
-          <p className="text-sm leading-6 text-muted-foreground">
-            {failure === "unavailable"
-              ? locale === "he"
-                ? "לא הצלחנו להתחבר לשיחה כרגע. אפשר לנסות שוב."
-                : "We couldn’t connect to the conversation right now. Please try again."
-              : locale === "he"
-                ? "קישור ההזמנה הזה כבר אינו פעיל. אפשר לבקש ממי שהזמין אתכם לשלוח קישור חדש."
-                : "This invitation link is no longer active. Please ask the person who invited you to send a new one."}
-          </p>
-          {failure === "unavailable" ? (
-            <button
-              className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-              type="button"
-              onClick={() => {
-                setLoaded({ key: contextKey })
-                setAttempt((value) => value + 1)
-              }}
-            >
-              {locale === "he" ? "ניסיון נוסף" : "Try again"}
-            </button>
-          ) : null}
-        </div>
-      </main>
+      <GuestNotice
+        locale={locale}
+        failure={current.failure}
+        onRetry={() => {
+          setLoaded({ key: contextKey, state: "loading" })
+          setAttempt((value) => value + 1)
+        }}
+      />
     )
-  const context = loaded.key === contextKey ? loaded.context : undefined
-  if (!context)
+  if (current?.state !== "ready")
     return (
       <main
         className="grid min-h-dvh place-items-center p-6 text-sm text-muted-foreground"
@@ -544,9 +581,10 @@ export function GuestAosSurface({
   return (
     <ReadyGuestAosSurface
       config={config}
+      connection={current.connection}
+      context={current.context}
       inviteToken={inviteToken}
       locale={locale}
-      context={context}
     />
   )
 }

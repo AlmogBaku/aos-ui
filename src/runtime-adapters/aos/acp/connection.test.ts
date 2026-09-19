@@ -1,6 +1,7 @@
 import {
   agent,
   methods,
+  RequestError,
   type AgentApp,
   type AgentContext,
   type AnyWireMessage,
@@ -12,6 +13,8 @@ import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
+  AOS_AUTH_METHOD_INVITE,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
@@ -124,10 +127,13 @@ function catalogEntry() {
 type AgentCall = { method: string; params: unknown }
 
 /** An in-process proxy: the AOS agent side of the connection under test. */
-function createProxyAgent(options: { resyncOnResume?: number } = {}) {
+function createProxyAgent(
+  options: { resyncOnResume?: number; refuseLoginAfter?: number } = {}
+) {
   const calls: AgentCall[] = []
   let peer: AgentContext | undefined
   let resumes = 0
+  let logins = 0
   const record = (method: string, params: unknown) => {
     calls.push({ method, params })
   }
@@ -156,6 +162,19 @@ function createProxyAgent(options: { resyncOnResume?: number } = {}) {
           },
         },
       }
+    })
+    .onRequest(methods.agent.auth.login, ({ params }) => {
+      record(methods.agent.auth.login, params)
+      logins += 1
+      if (
+        options.refuseLoginAfter !== undefined &&
+        logins > options.refuseLoginAfter
+      )
+        throw new RequestError(
+          AOS_JSONRPC_ERRORS.authenticationRequired,
+          "authentication_required"
+        )
+      return {}
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       record(methods.agent.session.new, params)
@@ -344,6 +363,20 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
     connection.close()
     expect(connection.status).toBe("closed")
+  })
+
+  it("redeems an invitation with the AOS login metadata", async () => {
+    const proxy = createProxyAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+
+    await connection.login("invitation-token")
+
+    expect(proxy.paramsOf(methods.agent.auth.login)).toEqual({
+      methodId: AOS_AUTH_METHOD_INVITE,
+      _meta: { [AOS_META_KEY]: { token: "invitation-token" } },
+    })
+    connection.close()
   })
 
   it("creates, lists, resumes, and prompts Sessions with AOS metadata", async () => {
@@ -635,5 +668,76 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
     expect(sockets).toHaveLength(2)
     connection.close()
+  })
+
+  it("redeems the invitation again before replaying a recovered transport", async () => {
+    const proxy = createProxyAgent()
+    const sockets: { close: () => void }[] = []
+    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://guest.test/api/guest/v1/acp",
+      socketConstructor: class extends socketConstructor {
+        constructor(url: string) {
+          super(url)
+          sockets.push(this)
+        }
+      },
+      schedule: (_delayMs, task) => task(),
+    })
+    await connection.initialized
+    await connection.login("invitation-token")
+    connection.onSessionUpdate(SESSION_ID, () => {})
+    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+
+    sockets[0]?.close()
+
+    await vi.waitFor(() =>
+      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
+    )
+    expect(
+      proxy.calls
+        .map(({ method }) => method)
+        .filter(
+          (method) =>
+            method === methods.agent.auth.login ||
+            method === methods.agent.session.resume
+        )
+    ).toEqual([
+      methods.agent.auth.login,
+      methods.agent.session.resume,
+      methods.agent.auth.login,
+      methods.agent.session.resume,
+    ])
+    connection.close()
+  })
+
+  it("ends the connection when the invitation can no longer be redeemed", async () => {
+    const proxy = createProxyAgent({ refuseLoginAfter: 1 })
+    const sockets: { close: () => void }[] = []
+    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://guest.test/api/guest/v1/acp",
+      socketConstructor: class extends socketConstructor {
+        constructor(url: string) {
+          super(url)
+          sockets.push(this)
+        }
+      },
+      schedule: (_delayMs, task) => task(),
+    })
+    await connection.initialized
+    await connection.login("invitation-token")
+    connection.onSessionUpdate(SESSION_ID, () => {})
+    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+
+    sockets[0]?.close()
+
+    await vi.waitFor(() => expect(connection.status).toBe("closed"))
+    // A refused invitation stops the reconnect loop instead of replaying.
+    expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
+    expect(sockets).toHaveLength(2)
   })
 })

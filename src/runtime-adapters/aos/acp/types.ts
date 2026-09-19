@@ -70,6 +70,12 @@ export interface AcpConnection {
   readonly initialized: Promise<z.infer<typeof AosInitializeMetaSchema>>
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void
 
+  /**
+   * Redeems a guest invitation. The connection keeps the token and replays the
+   * login before it resumes attached Sessions on a recovered transport.
+   */
+  login(token: string): Promise<void>
+
   newSession(meta: z.infer<typeof AosSessionNewMetaSchema>): Promise<{
     sessionId: string
     configOptions: SessionConfigOption[]

@@ -21,6 +21,8 @@ import { z } from "zod"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_ACP_OPERATOR_PATH,
+  AOS_AUTH_METHOD_INVITE,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
   AosActivityNotificationSchema,
@@ -97,14 +99,25 @@ export type AcpConnectionOptions = {
   schedule?: (delayMs: number, task: () => void) => void
 }
 
+/** The code the proxy refuses an invitation it cannot redeem with. */
+function isAuthenticationRequired(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === AOS_JSONRPC_ERRORS.authenticationRequired
+  )
+}
+
 /** `_meta.aos` of an ACP payload, when it carries one. */
 function aosMetaOf(meta: unknown): Record<string, unknown> | undefined {
   const parsed = AosEnvelopeSchema.safeParse(meta)
   return parsed.success ? parsed.data[AOS_META_KEY] : undefined
 }
 
-function operatorUrl() {
-  const url = new URL(AOS_ACP_OPERATOR_PATH, window.location.href)
+/** One of the proxy's ACP lane paths as a same-origin WebSocket URL. */
+export function acpSocketUrl(path: string) {
+  const url = new URL(path, window.location.href)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   return url.toString()
 }
@@ -157,6 +170,8 @@ export function createAcpConnection(
   let reconnectDelayMs = INITIAL_RECONNECT_MS
   let reconnecting = false
   let recovering = false
+  // The guest lane's principal, replayed whenever a new transport redeems it.
+  let invitation: string | undefined
   let settleInitialized: ((meta: AosInitializeMeta) => void) | undefined
   let failInitialized: ((error: Error) => void) | undefined
   const initialized = new Promise<AosInitializeMeta>((resolve, reject) => {
@@ -252,6 +267,30 @@ export function createAcpConnection(
     failInitialized = undefined
   }
 
+  async function login(token: string) {
+    const agent = await withAgent()
+    await agent.request(methods.agent.auth.login, {
+      methodId: AOS_AUTH_METHOD_INVITE,
+      _meta: { [AOS_META_KEY]: { token } },
+    })
+    invitation = token
+  }
+
+  /**
+   * Redeems the invitation on a recovered transport. A refused one stays
+   * refused, so the connection ends instead of reconnecting against it.
+   */
+  async function reloginOrClose(token: string) {
+    try {
+      await login(token)
+      return true
+    } catch (error) {
+      if (!isAuthenticationRequired(error)) throw error
+      closeConnection()
+      return false
+    }
+  }
+
   async function resumeSession(sessionId: string, resume: AcpResumeOptions) {
     const agent = await withAgent()
     const agentId = resume.agentId ?? owners.get(sessionId)
@@ -302,7 +341,7 @@ export function createAcpConnection(
       ? app.connect(connectAgent)
       : app.connect(
           createWebSocketStream<AnyWireMessage>(
-            options.url ?? operatorUrl(),
+            options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
             options.socketConstructor
               ? { WebSocket: options.socketConstructor }
               : {}
@@ -313,14 +352,18 @@ export function createAcpConnection(
     // A handshake or replay that cannot complete leaves an unusable
     // connection; closing it runs the same recovery as a dropped transport.
     void current.ready
-      .then(() => {
+      .then(async () => {
         reconnectDelayMs = INITIAL_RECONNECT_MS
         setStatus("ready")
         // Consumers attach Sessions on the first connection themselves; only a
         // recovered transport owes them a replay.
         if (!recovering) return
         recovering = false
-        return resumeAttached()
+        // The new transport is unauthenticated, so a guest connection redeems
+        // its invitation again before anything that login authorizes.
+        if (invitation !== undefined && !(await reloginOrClose(invitation)))
+          return
+        await resumeAttached()
       })
       .catch((error: unknown) => connection.close(error))
     const onClosed = () => {
@@ -338,6 +381,17 @@ export function createAcpConnection(
     void connection.closed.then(onClosed, onClosed)
   }
 
+  function closeConnection() {
+    if (closed) return
+    closed = true
+    setStatus("closed")
+    failInitialized?.(new Error("The ACP connection closed"))
+    failInitialized = undefined
+    settleInitialized = undefined
+    live?.connection.close()
+    live = undefined
+  }
+
   open()
 
   return {
@@ -346,6 +400,8 @@ export function createAcpConnection(
     },
     initialized,
     subscribeStatus: (listener) => subscribeTo(statusListeners, listener),
+
+    login,
 
     async newSession(meta) {
       const agent = await withAgent()
@@ -452,15 +508,6 @@ export function createAcpConnection(
     onPendingRequest: (listener) => subscribeTo(pendingListeners, listener),
     lastSequence: (sessionId) => positions.get(sessionId),
 
-    close() {
-      if (closed) return
-      closed = true
-      setStatus("closed")
-      failInitialized?.(new Error("The ACP connection closed"))
-      failInitialized = undefined
-      settleInitialized = undefined
-      live?.connection.close()
-      live = undefined
-    },
+    close: closeConnection,
   }
 }
