@@ -58,11 +58,8 @@ import {
   HermesSessionGoneError,
   isSessionGone,
 } from "./attachment-registry"
-import {
-  ServerRunSteerUncertainError,
-  type ServerRuntime,
-} from "../../core/runtime"
-import { nativeSlashCommands, nativeSlashInvocation } from "./slash-commands"
+import type { ServerRuntime } from "../../core/runtime"
+import { nativeSlashCommands } from "./slash-commands"
 import { isRecord, nativeId, timestamp, trimmedText } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
