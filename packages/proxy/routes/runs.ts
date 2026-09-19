@@ -1,4 +1,9 @@
-import { EventType, RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core"
+import {
+  EventType,
+  RunAgentInputSchema,
+  type RunAgentInput,
+  type UserMessage,
+} from "@ag-ui/core"
 import { EventEncoder } from "@ag-ui/encoder"
 import type { Context } from "hono"
 
@@ -135,6 +140,35 @@ export async function prepareRunInput(
   return { input, stage }
 }
 
+/**
+ * One admitted user turn, independent of the transport that carried it. The
+ * normalized AG-UI wire and the ACP agent both submit turns through here so
+ * one Session run is admitted the same way whichever protocol asked for it.
+ */
+export function buildNewTurnInput(options: {
+  threadId: string
+  runId: string
+  messageId: string
+  content: UserMessage["content"]
+  /** User turn to rewind before Edit or Retry; validated authoritatively. */
+  rewindSourceId?: string
+}): NewTurnRunInput {
+  return {
+    threadId: options.threadId,
+    runId: options.runId,
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {},
+    messages: [
+      { id: options.messageId, role: "user", content: options.content },
+    ],
+    ...(options.rewindSourceId === undefined
+      ? {}
+      : { rewindSourceId: options.rewindSourceId }),
+  }
+}
+
 export function normalizeRunInput(
   candidate: RunAgentInput,
   threadId: string,
@@ -142,19 +176,16 @@ export function normalizeRunInput(
 ): NewTurnRunInput | ResumeRunInput | undefined {
   if (candidate.threadId !== threadId || !validIdentifier(candidate.runId))
     return undefined
-  const base = {
-    threadId,
-    runId: candidate.runId,
-    state: {},
-    tools: [],
-    context: [],
-    forwardedProps: {},
-  }
   if (candidate.resume !== undefined) {
     if (candidate.messages.length !== 0 || candidate.resume.length === 0)
       return undefined
     return {
-      ...base,
+      threadId,
+      runId: candidate.runId,
+      state: {},
+      tools: [],
+      context: [],
+      forwardedProps: {},
       messages: [],
       resume: candidate.resume.map(({ interruptId, status, payload }) => ({
         interruptId,
@@ -166,11 +197,13 @@ export function normalizeRunInput(
   const message = candidate.messages[0]
   if (candidate.messages.length !== 1 || message?.role !== "user")
     return undefined
-  return {
-    ...base,
-    messages: [{ id: message.id, role: "user", content: message.content }],
+  return buildNewTurnInput({
+    threadId,
+    runId: candidate.runId,
+    messageId: message.id,
+    content: message.content,
     ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
-  }
+  })
 }
 
 type RunStreamOptions = {
