@@ -22,6 +22,7 @@ import { HermesInteractionPublicError } from "./interactions"
 import {
   HermesContentScopeError,
   HermesContentUnavailableError,
+  HermesContentUnreadableError,
 } from "./content"
 import {
   HermesWorkspaceScopeError,
@@ -276,12 +277,24 @@ describe("Hermes server adapter", () => {
         role: "tool",
         tool_call_id: "tts-call",
         tool_name: "text_to_speech",
+        // The receipt shape a live Hermes `text_to_speech` writes: one absolute
+        // delivery path repeated in `file_path`, `file_paths` and the `MEDIA:`
+        // directive, alongside the delivery bookkeeping AOS ignores.
         content: JSON.stringify({
           success: true,
           file_path: audioPath,
           file_paths: [audioPath],
           media_tag: `MEDIA:${audioPath}`,
-          provider: "edge",
+          provider: "elevenlabs",
+          voice_compatible: false,
+          chunk_count: 1,
+          delivery_file_count: 1,
+          combined_chunks: false,
+          delivery_profile: {
+            platform: "default",
+            max_file_bytes: 10_485_760,
+            target_file_bytes: 8_912_896,
+          },
         }),
       },
       {
@@ -326,6 +339,147 @@ describe("Hermes server adapter", () => {
       `path=${encodeURIComponent(audioPath)}&profile=researcher&session_id=stored`
     )
     expect(JSON.stringify(history)).not.toContain(audioPath)
+  })
+
+  it("reports an output the provider can no longer read as not found", async () => {
+    // A default `text_to_speech` delivery lands in the media cache Hermes prunes
+    // at a 24-hour age, so its receipt outlives its bytes and `read-data-url`
+    // answers 404. The Session's published artifact reads from the same
+    // endpoint and must stay unaffected.
+    const audioPath = "/home/alice/.hermes/cache/audio/tts_20260915_184023.mp3"
+    const messages = [
+      {
+        id: "assistant-tools",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "artifact-call",
+            function: {
+              name: "tool_call",
+              arguments: JSON.stringify({
+                name: "present_artifact",
+                arguments: {
+                  mimeType: "text/markdown",
+                  path: "interview-brief.md",
+                  title: "Interview Brief",
+                },
+              }),
+            },
+          },
+          {
+            id: "tts-call",
+            function: {
+              name: "text_to_speech",
+              arguments: '{"speed":1.05,"text":"Interview brief"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "artifact-call",
+        tool_name: "present_artifact",
+        content: JSON.stringify({
+          ok: true,
+          type: "aos.artifact",
+          artifact: {
+            id: "hermes-artifact-3d43f638eb6049e8aaf7cb0c8d96ad3b",
+            path: "interview-brief.md",
+            filename: "Interview Brief — VP AI",
+            sizeBytes: 11_102,
+            mimeType: "text/markdown",
+          },
+        }),
+      },
+      {
+        role: "tool",
+        tool_call_id: "tts-call",
+        tool_name: "text_to_speech",
+        content: JSON.stringify({
+          success: true,
+          file_path: audioPath,
+          file_paths: [audioPath],
+          media_tag: `MEDIA:${audioPath}`,
+          provider: "elevenlabs",
+          voice_compatible: false,
+          chunk_count: 1,
+          delivery_file_count: 1,
+          combined_chunks: false,
+        }),
+      },
+      {
+        id: "assistant-final",
+        role: "assistant",
+        content: `MEDIA:${audioPath}`,
+      },
+    ]
+    let audioFailure = new HermesHttpError(404)
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return { session_id: "live-secret", running: false, status: "idle" }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      if (path.includes("/messages?")) return { session_id: "stored", messages }
+      if (path.startsWith("/api/fs/read-data-url?")) {
+        if (path.includes(encodeURIComponent(audioPath))) throw audioFailure
+        return { dataUrl: "data:text/markdown;base64,IyBCcmllZg==" }
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const history = await adapter.history("researcher", "stored", 200, 0)
+    const mediaId = history.messages
+      .flatMap((message) =>
+        message.role === "assistant" ? message.content : []
+      )
+      .find(
+        (part) =>
+          part.type === "data" &&
+          part.name === "aos.artifact" &&
+          part.data.mimeType === "audio/mpeg"
+      )
+    if (mediaId?.type !== "data" || typeof mediaId.data.id !== "string")
+      throw new Error("Expected a projected TTS artifact")
+
+    const unreadable = await adapter
+      .artifact("researcher", "stored", mediaId.data.id)
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+    expect(unreadable).toBeInstanceOf(HermesContentUnreadableError)
+    expect(adapter.publicError(unreadable)).toEqual({
+      code: "not_found",
+      status: 404,
+    })
+    expect(String(unreadable)).not.toContain(audioPath)
+
+    // The same endpoint still serves the artifact the tool published.
+    await expect(
+      adapter.artifact(
+        "researcher",
+        "stored",
+        "hermes-artifact-3d43f638eb6049e8aaf7cb0c8d96ad3b"
+      )
+    ).resolves.toEqual({
+      bytes: Uint8Array.from([35, 32, 66, 114, 105, 101, 102]),
+      filename: "Interview Brief — VP AI",
+      mimeType: "text/markdown",
+    })
+
+    // A provider outage stays retryable: only a refusal of the file itself is
+    // reported as the output being gone.
+    audioFailure = new HermesHttpError(500)
+    const outage = await adapter
+      .artifact("researcher", "stored", mediaId.data.id)
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+    expect(outage).toBeInstanceOf(HermesContentUnavailableError)
+    expect(adapter.publicError(outage)).toEqual({
+      code: "temporarily_unavailable",
+      status: 503,
+    })
   })
 
   it("restores pending interactions from authoritative owned Session state", async () => {
@@ -1893,6 +2047,7 @@ describe("Hermes server adapter", () => {
       new HermesSessionNotFoundError(),
       new HermesWorkspaceScopeError(),
       new HermesContentScopeError(),
+      new HermesContentUnreadableError(),
       new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND"),
     ])
       expect(adapter.publicError(cause)).toEqual({

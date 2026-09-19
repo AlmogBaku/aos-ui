@@ -142,6 +142,19 @@ export class HermesContentUnavailableError extends Error {
   }
 }
 
+/**
+ * The provider answered that it cannot read this artifact's bytes. A retry
+ * cannot change that answer, so it is deliberately not a
+ * `HermesContentUnavailableError`: the operator must be told the output is
+ * gone, not that the service is briefly down.
+ */
+export class HermesContentUnreadableError extends Error {
+  constructor() {
+    super("The provider could not read this output")
+    this.name = "HermesContentUnreadableError"
+  }
+}
+
 /** Server-only retry handle; it intentionally exposes no native identifiers. */
 export class HermesContentCleanupRequiredError extends HermesContentUnavailableError {
   constructor(readonly retry: () => Promise<void>) {
@@ -666,7 +679,10 @@ export function createHermesContentOperations(input: {
           MAX_ARTIFACT_BYTES,
           MAX_ARTIFACT_BYTES
         )
-      } catch {
+      } catch (error) {
+        // A provider that answered "I cannot read this" keeps that answer; only
+        // an unclassified transport failure is an outage.
+        if (error instanceof HermesContentUnreadableError) throw error
         throw new HermesContentUnavailableError()
       }
       if (

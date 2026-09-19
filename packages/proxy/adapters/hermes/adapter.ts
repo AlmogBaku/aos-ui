@@ -46,6 +46,7 @@ import {
   decodeDataUrl,
   HermesContentScopeError,
   HermesContentUnavailableError,
+  HermesContentUnreadableError,
   type HermesContentAttachment,
 } from "./content"
 import {
@@ -95,6 +96,16 @@ export class HermesSessionConflictError extends Error {
 }
 
 type NativeRecord = Record<string, unknown>
+
+/**
+ * The statuses Hermes' `GET /api/fs/read-data-url` answers when it has read the
+ * request and refuses the file itself: 404 for a path it cannot find (a default
+ * `text_to_speech` output lives in the media cache Hermes prunes hourly at a
+ * 24-hour age, so its receipt outlives its bytes), 400 for a path it rejects or
+ * a directory, and 413 for a file past its own data-URL ceiling. None of those
+ * change on a retry.
+ */
+const UNREADABLE_ARTIFACT_STATUS: ReadonlySet<number> = new Set([400, 404, 413])
 
 function historyPagination(
   requestedLimit: number,
@@ -288,12 +299,22 @@ export class HermesServerAdapter implements ServerRuntime {
           if (!this.#dashboard) throw new HermesUnavailableError()
           const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
           if (!storedId) throw new HermesUnavailableError()
-          const payload = await this.#dashboard.readArtifactDataUrl(
-            scope.agentId,
-            storedId,
-            reference,
-            maxResponseBytes
-          )
+          let payload: unknown
+          try {
+            payload = await this.#dashboard.readArtifactDataUrl(
+              scope.agentId,
+              storedId,
+              reference,
+              maxResponseBytes
+            )
+          } catch (error) {
+            if (
+              error instanceof HermesHttpError &&
+              UNREADABLE_ARTIFACT_STATUS.has(error.status)
+            )
+              throw new HermesContentUnreadableError()
+            throw error
+          }
           const decoded = decodeDataUrl(
             isRecord(payload) ? payload.dataUrl : undefined,
             maxBytes
@@ -515,7 +536,11 @@ export class HermesServerAdapter implements ServerRuntime {
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
       cause instanceof HermesWorkspaceScopeError ||
-      cause instanceof HermesContentScopeError
+      cause instanceof HermesContentScopeError ||
+      // The artifact is still authoritative history, but the provider no longer
+      // holds its bytes: "not found" is the honest answer, and unlike a 503 it
+      // never invites a retry that cannot succeed.
+      cause instanceof HermesContentUnreadableError
     )
       return { code: "not_found", status: 404 } as const
     if (
