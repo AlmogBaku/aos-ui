@@ -11,6 +11,7 @@ import {
   ServerRunSteerUncertainError,
   ServerSessionNotFoundError,
   type RuntimeInstance,
+  type ServerAttachmentStages,
   type ServerRuntime,
 } from "./core/runtime"
 import { redactForLog } from "./redaction"
@@ -36,6 +37,8 @@ export type ProxyAppOptions = {
     publicOrigin: string
     service: GuestInvitationService
   }
+  /** Shared with the ACP socket so prompts can reference REST-staged batches. */
+  attachmentStages?: ServerAttachmentStages
 }
 
 const securityHeaders = {
@@ -50,7 +53,8 @@ export function createProxyApp(options: ProxyAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
   const runtime = options.runtimeInstance.runtime
-  const attachmentStages = new AttachmentStageRegistry()
+  const attachmentStages =
+    options.attachmentStages ?? new AttachmentStageRegistry()
 
   app.use("*", async (context, next) => {
     const requestId = randomUUID()

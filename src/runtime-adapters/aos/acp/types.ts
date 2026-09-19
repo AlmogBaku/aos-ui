@@ -58,6 +58,8 @@ export type AcpSessionUpdateListener = (
 
 export type AcpResumeOptions = {
   replayFromStart: boolean
+  /** Owning Agent when known before listing, e.g. from a deep link. */
+  agentId?: string
   after?: number
   runId?: string
 }

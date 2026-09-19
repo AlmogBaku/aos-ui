@@ -11,6 +11,7 @@ import {
   AOS_AUTH_METHOD_INVITE,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
+  AOS_ATTACHMENT_URI_SCHEME,
   AOS_META_KEY,
   AosFocusNotificationSchema,
   AosPromptMetaSchema,
@@ -71,6 +72,16 @@ const INVITE_AUTH_METHOD = {
   methodId: AOS_AUTH_METHOD_INVITE,
   name: "Invitation",
 } as const
+
+/** Text, or a link to a batch the browser staged over REST. */
+function isPromptBlock(block: ContentBlock) {
+  return (
+    ContentBlock.isText(block) ||
+    (block.type === "resource_link" &&
+      typeof block.uri === "string" &&
+      block.uri.startsWith(AOS_ATTACHMENT_URI_SCHEME))
+  )
+}
 
 /** ACP text blocks joined the way the normalized wire carries a turn. */
 function promptText(prompt: readonly ContentBlock[]) {
@@ -172,6 +183,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(methods.agent.session.resume, async ({ params, client }) => {
     const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+    if (meta.agentId !== undefined)
+      sessions.adopt(params.sessionId, meta.agentId)
     const scope = sessions.scope(params.sessionId)
     const row = await workspace.session(scope)
     // The same preamble the history route runs: only a wait or a Session the
@@ -220,24 +233,29 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(methods.agent.session.prompt, async ({ params, client }) => {
     const meta = parseMeta(AosPromptMetaSchema, params._meta)
-    // Staged attachments and inline media need the server-side attachment
-    // stage registry, which this connection is not given.
-    if (
-      meta.attachmentStageId !== undefined ||
-      !params.prompt.every(ContentBlock.isText)
-    )
-      throw invalidRequest()
+    if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
     const text = promptText(params.prompt)
     if (!text) throw invalidRequest()
     const scope = sessions.scope(params.sessionId)
     await workspace.session(scope)
     if (coordinator.state(scope) !== "idle") throw runInProgress()
+    // Bytes were staged over REST; the prompt references the batch by id and
+    // the stage appends its server-owned content to the user turn.
+    const stage =
+      meta.attachmentStageId === undefined
+        ? undefined
+        : context.attachmentStages.take(
+            scope.agentId,
+            scope.threadId,
+            meta.attachmentStageId
+          )
+    if (meta.attachmentStageId !== undefined && !stage) throw invalidRequest()
     const messageId = crypto.randomUUID()
     const input = buildNewTurnInput({
       threadId: scope.threadId,
       runId: crypto.randomUUID(),
       messageId,
-      content: text,
+      content: stage ? await stage.appendTo(text) : text,
       ...(meta.rewindSourceId === undefined
         ? {}
         : { rewindSourceId: meta.rewindSourceId }),
@@ -249,7 +267,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         messageId,
         content: params.prompt,
       })
-      await attachment.startTurn(input)
+      await attachment.startTurn(input, stage)
     })
     return { _meta: { [AOS_META_KEY]: { messageId } } }
   })

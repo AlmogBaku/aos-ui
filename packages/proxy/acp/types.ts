@@ -22,7 +22,7 @@ import type {
   RequestReply,
   RunEvent,
 } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
+import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 
 export type Lane = "operator" | "guest"
@@ -37,6 +37,8 @@ export type AcpConnectionContext = {
   readState: ReadState
   activityFeed: ActivityFeed
   translators: Translators
+  /** Server-staged attachment batches, shared with the REST upload route. */
+  attachmentStages: ServerAttachmentStages
 }
 
 /** Builds the per-connection ACP v2 agent app. Implemented in `agent.ts`. */

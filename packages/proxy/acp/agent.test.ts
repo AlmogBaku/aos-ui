@@ -33,6 +33,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
+import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
@@ -538,6 +539,7 @@ async function harness(options: HarnessOptions = {}) {
     readState,
     activityFeed,
     translators,
+    attachmentStages: new AttachmentStageRegistry(),
   }
 
   const recorder = createRecorder()

@@ -164,9 +164,20 @@ export const AosSessionNewResponseMetaSchema = z.strictObject({
 
 /** `ResumeSessionRequest._meta.aos` */
 export const AosSessionResumeMetaSchema = z.strictObject({
+  /** Owning Agent, when the client knows it before listing (deep links). */
+  agentId: IdentifierSchema.optional(),
   /** Last `_meta.aos.sequence` the client saw for `runId`. */
   after: SequenceSchema.optional(),
   runId: IdentifierSchema.optional(),
+})
+
+/**
+ * `PromptResponse._meta.aos`. The pinned SDK's v2 `PromptResponse` has no
+ * `messageId` field and its client parser strips unknown keys, so the proxy's
+ * minted user message id travels here.
+ */
+export const AosPromptResponseMetaSchema = z.strictObject({
+  messageId: IdentifierSchema,
 })
 
 /**

@@ -260,6 +260,11 @@ export function createSessions(context: AcpConnectionContext) {
       return owners.get(publicSessionId)
     },
 
+    /** Trusts a client-supplied owner until the Session read confirms it. */
+    adopt(publicSessionId: string, agentId: string) {
+      if (!owners.has(publicSessionId)) owners.set(publicSessionId, agentId)
+    },
+
     scope(publicSessionId: string) {
       const agentId = owners.get(publicSessionId)
       if (agentId === undefined) throw notFound()
