@@ -92,6 +92,7 @@ export const RunOutcomeSchema = z.discriminatedUnion("type", [
   }),
 ])
 export type RunOutcome = z.infer<typeof RunOutcomeSchema>
+export type RunInterruptOutcome = Extract<RunOutcome, { type: "interrupt" }>
 
 /** What one provider call spent, as the provider reported it. */
 export const TokenUsageSchema = z.object({
@@ -104,6 +105,35 @@ export const TokenUsageSchema = z.object({
   cachedInputTokens: z.number().int().nonnegative().optional(),
 })
 export type TokenUsage = z.infer<typeof TokenUsageSchema>
+
+const TOKEN_COUNT_KEYS = [
+  "inputTokens",
+  "outputTokens",
+  "totalTokens",
+  "reasoningTokens",
+  "cachedInputTokens",
+] as const
+
+/** Sums usage per provider and model, dropping counts a provider omitted. */
+export function aggregateTokenUsage(
+  entries: readonly TokenUsage[]
+): TokenUsage[] {
+  const grouped = new Map<string, TokenUsage>()
+  for (const entry of entries) {
+    const key = `${entry.provider ?? ""} ${entry.model ?? ""}`
+    const target = grouped.get(key) ?? {
+      ...(entry.provider === undefined ? {} : { provider: entry.provider }),
+      ...(entry.model === undefined ? {} : { model: entry.model }),
+    }
+    for (const field of TOKEN_COUNT_KEYS) {
+      const value = entry[field]
+      if (value === undefined) continue
+      target[field] = (target[field] ?? 0) + value
+    }
+    grouped.set(key, target)
+  }
+  return [...grouped.values()]
+}
 
 /** One part of a user turn the proxy admits; prose only, never a blob. */
 const TurnTextPartSchema = z.object({

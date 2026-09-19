@@ -44,11 +44,10 @@ the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
 | Field             | Meaning                                                                                       |
 | ----------------- | --------------------------------------------------------------------------------------------- |
 | `version`         | Configuration format; V1 accepts only `1`.                                                    |
-| `deploymentId`    | Stable identifier bound into reconnect cursors and guest invitations.                         |
+| `deploymentId`    | Stable identifier bound into guest invitations.                                               |
 | `listen`          | Trusted operator host and port. Wildcard binds require `exposure: "private-container"`.       |
 | `publicOrigin`    | Exact browser origin accepted for state-changing operator requests.                           |
 | `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below. |
-| `events`          | Active reconnect-cursor key ID and one to three file-backed keys.                             |
 | `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                   |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys.                          |
 | `shutdownGraceMs` | Time allowed for HTTP and event connections to drain.                                         |
@@ -72,8 +71,7 @@ requires a scoped, expiring JWT.
 
 Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
 `runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable), every
-`events.keys[].secretFile`, and every `guest.invitations.keys[].secretFile`
-must be absolute paths to regular, non-symlinked, owner-only files. Secret
+and every `guest.invitations.keys[].secretFile` must be absolute paths to regular, non-symlinked, owner-only files. Secret
 values never belong directly in the JSON, Compose environment, `VITE_*`, public
 runtime configuration, or browser bundle. Unknown and legacy OIDC,
 operator-cookie, Hermes browser-broker, and guest-Hermes fields are rejected.

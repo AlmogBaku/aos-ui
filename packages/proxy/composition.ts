@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto"
-
 import { createOperatorAcpService } from "./acp/operator"
 import {
   createRuntimeInstance,
@@ -13,8 +11,6 @@ import {
   type GuestInvitationService,
 } from "./auth/guest-invitation"
 import { parseProxyConfig } from "./config"
-import { createReconnectCursorCodec } from "./events/cursor"
-import { createOperatorEventService } from "./events/service"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
 import { createGuestAttachmentStages } from "./guest/context"
@@ -32,16 +28,10 @@ export async function createConfiguredProxy(
   dependencies: ConfiguredProxyDependencies
 ) {
   const config = parseProxyConfig(input)
-  const [runtimeInstance, cursorKeys, invitationKeys] = await Promise.all([
+  const [runtimeInstance, invitationKeys] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
       config.limits
-    ),
-    Promise.all(
-      config.events.keys.map(async ({ id, secretFile }) => ({
-        id,
-        secret: await readSecretKeyFile(secretFile),
-      }))
     ),
     config.guest
       ? Promise.all(
@@ -54,13 +44,6 @@ export async function createConfiguredProxy(
         )
       : Promise.resolve(undefined),
   ])
-  const cursor = createReconnectCursorCodec({
-    activeKeyId: config.events.activeKeyId,
-    keys: Object.fromEntries(cursorKeys.map(({ id, secret }) => [id, secret])),
-    ...(dependencies.clock === undefined
-      ? {}
-      : { now: () => Math.floor(dependencies.clock!() / 1_000) }),
-  })
   const invitations =
     config.guest && invitationKeys
       ? createGuestInvitationService({
@@ -104,14 +87,6 @@ export async function createConfiguredProxy(
     config.guest && invitations
       ? guestLane(config.guest.publicOrigin, invitations)
       : undefined
-  const eventService = createOperatorEventService({
-    publicOrigin: config.publicOrigin,
-    deploymentId: config.deploymentId,
-    bootEpoch: randomUUID(),
-    cursor,
-    runtimeInstance,
-    ...(dependencies.clock === undefined ? {} : { now: dependencies.clock }),
-  })
   const attachmentStages = new AttachmentStageRegistry()
   const acpService = createOperatorAcpService({
     publicOrigin: config.publicOrigin,
@@ -145,13 +120,5 @@ export async function createConfiguredProxy(
     ...(dependencies.clock === undefined ? {} : { clock: dependencies.clock }),
   })
 
-  return {
-    app,
-    config,
-    runtimeInstance,
-    cursor,
-    eventService,
-    acpService,
-    guest,
-  }
+  return { app, config, runtimeInstance, acpService, guest }
 }

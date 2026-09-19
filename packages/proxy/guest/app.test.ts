@@ -1,6 +1,5 @@
 // @vitest-environment node
 
-import { EventType, type AGUIEvent, type RunAgentInput } from "@ag-ui/core"
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
@@ -11,7 +10,6 @@ import {
 import type {
   RuntimeInstance,
   ServerRunEngine,
-  ServerRunHandle,
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -34,17 +32,6 @@ function invitations() {
     now: () => NOW,
     ttlSeconds: 259_200,
   })
-}
-
-function terminalHandle(events: AGUIEvent[]): ServerRunHandle {
-  return {
-    events: (async function* () {
-      yield* events
-    })(),
-    settled: Promise.resolve(),
-    stop: vi.fn(async () => "idle" as const),
-    recoveryPosition: () => ({ epoch: "native", lastSeen: events.length }),
-  }
 }
 
 function workspaceCapabilities() {
@@ -127,37 +114,8 @@ function workspaceCapabilities() {
   }
 }
 
-function harness(
-  options: {
-    existing?: boolean
-    sessions?: RuntimeInstance["sessions"]
-  } = {}
-) {
-  const engine: ServerRunEngine = {
-    start: vi.fn(async (_scope, input) =>
-      terminalHandle([
-        { type: EventType.RUN_STARTED, threadId: REF, runId: input.runId },
-        {
-          type: EventType.TEXT_MESSAGE_START,
-          messageId: "assistant-native",
-          role: "assistant",
-        },
-        {
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: "assistant-native",
-          delta: "Guest-visible answer",
-        },
-        { type: EventType.TEXT_MESSAGE_END, messageId: "assistant-native" },
-        {
-          type: EventType.RUN_FINISHED,
-          threadId: REF,
-          runId: input.runId,
-          outcome: { type: "success" },
-        },
-      ])
-    ),
-    recover: vi.fn(),
-  }
+function harness(options: { existing?: boolean } = {}) {
+  const engine: ServerRunEngine = { start: vi.fn(), recover: vi.fn() }
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
       options.existing || create
@@ -257,17 +215,15 @@ function harness(
   const instance: RuntimeInstance = {
     id: "hermes-primary",
     runtime,
-    sessions:
-      options.sessions ??
-      new SessionCoordinator({
-        engine,
-        maxActiveExecutions: 8,
-        maxGuestActiveExecutions: 4,
-        maxSubscriberEvents: 32,
-        maxSubscriberBytes: 256 * 1024,
-        maxReplayEvents: 64,
-        maxReplayBytes: 512 * 1024,
-      }),
+    sessions: new SessionCoordinator({
+      engine,
+      maxActiveExecutions: 8,
+      maxGuestActiveExecutions: 4,
+      maxSubscriberEvents: 32,
+      maxSubscriberBytes: 256 * 1024,
+      maxReplayEvents: 64,
+      maxReplayBytes: 512 * 1024,
+    }),
     close: vi.fn(async () => undefined),
   }
   const invitationService = invitations()
@@ -374,137 +330,11 @@ describe("guest app", () => {
     )
   })
 
-  it("restores safe history and interrupt metadata through the public reference", async () => {
-    const subject = harness({ existing: true })
-    const invite = await token(subject.invitationService)
-
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/history?limit=200&offset=0`,
-      { headers: headers(invite) }
-    )
-    const body = await response.json()
-
-    expect(response.status).toBe(200)
-    expect(body.sessionId).toBe(REF)
-    expect(JSON.stringify(body)).toContain("question-1")
-    expect(JSON.stringify(body)).not.toContain("private reasoning")
-    expect(subject.runtime.history).toHaveBeenCalledWith(AGENT, STORED, 200, 0)
-  })
-
-  it("returns empty history for a fresh invitation without creating a Session", async () => {
+  it("stages first-Send attachments without creating a Session", async () => {
     const subject = harness()
     const invite = await token(subject.invitationService)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/history`,
-      { headers: headers(invite) }
-    )
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({
-      sessionId: REF,
-      messages: [],
-      total: 0,
-      execution: { status: "idle" },
-    })
-    expect(subject.runtime.history).not.toHaveBeenCalled()
-    expect(subject.runtime.getSession).not.toHaveBeenCalled()
-    expect(subject.resolveInvitedSession).toHaveBeenCalledWith(AGENT, REF)
-    expect(subject.resolveInvitedSession).not.toHaveBeenCalledWith(
-      AGENT,
-      REF,
-      expect.anything()
-    )
-  })
-
-  it("creates lazily on first Send and starts exactly one normalized run", async () => {
-    const subject = harness()
-    const invite = await token(subject.invitationService)
-    const verify = vi.spyOn(subject.invitationService, "verify")
-    const input: RunAgentInput = {
-      threadId: REF,
-      runId: "run-1",
-      state: {},
-      messages: [{ id: "user-1", role: "user", content: "Hello" }],
-      tools: [],
-      context: [],
-      forwardedProps: {},
-    }
-
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
-      {
-        method: "POST",
-        headers: {
-          ...headers(invite, true),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(input),
-      }
-    )
-    const body = await response.text()
-
-    expect(response.status).toBe(200)
-    expect(body).toContain("Guest-visible answer")
-    expect(verify).toHaveBeenCalledOnce()
-    expect(subject.resolveInvitedSession).toHaveBeenCalledWith(AGENT, REF, {
-      firstTurnInstruction: "Load the interview skill.",
-    })
-    expect(subject.engine.start).toHaveBeenCalledOnce()
-    expect(subject.engine.start).toHaveBeenCalledWith(
-      { agentId: AGENT, sessionId: STORED, threadId: REF },
-      expect.objectContaining({ threadId: REF, runId: "run-1" })
-    )
-  })
-
-  it("rejects an Agent-wide guest approval before runtime execution", async () => {
-    const start = vi.fn()
-    const sessions = {
-      snapshot: vi.fn(() => ({
-        state: "waiting-for-input" as const,
-        runId: "run-before",
-        interrupts: [{ id: "approval-1", reason: "approval" }],
-      })),
-      start,
-    } as unknown as RuntimeInstance["sessions"]
-    const subject = harness({ existing: true, sessions })
-    const invite = await token(subject.invitationService)
-
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
-      {
-        method: "POST",
-        headers: {
-          ...headers(invite, true),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          threadId: REF,
-          runId: "run-resume",
-          state: {},
-          messages: [],
-          tools: [],
-          context: [],
-          forwardedProps: {},
-          resume: [
-            {
-              interruptId: "approval-1",
-              status: "resolved",
-              payload: "always",
-            },
-          ],
-        }),
-      }
-    )
-
-    expect(response.status).toBe(400)
-    expect(start).not.toHaveBeenCalled()
-  })
-
-  it("creates lazily while staging first-Send attachments and consumes the stage once", async () => {
-    const subject = harness()
-    const invite = await token(subject.invitationService)
-    const stage = await subject.app.request(
       `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
       {
         method: "POST",
@@ -524,71 +354,23 @@ describe("guest app", () => {
         }),
       }
     )
-    const staged = await stage.json()
 
-    expect(stage.status).toBe(201)
+    expect(response.status).toBe(201)
+    await expect(response.json()).resolves.toMatchObject({
+      stageId: expect.any(String),
+    })
+    // The invited Session is created by the first ACP prompt, not by staging.
     expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
     expect(subject.runtime.stageAttachments).not.toHaveBeenCalled()
-
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
-      {
-        method: "POST",
-        headers: {
-          ...headers(invite, true),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          threadId: REF,
-          runId: "run-with-file",
-          state: {},
-          messages: [{ id: "user-1", role: "user", content: "Review" }],
-          tools: [],
-          context: [],
-          forwardedProps: { aosAttachmentStageId: staged.stageId },
-        }),
-      }
-    )
-    await response.text()
-
-    expect(response.status).toBe(200)
-    expect(subject.resolveInvitedSession).toHaveBeenCalledWith(AGENT, REF, {
-      firstTurnInstruction: "Load the interview skill.",
-    })
-    expect(subject.runtime.stageAttachments).toHaveBeenCalledWith(
-      AGENT,
-      STORED,
-      expect.any(Array)
-    )
-    expect(subject.engine.start).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({ content: "Review\n@file:note.txt" }),
-        ],
-      }),
-      expect.objectContaining({
-        public: [
-          expect.objectContaining({
-            type: "file",
-            filename: "note.txt",
-            mimeType: "text/plain",
-          }),
-        ],
-      })
-    )
   })
 
-  it("returns warm copy for an invalid invitation and exposes no event socket", async () => {
+  it("returns warm copy for an invalid invitation and exposes no browser wire", async () => {
     const subject = harness()
 
     const invalid = await subject.app.request(
       `${ORIGIN}/api/guest/v1/runtime`,
       { headers: headers("invalid") }
     )
-    const events = await subject.app.request(`${ORIGIN}/api/guest/v1/events`, {
-      headers: headers("invalid"),
-    })
 
     expect(invalid.status).toBe(401)
     await expect(invalid.json()).resolves.toEqual({
@@ -598,7 +380,18 @@ describe("guest app", () => {
           "This invitation link is no longer active. Please ask the person who invited you to send a new one.",
       },
     })
-    expect(events.status).toBe(404)
+
+    // History, runs, and the invalidation socket all travel over guest ACP now.
+    for (const path of [
+      `${ORIGIN}/api/guest/v1/events`,
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/history`,
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
+    ])
+      expect(
+        (await subject.app.request(path, { headers: headers("invalid") }))
+          .status,
+        path
+      ).toBe(404)
   })
 
   it.each([
@@ -613,14 +406,29 @@ describe("guest app", () => {
     const invite = await scopedToken(overrides)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/history`,
-      { headers: headers(invite) }
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          attachments: [
+            {
+              type: "file",
+              filename: "note.txt",
+              mimeType: "text/plain",
+              dataUrl: "data:text/plain;base64,aGVsbG8=",
+            },
+          ],
+        }),
+      }
     )
 
     expect(response.status).toBe(401)
     expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
-    expect(subject.runtime.history).not.toHaveBeenCalled()
-    expect(subject.engine.start).not.toHaveBeenCalled()
+    expect(subject.runtime.stageAttachments).not.toHaveBeenCalled()
   })
 
   it("rejects a wrong Origin before runtime access", async () => {
@@ -628,7 +436,7 @@ describe("guest app", () => {
     const invite = await token(subject.invitationService)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
       {
         method: "POST",
         headers: {
@@ -642,7 +450,7 @@ describe("guest app", () => {
 
     expect(response.status).toBe(403)
     expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
-    expect(subject.engine.start).not.toHaveBeenCalled()
+    expect(subject.runtime.stageAttachments).not.toHaveBeenCalled()
   })
 
   it("returns a normalized friendly error when the selected runtime is unavailable", async () => {

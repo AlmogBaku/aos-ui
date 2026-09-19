@@ -8,9 +8,7 @@ import {
   type GuestAppOptions,
 } from "./context"
 import { registerGuestContentRoutes } from "./routes/content"
-import { registerGuestRunRoutes } from "./routes/runs"
 import { registerGuestRuntimeRoute } from "./routes/runtime"
-import { registerGuestSessionRoutes } from "./routes/sessions"
 
 export type { GuestAppOptions } from "./context"
 
@@ -25,9 +23,7 @@ export function createGuestApp(options: GuestAppOptions) {
   })
 
   registerGuestRuntimeRoute(app, routes)
-  registerGuestSessionRoutes(app, routes)
   registerGuestContentRoutes(app, routes)
-  registerGuestRunRoutes(app, routes)
 
   app.onError(() =>
     Response.json(

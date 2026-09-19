@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto"
 
 import {
-  EventSchemas,
-  EventType,
-  type AGUIEvent,
-  type ActivityDeltaEvent,
-  type ActivitySnapshotEvent,
-  type CustomEvent,
-} from "@ag-ui/core"
-
-import {
   GuestRuntimeCapabilitiesResponseSchema,
   SessionHistoryResponseSchema,
   SessionPlanActivityMessageSchema,
@@ -26,6 +17,12 @@ import {
   type GuestPublicErrorCode,
 } from "./guest-projection"
 import { guestAuthorizationActive, guestControllerId } from "./guest-request"
+import {
+  isRunEvent,
+  RunEventKind,
+  type RunEvent,
+  type RunEventOf,
+} from "../core/events"
 import type { SessionScope } from "../core/runtime"
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import { validIdentifier } from "../routes/http"
@@ -253,8 +250,8 @@ function guestMessageId(tokenId: string, sourceId: string) {
 }
 
 function projectPlanSnapshot(
-  candidate: ActivitySnapshotEvent
-): ActivitySnapshotEvent | undefined {
+  candidate: RunEventOf<typeof RunEventKind.ACTIVITY_SNAPSHOT>
+): RunEventOf<typeof RunEventKind.ACTIVITY_SNAPSHOT> | undefined {
   const parsed = SessionPlanActivityMessageSchema.safeParse({
     id: candidate.messageId,
     role: "activity",
@@ -263,7 +260,7 @@ function projectPlanSnapshot(
   })
   return parsed.success
     ? {
-        type: EventType.ACTIVITY_SNAPSHOT,
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
         messageId: parsed.data.id,
         activityType: "PLAN" as const,
         content: parsed.data.content,
@@ -273,8 +270,8 @@ function projectPlanSnapshot(
 }
 
 function projectPlanDelta(
-  candidate: ActivityDeltaEvent
-): ActivityDeltaEvent | undefined {
+  candidate: RunEventOf<typeof RunEventKind.ACTIVITY_DELTA>
+): RunEventOf<typeof RunEventKind.ACTIVITY_DELTA> | undefined {
   const patch = candidate.patch
   if (
     candidate.activityType !== "PLAN" ||
@@ -301,7 +298,7 @@ function projectPlanDelta(
   })
   return parsed.success
     ? {
-        type: EventType.ACTIVITY_DELTA,
+        type: RunEventKind.ACTIVITY_DELTA,
         messageId: parsed.data.id,
         activityType: "PLAN" as const,
         patch: [
@@ -315,7 +312,9 @@ function projectPlanDelta(
     : undefined
 }
 
-function projectArtifact(candidate: CustomEvent): CustomEvent | undefined {
+function projectArtifact(
+  candidate: RunEventOf<typeof RunEventKind.CUSTOM>
+): RunEventOf<typeof RunEventKind.CUSTOM> | undefined {
   if (
     candidate.name !== "aos.artifact" ||
     typeof candidate.value !== "object" ||
@@ -345,7 +344,7 @@ function projectArtifact(candidate: CustomEvent): CustomEvent | undefined {
     return undefined
   const id = value.id
   return {
-    type: EventType.CUSTOM,
+    type: RunEventKind.CUSTOM,
     name: "aos.artifact",
     value: {
       id,
@@ -365,16 +364,16 @@ function createRunProjector(
   now: () => number
 ) {
   const assistantMessages = new Set<string>()
-  return (candidate: AGUIEvent): AGUIEvent | undefined => {
+  return (candidate: RunEvent): RunEvent | undefined => {
     if (
       !guestAuthorizationActive(read, now) ||
       !guestAuthorizationActive(errors, now) ||
-      !EventSchemas.safeParse(candidate).success
+      !isRunEvent(candidate)
     )
       return undefined
-    if (candidate.type === EventType.RUN_STARTED)
-      return { type: EventType.RUN_STARTED, threadId: scope.threadId, runId }
-    if (candidate.type === EventType.TEXT_MESSAGE_START) {
+    if (candidate.type === RunEventKind.RUN_STARTED)
+      return { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId }
+    if (candidate.type === RunEventKind.TEXT_MESSAGE_START) {
       if (
         candidate.role !== "assistant" ||
         !validIdentifier(candidate.messageId)
@@ -382,12 +381,12 @@ function createRunProjector(
         return undefined
       assistantMessages.add(candidate.messageId)
       return {
-        type: EventType.TEXT_MESSAGE_START,
+        type: RunEventKind.TEXT_MESSAGE_START,
         messageId: guestMessageId(read.tokenId, candidate.messageId),
         role: "assistant",
       }
     }
-    if (candidate.type === EventType.TEXT_MESSAGE_CONTENT) {
+    if (candidate.type === RunEventKind.TEXT_MESSAGE_CONTENT) {
       if (!assistantMessages.has(candidate.messageId)) return undefined
       const projected = projectGuestOutbound(
         {
@@ -405,20 +404,20 @@ function createRunProjector(
       return projected?.payload.type === "message" &&
         projected.payload.text !== undefined
         ? {
-            type: EventType.TEXT_MESSAGE_CONTENT,
+            type: RunEventKind.TEXT_MESSAGE_CONTENT,
             messageId: guestMessageId(read.tokenId, candidate.messageId),
             delta: projected.payload.text,
           }
         : undefined
     }
-    if (candidate.type === EventType.TEXT_MESSAGE_END) {
+    if (candidate.type === RunEventKind.TEXT_MESSAGE_END) {
       if (!assistantMessages.delete(candidate.messageId)) return undefined
       return {
-        type: EventType.TEXT_MESSAGE_END,
+        type: RunEventKind.TEXT_MESSAGE_END,
         messageId: guestMessageId(read.tokenId, candidate.messageId),
       }
     }
-    if (candidate.type === EventType.RUN_FINISHED) {
+    if (candidate.type === RunEventKind.RUN_FINISHED) {
       if (candidate.outcome?.type === "interrupt") {
         const projected = projectGuestOutbound(
           {
@@ -434,7 +433,7 @@ function createRunProjector(
         )
         if (projected?.payload.type !== "interrupt") return undefined
         return {
-          type: EventType.RUN_FINISHED,
+          type: RunEventKind.RUN_FINISHED,
           threadId: scope.threadId,
           runId,
           outcome: {
@@ -444,13 +443,13 @@ function createRunProjector(
         }
       }
       return {
-        type: EventType.RUN_FINISHED,
+        type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
         runId,
         outcome: { type: "success" },
       }
     }
-    if (candidate.type === EventType.RUN_ERROR) {
+    if (candidate.type === RunEventKind.RUN_ERROR) {
       const error = publicRunError(candidate.code)
       const projected = projectGuestOutbound(
         {
@@ -468,7 +467,7 @@ function createRunProjector(
       )
       return projected?.payload.type === "error"
         ? {
-            type: EventType.RUN_ERROR,
+            type: RunEventKind.RUN_ERROR,
             code: projected.payload.code,
             message:
               projected.payload.description ??
@@ -476,11 +475,12 @@ function createRunProjector(
           }
         : undefined
     }
-    if (candidate.type === EventType.ACTIVITY_SNAPSHOT)
+    if (candidate.type === RunEventKind.ACTIVITY_SNAPSHOT)
       return projectPlanSnapshot(candidate)
-    if (candidate.type === EventType.ACTIVITY_DELTA)
+    if (candidate.type === RunEventKind.ACTIVITY_DELTA)
       return projectPlanDelta(candidate)
-    if (candidate.type === EventType.CUSTOM) return projectArtifact(candidate)
+    if (candidate.type === RunEventKind.CUSTOM)
+      return projectArtifact(candidate)
     return undefined
   }
 }

@@ -8,7 +8,6 @@ import type { AcpConnectionContext } from "./acp/types"
 import { startProxyServer } from "./server"
 
 const ORIGIN = "https://aos.example.test"
-const EVENTS_PATH = "/api/aos/v1/events"
 const lifecycles: Array<ReturnType<typeof startProxyServer>> = []
 
 afterEach(async () => {
@@ -79,25 +78,20 @@ describe("real Bun WebSocket upgrade", () => {
       app: { fetch: () => new Response("not found", { status: 404 }) },
       sockets: [
         {
-          path: EVENTS_PATH,
+          path: AOS_ACP_OPERATOR_PATH,
           service: {
             authorizeUpgrade: async (request) =>
-              request.headers.get("origin") === ORIGIN &&
-              request.headers.get("cookie") === "session=valid"
-                ? {
-                    principalId: "principal",
-                    browserSessionId: "browser-session",
-                    authorizationExpiresAt: Date.now() + 60_000,
-                  }
+              request.headers.get("origin") === ORIGIN
+                ? { principalId: "operator", connectionId: "connection-1" }
                 : undefined,
             open: (_authorization, peer) => {
               opened += 1
-              peer.send(JSON.stringify({ type: "aos.ready", version: 1 }))
+              peer.send(JSON.stringify({ jsonrpc: "2.0", method: "opened" }))
               return {
                 async receive(raw) {
                   if (raw === "notify")
                     peer.send(
-                      JSON.stringify({ type: "aos.invalidate", version: 1 })
+                      JSON.stringify({ jsonrpc: "2.0", method: "notified" })
                     )
                 },
                 close() {
@@ -117,14 +111,17 @@ describe("real Bun WebSocket upgrade", () => {
     lifecycles.push(lifecycle)
     const port = portOf(lifecycle)
 
-    const denied = await fetch(`http://127.0.0.1:${port}${EVENTS_PATH}`)
+    const denied = await fetch(
+      `http://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`
+    )
     expect(denied.status).toBe(401)
     expect(opened).toBe(0)
 
     const frames: unknown[] = []
-    const socket = new WebSocket(`ws://127.0.0.1:${port}${EVENTS_PATH}`, {
-      headers: { Origin: ORIGIN, Cookie: "session=valid" },
-    })
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      { headers: { Origin: ORIGIN } }
+    )
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("message", (event) => {
         frames.push(JSON.parse(String(event.data)))
@@ -135,8 +132,8 @@ describe("real Bun WebSocket upgrade", () => {
     })
 
     expect(frames).toEqual([
-      { type: "aos.ready", version: 1 },
-      { type: "aos.invalidate", version: 1 },
+      { jsonrpc: "2.0", method: "opened" },
+      { jsonrpc: "2.0", method: "notified" },
     ])
     expect(opened).toBe(1)
     socket.close()

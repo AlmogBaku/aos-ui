@@ -32,8 +32,6 @@ export type GuestAppOptions = {
   /** Shared with the guest ACP service so one upload serves either transport. */
   attachmentStages?: ServerAttachmentStages
   now?: () => number
-  schedule?: (delayMs: number, task: () => void) => unknown
-  cancel?: (timer: unknown) => void
 }
 
 /** The guest lane's staging limits: smaller and shorter-lived than operators'. */
@@ -58,17 +56,8 @@ export function createGuestRoutes(options: GuestAppOptions) {
     invitations: options.invitations,
     now,
   })
-  let subscriberSequence = 0
-  const activeStreams = new Map<string, number>()
-  let activeStreamTotal = 0
   return {
     options,
-    now,
-    schedule:
-      options.schedule ??
-      ((delayMs: number, task: () => void) => setTimeout(task, delayMs)),
-    cancel:
-      options.cancel ?? ((timer: unknown) => clearTimeout(timer as number)),
     attachmentStages: options.attachmentStages ?? createGuestAttachmentStages(),
     authenticate: (request: Request) => authorizer.authenticate(request),
     authorize: (
@@ -77,24 +66,6 @@ export function createGuestRoutes(options: GuestAppOptions) {
       ref: string,
       operation: GuestOperation
     ) => authorizer.authorize(identity, { agentId, sessionId: ref, operation }),
-    nextSubscriberId(tokenId: string) {
-      return `${tokenId}:${++subscriberSequence}`
-    },
-    acquireStream(tokenId: string) {
-      const count = activeStreams.get(tokenId) ?? 0
-      if (count >= 4 || activeStreamTotal >= 64) return undefined
-      activeStreams.set(tokenId, count + 1)
-      activeStreamTotal += 1
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        const next = (activeStreams.get(tokenId) ?? 1) - 1
-        activeStreamTotal -= 1
-        if (next > 0) activeStreams.set(tokenId, next)
-        else activeStreams.delete(tokenId)
-      }
-    },
     projectedError(
       identity: VerifiedGuestIdentity,
       agentId: string,
@@ -113,34 +84,6 @@ export function createGuestRoutes(options: GuestAppOptions) {
         : emptyError(status)
     },
   }
-}
-
-export function guestPageQuery(requestUrl: string) {
-  const url = new URL(requestUrl)
-  if (
-    url.search.length > 2_048 ||
-    [...url.searchParams.keys()].some(
-      (key) => key !== "limit" && key !== "offset"
-    ) ||
-    url.searchParams.getAll("limit").length > 1 ||
-    url.searchParams.getAll("offset").length > 1
-  )
-    return undefined
-  const integer = (name: "limit" | "offset", fallback: number) => {
-    const value = url.searchParams.get(name)
-    if (value === null) return fallback
-    if (!/^(?:0|[1-9]\d*)$/u.test(value)) return undefined
-    const parsed = Number(value)
-    return Number.isSafeInteger(parsed) ? parsed : undefined
-  }
-  const limit = integer("limit", 200)
-  const offset = integer("offset", 0)
-  return limit !== undefined &&
-    offset !== undefined &&
-    limit >= 1 &&
-    limit <= 500
-    ? { limit, offset }
-    : undefined
 }
 
 export function encodedFilename(filename: string) {

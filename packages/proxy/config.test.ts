@@ -49,12 +49,6 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
       tokenFile,
       sessionIdleMs: 300_000,
     },
-    events: {
-      activeKeyId: "current",
-      keys: [
-        { id: "current", secretFile: "/run/secrets/reconnect-cursor-key" },
-      ],
-    },
     limits: {
       activeExecutions: 256,
       guestActiveExecutions: 32,
@@ -228,20 +222,13 @@ describe("proxy configuration and secret boundary", () => {
     ).toThrow("Invalid proxy configuration")
   })
 
-  it("requires active reconnect keys and coherent limits", () => {
-    for (const candidate of [
-      {
-        ...validConfig(),
-        events: { ...validConfig().events, activeKeyId: "missing" },
-      },
-      {
+  it("requires coherent execution limits", () => {
+    expect(() =>
+      parseProxyConfig({
         ...validConfig(),
         limits: { ...validConfig().limits, guestActiveExecutions: 257 },
-      },
-    ])
-      expect(() => parseProxyConfig(candidate)).toThrow(
-        "Invalid proxy configuration"
-      )
+      })
+    ).toThrow("Invalid proxy configuration")
   })
 
   it("reads a bounded owner-only secret and trims its trailing newline", async () => {

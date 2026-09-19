@@ -4,11 +4,6 @@ import { Hono } from "hono"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import {
-  ServerRunCapacityError,
-  ServerRunConflictError,
-  ServerRunControlError,
-  ServerRunSteerUnavailableError,
-  ServerRunSteerUncertainError,
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerAttachmentStages,
@@ -18,9 +13,7 @@ import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
 import { errorResponse, type ErrorCode } from "./routes/http"
-import { registerRunRoutes } from "./routes/runs"
-import { registerSessionRoutes } from "./routes/sessions"
-import { registerWorkspaceRoutes } from "./routes/workspace"
+import { registerRuntimeRoute } from "./routes/runtime"
 
 type Logger = {
   info(value: unknown): void
@@ -75,12 +68,10 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   })
 
-  const requireRuntimeBinding = async (request: Request) => {
+  const requireRuntime = async (request: Request) => {
     void request
-    return { runtime, principalId: "operator" }
+    return runtime
   }
-  const requireRuntime = async (request: Request) =>
-    (await requireRuntimeBinding(request)).runtime
   const requireScopedSession = async (
     selected: ServerRuntime,
     agentId: string,
@@ -115,8 +106,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     )
   })
 
-  registerSessionRoutes(app, options, requireRuntime)
-  registerWorkspaceRoutes(app, options, requireRuntime, requireScopedSession)
+  registerRuntimeRoute(app, requireRuntime)
   registerContentRoutes(
     app,
     options,
@@ -124,7 +114,6 @@ export function createProxyApp(options: ProxyAppOptions) {
     requireRuntime,
     requireScopedSession
   )
-  registerRunRoutes(app, options, attachmentStages, requireRuntimeBinding)
   if (options.guestInvitations)
     registerInvitationRoutes(app, {
       publicOrigin: options.publicOrigin,
@@ -136,21 +125,11 @@ export function createProxyApp(options: ProxyAppOptions) {
   app.onError((cause, context) => {
     const runtimeError = runtime.publicError(cause)
     const [code, status]: [ErrorCode, number] =
-      cause instanceof ServerRunConflictError
-        ? ["run_conflict", 409]
-        : cause instanceof ServerRunCapacityError
-          ? ["run_capacity_exceeded", 503]
-          : cause instanceof ServerRunControlError
-            ? ["not_found", 404]
-            : cause instanceof ServerRunSteerUnavailableError
-              ? ["temporarily_unavailable", 503]
-              : cause instanceof ServerRunSteerUncertainError
-                ? ["uncertain_mutation", 409]
-                : cause instanceof ServerSessionNotFoundError
-                  ? ["not_found", 404]
-                  : runtimeError
-                    ? [runtimeError.code, runtimeError.status]
-                    : ["internal_error", 500]
+      cause instanceof ServerSessionNotFoundError
+        ? ["not_found", 404]
+        : runtimeError
+          ? [runtimeError.code, runtimeError.status]
+          : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

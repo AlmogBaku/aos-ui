@@ -8,7 +8,6 @@ credentials, and durable history. The browser connects over ACP v2 WebSocket at 
 
 - An authenticated Hermes server reachable from the proxy
 - A Hermes server token in a private, owner-readable file
-- A 32-byte base64url reconnect-cursor key in another private file
 - Bun, or Docker with Compose
 - `uv` only when building or testing the optional native plugin
 
@@ -42,7 +41,6 @@ Set these fields in the private copy:
 
 - `listen` and `publicOrigin` for the trusted operator listener;
 - `runtime.baseUrl` and `runtime.tokenFile` for the one selected Hermes runtime;
-- `events.keys` for sealed reconnect cursors;
 - optionally, a distinct `guest.listen`, `guest.publicOrigin`, and invitation
   signing key.
 
@@ -90,7 +88,6 @@ API. Hermes itself remains outside the stack:
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
 AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
-AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
 ```

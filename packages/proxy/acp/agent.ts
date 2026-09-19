@@ -29,7 +29,7 @@ import {
 } from "../../protocol/acp"
 import type { SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
-import { buildNewTurnInput } from "../routes/runs"
+import { buildNewTurnInput } from "../core/turn-input"
 import {
   commandsUpdate,
   createSessions,

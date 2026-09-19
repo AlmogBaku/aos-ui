@@ -27,7 +27,7 @@ describe("runtime adapter boundary", () => {
     const repositoryRoot = join(proxyRoot, "../..")
     const commonProxyFiles = (
       await Promise.all(
-        ["acp", "auth", "core", "events", "guest", "routes"].map((directory) =>
+        ["acp", "auth", "core", "guest", "routes"].map((directory) =>
           productionFiles(join(proxyRoot, directory))
         )
       )
@@ -48,10 +48,6 @@ describe("runtime adapter boundary", () => {
     const allowed = [
       join(proxyRoot, "adapters"),
       join(proxyRoot, "core/events.ts"),
-      // The AG-UI browser wire; deleted in Phase D of the ACP cutover.
-      join(proxyRoot, "routes/runs.ts"),
-      join(proxyRoot, "guest/routes/runs.ts"),
-      join(proxyRoot, "auth/guest-runtime-projection.ts"),
     ]
     const files = await productionFiles(proxyRoot)
 

@@ -15,15 +15,6 @@
     "username": "aos-ui",
     "passwordFile": "/run/secrets/opencode-password"
   },
-  "events": {
-    "activeKeyId": "current",
-    "keys": [
-      {
-        "id": "current",
-        "secretFile": "/run/secrets/reconnect-cursor-key"
-      }
-    ]
-  },
   "guest": {
     "listen": {
       "host": "0.0.0.0",

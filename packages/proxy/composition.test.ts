@@ -34,7 +34,6 @@ async function secretFile(name: string, contents: string) {
 async function configuration(withGuest = false) {
   const key = Buffer.alloc(32, 7).toString("base64url")
   const tokenFile = await secretFile("hermes-token", "hermes-secret")
-  const cursorKey = await secretFile("cursor-key", key)
   const invitationKey = withGuest
     ? await secretFile("invitation-key", key)
     : undefined
@@ -49,10 +48,6 @@ async function configuration(withGuest = false) {
       baseUrl: "http://127.0.0.1:9119",
       tokenFile,
       sessionIdleMs: 300_000,
-    },
-    events: {
-      activeKeyId: "current",
-      keys: [{ id: "current", secretFile: cursorKey }],
     },
     limits: {
       activeExecutions: 256,
@@ -100,19 +95,13 @@ describe("configured proxy composition", () => {
   it("uses an injected provider-neutral runtime factory without reading adapter secrets", async () => {
     const input = await configuration(true)
     input.runtime.tokenFile = "/missing/provider-private-secret"
-    const listAgents = vi.fn(async () => ({
-      revision: "test-catalog-1",
-      agents: [],
+    const runtimeInfo = vi.fn(async () => ({
+      id: "test-runtime",
+      kind: "test",
+      status: "ready",
+      capabilities: {},
     }))
-    const runtime = {
-      runtimeInfo: vi.fn(async () => ({
-        id: "test-runtime",
-        kind: "test",
-        status: "ready",
-        capabilities: {},
-      })),
-      listAgents,
-    } as unknown as ServerRuntime
+    const runtime = { runtimeInfo } as unknown as ServerRuntime
     const runtimeInstance = {
       id: "test-runtime",
       runtime,
@@ -135,14 +124,14 @@ describe("configured proxy composition", () => {
       Function
     )
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/agents"
+      "https://aos.example.test/api/aos/v1/readyz"
     )
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      revision: "test-catalog-1",
-      agents: [],
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ready",
+      runtime: "ready",
     })
-    expect(listAgents).toHaveBeenCalledOnce()
+    expect(runtimeInfo).toHaveBeenCalledOnce()
   })
 
   it("starts a trusted operator app without OIDC or operator cookies", async () => {
@@ -155,10 +144,11 @@ describe("configured proxy composition", () => {
     })
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/agents"
+      "https://aos.example.test/api/aos/v1/runtime"
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get("set-cookie")).toBeNull()
     expect(request).toHaveBeenCalledWith("profiles.list", {
       include_sessions: false,
     })

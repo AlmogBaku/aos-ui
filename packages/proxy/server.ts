@@ -1,8 +1,3 @@
-import type { OperatorEventUpgrade } from "./events/service"
-
-/** Where the operator invalidation socket is mounted. */
-export const OPERATOR_EVENTS_PATH = "/api/aos/v1/events"
-
 type FetchHandler = (
   request: Request,
   server?: unknown
@@ -66,9 +61,6 @@ type UpgradeServer = {
     }
   ): boolean
 }
-type RequestServer = UpgradeServer & {
-  timeout?(request: Request, seconds: number): void
-}
 type ServeOptions<Upgrade extends SocketUpgrade> = {
   hostname: string
   port: number
@@ -87,7 +79,7 @@ type Serve = <Upgrade extends SocketUpgrade>(
 ) => Server
 
 export type StartProxyServerOptions<
-  Upgrade extends SocketUpgrade = OperatorEventUpgrade,
+  Upgrade extends SocketUpgrade = SocketUpgrade,
 > = {
   app: { fetch: FetchHandler }
   /** WebSocket mounts hosted beside the HTTP app, each with its own peer budget. */
@@ -121,9 +113,9 @@ function mountState<Upgrade extends SocketUpgrade>(
   }
 }
 
-export function startProxyServer<
-  Upgrade extends SocketUpgrade = OperatorEventUpgrade,
->(options: StartProxyServerOptions<Upgrade>) {
+export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
+  options: StartProxyServerOptions<Upgrade>
+) {
   const mounts = (options.sockets ?? []).map((mount) => mountState(mount))
   const failPeer = (peer: SocketPeer<Upgrade>) => {
     if (peer.data.failed) return
@@ -187,7 +179,7 @@ export function startProxyServer<
       if (request.method !== "GET") return new Response(null, { status: 405 })
       const authorization = await mount.service.authorizeUpgrade(request)
       if (!authorization) return new Response(null, { status: 401 })
-      const upgrade = rawServer as RequestServer | undefined
+      const upgrade = rawServer as UpgradeServer | undefined
       const overloaded = mount.peers.size + mount.reserved >= mount.maxPeers
       if (!overloaded) mount.reserved += 1
       if (
@@ -203,15 +195,7 @@ export function startProxyServer<
       }
       return undefined
     }
-    const response = await options.app.fetch(request, rawServer)
-    if (
-      response?.headers
-        .get("content-type")
-        ?.toLowerCase()
-        .startsWith("text/event-stream")
-    )
-      (rawServer as RequestServer | undefined)?.timeout?.(request, 0)
-    return response
+    return options.app.fetch(request, rawServer)
   }
   const server = (options.serve ?? bunServe())({
     hostname: options.host,

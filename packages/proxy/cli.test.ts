@@ -26,7 +26,6 @@ async function proxyConfig() {
     return path
   }
   const tokenFile = await writeSecret("hermes-token", "hermes-token")
-  const cursorKey = await writeSecret("cursor-key", key)
   const invitationKey = await writeSecret("invitation-key", key)
   const configFile = join(directory, "proxy.json")
   await writeFile(
@@ -46,10 +45,6 @@ async function proxyConfig() {
         baseUrl: "http://host.docker.internal:9119",
         tokenFile,
         sessionIdleMs: 300_000,
-      },
-      events: {
-        activeKeyId: "current",
-        keys: [{ id: "current", secretFile: cursorKey }],
       },
       limits: {
         activeExecutions: 256,
@@ -125,10 +120,6 @@ describe("proxy executable", () => {
           host: "0.0.0.0",
           port: 4100,
           sockets: [
-            expect.objectContaining({
-              path: "/api/aos/v1/events",
-              maxPeers: 256,
-            }),
             expect.objectContaining({ path: "/api/aos/v1/acp", maxPeers: 256 }),
           ],
         })
@@ -146,8 +137,6 @@ describe("proxy executable", () => {
           ],
         })
       )
-      expect(start.mock.calls[1]![0]).not.toHaveProperty("events")
-      expect(start.mock.calls[1]![0]).not.toHaveProperty("eventsPath")
       expect(start.mock.calls[0]![0].close).toBeUndefined()
       expect(start.mock.calls[1]![0].close).toBeUndefined()
       const guestApp = start.mock.calls[1]![0].app

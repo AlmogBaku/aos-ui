@@ -24,11 +24,6 @@ services:
         uid: "${AOS_UI_HOST_UID:-1000}"
         gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
-      - source: reconnect-cursor-key
-        target: reconnect-cursor-key
-        uid: "${AOS_UI_HOST_UID:-1000}"
-        gid: "${AOS_UI_HOST_GID:-1000}"
-        mode: 0400
       - source: guest-invite-signing-key
         target: guest-invite-signing-key
         uid: "${AOS_UI_HOST_UID:-1000}"
@@ -114,7 +109,5 @@ configs:
 secrets:
   opencode-password:
     file: ${AOS_UI_OPENCODE_PASSWORD_FILE:?Set AOS_UI_OPENCODE_PASSWORD_FILE to the private OpenCode server password file}
-  reconnect-cursor-key:
-    file: ${AOS_UI_RECONNECT_CURSOR_KEY_FILE:?Set AOS_UI_RECONNECT_CURSOR_KEY_FILE to an owner-only 32-byte key file}
   guest-invite-signing-key:
     file: ${AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE:?Set AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE to the private guest invitation key file}

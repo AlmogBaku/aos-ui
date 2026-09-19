@@ -99,7 +99,6 @@ describe("container orchestration", () => {
         tokenFile: string
         sessionIdleMs: number
       }
-      events: { keys: Array<{ secretFile: string }> }
       guest: {
         listen: { host: string; port: number; exposure: string }
         publicOrigin: string
@@ -127,7 +126,6 @@ describe("container orchestration", () => {
     expect(proxy.guest.invitations.keys[0]!.secretFile).toBe(
       "/run/secrets/guest-invite-signing-key"
     )
-    expect(proxy.events.keys[0].secretFile).toMatch(/^\/run\/secrets\//u)
     expect(proxy.limits).toMatchObject({
       activeExecutions: 256,
       guestActiveExecutions: 32,
@@ -166,7 +164,6 @@ describe("container orchestration", () => {
         root,
         "deploy/proxy-config.opencode.example.json"
       ),
-      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
@@ -208,13 +205,6 @@ describe("container orchestration", () => {
       expect.objectContaining({
         source: "opencode-password",
         target: "opencode-password",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "reconnect-cursor-key",
-        target: "reconnect-cursor-key",
         mode: "0400",
         uid: "1234",
         gid: "2345",
@@ -280,7 +270,6 @@ describe("container orchestration", () => {
         "deploy/proxy-config.hermes.example.json"
       ),
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
-      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
@@ -326,12 +315,6 @@ describe("container orchestration", () => {
         gid: "2345",
       }),
       expect.objectContaining({
-        source: "reconnect-cursor-key",
-        target: "reconnect-cursor-key",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
         source: "guest-invite-signing-key",
         target: "guest-invite-signing-key",
         uid: "1234",
@@ -347,16 +330,12 @@ describe("container orchestration", () => {
     expect(config.secrets?.["hermes-token"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    expect(config.secrets?.["reconnect-cursor-key"]?.file).toBe(
-      resolve(root, ".env.example")
-    )
     expect(config.secrets?.["guest-invite-signing-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
     expect(Object.keys(config.secrets ?? {}).sort()).toEqual([
       "guest-invite-signing-key",
       "hermes-token",
-      "reconnect-cursor-key",
     ])
     expect(JSON.stringify(config.services.web.environment)).not.toMatch(
       /HERMES|TOKEN|OIDC|SECRET/u
@@ -373,7 +352,6 @@ describe("container orchestration", () => {
         root,
         "deploy/proxy-config.openclaw.example.json"
       ),
-      AOS_UI_RECONNECT_CURSOR_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
@@ -423,13 +401,6 @@ describe("container orchestration", () => {
       expect.objectContaining({
         source: "openclaw-device-token",
         target: "openclaw-device-token",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
-      expect.objectContaining({
-        source: "reconnect-cursor-key",
-        target: "reconnect-cursor-key",
         mode: "0400",
         uid: "1234",
         gid: "2345",

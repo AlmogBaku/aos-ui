@@ -171,8 +171,8 @@ authorize scope
   -> resume normalized delivery
 ```
 
-Provider replay positions are adapter-private. Normalized reconnect cursors are
-bounded authorization hints, not authoritative conversation state. Replay
+Provider replay positions are adapter-private: the coordinator carries only the
+opaque `{ epoch, lastSeen }` an adapter reports, never a provider cursor. Replay
 overflow or an epoch change falls back to authoritative reads without
 resubmitting user intent.
 

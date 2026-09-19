@@ -149,10 +149,6 @@ const ProxyConfigSchema = z
     listen: ListenerSchema,
     publicOrigin: PublicOriginSchema,
     runtime: RuntimeSchema,
-    events: z.strictObject({
-      activeKeyId: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/u),
-      keys: UniqueSecretKeysSchema,
-    }),
     limits: LimitsSchema,
     guest: z
       .strictObject({
@@ -168,12 +164,6 @@ const ProxyConfigSchema = z
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
-    if (!config.events.keys.some(({ id }) => id === config.events.activeKeyId))
-      context.addIssue({
-        code: "custom",
-        path: ["events", "activeKeyId"],
-        message: "Unknown active key",
-      })
     if (config.limits.guestActiveExecutions > config.limits.activeExecutions)
       context.addIssue({
         code: "custom",

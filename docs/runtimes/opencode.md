@@ -44,7 +44,6 @@ cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
 AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
 AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
-AOS_UI_RECONNECT_CURSOR_KEY_FILE=/absolute/private/path/reconnect-cursor-key \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build

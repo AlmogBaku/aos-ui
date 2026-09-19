@@ -1,20 +1,17 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
 
-import {
-  DEFAULT_INPUT_BYTES_PER_WINDOW,
-  DEFAULT_INPUT_FRAMES_PER_WINDOW,
-  DEFAULT_INPUT_WINDOW_MS,
-} from "../events/socket"
-
 /** The WebSocket shape a prepared ACP upgrade drives. */
 export type AcpWebSocket = Parameters<PreparedWebSocketUpgrade["accept"]>[0]
 
 /** One inbound frame may carry a whole prompt, matching `boundedJson`'s ceiling. */
 const MAX_FRAME_BYTES = 1_100_000
+const DEFAULT_INPUT_WINDOW_MS = 1_000
+const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
+const DEFAULT_INPUT_BYTES_PER_WINDOW = 256 * 1_024
 /**
  * One outbound frame may carry a history entry, a tool payload, or an inline
  * artifact, so the queue is sized for the largest native event the proxy
- * accepts rather than for the small control frames the events socket carries.
+ * accepts rather than for small control frames.
  */
 const DEFAULT_OUTPUT_FRAMES = 256
 const DEFAULT_OUTPUT_BYTES = 4 * 1_024 * 1_024
@@ -47,9 +44,9 @@ export type AcpSocket = {
 
 /**
  * Bounded WebSocket shim between Bun's `ServerWebSocket` handlers and the ACP
- * SDK. It mirrors the invalidation socket's protections: an inbound frame cap,
- * an inbound rate window, and a bounded outbound queue. Pure logic: it touches
- * no Bun global and takes its clock from `now`.
+ * SDK, with an inbound frame cap, an inbound rate window, and a bounded
+ * outbound queue. Pure logic: it touches no Bun global and takes its clock
+ * from `now`.
  */
 export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
   const now = options.now ?? Date.now
