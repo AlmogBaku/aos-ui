@@ -387,6 +387,54 @@ test("switching Agents restores each Agent's last selected Session", async ({
   )
 })
 
+test("Lumen's Session row shows Unread until Activity opens it", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await page.waitForFunction(() => Boolean(window.__AOS_UI_FIXTURE_WORKSPACE__))
+
+  // The provider reports Lumen's Session unread; Aster owns no unread Session.
+  const lumen = agentButton(page, "Lumen")
+  await expect(lumen).toHaveAttribute(
+    "aria-label",
+    "Lumen, Status: Needs attention, Unread"
+  )
+  await expect(agentButton(page, "Aster")).toHaveAttribute(
+    "aria-label",
+    `Aster, Status: Running, ${english.selectedAgent}`
+  )
+
+  await lumen.click()
+  await expect(lumen).toHaveAttribute(
+    "aria-label",
+    `Lumen, Status: Needs attention, ${english.selectedAgent}, Unread`
+  )
+  const roadmap = page.getByRole("tab", { name: "Roadmap review" })
+  await expect(roadmap).toHaveAttribute("aria-label", "Roadmap review, Unread")
+
+  // Opening the Session from Activity is the read the provider records.
+  await page.evaluate(() =>
+    window.__AOS_UI_FIXTURE_WORKSPACE__!.publishActivityScenario("question")
+  )
+  await page.getByRole("button", { name: /^Activity, / }).click()
+  await page
+    .getByRole("button", { name: "Open: Lumen, Roadmap review" })
+    .click()
+
+  await expect(lumen).toHaveAttribute(
+    "aria-label",
+    `Lumen, Status: Needs attention, ${english.selectedAgent}`
+  )
+  await expect(
+    page.getByRole("tab", { name: "Roadmap review, Unread" })
+  ).toHaveCount(0)
+  // The wait itself is untouched, so it still counts toward the Activity bell.
+  await expect(roadmap.getByTitle("Waiting for input")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Activity, 2 unread", exact: true })
+  ).toBeVisible()
+})
+
 test("an older history Session becomes a real tab until it is closed", async ({
   page,
 }) => {

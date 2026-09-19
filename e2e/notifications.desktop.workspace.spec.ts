@@ -95,25 +95,47 @@ async function enable(page: Page) {
   await page.keyboard.press("Escape")
 }
 
-test("focused exact Session suppresses delivery; other Agent coalesces a notice and unread markers", async ({
+test("the Activity count follows Session state, and arrivals on read Sessions stay silent", async ({
   page,
 }) => {
   await prepare(page)
   await enable(page)
+  // The provider reports two unread Sessions: Lumen's and Nori's.
+  const bell = (count: number) =>
+    page.getByRole("button", {
+      name: `Activity, ${count} unread`,
+      exact: true,
+    })
+  await expect(bell(2)).toBeVisible()
+
   await publish(page, "run-completed")
-  await expect(
-    page.getByRole("button", { name: "Activity, 0 unread", exact: true })
-  ).toBeVisible()
-  await expect(page.locator('[data-activity-notice="true"]')).toHaveCount(0)
   await publish(page, "delayed-non-selected")
   await publish(page, "duplicates")
+
+  // None of those three Sessions is unread, so nothing is counted or announced.
+  await expect(bell(2)).toBeVisible()
+  await expect(page.locator('[data-activity-notice="true"]')).toHaveCount(0)
+
+  // Navigation marks the Agents holding unread Sessions, not the ones that ran.
+  const agents = page.getByRole("navigation", { name: "Agents" })
+  await expect(agents.getByRole("button", { name: /^Lumen/ })).toHaveAttribute(
+    "aria-label",
+    "Lumen, Status: Needs attention, Unread"
+  )
+  await expect(agents.getByRole("button", { name: /^Nori/ })).toHaveAttribute(
+    "aria-label",
+    "Nori, Unread"
+  )
+  await expect(agents.getByRole("button", { name: /^Mica/ })).toHaveAttribute(
+    "aria-label",
+    "Mica"
+  )
+
+  // Every arrival stays inspectable in the drawer, read or not.
+  await page.getByRole("button", { name: /^Activity, / }).click()
   await expect(
-    page.getByRole("button", { name: "Activity, 2 unread", exact: true })
-  ).toBeVisible()
-  await expect(page.locator('[data-activity-notice="true"]')).toHaveCount(1)
-  await expect(
-    page.getByRole("button", { name: /^Mica,.*1 unread/ })
-  ).toBeVisible()
+    page.getByRole("dialog").getByText("A turn finished", { exact: true })
+  ).toHaveCount(3)
   await expect
     .poll(() =>
       page.evaluate(() => window.__notificationTest.notifications.length)
@@ -122,13 +144,15 @@ test("focused exact Session suppresses delivery; other Agent coalesces a notice 
 })
 
 for (const hidden of [true, false]) {
-  test(`${hidden ? "hidden tab" : "visible unfocused window/app"} completion delivers private text and click opens the owning Agent/Session`, async ({
+  // Delivery follows the Session's own unread state, so the background arrival
+  // is Nori's, the Session the provider already reports unread.
+  test(`${hidden ? "hidden tab" : "visible unfocused window/app"} failure delivers private text and click opens the owning Agent/Session`, async ({
     page,
   }) => {
     await prepare(page)
     await enable(page)
     await background(page, hidden)
-    await publish(page, "delayed-non-selected")
+    await publish(page, "run-failed")
     await expect
       .poll(() =>
         page.evaluate(() => window.__notificationTest.notifications.length)
@@ -138,15 +162,15 @@ for (const hidden of [true, false]) {
       () => window.__notificationTest.notifications[0]
     )
     expect(notification.title).toBe("AOS")
-    expect(notification.options.body).toBe("A turn finished")
+    expect(notification.options.body).toBe("A turn failed")
     expect(JSON.stringify(notification)).not.toMatch(
-      /Mica|Quarterly|thread-mica|agent-mica/
+      /Nori|Launch copy|thread-nori|agent-nori/
     )
     await page.evaluate(() =>
       window.__notificationTest.notifications[0].onclick?.()
     )
     await expect(
-      page.getByRole("tab", { name: "Quarterly synthesis" })
+      page.getByRole("tab", { name: "Launch copy" })
     ).toHaveAttribute("aria-selected", "true")
     expect(await page.evaluate(() => window.__notificationTest.focuses)).toBe(1)
     expect(
@@ -154,12 +178,18 @@ for (const hidden of [true, false]) {
         () => window.__notificationTest.notifications[0].closed
       )
     ).toBe(true)
+    // Opening the target is the read the provider records, so the count drops.
+    await expect(
+      page.getByRole("button", { name: "Activity, 1 unread", exact: true })
+    ).toBeVisible()
     await page.reload()
     await expect(page.getByRole("tablist")).toBeVisible()
     await page.getByRole("button", { name: /^Activity, / }).click()
+    // Only preferences persist: the browser keeps no activity across reloads,
+    // so nothing is listed again and nothing is delivered again.
     await expect(
-      page.getByRole("dialog").getByText("A turn finished", { exact: true })
-    ).toBeVisible()
+      page.getByRole("dialog").getByText("A turn failed", { exact: true })
+    ).toHaveCount(0)
     expect(
       await page.evaluate(() => window.__notificationTest.notifications.length)
     ).toBe(0)
@@ -177,8 +207,9 @@ test("question, permission and failure remain inspectable; stale arrivals do not
   await publish(page, "permission")
   await publish(page, "run-failed")
   await publish(page, "stale-target")
+  // Arrivals do not raise the count: it is the unread and waiting Sessions.
   await expect(
-    page.getByRole("button", { name: "Activity, 3 unread", exact: true })
+    page.getByRole("button", { name: "Activity, 2 unread", exact: true })
   ).toBeVisible()
   await expect(
     page.locator('[data-activity-notice="true"]').getByRole("alert")
@@ -227,7 +258,8 @@ test("Activity drawer restores focus, makes background inert and honors reduced 
   await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto("/he")
   await page.waitForFunction(() => Boolean(window.__AOS_UI_FIXTURE_WORKSPACE__))
-  await publish(page, "delayed-non-selected")
+  // An unread Session's arrival is the one that raises an in-app notice.
+  await publish(page, "question")
   const notice = page.locator('[data-activity-notice="true"]')
   await expect(notice).toBeVisible()
   const bell = page.getByRole("button", { name: /^פעילות, / })

@@ -1,13 +1,18 @@
-import { expect, test } from "./test"
+import { expect, test, type Page } from "./test"
 
-const session = {
-  id: "session-1",
-  agentId: "research",
-  title: "Research",
-  archived: false,
-  updatedAt: "2026-09-12T00:00:00.000Z",
-  status: "idle",
-}
+/**
+ * The operator surface over one scripted ACP v2 connection. A fake
+ * `window.WebSocket` answers the proxy's operator lane with JSON-RPC and pushes
+ * the `session/update` notifications a real proxy emits; REST carries only the
+ * runtime read.
+ */
+
+const AGENT_ID = "research"
+const SESSION_ID = "session-1"
+const RUN_ID = "run-1"
+const ACP_PATH = "/api/aos/v1/acp"
+/** A prompt the scripted provider leaves running until it is cancelled. */
+const PENDING_PROMPT = "Keep running until I stop it"
 
 const runtime = {
   runtime: { id: "hermes", name: "Hermes" },
@@ -43,28 +48,19 @@ const runtime = {
   },
 }
 
+/** Enough commands that the menu has to scroll to reach the later ones. */
+const slashCommands = Array.from({ length: 30 }, (_, index) => ({
+  name: `command-${index}`,
+  description: `Command ${index}`,
+}))
+
+/** `ResumeSessionResponse._meta.aos.capabilities`. */
 const sessionCapabilities = {
-  agent: {
-    transport: { streaming: true, resumable: true },
-    reasoning: { supported: true, streaming: true },
-    multimodal: {
-      input: { image: true, audio: false, file: true },
-      output: { audio: false },
-    },
-    humanInTheLoop: {
-      supported: true,
-      approvals: true,
-      interrupts: true,
-    },
-  },
   workspace: {
     slashCommands: {
       status: "available",
       scope: "attached-session",
-      commands: Array.from({ length: 30 }, (_, index) => ({
-        name: `command-${index}`,
-        description: `Command ${index}`,
-      })),
+      commands: slashCommands,
     },
     models: {
       status: "available",
@@ -101,7 +97,7 @@ const sessionCapabilities = {
     },
     approvals: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: "acp-request",
       scope: "run",
       choices: [
         { value: "once", scope: "request" },
@@ -113,7 +109,7 @@ const sessionCapabilities = {
     },
     questions: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: "acp-request",
       scope: "run",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-empty-answer",
@@ -144,260 +140,371 @@ const sessionCapabilities = {
   },
 }
 
-test("AOS proxy restores history, offers commands, streams one turn, stops, and reconnects", async ({
-  page,
-}) => {
-  let stopRequests = 0
-  let runRequests = 0
-  let reconnectRequests = 0
-  let restoreActiveRun = false
+/** Every payload the scripted responder answers with, in one serializable object. */
+const script = {
+  acpPath: ACP_PATH,
+  sessionId: SESSION_ID,
+  runId: RUN_ID,
+  pendingPrompt: PENDING_PROMPT,
+  /** `InitializeResponse._meta.aos` for the operator lane. */
+  initializeMeta: {
+    version: 1,
+    lane: "operator",
+    extensions: {
+      steer: true,
+      rewind: true,
+      artifacts: false,
+      composerPrefill: true,
+      agents: true,
+      invalidation: true,
+      activity: true,
+      readState: true,
+      focus: true,
+      guestProjection: false,
+    },
+  },
+  agentCatalog: {
+    revision: "catalog-1",
+    agents: [
+      {
+        summary: {
+          kind: "ready",
+          id: AGENT_ID,
+          name: "Research",
+          status: "idle",
+        },
+        visibility: "visible",
+        selectable: true,
+        editable: false,
+        revision: "research-1",
+      },
+    ],
+  },
+  sessions: [
+    {
+      sessionId: SESSION_ID,
+      cwd: "/",
+      title: "Research",
+      updatedAt: "2026-09-12T00:00:00.000Z",
+      _meta: {
+        aos: {
+          agentId: AGENT_ID,
+          status: "idle",
+          archived: false,
+          unread: false,
+        },
+      },
+    },
+  ],
+  configOptions: [
+    {
+      type: "select",
+      configId: "model",
+      name: "Model",
+      category: "model",
+      currentValue: "default",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "deep", name: "Deep" },
+      ],
+    },
+  ],
+  resumeMeta: {
+    session: {
+      agentId: AGENT_ID,
+      status: "idle",
+      archived: false,
+      unread: false,
+    },
+    execution: { status: "idle" },
+    capabilities: sessionCapabilities,
+  },
+  history: [
+    { role: "user", messageId: "history-user", text: "Restore my research." },
+    {
+      role: "assistant",
+      messageId: "history-answer",
+      text: "Restored from AOS.",
+    },
+  ],
+  recovered: {
+    messageId: "reconnect-answer",
+    text: "Recovered after reconnect.",
+  },
+  /** Each chunk stays its own content block, so each one is asserted. */
+  reply: ["Streamed by AOS.", "Both chunks arrived."],
+  usage: { used: 1, size: 100 },
+}
 
-  await page.addInitScript(() => {
-    class AOSSocket extends EventTarget {
-      readyState = 0
-      constructor() {
-        super()
-        queueMicrotask(() => {
-          this.readyState = 1
-          this.dispatchEvent(new Event("open"))
-        })
-      }
-      send(raw: string) {
-        const { scope, streamId } = JSON.parse(raw) as {
-          scope: unknown
-          streamId: string
-        }
-        queueMicrotask(() =>
-          this.dispatchEvent(
-            new MessageEvent("message", {
-              data: JSON.stringify({
-                type: "aos.ready",
-                version: 1,
-                streamId,
-                scope,
-                generation: 0,
-                read: "authoritative",
-              }),
-            })
-          )
-        )
-      }
-      close() {
-        this.readyState = 3
-        this.dispatchEvent(new Event("close"))
-      }
+type AcpScript = typeof script
+type AcpCall = { method: string; params: unknown }
+type ResumeParams = {
+  sessionId: string
+  replayFrom?: { type: string }
+  _meta?: { aos?: { agentId?: string; after?: number; runId?: string } }
+}
+
+declare global {
+  interface Window {
+    __acpStub: {
+      /** Every JSON-RPC call the browser sent, in order. */
+      calls: AcpCall[]
+      /** How many transports the browser has opened. */
+      connections: number
+      /** The newest `_meta.aos.sequence` the stub has emitted. */
+      sequence: number
+      /** Drops the live transport, as a proxy restart would. */
+      dropSocket: () => void
     }
-    Object.defineProperty(window, "WebSocket", { value: AOSSocket })
-  })
+  }
+}
 
+/**
+ * Replaces `window.WebSocket` for the operator lane with a scripted JSON-RPC
+ * responder: a method table, sequenced run updates, and a droppable transport.
+ */
+function installAcpStub(script: AcpScript) {
+  const RealWebSocket = window.WebSocket
+  const stub: Window["__acpStub"] = {
+    calls: [],
+    connections: 0,
+    sequence: 0,
+    dropSocket: () => {},
+  }
+  window.__acpStub = stub
+  let turn = 0
+
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {}
+
+  const promptText = (params: Record<string, unknown>) =>
+    (Array.isArray(params.prompt) ? params.prompt : [])
+      .map((block) => asRecord(block).text)
+      .filter((text): text is string => typeof text === "string")
+      .join(" ")
+
+  class AcpStubSocket extends EventTarget {
+    readyState = 0
+    handlers = new Map<
+      string,
+      (params: Record<string, unknown>, id: unknown) => void
+    >()
+
+    constructor() {
+      super()
+      stub.connections += 1
+      stub.dropSocket = () => this.closeTransport()
+      this.registerHandlers()
+      queueMicrotask(() => {
+        this.readyState = 1
+        this.dispatchEvent(new Event("open"))
+      })
+    }
+
+    send(raw: string) {
+      const payload: unknown = JSON.parse(raw)
+      for (const message of Array.isArray(payload) ? payload : [payload])
+        this.accept(asRecord(message))
+    }
+
+    close() {
+      this.closeTransport()
+    }
+
+    closeTransport() {
+      if (this.readyState === 3) return
+      this.readyState = 3
+      this.dispatchEvent(new Event("close"))
+    }
+
+    accept(message: Record<string, unknown>) {
+      const method = message.method
+      if (typeof method !== "string") return
+      const params = asRecord(message.params)
+      stub.calls.push({ method, params })
+      const handler = this.handlers.get(method)
+      if (handler) return handler(params, message.id)
+      if (message.id !== undefined)
+        this.deliver({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32601, message: `Unscripted ACP method: ${method}` },
+        })
+    }
+
+    deliver(frame: Record<string, unknown>) {
+      queueMicrotask(() => {
+        if (this.readyState !== 1) return
+        this.dispatchEvent(
+          new MessageEvent("message", { data: JSON.stringify(frame) })
+        )
+      })
+    }
+
+    respond(id: unknown, result: unknown) {
+      this.deliver({ jsonrpc: "2.0", id, result })
+    }
+
+    notify(method: string, params: unknown) {
+      this.deliver({ jsonrpc: "2.0", method, params })
+    }
+
+    /** One unsequenced `session/update`, as a replay or an out-of-band read. */
+    update(update: Record<string, unknown>) {
+      this.notify("session/update", { sessionId: script.sessionId, update })
+    }
+
+    /** One run-stream `session/update`, carrying its position in the run. */
+    run(update: Record<string, unknown>) {
+      stub.sequence += 1
+      this.update({
+        ...update,
+        _meta: { aos: { sequence: stub.sequence, runId: script.runId } },
+      })
+    }
+
+    message(role: string, messageId: string, text: string) {
+      this.update({
+        sessionUpdate: role === "user" ? "user_message" : "agent_message",
+        messageId,
+        content: [{ type: "text", text }],
+      })
+    }
+
+    registerHandlers() {
+      this.handlers.set("initialize", (_params, id) =>
+        this.respond(id, {
+          protocolVersion: 2,
+          info: { name: "aos-proxy-stub", version: "1" },
+          capabilities: {},
+          authMethods: [],
+          _meta: { aos: script.initializeMeta },
+        })
+      )
+      this.handlers.set("_aos/agents/list", (_params, id) =>
+        this.respond(id, script.agentCatalog)
+      )
+      this.handlers.set("session/list", (_params, id) =>
+        this.respond(id, { sessions: script.sessions })
+      )
+      // A resume from the start replays the stored turns; a resume positioned
+      // by `_meta.aos.after` reports only what the dropped transport missed.
+      this.handlers.set("session/resume", (params, id) => {
+        if (asRecord(params.replayFrom).type === "start")
+          for (const entry of script.history)
+            this.message(entry.role, entry.messageId, entry.text)
+        else
+          this.message(
+            "assistant",
+            script.recovered.messageId,
+            script.recovered.text
+          )
+        this.respond(id, {
+          configOptions: script.configOptions,
+          _meta: { aos: script.resumeMeta },
+        })
+        this.update({ sessionUpdate: "usage_update", ...script.usage })
+      })
+      // The prompt is acknowledged with the minted user message id, then the
+      // turn streams. The pending prompt stays running until it is cancelled.
+      this.handlers.set("session/prompt", (params, id) => {
+        turn += 1
+        const messageId = `user-${turn}`
+        const answerId = `answer-${turn}`
+        this.respond(id, { _meta: { aos: { messageId } } })
+        this.update({
+          sessionUpdate: "user_message",
+          messageId,
+          content: params.prompt,
+        })
+        this.run({ sessionUpdate: "state_update", state: "running" })
+        if (promptText(params).includes(script.pendingPrompt)) return
+        for (const text of script.reply)
+          this.run({
+            sessionUpdate: "agent_message_chunk",
+            messageId: answerId,
+            content: { type: "text", text },
+          })
+        this.run({
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "end_turn",
+        })
+      })
+      this.handlers.set("session/cancel", () =>
+        this.run({
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "cancelled",
+        })
+      )
+      this.handlers.set("session/set_config_option", (params, id) => {
+        const configOptions = script.configOptions.map((option) =>
+          option.configId === params.configId &&
+          typeof params.value === "string"
+            ? { ...option, currentValue: params.value }
+            : option
+        )
+        this.respond(id, { configOptions })
+        this.update({ sessionUpdate: "config_option_update", configOptions })
+      })
+      this.handlers.set("_aos/session/update", (_params, id) =>
+        this.respond(id, {})
+      )
+      // Focus is a notification; recording it is all the proxy owes the browser.
+      this.handlers.set("_aos/session/focus", () => {})
+    }
+  }
+
+  function WebSocketProxy(url: string | URL, protocols?: string | string[]) {
+    return String(url).includes(script.acpPath)
+      ? new AcpStubSocket()
+      : new RealWebSocket(url, protocols)
+  }
+  Object.defineProperty(window, "WebSocket", {
+    configurable: true,
+    value: WebSocketProxy,
+  })
+}
+
+async function serveAcp(page: Page) {
+  await page.addInitScript(installAcpStub, script)
   await page.route("**/runtime-config.json", (route) =>
     route.fulfill({ json: { mode: "aos" } })
   )
-  await page.route("**/api/aos/v1/**", async (route) => {
-    const request = route.request()
-    const url = new URL(request.url())
-    const path = url.pathname
-    if (path.endsWith("/runtime")) return route.fulfill({ json: runtime })
-    if (path.endsWith("/agents"))
-      return route.fulfill({
-        json: {
-          revision: "catalog-1",
-          agents: [
-            {
-              summary: {
-                kind: "ready",
-                id: "research",
-                name: "Research",
-                status: "idle",
-              },
-              visibility: "visible",
-              selectable: true,
-              editable: false,
-              revision: "research-1",
-            },
-          ],
-        },
-      })
-    if (path.endsWith("/sessions"))
-      return route.fulfill({
-        json: { sessions: [session], total: 1, limit: 50, offset: 0 },
-      })
-    if (path.endsWith("/history"))
-      return route.fulfill({
-        json: restoreActiveRun
-          ? {
-              sessionId: session.id,
-              messages: [
-                {
-                  id: "refresh-user",
-                  role: "user",
-                  content: [{ type: "text", text: "Continue after refresh" }],
-                  createdAt: "2026-09-12T00:00:01.000Z",
-                },
-                {
-                  id: "refresh-partial",
-                  role: "assistant",
-                  content: [{ type: "text", text: "Partial before refresh" }],
-                  createdAt: "2026-09-12T00:00:02.000Z",
-                },
-              ],
-              total: 2,
-              limit: 200,
-              offset: 0,
-              nextOffset: 2,
-              execution: { status: "running", runId: "refresh-run" },
-            }
-          : {
-              sessionId: session.id,
-              messages: [
-                {
-                  id: "history-1",
-                  role: "assistant",
-                  content: [{ type: "text", text: "Restored from AOS." }],
-                  createdAt: "2026-09-12T00:00:00.000Z",
-                },
-              ],
-              total: 1,
-              limit: 200,
-              offset: 0,
-              nextOffset: 1,
-            },
-      })
-    if (path.endsWith("/workspace/capabilities"))
-      return route.fulfill({ json: sessionCapabilities })
-    if (path.endsWith("/workspace/models"))
-      return route.fulfill({
-        // A model update answers with the Session's state after the write.
-        json:
-          request.method() === "PATCH"
-            ? { selectedId: "default" }
-            : {
-                selectedId: "default",
-                options: [{ id: "default", label: "Default", group: "Hermes" }],
-              },
-      })
-    if (path.endsWith("/workspace/context"))
-      return route.fulfill({
-        json: { usedTokens: 1, maxTokens: 100, source: "provider-usage" },
-      })
-    if (path.endsWith("/workspace/todos"))
-      return route.fulfill({ json: { todos: [] } })
-    if (path.endsWith("/interactions/pending"))
-      return route.fulfill({
-        json: { runId: "run-1", running: false, status: "idle" },
-      })
-    if (path.endsWith("/workspace/activity"))
-      return route.fulfill({
-        json: {
-          status: "available",
-          scope: "attached-active-session",
-          coverage: "active-session-only",
-          state: "idle",
-        },
-      })
-    if (path.endsWith("/audio"))
-      return route.fulfill({
-        json: {
-          transcription: { status: "unavailable", reason: "not-configured" },
-          speech: { status: "unavailable", reason: "not-configured" },
-        },
-      })
-    if (path.endsWith("/runs/stop")) {
-      stopRequests++
-      return route.fulfill({ status: 202, json: { status: "stopping" } })
-    }
-    if (path.endsWith("/runs/reconnect")) {
-      reconnectRequests++
-      const toolEvents = Array.from({ length: 11 }, (_, index) => [
-        {
-          type: "TOOL_CALL_START",
-          toolCallId: `refresh-tool-${index}`,
-          toolCallName: "search",
-          parentMessageId: "refresh-answer",
-        },
-        {
-          type: "TOOL_CALL_ARGS",
-          toolCallId: `refresh-tool-${index}`,
-          delta: "{}",
-        },
-        { type: "TOOL_CALL_END", toolCallId: `refresh-tool-${index}` },
-        {
-          type: "TOOL_CALL_RESULT",
-          messageId: `refresh-result-${index}`,
-          toolCallId: `refresh-tool-${index}`,
-          content: `result-${index}`,
-          role: "tool",
-        },
-      ]).flat()
-      restoreActiveRun = false
-      return route.fulfill({
-        contentType: "text/event-stream",
-        body: [
-          {
-            type: "RUN_STARTED",
-            threadId: session.id,
-            runId: "refresh-run",
-          },
-          {
-            type: "REASONING_MESSAGE_START",
-            messageId: "refresh-reasoning",
-            role: "reasoning",
-          },
-          {
-            type: "REASONING_MESSAGE_CONTENT",
-            messageId: "refresh-reasoning",
-            delta: "Recovered reasoning",
-          },
-          {
-            type: "REASONING_MESSAGE_END",
-            messageId: "refresh-reasoning",
-          },
-          {
-            type: "TEXT_MESSAGE_START",
-            messageId: "refresh-answer",
-            role: "assistant",
-          },
-          ...toolEvents,
-          {
-            type: "TEXT_MESSAGE_CONTENT",
-            messageId: "refresh-answer",
-            delta: "Recovered after refresh.",
-          },
-          { type: "TEXT_MESSAGE_END", messageId: "refresh-answer" },
-          {
-            type: "RUN_FINISHED",
-            threadId: session.id,
-            runId: "refresh-run",
-            outcome: { type: "success" },
-          },
-        ]
-          .map((event) => `data: ${JSON.stringify(event)}`)
-          .concat("")
-          .join("\n\n"),
-      })
-    }
-    if (path.endsWith("/runs")) {
-      runRequests++
-      return route.fulfill({
-        contentType: "text/event-stream",
-        body: [
-          'data: {"type":"RUN_STARTED","threadId":"session-1","runId":"run-1"}',
-          'data: {"type":"TEXT_MESSAGE_START","threadId":"session-1","messageId":"answer-1"}',
-          'data: {"type":"TEXT_MESSAGE_CONTENT","threadId":"session-1","messageId":"answer-1","delta":"Streamed by AOS."}',
-          'data: {"type":"TEXT_MESSAGE_END","threadId":"session-1","messageId":"answer-1"}',
-          'data: {"type":"RUN_FINISHED","threadId":"session-1","runId":"run-1","outcome":{"type":"success"}}',
-          "",
-        ].join("\n\n"),
-      })
-    }
-    return route.fulfill({
-      status: 404,
-      json: { error: { code: "not_found" } },
-    })
-  })
+  // The runtime read is the only REST route this journey still needs.
+  await page.route("**/api/aos/v1/**", (route) =>
+    new URL(route.request().url()).pathname.endsWith("/runtime")
+      ? route.fulfill({ json: runtime })
+      : route.fulfill({ status: 404, json: { error: { code: "not_found" } } })
+  )
+}
 
+function recorded(page: Page, method: string) {
+  return page.evaluate(
+    (method) => window.__acpStub.calls.filter((call) => call.method === method),
+    method
+  )
+}
+
+async function resumes(page: Page) {
+  return (await recorded(page, "session/resume")).map(
+    (call) => call.params as ResumeParams
+  )
+}
+
+test("AOS proxy restores history, offers commands, streams one turn, stops, and reconnects", async ({
+  page,
+}) => {
+  await serveAcp(page)
   await page.goto("/")
+
+  // The replay arrives before the resume answers, so both stored turns render.
+  await expect(page.getByText("Restore my research.")).toBeVisible()
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  expect((await resumes(page))[0]?.replayFrom).toEqual({ type: "start" })
 
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.fill("/")
@@ -415,19 +522,41 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await input.fill("Send once")
   await page.getByRole("button", { name: "Send message" }).click()
   await expect(page.getByText("Streamed by AOS.")).toBeVisible()
-  expect(runRequests).toBe(1)
+  await expect(page.getByText("Both chunks arrived.")).toBeVisible()
+  expect(await recorded(page, "session/prompt")).toHaveLength(1)
 
-  await page.evaluate(() =>
-    fetch("/api/aos/v1/agents/research/sessions/session-1/runs/stop", {
-      method: "POST",
+  // Stop: the scripted turn stays running until the cancel notification.
+  await input.fill(PENDING_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  const stop = page.getByRole("button", { name: "Stop generating" })
+  await expect(stop).toBeVisible()
+  await stop.click()
+  await expect(stop).toHaveCount(0)
+  await expect
+    .poll(() => recorded(page, "session/cancel"))
+    .toEqual([{ method: "session/cancel", params: { sessionId: SESSION_ID } }])
+  await expect(input).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible()
+
+  // The exposed Session is reported to the proxy, which owns read state.
+  await expect
+    .poll(() => recorded(page, "_aos/session/focus"))
+    .toContainEqual({
+      method: "_aos/session/focus",
+      params: { sessionId: SESSION_ID },
     })
-  )
-  expect(stopRequests).toBe(1)
 
-  restoreActiveRun = true
-  await page.reload()
-  await expect(page.getByText("Recovered after refresh.")).toBeVisible()
-  await expect(page.getByText("Partial before refresh")).toHaveCount(0)
-  expect(runRequests).toBe(1)
-  expect(reconnectRequests).toBe(1)
+  // A dropped transport re-initializes and resumes from the last sequence seen.
+  const sequence = await page.evaluate(() => window.__acpStub.sequence)
+  await page.evaluate(() => window.__acpStub.dropSocket())
+  await expect
+    .poll(() => page.evaluate(() => window.__acpStub.connections))
+    .toBe(2)
+  await expect
+    .poll(async () => (await recorded(page, "initialize")).length)
+    .toBe(2)
+  await expect
+    .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
+    .toEqual({ agentId: AGENT_ID, after: sequence, runId: RUN_ID })
+  await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })

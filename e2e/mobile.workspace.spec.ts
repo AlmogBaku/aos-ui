@@ -321,6 +321,35 @@ test("the navigator browses another Agent and closes after Session selection", a
   ).toBeVisible()
 })
 
+test("the Sessions drawer marks another Agent's unread Session on the back control", async ({
+  page,
+}) => {
+  await page.goto("/en")
+  await page.getByRole("button", { name: "Open Agents" }).click()
+
+  // Aster is selected and holds no unread Session; Lumen's and Nori's are unread.
+  const sessions = page.getByRole("dialog", { name: "Sessions" })
+  const back = sessions.getByRole("button", { name: "Back to Agents" })
+  await expect(back).toHaveAttribute("aria-label", "Back to Agents, Unread")
+  await expect(back.getByTitle("Unread")).toBeVisible()
+
+  await back.click()
+  const agents = page.getByRole("dialog", { name: "Agents" })
+  await expect(
+    agents.getByRole("button", { name: /^Lumen,.*Unread$/ })
+  ).toBeVisible()
+  await expect(
+    agents.getByRole("button", { name: /^Aster/ })
+  ).not.toHaveAttribute("aria-label", /Unread/)
+
+  await agents.getByRole("button", { name: /^Lumen/ }).click()
+  await expect(
+    page
+      .getByRole("dialog", { name: "Sessions" })
+      .getByRole("button", { name: /^Open session: Roadmap review,.*Unread$/ })
+  ).toBeVisible()
+})
+
 test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
   page,
 }) => {

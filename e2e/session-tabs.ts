@@ -120,10 +120,11 @@ export async function exerciseSessionTabs(
     return
   }
 
-  await expect(page.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  )
+  // A read Session's tab is named by its title alone; an unread one appends
+  // the unread marker through an explicit label.
+  await expect(
+    page.getByRole("tab", { name: "Market brief", exact: true })
+  ).toHaveAttribute("aria-selected", "true")
   await expect(page.getByRole("tablist", { name: copy.sessions })).toBeVisible()
   {
     const close = page.getByRole("button", {
