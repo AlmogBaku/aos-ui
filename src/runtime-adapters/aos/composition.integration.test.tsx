@@ -10,8 +10,10 @@ import { StrictMode, type ReactNode } from "react"
 
 import {
   SESSION_CATALOG_MAX_WINDOW,
+  SessionAttachmentStageRequestSchema,
   type RuntimeInfo,
   type Session,
+  type SessionAttachmentStageRequest,
   type SessionModelsResponse,
 } from "../../../packages/protocol"
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
@@ -53,6 +55,7 @@ import { runtimeAdapter } from "./composition"
 
 const AGENT_ID = "alpha"
 const SESSION_ID = "stored-alpha"
+const CREATED_SESSION_ID = "created-alpha"
 const NOW = "2026-01-01T00:00:00.000Z"
 
 const AVAILABLE = { status: "available" } as const
@@ -214,11 +217,11 @@ class RunSegment implements ServerRunHandle {
   }
 }
 
-function sessionRow(): Session {
+function sessionRow(id = SESSION_ID, title = "Older"): Session {
   return {
-    id: SESSION_ID,
+    id,
     agentId: AGENT_ID,
-    title: "Older",
+    title,
     archived: false,
     updatedAt: NOW,
     status: "idle",
@@ -231,6 +234,7 @@ type StartInput = Parameters<ServerRunEngine["start"]>[1]
 function createProxyAgentApp() {
   const segments: RunSegment[] = []
   const inputs: StartInput[] = []
+  const created: string[] = []
   const start = vi.fn(async (_scope: SessionScope, input: StartInput) => {
     inputs.push(input)
     const segment = new RunSegment()
@@ -292,23 +296,28 @@ function createProxyAgentApp() {
     listAllSessions,
     listSessions: async (_agentId, limit, offset) =>
       listAllSessions(limit, offset),
+    // Only the stored Session has a transcript; a Session this run created has
+    // nothing to replay, exactly as the runtime reports it.
     history: async (_agentId, sessionId) => ({
       sessionId,
-      messages: [
-        {
-          id: "native-user-1",
-          role: "user" as const,
-          content: [{ type: "text" as const, text: "Open it" }],
-          createdAt: NOW,
-        },
-        {
-          id: "native-assistant-1",
-          role: "assistant" as const,
-          content: [{ type: "text" as const, text: "Ready" }],
-          createdAt: NOW,
-        },
-      ],
-      total: 2,
+      messages:
+        sessionId === SESSION_ID
+          ? [
+              {
+                id: "native-user-1",
+                role: "user" as const,
+                content: [{ type: "text" as const, text: "Open it" }],
+                createdAt: NOW,
+              },
+              {
+                id: "native-assistant-1",
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "Ready" }],
+                createdAt: NOW,
+              },
+            ]
+          : [],
+      total: sessionId === SESSION_ID ? 2 : 0,
       limit: 500,
       offset: 0,
       nextOffset: 0,
@@ -318,7 +327,14 @@ function createProxyAgentApp() {
       if (!row) throw new Error("Unknown Session")
       return row
     },
-    createSession: unsupported,
+    createSession: async (agentId, title) => {
+      rows.set(
+        CREATED_SESSION_ID,
+        sessionRow(CREATED_SESSION_ID, title ?? "New Session")
+      )
+      created.push(agentId)
+      return { session: { id: CREATED_SESSION_ID, agentId } }
+    },
     mutateSession: async () => undefined,
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => models,
@@ -345,6 +361,7 @@ function createProxyAgentApp() {
   }
   const lane = "operator" as const
   const sessionRows = createSessionRows()
+  const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
@@ -352,7 +369,7 @@ function createProxyAgentApp() {
     runtimeInstance,
     sessionRows,
     translators,
-    attachmentStages: new AttachmentStageRegistry(),
+    attachmentStages,
     readState: createReadState({
       runtimeInstance,
       sessionRows,
@@ -365,10 +382,61 @@ function createProxyAgentApp() {
     app: createAosAcpAgent(context),
     segments,
     inputs,
+    created,
+    attachmentStages,
     start,
     updateModel,
     close: () => runtimeInstance.close(),
   }
+}
+
+type ProxyAgentApp = ReturnType<typeof createProxyAgentApp>
+
+/**
+ * The REST leg of an attachment batch: the proxy owns the bytes and hands back
+ * a stage id, which the next prompt references over ACP.
+ */
+function stageAttachmentsOverRest(proxy: ProxyAgentApp) {
+  const requests: SessionAttachmentStageRequest[] = []
+  const appended: string[] = []
+  const fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
+    const path = /\/agents\/([^/]+)\/sessions\/([^/]+)\/attachments\/stage$/u
+    const match = path.exec(String(input))
+    if (!match || typeof init?.body !== "string")
+      throw new Error("The ACP operator lane reads no other REST here")
+    const request = SessionAttachmentStageRequestSchema.parse(
+      JSON.parse(init.body)
+    )
+    requests.push(request)
+    const attachments = request.attachments.map((attachment) =>
+      attachment.type === "image"
+        ? {
+            type: "image" as const,
+            dataUrl: attachment.dataUrl,
+            ...(attachment.filename ? { filename: attachment.filename } : {}),
+          }
+        : {
+            type: "file" as const,
+            mimeType: attachment.mimeType ?? "application/octet-stream",
+            ...(attachment.filename ? { filename: attachment.filename } : {}),
+          }
+    )
+    const stageId = proxy.attachmentStages.create(
+      decodeURIComponent(match[1]!),
+      decodeURIComponent(match[2]!),
+      {
+        public: attachments,
+        appendTo: (text: string) => {
+          appended.push(text)
+          return `${text}\n[${attachments.length} attachment]`
+        },
+        cleanup: async () => undefined,
+      }
+    )
+    if (!stageId) throw new Error("The stage registry refused the batch")
+    return Response.json({ stageId, attachments })
+  })
+  return { fetcher, requests, appended }
 }
 
 /** A WebSocket-shaped pipe to the in-process proxy agent. */
@@ -437,13 +505,9 @@ const components = { Composer: GatedComposer }
 
 async function mount() {
   const proxy = createProxyAgentApp()
+  const staging = stageAttachmentsOverRest(proxy)
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => {
-      throw new Error("The ACP operator lane reads no REST here")
-    })
-  )
+  vi.stubGlobal("fetch", staging.fetcher)
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
   render(
@@ -489,7 +553,7 @@ async function mount() {
   await act(async () => {
     await runtime().assistantRuntime.threads.switchToThread(SESSION_ID)
   })
-  return { proxy, runtime }
+  return { proxy, runtime, staging }
 }
 
 const messageTexts = (runtime: HarnessRuntime) =>
@@ -728,6 +792,123 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     })
     await waitFor(() =>
       expect(runtime().composer?.model?.selectedId).toBe("opus")
+    )
+    await proxy.close()
+  })
+
+  it("a draft's first turn creates the Session and streams", async () => {
+    const { proxy, runtime } = await mount()
+    await screen.findByText("Ready")
+    const createSessionDraft = runtime().createSessionDraft
+    expect(createSessionDraft).toBeDefined()
+    await act(async () => {
+      await createSessionDraft?.(AGENT_ID)
+    })
+
+    await send(runtime(), "Ship it")
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    expect(proxy.created).toEqual([AGENT_ID])
+    const input = proxy.inputs[0]!
+    expect(input.threadId).toBe(CREATED_SESSION_ID)
+    // The turn the operator sent stays on screen across `session/new`.
+    expect(messageTexts(runtime())).toEqual(["Ship it"])
+    const segment = proxy.segments[0]!
+    act(() => {
+      segment.emit({
+        type: RunEventKind.RUN_STARTED,
+        threadId: CREATED_SESSION_ID,
+        runId: input.runId,
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "assistant-draft",
+        role: "assistant",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-draft",
+        delta: "Shipping it",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_END,
+        messageId: "assistant-draft",
+      })
+      segment.emit({
+        type: RunEventKind.RUN_FINISHED,
+        threadId: CREATED_SESSION_ID,
+        runId: input.runId,
+        outcome: { type: "success" },
+      })
+      segment.finish()
+    })
+
+    expect(await screen.findByText("Shipping it")).toBeVisible()
+    await waitFor(() =>
+      expect(messageTexts(runtime())).toEqual(["Ship it", "Shipping it"])
+    )
+    await proxy.close()
+  })
+
+  it("stages a composed attachment and links it on the prompt", async () => {
+    const { proxy, runtime, staging } = await mount()
+    await screen.findByText("Ready")
+
+    await act(async () => {
+      await runtime().assistantRuntime.thread.composer.addAttachment(
+        new File(["chart bytes"], "chart.png", { type: "image/png" })
+      )
+    })
+    await send(runtime(), "Read this")
+
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    expect(staging.requests).toEqual([
+      {
+        attachments: [
+          {
+            type: "image",
+            dataUrl: expect.stringContaining("data:image/png;base64,"),
+            filename: "chart.png",
+          },
+        ],
+      },
+    ])
+    // The proxy only appends a stage it could claim by id, so the turn it
+    // admitted proves both the `_meta.aos` stage id and the linked block.
+    expect(staging.appended).toEqual(["Read this"])
+    expect(proxy.inputs[0]!.messages[0]!.content).toBe(
+      "Read this\n[1 attachment]"
+    )
+    await proxy.close()
+  })
+
+  it("prefills the composer with the next turn the run suggested", async () => {
+    const { proxy, runtime } = await mount()
+    await screen.findByText("Ready")
+
+    await send(runtime(), "/undo")
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    const segment = proxy.segments[0]!
+    const runId = proxy.inputs[0]!.runId
+    act(() => {
+      segment.emit({
+        type: RunEventKind.RUN_STARTED,
+        threadId: SESSION_ID,
+        runId,
+      })
+      segment.emit({
+        type: RunEventKind.RUN_FINISHED,
+        threadId: SESSION_ID,
+        runId,
+        outcome: { type: "success" },
+        result: { "aos.composerPrefill": "next?" },
+      })
+      segment.finish()
+    })
+
+    await waitFor(() =>
+      expect(runtime().assistantRuntime.thread.composer.getState().text).toBe(
+        "next?"
+      )
     )
     await proxy.close()
   })

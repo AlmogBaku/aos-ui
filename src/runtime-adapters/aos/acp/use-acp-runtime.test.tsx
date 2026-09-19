@@ -9,7 +9,13 @@ import {
 } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
-import { AOS_METHODS, AOS_PLAN_ID } from "@aos/protocol/acp"
+import type { CompleteAttachment } from "@assistant-ui/core"
+
+import {
+  AOS_ATTACHMENT_URI_SCHEME,
+  AOS_METHODS,
+  AOS_PLAN_ID,
+} from "@aos/protocol/acp"
 
 import type { AcpConnection, AcpSessionUpdateListener } from "./types"
 import {
@@ -49,6 +55,7 @@ function createFakeConnection() {
     status: "ready",
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},
+    login: unused,
     newSession: unused,
     listSessions: unused,
     resumeSession,
@@ -115,7 +122,10 @@ const messageText = (part: { type: string }) =>
 
 async function mount(
   fake: Fake,
-  options?: Pick<UseAcpRuntimeOptions, "attach" | "enableMessageQueue">
+  options?: Pick<
+    UseAcpRuntimeOptions,
+    "attach" | "enableMessageQueue" | "onComposerPrefill" | "stageAttachments"
+  >
 ) {
   const hook = renderHook(() =>
     useAcpRuntime({
@@ -249,6 +259,109 @@ describe("useAcpRuntime", () => {
       result.current.thread.cancelRun()
     })
     expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
+  })
+
+  it("creates the Session a draft's first turn needs, then prompts it", async () => {
+    const fake = createFakeConnection()
+    const attach = vi.fn(async () => undefined)
+    const resolveSessionId = vi.fn(async () => SESSION_ID)
+    const { result } = renderHook(() =>
+      useAcpRuntime({
+        connection: fake.connection,
+        sessionId: undefined,
+        agentId: "agent-1",
+        attach,
+        resolveSessionId,
+      })
+    )
+    expect(attach).not.toHaveBeenCalled()
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Ship it" }],
+      })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "Ship it" }],
+        {}
+      )
+    })
+    expect(resolveSessionId).toHaveBeenCalledTimes(1)
+    // Binding the resolved Session is what attaches and observes it.
+    expect(attach).toHaveBeenCalledWith(SESSION_ID)
+    act(() => {
+      fake.emit(textUpdate("agent_message", "a1", "Shipping it"))
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a1", role: "assistant", text: "Shipping it" },
+    ])
+  })
+
+  it("stages a turn's attachments and links the batch it staged", async () => {
+    const fake = createFakeConnection()
+    const stageAttachments = vi.fn(async () => ({
+      stageId: "stage-1",
+      attachments: [
+        { id: "att-1", name: "chart.png", contentType: "image/png" },
+      ],
+    }))
+    const { result } = await mount(fake, { stageAttachments })
+    const attachment: CompleteAttachment = {
+      id: "att-1",
+      type: "image",
+      name: "chart.png",
+      contentType: "image/png",
+      status: { type: "complete" },
+      content: [{ type: "image", image: "data:image/png;base64,AAA" }],
+    }
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Read this" }],
+        attachments: [attachment],
+      })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [
+          { type: "text", text: "Read this" },
+          {
+            type: "resource_link",
+            uri: `${AOS_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
+            name: "chart.png",
+            mimeType: "image/png",
+          },
+        ],
+        { attachmentStageId: "stage-1" }
+      )
+    })
+    expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [attachment])
+  })
+
+  it("reports a composer prefill for the bound Session only", async () => {
+    const fake = createFakeConnection()
+    const onComposerPrefill = vi.fn()
+    await mount(fake, { onComposerPrefill })
+    act(() => {
+      fake.notify(AOS_METHODS.notify.composerPrefill, {
+        sessionId: "other-session",
+        runId: "run-1",
+        text: "Elsewhere",
+      })
+    })
+    expect(onComposerPrefill).not.toHaveBeenCalled()
+    act(() => {
+      fake.notify(AOS_METHODS.notify.composerPrefill, {
+        sessionId: SESSION_ID,
+        runId: "run-1",
+        text: "Next question?",
+      })
+    })
+    expect(onComposerPrefill).toHaveBeenCalledWith("Next question?")
   })
 
   it("appends an artifact only for its own Session", async () => {

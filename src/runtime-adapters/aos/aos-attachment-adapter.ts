@@ -13,6 +13,41 @@ const imageTypes = new Set([
   "image/bmp",
 ])
 
+/** The bytes one composed attachment stages over REST, ready for the batch. */
+export type AosStagedAttachment = {
+  type: "image" | "file"
+  dataUrl: string
+  filename?: string
+  mimeType: string
+}
+
+/**
+ * Reads back what `AosAttachmentAdapter.send` put on the message, so a staging
+ * caller never re-derives the encoding this adapter chose.
+ */
+export function stagedAttachmentOf(
+  attachment: CompleteAttachment
+): AosStagedAttachment {
+  const part = attachment.content[0]
+  const named = attachment.name ? { filename: attachment.name } : {}
+  if (part?.type === "image")
+    return {
+      type: "image",
+      dataUrl: part.image,
+      ...named,
+      // The stage request carries an image's type inside its data URL.
+      mimeType: attachment.contentType ?? "application/octet-stream",
+    }
+  if (part?.type === "file")
+    return {
+      type: "file",
+      dataUrl: part.data,
+      ...named,
+      mimeType: part.mimeType,
+    }
+  throw new Error("Could not read AOS attachment bytes")
+}
+
 /** Browser drafts retain bytes; the normalized run endpoint stages them once. */
 export class AosAttachmentAdapter implements AttachmentAdapter {
   readonly accept = "*"

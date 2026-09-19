@@ -8,7 +8,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { useAuiState, useRemoteThreadListRuntime } from "@assistant-ui/react"
+import {
+  useAui,
+  useAuiState,
+  useRemoteThreadListRuntime,
+  type AssistantRuntime,
+  type CompleteAttachment,
+  type ThreadRuntime,
+} from "@assistant-ui/react"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 
@@ -21,7 +28,10 @@ import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
 import { createAcpConnection } from "./acp/connection"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
-import { AosAttachmentAdapter } from "./aos-attachment-adapter"
+import {
+  AosAttachmentAdapter,
+  stagedAttachmentOf,
+} from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
 import {
   useAosComposerFeatures,
@@ -39,6 +49,21 @@ import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 const SESSION_TITLE_REFRESH_DEBOUNCE_MS = 100
 
 const CLIENT_INFO = { name: "aos-ui", version: "1" }
+
+/**
+ * Shows the next turn the provider suggested, once the run that suggested it has
+ * settled. Text the operator has already composed outranks the suggestion.
+ */
+function applyComposerPrefill(thread: ThreadRuntime, text: string) {
+  let unsubscribe = () => {}
+  const applyWhenIdle = () => {
+    if (thread.getState().isRunning) return
+    unsubscribe()
+    if (thread.composer.getState().isEmpty) thread.composer.setText(text)
+  }
+  unsubscribe = thread.subscribe(applyWhenIdle)
+  applyWhenIdle()
+}
 
 function ReadyAosRuntimeProvider({
   children,
@@ -102,8 +127,28 @@ function ReadyAosRuntimeProvider({
     },
     [client]
   )
+  // The Session owns the batch, so staging waits for the Session a draft's
+  // first turn creates; the prompt then links what the proxy accepted.
+  const stageAttachments = useCallback(
+    async (sessionId: string, attachments: readonly CompleteAttachment[]) => {
+      const { stageId } = await client.stageAttachments(
+        sessionId,
+        attachments.map(stagedAttachmentOf)
+      )
+      return {
+        stageId,
+        attachments: attachments.map(({ id, name, contentType }) => ({
+          id,
+          name,
+          ...(contentType === undefined ? {} : { contentType }),
+        })),
+      }
+    },
+    [client]
+  )
   const runtimeHook = useCallback(
     function useAosThreadRuntime() {
+      const aui = useAui()
       const remoteId = useAuiState((state) => state.threadListItem.remoteId)
       const localId = useAuiState((state) => state.threadListItem.id)
       const metadataAgentId = useAuiState((state) => {
@@ -130,7 +175,18 @@ function ReadyAosRuntimeProvider({
             })
           : undefined
       }, [agentId, localId, remoteId])
-      return useAcpRuntime({
+      // The thread list owns Session creation, so a draft's first turn resolves
+      // its Session through the same initialization the list already dedupes.
+      const resolveSessionId = useCallback(
+        async () => (await aui.threadListItem.initialize()).remoteId,
+        [aui]
+      )
+      const threadRuntime = useRef<AssistantRuntime | undefined>(undefined)
+      const onComposerPrefill = useCallback((text: string) => {
+        const thread = threadRuntime.current?.thread
+        if (thread) applyComposerPrefill(thread, text)
+      }, [])
+      const runtime = useAcpRuntime({
         connection,
         sessionId: remoteId,
         agentId: agentId ?? "",
@@ -139,10 +195,27 @@ function ReadyAosRuntimeProvider({
         enableMessageQueue: Boolean(remoteId),
         adapters: { attachments, ...mediaAdapters },
         attach,
+        resolveSessionId,
+        stageAttachments,
         messageRewind: (sourceUserId) => ({ rewindSourceId: sourceUserId }),
+        onComposerPrefill,
       })
+      useEffect(() => {
+        threadRuntime.current = runtime
+      }, [runtime])
+      return runtime
     },
-    [attach, attachments, client, connection, drafts, locale, media, threadList]
+    [
+      attach,
+      attachments,
+      client,
+      connection,
+      drafts,
+      locale,
+      media,
+      stageAttachments,
+      threadList,
+    ]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadList,
