@@ -130,6 +130,10 @@ describe("configured proxy composition", () => {
     expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits)
     expect(configured.runtimeInstance).toBe(runtimeInstance)
     expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
+    // The guest listener serves ACP beside its HTTP routes.
+    expect(configured.guest?.acpService.authorizeUpgrade).toBeInstanceOf(
+      Function
+    )
     const response = await configured.app.request(
       "https://aos.example.test/api/aos/v1/agents"
     )

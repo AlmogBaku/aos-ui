@@ -3,7 +3,6 @@ import type {
   SessionInfo,
   SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type { z } from "zod"
 
 import {
   SessionContextResponseSchema,
@@ -19,7 +18,7 @@ import type { SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import { createSessionAttachment } from "./session-attachment"
-import type { AcpConnectionContext } from "./types"
+import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import { invalidRequest, notFound, publicRequestError } from "./validation"
 
 /**
@@ -28,10 +27,6 @@ import { invalidRequest, notFound, publicRequestError } from "./validation"
  * per-connection registry of which Agent owns a Session and which Sessions
  * this connection has attached.
  */
-
-export type WorkspaceCapabilities = z.infer<
-  typeof SessionWorkspaceCapabilitiesResponseSchema
->
 
 /** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
 const SESSION_CWD = "/"
@@ -181,6 +176,12 @@ export function createWorkspace(context: AcpConnectionContext) {
         )
         return created.session.id
       }),
+    /** The invited Session a guest addresses by its conversation reference. */
+    invited: (
+      agentId: string,
+      ref: string,
+      create?: { firstTurnInstruction?: string }
+    ) => call(() => runtime.resolveInvitedSession(agentId, ref, create)),
     session: (scope: SessionScope) =>
       call(async () =>
         context.sessionRows.rememberDetail(
@@ -193,7 +194,8 @@ export function createWorkspace(context: AcpConnectionContext) {
       call(() =>
         runtime.mutateSession(scope.agentId, scope.sessionId, method, body)
       ),
-    capabilities: (scope: SessionScope) =>
+    /** Addressed by public reference, so an invited Session needs no detail. */
+    capabilities: (scope: Pick<SessionScope, "agentId" | "threadId">) =>
       call(async () =>
         SessionWorkspaceCapabilitiesResponseSchema.parse(
           await runtime.workspaceCapabilities(scope.agentId, scope.threadId)

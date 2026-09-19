@@ -4,8 +4,11 @@ import {
   ContentBlock,
   RequestError,
   type AgentApp,
+  type AgentContext,
+  type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
+import { SessionHistoryResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_AUTH_METHOD_INVITE,
@@ -14,6 +17,7 @@ import {
   AOS_ATTACHMENT_URI_SCHEME,
   AOS_META_KEY,
   AosFocusNotificationSchema,
+  AosLoginMetaSchema,
   AosPromptMetaSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
@@ -23,11 +27,14 @@ import {
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
+import type { SessionScope } from "../core/runtime"
+import type { SessionExecutionState } from "../core/session-coordinator"
 import { buildNewTurnInput } from "../routes/runs"
 import {
   commandsUpdate,
   createSessions,
   executionMeta,
+  overlaidStatus,
   sessionInfoMeta,
   sessionInfoOf,
   sessionInfoUpdate,
@@ -36,8 +43,19 @@ import {
   encodeCursor,
 } from "./agent-sessions"
 import type { SessionAttachment } from "./session-attachment"
-import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
-import { invalidRequest, parseMeta, runInProgress } from "./validation"
+import type {
+  AcpConnectionContext,
+  AosAcpAgentFactory,
+  GuestGrant,
+  GuestPolicy,
+} from "./types"
+import {
+  authenticationRequired,
+  invalidRequest,
+  notFound,
+  parseMeta,
+  runInProgress,
+} from "./validation"
 
 /**
  * The per-connection ACP v2 agent that fronts the coordinator and the runtime.
@@ -66,6 +84,32 @@ const EXTENSIONS = {
   readState: true,
   focus: true,
 } satisfies Omit<AosExtensions, "guestProjection">
+
+/** What a redeemed invitation may call; every other method is unavailable. */
+const GUEST_METHODS = new Set<string>([
+  methods.agent.session.resume,
+  methods.agent.session.prompt,
+  methods.agent.session.cancel,
+  methods.agent.session.close,
+  AOS_METHODS.session.focus,
+])
+
+/**
+ * The guest lane streams one invited conversation and manages no workspace: it
+ * owns no roster, no read state, no catalog, and no run control beyond Stop.
+ */
+const GUEST_EXTENSIONS = {
+  steer: false,
+  rewind: false,
+  artifacts: true,
+  composerPrefill: false,
+  agents: false,
+  invalidation: false,
+  activity: false,
+  readState: false,
+  focus: false,
+  guestProjection: true,
+} satisfies AosExtensions
 
 const INVITE_AUTH_METHOD = {
   type: "agent",
@@ -101,6 +145,9 @@ function afterResponse(
   }, 0)
 }
 
+/** One authorized guest request: its connection policy and redeemed grant. */
+type GuestRequest = { policy: GuestPolicy; grant: GuestGrant }
+
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { lane, translators } = context
   const { runtime, sessions: coordinator } = context.runtimeInstance
@@ -109,37 +156,191 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   const app = agent({ name: "aos-proxy" })
 
+  /**
+   * Gates one method on the guest lane and returns what its handler runs under.
+   * An operator connection has no grant and passes straight through.
+   */
+  function guestFor(method: string): GuestRequest | undefined {
+    const policy = context.guest
+    if (!policy) return undefined
+    const grant = policy.grant()
+    if (!grant) throw authenticationRequired()
+    if (!GUEST_METHODS.has(method)) throw RequestError.methodNotFound(method)
+    return { policy, grant }
+  }
+
+  /**
+   * The invited Session as a coordinator scope. A guest addresses its one
+   * conversation by reference alone, so no other Session is reachable, and
+   * `undefined` means the runtime has not created this one yet.
+   */
+  async function invitedScope(
+    grant: GuestGrant,
+    publicSessionId: string,
+    create?: { firstTurnInstruction?: string }
+  ): Promise<SessionScope | undefined> {
+    if (publicSessionId !== grant.ref) throw notFound()
+    const resolved = await workspace.invited(grant.agentId, grant.ref, create)
+    return resolved
+      ? {
+          agentId: grant.agentId,
+          sessionId: resolved.sessionId,
+          threadId: grant.ref,
+        }
+      : undefined
+  }
+
+  /** A guest sees the invited Session's live state, not the operator's row. */
+  function invitedSessionMeta(grant: GuestGrant, state: SessionExecutionState) {
+    return {
+      agentId: grant.agentId,
+      status: overlaidStatus(state, "idle"),
+      archived: false,
+    }
+  }
+
+  /** Subscribes to the live run, reporting a cursor that cannot position it. */
+  async function attachPositioned(
+    attachment: SessionAttachment,
+    scope: SessionScope,
+    meta: { runId?: string; after?: number }
+  ) {
+    const positioned =
+      meta.runId === undefined ||
+      meta.runId === coordinator.snapshot(scope).runId
+    try {
+      await attachment.attach(positioned ? meta.after : undefined)
+      return positioned ? {} : { resync: true }
+    } catch {
+      return { resync: true }
+    }
+  }
+
+  /**
+   * The invited conversation as the guest lane resumes it. A fresh invitation
+   * has no Session yet: resuming it creates nothing and replays nothing, the
+   * way the guest history route serves an empty page, and the first Send
+   * resolves it.
+   */
+  async function resumeInvited(
+    guest: GuestRequest,
+    params: ResumeSessionRequest,
+    client: AgentContext
+  ) {
+    const { grant, policy } = guest
+    const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+    const scope = await invitedScope(grant, params.sessionId)
+    const capabilities = policy.project.capabilities(
+      await workspace.capabilities({
+        agentId: grant.agentId,
+        threadId: grant.ref,
+      })
+    )
+    if (!scope)
+      return {
+        _meta: {
+          [AOS_META_KEY]: {
+            session: invitedSessionMeta(grant, "idle"),
+            execution: { status: "idle" as const },
+            capabilities,
+          },
+        },
+      }
+    if (coordinator.state(scope) === "waiting-for-input")
+      await workspace.discover(scope)
+    const attachment = sessions.attach(client, scope)
+    if (params.replayFrom?.type === "start")
+      for (const update of translators.translateHistory(
+        policy.project.history(
+          SessionHistoryResponseSchema.parse(
+            await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+          )
+        ),
+        lane
+      ))
+        await attachment.update(update)
+    const resync = await attachPositioned(attachment, scope, meta)
+    const execution = coordinator.snapshot(scope)
+    afterResponse(attachment, async () => {
+      await attachment.reportExecution()
+      if (coordinator.state(scope) === "waiting-for-input")
+        await attachment.reissuePending()
+    })
+    return {
+      _meta: {
+        [AOS_META_KEY]: {
+          session: invitedSessionMeta(grant, execution.state),
+          execution: executionMeta(execution),
+          capabilities,
+          ...resync,
+        },
+      },
+    }
+  }
+
+  /**
+   * The invited Session one guest turn runs in. Rewind stays operator-only,
+   * exactly as the guest run route refuses one, and the invitation's setup text
+   * reaches the runtime only when this Send creates the Session.
+   */
+  async function promptInvited(
+    { grant }: GuestRequest,
+    publicSessionId: string,
+    meta: { rewindSourceId?: string }
+  ) {
+    if (meta.rewindSourceId !== undefined) throw invalidRequest()
+    const scope = await invitedScope(grant, publicSessionId, {
+      ...(grant.firstTurnInstruction === undefined
+        ? {}
+        : { firstTurnInstruction: grant.firstTurnInstruction }),
+    })
+    if (!scope) throw notFound()
+    return scope
+  }
+
   app.onRequest(methods.agent.initialize, async () => {
-    const info = await workspace.info()
+    // An unauthenticated guest learns nothing about the deployment it reached.
+    const info = context.guest ? undefined : await workspace.info()
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
         name: "aos-proxy",
-        title: info.runtime.name,
+        ...(info ? { title: info.runtime.name } : {}),
         // The proxy versions the AOS extension contract, not a build.
         version: `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
-        session: { prompt: { image: {}, embeddedContext: {} }, delete: {} },
+        session: {
+          prompt: { image: {}, embeddedContext: {} },
+          ...(context.guest ? {} : { delete: {} }),
+        },
       },
-      authMethods: lane === "guest" ? [INVITE_AUTH_METHOD] : [],
+      authMethods: context.guest ? [INVITE_AUTH_METHOD] : [],
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
           lane,
-          extensions: { ...EXTENSIONS, guestProjection: lane === "guest" },
+          extensions: context.guest
+            ? GUEST_EXTENSIONS
+            : { ...EXTENSIONS, guestProjection: false },
         },
       },
     }
   })
 
-  // The operator lane authenticates the WebSocket upgrade, and the guest lane
-  // redeems its invitation token in Phase C.
-  app.onRequest(methods.agent.auth.login, () => {
-    throw RequestError.methodNotFound(methods.agent.auth.login)
+  // The operator lane authenticates its WebSocket upgrade instead.
+  app.onRequest(methods.agent.auth.login, async ({ params }) => {
+    const policy = context.guest
+    if (!policy) throw RequestError.methodNotFound(methods.agent.auth.login)
+    if (params.methodId !== AOS_AUTH_METHOD_INVITE)
+      throw authenticationRequired()
+    const { token } = parseMeta(AosLoginMetaSchema, params._meta)
+    if (!(await policy.authenticate(token))) throw authenticationRequired()
+    return {}
   })
 
   app.onRequest(methods.agent.session.new, async ({ params, client }) => {
+    guestFor(methods.agent.session.new)
     const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
     const publicSessionId = await workspace.create(meta.agentId, meta.title)
     const scope = workspace.scope(meta.agentId, publicSessionId)
@@ -165,6 +366,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.list, async ({ params }) => {
+    guestFor(methods.agent.session.list)
     const meta = parseMeta(AosSessionListMetaSchema, params._meta)
     const offset = decodeCursor(params.cursor)
     const page = await workspace.list(meta.agentId, SESSION_LIST_LIMIT, offset)
@@ -182,6 +384,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.resume, async ({ params, client }) => {
+    const guest = guestFor(methods.agent.session.resume)
+    if (guest) return await resumeInvited(guest, params, client)
     const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
     if (meta.agentId !== undefined)
       sessions.adopt(params.sessionId, meta.agentId)
@@ -204,14 +408,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await attachment.update(update)
     // A cursor for another run cannot position this one, and a cursor beyond
     // bounded replay cannot be served: both need a full reload.
-    const live = coordinator.snapshot(scope)
-    const positioned = meta.runId === undefined || meta.runId === live.runId
-    let resync = !positioned
-    try {
-      await attachment.attach(positioned ? meta.after : undefined)
-    } catch {
-      resync = true
-    }
+    const resync = await attachPositioned(attachment, scope, meta)
     const execution = coordinator.snapshot(scope)
     afterResponse(attachment, async () => {
       await attachment.reportExecution()
@@ -225,18 +422,21 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           session: sessionInfoMeta(row, sessions.status(row)),
           execution: executionMeta(execution),
           capabilities: await workspace.capabilities(scope),
-          ...(resync ? { resync: true } : {}),
+          ...resync,
         },
       },
     }
   })
 
   app.onRequest(methods.agent.session.prompt, async ({ params, client }) => {
+    const guest = guestFor(methods.agent.session.prompt)
     const meta = parseMeta(AosPromptMetaSchema, params._meta)
     if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
     const text = promptText(params.prompt)
     if (!text) throw invalidRequest()
-    const scope = sessions.scope(params.sessionId)
+    const scope = guest
+      ? await promptInvited(guest, params.sessionId, meta)
+      : sessions.scope(params.sessionId)
     await workspace.session(scope)
     if (coordinator.state(scope) !== "idle") throw runInProgress()
     // Bytes were staged over REST; the prompt references the batch by id and
@@ -273,6 +473,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
+    // Only a resumed or prompted Session is attached, so an unauthenticated
+    // guest reaches nothing here.
     const attachment = sessions.attached(params.sessionId)
     if (!attachment) return
     await attachment
@@ -281,6 +483,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.setConfigOption, async ({ params }) => {
+    guestFor(methods.agent.session.setConfigOption)
     const scope = sessions.scope(params.sessionId)
     const write = translators.configWriteOf(params.configId, params.value)
     if (!write) throw invalidRequest()
@@ -291,11 +494,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.close, ({ params }) => {
+    guestFor(methods.agent.session.close)
     sessions.detach(params.sessionId)
     return {}
   })
 
   app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
+    guestFor(methods.agent.session.delete)
     const scope = sessions.scope(params.sessionId)
     await workspace.mutate(scope, "DELETE")
     sessions.forget(scope)
@@ -307,6 +512,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     AOS_METHODS.session.update,
     AosSessionUpdateRequestSchema,
     async ({ params, client }) => {
+      guestFor(AOS_METHODS.session.update)
       const scope = sessions.scope(params.sessionId)
       if (params.unread === false) {
         await context.readState.markRead(scope.agentId, scope.threadId)
@@ -333,6 +539,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     AOS_METHODS.session.steer,
     AosSteerRequestSchema,
     async ({ params }) => {
+      guestFor(AOS_METHODS.session.steer)
       const scope = sessions.scope(params.sessionId)
       const { runId } = coordinator.snapshot(scope)
       if (runId === undefined) throw runInProgress()
@@ -348,6 +555,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     AOS_METHODS.session.focus,
     AosFocusNotificationSchema,
     ({ params }) => {
+      // Read state belongs to the operator; a guest's exposure moves nothing.
+      if (context.guest) return
       if (params.sessionId === null) return context.readState.blur()
       const agentId = sessions.owner(params.sessionId)
       if (agentId !== undefined)
@@ -355,19 +564,22 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   )
 
-  app.onRequest(AOS_METHODS.agents.list, withoutParams, () =>
-    workspace.agents()
-  )
+  app.onRequest(AOS_METHODS.agents.list, withoutParams, () => {
+    guestFor(AOS_METHODS.agents.list)
+    return workspace.agents()
+  })
 
   app.onRequest(
     AOS_METHODS.agents.setVisibility,
     AosSetVisibilityRequestSchema,
-    ({ params }) =>
-      workspace.setVisibility(
+    ({ params }) => {
+      guestFor(AOS_METHODS.agents.setVisibility)
+      return workspace.setVisibility(
         params.agentId,
         params.visibility,
         params.revision
       )
+    }
   )
 
   app.onConnect(async (connection) => {
@@ -386,16 +598,22 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       context.activityFeed.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
-      context.sessionRows.subscribe((row) => {
-        const attachment = sessions.attached(row.id)
-        if (attachment)
-          void attachment
-            .update(sessionInfoUpdate(row, sessions.status(row)))
-            .catch(() => undefined)
-      }),
-      await runtime.subscribeCatalogChanges?.(() =>
-        notify(AOS_METHODS.notify.catalogInvalidated)
-      ),
+      // A guest owns no roster and no catalog, and its connection ends with the
+      // invitation it redeemed.
+      ...(context.guest
+        ? [context.guest.expire(() => connection.close())]
+        : [
+            context.sessionRows.subscribe((row) => {
+              const attachment = sessions.attached(row.id)
+              if (attachment)
+                void attachment
+                  .update(sessionInfoUpdate(row, sessions.status(row)))
+                  .catch(() => undefined)
+            }),
+            await runtime.subscribeCatalogChanges?.(() =>
+              notify(AOS_METHODS.notify.catalogInvalidated)
+            ),
+          ]),
     ]
     await connection.closed
     for (const stop of stops) stop?.()

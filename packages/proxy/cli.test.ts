@@ -138,6 +138,12 @@ describe("proxy executable", () => {
         expect.objectContaining({
           host: "127.0.0.1",
           port: 4101,
+          sockets: [
+            expect.objectContaining({
+              path: "/api/guest/v1/acp",
+              maxPeers: 256,
+            }),
+          ],
         })
       )
       expect(start.mock.calls[1]![0]).not.toHaveProperty("events")

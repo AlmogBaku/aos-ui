@@ -10,11 +10,14 @@ import { AttachmentStageRegistry } from "./core/attachment-stages"
 import {
   createGuestInvitationService,
   type GuestInvitationKey,
+  type GuestInvitationService,
 } from "./auth/guest-invitation"
 import { parseProxyConfig } from "./config"
 import { createReconnectCursorCodec } from "./events/cursor"
 import { createOperatorEventService } from "./events/service"
+import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
+import { createGuestAttachmentStages } from "./guest/context"
 import { readSecretKeyFile } from "./secrets"
 
 export type ConfiguredProxyDependencies = {
@@ -73,20 +76,33 @@ export async function createConfiguredProxy(
             : { now: dependencies.clock }),
         })
       : undefined
+  /** One guest listener: its HTTP app and ACP socket share staged uploads. */
+  const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
+    const clock =
+      dependencies.clock === undefined ? {} : { now: dependencies.clock }
+    const attachmentStages = createGuestAttachmentStages()
+    return {
+      runtimeInstance,
+      invitations: service,
+      app: createGuestApp({
+        publicOrigin,
+        runtime: runtimeInstance,
+        invitations: service,
+        attachmentStages,
+        ...clock,
+      }),
+      acpService: createGuestAcpService({
+        publicOrigin,
+        runtimeInstance,
+        invitations: service,
+        attachmentStages,
+        ...clock,
+      }),
+    }
+  }
   const guest =
     config.guest && invitations
-      ? {
-          runtimeInstance,
-          invitations,
-          app: createGuestApp({
-            publicOrigin: config.guest.publicOrigin,
-            runtime: runtimeInstance,
-            invitations,
-            ...(dependencies.clock === undefined
-              ? {}
-              : { now: dependencies.clock }),
-          }),
-        }
+      ? guestLane(config.guest.publicOrigin, invitations)
       : undefined
   const eventService = createOperatorEventService({
     publicOrigin: config.publicOrigin,

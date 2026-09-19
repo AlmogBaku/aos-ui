@@ -90,7 +90,7 @@ class SessionAttachment {
           runId,
           ...(after === undefined ? {} : { after }),
         },
-        this.#access()
+        this.#access(runId)
       )
     )
   }
@@ -101,7 +101,7 @@ class SessionAttachment {
       await this.#coordinator.start(
         this.#scope,
         input,
-        this.#access(),
+        this.#access(input.runId),
         ...(stage ? [stage] : [])
       )
     )
@@ -109,10 +109,7 @@ class SessionAttachment {
 
   /** Requests Stop, reporting an unsettled provider as `execution: stopping`. */
   async cancel() {
-    const status = await this.#coordinator.stop(
-      this.#scope,
-      this.#context.principalId
-    )
+    const status = await this.#coordinator.stop(this.#scope, this.#controllerId)
     if (status !== "stopping") return
     this.#stopRequested = true
     await this.reportExecution()
@@ -213,14 +210,27 @@ class SessionAttachment {
     )
   }
 
-  #access() {
-    const { connectionId, principalId, lane } = this.#context
-    return {
+  /** The controller the coordinator knows this connection by. */
+  get #controllerId() {
+    return (
+      this.#context.guest?.grant()?.principalId ?? this.#context.principalId
+    )
+  }
+
+  /**
+   * How the coordinator sees one subscription of this attachment. The guest
+   * projection replaces the run stream with its allowlisted events and restates
+   * the same controller identity, so a guest may Stop only its own run.
+   */
+  #access(runId: string) {
+    const { connectionId, lane, guest } = this.#context
+    const base = {
       subscriberId: `${connectionId}:${this.#scope.threadId}`,
-      controllerId: principalId,
+      controllerId: this.#controllerId,
       lane,
       canControl: lane === "operator",
     }
+    return guest ? guest.project.access(base, this.#scope, runId) : base
   }
 
   #consume(subscription: CoordinatedRunSubscription) {
@@ -306,8 +316,14 @@ class SessionAttachment {
       { ...outbound.request, sessionId: this.#scope.threadId }
     )
     const request = this.#interrupt(outbound.interruptId)
-    const { replyFromPermission } = this.#context.translators
-    await this.#settle(request, replyFromPermission(request, response))
+    const { guest, translators } = this.#context
+    const reply = translators.replyFromPermission(request, response)
+    // A guest may answer only within the scope it was offered, so its
+    // projection refuses a widened grant the way the guest run route does.
+    await this.#settle(
+      request,
+      guest ? guest.project.permissionReply(request, reply) : reply
+    )
   }
 
   async #askElicitation(
@@ -350,12 +366,13 @@ class SessionAttachment {
       return entry ? [entry] : []
     })
     this.#replies.clear()
+    const runId = crypto.randomUUID()
     this.#consume(
       await this.#coordinator.start(
         this.#scope,
         {
           threadId: this.#scope.threadId,
-          runId: crypto.randomUUID(),
+          runId,
           state: {},
           messages: [],
           tools: [],
@@ -363,7 +380,7 @@ class SessionAttachment {
           forwardedProps: {},
           resume,
         },
-        this.#access()
+        this.#access(runId)
       )
     )
   }

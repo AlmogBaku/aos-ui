@@ -7,10 +7,12 @@ import type {
   SessionConfigOption,
   SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
+import type { z } from "zod"
 
 import type {
   SessionHistoryResponse,
   SessionModelsResponse,
+  SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
 import type {
   AosActivityNotification,
@@ -22,10 +24,19 @@ import type {
   RequestReply,
   RunEvent,
 } from "../core/events"
-import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
+import type {
+  RuntimeInstance,
+  ServerAttachmentStages,
+  SessionScope,
+} from "../core/runtime"
+import type { CoordinatorAccess } from "../core/session-coordinator"
 import type { SessionRows } from "../core/session-rows"
 
 export type Lane = "operator" | "guest"
+
+export type WorkspaceCapabilities = z.infer<
+  typeof SessionWorkspaceCapabilitiesResponseSchema
+>
 
 /** What the proxy knows about one accepted WebSocket connection. */
 export type AcpConnectionContext = {
@@ -39,6 +50,49 @@ export type AcpConnectionContext = {
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
+  /** Present only on the guest lane; absent means an operator connection. */
+  guest?: GuestPolicy
+}
+
+/**
+ * One redeemed invitation, shaped after the claims `GuestInvitationService`
+ * verifies: the single Agent and conversation reference it grants, the
+ * controller identity the coordinator knows this guest by, and the moment the
+ * connection must close.
+ */
+export type GuestGrant = {
+  agentId: string
+  ref: string
+  principalId: string
+  /** Unix milliseconds; the connection closes when it passes. */
+  expiresAt: number
+  /** Non-secret setup text the runtime receives once, on creation. */
+  firstTurnInstruction?: string
+}
+
+/**
+ * The guest lane's per-connection authorization and projection, implemented in
+ * `guest/acp.ts`. Every projection fails closed before an invitation is
+ * redeemed.
+ */
+export type GuestPolicy = {
+  /** Redeems one invitation token; `undefined` means it is not usable. */
+  authenticate(token: string): Promise<GuestGrant | undefined>
+  grant(): GuestGrant | undefined
+  project: {
+    /** Wraps one coordinator subscription in the guest run projection. */
+    access(
+      base: CoordinatorAccess,
+      scope: SessionScope,
+      runId: string
+    ): CoordinatorAccess
+    history(value: SessionHistoryResponse): SessionHistoryResponse
+    capabilities(value: WorkspaceCapabilities): WorkspaceCapabilities
+    /** Refuses an approval answer that would widen the grant past this request. */
+    permissionReply(request: PendingRequest, reply: RequestReply): RequestReply
+  }
+  /** Schedules the close the invitation's expiry owes, returning its canceller. */
+  expire(close: () => void): () => void
 }
 
 /** Builds the per-connection ACP v2 agent app. Implemented in `agent.ts`. */

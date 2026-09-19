@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 
-import { AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import { AOS_ACP_GUEST_PATH, AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { parseGuestComposerSlashCommandsEnabled } from "../config"
 import {
@@ -100,7 +100,14 @@ export async function serveProxy(
     shutdownGraceMs: configured.config.shutdownGraceMs,
   })
   const guestLifecycle = configured.guest
-    ? start({
+    ? start<SocketUpgrade>({
+        sockets: [
+          {
+            path: AOS_ACP_GUEST_PATH,
+            service: configured.guest.acpService,
+            maxPeers: configured.config.limits.operatorEventPeers,
+          },
+        ],
         app: listenerApp(
           configured.guest.app,
           "/api/guest/v1",

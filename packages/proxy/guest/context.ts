@@ -7,7 +7,7 @@ import { projectGuestError } from "../auth/guest-runtime-projection"
 import { createGuestRequestAuthorizer } from "../auth/guest-request"
 import type { GuestPublicErrorCode } from "../auth/guest-projection"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
-import type { RuntimeInstance } from "../core/runtime"
+import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 
 export const guestSecurityHeaders = {
   "cache-control": "no-store",
@@ -29,9 +29,16 @@ export type GuestAppOptions = {
   publicOrigin: string
   runtime: RuntimeInstance
   invitations: GuestInvitationService
+  /** Shared with the guest ACP service so one upload serves either transport. */
+  attachmentStages?: ServerAttachmentStages
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
   cancel?: (timer: unknown) => void
+}
+
+/** The guest lane's staging limits: smaller and shorter-lived than operators'. */
+export function createGuestAttachmentStages() {
+  return new AttachmentStageRegistry(256, 300_000, 67_108_864, 4)
 }
 
 export type GuestRoutes = ReturnType<typeof createGuestRoutes>
@@ -62,12 +69,7 @@ export function createGuestRoutes(options: GuestAppOptions) {
       ((delayMs: number, task: () => void) => setTimeout(task, delayMs)),
     cancel:
       options.cancel ?? ((timer: unknown) => clearTimeout(timer as number)),
-    attachmentStages: new AttachmentStageRegistry(
-      256,
-      300_000,
-      67_108_864,
-      4
-    ),
+    attachmentStages: options.attachmentStages ?? createGuestAttachmentStages(),
     authenticate: (request: Request) => authorizer.authenticate(request),
     authorize: (
       identity: VerifiedGuestIdentity,
