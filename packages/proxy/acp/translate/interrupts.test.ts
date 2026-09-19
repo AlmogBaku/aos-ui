@@ -96,26 +96,6 @@ const questions: PendingRequest = {
   expiresAt: "2026-09-19T10:00:00.000Z",
 }
 
-/** One question that takes several of the choices it lists. */
-const multiChoiceQuestions: PendingRequest = {
-  id: "clarify-2",
-  reason: "question",
-  responseSchema: {
-    type: "object",
-    properties: {
-      answers: {
-        prefixItems: [
-          {
-            title: "Pick the suites",
-            items: { type: "string", enum: ["unit", "e2e"] },
-            maxItems: 2,
-          },
-        ],
-      },
-    },
-  },
-}
-
 describe("pendingRequestToOutbound approvals", () => {
   it("offers every adapter choice as its own permission option kind", () => {
     expect(permissionOf(approval).request.options).toEqual([
