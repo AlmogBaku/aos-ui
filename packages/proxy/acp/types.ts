@@ -204,11 +204,15 @@ export type TranslateRunEvent = (
   context: TranslateContext
 ) => { state: TranslateState; outbound: AcpOutbound[] }
 
-/** `translate/history.ts` → `translateHistory` */
+/**
+ * `translate/history.ts` → `translateHistory`. A replay sends the same outbound
+ * kinds a run segment does, so a stored artifact reaches the browser through
+ * `_aos/artifact` exactly as the live one did.
+ */
 export type TranslateHistory = (
   history: SessionHistoryResponse,
   lane: Lane
-) => SessionUpdate[]
+) => AcpOutbound[]
 
 /** `translate/interrupts.ts` → `pendingRequestToOutbound` */
 export type PendingRequestToOutbound = (

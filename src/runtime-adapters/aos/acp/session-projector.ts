@@ -427,6 +427,21 @@ export function applyUpdate(
   }
 }
 
+/**
+ * Whether this turn already carries the artifact. A replay re-grants every
+ * artifact the transcript stored, so one publication lands on its turn once
+ * however often the proxy announces it.
+ */
+function carriesArtifact(message: ProjectedMessage, id: string) {
+  return message.parts.some(
+    (part) =>
+      part.source === "data" &&
+      part.name === ARTIFACT_DATA_PART_NAME &&
+      isRecord(part.data) &&
+      part.data.id === id
+  )
+}
+
 /** `_aos/artifact` and `_aos/steer_accepted` land as message data parts. */
 export function applyNotification(
   state: ProjectorState,
@@ -436,10 +451,13 @@ export function applyNotification(
   if (method === AOS_METHODS.notify.artifact) {
     const parsed = AosArtifactNotificationSchema.safeParse(params)
     if (!parsed.success) return state
+    const { artifact } = parsed.data
     const messageId = parsed.data.messageId ?? latestAssistantId(state.messages)
     if (messageId === undefined) return state
     return onMessage(state, messageId, "assistant", (message) =>
-      appendData(message, ARTIFACT_DATA_PART_NAME, parsed.data.artifact)
+      carriesArtifact(message, artifact.id)
+        ? message
+        : appendData(message, ARTIFACT_DATA_PART_NAME, artifact)
     )
   }
   if (method !== AOS_METHODS.notify.steerAccepted) return state

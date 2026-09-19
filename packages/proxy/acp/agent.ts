@@ -263,7 +263,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await workspace.discover(scope)
     const attachment = sessions.attach(client, scope)
     if (params.replayFrom?.type === "start")
-      for (const update of translators.translateHistory(
+      for (const outbound of translators.translateHistory(
         policy.project.history(
           SessionHistoryResponseSchema.parse(
             await workspace.history(scope, HISTORY_REPLAY_LIMIT)
@@ -271,7 +271,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ),
         lane
       ))
-        await attachment.update(update)
+        await attachment.send(outbound)
     const resync = await attachPositioned(attachment, scope, meta)
     const execution = coordinator.snapshot(scope)
     afterResponse(attachment, async () => {
@@ -414,11 +414,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await workspace.discover(scope)
     const attachment = sessions.attach(client, scope)
     if (params.replayFrom?.type === "start")
-      for (const update of translators.translateHistory(
+      for (const outbound of translators.translateHistory(
         await workspace.history(scope, HISTORY_REPLAY_LIMIT),
         lane
       ))
-        await attachment.update(update)
+        await attachment.send(outbound)
     // A cursor for another run cannot position this one, and a cursor beyond
     // bounded replay cannot be served: both need a full reload.
     const resync = await attachPositioned(attachment, scope, meta)

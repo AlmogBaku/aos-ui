@@ -20,6 +20,7 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosActivityNotificationSchema,
+  AosArtifactNotificationSchema,
   AosInitializeMetaSchema,
   AosPermissionMetaSchema,
   AosPlanMetaSchema,
@@ -909,6 +910,50 @@ describe("operator ACP lane", () => {
       AosSessionResumeResponseMetaSchema.parse(aosMetaOf(resumed)).execution
         .status
     ).toBe("idle")
+    test.close()
+  })
+
+  it("replays a stored artifact as a notification naming its message", async () => {
+    const artifact = {
+      id: "artifact-1",
+      filename: "Quarterly report",
+      sizeBytes: 4_096,
+      source: { type: "provider" as const, reference: "artifact-1" },
+    }
+    const test = await harness({
+      history: {
+        ...HISTORY,
+        messages: [
+          HISTORY.messages[0]!,
+          {
+            id: "message-agent",
+            role: "assistant",
+            content: [
+              { type: "text", text: "Here they are" },
+              { type: "data", name: "aos.artifact", data: artifact },
+            ],
+            createdAt: NOW,
+          },
+        ],
+      },
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+    })
+
+    const granted = test.recorder.of(AOS_METHODS.notify.artifact)
+    expect(granted).toHaveLength(1)
+    expect(AosArtifactNotificationSchema.parse(granted[0]!.params)).toEqual({
+      sessionId: SESSION,
+      sequence: 0,
+      runId: "history",
+      messageId: "message-agent",
+      artifact,
+    })
     test.close()
   })
 })

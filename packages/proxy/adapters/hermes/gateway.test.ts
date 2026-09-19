@@ -76,6 +76,14 @@ async function flush() {
   for (let index = 0; index < 4; index += 1) await Promise.resolve()
 }
 
+/**
+ * Decoded client frames written after the initial client.capabilities
+ * announcement. Every socket sends that announcement first; user frames follow.
+ */
+function announced(socket: FakeSocket): Array<Record<string, unknown>> {
+  return socket.requests().slice(1)
+}
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -93,14 +101,22 @@ describe("Hermes gateway dial and authentication", () => {
 
     expect(factory).toHaveBeenCalledTimes(1)
     expect(factory).toHaveBeenCalledWith(WS_URL)
-    expect(sockets[0]!.sent).toEqual([
+    expect(sockets[0]!.sent[0]).toEqual(
       JSON.stringify({
         jsonrpc: "2.0",
         id: "aos-1",
+        method: "client.capabilities",
+        params: { server_requests: true },
+      })
+    )
+    expect(sockets[0]!.sent[1]).toEqual(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "aos-2",
         method: "profiles.list",
         params: { include_sessions: false },
-      }),
-    ])
+      })
+    )
     await gateway.close()
   })
 
@@ -231,9 +247,9 @@ describe("Hermes gateway request classification", () => {
 
     const first = gateway.request("profiles.list", {})
     const second = gateway.request("session.events.since", { session_id: "a" })
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(3))
     expect(factory).toHaveBeenCalledTimes(1)
-    const [firstFrame, secondFrame] = sockets[0]!.requests() as Array<{
+    const [firstFrame, secondFrame] = announced(sockets[0]!) as Array<{
       id: string
     }>
     sockets[0]!.reply(secondFrame!.id, "second")
@@ -276,17 +292,17 @@ describe("Hermes gateway request classification", () => {
       session_id: "live-a",
       text: "once",
     })
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     sockets[0]!.close(1006)
     await expect(mutation).rejects.toBeInstanceOf(HermesRpcUncertainError)
 
     const read = gateway.request("profiles.list", {})
     await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(2))
-    await vi.waitFor(() => expect(sockets[1]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[1]!.sent).toHaveLength(2))
     const { id } = sockets[1]!.lastRequest() as { id: string }
     sockets[1]!.reply(id, { profiles: [] })
     await expect(read).resolves.toEqual({ profiles: [] })
-    expect(sockets[0]!.sent).toHaveLength(1)
+    expect(sockets[0]!.sent).toHaveLength(2)
     expect(sockets[1]!.requestsFor("prompt.submit")).toEqual([])
     expect(credentials.mock.calls.length).toBeGreaterThanOrEqual(2)
     await gateway.close()
@@ -304,11 +320,11 @@ describe("Hermes gateway request classification", () => {
         (error: unknown) => (error as Error).name
       )
     await flush()
-    expect(sockets[0]!.sent).toHaveLength(1)
+    expect(sockets[0]!.sent).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1_000)
 
     await expect(outcome).resolves.toBe("HermesRpcUncertainError")
-    expect(sockets[0]!.sent).toHaveLength(1)
+    expect(sockets[0]!.sent).toHaveLength(2)
     await gateway.close()
   })
 
@@ -338,11 +354,11 @@ describe("Hermes gateway request classification", () => {
       { session_id: "live-a" },
       { signal: controller.signal }
     )
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     controller.abort()
 
     await expect(pending).rejects.toBeInstanceOf(HermesRequestAbortedError)
-    expect(sockets[0]!.sent).toHaveLength(1)
+    expect(sockets[0]!.sent).toHaveLength(2)
     expect(sockets[0]!.readyState).toBe(1)
     await gateway.close()
   })
@@ -371,15 +387,18 @@ describe("Hermes gateway request classification", () => {
     const { gateway, sockets } = harness({ requestTimeoutMs: 120_000 })
     await gateway.connect()
 
+    // Capabilities is written to the socket but does not count toward the
+    // in-flight bound (it bypasses HermesGateway.request); all 256 user
+    // requests fit, and the 257th is refused without being written.
     const inFlight = Array.from({ length: 256 }, (_unused, index) =>
       gateway.request("session.events.since", { session_id: `live-${index}` })
     )
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(256))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(257))
 
     await expect(gateway.request("profiles.list", {})).rejects.toBeInstanceOf(
       HermesUnavailableError
     )
-    expect(sockets[0]!.sent).toHaveLength(256)
+    expect(sockets[0]!.sent).toHaveLength(257)
 
     await gateway.close()
     await Promise.allSettled(inFlight)
@@ -397,8 +416,8 @@ describe("Hermes gateway response bounds", () => {
       { maxResponseBytes: 128 }
     )
     const other = gateway.request("profiles.list", {})
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
-    const [boundedFrame, otherFrame] = sockets[0]!.requests() as Array<{
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(3))
+    const [boundedFrame, otherFrame] = announced(sockets[0]!) as Array<{
       id: string
     }>
     sockets[0]!.reply(boundedFrame!.id, { value: "x".repeat(256) })
@@ -892,7 +911,9 @@ describe("Hermes gateway heartbeat and redial", () => {
     await flush()
 
     expect(restored).toHaveBeenCalledTimes(1)
-    expect(sockets[0]!.sent).toEqual([])
+    // The capabilities announcement was sent on open; the parked user request
+    // must not be written until the restore handler settles.
+    expect(sockets[0]!.requestsFor("profiles.list")).toEqual([])
 
     releaseRestore()
 
@@ -998,7 +1019,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     })
 
     const resume = gateway.request("session.resume", { session_id: "stored" })
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     const { id } = sockets[0]!.lastRequest() as { id: string }
     sockets[0]!.reply(id, {
       session_id: "live-secret",
@@ -1014,7 +1035,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
 
     await expect(resume).resolves.toMatchObject({ running: true })
     expect(claimed).toEqual([{ id: "srq-000000000003", replayed: true }])
-    expect(sockets[0]!.sent).toHaveLength(1)
+    expect(sockets[0]!.sent).toHaveLength(2)
     await gateway.close()
   })
 
@@ -1055,6 +1076,50 @@ describe("Hermes gateway lifecycle and server requests", () => {
         }),
       })
     )
+    await gateway.close()
+  })
+
+  it("re-announces capabilities on each new socket after a redial", async () => {
+    const { gateway, sockets, factory } = harness()
+    await gateway.connect()
+
+    // First socket: capabilities was announced immediately on open.
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    expect(sockets[0]!.requests()[0]).toMatchObject({
+      method: "client.capabilities",
+      params: { server_requests: true },
+    })
+
+    // Drop the socket and wait for the gateway to redial.
+    sockets[0]!.close(1006)
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(sockets[1]!.sent).toHaveLength(1))
+
+    // New socket: capabilities was announced again.
+    expect(sockets[1]!.requests()[0]).toMatchObject({
+      method: "client.capabilities",
+      params: { server_requests: true },
+    })
+    await gateway.close()
+  })
+
+  it("succeeds the dial and logs capabilities_unacknowledged when the announcement is rejected", async () => {
+    const { gateway, sockets, log } = harness({ autoReply: false })
+    await gateway.connect()
+
+    // The capabilities frame is the first frame sent; reply with a JSON-RPC
+    // error as an older Hermes would (method not found).
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    const { id } = sockets[0]!.requests()[0]! as { id: string }
+    sockets[0]!.replyError(id, { code: -32601, message: "method not found" })
+    await flush()
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "hermes.gateway.capabilities_unacknowledged",
+      {}
+    )
+    // The dial itself is still open; requests can still be issued.
+    expect(gateway.connected()).toBe(true)
     await gateway.close()
   })
 })

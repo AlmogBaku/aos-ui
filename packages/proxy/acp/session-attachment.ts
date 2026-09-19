@@ -196,6 +196,15 @@ class SessionAttachment {
     }
   }
 
+  /**
+   * Sends one translated item outside a run segment, which is what a replay is:
+   * the same `session/update` and `_aos/*` notifications the run pump sends,
+   * under the sequence this attachment has reached.
+   */
+  send(outbound: AcpOutbound) {
+    return this.#send(outbound, this.#sequence)
+  }
+
   update(update: SessionUpdate) {
     const failure = runFailureOf(update)
     if (failure) this.#log("error", "acp.run.failed", failure)

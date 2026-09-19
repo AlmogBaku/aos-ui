@@ -15,6 +15,7 @@ import {
   type RuntimeInfo,
   type Session,
   type SessionAttachmentStageRequest,
+  type SessionMessage,
   type SessionModelsResponse,
 } from "../../../packages/protocol"
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
@@ -228,10 +229,29 @@ function sessionRow(id = SESSION_ID, title = "Older"): Session {
   }
 }
 
+/** The transcript the stored Session replays; only it has one. */
+const STORED_MESSAGES: readonly SessionMessage[] = [
+  {
+    id: "native-user-1",
+    role: "user",
+    content: [{ type: "text", text: "Open it" }],
+    createdAt: NOW,
+  },
+  {
+    id: "native-assistant-1",
+    role: "assistant",
+    content: [
+      { type: "reasoning", text: "Recall the thread." },
+      { type: "text", text: "Ready" },
+    ],
+    createdAt: NOW,
+  },
+]
+
 /** The fake native runtime, wired into the real coordinator and ACP agent. */
 type StartInput = Parameters<ServerRunEngine["start"]>[1]
 
-function createProxyAgentApp() {
+function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const segments: RunSegment[] = []
   const inputs: StartInput[] = []
   const created: string[] = []
@@ -298,33 +318,17 @@ function createProxyAgentApp() {
       listAllSessions(limit, offset),
     // Only the stored Session has a transcript; a Session this run created has
     // nothing to replay, exactly as the runtime reports it.
-    history: async (_agentId, sessionId) => ({
-      sessionId,
-      messages:
-        sessionId === SESSION_ID
-          ? [
-              {
-                id: "native-user-1",
-                role: "user" as const,
-                content: [{ type: "text" as const, text: "Open it" }],
-                createdAt: NOW,
-              },
-              {
-                id: "native-assistant-1",
-                role: "assistant" as const,
-                content: [
-                  { type: "reasoning" as const, text: "Recall the thread." },
-                  { type: "text" as const, text: "Ready" },
-                ],
-                createdAt: NOW,
-              },
-            ]
-          : [],
-      total: sessionId === SESSION_ID ? 2 : 0,
-      limit: 500,
-      offset: 0,
-      nextOffset: 0,
-    }),
+    history: async (_agentId, sessionId) => {
+      const messages = sessionId === SESSION_ID ? [...stored] : []
+      return {
+        sessionId,
+        messages,
+        total: messages.length,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }
+    },
     getSession: async (_agentId, sessionId) => {
       const row = rows.get(sessionId)
       if (!row) throw new Error("Unknown Session")
@@ -506,8 +510,8 @@ function GatedComposer({ fallback }: { fallback: ReactNode }) {
 
 const components = { Composer: GatedComposer }
 
-async function mount() {
-  const proxy = createProxyAgentApp()
+async function mount(stored: readonly SessionMessage[] = STORED_MESSAGES) {
+  const proxy = createProxyAgentApp(stored)
   const staging = stageAttachmentsOverRest(proxy)
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   vi.stubGlobal("fetch", staging.fetcher)
@@ -576,6 +580,21 @@ const dataPartNames = (runtime: HarnessRuntime) =>
         part.type === "data" ? [part.name] : []
       )
     )
+
+/** The `aos.artifact` payloads the assistant turn with this prose carries. */
+const artifactsOnMessage = (runtime: HarnessRuntime, text: string) => {
+  const message = runtime.assistantRuntime.thread
+    .getState()
+    .messages.find(
+      (candidate) =>
+        candidate.content
+          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .join("") === text
+    )
+  return (message?.content ?? []).flatMap((part) =>
+    part.type === "data" && part.name === "aos.artifact" ? [part.data] : []
+  )
+}
 
 const permissionInterrupt = (): PendingRequest => ({
   id: "interrupt-1",
@@ -675,6 +694,102 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     )
     await waitFor(() =>
       expect(dataPartNames(runtime())).toContain("aos.artifact")
+    )
+    await proxy.close()
+  })
+
+  it("replays a stored artifact onto the turn that published it", async () => {
+    const artifact = {
+      id: "artifact-stored",
+      filename: "Quarterly report",
+      sizeBytes: 4_096,
+      source: { type: "provider" as const, reference: "artifact-stored" },
+    }
+    const { proxy, runtime } = await mount([
+      STORED_MESSAGES[0]!,
+      {
+        id: "native-assistant-1",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Ready" },
+          { type: "data", name: "aos.artifact", data: artifact },
+        ],
+        createdAt: NOW,
+      },
+      {
+        id: "native-user-2",
+        role: "user",
+        content: [{ type: "text", text: "And again" }],
+        createdAt: NOW,
+      },
+      {
+        id: "native-assistant-2",
+        role: "assistant",
+        content: [{ type: "text", text: "Still ready" }],
+        createdAt: NOW,
+      },
+    ])
+
+    expect(await screen.findByText("Still ready")).toBeVisible()
+    await waitFor(() =>
+      expect(artifactsOnMessage(runtime(), "Ready")).toEqual([artifact])
+    )
+    // The replay addresses the turn that stored it, not the newest one.
+    expect(artifactsOnMessage(runtime(), "Still ready")).toEqual([])
+    await proxy.close()
+  })
+
+  it("renders a live artifact whose publisher reported only a size", async () => {
+    const { proxy, runtime } = await mount()
+    expect(await screen.findByText("Ready")).toBeVisible()
+    const artifact = {
+      id: "artifact-live",
+      filename: "notes.txt",
+      sizeBytes: 12,
+      source: { type: "provider" as const, reference: "artifact-live" },
+    }
+
+    await send(runtime(), "Ship it")
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    const segment = proxy.segments[0]!
+    const runId = proxy.inputs[0]!.runId
+    act(() => {
+      segment.emit({
+        type: RunEventKind.RUN_STARTED,
+        threadId: SESSION_ID,
+        runId,
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta: "Shipping it",
+      })
+      segment.emit({
+        type: RunEventKind.CUSTOM,
+        name: "aos.artifact",
+        value: artifact,
+      })
+      segment.emit({
+        type: RunEventKind.TEXT_MESSAGE_END,
+        messageId: "assistant-1",
+      })
+      segment.emit({
+        type: RunEventKind.RUN_FINISHED,
+        threadId: SESSION_ID,
+        runId,
+        outcome: { type: "success" },
+      })
+      segment.finish()
+    })
+
+    expect(await screen.findByText("Shipping it")).toBeVisible()
+    await waitFor(() =>
+      expect(artifactsOnMessage(runtime(), "Shipping it")).toEqual([artifact])
     )
     await proxy.close()
   })

@@ -334,6 +334,27 @@ export class HermesGateway implements HermesRpcTransport {
     // arm the redial ladder.
     if (this.#client.connectionState !== "open")
       throw new HermesUnavailableError()
+    void this.#advertiseCapabilities()
+  }
+
+  /**
+   * Hermes sends a clarify or approval only to a connection that announced it
+   * answers server→client requests (`tui_gateway/server_requests.py`); one that
+   * never did gets every such request failed fast, which the agent reports as a
+   * cancelled question. Announced once per socket, so a redial announces again.
+   */
+  async #advertiseCapabilities() {
+    try {
+      await this.#client.request(
+        "client.capabilities",
+        { server_requests: true },
+        this.#requestTimeoutMs
+      )
+    } catch {
+      // An older Hermes has no such method and sends no server requests; the
+      // dial itself stands, and interactions simply stay unavailable.
+      this.#log?.warn("hermes.gateway.capabilities_unacknowledged", {})
+    }
   }
 
   /** Read the private server token under the connect deadline; validate it. */

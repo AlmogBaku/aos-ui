@@ -549,8 +549,24 @@ describe("translateRunEvent extensions", () => {
     ])
   })
 
+  it("grants an artifact whose publisher knew a size but no media type", () => {
+    const published = {
+      id: "a2",
+      filename: "report.md",
+      sizeBytes: 4_096,
+      source: { type: "provider", reference: "a2" },
+    }
+
+    expect(
+      translate([
+        { type: RunEventKind.CUSTOM, name: "aos.artifact", value: published },
+      ]).outbound
+    ).toEqual([{ kind: "artifact", runId: "run-1", artifact: published }])
+  })
+
   it.each([
     ["an artifact missing its source", { id: "a1", filename: "chart.png" }],
+    ["a negative artifact size", { ...artifact, sizeBytes: -1 }],
     ["an unknown artifact source", { ...artifact, source: { type: "magic" } }],
   ])("drops %s", (_label, value) => {
     expect(

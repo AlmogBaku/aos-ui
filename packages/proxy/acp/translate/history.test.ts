@@ -8,9 +8,18 @@ import {
   AosPlanMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
+import type { AcpOutbound } from "../types"
 import { translateHistory } from "./history"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
+
+/** What `present_artifact` publishes: a size, and no media type it could guess. */
+const ARTIFACT = {
+  id: "art-1",
+  filename: "chart.png",
+  sizeBytes: 2048,
+  source: { type: "provider" as const, reference: "art-1" },
+}
 
 const history: SessionHistoryResponse = {
   sessionId: "session-1",
@@ -50,7 +59,7 @@ const history: SessionHistoryResponse = {
         {
           type: "data",
           name: "aos.artifact",
-          data: { id: "art-1", filename: "chart.png" },
+          data: ARTIFACT,
         },
       ],
       createdAt: "2026-09-19T09:00:01.000Z",
@@ -83,25 +92,44 @@ function aosMeta(update: SessionUpdate): unknown {
   return isRecord(meta) ? meta[AOS_META_KEY] : undefined
 }
 
+/** What the replay sends, naming a `session/update` by the update it carries. */
+function kinds(outbound: readonly AcpOutbound[]) {
+  return outbound.map((item) =>
+    item.kind === "update" ? item.update.sessionUpdate : item.kind
+  )
+}
+
+function updatesOf(outbound: readonly AcpOutbound[]) {
+  return outbound.flatMap((item) =>
+    item.kind === "update" ? [item.update] : []
+  )
+}
+
 describe("translateHistory", () => {
   it("replays every message in order for the operator", () => {
-    expect(
-      translateHistory(history, "operator").map(
-        ({ sessionUpdate }) => sessionUpdate
-      )
-    ).toEqual([
+    expect(kinds(translateHistory(history, "operator"))).toEqual([
       "user_message",
       "agent_thought",
       "agent_message",
       "tool_call_update",
       "tool_call_update",
+      "artifact",
       "plan_update",
       "agent_message",
     ])
   })
 
+  it("replays a published artifact against the message that stored it", () => {
+    expect(translateHistory(history, "operator")[5]).toEqual({
+      kind: "artifact",
+      runId: "history",
+      messageId: "a1",
+      artifact: ARTIFACT,
+    })
+  })
+
   it("upserts the user turn with its text and inline image", () => {
-    const [update] = translateHistory(history, "operator")
+    const [update] = updatesOf(translateHistory(history, "operator"))
 
     expect(update).toEqual({
       sessionUpdate: "user_message",
@@ -114,7 +142,7 @@ describe("translateHistory", () => {
   })
 
   it("replays reasoning and prose on one assistant message", () => {
-    const [, thought, prose] = translateHistory(history, "operator")
+    const [, thought, prose] = updatesOf(translateHistory(history, "operator"))
 
     expect(thought).toEqual({
       sessionUpdate: "agent_thought",
@@ -129,7 +157,7 @@ describe("translateHistory", () => {
   })
 
   it("replays a settled tool call with parseable history metadata", () => {
-    const update = translateHistory(history, "operator")[3]
+    const update = updatesOf(translateHistory(history, "operator"))[3]
 
     expect(update).toMatchObject({
       sessionUpdate: "tool_call_update",
@@ -148,17 +176,14 @@ describe("translateHistory", () => {
   })
 
   it("replays a failed tool call without an output", () => {
-    expect(translateHistory(history, "operator")[4]).toMatchObject({
-      toolCallId: "c2",
-      status: "failed",
-    })
-    expect(translateHistory(history, "operator")[4]).not.toHaveProperty(
-      "rawOutput"
-    )
+    const update = updatesOf(translateHistory(history, "operator"))[4]
+
+    expect(update).toMatchObject({ toolCallId: "c2", status: "failed" })
+    expect(update).not.toHaveProperty("rawOutput")
   })
 
   it("replays the Session Todos as the one plan", () => {
-    const update = translateHistory(history, "operator")[5]
+    const update = updatesOf(translateHistory(history, "operator"))[5]
 
     expect(update).toMatchObject({
       sessionUpdate: "plan_update",
@@ -176,33 +201,37 @@ describe("translateHistory", () => {
     })
   })
 
-  it("keeps execution history out of the guest lane", () => {
-    expect(
-      translateHistory(history, "guest").map(
-        ({ sessionUpdate }) => sessionUpdate
-      )
-    ).toEqual(["user_message", "agent_message", "plan_update", "agent_message"])
+  it("keeps execution history out of the guest lane, but not outcomes", () => {
+    expect(kinds(translateHistory(history, "guest"))).toEqual([
+      "user_message",
+      "agent_message",
+      "artifact",
+      "plan_update",
+      "agent_message",
+    ])
   })
 
   it("replays a failed turn that streamed nothing, carrying its failure", () => {
-    const updates = translateHistory(
-      {
-        ...history,
-        messages: [
-          {
-            id: "a3",
-            role: "assistant",
-            content: [],
-            createdAt: "2026-09-19T09:00:04.000Z",
-            status: {
-              type: "incomplete",
-              reason: "error",
-              error: "The model provider rejected this turn.",
+    const updates = updatesOf(
+      translateHistory(
+        {
+          ...history,
+          messages: [
+            {
+              id: "a3",
+              role: "assistant",
+              content: [],
+              createdAt: "2026-09-19T09:00:04.000Z",
+              status: {
+                type: "incomplete",
+                reason: "error",
+                error: "The model provider rejected this turn.",
+              },
             },
-          },
-        ],
-      },
-      "operator"
+          ],
+        },
+        "operator"
+      )
     )
 
     expect(updates).toHaveLength(1)
@@ -223,7 +252,7 @@ describe("translateHistory", () => {
     })
   })
 
-  it("replays a message with no renderable content as nothing", () => {
+  it("replays a message with no renderable content and no artifact as nothing", () => {
     expect(
       translateHistory(
         {

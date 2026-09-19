@@ -791,6 +791,58 @@ describe("applyNotification", () => {
     })
   })
 
+  it("appends a replayed artifact to the earlier turn it names", () => {
+    const replayed = fold(
+      [userChunk("u2", "And again"), agentChunk("a2", "Still here")],
+      answered
+    )
+    const withArtifact = applyNotification(
+      replayed,
+      AOS_METHODS.notify.artifact,
+      {
+        sessionId: "s1",
+        sequence: 0,
+        runId: "history",
+        messageId: "a1",
+        artifact: { ...ARTIFACT, sizeBytes: 2_048 },
+      }
+    )
+    const messages = toThreadMessages(withArtifact)
+
+    expect(messages[1]).toMatchObject({
+      content: [
+        { type: "text", text: "Hello" },
+        {
+          type: "data",
+          name: ARTIFACT_DATA_PART_NAME,
+          data: { ...ARTIFACT, sizeBytes: 2_048 },
+        },
+      ],
+    })
+    expect(messages[3]).toMatchObject({
+      content: [{ type: "text", text: "Still here" }],
+    })
+  })
+
+  it("grants one artifact once however often a replay announces it", () => {
+    const params = {
+      sessionId: "s1",
+      sequence: 0,
+      runId: "history",
+      messageId: "a1",
+      artifact: ARTIFACT,
+    }
+    const once = applyNotification(
+      answered,
+      AOS_METHODS.notify.artifact,
+      params
+    )
+
+    expect(
+      applyNotification(once, AOS_METHODS.notify.artifact, params)
+    ).toEqual(once)
+  })
+
   it("appends an unaddressed artifact to the latest assistant turn", () => {
     const withArtifact = applyNotification(
       answered,

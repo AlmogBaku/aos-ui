@@ -4,17 +4,24 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import type { SessionMessage } from "../../../protocol"
-import { AOS_META_KEY } from "../../../protocol/acp"
-import type { Lane, TranslateHistory } from "../types"
+import {
+  AOS_META_KEY,
+  AosArtifactDescriptorSchema,
+} from "../../../protocol/acp"
+import type { AcpOutbound, Lane, TranslateHistory } from "../types"
 import { planUpdate } from "./updates"
 
 type MessagePart = SessionMessage["content"][number]
 type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
+type DataPart = Extract<MessagePart, { type: "data" }>
 
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
 
 /** Replayed history has no run; `_meta.aos` still needs a run identity. */
 const HISTORY_RUN_ID = "history"
+
+/** The `data` part name a published artifact travels under, live and stored. */
+const ARTIFACT_PART_NAME = "aos.artifact"
 
 function imageBlock(image: string): ContentBlock | undefined {
   const match = DATA_URL.exec(image)
@@ -23,10 +30,7 @@ function imageBlock(image: string): ContentBlock | undefined {
     : undefined
 }
 
-/**
- * Text and inline images only. A `data` part named `aos.artifact` is skipped:
- * the attachment re-grants artifacts through `_aos/artifact` on replay.
- */
+/** Text and inline images only; every other part replays as its own outbound. */
 function contentBlocks(parts: readonly MessagePart[]): ContentBlock[] {
   return parts.flatMap((part) => {
     if (part.type === "text") return [{ type: "text", text: part.text }]
@@ -34,6 +38,21 @@ function contentBlocks(parts: readonly MessagePart[]): ContentBlock[] {
     const image = imageBlock(part.image)
     return image ? [image] : []
   })
+}
+
+/** A stored artifact replays as the `_aos/artifact` notification it arrived as. */
+function artifactOutbound(messageId: string, part: DataPart): AcpOutbound[] {
+  const artifact = AosArtifactDescriptorSchema.safeParse(part.data)
+  return artifact.success
+    ? [
+        {
+          kind: "artifact",
+          runId: HISTORY_RUN_ID,
+          messageId,
+          artifact: artifact.data,
+        },
+      ]
+    : []
 }
 
 function toolCallUpdate(messageId: string, part: ToolCallPart): SessionUpdate {
@@ -56,8 +75,8 @@ function toolCallUpdate(messageId: string, part: ToolCallPart): SessionUpdate {
 }
 
 /** Assistant and system turns; ACP v2 has no system role of its own. */
-function agentUpdates(message: SessionMessage, lane: Lane): SessionUpdate[] {
-  const updates: SessionUpdate[] = []
+function agentOutbound(message: SessionMessage, lane: Lane): AcpOutbound[] {
+  const outbound: AcpOutbound[] = []
   const reasoning: ContentBlock[] = message.content.flatMap((part) =>
     part.type === "reasoning" ? [{ type: "text", text: part.text }] : []
   )
@@ -65,10 +84,13 @@ function agentUpdates(message: SessionMessage, lane: Lane): SessionUpdate[] {
   // upsert sets its reasoning, the message upsert its prose, and reasoning
   // replays first because that is the order the provider produced it in.
   if (lane !== "guest" && reasoning.length > 0)
-    updates.push({
-      sessionUpdate: "agent_thought",
-      messageId: message.id,
-      content: reasoning,
+    outbound.push({
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_thought",
+        messageId: message.id,
+        content: reasoning,
+      },
     })
   const content = contentBlocks(message.content)
   // A turn the provider failed is replayed even when it streamed no prose: its
@@ -77,41 +99,58 @@ function agentUpdates(message: SessionMessage, lane: Lane): SessionUpdate[] {
   const failure =
     message.status?.type === "incomplete" ? message.status : undefined
   if (content.length > 0 || failure)
-    updates.push({
-      sessionUpdate: "agent_message",
-      messageId: message.id,
-      content,
-      ...(failure
-        ? {
-            _meta: {
-              [AOS_META_KEY]: {
-                sequence: 0,
-                runId: HISTORY_RUN_ID,
-                status: failure,
+    outbound.push({
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message",
+        messageId: message.id,
+        content,
+        ...(failure
+          ? {
+              _meta: {
+                [AOS_META_KEY]: {
+                  sequence: 0,
+                  runId: HISTORY_RUN_ID,
+                  status: failure,
+                },
               },
-            },
-          }
-        : {}),
+            }
+          : {}),
+      },
     })
-  if (lane === "guest") return updates
-  for (const part of message.content)
-    if (part.type === "tool-call")
-      updates.push(toolCallUpdate(message.id, part))
-  return updates
+  // Execution history is the operator's. A published artifact is the turn's
+  // outcome, so it replays on both lanes; the guest history projection already
+  // dropped the parts a guest may not see.
+  for (const part of message.content) {
+    if (part.type === "data" && part.name === ARTIFACT_PART_NAME)
+      outbound.push(...artifactOutbound(message.id, part))
+    else if (lane !== "guest" && part.type === "tool-call")
+      outbound.push({
+        kind: "update",
+        update: toolCallUpdate(message.id, part),
+      })
+  }
+  return outbound
 }
 
 export const translateHistory = ((history, lane) => {
-  const updates: SessionUpdate[] = []
+  const outbound: AcpOutbound[] = []
   for (const message of history.messages) {
     if (message.role === "activity")
-      updates.push(planUpdate(message.content.todos, { sequence: 0 }))
-    else if (message.role === "user")
-      updates.push({
-        sessionUpdate: "user_message",
-        messageId: message.id,
-        content: contentBlocks(message.content),
+      outbound.push({
+        kind: "update",
+        update: planUpdate(message.content.todos, { sequence: 0 }),
       })
-    else updates.push(...agentUpdates(message, lane))
+    else if (message.role === "user")
+      outbound.push({
+        kind: "update",
+        update: {
+          sessionUpdate: "user_message",
+          messageId: message.id,
+          content: contentBlocks(message.content),
+        },
+      })
+    else outbound.push(...agentOutbound(message, lane))
   }
-  return updates
+  return outbound
 }) satisfies TranslateHistory

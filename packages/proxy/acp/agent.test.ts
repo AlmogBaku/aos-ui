@@ -329,9 +329,12 @@ const translators: Translators = {
   },
   translateHistory: (history) =>
     history.messages.map((message) => ({
-      sessionUpdate: "agent_message",
-      messageId: message.id,
-      content: [{ type: "text", text: `replay:${message.id}` }],
+      kind: "update",
+      update: {
+        sessionUpdate: "agent_message",
+        messageId: message.id,
+        content: [{ type: "text", text: `replay:${message.id}` }],
+      },
     })),
   pendingRequestToOutbound: (request) => permissionOutbound(request),
   replyFromPermission: (request, response) => ({

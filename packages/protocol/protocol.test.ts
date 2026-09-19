@@ -25,6 +25,7 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "./index"
+import { AosArtifactDescriptorSchema } from "./acp"
 
 describe("AOS v1 normalized protocol", () => {
   it("preserves provider-specific approval choices and question cancellation", () => {
@@ -662,6 +663,54 @@ describe("AOS v1 normalized protocol", () => {
             native_position: 41,
           },
         ],
+      })
+    ).toThrow()
+  })
+
+  // The two descriptors Hermes actually publishes: an audio file it recognized
+  // by extension, and a `present_artifact` receipt carrying a size for a file
+  // whose media type nothing could guess.
+  it.each([
+    [
+      "a media artifact",
+      {
+        id: "hermes-media-2f6b1c0d4e8a9b7c3d5e1f0a2b4c6d8e",
+        filename: "reply.mp3",
+        mimeType: "audio/mpeg",
+        source: {
+          type: "provider",
+          reference: "hermes-media-2f6b1c0d4e8a9b7c3d5e1f0a2b4c6d8e",
+        },
+      },
+    ],
+    [
+      "a published artifact receipt",
+      {
+        id: "hermes-artifact-9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
+        filename: "Quarterly report",
+        sizeBytes: 5_242_880,
+        source: {
+          type: "provider",
+          reference: "hermes-artifact-9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
+        },
+      },
+    ],
+  ])("accepts %s as its publisher emits it", (_label, descriptor) => {
+    expect(AosArtifactDescriptorSchema.parse(descriptor)).toEqual(descriptor)
+  })
+
+  it.each([
+    ["an unknown field", { sizeBytes: 1, description: "A report" }],
+    ["a fractional size", { sizeBytes: 1.5 }],
+    ["a negative size", { sizeBytes: -1 }],
+    ["an empty media type", { mimeType: "" }],
+  ])("refuses an artifact descriptor with %s", (_label, patch) => {
+    expect(() =>
+      AosArtifactDescriptorSchema.parse({
+        id: "artifact-1",
+        filename: "report.md",
+        source: { type: "provider", reference: "artifact-1" },
+        ...patch,
       })
     ).toThrow()
   })
