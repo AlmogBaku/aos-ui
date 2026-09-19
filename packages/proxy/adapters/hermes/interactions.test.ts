@@ -773,8 +773,9 @@ describe("HermesInteractions server requests", () => {
       choices: ["eu", "us"],
     })
 
+    // An answer the choices never offered is free text, not a malformed answer:
+    // only the shape, the question count and the value count are rejected here.
     for (const payload of [
-      { answers: [["ap"]] },
       { answers: [] },
       { answers: [["eu"], ["us"]] },
       { answers: [["eu", "us"]] },
@@ -856,6 +857,154 @@ describe("HermesInteractions server requests", () => {
     })
 
     expect(requests.answer(id)).toEqual({ answer: "/home/operator/run.sh" })
+  })
+
+  it.each([
+    ["a POSIX path", "Read /home/operator/secret now"],
+    ["a system file", "cat /etc/passwd"],
+    ["a dot-extension path", "Open /tmp/a.txt"],
+    ["a relative-looking home path", "Copy /home/anakin/x"],
+    ["a Windows path", "Edit C:\\Users\\operator\\notes"],
+    ["a UNC path", "Mount \\\\fileserver\\share"],
+  ])("redacts %s from question text", (_label, question) => {
+    const { requests, interactions, bind } = harness()
+    bind()
+
+    requests.deliver("clarify", { session_id: LIVE, question })
+
+    const message = interactions.pending(scope)[0]?.interrupts[0]?.message
+    expect(message).toContain("[provider path redacted]")
+    expect(message).not.toMatch(/operator|passwd|anakin|fileserver|a\.txt/u)
+  })
+
+  it.each([
+    ["a slash between words", "Should I post on X / twitter?"],
+    ["a lone slash", "/"],
+    ["an inline alternative", "Use and/or here"],
+    ["a ratio", "Is 24/7 support needed?"],
+    ["a pronoun pair", "Does he/him apply?"],
+    ["a fraction", "Split 50/50?"],
+  ])("keeps %s in question text", (_label, question) => {
+    const { requests, interactions, bind } = harness()
+    bind()
+
+    requests.deliver("clarify", { session_id: LIVE, question })
+
+    // The live defect: `X / twitter` rendered as `X [provider path redacted]
+    // twitter`. Redaction covers provider filesystem locations, not prose.
+    expect(interactions.pending(scope)[0]?.interrupts[0]?.message).toBe(
+      question
+    )
+  })
+
+  it("answers a displayed choice natively and free text as the user typed it", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
+        {
+          qid: "q0",
+          question: "Which script?",
+          choices: ["/home/operator/run.sh", "skip"],
+          multi_select: false,
+        },
+        {
+          qid: "q1",
+          question: "Which region?",
+          choices: ["eu", "us"],
+          multi_select: false,
+        },
+      ],
+    })
+    const prefixItems = (
+      interactions.pending(scope)[0]?.interrupts[0]?.responseSchema as {
+        properties: {
+          answers: { prefixItems: Array<{ items: { enum?: string[] } }> }
+        }
+      }
+    ).properties.answers.prefixItems
+    const redacted = prefixItems[0]!.items.enum![0]!
+
+    // Hermes always offers "Other (type your answer)" beside the choices it
+    // lists (`MAX_CHOICES` in `tools/clarify_tool.py`), so an answer that is
+    // none of them is the user's own text and is answered verbatim.
+    await expect(
+      interactions.respond(scope, {
+        interruptId: id,
+        status: "resolved",
+        payload: { answers: [[redacted], ["ap-southeast"]] },
+      })
+    ).resolves.toEqual({ status: "resolved" })
+
+    expect(requests.answer(id)).toEqual({
+      answers: { q0: "/home/operator/run.sh", q1: "ap-southeast" },
+    })
+  })
+
+  it("accepts one free-text value in a multi-select but still bounds it", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which checks?",
+      choices: ["smoke", "e2e"],
+      multi_select: true,
+    })
+
+    for (const answers of [[["smoke", "smoke"]], [["smoke", "e2e", "soak"]]])
+      await expect(
+        interactions.respond(scope, {
+          interruptId: id,
+          status: "resolved",
+          payload: { answers },
+        })
+      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    expect(requests.frames()).toEqual([])
+
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: { answers: [["smoke", "soak"]] },
+    })
+
+    expect(requests.answer(id)).toEqual({ answer: '["smoke","soak"]' })
+  })
+
+  it("restores a locked free-text answer to a question that offered choices", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      questions: [
+        {
+          qid: "q0",
+          question: "Which region?",
+          choices: ["eu", "us"],
+          multi_select: false,
+        },
+      ],
+      answers: { q0: "ap-southeast" },
+    })
+
+    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
+    expect(interrupt?.metadata).toMatchObject({
+      "aos.lockedAnswerIndexes": [0],
+    })
+    const schema = interrupt?.responseSchema as {
+      properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
+    }
+    expect(schema.properties.answers.prefixItems[0]!.default).toEqual([
+      "ap-southeast",
+    ])
+
+    await interactions.respond(scope, {
+      interruptId: id,
+      status: "resolved",
+      payload: { answers: [["ap-southeast"]] },
+    })
+
+    expect(requests.answer(id)).toEqual({ answers: { q0: "ap-southeast" } })
   })
 
   it("enforces question count, nesting, and answer byte limits", async () => {

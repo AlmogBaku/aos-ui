@@ -223,9 +223,7 @@ export type HermesInteractionResumeSnapshot = {
   outcome?: RunInterruptOutcome
 }
 
-export type HermesInterruptListener = (
-  outcome: RunInterruptOutcome
-) => void
+export type HermesInterruptListener = (outcome: RunInterruptOutcome) => void
 
 // ---------------------------------------------------------------------------
 // Native validation and public projection
@@ -257,8 +255,13 @@ function nativeText(
 const credentialText =
   /(?:\bauthorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:access[-_]?token|api[-_]?key|credential|password|secret|token)\s*[=:]\s*[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)/giu
 const providerLocationText = /\b(?:https?|wss?|file):\/\/[^\s"'<>]+/giu
+/**
+ * A filesystem location, not every slash in prose: a POSIX path needs a second
+ * separator (`/etc/passwd`) or a dot-extension (`/run.sh`), so `X / twitter`,
+ * `and/or`, `24/7` and a lone `/` stay the text the agent wrote.
+ */
 const providerPathText =
-  /(^|[\s("'=,:;\x5b])(?:(?:\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*)/gu
+  /(^|[\s("'=,:;\x5b])(?:\/(?!\/)(?:[^\s"'<>/]+\/|[^\s"'<>/]*\.[A-Za-z0-9])|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*/gu
 
 function publicText(value: string) {
   return value
@@ -387,7 +390,9 @@ function parseQuestions(params: ClarifyRequestParams) {
 /**
  * `answers` carries the batch answers Hermes locked before this delivery (only
  * a reconnect replay has them). They become the schema defaults, and their
- * exact native values are kept so a redacted default is never answered back.
+ * exact native values are kept so a redacted default is never answered back. A
+ * locked answer is free text whenever the user typed one, so it is projected
+ * like any other value rather than required to be one of the choices.
  */
 function lockAnswers(answers: unknown, questions: Question[]) {
   if (!isRecord(answers) || !questions.every(({ id }) => id)) invalidNative()
@@ -427,18 +432,15 @@ function lockAnswers(answers: unknown, questions: Question[]) {
           ? (question.nativeChoices?.length ??
             HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
           : 1) ||
-      new Set(nativeAnswers).size !== nativeAnswers.length ||
-      (question.nativeChoices &&
-        nativeAnswers.some(
-          (answer) => !question.nativeChoices!.includes(answer)
-        ))
+      new Set(nativeAnswers).size !== nativeAnswers.length
     )
       invalidNative()
     question.lockedNative = nativeAnswers
     question.locked = nativeAnswers.map((answer) => {
       if (!question.nativeChoices || !question.choices)
         return publicText(answer)
-      return question.choices[question.nativeChoices.indexOf(answer)]!
+      const choice = question.nativeChoices.indexOf(answer)
+      return choice < 0 ? publicText(answer) : question.choices[choice]!
     })
   }
 }
@@ -644,9 +646,7 @@ function answerSets(value: unknown, questions: Question[]) {
     )
     if (
       answers.some((answer) => answer === undefined) ||
-      new Set(answers).size !== answers.length ||
-      (question.choices &&
-        answers.some((answer) => !question.choices!.includes(answer!)))
+      new Set(answers).size !== answers.length
     )
       throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
     const publicAnswers = answers as string[]
@@ -660,7 +660,12 @@ function answerSets(value: unknown, questions: Question[]) {
       return question.lockedNative
     return publicAnswers.map((answer) => {
       if (!question.choices || !question.nativeChoices) return answer
-      return question.nativeChoices[question.choices.indexOf(answer)]!
+      const choice = question.choices.indexOf(answer)
+      // Hermes always offers free text beside the choices it lists (`MAX_CHOICES`
+      // in `tools/clarify_tool.py`: "the UI always appends an Other row"), so an
+      // answer that is not one of them is the user's own text and is answered
+      // verbatim; a displayed choice still round-trips to its native value.
+      return choice < 0 ? answer : question.nativeChoices[choice]!
     })
   })
 }

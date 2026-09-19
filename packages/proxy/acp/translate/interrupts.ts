@@ -118,7 +118,13 @@ function optionsOf(schema: Record<string, unknown> | undefined) {
   return enumValues(schema).map((label) => ({ label }))
 }
 
-/** Ports `createAgUiInterruptRequest` in `src/components/runtime-interactions`. */
+/**
+ * Ports `createAgUiInterruptRequest` in `src/components/runtime-interactions`.
+ * Every question is `custom`: a clarify answer may be free text that is none of
+ * the offered choices (`MAX_CHOICES` in Hermes' `tools/clarify_tool.py`: "the UI
+ * always appends an Other (type your answer) row"), so the browser must always
+ * offer that row.
+ */
 function questionsOf(request: PendingRequest): AosQuestion[] {
   const schema = record(request.responseSchema)
   const answers = record(record(schema?.properties)?.answers)
@@ -136,7 +142,7 @@ function questionsOf(request: PendingRequest): AosQuestion[] {
         prompt: title ?? request.message ?? "Question",
         options,
         multiple: question?.maxItems !== 1,
-        custom: options.length === 0,
+        custom: true,
       }
     })
   const options = optionsOf(schema)
@@ -146,14 +152,18 @@ function questionsOf(request: PendingRequest): AosQuestion[] {
       prompt: request.message ?? "Question",
       options,
       multiple: false,
-      custom: options.length === 0,
+      custom: true,
     },
   ]
 }
 
 /**
- * ACP multi-select requires an enum, so a free-text question stays a string
- * field even when it accepts several values; `_meta.aos` keeps `multiple`.
+ * The choices ride only in `_meta.aos.questions[].options`, never as a schema
+ * `enum`: an `enum` would make the free-text answer every question accepts
+ * invalid against `requestedSchema`. A foreign ACP client therefore loses the
+ * enum hint and gains the ability to answer freely, which is the native
+ * contract. A question with no choices stays a string field even when it takes
+ * several values; `_meta.aos` keeps `multiple`.
  */
 function propertyOf(question: AosQuestion): ElicitationPropertySchema {
   const values = question.options.map((option) => option.value ?? option.label)
@@ -162,13 +172,12 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
       type: "array",
       title: question.header,
       description: question.prompt,
-      items: { type: "string", enum: values },
+      items: { type: "string" },
     }
   return {
     type: "string",
     title: question.header,
     description: question.prompt,
-    ...(values.length > 0 ? { enum: values } : {}),
   }
 }
 

@@ -173,6 +173,8 @@ describe("pendingRequestToOutbound questions", () => {
 
     expect(fieldOf(outbound, "mode")).toBe("form")
     expect(fieldOf(outbound, "message")).toBe("2 questions require answers")
+    // No `enum`: a clarify answer may be free text that is none of the offered
+    // choices, which an enumerated property would reject.
     expect(fieldOf(outbound, "requestedSchema")).toEqual({
       type: "object",
       properties: {
@@ -180,7 +182,6 @@ describe("pendingRequestToOutbound questions", () => {
           type: "string",
           title: "Which environment?",
           description: "Which environment?",
-          enum: ["staging", "production"],
         },
         q1: {
           type: "string",
@@ -193,6 +194,8 @@ describe("pendingRequestToOutbound questions", () => {
   })
 
   it("keeps the questions losslessly in parseable elicitation metadata", () => {
+    // Every question is `custom`: the native contract always offers an
+    // "Other (type your answer)" row beside the choices it lists.
     expect(
       AosElicitationMetaSchema.parse(metaOf(elicitationOf(questions)))
     ).toEqual({
@@ -204,7 +207,7 @@ describe("pendingRequestToOutbound questions", () => {
           prompt: "Which environment?",
           options: [{ label: "staging" }, { label: "production" }],
           multiple: false,
-          custom: false,
+          custom: true,
         },
         {
           header: "Anything else to watch?",
@@ -237,10 +240,28 @@ describe("pendingRequestToOutbound questions", () => {
       },
     })
 
-    expect(fieldOf(outbound, "requestedSchema")).toMatchObject({
+    // The array accepts a value the question never listed, so a multi-select
+    // answer may include the user's own text; the choices stay in `_meta.aos`.
+    expect(fieldOf(outbound, "requestedSchema")).toEqual({
+      type: "object",
       properties: {
-        q0: { type: "array", items: { type: "string", enum: ["unit", "e2e"] } },
+        q0: {
+          type: "array",
+          title: "Pick the suites",
+          description: "Pick the suites",
+          items: { type: "string" },
+        },
       },
+      required: ["q0"],
+    })
+    expect(
+      AosElicitationMetaSchema.parse(metaOf(outbound)).questions[0]
+    ).toEqual({
+      header: "Pick the suites",
+      prompt: "Pick the suites",
+      options: [{ label: "unit" }, { label: "e2e" }],
+      multiple: true,
+      custom: true,
     })
   })
 
