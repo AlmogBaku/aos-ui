@@ -9,6 +9,7 @@ import { STEER_ACCEPTED_DATA_NAME } from "@/components/assistant-ui/elements/mes
 import {
   applyNotification,
   applyUpdate,
+  failLatestTurn,
   initialProjectorState,
   messageBlocks,
   renameMessage,
@@ -671,6 +672,38 @@ describe("applyUpdate execution", () => {
     })
   })
 
+  it("keeps the normalized code alone as the turn's failure shape", () => {
+    const failed = fold(
+      [
+        stateUpdate(
+          { state: "idle", stopReason: AOS_STOP_REASONS.error },
+          { ...RUN_META, code: "AOS_PROVIDER_RUN_FAILED" }
+        ),
+      ],
+      answering
+    )
+    // Nothing stringifies the failure on its way to the UI, so a code with no
+    // provider description still arrives as the one shape the notice localizes.
+    expect(toThreadMessages(failed)[2]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: { code: "AOS_PROVIDER_RUN_FAILED" },
+    })
+    expect(failed.execution.error).toEqual({ code: "AOS_PROVIDER_RUN_FAILED" })
+  })
+
+  it("carries no failure detail when the run named neither code nor message", () => {
+    const failed = fold(
+      [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.error })],
+      answering
+    )
+    expect(toThreadMessages(failed)[2]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+    })
+    expect(failed.execution.error).toBeUndefined()
+  })
+
   it("fails the Session on an uncertain stop reason", () => {
     const uncertain = fold(
       [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.uncertain })],
@@ -939,5 +972,14 @@ describe("local turn bookkeeping", () => {
       { type: "text", text: "Hi" },
     ])
     expect(messageBlocks(sent, "missing")).toEqual([])
+  })
+
+  it("reports a refusal in the same failure shape a failed run uses", () => {
+    const refused = failLatestTurn(sent, "This Session is still busy.")
+    expect(toThreadMessages(refused)[1]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: { message: "This Session is still busy." },
+    })
   })
 })

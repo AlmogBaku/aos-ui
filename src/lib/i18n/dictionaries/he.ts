@@ -157,6 +157,7 @@ export const he = {
     rate_limited: "יותר מדי בקשות. נסו שוב בעוד רגע.",
     request_failed: "לא ניתן היה להשלים את הבקשה.",
   },
+  turnFailed: "התור הזה לא הושלם.",
   empty: {
     addAgentTitle: "הוסיפו סוכן לסביבת העבודה.",
     addAgentDescription: "צרו סוכן עם תפקיד, הנחיות וכלים משלו.",

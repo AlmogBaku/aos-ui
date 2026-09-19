@@ -18,7 +18,7 @@ import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
 import { MessageToolExperience } from "@/components/assistant-ui/elements/message-tool-experience"
-import { isAosRichTool } from "@/components/tool-ui"
+import { isAosRichTool, useToolUiLocale } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import {
   ModelSelectorContent,
@@ -34,6 +34,11 @@ import {
 } from "@/components/assistant-ui/elements/conversation-search"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { SystemNotice } from "@/components/ui/system-notice"
+import { en } from "@/lib/i18n/dictionaries/en"
+import { he } from "@/lib/i18n/dictionaries/he"
+import type { Dictionary } from "@/lib/i18n/dictionary"
+import { runErrorMessage } from "@/lib/i18n/run-errors"
 import { cn } from "@/lib/utils"
 import {
   isCollapsedCaretAtVisualLineBoundary,
@@ -43,7 +48,7 @@ import {
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import { copyTextToClipboard } from "@/lib/clipboard"
-import type { LocaleDirection } from "@/lib/i18n/config"
+import type { Locale, LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
   isUncertainDelivery,
@@ -72,7 +77,6 @@ import {
   type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
-  ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
   SuggestionPrimitive,
@@ -1512,14 +1516,66 @@ const ComposerToolbar: FC<
   )
 }
 
+const RUN_FAILURE_DICTIONARIES: Record<Locale, Dictionary> = { en, he }
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/**
+ * The failure a turn carries, read into one shape. A live run reports the
+ * normalized `AOS_*` code beside the provider's own description; a turn replayed
+ * from durable history carries only that description, as a plain string.
+ */
+function turnFailure(state: AssistantState): {
+  code?: string
+  message?: string
+} {
+  const status = state.message.status
+  if (status?.type !== "incomplete" || status.reason !== "error") return {}
+  const error: unknown = status.error
+  if (typeof error === "string") return { message: error }
+  if (!isRecord(error)) return {}
+  return {
+    ...(typeof error.code === "string" ? { code: error.code } : {}),
+    ...(typeof error.message === "string" ? { message: error.message } : {}),
+  }
+}
+
+const turnFailureCode = (state: AssistantState) => turnFailure(state).code
+const turnFailureMessage = (state: AssistantState) => turnFailure(state).message
+
+/**
+ * A failed turn is AOS reporting on the run, never the Agent's own words, so it
+ * renders as a System Notice: the normalized code carries the localized
+ * headline, and the provider's description stays beside it as detail.
+ */
+const MessageErrorNotice: FC = () => {
+  const { locale } = useToolUiLocale()
+  const code = useAuiState(turnFailureCode)
+  const message = useAuiState(turnFailureMessage)
+  const dictionary = RUN_FAILURE_DICTIONARIES[locale]
+  const title = runErrorMessage(
+    dictionary,
+    code,
+    message ?? dictionary.turnFailed
+  )
+  return (
+    <SystemNotice
+      tone="error"
+      title={title}
+      {...(message !== undefined && message !== title
+        ? { detail: message }
+        : {})}
+      locale={locale}
+      className="mt-2"
+    />
+  )
+}
+
 const MessageError: FC = () => {
   return (
     <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root mt-2 rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive dark:bg-destructive/5 dark:text-red-200">
-        {/* A normalized failure reads as its headline over the provider's own
-            detail, so the line break between them is preserved. */}
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-3 whitespace-pre-line" />
-      </ErrorPrimitive.Root>
+      <MessageErrorNotice />
     </MessagePrimitive.Error>
   )
 }

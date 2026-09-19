@@ -135,6 +135,18 @@ describe("run error messages", () => {
     )
   })
 
+  it("localizes the headline a failure named neither by code nor by text", async () => {
+    const english = await getDictionary("en")
+    const hebrew = await getDictionary("he")
+
+    expect(english.turnFailed).toBe("This turn did not complete.")
+    expect(hebrew.turnFailed).toBe("התור הזה לא הושלם.")
+    // The generic headline is the fallback, so an unknown code keeps it.
+    expect(runErrorMessage(hebrew, "AOS_NOT_A_CODE", hebrew.turnFailed)).toBe(
+      hebrew.turnFailed
+    )
+  })
+
   it("keeps the proxy description for an unknown or absent run error code", async () => {
     const english = await getDictionary("en")
 

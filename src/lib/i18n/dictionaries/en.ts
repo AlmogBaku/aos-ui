@@ -166,6 +166,7 @@ export const en = {
     rate_limited: "Too many requests. Please try again shortly.",
     request_failed: "The request could not be completed.",
   },
+  turnFailed: "This turn did not complete.",
   empty: {
     addAgentTitle: "Add an Agent to your workspace.",
     addAgentDescription:

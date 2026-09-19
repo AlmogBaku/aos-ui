@@ -15,14 +15,7 @@ import {
   LoaderCircle,
   RotateCw,
 } from "lucide-react"
-import {
-  createContext,
-  memo,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react"
+import { createContext, memo, useContext, useMemo, useState } from "react"
 
 import {
   Thread,
@@ -61,7 +54,6 @@ import { cn } from "@/lib/utils"
 import { VoiceMediaProvider } from "@/components/assistant-ui/voice/voice-context"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
-import { useRuntimeErrorReporter } from "@/runtime-adapters/runtime-error-context"
 
 type AosUiWorkspaceProps = {
   runtime: HarnessRuntime
@@ -431,7 +423,6 @@ function WorkspaceContent({
   composer?: ThreadComponents["Composer"]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
-  const onWorkspaceError = useRuntimeErrorReporter()
   const {
     environmentLabel,
     activityCoverage,
@@ -491,9 +482,6 @@ function WorkspaceContent({
     retryWorkspace,
   } = useWorkspaceNavigation({ bundle, locale, dictionary, now, readNow })
   const workspaceError = agentError ?? sessionError ?? actionError
-  useEffect(() => {
-    if (workspaceError) onWorkspaceError?.(workspaceError)
-  }, [onWorkspaceError, workspaceError])
   const threadChrome = useMemo<WorkspaceThreadChrome>(
     () => ({
       locale,
@@ -575,7 +563,7 @@ function WorkspaceContent({
         onActionError={(reason) => setActionError(toError(reason))}
       >
         <div className="relative h-full min-h-0">
-          {workspaceError && !onWorkspaceError ? (
+          {workspaceError ? (
             <WorkspaceError
               key={workspaceError.message}
               locale={locale}

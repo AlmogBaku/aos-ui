@@ -30,7 +30,14 @@ import {
   type ThreadComposerOverrideProps,
   type ThreadLabels,
 } from "./thread.aui"
-import { AosToolPresentation, RichToolRenderer } from "@/components/tool-ui"
+import {
+  AosToolPresentation,
+  RichToolRenderer,
+  ToolUiLocaleProvider,
+  type ToolUiLocale,
+} from "@/components/tool-ui"
+import { en } from "@/lib/i18n/dictionaries/en"
+import { he } from "@/lib/i18n/dictionaries/he"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
 import type {
   RuntimeInteractionAdapter,
@@ -456,9 +463,11 @@ function LocalThread({
   enableMessageQueue = false,
   attachmentAdapter,
   messageRewind,
+  locale,
 }: {
   labels?: Partial<ThreadLabels>
   direction?: "ltr" | "rtl"
+  locale?: ToolUiLocale
   model?: ChatModelAdapter
   exposeRuntime?: (runtime: AssistantRuntime) => void
   initialMessages?: readonly ThreadMessageLike[]
@@ -487,14 +496,16 @@ function LocalThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread
-        labels={labels}
-        direction={direction}
-        autoFocus={false}
-        composerFeatures={composerFeatures}
-        components={{ ToolFallback: toolFallback, Composer: composer }}
-        messageRewind={messageRewind}
-      />
+      <ToolUiLocaleProvider locale={locale}>
+        <Thread
+          labels={labels}
+          direction={direction}
+          autoFocus={false}
+          composerFeatures={composerFeatures}
+          components={{ ToolFallback: toolFallback, Composer: composer }}
+          messageRewind={messageRewind}
+        />
+      </ToolUiLocaleProvider>
     </AssistantRuntimeProvider>
   )
 }
@@ -2551,5 +2562,132 @@ describe("Thread accessibility", () => {
     input.dispatchEvent(consumedEscape)
     await user.keyboard("{Escape}")
     expect(input).toHaveValue("recovered")
+  })
+})
+
+describe("failed turn presentation", () => {
+  // A live run reports the normalized failure shape; a replayed turn carries the
+  // durable description the protocol stores as a plain string.
+  const failedTurn = (
+    error: { code?: string; message?: string } | string | undefined
+  ): readonly ThreadMessageLike[] => [
+    { id: "u1", role: "user", content: [{ type: "text", text: "Summarize" }] },
+    {
+      id: "a1",
+      role: "assistant",
+      content: [{ type: "text", text: "Half an answer" }],
+      status: { type: "incomplete", reason: "error", error },
+    },
+  ]
+
+  it("reads a normalized code as localized AOS copy, not the Agent's words", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
+      />
+    )
+
+    expect(
+      screen.getByRole("alert", {
+        name: `AOS ${en.runErrors.AOS_PROVIDER_RUN_FAILED}`,
+      })
+    ).toBeVisible()
+  })
+
+  it("keeps the provider's own description for a code this build cannot know", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn({
+          code: "AOS_UNKNOWN_TO_THIS_BUILD",
+          message: "The upstream model returned 503.",
+        })}
+      />
+    )
+
+    const notice = screen.getByRole("alert", {
+      name: "AOS The upstream model returned 503.",
+    })
+    expect(notice).toBeVisible()
+    // The description is already the headline, so it is not repeated as detail.
+    expect(
+      within(notice).getAllByText("The upstream model returned 503.")
+    ).toHaveLength(1)
+  })
+
+  it("shows the provider's description beside a localized headline", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn({
+          code: "AOS_SESSION_BUSY",
+          message: "run 9f2 is still streaming",
+        })}
+      />
+    )
+
+    const notice = screen.getByRole("alert", {
+      name: `AOS ${en.runErrors.AOS_SESSION_BUSY}`,
+    })
+    expect(within(notice).getByText("run 9f2 is still streaming")).toBeVisible()
+  })
+
+  it("never renders a failure object as text", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
+      />
+    )
+
+    expect(screen.queryByText(/\[object Object\]/u)).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toContain("[object Object]")
+  })
+
+  it("falls back to generic copy when nothing named the failure", () => {
+    render(<LocalThread initialMessages={failedTurn(undefined)} />)
+
+    expect(
+      screen.getByRole("alert", { name: `AOS ${en.turnFailed}` })
+    ).toBeVisible()
+  })
+
+  it("reads a replayed string failure as the provider's description", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn("The provider rejected this turn.")}
+      />
+    )
+
+    expect(
+      screen.getByRole("alert", {
+        name: "AOS The provider rejected this turn.",
+      })
+    ).toBeVisible()
+  })
+
+  it("speaks Hebrew for the same normalized code", () => {
+    render(
+      <LocalThread
+        locale="he"
+        direction="rtl"
+        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
+      />
+    )
+
+    const notice = screen.getByRole("alert", {
+      name: `AOS ${he.runErrors.AOS_PROVIDER_RUN_FAILED}`,
+    })
+    expect(notice).toHaveAttribute("dir", "rtl")
+    expect(document.body.textContent).not.toContain("[object Object]")
+  })
+
+  it("keeps the retry affordance out of the notice", () => {
+    render(
+      <LocalThread
+        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
+      />
+    )
+
+    expect(
+      within(screen.getByRole("alert")).queryByRole("button")
+    ).not.toBeInTheDocument()
   })
 })

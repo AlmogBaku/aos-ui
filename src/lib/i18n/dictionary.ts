@@ -146,6 +146,11 @@ export type Dictionary = {
     rate_limited: string
     request_failed: string
   }
+  /**
+   * The System Notice headline a failed turn falls back to when neither a
+   * normalized code nor provider text named the failure.
+   */
+  turnFailed: string
   empty: {
     addAgentTitle: string
     addAgentDescription: string

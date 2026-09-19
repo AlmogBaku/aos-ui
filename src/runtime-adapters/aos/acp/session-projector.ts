@@ -48,11 +48,21 @@ import {
  * reducer the live stream does.
  */
 
+/**
+ * The one shape a failed turn carries: the normalized `AOS_*` code the workspace
+ * localizes, over the provider's own description. Lossless, so nothing has to be
+ * stringified before the System Notice reads it.
+ */
+export type TurnFailure = {
+  readonly code?: string
+  readonly message?: string
+}
+
 export type ProjectorExecution = {
   readonly status: SessionStatus
   readonly runId?: string
   readonly stopReason?: string
-  readonly error?: { readonly code?: string; readonly message?: string }
+  readonly error?: TurnFailure
 }
 
 export type ProjectorState = {
@@ -200,16 +210,18 @@ function applyToolCall(
 }
 
 /** The vendor stop reasons carry the failure the run reported. */
-function errorFrom(meta: unknown): Record<string, string> | undefined {
+function errorFrom(meta: unknown): TurnFailure | undefined {
   const parsed = AosStateMetaSchema.safeParse(meta)
   if (!parsed.success) return undefined
-  const error: Record<string, string> = {
+  const error: TurnFailure = {
     ...(parsed.data.code === undefined ? {} : { code: parsed.data.code }),
     ...(parsed.data.message === undefined
       ? {}
       : { message: parsed.data.message }),
   }
-  return Object.keys(error).length > 0 ? error : undefined
+  return error.code === undefined && error.message === undefined
+    ? undefined
+    : error
 }
 
 function applyIdle(
@@ -516,11 +528,14 @@ export function retainMessages(
  */
 export function failLatestTurn(
   state: ProjectorState,
-  error: string
+  reported: string
 ): ProjectorState {
   const id = latestAssistantId(state.messages)
   const host = state.messages.find((message) => message.id === id)
   if (id === undefined || host?.status?.type === "requires-action") return state
+  // The refusal arrives already worded for the operator, so it fills the
+  // description half of the one failure shape every failed turn carries.
+  const error: TurnFailure = { message: reported }
   return onMessage(state, id, "assistant", (message) =>
     withStatus(message, { type: "incomplete", reason: "error", error })
   )
