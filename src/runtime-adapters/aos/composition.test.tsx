@@ -102,6 +102,7 @@ function createProxyAgent() {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
   const cancelled: string[] = []
+  const resumed: string[] = []
   // The proxy keeps each Session's transcript and replays it from the start on
   // every such resume; it streams live updates only to an attached client.
   const history = new Map<string, SessionUpdate[]>()
@@ -190,6 +191,7 @@ function createProxyAgent() {
     })
     .onRequest(methods.agent.session.resume, ({ params }) => {
       const { sessionId } = params
+      resumed.push(sessionId)
       const replayFromStart = params.replayFrom?.type === "start"
       queueMicrotask(() => {
         attached.add(sessionId)
@@ -259,6 +261,7 @@ function createProxyAgent() {
     app,
     prompts,
     cancelled,
+    resumed,
     push,
     busy,
     /** One question interrupt, exactly as the proxy issues it. */
@@ -373,6 +376,13 @@ const messageTexts = (runtime: HarnessRuntime) =>
         .join("")
     )
 
+/** Lets every queued notification and reply reach the runtime. */
+const settle = async () => {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -425,6 +435,45 @@ describe("provider-neutral AOS runtime composition", () => {
         "Shipping it",
       ])
     )
+  })
+
+  it("resumes each opened Session once and replays nothing on return", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const supplied = runtime()!
+    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    expect(await screen.findByText("Ready")).toBeVisible()
+    await settle()
+    expect(proxy.resumed).toEqual([SESSION_ID])
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SECOND_SESSION_ID)
+    })
+    expect(await screen.findByText("First answer")).toBeVisible()
+    await settle()
+    expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
+
+    // The first Session's thread stays mounted and attached while the operator
+    // is away, so returning to it replays nothing: what arrived meanwhile is
+    // already projected.
+    act(() => {
+      proxy.push(SESSION_ID, {
+        sessionUpdate: "agent_message",
+        messageId: "history-5",
+        content: [{ type: "text", text: "Still here" }],
+        _meta: { [AOS_META_KEY]: { runId: "run-2", sequence: 1 } },
+      })
+    })
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    expect(await screen.findByText("Still here")).toBeVisible()
+    await settle()
+    expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
   })
 
   it("switching threads does not stop the provider run", async () => {

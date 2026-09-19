@@ -170,6 +170,45 @@ describe("useAcpRuntime", () => {
     ])
   })
 
+  it("resumes the opened Session once, whatever its caller's callbacks do", async () => {
+    const fake = createFakeConnection()
+    // The workspace closes these over the `AssistantClient`, which a
+    // thread-list switch replaces, so it hands over new ones mid-thread.
+    const { rerender } = renderHook(
+      ({ nonce }: { nonce: number }) =>
+        useAcpRuntime({
+          connection: fake.connection,
+          sessionId: SESSION_ID,
+          agentId: "agent-1",
+          resolveSessionId: async () => `${SESSION_ID}-${nonce}`,
+          stageAttachments: async () => ({
+            stageId: `stage-${nonce}`,
+            attachments: [],
+          }),
+        }),
+      { initialProps: { nonce: 0 } }
+    )
+    await act(async () => {
+      await fake.settleResume()
+    })
+    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      rerender({ nonce: 1 })
+    })
+    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+  })
+
+  it("resumes again once the thread remounts, so a reopened Session replays", async () => {
+    const fake = createFakeConnection()
+    const first = await mount(fake)
+    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+
+    first.unmount()
+    await mount(fake)
+    expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+  })
+
   it("attaches through the injected attach instead of resuming itself", async () => {
     const fake = createFakeConnection()
     const attach = vi.fn(async () => undefined)

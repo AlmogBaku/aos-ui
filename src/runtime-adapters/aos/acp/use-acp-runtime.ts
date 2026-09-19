@@ -200,28 +200,35 @@ type ControllerOptions = {
   connection: AcpConnection
   /** The Session this thread opened with; a local draft has none yet. */
   sessionId: string | undefined
-  attach?: UseAcpRuntimeOptions["attach"]
-  resolveSessionId?: UseAcpRuntimeOptions["resolveSessionId"]
-  stageAttachments?: UseAcpRuntimeOptions["stageAttachments"]
 }
 
-/** The callers' latest callbacks, handed over each render like AG-UI's core. */
+/**
+ * The callers' latest callbacks, handed over each render like AG-UI's core.
+ * Everything the caller supplies belongs here rather than in the controller's
+ * identity: a callback that changes identity mid-thread — one closing over the
+ * `AssistantClient`, which a thread-list switch replaces — would otherwise
+ * rebuild the controller and replay the whole Session a second time.
+ */
 type ControllerCallbacks = Pick<
   UseAcpRuntimeOptions,
-  "messageRewind" | "onStateChange" | "onComposerPrefill" | "describeRunError"
+  | "attach"
+  | "resolveSessionId"
+  | "stageAttachments"
+  | "messageRewind"
+  | "onStateChange"
+  | "onComposerPrefill"
+  | "describeRunError"
 >
 
 function createAcpController({
   sessionId: openedWith,
   connection,
-  attach,
-  resolveSessionId,
-  stageAttachments,
 }: ControllerOptions) {
-  const resume =
-    attach ??
-    ((id: string) => connection.resumeSession(id, { replayFromStart: true }))
   let callbacks: ControllerCallbacks = {}
+  const resume = (id: string) =>
+    callbacks.attach
+      ? callbacks.attach(id)
+      : connection.resumeSession(id, { replayFromStart: true })
   let state = initialProjectorState
   /** unbound → bound: the Session this controller observes and prompts. */
   let bound: string | undefined
@@ -302,7 +309,7 @@ function createAcpController({
   /** The bound Session, creating one for a local draft's first turn. */
   const boundSession = async () => {
     if (bound !== undefined) return bound
-    const resolved = await resolveSessionId?.()
+    const resolved = await callbacks.resolveSessionId?.()
     if (resolved === undefined)
       throw new Error("The ACP Session is not initialized")
     bind(resolved)
@@ -313,6 +320,7 @@ function createAcpController({
   const stage = async (sessionId: string, message: AppendMessage) => {
     const attachments = message.attachments ?? []
     if (attachments.length === 0) return undefined
+    const { stageAttachments } = callbacks
     if (!stageAttachments)
       throw new Error("AOS attachment staging is unavailable")
     return stageAttachments(sessionId, attachments)
@@ -458,15 +466,7 @@ function createQueue(controller: AcpController) {
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
-  const {
-    attach,
-    connection,
-    sessionId,
-    enableMessageQueue,
-    isDisabled,
-    resolveSessionId,
-    stageAttachments,
-  } = options
+  const { connection, sessionId, enableMessageQueue, isDisabled } = options
   // One controller per mounted thread: a local draft gains its Session while
   // this thread stays mounted, so keying the store on that Session would
   // discard the very turn that created it, mid-prompt. Only the Session the
@@ -474,19 +474,16 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   // around that one and the later binding moves underneath it.
   const [openedWith] = useState(sessionId)
   const controller = useMemo(
-    () =>
-      createAcpController({
-        connection,
-        sessionId: openedWith,
-        attach,
-        resolveSessionId,
-        stageAttachments,
-      }),
-    [attach, connection, openedWith, resolveSessionId, stageAttachments]
+    () => createAcpController({ connection, sessionId: openedWith }),
+    [connection, openedWith]
   )
-  // Ordered before the subscription so a replayed update already reports.
+  // Ordered before the binding so the first resume already reaches the caller's
+  // `attach`, and before the subscription so a replayed update already reports.
   useEffect(() => {
     controller.setCallbacks({
+      attach: options.attach,
+      resolveSessionId: options.resolveSessionId,
+      stageAttachments: options.stageAttachments,
       messageRewind: options.messageRewind,
       onStateChange: options.onStateChange,
       onComposerPrefill: options.onComposerPrefill,
