@@ -87,7 +87,7 @@ describe("Bun proxy server lifecycle", () => {
     })
     startProxyServer({
       app: { fetch: vi.fn() },
-      events: eventService,
+      sockets: [{ path: "/api/aos/v1/events", service: eventService }],
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,
@@ -240,11 +240,16 @@ describe("Bun proxy server lifecycle", () => {
     const eventSocket = { receive: vi.fn(), close: vi.fn() }
     startProxyServer({
       app: { fetch: vi.fn() },
-      events: {
-        authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
-        open: vi.fn(() => eventSocket),
-      },
-      maxEventPeers: 1,
+      sockets: [
+        {
+          path: "/api/aos/v1/events",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
+            open: vi.fn(() => eventSocket),
+          },
+          maxPeers: 1,
+        },
+      ],
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,
@@ -296,14 +301,19 @@ describe("Bun proxy server lifecycle", () => {
     let data: unknown
     startProxyServer({
       app: { fetch: vi.fn() },
-      events: {
-        authorizeUpgrade: vi.fn(async () => ({
-          principalId: "principal",
-          browserSessionId: "session",
-          authorizationExpiresAt: 10_000,
-        })),
-        open: vi.fn(() => eventSocket),
-      },
+      sockets: [
+        {
+          path: "/api/aos/v1/events",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({
+              principalId: "principal",
+              browserSessionId: "session",
+              authorizationExpiresAt: 10_000,
+            })),
+            open: vi.fn(() => eventSocket),
+          },
+        },
+      ],
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,

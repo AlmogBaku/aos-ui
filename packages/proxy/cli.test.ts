@@ -124,7 +124,13 @@ describe("proxy executable", () => {
         expect.objectContaining({
           host: "0.0.0.0",
           port: 4100,
-          maxEventPeers: 256,
+          sockets: [
+            expect.objectContaining({
+              path: "/api/aos/v1/events",
+              maxPeers: 256,
+            }),
+            expect.objectContaining({ path: "/api/aos/v1/acp", maxPeers: 256 }),
+          ],
         })
       )
       expect(start).toHaveBeenNthCalledWith(

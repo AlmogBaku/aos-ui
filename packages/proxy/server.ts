@@ -1,7 +1,7 @@
 import type { OperatorEventUpgrade } from "./events/service"
 
 /** Where the operator invalidation socket is mounted. */
-const OPERATOR_EVENTS_PATH = "/api/aos/v1/events"
+export const OPERATOR_EVENTS_PATH = "/api/aos/v1/events"
 
 type FetchHandler = (
   request: Request,
@@ -90,13 +90,7 @@ export type StartProxyServerOptions<
   Upgrade extends SocketUpgrade = OperatorEventUpgrade,
 > = {
   app: { fetch: FetchHandler }
-  /**
-   * The operator invalidation socket: the events lane's shorthand for one
-   * `sockets` entry at `/api/aos/v1/events`.
-   */
-  events?: ProxySocketService<Upgrade>
-  maxEventPeers?: number
-  /** Further WebSocket mounts, each with its own path and peer budget. */
+  /** WebSocket mounts hosted beside the HTTP app, each with its own peer budget. */
   sockets?: readonly ProxySocketMount<Upgrade>[]
   host: string
   port: number
@@ -130,20 +124,7 @@ function mountState<Upgrade extends SocketUpgrade>(
 export function startProxyServer<
   Upgrade extends SocketUpgrade = OperatorEventUpgrade,
 >(options: StartProxyServerOptions<Upgrade>) {
-  const mounts = [
-    ...(options.events
-      ? [
-          {
-            path: OPERATOR_EVENTS_PATH,
-            service: options.events,
-            ...(options.maxEventPeers === undefined
-              ? {}
-              : { maxPeers: options.maxEventPeers }),
-          },
-        ]
-      : []),
-    ...(options.sockets ?? []),
-  ].map((mount) => mountState(mount))
+  const mounts = (options.sockets ?? []).map((mount) => mountState(mount))
   const failPeer = (peer: SocketPeer<Upgrade>) => {
     if (peer.data.failed) return
     peer.data.failed = true

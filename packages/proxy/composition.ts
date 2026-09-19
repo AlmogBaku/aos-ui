@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
 
+import { createOperatorAcpService } from "./acp/operator"
 import {
   createRuntimeInstance,
   type RuntimeFactory,
 } from "./adapters/create-runtime"
 import { createProxyApp } from "./app"
+import { AttachmentStageRegistry } from "./core/attachment-stages"
 import {
   createGuestInvitationService,
   type GuestInvitationKey,
@@ -94,9 +96,17 @@ export async function createConfiguredProxy(
     runtimeInstance,
     ...(dependencies.clock === undefined ? {} : { now: dependencies.clock }),
   })
+  const attachmentStages = new AttachmentStageRegistry()
+  const acpService = createOperatorAcpService({
+    publicOrigin: config.publicOrigin,
+    runtimeInstance,
+    attachmentStages,
+    ...(dependencies.clock === undefined ? {} : { now: dependencies.clock }),
+  })
   const app = createProxyApp({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
+    attachmentStages,
     ...(config.guest && invitations
       ? {
           guestInvitations: {
@@ -125,6 +135,7 @@ export async function createConfiguredProxy(
     runtimeInstance,
     cursor,
     eventService,
+    acpService,
     guest,
   }
 }

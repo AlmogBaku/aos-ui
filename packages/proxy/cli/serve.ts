@@ -1,8 +1,13 @@
 import { readFile } from "node:fs/promises"
 
+import { AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { parseGuestComposerSlashCommandsEnabled } from "../config"
-import { startProxyServer } from "../server"
+import {
+  OPERATOR_EVENTS_PATH,
+  startProxyServer,
+  type SocketUpgrade,
+} from "../server"
 import type { StaticHandler } from "../static"
 import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
 
@@ -75,13 +80,24 @@ export async function serveProxy(
       getenv("AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED")
     )
   const start = dependencies.start ?? startProxyServer
-  const lifecycle = start({
+  // Two lanes share the operator listener; their upgrades meet at the base type.
+  const lifecycle = start<SocketUpgrade>({
     app: listenerApp(configured.app, "/api/aos/v1", dependencies.staticHandler),
-    events: configured.eventService,
+    sockets: [
+      {
+        path: OPERATOR_EVENTS_PATH,
+        service: configured.eventService,
+        maxPeers: configured.config.limits.operatorEventPeers,
+      },
+      {
+        path: AOS_ACP_OPERATOR_PATH,
+        service: configured.acpService,
+        maxPeers: configured.config.limits.operatorEventPeers,
+      },
+    ],
     host: configured.config.listen.host,
     port: configured.config.listen.port,
     shutdownGraceMs: configured.config.shutdownGraceMs,
-    maxEventPeers: configured.config.limits.operatorEventPeers,
   })
   const guestLifecycle = configured.guest
     ? start({
