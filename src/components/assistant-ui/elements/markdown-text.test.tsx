@@ -82,7 +82,7 @@ describe("MarkdownText fenced diagrams", () => {
     ).toBeVisible()
     expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull()
     expect(screen.queryByRole("button", { name: /run/i })).toBeNull()
-  }, 15_000)
+  })
 
   it("keeps the standard header and copy control for ordinary code fences", async () => {
     render(<TestMarkdown text={"```ts\nconst answer = 42\n```"} />)

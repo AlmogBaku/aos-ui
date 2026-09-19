@@ -451,7 +451,7 @@ describe("reversible local Session tabs", () => {
       "true"
     )
     expect(window.location.pathname).toBe("/agent-aster/thread-aster-market")
-  }, 20_000)
+  })
 
   it("keeps the resolved conversation mounted during a background Session reload", async () => {
     let bundle: WorkspaceFixtureRuntime | undefined
@@ -530,7 +530,7 @@ describe("reversible local Session tabs", () => {
         screen.getByRole("tab", { name: "Competitive scan" })
       ).toHaveAttribute("aria-selected", "true")
     )
-  }, 20_000)
+  })
   it("restores the exact closed tab and selection without provider lifecycle mutations", async () => {
     const user = userEvent.setup()
     let bundle: WorkspaceFixtureRuntime | undefined
@@ -777,7 +777,7 @@ describe("Agent management", () => {
     expect(
       within(main).getByRole("button", { name: "New Agent" })
     ).toBeVisible()
-  }, 10_000) // Sequential catalog mutations exercise the full workspace.
+  })
 
   it("keeps provider-managed entries read-only and omits unavailable creation", async () => {
     const user = userEvent.setup()
@@ -1200,7 +1200,7 @@ describe("AosUiApp fixture composition", () => {
     } finally {
       focus.mockRestore()
     }
-  }, 20_000)
+  })
 
   it("removes an idle Session tab when it reaches the exact 12-hour boundary", async () => {
     vi.useFakeTimers()

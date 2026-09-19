@@ -489,5 +489,5 @@ describe("AOS normalized Session browser integration", () => {
       "/api/aos/v1/agents/alpha/sessions/stored-alpha/runs/stop"
     )
     await runtimeInstance.close()
-  }, 15_000)
+  })
 })

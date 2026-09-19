@@ -29,9 +29,8 @@ describe("assistant message Markdown", () => {
 
     release()
     const { Thread } = await threadImport
-    const { AssistantRuntimeProvider, useLocalRuntime } = await import(
-      "@assistant-ui/react"
-    )
+    const { AssistantRuntimeProvider, useLocalRuntime } =
+      await import("@assistant-ui/react")
     const { ToolUiLocaleProvider } = await import("@/components/tool-ui/locale")
 
     function Scope() {
@@ -62,5 +61,5 @@ describe("assistant message Markdown", () => {
     ).toBeVisible()
     expect(screen.getByText("Confirmed").tagName).toBe("STRONG")
     expect(screen.queryByText("Loading formatted text…")).toBeNull()
-  }, 10_000)
+  })
 })
