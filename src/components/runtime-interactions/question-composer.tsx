@@ -24,7 +24,9 @@ import type {
 type QuestionCopy = {
   questionsLabel: string
   answerFor: (header: string) => string
+  otherAnswerFor: (header: string) => string
   typeAnswer: string
+  other: string
   customPlaceholder: string
   send: string
   sending: string
@@ -43,7 +45,9 @@ const questionCopy: Record<Locale, QuestionCopy> = {
   en: {
     questionsLabel: "Questions",
     answerFor: (header: string) => `Your answer for ${header}`,
+    otherAnswerFor: (header: string) => `Other answer for ${header}`,
     typeAnswer: "Type an answer",
+    other: "Other (type your answer)",
     customPlaceholder: "Type your answer…",
     send: "Send answer",
     sending: "Sending…",
@@ -60,7 +64,9 @@ const questionCopy: Record<Locale, QuestionCopy> = {
   he: {
     questionsLabel: "שאלות",
     answerFor: (header: string) => `התשובה שלך עבור ${header}`,
+    otherAnswerFor: (header: string) => `תשובה אחרת עבור ${header}`,
     typeAnswer: "הקלדת תשובה",
+    other: "אחר (הקלידו תשובה)",
     customPlaceholder: "אפשר להקליד תשובה…",
     send: "שליחת תשובה",
     sending: "שולח…",
@@ -264,6 +270,12 @@ export function RuntimeQuestionComposer({
     })
   )
   const customAllowed = activeQuestion ? activeQuestion.custom !== false : false
+  // The native contract appends an "Other" row to the offered choices, so free
+  // text stays a valid answer even when the provider listed options.
+  const offersOther = customAllowed && optionEntries.length > 0
+  const hasAnswer = answers.some((answer) => answer.length > 0)
+  const sendAction =
+    phase === "failed" ? "retry" : isLastQuestion ? "send" : "next"
   const optionById = new Map(optionEntries.map((option) => [option.id, option]))
 
   function handleTabKeyDown(
@@ -451,9 +463,11 @@ export function RuntimeQuestionComposer({
                           >
                             {activeDraft.customActive ? (
                               <input
-                                aria-label={copy.answerFor(
-                                  activeQuestion.header
-                                )}
+                                aria-label={
+                                  offersOther
+                                    ? copy.otherAnswerFor(activeQuestion.header)
+                                    : copy.answerFor(activeQuestion.header)
+                                }
                                 id={`${request.requestId}-custom-${questionIndex}`}
                                 type="text"
                                 className="min-h-[50px] w-full bg-transparent ps-11 pe-4 text-base font-medium text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50 sm:text-sm"
@@ -480,15 +494,9 @@ export function RuntimeQuestionComposer({
                                   event.preventDefault()
                                   event.stopPropagation()
                                   event.currentTarget.blur()
-                                  const actionId =
-                                    phase === "failed"
-                                      ? "retry"
-                                      : isLastQuestion
-                                        ? "send"
-                                        : "next"
                                   document
                                     .getElementById(
-                                      `${request.requestId}-${actionId}`
+                                      `${request.requestId}-${sendAction}`
                                     )
                                     ?.focus()
                                 }}
@@ -501,7 +509,9 @@ export function RuntimeQuestionComposer({
                                 disabled={busy || recovered}
                                 onClick={() => activateCustom(questionIndex)}
                               >
-                                <span dir="auto">{copy.typeAnswer}</span>
+                                <span dir="auto">
+                                  {offersOther ? copy.other : copy.typeAnswer}
+                                </span>
                               </button>
                             )}
                           </div>
@@ -543,15 +553,15 @@ export function RuntimeQuestionComposer({
                       </Button>
                     ) : null}
                     <Button
-                      id={`${request.requestId}-${phase === "failed" ? "retry" : isLastQuestion ? "send" : "next"}`}
+                      id={`${request.requestId}-${sendAction}`}
                       type="submit"
-                      disabled={busy}
+                      disabled={busy || (sendAction === "send" && !hasAnswer)}
                     >
                       {phase === "submitting"
                         ? copy.sending
-                        : phase === "failed"
+                        : sendAction === "retry"
                           ? copy.retry
-                          : isLastQuestion
+                          : sendAction === "send"
                             ? copy.send
                             : copy.next}
                     </Button>

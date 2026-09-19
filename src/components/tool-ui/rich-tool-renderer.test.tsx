@@ -20,6 +20,8 @@ import {
   normalizeRichToolState,
   type RichToolPart,
 } from "./index"
+import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
+import type { RuntimeInteractionAdapter } from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
 import { Plan } from "./plan/index"
 import { SerializablePlanSchema } from "./plan/schema"
@@ -61,6 +63,16 @@ function toolPart(
     resume: vi.fn(),
     respondToApproval: vi.fn().mockResolvedValue(undefined),
     ...overrides,
+  }
+}
+
+/** A runtime that raises questions out of band and answers them elsewhere. */
+function outOfBandInteractions(): RuntimeInteractionAdapter {
+  return {
+    respond: vi.fn().mockResolvedValue(undefined),
+    reject: vi.fn().mockResolvedValue(undefined),
+    getPending: () => undefined,
+    subscribe: () => () => {},
   }
 }
 
@@ -678,6 +690,82 @@ describe("QuestionFlow renderer", () => {
 
     await act(async () => resolveRetry?.())
     expect(screen.getByText("נענה")).toBeInTheDocument()
+  })
+
+  it("keeps a batched question read-only when the runtime answers it out of band", async () => {
+    await renderTool(
+      <PendingInteractionProvider interactions={outOfBandInteractions()}>
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "question",
+            args: {
+              question: "3 questions",
+              questions: [
+                {
+                  question: "Where do you live?",
+                  options: ["Tel Aviv", "Haifa"],
+                },
+                { question: "Which amenities do you use?", multiple: true },
+                { question: "When should I follow up?", allowFreeform: true },
+              ],
+              allowFreeform: true,
+            },
+            status: { type: "requires-action", reason: "tool-calls" },
+          })}
+        />
+      </PendingInteractionProvider>
+    )
+
+    expect(screen.getByText("Needs response")).toBeVisible()
+    for (const asked of [
+      "Where do you live?",
+      "Which amenities do you use?",
+      "When should I follow up?",
+      "Tel Aviv",
+      "Haifa",
+    ]) {
+      expect(screen.getByText(asked)).toBeVisible()
+    }
+    expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
+    expect(screen.queryAllByRole("option")).toEqual([])
+  })
+
+  it("reads a cancelled out-of-band result as unanswered rather than an answer form", async () => {
+    await renderTool(
+      <PendingInteractionProvider interactions={outOfBandInteractions()}>
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "question",
+            args: {
+              question: "2 questions",
+              questions: [
+                { question: "Where do you live?", allowFreeform: true },
+                {
+                  question: "Which amenities do you use?",
+                  allowFreeform: true,
+                },
+              ],
+              allowFreeform: true,
+            },
+            result: {
+              status: "cancelled",
+              responses: [
+                { question: "Where do you live?", answers: [] },
+                { question: "Which amenities do you use?", answers: [] },
+              ],
+            },
+            status: { type: "complete" },
+          })}
+        />
+      </PendingInteractionProvider>
+    )
+
+    expect(screen.getByText("Cancelled")).toBeVisible()
+    expect(screen.getByText("Where do you live?")).toBeVisible()
+    expect(screen.getAllByText("Discarded")).toHaveLength(2)
+    expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
   })
 })
 

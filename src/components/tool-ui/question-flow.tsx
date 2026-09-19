@@ -5,49 +5,122 @@ import type { QuestionPayload } from "./payloads/question-flow"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { useOutOfBandQuestions } from "@/components/runtime-interactions/pending-interaction-context"
 
 import { OptionList } from "./option-list"
 import { QuestionFlow } from "./question-flow/index"
 import { ToolChrome } from "./common"
 import { normalizeRichToolState } from "./lifecycle"
 import { useToolUiLocale } from "./locale"
-import type { RichToolPart, RichToolPhase } from "./types"
+import type { RichToolPart, RichToolPhase, RichToolState } from "./types"
 
 type LocalSubmission = {
   phase?: Extract<RichToolPhase, "submitting" | "answered" | "failed">
   answer?: string
 }
 
-export function QuestionFlowTool({
-  part,
-  payload,
-}: {
+type QuestionOption = {
+  id: string
+  label: string
+  description?: string
+}
+
+type AskedQuestion = {
+  /** Absent when the chrome title already states the one question verbatim. */
+  text?: string
+  options: readonly QuestionOption[]
+}
+
+type QuestionToolProps = {
   part: RichToolPart
   payload: QuestionPayload
-}) {
+}
+
+/**
+ * Runtimes that expose `HarnessRuntime.interactions` raise their questions out
+ * of band and answer them beside the composer, so the transcript keeps the
+ * call inspectable instead of collecting a second answer of its own.
+ */
+export function QuestionFlowTool(props: QuestionToolProps) {
+  return useOutOfBandQuestions() ? (
+    <QuestionRecord {...props} />
+  ) : (
+    <AnswerableQuestion {...props} />
+  )
+}
+
+function QuestionRecord({ part, payload }: QuestionToolProps) {
+  const { labels } = useToolUiLocale()
+  const state = readQuestionState(part, { interactive: true })
+  const recorded = readRecordedAnswers(part)
+  const asked = readAskedQuestions(payload)
+
+  return (
+    <ToolChrome title={payload.args.question} state={state}>
+      <ul className="flex flex-col gap-3 text-sm">
+        {asked.map((question, index) => {
+          const answers = recorded?.[index]
+          return (
+            <li
+              key={`${part.toolCallId}-asked-${index}`}
+              className="flex flex-col gap-1"
+            >
+              {question.text ? (
+                <p className="text-muted-foreground" dir="auto">
+                  {question.text}
+                </p>
+              ) : null}
+              {question.options.length ? (
+                <ul className="list-disc space-y-0.5 ps-5 text-muted-foreground">
+                  {question.options.map((option) => (
+                    <li key={option.id} dir="auto">
+                      {option.description
+                        ? `${option.label} — ${option.description}`
+                        : option.label}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {answers ? (
+                <p>
+                  <span className="text-muted-foreground">
+                    {labels.question.response}{" "}
+                  </span>
+                  <bdi className="font-medium" dir="auto">
+                    {answers.length
+                      ? answers.join(", ")
+                      : labels.question.discarded}
+                  </bdi>
+                </p>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+      {state.phase === "expired" ? (
+        <p className="text-sm text-muted-foreground">
+          {labels.question.expired}
+        </p>
+      ) : null}
+    </ToolChrome>
+  )
+}
+
+function AnswerableQuestion({ part, payload }: QuestionToolProps) {
   const [freeform, setFreeform] = useState("")
   const [submission, setSubmission] = useState<LocalSubmission>({})
   const submissionInFlight = useRef(false)
   const { labels } = useToolUiLocale()
   const providerState = normalizeRichToolState(part, { interactive: true })
-  const normalizedState = normalizeRichToolState(part, {
+  const state = readQuestionState(part, {
     interactive: true,
     overridePhase:
       providerState.phase === "pending" ? submission.phase : undefined,
   })
   const responses = readResponses(part.result)
-  const state =
-    readResultStatus(part.result) === "cancelled"
-      ? { phase: "cancelled" as const, label: "Cancelled", canRespond: false }
-      : normalizedState
   const providerAnswer = readAnswer(part.result, part.approval)
   const answer = providerAnswer ?? submission.answer
-  const options = payload.args.options ?? []
-  const normalizedOptions = options.map((option, index) => ({
-    id: typeof option === "string" ? `option-${index}` : option.id,
-    label: typeof option === "string" ? option : option.label,
-    description: typeof option === "string" ? undefined : option.description,
-  }))
+  const normalizedOptions = normalizeOptions(payload.args.options)
 
   async function submit(answerValue: string) {
     const normalizedAnswer = answerValue.trim()
@@ -212,6 +285,50 @@ export function QuestionFlowTool({
       ) : null}
     </ToolChrome>
   )
+}
+
+/** A cancelled provider result outranks the lifecycle's completion reading. */
+function readQuestionState(
+  part: RichToolPart,
+  options: Parameters<typeof normalizeRichToolState>[1]
+): RichToolState {
+  if (readResultStatus(part.result) === "cancelled")
+    return { phase: "cancelled", label: "Cancelled", canRespond: false }
+  return normalizeRichToolState(part, options)
+}
+
+function normalizeOptions(
+  options: QuestionPayload["args"]["options"]
+): QuestionOption[] {
+  return (options ?? []).map((option, index) => ({
+    id: typeof option === "string" ? `option-${index}` : option.id,
+    label: typeof option === "string" ? option : option.label,
+    description: typeof option === "string" ? undefined : option.description,
+  }))
+}
+
+/**
+ * The questions a call put to the operator. A batched call spells each one out
+ * beneath the chrome title; a single question is the title itself.
+ */
+function readAskedQuestions(payload: QuestionPayload): AskedQuestion[] {
+  const batched = payload.args.questions ?? []
+  if (batched.length)
+    return batched.map((question) => ({
+      text: question.question,
+      options: normalizeOptions(question.options),
+    }))
+  return [{ options: normalizeOptions(payload.args.options) }]
+}
+
+/** Answers the provider recorded, positioned like the questions it asked. */
+function readRecordedAnswers(
+  part: RichToolPart
+): readonly (readonly string[])[] | undefined {
+  const responses = readResponses(part.result)
+  if (responses) return responses.map((response) => response.answers)
+  const answer = readAnswer(part.result, part.approval)
+  return answer ? [[answer]] : undefined
 }
 
 function readAnswer(

@@ -29,6 +29,15 @@ export function PendingInteractionProvider({
   )
 }
 
+/**
+ * Whether the selected runtime raises its questions out of band, so a question
+ * tool call is a transcript record the operator answers beside the composer
+ * rather than an answerable form of its own.
+ */
+export function useOutOfBandQuestions(): boolean {
+  return useContext(PendingInteractionContext) !== undefined
+}
+
 /** Whether the mounted thread is waiting on the operator's answer. */
 export function usePendingInteractionGate(): boolean {
   const interactions = useContext(PendingInteractionContext)

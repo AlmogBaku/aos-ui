@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -106,5 +106,146 @@ describe("RuntimeQuestionComposer", () => {
       kind: "question",
       answers: [["Fast"]],
     })
+  })
+
+  it("offers Other beside the provider's options and submits the typed text", async () => {
+    const user = userEvent.setup()
+    const interactions = {
+      respond: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+    }
+
+    render(
+      <RuntimeQuestionComposer
+        locale="en"
+        request={request}
+        interactions={interactions}
+        onResponsePending={vi.fn()}
+        onResolved={vi.fn()}
+        onDismissExpired={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole("option", { name: /Fast/ })).toBeVisible()
+    expect(
+      screen.queryByRole("textbox", { name: "Other answer for Approach" })
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Other (type your answer)" })
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: "Other answer for Approach" }),
+      "Pair on it first"
+    )
+    await user.click(screen.getByRole("button", { name: "Send answer" }))
+
+    expect(interactions.respond).toHaveBeenCalledWith(request, {
+      kind: "question",
+      answers: [["Pair on it first"]],
+    })
+  })
+
+  it("submits selected options together with the typed Other answer", async () => {
+    const user = userEvent.setup()
+    const multiSelect: RuntimeQuestionRequest = {
+      ...request,
+      questions: [
+        {
+          header: "Amenities",
+          prompt: "Which amenities do you use?",
+          multiple: true,
+          custom: true,
+          options: [{ label: "Gym" }, { label: "Pool" }],
+        },
+      ],
+    }
+    const interactions = {
+      respond: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+    }
+
+    render(
+      <RuntimeQuestionComposer
+        locale="en"
+        request={multiSelect}
+        interactions={interactions}
+        onResponsePending={vi.fn()}
+        onResolved={vi.fn()}
+        onDismissExpired={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole("option", { name: "Gym" }))
+    await user.click(
+      screen.getByRole("button", { name: "Other (type your answer)" })
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: "Other answer for Amenities" }),
+      "Bike storage"
+    )
+    await user.click(screen.getByRole("button", { name: "Send answer" }))
+
+    expect(interactions.respond).toHaveBeenCalledWith(multiSelect, {
+      kind: "question",
+      answers: [["Gym", "Bike storage"]],
+    })
+  })
+
+  it("localizes the Other row and its input in Hebrew", async () => {
+    const user = userEvent.setup()
+
+    render(
+      <RuntimeQuestionComposer
+        locale="he"
+        request={request}
+        interactions={{
+          respond: vi.fn().mockResolvedValue(undefined),
+          reject: vi.fn().mockResolvedValue(undefined),
+        }}
+        onResponsePending={vi.fn()}
+        onResolved={vi.fn()}
+        onDismissExpired={vi.fn()}
+      />
+    )
+
+    const other = screen.getByRole("button", { name: "אחר (הקלידו תשובה)" })
+    expect(other).toBeVisible()
+    await user.click(other)
+    expect(
+      screen.getByRole("textbox", { name: "תשובה אחרת עבור Approach" })
+    ).toBeVisible()
+  })
+
+  it("refuses to send an empty Other answer", async () => {
+    const user = userEvent.setup()
+    const interactions = {
+      respond: vi.fn().mockResolvedValue(undefined),
+      reject: vi.fn().mockResolvedValue(undefined),
+    }
+
+    render(
+      <RuntimeQuestionComposer
+        locale="en"
+        request={request}
+        interactions={interactions}
+        onResponsePending={vi.fn()}
+        onResolved={vi.fn()}
+        onDismissExpired={vi.fn()}
+      />
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Other (type your answer)" })
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: "Other answer for Approach" }),
+      "   "
+    )
+
+    const send = screen.getByRole("button", { name: "Send answer" })
+    expect(send).toBeDisabled()
+    fireEvent.click(send)
+    expect(interactions.respond).not.toHaveBeenCalled()
   })
 })
