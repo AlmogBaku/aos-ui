@@ -96,6 +96,26 @@ const questions: PendingRequest = {
   expiresAt: "2026-09-19T10:00:00.000Z",
 }
 
+/** One question that takes several of the choices it lists. */
+const multiChoiceQuestions: PendingRequest = {
+  id: "clarify-2",
+  reason: "question",
+  responseSchema: {
+    type: "object",
+    properties: {
+      answers: {
+        prefixItems: [
+          {
+            title: "Pick the suites",
+            items: { type: "string", enum: ["unit", "e2e"] },
+            maxItems: 2,
+          },
+        ],
+      },
+    },
+  },
+}
+
 describe("pendingRequestToOutbound approvals", () => {
   it("offers every adapter choice as its own permission option kind", () => {
     expect(permissionOf(approval).request.options).toEqual([
@@ -240,8 +260,9 @@ describe("pendingRequestToOutbound questions", () => {
       },
     })
 
-    // The array accepts a value the question never listed, so a multi-select
-    // answer may include the user's own text; the choices stay in `_meta.aos`.
+    // ACP requires a `"string"` item type to declare its `enum`, and the
+    // response schema never constrains an answer to it, so the user's own text
+    // still travels while a foreign client can still render the choices.
     expect(fieldOf(outbound, "requestedSchema")).toEqual({
       type: "object",
       properties: {
@@ -249,7 +270,7 @@ describe("pendingRequestToOutbound questions", () => {
           type: "array",
           title: "Pick the suites",
           description: "Pick the suites",
-          items: { type: "string" },
+          items: { type: "string", enum: ["unit", "e2e"] },
         },
       },
       required: ["q0"],

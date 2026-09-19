@@ -158,11 +158,13 @@ function questionsOf(request: PendingRequest): AosQuestion[] {
 }
 
 /**
- * The choices ride only in `_meta.aos.questions[].options`, never as a schema
- * `enum`: an `enum` would make the free-text answer every question accepts
- * invalid against `requestedSchema`. A foreign ACP client therefore loses the
- * enum hint and gains the ability to answer freely, which is the native
- * contract. A question with no choices stays a string field even when it takes
+ * A single-choice question is a plain string field: its choices ride in
+ * `_meta.aos.questions[].options`, and omitting the schema `enum` is what keeps
+ * the free-text answer every question accepts valid against `requestedSchema`.
+ * A multi-select must declare `items.enum`, which ACP requires of a reserved
+ * `"string"` item type and the SDK rejects the whole elicitation without; the
+ * response schema does not constrain values to it, so a free-text answer still
+ * travels. A question with no choices stays a string field even when it takes
  * several values; `_meta.aos` keeps `multiple`.
  */
 function propertyOf(question: AosQuestion): ElicitationPropertySchema {
@@ -172,7 +174,7 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
       type: "array",
       title: question.header,
       description: question.prompt,
-      items: { type: "string" },
+      items: { type: "string", enum: values },
     }
   return {
     type: "string",
