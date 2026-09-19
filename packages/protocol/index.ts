@@ -1,8 +1,4 @@
 import { z } from "zod"
-import {
-  AgentCapabilitiesSchema as AgUiAgentCapabilitiesSchema,
-  type AgentCapabilities,
-} from "@ag-ui/core"
 
 export const AOS_API_PREFIX = "/api/aos/v1" as const
 export const SESSION_CATALOG_MAX_WINDOW = 1_000 as const
@@ -321,11 +317,6 @@ const CapabilityUnavailableSchema = z.strictObject({
   status: z.literal("unavailable"),
   reason: z.string().min(1).max(256),
 })
-// AG-UI currently brings Zod 3 while AOS uses Zod 4. Embedding its schema in a
-// Zod 4 object is invalid, so validate through the public AG-UI schema instead.
-const AgentCapabilitiesSchema = z.custom<AgentCapabilities>(
-  (value) => AgUiAgentCapabilitiesSchema.safeParse(value).success
-)
 export const SlashCommandSchema = z.strictObject({
   name: z
     .string()
@@ -336,8 +327,12 @@ export const SlashCommandSchema = z.strictObject({
 })
 export type SlashCommand = z.infer<typeof SlashCommandSchema>
 export const MAX_SLASH_COMMANDS = 4_096
+/**
+ * How every runtime carries an approval or a question: as an ACP request the
+ * operator answers over the same connection that serves the conversation.
+ */
+export const INTERACTION_PROTOCOL = "acp-request" as const
 export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
-  agent: AgentCapabilitiesSchema,
   workspace: z.strictObject({
     slashCommands: z
       .union([
@@ -403,7 +398,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     ]),
     approvals: z.strictObject({
       status: z.literal("available"),
-      protocol: z.literal("ag-ui-interrupt"),
+      protocol: z.literal(INTERACTION_PROTOCOL),
       scope: z.literal("run"),
       choices: z
         .array(
@@ -437,7 +432,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     }),
     questions: z.strictObject({
       status: z.literal("available"),
-      protocol: z.literal("ag-ui-interrupt"),
+      protocol: z.literal(INTERACTION_PROTOCOL),
       scope: z.literal("run"),
       answerModes: z.tuple([
         z.literal("single"),
@@ -519,7 +514,6 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
 
 export const GuestRuntimeCapabilitiesResponseSchema =
   SessionWorkspaceCapabilitiesResponseSchema.pick({
-    agent: true,
     workspace: true,
     interactions: true,
     content: true,

@@ -23,7 +23,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@ag-ui/core": "0.0.59",
     "@agentclientprotocol/sdk": "1.4.0",
     "@assistant-ui/core": "0.3.17",
     "@assistant-ui/react": "0.15.18",

@@ -1,9 +1,3 @@
-import {
-  EventSchemas,
-  InterruptSchema,
-  ResumeEntrySchema,
-  RunAgentInputSchema,
-} from "@ag-ui/core"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -15,11 +9,12 @@ import {
 } from "./events"
 
 /**
- * The proxy owns its run vocabulary, but the bytes on the wire are AG-UI
- * 0.0.59's. This file is the only place in `core/` allowed to import
- * `@ag-ui/core`: it pins every shape against the declarations the adapters
- * emitted before the vocabulary moved, so a drift shows up here rather than as
- * a rejected provider event in production.
+ * The proxy owns its run vocabulary, so this file is where that vocabulary is
+ * pinned: one fixture per kind in the wire shape the adapters emit, and an
+ * explicit table of the fields each kind cannot do without. Nothing here is
+ * derived from another library at runtime — a table entry changes only when the
+ * wire shape deliberately changes, so drift shows up here rather than as a
+ * rejected provider event in production.
  */
 
 const pendingRequest = {
@@ -73,7 +68,7 @@ const tokenUsage = {
 const base = {
   timestamp: 1_767_225_600_000,
   rawEvent: { provider: "native" },
-  metadata: { "ag-ui": { source: "native" } },
+  metadata: { native: { source: "provider" } },
 }
 const attributed = { ...base, subagentRunId: "subagent-1" }
 
@@ -196,6 +191,34 @@ const eventFixtures: Record<RunEventKind, Record<string, unknown>> = {
   },
 }
 
+/**
+ * The fields each kind must carry beyond the `type` discriminator, which every
+ * kind requires. This table is the wire shape the adapters emit: every other
+ * field in a fixture above is optional or defaulted, and a kind gaining or
+ * losing a required field is a deliberate protocol change that belongs here
+ * before it belongs in an adapter.
+ */
+const requiredFields: Record<RunEventKind, readonly string[]> = {
+  [RunEventKind.RUN_STARTED]: ["threadId", "runId"],
+  [RunEventKind.RUN_FINISHED]: ["threadId", "runId"],
+  [RunEventKind.RUN_ERROR]: ["message"],
+  [RunEventKind.TEXT_MESSAGE_START]: ["messageId"],
+  [RunEventKind.TEXT_MESSAGE_CONTENT]: ["messageId", "delta"],
+  [RunEventKind.TEXT_MESSAGE_END]: ["messageId"],
+  [RunEventKind.REASONING_START]: ["messageId"],
+  [RunEventKind.REASONING_END]: ["messageId"],
+  [RunEventKind.REASONING_MESSAGE_START]: ["messageId", "role"],
+  [RunEventKind.REASONING_MESSAGE_CONTENT]: ["messageId", "delta"],
+  [RunEventKind.REASONING_MESSAGE_END]: ["messageId"],
+  [RunEventKind.TOOL_CALL_START]: ["toolCallId", "toolCallName"],
+  [RunEventKind.TOOL_CALL_ARGS]: ["toolCallId", "delta"],
+  [RunEventKind.TOOL_CALL_END]: ["toolCallId"],
+  [RunEventKind.TOOL_CALL_RESULT]: ["messageId", "toolCallId", "content"],
+  [RunEventKind.ACTIVITY_SNAPSHOT]: ["messageId", "activityType", "content"],
+  [RunEventKind.ACTIVITY_DELTA]: ["messageId", "activityType", "patch"],
+  [RunEventKind.CUSTOM]: ["name"],
+}
+
 const fixtures = Object.entries(eventFixtures)
 
 function without(fixture: Record<string, unknown>, key: string) {
@@ -204,161 +227,179 @@ function without(fixture: Record<string, unknown>, key: string) {
   )
 }
 
-describe("run event parity with the AG-UI wire", () => {
+describe("the proxy-owned run vocabulary", () => {
   it("covers every kind the proxy carries", () => {
     expect(Object.keys(eventFixtures).sort()).toEqual(
       Object.values(RunEventKind).sort()
     )
+    expect(Object.keys(requiredFields).sort()).toEqual(
+      Object.values(RunEventKind).sort()
+    )
   })
 
-  it.each(fixtures)("parses %s as AG-UI parses it", (_kind, fixture) => {
-    const own = RunEventSchema.safeParse(fixture)
-    const agui = EventSchemas.safeParse(fixture)
+  it.each(fixtures)("parses the %s wire shape unchanged", (_kind, fixture) => {
+    expect(RunEventSchema.parse(fixture)).toEqual(fixture)
+  })
 
-    expect(own.success).toBe(true)
-    expect(agui.success).toBe(true)
-    expect(own.data).toEqual(agui.data)
-    expect(Object.keys(own.data ?? {}).sort()).toEqual(
-      Object.keys(agui.data ?? {}).sort()
+  it.each(fixtures)(
+    "keeps an unknown top-level field on %s",
+    (_kind, fixture) => {
+      const candidate = { ...fixture, providerOnlyField: "kept" }
+
+      expect(RunEventSchema.parse(candidate)).toEqual(candidate)
+    }
+  )
+
+  it.each(fixtures)("requires the %s discriminator", (_kind, fixture) => {
+    expect(RunEventSchema.safeParse(without(fixture, "type")).success).toBe(
+      false
     )
   })
 
   it.each(fixtures)(
-    "keeps an unknown top-level field on %s, as AG-UI does",
-    (_kind, fixture) => {
-      const candidate = { ...fixture, providerOnlyField: "kept" }
-      const own = RunEventSchema.safeParse(candidate)
-      const agui = EventSchemas.safeParse(candidate)
+    "rejects a %s missing a required field and accepts every other omission",
+    (kind, fixture) => {
+      const required = requiredFields[kind as RunEventKind]
+      expect(
+        required.filter((field) => field in fixture),
+        `${kind} fixture covers its required fields`
+      ).toEqual(required)
 
-      expect(own.success).toBe(true)
-      expect(agui.success).toBe(true)
-      expect(own.data).toEqual(agui.data)
-      expect(own.data).toMatchObject({ providerOnlyField: "kept" })
+      for (const key of Object.keys(fixture)) {
+        if (key === "type") continue
+        expect(
+          RunEventSchema.safeParse(without(fixture, key)).success,
+          `${kind} without ${key}`
+        ).toBe(!required.includes(key))
+      }
     }
   )
 
-  it("agrees with AG-UI on which field of which kind may be omitted", () => {
-    for (const [kind, fixture] of fixtures)
-      for (const key of Object.keys(fixture)) {
-        const candidate = without(fixture, key)
-        const own = RunEventSchema.safeParse(candidate)
-        const agui = EventSchemas.safeParse(candidate)
-        expect(own.success, `${kind} without ${key}`).toBe(agui.success)
-        if (own.success && agui.success)
-          expect(own.data, `${kind} without ${key}`).toEqual(agui.data)
-      }
-  })
-
   it("normalizes the nulls released producers still send", () => {
-    const toolCall = {
+    const toolCall = RunEventSchema.parse({
       type: RunEventKind.TOOL_CALL_START,
       toolCallId: "call-1",
       toolCallName: "read",
       parentMessageId: null,
-    }
-    const finished = {
+    })
+    const finished = RunEventSchema.parse({
       type: RunEventKind.RUN_FINISHED,
       threadId: "session-1",
       runId: "run-1",
       outcome: null,
-    }
+    })
 
-    for (const candidate of [toolCall, finished]) {
-      const own = RunEventSchema.parse(candidate)
-      const agui = EventSchemas.parse(candidate)
-      expect(own).toEqual(agui)
-      expect(Object.keys(own).sort()).toEqual(Object.keys(agui).sort())
-    }
-    expect(RunEventSchema.parse(toolCall).parentMessageId).toBeUndefined()
-    expect(RunEventSchema.parse(finished).outcome).toBeUndefined()
+    expect(toolCall).toEqual({
+      type: RunEventKind.TOOL_CALL_START,
+      toolCallId: "call-1",
+      toolCallName: "read",
+    })
+    expect(toolCall.parentMessageId).toBeUndefined()
+    expect(finished).toEqual({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: "session-1",
+      runId: "run-1",
+    })
+    expect(finished.outcome).toBeUndefined()
   })
 
-  it("rejects a kind outside the proxy vocabulary that AG-UI still accepts", () => {
-    const stepStarted = { type: "STEP_STARTED", stepName: "one" }
+  it("applies the defaults the adapters rely on", () => {
+    expect(
+      RunEventSchema.parse({
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "message-1",
+      })
+    ).toMatchObject({ role: "assistant" })
+    expect(
+      RunEventSchema.parse({
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
+        messageId: "activity-1",
+        activityType: "PLAN",
+        content: {},
+      })
+    ).toMatchObject({ replace: true })
+  })
 
-    expect(RunEventSchema.safeParse(stepStarted).success).toBe(false)
-    expect(EventSchemas.safeParse(stepStarted).success).toBe(true)
+  it("rejects a kind outside the proxy vocabulary", () => {
+    expect(
+      RunEventSchema.safeParse({ type: "STEP_STARTED", stepName: "one" })
+        .success
+    ).toBe(false)
   })
 
   it("rejects a token count beyond the safe integer range", () => {
-    const candidate = {
-      type: RunEventKind.RUN_ERROR,
-      message: "the provider refused",
-      usage: [{ inputTokens: 1e100 }],
-    }
-
-    // The one known divergence: Zod 4's integer check also bounds the value at
-    // Number.MAX_SAFE_INTEGER, where AG-UI's Zod 3 check only asks for an
-    // integer. No provider can report such a count, and a value that large
-    // cannot survive a round trip through JSON anyway.
-    expect(RunEventSchema.safeParse(candidate).success).toBe(false)
-    expect(EventSchemas.safeParse(candidate).success).toBe(true)
+    // No provider can report such a count, and a value that large cannot
+    // survive a round trip through JSON anyway.
+    expect(
+      RunEventSchema.safeParse({
+        type: RunEventKind.RUN_ERROR,
+        message: "the provider refused",
+        usage: [{ inputTokens: 1e100 }],
+      }).success
+    ).toBe(false)
   })
 })
 
-describe("pending request parity with the AG-UI wire", () => {
-  it("parses a pending request as AG-UI parses an interrupt", () => {
-    expect(PendingRequestSchema.parse(pendingRequest)).toEqual(
-      InterruptSchema.parse(pendingRequest)
-    )
+describe("a pending request", () => {
+  it("parses the wire shape a provider interrupt carries", () => {
+    expect(PendingRequestSchema.parse(pendingRequest)).toEqual(pendingRequest)
   })
 
-  it("agrees on which pending request fields may be omitted", () => {
-    for (const key of Object.keys(pendingRequest)) {
-      const candidate = without(pendingRequest, key)
-      const own = PendingRequestSchema.safeParse(candidate)
-      const agui = InterruptSchema.safeParse(candidate)
-      expect(own.success, `without ${key}`).toBe(agui.success)
-      if (own.success && agui.success)
-        expect(own.data, `without ${key}`).toEqual(agui.data)
-    }
+  it("requires only the identifier and the reason", () => {
+    const required = ["id", "reason"]
+
+    for (const key of Object.keys(pendingRequest))
+      expect(
+        PendingRequestSchema.safeParse(without(pendingRequest, key)).success,
+        `without ${key}`
+      ).toBe(!required.includes(key))
   })
 })
 
-describe("request reply parity with the AG-UI wire", () => {
-  it("parses a reply as AG-UI parses a resume entry", () => {
-    expect(RequestReplySchema.parse(requestReply)).toEqual(
-      ResumeEntrySchema.parse(requestReply)
-    )
+describe("a request reply", () => {
+  it("parses the wire shape the operator's answer carries", () => {
+    expect(RequestReplySchema.parse(requestReply)).toEqual(requestReply)
   })
 
-  it("agrees on which reply fields may be omitted", () => {
-    for (const key of Object.keys(requestReply)) {
-      const candidate = without(requestReply, key)
-      const own = RequestReplySchema.safeParse(candidate)
-      const agui = ResumeEntrySchema.safeParse(candidate)
-      expect(own.success, `without ${key}`).toBe(agui.success)
-      if (own.success && agui.success)
-        expect(own.data, `without ${key}`).toEqual(agui.data)
-    }
+  it("requires only the interrupt it answers and its status", () => {
+    const required = ["interruptId", "status"]
+
+    for (const key of Object.keys(requestReply))
+      expect(
+        RequestReplySchema.safeParse(without(requestReply, key)).success,
+        `without ${key}`
+      ).toBe(!required.includes(key))
   })
 
-  it("admits only the two statuses AG-UI admits", () => {
-    for (const status of ["resolved", "cancelled", "pending"]) {
-      const candidate = { interruptId: "interrupt-1", status }
-      expect(RequestReplySchema.safeParse(candidate).success, status).toBe(
-        ResumeEntrySchema.safeParse(candidate).success
-      )
-    }
+  it("admits a resolved or cancelled reply and nothing else", () => {
+    for (const status of ["resolved", "cancelled"])
+      expect(
+        RequestReplySchema.safeParse({ interruptId: "interrupt-1", status })
+          .success,
+        status
+      ).toBe(true)
+    expect(
+      RequestReplySchema.safeParse({
+        interruptId: "interrupt-1",
+        status: "pending",
+      }).success
+    ).toBe(false)
   })
 })
 
-describe("turn input parity with the AG-UI wire", () => {
-  it("parses an admitted turn as AG-UI parses a run input", () => {
-    expect(TurnInputSchema.parse(turnInput)).toEqual(
-      RunAgentInputSchema.parse(turnInput)
-    )
+describe("an admitted turn", () => {
+  it("parses the wire shape the proxy builds", () => {
+    expect(TurnInputSchema.parse(turnInput)).toEqual(turnInput)
   })
 
-  it("agrees on which turn input fields may be omitted", () => {
-    for (const key of Object.keys(turnInput)) {
-      const candidate = without(turnInput, key)
-      const own = TurnInputSchema.safeParse(candidate)
-      const agui = RunAgentInputSchema.safeParse(candidate)
-      expect(own.success, `without ${key}`).toBe(agui.success)
-      if (own.success && agui.success)
-        expect(own.data, `without ${key}`).toEqual(agui.data)
-    }
+  it("requires the Session, the run, and the three turn collections", () => {
+    const required = ["threadId", "runId", "messages", "tools", "context"]
+
+    for (const key of Object.keys(turnInput))
+      expect(
+        TurnInputSchema.safeParse(without(turnInput, key)).success,
+        `without ${key}`
+      ).toBe(!required.includes(key))
   })
 
   it("accepts the text parts a user turn may carry", () => {
@@ -373,12 +414,11 @@ describe("turn input parity with the AG-UI wire", () => {
       ],
     }
 
-    expect(TurnInputSchema.parse(candidate)).toEqual(
-      RunAgentInputSchema.parse(candidate)
-    )
+    expect(TurnInputSchema.parse(candidate)).toEqual(candidate)
   })
 
   it("rejects unstaged multimodal parts instead of dropping them", () => {
+    // Staged media must reach an adapter as text, never as inline bytes.
     const candidate = {
       ...turnInput,
       messages: [
@@ -401,28 +441,26 @@ describe("turn input parity with the AG-UI wire", () => {
     }
 
     expect(TurnInputSchema.safeParse(candidate).success).toBe(false)
-    // AG-UI admits the image; staged media must reach adapters as text.
-    expect(RunAgentInputSchema.safeParse(candidate).success).toBe(true)
   })
 
-  it("drops an unknown top-level field, as AG-UI does", () => {
-    const candidate = { ...turnInput, callerOnlyField: "dropped" }
+  it("drops an unknown top-level field", () => {
+    const parsed = TurnInputSchema.parse({
+      ...turnInput,
+      callerOnlyField: "dropped",
+    })
 
-    expect(TurnInputSchema.parse(candidate)).toEqual(
-      RunAgentInputSchema.parse(candidate)
-    )
-    expect("callerOnlyField" in TurnInputSchema.parse(candidate)).toBe(false)
+    expect(parsed).toEqual(turnInput)
+    expect("callerOnlyField" in parsed).toBe(false)
   })
 
   it("admits only the user turn the proxy builds", () => {
-    const candidate = {
-      ...turnInput,
-      messages: [{ id: "message-1", role: "assistant", content: "Hello" }],
-    }
-
-    // Narrower than AG-UI on purpose: the proxy never builds or forwards any
-    // other message, so a provider-shaped history cannot reach a runtime here.
-    expect(TurnInputSchema.safeParse(candidate).success).toBe(false)
-    expect(RunAgentInputSchema.safeParse(candidate).success).toBe(true)
+    // The proxy never builds or forwards any other message, so a
+    // provider-shaped history cannot reach a runtime through this schema.
+    expect(
+      TurnInputSchema.safeParse({
+        ...turnInput,
+        messages: [{ id: "message-1", role: "assistant", content: "Hello" }],
+      }).success
+    ).toBe(false)
   })
 })

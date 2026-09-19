@@ -43,16 +43,10 @@ describe("runtime adapter boundary", () => {
     }
   })
 
-  it("confines the AG-UI vocabulary to adapters and the alias layer", async () => {
-    const proxyRoot = import.meta.dirname
-    const allowed = [
-      join(proxyRoot, "adapters"),
-      join(proxyRoot, "core/events.ts"),
-    ]
-    const files = await productionFiles(proxyRoot)
+  it("keeps AG-UI out of the proxy", async () => {
+    const files = await productionFiles(import.meta.dirname)
 
     for (const path of files) {
-      if (allowed.some((prefix) => path.startsWith(prefix))) continue
       const source = await readFile(path, "utf8")
       expect(source, path).not.toMatch(/(?:from\s+|import\s*\()["']@ag-ui\//u)
     }

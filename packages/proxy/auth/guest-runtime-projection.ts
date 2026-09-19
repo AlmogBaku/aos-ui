@@ -204,13 +204,8 @@ export function projectGuestHistory(
 export function projectGuestCapabilities(value: unknown) {
   const parsed = SessionWorkspaceCapabilitiesResponseSchema.safeParse(value)
   if (!parsed.success) return undefined
-  const { agent, content, interactions, workspace } = parsed.data
+  const { content, interactions, workspace } = parsed.data
   return GuestRuntimeCapabilitiesResponseSchema.parse({
-    agent: {
-      ...(agent.transport ? { transport: agent.transport } : {}),
-      ...(agent.multimodal ? { multimodal: agent.multimodal } : {}),
-      ...(agent.humanInTheLoop ? { humanInTheLoop: agent.humanInTheLoop } : {}),
-    },
     workspace: { slashCommands: workspace.slashCommands },
     content,
     interactions: {

@@ -30,7 +30,6 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 /** The capability snapshot `session/resume` reports for the opened Session. */
 function capabilities() {
   return {
-    agent: {},
     workspace: {
       slashCommands: unavailable,
       models: unavailable,

@@ -67,8 +67,8 @@ describe("runtime package import boundaries", () => {
         importers.push(path)
     }
 
-    // The browser speaks ACP v2 to the proxy; only server adapters still map
-    // native providers through the AG-UI event shapes.
+    // The browser speaks ACP v2 to the proxy and the proxy owns its own run
+    // vocabulary, so no AG-UI package belongs anywhere in the repository.
     expect(importers).toEqual([])
   })
 

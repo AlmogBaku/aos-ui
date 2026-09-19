@@ -2,8 +2,8 @@
 
 This document explains how the Hermes `/api/ws` protocol represents one model
 turn and how the AOS Hermes adapter maps that turn to the proxy-owned run
-vocabulary (currently aliasing AG-UI shapes). The ACP layer then delivers those
-events to the browser. This is a reference for contributors changing
+vocabulary defined in `packages/proxy/core/events.ts`. The ACP layer then
+delivers those events to the browser. This is a reference for contributors changing
 `transport.ts`, `run.ts`, recovery, or history.
 
 ## The socket is not the turn
@@ -104,8 +104,8 @@ to `RUN_ERROR`.
 
 ## Run vocabulary mapping rules
 
-The Hermes adapter applies these rules (the proxy-owned vocabulary currently
-aliases AG-UI shapes; the ACP layer translates them for the browser):
+The Hermes adapter applies these rules (the ACP layer translates the
+proxy-owned vocabulary for the browser):
 
 - `message.interim` closes only the current text message in the proxy-owned vocabulary. It does not emit
   `RUN_FINISHED` or `RUN_ERROR`.

@@ -396,30 +396,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       this.#workspace.capabilities()
     void [agentVisibility, sessionTitle, sessionDeletion]
     return SessionWorkspaceCapabilitiesResponseSchema.parse({
-      agent: {
-        identity: { type: "opencode", provider: "OpenCode" },
-        transport: { streaming: true, resumable: true },
-        tools: { supported: true, clientProvided: false },
-        reasoning: { supported: true, streaming: true, encrypted: false },
-        multimodal: {
-          input: {
-            image: true,
-            audio: false,
-            video: false,
-            pdf: false,
-            file: true,
-          },
-          output: { image: false, audio: false },
-        },
-        humanInTheLoop: {
-          supported: true,
-          approvals: true,
-          interventions: false,
-          feedback: false,
-          interrupts: true,
-          approveWithEdits: false,
-        },
-      },
       workspace,
       ...openCodeCapabilities(),
     })

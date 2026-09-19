@@ -7,6 +7,7 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
+import { INTERACTION_PROTOCOL } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_AUTH_METHOD_INVITE,
@@ -51,11 +52,6 @@ const APPROVAL = {
 
 /** Provider capabilities that include everything a guest may not learn. */
 const CAPABILITIES = {
-  agent: {
-    identity: { type: "hermes", provider: "private-provider" },
-    transport: { streaming: true, resumable: true },
-    reasoning: { supported: true, streaming: true },
-  },
   workspace: {
     slashCommands: {
       status: "available",
@@ -87,7 +83,7 @@ const CAPABILITIES = {
     },
     approvals: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: INTERACTION_PROTOCOL,
       scope: "run",
       choices: [
         { value: "once", scope: "request" },
@@ -98,7 +94,7 @@ const CAPABILITIES = {
     },
     questions: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: INTERACTION_PROTOCOL,
       scope: "run",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-empty-answer",
@@ -541,8 +537,7 @@ describe("guest ACP lane", () => {
         },
       },
     })
-    // Neither the provider's identity nor the operator's controls travel.
-    expect(JSON.stringify(resumed)).not.toContain("private-provider")
+    // The operator's own Session title never travels to a guest.
     expect(JSON.stringify(resumed)).not.toContain("Operator-owned title")
     expect(resumed).toMatchObject({
       _meta: {

@@ -12,6 +12,7 @@ import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
@@ -37,7 +38,6 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
 function capabilities(): AcpCapabilities {
   return {
-    agent: {},
     workspace: {
       slashCommands: {
         status: "available",
@@ -69,14 +69,14 @@ function capabilities(): AcpCapabilities {
       },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [{ value: "once", scope: "request" }],
         maxPending: 8,
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",

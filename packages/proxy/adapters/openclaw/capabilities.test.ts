@@ -23,7 +23,7 @@ describe("OpenClaw capabilities", () => {
       },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: "acp-request",
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
@@ -34,7 +34,7 @@ describe("OpenClaw capabilities", () => {
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: "acp-request",
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-cancel",

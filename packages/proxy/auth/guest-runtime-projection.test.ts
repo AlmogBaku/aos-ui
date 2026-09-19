@@ -1,6 +1,8 @@
-import { EventType, type AGUIEvent } from "@ag-ui/core"
 import { describe, expect, it } from "vitest"
+import { z } from "zod"
 
+import { INTERACTION_PROTOCOL } from "../../protocol"
+import { RunEventKind, RunEventSchema } from "../core/events"
 import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   createGuestRunAccess,
@@ -36,7 +38,8 @@ const authorization: VerifiedGuestAuthorization = {
   operation: "messages:read",
 }
 
-const project = (event: AGUIEvent) =>
+/** A runtime's wire shape, normalized the way the coordinator normalizes it. */
+const project = (event: z.input<typeof RunEventSchema>) =>
   createGuestRunAccess(
     authorization,
     { ...authorization, operation: "errors:read" },
@@ -44,7 +47,7 @@ const project = (event: AGUIEvent) =>
     "public-run",
     () => 10_000,
     "subscriber"
-  ).project(event)
+  ).project(RunEventSchema.parse(event))
 
 describe("guest AG-UI projection", () => {
   it("returns normalized friendly HTTP errors", async () => {
@@ -190,20 +193,6 @@ describe("guest AG-UI projection", () => {
 
   it("removes Agent-wide approval grants from guest capabilities", () => {
     const projected = projectGuestCapabilities({
-      agent: {
-        identity: { type: "hermes", provider: "private-provider" },
-        transport: { streaming: true, resumable: true },
-        reasoning: { supported: true, streaming: true },
-        multimodal: {
-          input: { image: true, audio: false, file: true },
-          output: { audio: false },
-        },
-        humanInTheLoop: {
-          supported: true,
-          approvals: true,
-          interrupts: true,
-        },
-      },
       workspace: {
         models: {
           status: "available",
@@ -230,7 +219,7 @@ describe("guest AG-UI projection", () => {
         },
         approvals: {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: INTERACTION_PROTOCOL,
           scope: "run",
           choices: [
             { value: "once", scope: "request" },
@@ -242,7 +231,7 @@ describe("guest AG-UI projection", () => {
         },
         questions: {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: INTERACTION_PROTOCOL,
           scope: "run",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-empty-answer",
@@ -291,7 +280,7 @@ describe("guest AG-UI projection", () => {
 
     expect(
       project({
-        type: EventType.ACTIVITY_SNAPSHOT,
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
         messageId: "plan",
         activityType: "PLAN",
         content: { todos },
@@ -299,7 +288,7 @@ describe("guest AG-UI projection", () => {
         rawEvent: { native: "secret" },
       })
     ).toEqual({
-      type: EventType.ACTIVITY_SNAPSHOT,
+      type: RunEventKind.ACTIVITY_SNAPSHOT,
       messageId: "plan",
       activityType: "PLAN",
       content: { todos },
@@ -307,20 +296,20 @@ describe("guest AG-UI projection", () => {
     })
     expect(
       project({
-        type: EventType.ACTIVITY_DELTA,
+        type: RunEventKind.ACTIVITY_DELTA,
         messageId: "plan",
         activityType: "PLAN",
         patch: [{ op: "replace", path: "/todos", value: todos }],
       })
     ).toEqual({
-      type: EventType.ACTIVITY_DELTA,
+      type: RunEventKind.ACTIVITY_DELTA,
       messageId: "plan",
       activityType: "PLAN",
       patch: [{ op: "replace", path: "/todos", value: todos }],
     })
     expect(
       project({
-        type: EventType.ACTIVITY_SNAPSHOT,
+        type: RunEventKind.ACTIVITY_SNAPSHOT,
         messageId: "secret",
         activityType: "TRACE",
         content: { providerPath: "/private" },
@@ -331,7 +320,7 @@ describe("guest AG-UI projection", () => {
   it("preserves safe artifact data and drops provider fields and other custom events", () => {
     expect(
       project({
-        type: EventType.CUSTOM,
+        type: RunEventKind.CUSTOM,
         name: "aos.artifact",
         value: {
           id: "report-1",
@@ -343,7 +332,7 @@ describe("guest AG-UI projection", () => {
         },
       })
     ).toEqual({
-      type: EventType.CUSTOM,
+      type: RunEventKind.CUSTOM,
       name: "aos.artifact",
       value: {
         id: "report-1",
@@ -354,7 +343,7 @@ describe("guest AG-UI projection", () => {
       },
     })
     expect(
-      project({ type: EventType.CUSTOM, name: "hermes.native", value: {} })
+      project({ type: RunEventKind.CUSTOM, name: "hermes.native", value: {} })
     ).toBeUndefined()
   })
 })

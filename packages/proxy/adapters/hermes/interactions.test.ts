@@ -642,7 +642,7 @@ describe("HermesInteractions", () => {
     expect(interactions.capabilities()).toEqual({
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: "acp-request",
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
@@ -654,7 +654,7 @@ describe("HermesInteractions", () => {
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: "acp-request",
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",

@@ -1,3 +1,5 @@
+import { INTERACTION_PROTOCOL } from "../../../protocol"
+
 /** Normalized capability fragment for the pinned OpenCode v2 surface. */
 export function openCodeCapabilities() {
   return {
@@ -5,7 +7,7 @@ export function openCodeCapabilities() {
       steering: { status: "unavailable", reason: "native-steering-unproven" },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
@@ -16,7 +18,7 @@ export function openCodeCapabilities() {
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-reject",

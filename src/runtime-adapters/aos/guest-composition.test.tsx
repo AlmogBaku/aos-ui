@@ -13,6 +13,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
@@ -31,7 +32,6 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 /** What the guest lane reports for the invited Session on `session/resume`. */
 function capabilities() {
   return {
-    agent: {},
     workspace: {
       slashCommands: unavailable,
       models: unavailable,
@@ -43,7 +43,7 @@ function capabilities() {
       steering: unavailable,
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [{ value: "once", scope: "request" }],
         maxPending: 1,
@@ -76,7 +76,7 @@ function guestRuntimeContext() {
       message: "Welcome to the conversation.",
     },
     prefill: "Hello from the invitation",
-    capabilities: { agent: {}, content: {}, interactions: {} },
+    capabilities: { content: {}, interactions: {} },
     expiresAt: "2026-09-22T08:00:00.000Z",
   }
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   AgentCatalogResponseSchema,
   ErrorResponseSchema,
+  INTERACTION_PROTOCOL,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   RunSteerRequestSchema,
@@ -35,7 +36,7 @@ describe("AOS v1 normalized protocol", () => {
         },
         approvals: {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: INTERACTION_PROTOCOL,
           scope: "run",
           choices: [
             { value: "once", scope: "request" },
@@ -46,7 +47,7 @@ describe("AOS v1 normalized protocol", () => {
         },
         questions: {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: INTERACTION_PROTOCOL,
           scope: "run",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-reject",
@@ -77,7 +78,7 @@ describe("AOS v1 normalized protocol", () => {
       SessionWorkspaceCapabilitiesResponseSchema.shape.interactions.shape.questions.parse(
         {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: INTERACTION_PROTOCOL,
           scope: "run",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-cancel",
@@ -165,19 +166,6 @@ describe("AOS v1 normalized protocol", () => {
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
     expect(
       SessionWorkspaceCapabilitiesResponseSchema.parse({
-        agent: {
-          transport: { streaming: true, resumable: true },
-          reasoning: { supported: true, streaming: true },
-          multimodal: {
-            input: { image: true, audio: false, file: true },
-            output: { audio: false },
-          },
-          humanInTheLoop: {
-            supported: true,
-            approvals: true,
-            interrupts: true,
-          },
-        },
         workspace: {
           slashCommands: {
             status: "available",
@@ -212,7 +200,7 @@ describe("AOS v1 normalized protocol", () => {
           },
           approvals: {
             status: "available",
-            protocol: "ag-ui-interrupt",
+            protocol: INTERACTION_PROTOCOL,
             scope: "run",
             choices: [
               { value: "once", scope: "request" },
@@ -224,7 +212,7 @@ describe("AOS v1 normalized protocol", () => {
           },
           questions: {
             status: "available",
-            protocol: "ag-ui-interrupt",
+            protocol: INTERACTION_PROTOCOL,
             scope: "run",
             answerModes: ["single", "multiple", "free-text"],
             cancellation: "native-empty-answer",

@@ -869,31 +869,6 @@ export class HermesServerAdapter implements HermesRunNative, ServerRuntime {
       }
     }
     return {
-      agent: {
-        identity: { type: "hermes", provider: "NousResearch" },
-        transport: { streaming: true, resumable: true },
-        tools: { supported: true, clientProvided: false },
-        reasoning: { supported: true, streaming: true, encrypted: false },
-        multimodal: {
-          input: {
-            image: true,
-            audio: false,
-            video: false,
-            pdf: true,
-            file: true,
-          },
-          output: { image: false, audio: false },
-        },
-        humanInTheLoop: {
-          supported: true,
-          approvals: true,
-          interventions: true,
-          feedback: false,
-          interrupts: true,
-          approveWithEdits: false,
-        },
-        custom: { "aos.planActivityType": "PLAN" },
-      },
       workspace: { ...this.#workspace.capabilities(), slashCommands },
       interactions: {
         ...this.interactions.capabilities(),

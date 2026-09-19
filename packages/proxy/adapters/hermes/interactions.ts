@@ -1,3 +1,4 @@
+import { INTERACTION_PROTOCOL } from "../../../protocol"
 import type { RunInterruptOutcome } from "../../core/events"
 
 export type HermesInteractionScope = {
@@ -820,7 +821,7 @@ export class HermesInteractions {
     return {
       approvals: {
         status: "available" as const,
-        protocol: "ag-ui-interrupt" as const,
+        protocol: INTERACTION_PROTOCOL,
         scope: "run" as const,
         choices: [
           { value: "once" as const, scope: "request" as const },
@@ -832,7 +833,7 @@ export class HermesInteractions {
       },
       questions: {
         status: "available" as const,
-        protocol: "ag-ui-interrupt" as const,
+        protocol: INTERACTION_PROTOCOL,
         scope: "run" as const,
         answerModes: ["single", "multiple", "free-text"] as const,
         cancellation: "native-empty-answer" as const,

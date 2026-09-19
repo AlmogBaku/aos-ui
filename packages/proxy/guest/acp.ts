@@ -72,7 +72,6 @@ function projectCapabilities(
   if (!projected)
     throw new Error("The invited Session reported unusable capabilities")
   return SessionWorkspaceCapabilitiesResponseSchema.parse({
-    agent: projected.agent,
     workspace: {
       slashCommands: projected.workspace.slashCommands,
       models: OPERATOR_ONLY,

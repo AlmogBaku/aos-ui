@@ -223,31 +223,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
     if (!policy) throw new OpenClawAdapterUnavailableError()
     const provider = openClawCapabilities(policy)
     return SessionWorkspaceCapabilitiesResponseSchema.parse({
-      agent: {
-        identity: { type: "openclaw", provider: "OpenClaw" },
-        transport: { streaming: true, resumable: true },
-        tools: { supported: true, clientProvided: false },
-        reasoning: { supported: true, streaming: true, encrypted: false },
-        multimodal: {
-          input: {
-            image: true,
-            audio: false,
-            video: false,
-            pdf: false,
-            file: true,
-          },
-          output: { image: false, audio: false },
-        },
-        humanInTheLoop: {
-          supported: true,
-          approvals: true,
-          interventions: false,
-          feedback: false,
-          interrupts: true,
-          approveWithEdits: false,
-        },
-        custom: { "aos.planActivityType": "PLAN" },
-      },
       workspace: {
         slashCommands: {
           status: "unavailable",

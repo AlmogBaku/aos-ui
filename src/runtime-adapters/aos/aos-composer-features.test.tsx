@@ -1,6 +1,8 @@
 import { renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
+import { INTERACTION_PROTOCOL } from "@aos/protocol"
+
 import type { AosWorkspaceCapabilities } from "./aos-client"
 import {
   useAosComposerFeatures,
@@ -10,19 +12,6 @@ import {
 
 function capabilities(): AosWorkspaceCapabilities {
   return {
-    agent: {
-      transport: { streaming: true, resumable: true },
-      reasoning: { supported: true, streaming: true },
-      multimodal: {
-        input: { image: true, audio: false, file: true },
-        output: { audio: false },
-      },
-      humanInTheLoop: {
-        supported: true,
-        approvals: true,
-        interrupts: true,
-      },
-    },
     workspace: {
       slashCommands: {
         status: "available",
@@ -54,7 +43,7 @@ function capabilities(): AosWorkspaceCapabilities {
       },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
@@ -66,7 +55,7 @@ function capabilities(): AosWorkspaceCapabilities {
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",

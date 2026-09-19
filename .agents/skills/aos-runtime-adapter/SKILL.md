@@ -29,8 +29,8 @@ admission, normalized run state, control serialization, subscriber fanout, and
 run segment identity in the coordinator.
 
 Emit the proxy-owned run vocabulary for messages, reasoning, tools, activity,
-lifecycle, and interrupts (it currently aliases AG-UI shapes; the ACP layer
-delivers them to the browser). Use an AOS extension only for a demonstrated
+lifecycle, and interrupts, as defined in `packages/proxy/core/events.ts` (the
+ACP layer delivers them to the browser). Use an AOS extension only for a demonstrated
 behavior the vocabulary does not express. Require evidence from the current
 adapter and another native runtime before generalizing provider mechanics into
 shared core or protocol.

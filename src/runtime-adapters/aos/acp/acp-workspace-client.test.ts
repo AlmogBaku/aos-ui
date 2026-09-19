@@ -6,7 +6,7 @@ import type {
 import { describe, expect, it, vi } from "vitest"
 import type { z } from "zod"
 
-import type { RuntimeInfo } from "@aos/protocol"
+import { INTERACTION_PROTOCOL, type RuntimeInfo } from "@aos/protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
@@ -31,7 +31,6 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
 function capabilities(): AcpCapabilities {
   return {
-    agent: {},
     workspace: {
       slashCommands: unavailable,
       models: {
@@ -59,14 +58,14 @@ function capabilities(): AcpCapabilities {
       },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [{ value: "once", scope: "request" }],
         maxPending: 8,
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",

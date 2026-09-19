@@ -73,8 +73,8 @@ They share coordinator semantics, not a generic socket manager.
 
 Adapters emit the proxy-owned run vocabulary (`RunEvent`, `RunEventKind`,
 `PendingRequest`, `RequestReply`, `TurnInput`, `ExecutionEvent` from
-`packages/proxy/core/events.ts`), which currently aliases AG-UI shapes; the ACP
-layer in `packages/proxy/acp/` translates them for the browser. Treat the
+`packages/proxy/core/events.ts`); the ACP layer in `packages/proxy/acp/`
+translates them for the browser. Treat the
 vocabulary as an event grammar, not a bag of JSON:
 
 - final assistant prose is text message content, never reasoning content;

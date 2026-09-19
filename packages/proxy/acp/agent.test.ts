@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
+  INTERACTION_PROTOCOL,
   SESSION_CATALOG_MAX_WINDOW,
   type RuntimeInfo,
   type Session,
@@ -101,7 +102,6 @@ const RUNTIME_INFO: RuntimeInfo = {
 }
 
 const CAPABILITIES = {
-  agent: {},
   workspace: {
     slashCommands: {
       status: "available",
@@ -133,14 +133,14 @@ const CAPABILITIES = {
     },
     approvals: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: INTERACTION_PROTOCOL,
       scope: "run",
       choices: [{ value: "once", scope: "request" }],
       maxPending: 1,
     },
     questions: {
       status: "available",
-      protocol: "ag-ui-interrupt",
+      protocol: INTERACTION_PROTOCOL,
       scope: "run",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-cancel",

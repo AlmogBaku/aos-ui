@@ -3,6 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { INTERACTION_PROTOCOL } from "../../protocol"
 import {
   createGuestInvitationService,
   type GuestInvitationService,
@@ -36,20 +37,6 @@ function invitations() {
 
 function workspaceCapabilities() {
   return {
-    agent: {
-      identity: { type: "hermes", provider: "private-provider" },
-      transport: { streaming: true, resumable: true },
-      reasoning: { supported: true, streaming: true },
-      multimodal: {
-        input: { image: true, audio: false, file: true },
-        output: { audio: false },
-      },
-      humanInTheLoop: {
-        supported: true,
-        approvals: true,
-        interrupts: true,
-      },
-    },
     workspace: {
       models: {
         status: "available",
@@ -70,7 +57,7 @@ function workspaceCapabilities() {
       steering: { status: "unavailable", reason: "not-supported" },
       approvals: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         choices: [
           { value: "once", scope: "request" },
@@ -82,7 +69,7 @@ function workspaceCapabilities() {
       },
       questions: {
         status: "available",
-        protocol: "ag-ui-interrupt",
+        protocol: INTERACTION_PROTOCOL,
         scope: "run",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",
@@ -319,8 +306,6 @@ describe("guest app", () => {
       prefill: "Hello",
       expiresAt: "2023-11-17T22:13:20.000Z",
     })
-    expect(JSON.stringify(body)).not.toContain("private-provider")
-    expect(JSON.stringify(body)).not.toContain("reasoning")
     expect(JSON.stringify(body)).not.toContain("models")
     expect(subject.resolveInvitedSession).toHaveBeenCalledWith(AGENT, REF)
     expect(subject.resolveInvitedSession).not.toHaveBeenCalledWith(

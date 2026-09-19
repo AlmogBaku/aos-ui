@@ -9,7 +9,7 @@ describe("openCodeCapabilities", () => {
       interactions: {
         questions: {
           status: "available",
-          protocol: "ag-ui-interrupt",
+          protocol: "acp-request",
           scope: "run",
         },
         approvals: {

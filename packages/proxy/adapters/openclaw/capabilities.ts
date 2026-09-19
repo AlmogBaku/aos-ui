@@ -1,3 +1,4 @@
+import { INTERACTION_PROTOCOL } from "../../../protocol"
 import { OPENCLAW_ATTACHMENT_PROXY_LIMITS } from "./content"
 import type { OpenClawNegotiatedPolicy } from "./client"
 import { OPENCLAW_MAX_PENDING_INTERACTIONS } from "./interactions"
@@ -20,7 +21,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
       },
       approvals: {
         status: "available" as const,
-        protocol: "ag-ui-interrupt" as const,
+        protocol: INTERACTION_PROTOCOL,
         scope: "run" as const,
         choices: [
           { value: "once" as const, scope: "request" as const },
@@ -31,7 +32,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
       },
       questions: {
         status: "available" as const,
-        protocol: "ag-ui-interrupt" as const,
+        protocol: INTERACTION_PROTOCOL,
         scope: "run" as const,
         answerModes: ["single", "multiple", "free-text"] as const,
         cancellation: "native-cancel" as const,
