@@ -146,6 +146,94 @@ describe("Bun proxy server lifecycle", () => {
     expect(eventSocket.close).toHaveBeenCalledTimes(1)
   })
 
+  it("hosts each socket path with its own peer budget and upgrade headers", async () => {
+    const eventSocket = { receive: vi.fn(), close: vi.fn() }
+    const acpSocket = { receive: vi.fn(), close: vi.fn() }
+    const acpOpen = vi.fn(() => acpSocket)
+    const upgrades: Array<{
+      data: unknown
+      headers?: Record<string, string>
+    }> = []
+    let served: Record<string, unknown> | undefined
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/aos/v1/events",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
+            open: vi.fn(() => eventSocket),
+          },
+          maxPeers: 1,
+        },
+        {
+          path: "/api/aos/v1/acp",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({
+              principalId: "operator",
+              connectionId: "connection-1",
+              headers: { "Acp-Connection-Id": "connection-1" },
+            })),
+            open: acpOpen,
+          },
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: unknown
+    ) => Promise<Response | undefined>
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      message(peer: unknown, raw: string): void
+    }
+    const server = {
+      upgrade(
+        _request: Request,
+        options: { data: unknown; headers?: Record<string, string> }
+      ) {
+        upgrades.push(options)
+        return true
+      },
+    }
+    const connect = async (path: string) => {
+      await fetch(new Request(`https://aos.example.test${path}`), server)
+      const peer = {
+        data: upgrades[upgrades.length - 1]!.data,
+        send: vi.fn(),
+        close: vi.fn(),
+      }
+      websocket.open(peer)
+      return peer
+    }
+
+    await connect("/api/aos/v1/events")
+    const overBudget = await connect("/api/aos/v1/events")
+    expect(overBudget.close).toHaveBeenCalledWith(
+      1013,
+      "Event peer capacity exceeded"
+    )
+
+    const acpPeer = await connect("/api/aos/v1/acp")
+    expect(upgrades[2]!.headers).toEqual({
+      "Acp-Connection-Id": "connection-1",
+    })
+    expect(acpPeer.close).not.toHaveBeenCalled()
+    expect(acpOpen).toHaveBeenCalledTimes(1)
+    websocket.message(acpPeer, "frame")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(acpSocket.receive).toHaveBeenCalledWith("frame")
+    expect(eventSocket.receive).not.toHaveBeenCalled()
+  })
+
   it("closes event peers above the configured listener limit with 1013", async () => {
     let served: Record<string, unknown> | undefined
     const upgradeData: unknown[] = []

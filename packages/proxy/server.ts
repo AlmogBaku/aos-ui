@@ -1,62 +1,106 @@
 import type { OperatorEventUpgrade } from "./events/service"
-import type { EventsSocket } from "./events/socket"
+
+/** Where the operator invalidation socket is mounted. */
+const OPERATOR_EVENTS_PATH = "/api/aos/v1/events"
 
 type FetchHandler = (
   request: Request,
   server?: unknown
 ) => Response | undefined | Promise<Response | undefined>
 type Server = { stop(closeActiveConnections?: boolean): Promise<void> | void }
-type EventSocketData<Authorization> = {
-  authorization: Authorization
-  socket?: EventsSocket
+
+/** One authorized upgrade: its principal and any headers the 101 must carry. */
+export type SocketUpgrade = {
+  principalId: string
+  headers?: Readonly<Record<string, string>>
+}
+
+/** The transport-neutral socket a mounted service owns for one peer. */
+export type ProxySocket = {
+  receive(raw: string | Uint8Array): void | Promise<void>
+  close(): void
+}
+
+export type ProxySocketPeer = {
+  send(raw: string): void
+  close(code: number, reason: string): void
+}
+
+export type ProxySocketService<Upgrade extends SocketUpgrade> = {
+  authorizeUpgrade(request: Request): Promise<Upgrade | undefined>
+  open(upgrade: Upgrade, peer: ProxySocketPeer): ProxySocket
+}
+
+/** One WebSocket path hosted beside the HTTP app, with its own peer budget. */
+export type ProxySocketMount<Upgrade extends SocketUpgrade> = {
+  path: string
+  service: ProxySocketService<Upgrade>
+  maxPeers?: number
+}
+
+type MountState<Upgrade extends SocketUpgrade> = {
+  path: string
+  service: ProxySocketService<Upgrade>
+  maxPeers: number
+  peers: Set<SocketPeer<Upgrade>>
+  reserved: number
+}
+type SocketData<Upgrade extends SocketUpgrade> = {
+  mount: MountState<Upgrade>
+  authorization: Upgrade
+  socket?: ProxySocket
   failed?: boolean
   overloaded?: boolean
 }
-type EventPeer<Authorization> = {
-  data: EventSocketData<Authorization>
+type SocketPeer<Upgrade extends SocketUpgrade> = {
+  data: SocketData<Upgrade>
   send(raw: string): void
   close(code?: number, reason?: string): void
 }
 type UpgradeServer = {
-  upgrade<Authorization>(
+  upgrade<Upgrade extends SocketUpgrade>(
     request: Request,
-    options: { data: EventSocketData<Authorization> }
+    options: {
+      data: SocketData<Upgrade>
+      headers?: Readonly<Record<string, string>>
+    }
   ): boolean
 }
 type RequestServer = UpgradeServer & {
   timeout?(request: Request, seconds: number): void
 }
-type ServeOptions<Authorization> = {
+type ServeOptions<Upgrade extends SocketUpgrade> = {
   hostname: string
   port: number
   fetch: FetchHandler
   websocket?: {
-    open(peer: EventPeer<Authorization>): void
+    open(peer: SocketPeer<Upgrade>): void
     message(
-      peer: EventPeer<Authorization>,
+      peer: SocketPeer<Upgrade>,
       raw: string | Uint8Array | ArrayBuffer
     ): void
-    close(peer: EventPeer<Authorization>): void
+    close(peer: SocketPeer<Upgrade>): void
   }
 }
-type Serve = <Authorization>(options: ServeOptions<Authorization>) => Server
+type Serve = <Upgrade extends SocketUpgrade>(
+  options: ServeOptions<Upgrade>
+) => Server
 
-type EventService<Authorization> = {
-  authorizeUpgrade(request: Request): Promise<Authorization | undefined>
-  open(
-    authorization: Authorization,
-    peer: { send(raw: string): void; close(code: number, reason: string): void }
-  ): EventsSocket
-}
-
-export type StartProxyServerOptions<Authorization = OperatorEventUpgrade> = {
+export type StartProxyServerOptions<
+  Upgrade extends SocketUpgrade = OperatorEventUpgrade,
+> = {
   app: { fetch: FetchHandler }
-  events?: EventService<Authorization>
-  eventsPath?: string
+  /**
+   * The operator invalidation socket: the events lane's shorthand for one
+   * `sockets` entry at `/api/aos/v1/events`.
+   */
+  events?: ProxySocketService<Upgrade>
+  maxEventPeers?: number
+  /** Further WebSocket mounts, each with its own path and peer budget. */
+  sockets?: readonly ProxySocketMount<Upgrade>[]
   host: string
   port: number
   shutdownGraceMs: number
-  maxEventPeers?: number
   close?: () => Promise<void> | void
   serve?: Serve
   installSignalHandlers?: boolean
@@ -68,15 +112,39 @@ function bunServe(): Serve {
   return bun.serve.bind(bun)
 }
 
-export function startProxyServer<Authorization = OperatorEventUpgrade>(
-  options: StartProxyServerOptions<Authorization>
-) {
-  const activeEventPeers = new Set<EventPeer<Authorization>>()
-  const maxEventPeers = options.maxEventPeers ?? Number.MAX_SAFE_INTEGER
-  let reservedEventPeers = 0
-  if (!Number.isSafeInteger(maxEventPeers) || maxEventPeers < 1)
-    throw new Error("Invalid event peer limit")
-  const failEventPeer = (peer: EventPeer<Authorization>) => {
+function mountState<Upgrade extends SocketUpgrade>(
+  mount: ProxySocketMount<Upgrade>
+): MountState<Upgrade> {
+  const maxPeers = mount.maxPeers ?? Number.MAX_SAFE_INTEGER
+  if (!Number.isSafeInteger(maxPeers) || maxPeers < 1)
+    throw new Error("Invalid socket peer limit")
+  return {
+    path: mount.path,
+    service: mount.service,
+    maxPeers,
+    peers: new Set(),
+    reserved: 0,
+  }
+}
+
+export function startProxyServer<
+  Upgrade extends SocketUpgrade = OperatorEventUpgrade,
+>(options: StartProxyServerOptions<Upgrade>) {
+  const mounts = [
+    ...(options.events
+      ? [
+          {
+            path: OPERATOR_EVENTS_PATH,
+            service: options.events,
+            ...(options.maxEventPeers === undefined
+              ? {}
+              : { maxPeers: options.maxEventPeers }),
+          },
+        ]
+      : []),
+    ...(options.sockets ?? []),
+  ].map((mount) => mountState(mount))
+  const failPeer = (peer: SocketPeer<Upgrade>) => {
     if (peer.data.failed) return
     peer.data.failed = true
     try {
@@ -91,59 +159,65 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
       // The peer may already be gone.
     }
   }
-  const websocket = options.events
-    ? {
-        open(peer: EventPeer<Authorization>) {
-          if (reservedEventPeers > 0) reservedEventPeers -= 1
-          if (peer.data.overloaded) {
-            peer.close(1013, "Event peer capacity exceeded")
-            return
-          }
-          try {
-            peer.data.socket = options.events!.open(peer.data.authorization, {
-              send: (raw) => peer.send(raw),
-              close: (code, reason) => peer.close(code, reason),
-            })
-            activeEventPeers.add(peer)
-          } catch {
-            failEventPeer(peer)
-          }
-        },
-        message(
-          peer: EventPeer<Authorization>,
-          raw: string | Uint8Array | ArrayBuffer
-        ) {
-          const frame = raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw
-          void Promise.resolve()
-            .then(() => peer.data.socket?.receive(frame))
-            .catch(() => failEventPeer(peer))
-        },
-        close(peer: EventPeer<Authorization>) {
-          activeEventPeers.delete(peer)
-          try {
-            peer.data.socket?.close()
-          } catch {
-            // Concrete peer close must still finish cleanup.
-          }
-          peer.data.socket = undefined
-        },
-      }
-    : undefined
+  const websocket =
+    mounts.length > 0
+      ? {
+          open(peer: SocketPeer<Upgrade>) {
+            const mount = peer.data.mount
+            if (mount.reserved > 0) mount.reserved -= 1
+            if (peer.data.overloaded) {
+              peer.close(1013, "Event peer capacity exceeded")
+              return
+            }
+            try {
+              peer.data.socket = mount.service.open(peer.data.authorization, {
+                send: (raw) => peer.send(raw),
+                close: (code, reason) => peer.close(code, reason),
+              })
+              mount.peers.add(peer)
+            } catch {
+              failPeer(peer)
+            }
+          },
+          message(
+            peer: SocketPeer<Upgrade>,
+            raw: string | Uint8Array | ArrayBuffer
+          ) {
+            const frame = raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw
+            void Promise.resolve()
+              .then(() => peer.data.socket?.receive(frame))
+              .catch(() => failPeer(peer))
+          },
+          close(peer: SocketPeer<Upgrade>) {
+            peer.data.mount.peers.delete(peer)
+            try {
+              peer.data.socket?.close()
+            } catch {
+              // Concrete peer close must still finish cleanup.
+            }
+            peer.data.socket = undefined
+          },
+        }
+      : undefined
   const fetch: FetchHandler = async (request, rawServer) => {
     const url = new URL(request.url)
-    if (
-      options.events &&
-      url.pathname === (options.eventsPath ?? "/api/aos/v1/events")
-    ) {
+    const mount = mounts.find((candidate) => candidate.path === url.pathname)
+    if (mount) {
       if (request.method !== "GET") return new Response(null, { status: 405 })
-      const authorization = await options.events.authorizeUpgrade(request)
+      const authorization = await mount.service.authorizeUpgrade(request)
       if (!authorization) return new Response(null, { status: 401 })
       const upgrade = rawServer as RequestServer | undefined
-      const overloaded =
-        activeEventPeers.size + reservedEventPeers >= maxEventPeers
-      if (!overloaded) reservedEventPeers += 1
-      if (!upgrade?.upgrade(request, { data: { authorization, overloaded } })) {
-        if (!overloaded) reservedEventPeers -= 1
+      const overloaded = mount.peers.size + mount.reserved >= mount.maxPeers
+      if (!overloaded) mount.reserved += 1
+      if (
+        !upgrade?.upgrade(request, {
+          data: { mount, authorization, overloaded },
+          ...(authorization.headers === undefined
+            ? {}
+            : { headers: authorization.headers }),
+        })
+      ) {
+        if (!overloaded) mount.reserved -= 1
         return new Response(null, { status: 500 })
       }
       return undefined
@@ -168,20 +242,22 @@ export function startProxyServer<Authorization = OperatorEventUpgrade>(
   let onSignal: (() => void) | undefined
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise
-    for (const peer of activeEventPeers) {
-      try {
-        peer.data.socket?.close()
-      } catch {
-        // Shutdown continues even if observer cleanup has already failed.
+    for (const mount of mounts) {
+      for (const peer of mount.peers) {
+        try {
+          peer.data.socket?.close()
+        } catch {
+          // Shutdown continues even if observer cleanup has already failed.
+        }
+        peer.data.socket = undefined
+        try {
+          peer.close(1001, "Server shutting down")
+        } catch {
+          // The peer may already be gone.
+        }
       }
-      peer.data.socket = undefined
-      try {
-        peer.close(1001, "Server shutting down")
-      } catch {
-        // The peer may already be gone.
-      }
+      mount.peers.clear()
     }
-    activeEventPeers.clear()
     shutdownPromise = new Promise<void>((resolve) => {
       let settled = false
       let resourcesClosed = false

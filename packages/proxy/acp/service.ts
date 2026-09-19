@@ -1,0 +1,86 @@
+import { randomUUID } from "node:crypto"
+
+import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
+
+import { createAcpSocket, type AcpSocket } from "./socket"
+import type { AcpConnectionContext, AosAcpAgentFactory, Lane } from "./types"
+
+/**
+ * The 101 response header that tells the client which connection it got. The
+ * SDK reads it back only on its Streamable HTTP transport, which this lane does
+ * not host: the proxy mints the id so one value identifies the connection in
+ * the header, in the connection context, and in proxy logs.
+ */
+const CONNECTION_ID_HEADER = "Acp-Connection-Id"
+
+/** One authorized ACP upgrade, carried to `open` through the peer's data. */
+export type AcpUpgrade = {
+  principalId: string
+  lane: Lane
+  connectionId: string
+  headers: Readonly<Record<string, string>>
+}
+
+export type AcpPeer = {
+  send(raw: string): void
+  close(code: number, reason: string): void
+}
+
+export type AcpServiceOptions = {
+  publicOrigin: string
+  lane: Lane
+  /** Builds the per-connection ACP agent app. */
+  agent: AosAcpAgentFactory
+  /** Builds the per-connection proxy state the agent app runs against. */
+  connection(connectionId: string, principalId: string): AcpConnectionContext
+  /** The operator lane has one trusted principal; the guest lane passes its own. */
+  principalId?: string
+}
+
+/** Hosts one ACP v2 lane over WebSocket beside the invalidation socket. */
+export function createAcpService(options: AcpServiceOptions) {
+  const principalId = options.principalId ?? options.lane
+
+  async function authorizeUpgrade(
+    request: Request
+  ): Promise<AcpUpgrade | undefined> {
+    if (request.headers.get("origin") !== options.publicOrigin) return undefined
+    const connectionId = randomUUID()
+    return {
+      principalId,
+      lane: options.lane,
+      connectionId,
+      headers: { [CONNECTION_ID_HEADER]: connectionId },
+    }
+  }
+
+  function open(upgrade: AcpUpgrade, peer: AcpPeer) {
+    const server = new AcpServer({
+      createAgent: () =>
+        options.agent(
+          options.connection(upgrade.connectionId, upgrade.principalId)
+        ),
+    })
+    const prepared = server.prepareWebSocketUpgrade()
+    const holder: { socket?: AcpSocket } = {}
+    const socket = createAcpSocket({
+      close: peer.close,
+      notify() {
+        for (const raw of holder.socket?.drain() ?? []) peer.send(raw)
+      },
+    })
+    holder.socket = socket
+    prepared.accept(socket.socket)
+    return {
+      receive: (raw: string | Uint8Array) => socket.receive(raw),
+      close() {
+        socket.close()
+        void server.close()
+      },
+    }
+  }
+
+  return { authorizeUpgrade, open }
+}
+
+export type AcpService = ReturnType<typeof createAcpService>
