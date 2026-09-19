@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 
+import { withinGrace } from "../grace"
 import { createAcpSocket, type AcpSocket } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory, Lane } from "./types"
 
@@ -12,6 +13,13 @@ import type { AcpConnectionContext, AosAcpAgentFactory, Lane } from "./types"
  * the header, in the connection context, and in proxy logs.
  */
 const CONNECTION_ID_HEADER = "Acp-Connection-Id"
+
+/**
+ * The SDK's `close` tears down its inbound and outbound streams, which can wait
+ * on a handler that is still running, so the proxy bounds that wait instead of
+ * letting one connection delay a peer close or a listener shutdown.
+ */
+const SERVER_CLOSE_GRACE_MS = 1_000
 
 /** One authorized ACP upgrade, carried to `open` through the peer's data. */
 export type AcpUpgrade = {
@@ -75,7 +83,7 @@ export function createAcpService(options: AcpServiceOptions) {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
         socket.close()
-        void server.close()
+        void withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS)
       },
     }
   }

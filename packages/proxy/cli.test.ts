@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
+import type { startProxyServer } from "./server"
 
 const temporaryDirectories: string[] = []
 
@@ -89,8 +90,15 @@ describe("proxy executable", () => {
       const shutdowns: Array<ReturnType<typeof vi.fn>> = []
       const transportClose = vi.fn(async () => undefined)
       const staticHandler = vi.fn(async () => new Response("shell"))
-      const start = vi.fn(() => {
-        const shutdown = vi.fn(async () => undefined)
+      const exit = vi.fn()
+      const logger = { info: vi.fn(), error: vi.fn() }
+      /** Models one listener: shutdown announces, closes resources, settles. */
+      const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
+        const shutdown = vi.fn(async () => {
+          options.onShutdownStarted?.()
+          await options.close?.()
+          options.onSettled?.({ forced: false })
+        })
         shutdowns.push(shutdown)
         return { server: { stop: vi.fn() }, shutdown }
       })
@@ -104,13 +112,14 @@ describe("proxy executable", () => {
                 close: transportClose,
               }),
             }),
-          logger: { info: vi.fn(), error: vi.fn() },
+          logger,
           getenv: (name) =>
             name === "AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED"
               ? environmentValue
               : undefined,
           start,
           staticHandler,
+          exit,
         }
       )
 
@@ -137,8 +146,8 @@ describe("proxy executable", () => {
           ],
         })
       )
-      expect(start.mock.calls[0]![0].close).toBeUndefined()
-      expect(start.mock.calls[1]![0].close).toBeUndefined()
+      expect(start.mock.calls[0]![0].close).toBeInstanceOf(Function)
+      expect(start.mock.calls[1]![0].close).toBeInstanceOf(Function)
       const guestApp = start.mock.calls[1]![0].app
       expect(
         await (
@@ -181,6 +190,24 @@ describe("proxy executable", () => {
       expect(shutdowns[0]).toHaveBeenCalledOnce()
       expect(shutdowns[1]).toHaveBeenCalledOnce()
       expect(transportClose).toHaveBeenCalledOnce()
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "proxy.shutdown.started",
+          graceMs: 5_000,
+        })
+      )
+      expect(logger.info).toHaveBeenCalledWith({
+        event: "proxy.shutdown.completed",
+        forced: false,
+      })
+      expect(
+        logger.info.mock.calls.filter(
+          ([entry]) =>
+            (entry as { event: string }).event === "proxy.shutdown.started"
+        )
+      ).toHaveLength(1)
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0)
     }
   )
 

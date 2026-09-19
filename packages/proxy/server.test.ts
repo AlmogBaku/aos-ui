@@ -1,8 +1,160 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { startProxyServer } from "./server"
+import { startProxyServer, type ShutdownSettlement } from "./server"
 
 describe("Bun proxy server lifecycle", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** One listener whose stop, request count, and resource close are scripted. */
+  function fakeListener(
+    listener: {
+      stop?: (closeActiveConnections?: boolean) => Promise<void> | void
+      pendingRequests?: () => number
+      close?: () => Promise<void> | void
+    } = {}
+  ) {
+    const stop = vi.fn(listener.stop ?? (async () => undefined))
+    const close = vi.fn(listener.close ?? (async () => undefined))
+    const settlements: ShutdownSettlement[] = []
+    let served: Record<string, unknown> | undefined
+    const lifecycle = startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/aos/v1/acp",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
+            open: vi.fn(() => ({ receive: vi.fn(), close: vi.fn() })),
+          },
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      close,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return {
+          stop,
+          get pendingRequests() {
+            return listener.pendingRequests?.()
+          },
+        }
+      }),
+      onSettled: (settlement) => settlements.push(settlement),
+      installSignalHandlers: false,
+    })
+    const connect = async () => {
+      const fetch = served!.fetch as (
+        request: Request,
+        server: {
+          upgrade(request: Request, options: { data: unknown }): boolean
+        }
+      ) => Promise<Response | undefined>
+      let data: unknown
+      await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+        upgrade(_request, options) {
+          data = options.data
+          return true
+        },
+      })
+      const peer = { data, send: vi.fn(), close: vi.fn() }
+      ;(served!.websocket as { open(peer: unknown): void }).open(peer)
+      return peer
+    }
+    return { lifecycle, stop, close, settlements, connect }
+  }
+
+  it("closes peers and releases the listener without waiting for a stop that never resolves", async () => {
+    vi.useFakeTimers()
+    // Bun leaves `stop(false)` pending forever once a peer has been upgraded.
+    const listener = fakeListener({
+      stop: (closeActiveConnections) =>
+        closeActiveConnections === true
+          ? Promise.resolve()
+          : new Promise<void>(() => undefined),
+    })
+    const peer = await listener.connect()
+    const startedAt = Date.now()
+
+    await listener.lifecycle.shutdown()
+
+    expect(peer.close).toHaveBeenCalledWith(1001, "Server shutting down")
+    expect(listener.stop).toHaveBeenNthCalledWith(1, false)
+    expect(listener.stop).toHaveBeenNthCalledWith(2, true)
+    expect(listener.close).toHaveBeenCalledOnce()
+    expect(listener.settlements).toEqual([{ forced: false }])
+    expect(Date.now() - startedAt).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("waits for in-flight requests inside the grace", async () => {
+    vi.useFakeTimers()
+    const startedAt = Date.now()
+    const listener = fakeListener({
+      pendingRequests: () => (Date.now() - startedAt < 500 ? 1 : 0),
+    })
+
+    let resolved = false
+    const shutdown = listener.lifecycle.shutdown().then(() => {
+      resolved = true
+    })
+    await vi.advanceTimersByTimeAsync(400)
+    expect(resolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(200)
+    await shutdown
+    expect(listener.settlements).toEqual([{ forced: false }])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("forces the stop when in-flight requests outlive the grace", async () => {
+    vi.useFakeTimers()
+    const listener = fakeListener({ pendingRequests: () => 1 })
+
+    let resolved = false
+    const shutdown = listener.lifecycle.shutdown().then(() => {
+      resolved = true
+    })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(resolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await shutdown
+    expect(listener.stop).toHaveBeenNthCalledWith(2, true)
+    expect(listener.settlements).toEqual([{ forced: true }])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("forces the stop when the provider close outlives the grace", async () => {
+    vi.useFakeTimers()
+    const listener = fakeListener({
+      close: () => new Promise<void>(() => undefined),
+    })
+
+    const shutdown = listener.lifecycle.shutdown()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await shutdown
+
+    expect(listener.close).toHaveBeenCalledOnce()
+    expect(listener.settlements).toEqual([{ forced: true }])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("reports a clean settlement and closes resources once", async () => {
+    const listener = fakeListener()
+
+    await Promise.all([
+      listener.lifecycle.shutdown(),
+      listener.lifecycle.shutdown(),
+    ])
+
+    expect(listener.close).toHaveBeenCalledOnce()
+    expect(listener.settlements).toEqual([{ forced: false }])
+  })
+
   it("stops accepting work and lets active requests drain", async () => {
     const stop = vi.fn(async () => undefined)
     const close = vi.fn(async () => undefined)

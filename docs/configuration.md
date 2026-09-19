@@ -50,7 +50,7 @@ the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
 | `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below. |
 | `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                   |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys.                          |
-| `shutdownGraceMs` | Time allowed for HTTP and event connections to drain.                                         |
+| `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
 rejected. Operator and guest listeners use the exact same runtime instance,

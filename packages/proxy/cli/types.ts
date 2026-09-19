@@ -10,6 +10,8 @@ export type ProxyCliDependencies = ConfiguredProxyDependencies & {
   clock?: () => number
   writeOut?: (value: string) => void
   writeErr?: (value: string) => void
+  /** Ends the process once every listener has shut down. */
+  exit?: (code: number) => void
 }
 
 export type ProxyLifecycle = {

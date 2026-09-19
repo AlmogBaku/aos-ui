@@ -3,7 +3,11 @@ import { readFile } from "node:fs/promises"
 import { AOS_ACP_GUEST_PATH, AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { parseGuestComposerSlashCommandsEnabled } from "../config"
-import { startProxyServer, type SocketUpgrade } from "../server"
+import {
+  startProxyServer,
+  type ShutdownSettlement,
+  type SocketUpgrade,
+} from "../server"
 import type { StaticHandler } from "../static"
 import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
 
@@ -76,6 +80,40 @@ export async function serveProxy(
       getenv("AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED")
     )
   const start = dependencies.start ?? startProxyServer
+  const graceMs = configured.config.shutdownGraceMs
+  const listenerCount = configured.guest ? 2 : 1
+  let runtimeClosed: Promise<void> | undefined
+  /** One runtime is shared by every listener, so every shutdown path closes it once. */
+  const closeRuntime = () =>
+    (runtimeClosed ??= Promise.resolve().then(() =>
+      configured.runtimeInstance.close()
+    ))
+  let shutdownAnnounced = false
+  const announceShutdown = () => {
+    if (shutdownAnnounced) return
+    shutdownAnnounced = true
+    dependencies.logger.info({ event: "proxy.shutdown.started", graceMs })
+  }
+  const exit = dependencies.exit ?? ((code: number) => process.exit(code))
+  let settledListeners = 0
+  let forcedShutdown = false
+  /**
+   * Every listener has stopped and the runtime is closed, so nothing is left to
+   * serve: exiting is the only deterministic end for stray provider work that
+   * outlived the grace.
+   */
+  const onSettled = ({ forced }: ShutdownSettlement) => {
+    forcedShutdown ||= forced
+    settledListeners += 1
+    if (settledListeners < listenerCount) return
+    if (forcedShutdown)
+      dependencies.logger.error({ event: "proxy.shutdown.forced", graceMs })
+    dependencies.logger.info({
+      event: "proxy.shutdown.completed",
+      forced: forcedShutdown,
+    })
+    exit(forcedShutdown ? 1 : 0)
+  }
   const lifecycle = start<SocketUpgrade>({
     app: listenerApp(configured.app, "/api/aos/v1", dependencies.staticHandler),
     sockets: [
@@ -87,7 +125,10 @@ export async function serveProxy(
     ],
     host: configured.config.listen.host,
     port: configured.config.listen.port,
-    shutdownGraceMs: configured.config.shutdownGraceMs,
+    shutdownGraceMs: graceMs,
+    close: closeRuntime,
+    onShutdownStarted: announceShutdown,
+    onSettled,
   })
   const guestLifecycle = configured.guest
     ? start<SocketUpgrade>({
@@ -114,7 +155,10 @@ export async function serveProxy(
         ),
         host: configured.config.guest!.listen.host,
         port: configured.config.guest!.listen.port,
-        shutdownGraceMs: configured.config.shutdownGraceMs,
+        shutdownGraceMs: graceMs,
+        close: closeRuntime,
+        onShutdownStarted: announceShutdown,
+        onSettled,
       })
     : undefined
 
@@ -142,7 +186,7 @@ export async function serveProxy(
             ...(guestLifecycle ? [guestLifecycle.shutdown()] : []),
           ])
         } finally {
-          await configured.runtimeInstance.close()
+          await closeRuntime()
         }
       })()
       return shutdownPromise

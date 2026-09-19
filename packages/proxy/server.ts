@@ -1,8 +1,17 @@
+import { sleep, withinGrace } from "./grace"
+
 type FetchHandler = (
   request: Request,
   server?: unknown
 ) => Response | undefined | Promise<Response | undefined>
-type Server = { stop(closeActiveConnections?: boolean): Promise<void> | void }
+type Server = {
+  stop(closeActiveConnections?: boolean): Promise<void> | void
+  /** Bun's in-flight request count; absent when a caller fakes the listener. */
+  readonly pendingRequests?: number
+}
+
+/** How often shutdown re-reads the listener's in-flight request count. */
+const DRAIN_POLL_MS = 10
 
 /** One authorized upgrade: its principal and any headers the 101 must carry. */
 export type SocketUpgrade = {
@@ -78,6 +87,12 @@ type Serve = <Upgrade extends SocketUpgrade>(
   options: ServeOptions<Upgrade>
 ) => Server
 
+/** How one listener's shutdown ended, for the owner that decides the exit. */
+export type ShutdownSettlement = {
+  /** The grace expired before the listener drained: the exit is unclean. */
+  forced: boolean
+}
+
 export type StartProxyServerOptions<
   Upgrade extends SocketUpgrade = SocketUpgrade,
 > = {
@@ -86,8 +101,13 @@ export type StartProxyServerOptions<
   sockets?: readonly ProxySocketMount<Upgrade>[]
   host: string
   port: number
+  /** Bounds the whole shutdown sequence, however the shutdown was triggered. */
   shutdownGraceMs: number
   close?: () => Promise<void> | void
+  /** Observes entry into shutdown, before any bounded wait begins. */
+  onShutdownStarted?: () => void
+  /** Observes the one settlement of this listener's shutdown. */
+  onSettled?: (settlement: ShutdownSettlement) => void
   serve?: Serve
   installSignalHandlers?: boolean
 }
@@ -207,6 +227,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
   let onSignal: (() => void) | undefined
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise
+    options.onShutdownStarted?.()
     for (const mount of mounts) {
       for (const peer of mount.peers) {
         try {
@@ -223,30 +244,34 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
       }
       mount.peers.clear()
     }
-    shutdownPromise = new Promise<void>((resolve) => {
-      let settled = false
-      let resourcesClosed = false
-      const closeResources = async () => {
-        if (resourcesClosed) return
-        resourcesClosed = true
-        await options.close?.()
-      }
-      const finish = async () => {
-        if (settled) return
-        settled = true
-        clearTimeout(forceTimer)
-        if (onSignal) {
-          process.removeListener("SIGINT", onSignal)
-          process.removeListener("SIGTERM", onSignal)
-        }
-        await closeResources().catch(() => undefined)
-        resolve()
-      }
-      const forceTimer = setTimeout(() => {
-        void Promise.resolve(server.stop(true)).then(finish, finish)
-      }, options.shutdownGraceMs)
-      void Promise.resolve(server.stop(false)).then(finish, finish)
-    })
+    if (onSignal) {
+      process.removeListener("SIGINT", onSignal)
+      process.removeListener("SIGTERM", onSignal)
+      onSignal = undefined
+    }
+    shutdownPromise = (async () => {
+      // One deadline covers the whole sequence: a request that will not finish
+      // and a provider that will not close must not outlive the grace.
+      const deadlineAt = Date.now() + options.shutdownGraceMs
+      const remainingMs = () => Math.max(0, deadlineAt - Date.now())
+      let forced = false
+      // Stop accepting new work. Bun leaves this promise pending until every
+      // connection is gone and never settles it once a peer has been upgraded,
+      // so nothing waits on it and the drain below reads the request count.
+      void Promise.resolve()
+        .then(() => server.stop(false))
+        .catch(() => undefined)
+      const inFlight = () => server.pendingRequests ?? 0
+      while (inFlight() > 0 && remainingMs() > 0)
+        await sleep(Math.min(DRAIN_POLL_MS, remainingMs()))
+      if (inFlight() > 0) forced = true
+      // Peers are closed and requests are drained or abandoned, so release the
+      // listener itself: Bun frees a hosted socket only on a forced stop.
+      await withinGrace(() => server.stop(true), remainingMs())
+      if (!(await withinGrace(() => options.close?.(), remainingMs())))
+        forced = true
+      options.onSettled?.({ forced })
+    })()
     return shutdownPromise
   }
 
