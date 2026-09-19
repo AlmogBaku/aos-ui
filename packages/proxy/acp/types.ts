@@ -88,13 +88,16 @@ export type AcpOutbound =
   | {
       kind: "request-permission"
       interruptId: string
-      request: Omit<RequestPermissionRequest, "sessionId">
+      request: WithoutSession<RequestPermissionRequest>
     }
   | {
       kind: "elicitation"
       interruptId: string
-      request: Omit<CreateElicitationRequest, "sessionId">
+      request: WithoutSession<CreateElicitationRequest>
     }
+
+/** `Omit` that distributes over a union so mode-specific fields stay typed. */
+type WithoutSession<T> = T extends unknown ? Omit<T, "sessionId"> : never
 
 /**
  * Per-connection read-state service. The browser reports exposure through
