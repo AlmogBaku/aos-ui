@@ -1,78 +1,22 @@
 import type { SessionMessage } from "../../../protocol"
 import {
-  projectHermesMediaArtifacts,
-  projectHermesMediaText,
-} from "./media-artifacts"
+  isRecord as isNativeRecord,
+  timestamp,
+  trimmedText,
+  utf8BytesWithin,
+} from "./native"
+import { projectHermesMediaText } from "./media-artifacts"
 import {
-  hermesToolResultIsError,
-  projectHermesToolArgs,
-  projectHermesToolResult,
+  canonicalToolName,
+  projectHermesToolCall,
+  projectHermesToolOutcome,
 } from "./tool-data"
 
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 type JsonRecord = Record<string, JsonValue>
-
-const MAX_PUBLIC_DEPTH = 8
-const MAX_PUBLIC_ENTRIES = 100
-const MAX_PUBLIC_STRING_LENGTH = 4_000
-
-const privateToolKeys = new Set([
-  "apikey",
-  "authorization",
-  "baseurl",
-  "canonicalsession",
-  "cookie",
-  "credential",
-  "credentials",
-  "cwd",
-  "directory",
-  "endpoint",
-  "file",
-  "filepath",
-  "files",
-  "filepaths",
-  "href",
-  "livesessionid",
-  "meta",
-  "metadata",
-  "nativeposition",
-  "nativemetadata",
-  "password",
-  "passwd",
-  "path",
-  "paths",
-  "position",
-  "privatemetadata",
-  "privatekey",
-  "providermetadata",
-  "providerurl",
-  "reference",
-  "root",
-  "secret",
-  "sessionid",
-  "setcookie",
-  "source",
-  "storedsessionid",
-  "token",
-  "uri",
-  "url",
-  "websocketurl",
-  "workdir",
-  "workingdirectory",
-])
-
-const credentialValue =
-  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
-const privateLocationValue =
-  /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
-
 function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function stringValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
+  return isNativeRecord(value)
 }
 
 function jsonValue(value: unknown): JsonValue | undefined {
@@ -96,305 +40,17 @@ function jsonValue(value: unknown): JsonValue | undefined {
   return output
 }
 
-function parseJson(value: unknown): JsonValue | undefined {
+/**
+ * Row content parser: unlike `native.parseJson` this projects the decoded value
+ * into the strict `JsonValue` the public history shape accepts, and keeps the
+ * raw string when a row's content is not JSON at all.
+ */
+function parseRowJson(value: unknown): JsonValue | undefined {
   if (typeof value !== "string") return jsonValue(value)
   try {
     return jsonValue(JSON.parse(value) as unknown)
   } catch {
     return value
-  }
-}
-
-function jsonRecord(value: unknown): JsonRecord {
-  return isRecord(value) ? value : {}
-}
-
-function normalizedKey(key: string) {
-  return key.replace(/[^a-z0-9]/giu, "").toLowerCase()
-}
-
-function isPrivateToolKey(key: string) {
-  const normalized = normalizedKey(key)
-  return (
-    privateToolKeys.has(normalized) ||
-    [
-      "credential",
-      "credentials",
-      "metadata",
-      "password",
-      "path",
-      "position",
-      "secret",
-      "sessionid",
-      "token",
-      "uri",
-      "url",
-    ].some((suffix) => normalized.endsWith(suffix))
-  )
-}
-
-function publicJsonValue(value: JsonValue, depth = 0): JsonValue | undefined {
-  if (depth > MAX_PUBLIC_DEPTH) return undefined
-  if (typeof value === "string") {
-    if (
-      value.length > MAX_PUBLIC_STRING_LENGTH ||
-      credentialValue.test(value) ||
-      privateLocationValue.test(value)
-    )
-      return undefined
-    return value
-  }
-  if (value === null || typeof value === "boolean" || typeof value === "number")
-    return value
-  if (Array.isArray(value))
-    return value.slice(0, MAX_PUBLIC_ENTRIES).flatMap((item) => {
-      const projected = publicJsonValue(item, depth + 1)
-      return projected === undefined ? [] : [projected]
-    })
-  const result: JsonRecord = {}
-  for (const [key, item] of Object.entries(value).slice(
-    0,
-    MAX_PUBLIC_ENTRIES
-  )) {
-    if (isPrivateToolKey(key)) continue
-    const projected = publicJsonValue(item, depth + 1)
-    if (projected !== undefined) result[key] = projected
-  }
-  return result
-}
-
-function publicToolArgs(name: string, args: JsonRecord): JsonRecord {
-  const projected = projectHermesToolArgs(args)
-  if (canonicalToolName(name) !== "present_artifact") return projected
-  const artifactArgs: JsonRecord = {}
-  for (const key of ["id", "title", "filename", "mimeType", "sizeBytes"])
-    if (key in projected) artifactArgs[key] = projected[key]!
-  return artifactArgs
-}
-
-function publicToolResult(name: string, value: unknown, isError: boolean) {
-  const canonicalName = canonicalToolName(name)
-  if (canonicalName === "text_to_speech")
-    return { status: isError ? "failed" : "completed" }
-  if (canonicalName === "question") {
-    const responses = projectQuestionResponses(value)
-    if (responses) return responses
-  }
-  const projected = projectHermesToolResult(value, isError)
-  if (
-    canonicalName !== "present_artifact" ||
-    !projected ||
-    typeof projected !== "object" ||
-    Array.isArray(projected)
-  )
-    return projected
-  const receipt: JsonRecord = {}
-  for (const key of ["ok", "status", "message"])
-    if (key in projected) receipt[key] = projected[key]!
-  return Object.keys(receipt).length
-    ? receipt
-    : { status: isError ? "failed" : "completed" }
-}
-
-function timestamp(value: unknown, index: number) {
-  const numeric = typeof value === "number" ? value : Number(value)
-  if (!Number.isFinite(numeric) || numeric <= 0)
-    return new Date(index).toISOString()
-  return new Date(
-    numeric < 10_000_000_000 ? numeric * 1000 : numeric
-  ).toISOString()
-}
-
-function canonicalToolName(name: string) {
-  return (
-    {
-      delegate_task: "delegate_subagent",
-      skill_view: "use_skill",
-      todo_list: "todo",
-      clarify: "question",
-    }[name] ?? name
-  )
-}
-
-function canonicalToolArgs(name: string, args: JsonRecord) {
-  if (name === "clarify") {
-    if (Array.isArray(args.questions)) {
-      const questions = args.questions.flatMap((candidate) => {
-        if (!isRecord(candidate)) return []
-        const question = stringValue(candidate.question)
-        if (!question) return []
-        const options = Array.isArray(candidate.choices)
-          ? candidate.choices.filter(
-              (choice): choice is string =>
-                typeof choice === "string" && choice.trim().length > 0
-            )
-          : []
-        return [
-          {
-            question,
-            ...(options.length ? { options } : {}),
-            allowFreeform: options.length === 0,
-            multiple: candidate.multi_select === true,
-          } satisfies JsonRecord,
-        ]
-      })
-      if (questions.length)
-        return {
-          question: `${questions.length} ${questions.length === 1 ? "question" : "questions"}`,
-          questions,
-          // This keeps the existing question renderer valid while its
-          // settled receipt reads the richer batched shape below.
-          allowFreeform: true,
-        }
-    }
-    const { choices, multi_select, allow_freeform, ...rest } = args
-    const options = Array.isArray(choices)
-      ? choices.filter(
-          (choice): choice is string =>
-            typeof choice === "string" && choice.trim().length > 0
-        )
-      : []
-    return {
-      ...rest,
-      ...(options.length ? { options } : {}),
-      allowFreeform:
-        typeof allow_freeform === "boolean"
-          ? allow_freeform
-          : options.length === 0,
-      multiple: multi_select === true,
-    }
-  }
-  if (canonicalToolName(name) !== "delegate_subagent") return args
-  if (typeof args.description === "string" && args.description.trim())
-    return args
-  const candidate = [
-    args.goal,
-    args.goals,
-    args.prompt,
-    args.task,
-    args.name,
-    args.skill,
-  ]
-    .flatMap((value) => (Array.isArray(value) ? value : [value]))
-    .find((value) => typeof value === "string" && value.trim())
-  return typeof candidate === "string"
-    ? { ...args, description: candidate.trim() }
-    : args
-}
-
-function projectQuestionResponses(value: unknown): JsonRecord | undefined {
-  const parsed = parseJson(value)
-  if (!isRecord(parsed) || !Array.isArray(parsed.responses)) return undefined
-  const responses = parsed.responses.flatMap((candidate) => {
-    if (!isRecord(candidate)) return []
-    const question = stringValue(candidate.question)
-    const rawResponse = candidate.user_response
-    if (!question || typeof rawResponse !== "string") return []
-    let answers: string[] = []
-    if (rawResponse) {
-      try {
-        const decoded: unknown = JSON.parse(rawResponse)
-        answers = Array.isArray(decoded)
-          ? decoded.filter((answer): answer is string => {
-              const safe = publicJsonValue(answer)
-              return typeof safe === "string" && safe.length > 0
-            })
-          : [rawResponse]
-      } catch {
-        answers = [rawResponse]
-      }
-    }
-    answers = answers.flatMap((answer) => {
-      const safe = publicJsonValue(answer)
-      return typeof safe === "string" && safe.length > 0 ? [safe] : []
-    })
-    return [{ question, answers } satisfies JsonRecord]
-  })
-  if (!responses.length) return undefined
-  return {
-    status: responses.some(({ answers }) => (answers as JsonValue[]).length)
-      ? "answered"
-      : "cancelled",
-    responses,
-  }
-}
-
-export function projectHermesQuestionArgs(value: unknown) {
-  const parsed = parseJson(value)
-  if (!isRecord(parsed)) return undefined
-  const normalized =
-    Array.isArray(parsed.questions) || "choices" in parsed
-      ? canonicalToolArgs("clarify", parsed)
-      : parsed
-  return publicToolArgs("question", normalized)
-}
-
-export function projectHermesQuestionResult(value: unknown) {
-  return projectQuestionResponses(value)
-}
-
-function unwrapTool(name: string, args: JsonRecord) {
-  if (name !== "tool_call") return { name, args }
-  const selectedName = stringValue(args.name)
-  const selectedArgs = parseJson(args.arguments)
-  if (!selectedName || !isRecord(selectedArgs)) return { name, args }
-  return { name: selectedName, args: selectedArgs }
-}
-
-function safeArtifactToken(value: string, maxLength: number) {
-  return (
-    value.length <= maxLength &&
-    !/[\\/]/u.test(value) &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0)
-      return code <= 31 || code === 127
-    }) &&
-    value !== "." &&
-    value !== ".." &&
-    !credentialValue.test(value) &&
-    !privateLocationValue.test(value)
-  )
-}
-
-export function projectHermesArtifactReceipt(raw: unknown) {
-  const value = parseJson(raw)
-  if (!isRecord(value) || value.ok !== true || value.type !== "aos.artifact")
-    return undefined
-  const artifact = value.artifact
-  if (!isRecord(artifact)) return undefined
-  const id = stringValue(artifact.id)
-  const filename = stringValue(artifact.filename)
-  const mimeType = stringValue(artifact.mimeType)
-  const sizeBytes = artifact.sizeBytes
-  if (
-    !id ||
-    !filename ||
-    !safeArtifactToken(id, 256) ||
-    !safeArtifactToken(filename, 255) ||
-    (mimeType !== undefined &&
-      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
-        mimeType
-      )) ||
-    (sizeBytes !== undefined &&
-      (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
-  )
-    return undefined
-  const descriptor = {
-    id,
-    filename,
-    ...(mimeType ? { mimeType } : {}),
-    ...(typeof sizeBytes === "number" ? { sizeBytes } : {}),
-  }
-  return {
-    result: { ok: true, type: "aos.artifact", artifact: descriptor },
-    part: {
-      type: "data" as const,
-      name: "aos.artifact",
-      data: {
-        ...descriptor,
-        source: { type: "provider", reference: id },
-      },
-    },
   }
 }
 
@@ -423,7 +79,7 @@ function safeAttachmentName(reference: string) {
     return code < 32 || code === 127
   })
   return name &&
-    Buffer.byteLength(name, "utf8") <= 255 &&
+    utf8BytesWithin(name, 255) !== undefined &&
     !hasControlCharacter &&
     name !== "." &&
     name !== ".."
@@ -480,10 +136,10 @@ export function projectHermesHistory(
   const mediaReferences = new Map<number, Set<string>>()
 
   rows.forEach((value, index) => {
-    if (!isRecord(value) || stringValue(value.display_kind)) return
-    const role = stringValue(value.role)
+    if (!isRecord(value) || trimmedText(value.display_kind)) return
+    const role = trimmedText(value.role)
     if (role === "tool") {
-      const toolCallId = stringValue(value.tool_call_id ?? value.toolCallId)
+      const toolCallId = trimmedText(value.tool_call_id ?? value.toolCallId)
       const target = toolCallId ? calls.get(toolCallId) : undefined
       if (!toolCallId || !target) return
       const message = messages[target.messageIndex]
@@ -494,41 +150,27 @@ export function projectHermesHistory(
         part?.type !== "tool-call"
       )
         return
-      const resultToolName = stringValue(value.tool_name ?? value.toolName)
+      const resultToolName = trimmedText(value.tool_name ?? value.toolName)
       const toolName = resultToolName
         ? canonicalToolName(resultToolName)
         : part.toolName
-      const toolResult = value.content ?? value.result
-      const isError = hermesToolResultIsError(
-        toolResult,
+      const outcome = projectHermesToolOutcome(
+        toolCallId,
+        toolName,
+        value.content ?? value.result,
         value.is_error === true
       )
-      const artifact =
-        toolName === "present_artifact" && !isError
-          ? projectHermesArtifactReceipt(toolResult)
-          : undefined
-      const mediaArtifacts = !isError
-        ? projectHermesMediaArtifacts(toolCallId, toolName, toolResult)
-        : []
       const content = [...message.content]
       content[target.partIndex] = {
         ...part,
         ...(resultToolName ? { toolName } : {}),
-        result:
-          artifact?.result ?? publicToolResult(toolName, toolResult, isError),
-        ...(isError ? { isError: true } : {}),
+        result: outcome.result,
+        ...(outcome.isError ? { isError: true } : {}),
       }
-      if (artifact) content.push(artifact.part)
-      if (mediaArtifacts.length) {
+      for (const artifact of outcome.parts) content.push(artifact)
+      if (outcome.trustedMedia.length) {
         const trusted = mediaReferences.get(target.messageIndex) ?? new Set()
-        for (const media of mediaArtifacts) {
-          trusted.add(media.reference)
-          content.push({
-            type: "data",
-            name: "aos.artifact",
-            data: media.descriptor,
-          })
-        }
+        for (const reference of outcome.trustedMedia) trusted.add(reference)
         mediaReferences.set(target.messageIndex, trusted)
       }
       messages[target.messageIndex] = { ...message, content }
@@ -544,7 +186,7 @@ export function projectHermesHistory(
             Number.isSafeInteger(value.id) &&
             value.id > 0
           ? `hermes-row-${value.id}`
-          : (stringValue(value.id) ?? `hermes-history-${index}`)
+          : (trimmedText(value.id) ?? `hermes-history-${index}`)
     const previousAssistant =
       role === "assistant" && messages.at(-1)?.role === "assistant"
         ? messages.at(-1)
@@ -552,7 +194,7 @@ export function projectHermesHistory(
     const messageIndex = previousAssistant
       ? messages.length - 1
       : messages.length
-    const rawContent = parseJson(value.content)
+    const rawContent = parseRowJson(value.content)
     // Hermes only attaches a display projection while rendering a persisted
     // compaction carrier. Ignore it on ordinary rows so provider-only fields
     // cannot replace a Session's durable transcript content.
@@ -584,7 +226,7 @@ export function projectHermesHistory(
     const content = previousAssistant ? [...previousAssistant.content] : []
     const reasoning =
       role === "assistant"
-        ? (stringValue(value.reasoning_content) ?? stringValue(value.reasoning))
+        ? (trimmedText(value.reasoning_content) ?? trimmedText(value.reasoning))
         : undefined
     if (reasoning) content.push({ type: "reasoning", text: reasoning })
     if (visibleText) content.push({ type: "text", text: visibleText })
@@ -599,20 +241,18 @@ export function projectHermesHistory(
       for (const rawCall of value.tool_calls) {
         if (!isRecord(rawCall)) continue
         const fn = isRecord(rawCall.function) ? rawCall.function : undefined
-        const toolCallId = stringValue(rawCall.id)
-        const nativeToolName = fn && stringValue(fn.name)
+        const toolCallId = trimmedText(rawCall.id)
+        const nativeToolName = fn && trimmedText(fn.name)
         if (!toolCallId || !nativeToolName) continue
-        const parsedArgs = parseJson(String(fn?.arguments ?? "{}"))
-        const unwrapped = unwrapTool(nativeToolName, jsonRecord(parsedArgs))
-        const args = publicToolArgs(
-          unwrapped.name,
-          canonicalToolArgs(unwrapped.name, unwrapped.args)
+        const { toolName, args } = projectHermesToolCall(
+          nativeToolName,
+          fn?.arguments
         )
         const partIndex = content.length
         content.push({
           type: "tool-call",
           toolCallId,
-          toolName: canonicalToolName(unwrapped.name),
+          toolName,
           args,
           argsText: JSON.stringify(args),
         })

@@ -626,6 +626,31 @@ describe("Thread accessibility", () => {
     expect(screen.getByText("The reference is ready.")).toBeVisible()
   })
 
+  it("renders both roles' prose through one Markdown mechanism", async () => {
+    render(
+      <LocalThread
+        initialMessages={[
+          {
+            id: "asked",
+            role: "user",
+            content: [{ type: "text", text: "Read **README.md** first." }],
+          },
+          {
+            id: "answered",
+            role: "assistant",
+            content: [{ type: "text", text: "Reading **README.md** now." }],
+          },
+        ]}
+      />
+    )
+
+    const emphasized = await screen.findAllByText("README.md", {
+      selector: "strong",
+    })
+    expect(emphasized).toHaveLength(2)
+    for (const element of emphasized) expect(element).toBeVisible()
+  })
+
   it("copies assistant text when the Clipboard API is unavailable", async () => {
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(
       navigator,

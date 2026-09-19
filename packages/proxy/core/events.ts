@@ -357,6 +357,7 @@ export function isRunEvent(candidate: unknown): candidate is RunEvent {
 export const UNCERTAIN_ERROR_CODES = [
   "AOS_SEND_UNCERTAIN",
   "AOS_INTERACTION_UNCERTAIN",
+  "AOS_STOP_UNCERTAIN",
   "AOS_CONNECTION_INTERRUPTED",
   "AOS_RESET_REQUIRED",
 ] as const
@@ -366,6 +367,27 @@ export function isUncertainError(event: RunEvent): boolean {
   return (
     event.type === RunEventKind.RUN_ERROR &&
     UNCERTAIN_ERROR_CODES.some((code) => code === event.code)
+  )
+}
+
+/**
+ * The codes an adapter publishes when it stopped consuming a run that may still
+ * be alive in the provider. The turn is not over, so its journal outlives the
+ * error and the browser reconciles by redialing with the same run id. A reset is
+ * deliberately absent: that cursor can never be served again, so its journal
+ * must not be retained.
+ */
+export const REDIALABLE_ERROR_CODES = [
+  "AOS_SEND_UNCERTAIN",
+  "AOS_INTERACTION_UNCERTAIN",
+  "AOS_STOP_UNCERTAIN",
+  "AOS_CONNECTION_INTERRUPTED",
+] as const
+
+export function isRedialableError(event: RunEvent): boolean {
+  return (
+    event.type === RunEventKind.RUN_ERROR &&
+    REDIALABLE_ERROR_CODES.some((code) => code === event.code)
   )
 }
 

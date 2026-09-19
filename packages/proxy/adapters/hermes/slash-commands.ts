@@ -3,19 +3,23 @@ import {
   SlashCommandSchema,
   type SlashCommand,
 } from "../../../protocol"
-import type { HermesRpcTransport } from "./adapter"
+import {
+  HermesRpcRejectedError,
+  HermesUnavailableError,
+  type HermesRpcTransport,
+} from "./gateway"
+import { isRecord } from "./native"
 
 const MAX_CATALOG_RESPONSE_BYTES = 2_097_152
+const MAX_COMMAND_RESPONSE_BYTES = 1_048_576
 
 async function nativeCommandPairs(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>
 ) {
-  const value = await transport.request(
-    "commands.catalog",
-    params,
-    MAX_CATALOG_RESPONSE_BYTES
-  )
+  const value = await transport.request("commands.catalog", params, {
+    maxResponseBytes: MAX_CATALOG_RESPONSE_BYTES,
+  })
   if (
     !value ||
     typeof value !== "object" ||
@@ -105,12 +109,99 @@ export async function nativeSlashInvocation(
   return { ...invocation, name: recognized[0].replace(/^\//u, "") }
 }
 
-export function slashInvocation(
-  text: string,
-  commands: readonly SlashCommand[]
-) {
-  const invocation = parsedSlashInvocation(text)
-  if (!invocation || !commands.some(({ name }) => name === invocation.name))
-    return undefined
-  return invocation
+/**
+ * What one native command execution produced. A `completion` answered the user
+ * in band and no native turn follows; an `expanded` execution produced the
+ * prompt text the caller submits, which is the only part a refused write may
+ * repeat.
+ */
+export type HermesSlashExecution =
+  | { kind: "completion"; output: string; composerPrefill?: string }
+  | { kind: "expanded"; text: string }
+
+/**
+ * Execute one recognized native command and report what it produced; the
+ * expansion is submitted by the caller, so this function performs no
+ * `prompt.submit` of its own. `slash.exec` is the current native entry point;
+ * `command.dispatch` is attempted only when Hermes states the method is
+ * unsupported, and alias traversal is bounded. No dispatched write is ever
+ * retried.
+ */
+export async function executeSlashCommand(
+  transport: HermesRpcTransport,
+  liveSessionId: string,
+  name: string,
+  args: string,
+  depth = 0
+): Promise<HermesSlashExecution> {
+  if (depth >= 4) throw new HermesUnavailableError()
+  let result: unknown
+  try {
+    result = await transport.request(
+      "slash.exec",
+      {
+        command: `${name}${args ? ` ${args}` : ""}`,
+        session_id: liveSessionId,
+      },
+      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+    )
+  } catch (error) {
+    if (
+      !(error instanceof HermesRpcRejectedError) ||
+      (error.code !== -32601 && error.code !== 4018)
+    )
+      throw error
+    result = await transport.request(
+      "command.dispatch",
+      { session_id: liveSessionId, name, arg: args },
+      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+    )
+  }
+  if (!isRecord(result)) throw new HermesUnavailableError()
+  if (result.type === "alias") {
+    const target =
+      typeof result.target === "string"
+        ? /^\/?([^\s/]+)(?:\s+([\s\S]*))?$/u.exec(result.target)
+        : undefined
+    if (!target) throw new HermesUnavailableError()
+    return executeSlashCommand(
+      transport,
+      liveSessionId,
+      target[1]!,
+      [target[2], args].filter(Boolean).join(" "),
+      depth + 1
+    )
+  }
+  if (result.type === "send" || result.type === "skill") {
+    if (typeof result.message !== "string" || !result.message.trim())
+      throw new HermesUnavailableError()
+    return { kind: "expanded", text: result.message }
+  }
+  if (result.type === "prefill") {
+    if (
+      typeof result.message !== "string" ||
+      !result.message ||
+      Buffer.byteLength(result.message, "utf8") > MAX_COMMAND_RESPONSE_BYTES ||
+      (result.notice !== undefined && typeof result.notice !== "string")
+    )
+      throw new HermesUnavailableError()
+    return {
+      kind: "completion",
+      output: typeof result.notice === "string" ? result.notice : "",
+      composerPrefill: result.message,
+    }
+  }
+  if (
+    result.type !== "exec" &&
+    result.type !== "plugin" &&
+    typeof result.output !== "string" &&
+    typeof result.warning !== "string"
+  )
+    throw new HermesUnavailableError()
+  return {
+    kind: "completion",
+    output: [result.warning, result.output]
+      .filter((value): value is string => typeof value === "string" && !!value)
+      .join("\n"),
+  }
 }

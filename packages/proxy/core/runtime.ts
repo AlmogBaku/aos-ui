@@ -48,7 +48,12 @@ export type ServerRunHandle = {
   steer?(
     request: Readonly<{ requestId: string; text: string }>
   ): Promise<"steered" | "queued">
-  recoveryPosition(): { epoch: string; lastSeen: number }
+  /**
+   * Where this segment stopped reading the provider stream, or `undefined` when
+   * it has no comparable position: recovery then starts without one instead of
+   * naming an epoch no provider can match.
+   */
+  recoveryPosition(): { epoch: string; lastSeen: number } | undefined
 }
 
 export type RecoveryRequest = {
@@ -66,6 +71,12 @@ export type ServerRunEngine = {
     /** One-shot server-owned content staged for this native admission. */
     attachments?: ServerAttachmentStage
   ): Promise<ServerRunHandle>
+  /**
+   * Reattaches to a run this process already admitted. The returned handle must
+   * speak for that run: it either publishes at least one event or ends its
+   * stream. Coordination of an uncertain turn waits on that signal, so a handle
+   * that attaches silently and stays silent leaves the turn unanswered.
+   */
   recover(
     scope: SessionScope,
     request: RecoveryRequest

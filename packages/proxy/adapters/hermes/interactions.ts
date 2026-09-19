@@ -1,22 +1,139 @@
+/**
+ * Hermes asks the user through server→client JSON-RPC requests: the backend
+ * writes one `clarify` / `approval` frame and parks the agent until the
+ * renderer answers that very frame (`tui_gateway/server_requests.py`). AOS is
+ * that renderer, so this module owns exactly one `onRequest` handler and one
+ * `request.cancel` subscription, projects a recognized request into the AG-UI
+ * interrupt the browser already renders, and answers through the request handle
+ * the vendored channel hands it.
+ *
+ * A request whose method AOS cannot render is claimed and never answered: the
+ * prompt belongs to whichever Hermes renderer raised it, and `-32601` would
+ * cancel it — on every reconnect, because `open_requests` are re-delivered. Only
+ * a request AOS can render but cannot use (no bound Session, an unusable
+ * payload) is declined, which Hermes treats as "skipped" for a clarify and as
+ * "unanswered" for a queue backed approval, so the agent proceeds instead of
+ * waiting out its 300 s deadline. Native ids, commands, URLs and paths never
+ * reach public output.
+ */
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import type { RunInterruptOutcome } from "../../core/events"
 
+import {
+  JSON_RPC_METHOD_NOT_FOUND,
+  type HermesLog,
+  type ServerRequest,
+} from "./gateway"
+import {
+  isRecord,
+  nativeId,
+  parseJson,
+  publicReason,
+  sessionKey,
+  utf8BytesWithin,
+} from "./native"
+
+/**
+ * The run scope an interaction belongs to. `threadId` travels with it for the
+ * caller's benefit; interactions themselves are Session-scoped, because a
+ * Hermes Session carries exactly one thread.
+ */
 export type HermesInteractionScope = {
   agentId: string
   sessionId: string
   threadId: string
-  runId: string
 }
 
+/**
+ * The gateway surface interactions own. Answering is synchronous on the socket
+ * that carried the request, so liveness is part of the contract: a write onto a
+ * dead socket is swallowed and would report an answer Hermes never received.
+ */
 export type HermesInteractionTransport = {
-  request(
-    method: string,
-    params: Readonly<Record<string, unknown>>
-  ): Promise<unknown>
+  onRequest(handler: (request: ServerRequest) => boolean | void): () => void
+  onEvent(listener: (event: unknown) => void): () => void
+  connected(): boolean
 }
+
+/**
+ * The durable-to-live binding surface. `session_id` on a server request is a
+ * volatile live Hermes Session id, so only the registry can say which durable
+ * Session (and therefore which user) it belongs to.
+ */
+export type HermesInteractionAttachments = {
+  ensure(
+    scope: HermesInteractionScope,
+    options?: { refresh?: boolean }
+  ): Promise<{ liveSessionId: string; running: boolean }>
+  retain(scope: HermesInteractionScope, reason: string): Promise<() => void>
+  scopeFor(liveSessionId: string): HermesInteractionScope | undefined
+}
+
+// ---------------------------------------------------------------------------
+// Upstream contract shapes
+// ---------------------------------------------------------------------------
+
+/*
+ * The six shapes AOS answers, copied from `apps/shared/src/
+ * gateway-contract.generated.ts` at pin
+ * NousResearch/hermes-agent@47685348eaca9d673719003b9e03a71becfa6423. The
+ * generated contract is 176 KB of unrelated methods and is deliberately not
+ * vendored. Hermes owns the wire, so every field is validated before use; the
+ * declarations only name the upstream field set.
+ */
+
+type ClarifyQuestion = {
+  qid: string
+  question: string
+  choices?: string[] | null
+  multi_select?: boolean
+}
+
+/** Single question: `question`/`choices`; batch: `questions`. `answers` rides only on a reconnect replay. */
+type ClarifyRequestParams = {
+  session_id: string
+  question?: string | null
+  choices?: string[] | null
+  multi_select?: boolean | null
+  questions?: ClarifyQuestion[] | null
+  answers?: Record<string, string> | null
+}
+
+/** Single: `{answer}` ('' = skip). Batch: `{answers}`; neither member = cancel-all. */
+type ClarifyResult = {
+  answer?: string
+  answers?: Record<string, string>
+}
+
+type ApprovalRequestParams = {
+  session_id: string
+  request_id: string
+  command?: string
+  description?: string
+  choices?: ApprovalChoice[]
+  allow_permanent?: boolean | null
+  allow_session?: boolean | null
+  smart_denied?: boolean | null
+  tool_name?: string | null
+}
+
+type ApprovalResult = { choice: ApprovalChoice; all?: boolean }
+
+type RequestCancelPayload = { id: string; method: string; reason: string }
+
+// ---------------------------------------------------------------------------
+// Public surface
+// ---------------------------------------------------------------------------
 
 const APPROVAL_CHOICES = ["once", "session", "always", "deny"] as const
 type ApprovalChoice = (typeof APPROVAL_CHOICES)[number]
+
+/** Choices whose answer applies past this one request (`ApprovalResult.all`). */
+const BROAD_APPROVAL_CHOICES = new Set<ApprovalChoice>(["session", "always"])
+
+/** The server→client requests AOS renders; everything else is held unanswered. */
+const ANSWERED_METHODS = ["clarify", "approval"] as const
+type AnsweredMethod = (typeof ANSWERED_METHODS)[number]
 
 export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxNativePayloadBytes: 65_536,
@@ -28,6 +145,10 @@ export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxPending: 64,
 })
 
+/** Bound for the per-method log: Hermes chooses both method and volume. */
+const MAX_LOGGED_METHODS = 32
+const MAX_LOGGED_METHOD_CHARS = 64
+
 export class HermesInteractionPublicError extends Error {
   constructor(
     readonly code:
@@ -36,20 +157,17 @@ export class HermesInteractionPublicError extends Error {
       | "AOS_LIMIT_EXCEEDED"
       | "AOS_PROVIDER_INVALID_RESPONSE"
       | "AOS_PROVIDER_UNAVAILABLE"
-      | "AOS_RECONCILIATION_STALE"
   ) {
     super(
       code === "AOS_PROVIDER_INVALID_RESPONSE"
         ? "Hermes returned invalid interaction data"
-        : code === "AOS_RECONCILIATION_STALE"
-          ? "Stale Hermes reconciliation result"
-          : code === "AOS_PROVIDER_UNAVAILABLE"
-            ? "Hermes is temporarily unavailable"
-            : code === "AOS_INTERACTION_NOT_FOUND"
-              ? "Interaction not found"
-              : code === "AOS_LIMIT_EXCEEDED"
-                ? "Interaction limit exceeded"
-                : "Invalid interaction response"
+        : code === "AOS_PROVIDER_UNAVAILABLE"
+          ? "Hermes is temporarily unavailable"
+          : code === "AOS_INTERACTION_NOT_FOUND"
+            ? "Interaction not found"
+            : code === "AOS_LIMIT_EXCEEDED"
+              ? "Interaction limit exceeded"
+              : "Invalid interaction response"
     )
     this.name = "HermesInteractionPublicError"
   }
@@ -61,7 +179,9 @@ type Question = {
   choices: string[] | null
   nativeChoices: string[] | null
   multiple: boolean
+  /** Public projection of an answer Hermes already locked, for the schema default. */
   locked?: string[]
+  /** The exact native values behind `locked`; a redaction must never be answered. */
   lockedNative?: string[]
 }
 
@@ -71,47 +191,53 @@ type PendingInteraction = {
   id: string
   sequence: number
   outcome: RunInterruptOutcome
-  state: "pending" | "dispatching"
-  responseFingerprint?: string
+  /** The live handle Hermes waits on; a re-delivery replaces it. */
+  request: ServerRequest
+  /** The reconciliation Hermes last confirmed this request was open in. */
+  confirmed: number
 } & (
   | { kind: "approval"; choices: ApprovalChoice[] }
   | { kind: "questions"; questions: Question[] }
 )
 
-type NewPendingInteraction =
-  | Omit<
-      Extract<PendingInteraction, { kind: "approval" }>,
-      "sequence" | "state"
-    >
-  | Omit<
-      Extract<PendingInteraction, { kind: "questions" }>,
-      "sequence" | "state"
-    >
+/** A projected request, before it is bound to a live Session and remembered. */
+type ProjectedInteraction =
+  | {
+      kind: "approval"
+      choices: ApprovalChoice[]
+      outcome: RunInterruptOutcome
+    }
+  | {
+      kind: "questions"
+      questions: Question[]
+      outcome: RunInterruptOutcome
+    }
 
 export type HermesInteractionResult = {
-  status:
-    "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
+  status: "resolved" | "expired" | "already-resolved" | "uncertain"
 }
 
-type HermesInteractionResumeSnapshot = {
+export type HermesInteractionResumeSnapshot = {
   running: boolean
-  status: "waiting-for-input" | "running" | "idle" | "unknown"
+  status: "waiting-for-input" | "running" | "idle"
   outcome?: RunInterruptOutcome
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
+export type HermesInterruptListener = (
+  outcome: RunInterruptOutcome
+) => void
 
-function utf8Bytes(value: string) {
-  return new TextEncoder().encode(value).byteLength
-}
+// ---------------------------------------------------------------------------
+// Native validation and public projection
+// ---------------------------------------------------------------------------
 
 function validString(
   value: unknown,
   max: number = HERMES_INTERACTION_LIMITS.maxStringBytes
 ) {
-  return typeof value === "string" && value.trim() && utf8Bytes(value) <= max
+  return typeof value === "string" &&
+    value.trim() &&
+    utf8BytesWithin(value, max) !== undefined
     ? value.trim()
     : undefined
 }
@@ -122,7 +248,7 @@ function nativeText(
   allowEmpty = false
 ) {
   return typeof value === "string" &&
-    utf8Bytes(value) <= max &&
+    utf8BytesWithin(value, max) !== undefined &&
     (allowEmpty || value.length > 0)
     ? value
     : undefined
@@ -162,7 +288,12 @@ function boundedJson(value: unknown) {
     )
       return true
     if (typeof item === "string")
-      return utf8Bytes(item) <= HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      return (
+        utf8BytesWithin(
+          item,
+          HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+        ) !== undefined
+      )
     if (typeof item !== "object" || seen.has(item)) return false
     seen.add(item)
     const values = Array.isArray(item) ? item : Object.values(item)
@@ -173,14 +304,17 @@ function boundedJson(value: unknown) {
   if (!visit(value, 0)) return false
   try {
     return (
-      utf8Bytes(JSON.stringify(value)) <=
-      HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      utf8BytesWithin(
+        JSON.stringify(value),
+        HERMES_INTERACTION_LIMITS.maxNativePayloadBytes
+      ) !== undefined
     )
   } catch {
     return false
   }
 }
 
+/** A request field AOS cannot use: the caller declines the whole request. */
 function invalidNative(): never {
   throw new HermesInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
 }
@@ -200,17 +334,16 @@ function parseChoices(value: unknown): string[] | null | undefined {
   return new Set(normalized).size === normalized.length ? normalized : undefined
 }
 
-function parseClarification(payload: Record<string, unknown>) {
-  const requestId = validString(payload.request_id, 256)
-  if (!requestId) invalidNative()
+/** Validate `ClarifyRequestParams` into the ordered questions AOS renders. */
+function parseQuestions(params: ClarifyRequestParams) {
   let questions: Question[]
-  if (Array.isArray(payload.questions)) {
+  if (Array.isArray(params.questions)) {
     if (
-      payload.questions.length === 0 ||
-      payload.questions.length > HERMES_INTERACTION_LIMITS.maxQuestions
+      params.questions.length === 0 ||
+      params.questions.length > HERMES_INTERACTION_LIMITS.maxQuestions
     )
       invalidNative()
-    questions = payload.questions.map((candidate) => {
+    questions = params.questions.map((candidate) => {
       if (!isRecord(candidate)) invalidNative()
       const id = validString(candidate.qid, 256)
       const question = nativeText(candidate.question)
@@ -219,7 +352,8 @@ function parseClarification(payload: Record<string, unknown>) {
         !id ||
         !question ||
         nativeChoices === undefined ||
-        typeof candidate.multi_select !== "boolean"
+        (candidate.multi_select !== undefined &&
+          typeof candidate.multi_select !== "boolean")
       )
         invalidNative()
       return {
@@ -227,81 +361,86 @@ function parseClarification(payload: Record<string, unknown>) {
         question: publicText(question),
         choices: publicChoices(nativeChoices),
         nativeChoices,
-        multiple: candidate.multi_select,
+        multiple: candidate.multi_select === true,
       }
     })
     if (new Set(questions.map(({ id }) => id)).size !== questions.length)
       invalidNative()
   } else {
-    const question = nativeText(payload.question)
-    const nativeChoices = parseChoices(payload.choices)
+    const question = nativeText(params.question)
+    const nativeChoices = parseChoices(params.choices)
     if (!question || nativeChoices === undefined) invalidNative()
     questions = [
       {
         question: publicText(question),
         choices: publicChoices(nativeChoices),
         nativeChoices,
-        multiple: payload.multi_select === true,
+        multiple: params.multi_select === true,
       },
     ]
   }
-  if (payload.answers !== undefined) {
-    if (!isRecord(payload.answers) || !Array.isArray(payload.questions))
+  if (params.answers !== undefined && params.answers !== null)
+    lockAnswers(params.answers, questions)
+  return questions
+}
+
+/**
+ * `answers` carries the batch answers Hermes locked before this delivery (only
+ * a reconnect replay has them). They become the schema defaults, and their
+ * exact native values are kept so a redacted default is never answered back.
+ */
+function lockAnswers(answers: unknown, questions: Question[]) {
+  if (!isRecord(answers) || !questions.every(({ id }) => id)) invalidNative()
+  for (const [questionId, encoded] of Object.entries(answers)) {
+    const question = questions.find(({ id }) => id === questionId)
+    if (
+      !question ||
+      typeof encoded !== "string" ||
+      utf8BytesWithin(encoded, HERMES_INTERACTION_LIMITS.maxStringBytes) ===
+        undefined
+    )
       invalidNative()
-    for (const [questionId, encoded] of Object.entries(payload.answers)) {
-      const question = questions.find(({ id }) => id === questionId)
+    let nativeAnswers: string[]
+    if (question.multiple) {
+      // A native answer list that is not JSON parses to `undefined`, which the
+      // array check below rejects like any other invalid shape.
+      const parsed = parseJson(encoded)
       if (
-        !question ||
-        typeof encoded !== "string" ||
-        utf8Bytes(encoded) > HERMES_INTERACTION_LIMITS.maxStringBytes
+        !Array.isArray(parsed) ||
+        parsed.some(
+          (answer) =>
+            nativeText(
+              answer,
+              HERMES_INTERACTION_LIMITS.maxStringBytes,
+              true
+            ) === undefined
+        )
       )
         invalidNative()
-      let nativeAnswers: string[]
-      if (question.multiple) {
-        try {
-          const parsed: unknown = JSON.parse(encoded)
-          if (
-            !Array.isArray(parsed) ||
-            parsed.some(
-              (answer) =>
-                nativeText(
-                  answer,
-                  HERMES_INTERACTION_LIMITS.maxStringBytes,
-                  true
-                ) === undefined
-            )
-          )
-            invalidNative()
-          nativeAnswers = parsed as string[]
-        } catch (error) {
-          if (error instanceof HermesInteractionPublicError) throw error
-          invalidNative()
-        }
-      } else {
-        nativeAnswers = encoded ? [encoded] : []
-      }
-      if (
-        nativeAnswers.length >
-          (question.multiple
-            ? (question.nativeChoices?.length ??
-              HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
-            : 1) ||
-        new Set(nativeAnswers).size !== nativeAnswers.length ||
-        (question.nativeChoices &&
-          nativeAnswers.some(
-            (answer) => !question.nativeChoices!.includes(answer)
-          ))
-      )
-        invalidNative()
-      question.lockedNative = nativeAnswers
-      question.locked = nativeAnswers.map((answer) => {
-        if (!question.nativeChoices || !question.choices)
-          return publicText(answer)
-        return question.choices[question.nativeChoices.indexOf(answer)]!
-      })
+      nativeAnswers = parsed as string[]
+    } else {
+      nativeAnswers = encoded ? [encoded] : []
     }
+    if (
+      nativeAnswers.length >
+        (question.multiple
+          ? (question.nativeChoices?.length ??
+            HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
+          : 1) ||
+      new Set(nativeAnswers).size !== nativeAnswers.length ||
+      (question.nativeChoices &&
+        nativeAnswers.some(
+          (answer) => !question.nativeChoices!.includes(answer)
+        ))
+    )
+      invalidNative()
+    question.lockedNative = nativeAnswers
+    question.locked = nativeAnswers.map((answer) => {
+      if (!question.nativeChoices || !question.choices)
+        return publicText(answer)
+      return question.choices[question.nativeChoices.indexOf(answer)]!
+    })
   }
-  return { requestId, questions }
 }
 
 function questionSchema(question: Question) {
@@ -321,23 +460,140 @@ function questionSchema(question: Question) {
   }
 }
 
-function sameScope(
-  left: HermesInteractionScope,
-  right: HermesInteractionScope
-) {
-  return (
-    left.agentId === right.agentId &&
-    left.sessionId === right.sessionId &&
-    left.threadId === right.threadId
+/** Project a validated `clarify` request as the existing question interrupt. */
+function clarifyInteraction(
+  id: string,
+  params: ClarifyRequestParams
+): ProjectedInteraction {
+  const questions = parseQuestions(params)
+  return {
+    kind: "questions",
+    questions,
+    outcome: {
+      type: "interrupt",
+      interrupts: [
+        {
+          id,
+          reason: "question",
+          message:
+            questions.length === 1
+              ? questions[0]!.question
+              : `${questions.length} questions require answers`,
+          responseSchema: {
+            type: "object",
+            properties: {
+              answers: {
+                type: "array",
+                prefixItems: questions.map(questionSchema),
+                minItems: questions.length,
+                maxItems: questions.length,
+              },
+            },
+            required: ["answers"],
+            additionalProperties: false,
+          },
+          metadata: {
+            "aos.kind": "questions",
+            "aos.scope": "run",
+            "aos.questionCount": questions.length,
+            ...(questions.some(({ locked }) => locked)
+              ? {
+                  "aos.lockedAnswerIndexes": questions.flatMap(
+                    ({ locked }, index) => (locked ? [index] : [])
+                  ),
+                }
+              : {}),
+          },
+        },
+      ],
+    },
+  }
+}
+
+function approvalChoices(params: ApprovalRequestParams): ApprovalChoice[] {
+  const native: ApprovalChoice[] = Array.isArray(params.choices)
+    ? params.choices.filter((choice): choice is ApprovalChoice =>
+        APPROVAL_CHOICES.includes(choice as ApprovalChoice)
+      )
+    : params.smart_denied === true
+      ? (["once", "deny"] as ApprovalChoice[])
+      : [...APPROVAL_CHOICES]
+  return native.filter(
+    (choice, index) =>
+      (choice !== "always" || params.allow_permanent !== false) &&
+      native.indexOf(choice) === index
   )
 }
 
-function interactionKey(scope: HermesInteractionScope, id: string) {
-  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId, id])
+/** Project a validated `approval` request as the existing approval interrupt. */
+function approvalInteraction(
+  id: string,
+  params: ApprovalRequestParams
+): ProjectedInteraction {
+  const message =
+    validString(params.command ?? params.description) ??
+    "Hermes is requesting permission to continue."
+  const choices = approvalChoices(params)
+  if (choices.length === 0) invalidNative()
+  return {
+    kind: "approval",
+    choices,
+    outcome: {
+      type: "interrupt",
+      interrupts: [
+        {
+          id,
+          reason: "approval",
+          message: publicText(message),
+          responseSchema: { type: "string", enum: choices },
+          metadata: {
+            "aos.kind": "approval",
+            "aos.scope": "run",
+            "aos.choiceScopes": Object.fromEntries(
+              choices.map((choice) => [
+                choice,
+                choice === "session"
+                  ? "session"
+                  : choice === "always"
+                    ? "agent"
+                    : "request",
+              ])
+            ),
+          },
+        },
+      ],
+    },
+  }
 }
 
-function sessionKey(scope: HermesInteractionScope) {
-  return JSON.stringify([scope.agentId, scope.sessionId, scope.threadId])
+function cancellation(event: Record<string, unknown>) {
+  const payload = event.payload
+  if (!isRecord(payload)) return undefined
+  const id = nativeId(payload.id, 256)
+  const method = validString(payload.method, 64)
+  if (!id || !method) return undefined
+  return { id, method, reason: validString(payload.reason, 256) ?? "" }
+}
+
+// ---------------------------------------------------------------------------
+// Public response validation
+// ---------------------------------------------------------------------------
+
+/**
+ * A Hermes Session carries exactly one thread, so every interaction key is the
+ * Session key retainers, listeners and resumes already use: keying a pending
+ * request by `threadId` as well would let one of the two release the other's
+ * binding.
+ */
+function sameSession(
+  left: HermesInteractionScope,
+  right: HermesInteractionScope
+) {
+  return sessionKey(left) === sessionKey(right)
+}
+
+function interactionKey(scope: HermesInteractionScope, id: string) {
+  return `${sessionKey(scope)}\u0000${id}`
 }
 
 function strictResume(value: unknown) {
@@ -356,9 +612,14 @@ function strictResume(value: unknown) {
     throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
   if (value.metadata !== undefined && !isRecord(value.metadata))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-  return { interruptId, status: value.status, payload: value.payload }
+  return {
+    interruptId,
+    status: value.status as "resolved" | "cancelled",
+    payload: value.payload,
+  }
 }
 
+/** The native values one ordered public answer set stands for. */
 function answerSets(value: unknown, questions: Question[]) {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "answers"))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
@@ -389,32 +650,76 @@ function answerSets(value: unknown, questions: Question[]) {
     )
       throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
     const publicAnswers = answers as string[]
-    return {
-      values: publicAnswers.map((answer) => {
-        if (!question.choices || !question.nativeChoices) return answer
-        return question.nativeChoices[question.choices.indexOf(answer)]!
-      }),
-      lockedUnchanged:
-        question.locked !== undefined &&
-        JSON.stringify(question.locked) === JSON.stringify(publicAnswers),
-    }
+    // An unchanged locked answer is answered with the value Hermes locked: its
+    // public form may be a redaction of a credential or a path.
+    if (
+      question.lockedNative &&
+      question.locked &&
+      JSON.stringify(question.locked) === JSON.stringify(publicAnswers)
+    )
+      return question.lockedNative
+    return publicAnswers.map((answer) => {
+      if (!question.choices || !question.nativeChoices) return answer
+      return question.nativeChoices[question.choices.indexOf(answer)]!
+    })
   })
 }
 
-function approvalChoices(payload: Record<string, unknown>): ApprovalChoice[] {
-  const native: ApprovalChoice[] = Array.isArray(payload.choices)
-    ? payload.choices.filter((choice): choice is ApprovalChoice =>
-        APPROVAL_CHOICES.includes(choice as ApprovalChoice)
-      )
-    : payload.smart_denied === true
-      ? (["once", "deny"] as ApprovalChoice[])
-      : [...APPROVAL_CHOICES]
-  return native.filter(
-    (choice, index) =>
-      (choice !== "always" || payload.allow_permanent !== false) &&
-      native.indexOf(choice) === index
-  )
+/**
+ * One question's answer in wire form. A multi-select answer is a JSON array
+ * wherever it rides: Hermes parses the single and the batch answer through the
+ * same `_parse_multi_select_response` (`tools/clarify_tool.py`), so dropping
+ * the encoding on one path would answer with a single value and discard the
+ * rest of the selection.
+ */
+function encodedAnswer(question: Question, values: string[] | undefined) {
+  return question.multiple ? JSON.stringify(values ?? []) : (values?.[0] ?? "")
 }
+
+/** The `clarify` response for one validated public answer, in wire form. */
+function clarifyResult(
+  interaction: Extract<PendingInteraction, { kind: "questions" }>,
+  resume: { status: "resolved" | "cancelled"; payload: unknown }
+): ClarifyResult {
+  const batch = interaction.questions.every(({ id }) => id !== undefined)
+  // Hermes' own cancellation: an empty answer skips a single question, and a
+  // batch response without `answers` cancels every question in it.
+  if (resume.status === "cancelled") return batch ? {} : { answer: "" }
+  const answers = answerSets(resume.payload, interaction.questions)
+  if (!batch)
+    return { answer: encodedAnswer(interaction.questions[0]!, answers[0]) }
+  return {
+    answers: Object.fromEntries(
+      interaction.questions.map((question, index) => [
+        question.id!,
+        encodedAnswer(question, answers[index]),
+      ])
+    ),
+  }
+}
+
+/** The `approval` response for one validated public choice, in wire form. */
+function approvalResult(
+  interaction: Extract<PendingInteraction, { kind: "approval" }>,
+  resume: { status: "resolved" | "cancelled"; payload: unknown }
+): ApprovalResult {
+  const choice = resume.status === "cancelled" ? "deny" : resume.payload
+  if (
+    typeof choice !== "string" ||
+    !interaction.choices.includes(choice as ApprovalChoice)
+  )
+    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+  const selected = choice as ApprovalChoice
+  return {
+    choice: selected,
+    // `session` and `always` are answers about more than this one request.
+    ...(BROAD_APPROVAL_CHOICES.has(selected) ? { all: true } : {}),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HermesInteractions
+// ---------------------------------------------------------------------------
 
 export class HermesInteractions {
   readonly #pending = new Map<string, PendingInteraction>()
@@ -422,182 +727,82 @@ export class HermesInteractions {
     string,
     { fingerprint?: string; result: HermesInteractionResult }
   >()
-  readonly #live = new Map<
+  readonly #listeners = new Map<string, Set<HermesInterruptListener>>()
+  /**
+   * Requests whose live Session id was not bound yet. `open_requests` are
+   * re-delivered before the `session.resume` that carried them resolves, so the
+   * registry has not learned the id at delivery time; each is settled as soon
+   * as it can be, and refused if it never can.
+   */
+  readonly #deferred = new Map<
     string,
-    { scope: HermesInteractionScope; liveSessionId: string }
+    { request: ServerRequest; timer: ReturnType<typeof setTimeout> }
   >()
-  readonly #resuming = new Map<
-    string,
-    Promise<HermesInteractionResumeSnapshot>
-  >()
-  readonly #resumeGenerations = new Map<string, number>()
+  /**
+   * One attachment retainer per Session with something pending: Hermes may not
+   * have the live Session closed under a request that is still waiting.
+   */
+  readonly #retainers = new Map<string, Promise<() => void>>()
+  /**
+   * Sessions with a `resume()` in flight, by depth. Its own re-deliveries ride
+   * the snapshot it returns to the caller, so they raise no interrupt; every
+   * other re-delivery (a heal, a catch-up) is the first the run hears of that
+   * request and must be notified.
+   */
+  readonly #resuming = new Map<string, number>()
+  readonly #loggedMethods = new Set<string>()
+  /** Reconciliation counter: what a pending request's `confirmed` is stamped with. */
+  #reconciliation = 0
+  readonly #stopRequests: () => void
+  readonly #stopEvents: () => void
+  readonly #log: HermesLog | undefined
   #sequence = 0
 
-  constructor(readonly transport: HermesInteractionTransport) {}
-
-  #remember(interaction: NewPendingInteraction) {
-    const key = interactionKey(interaction.scope, interaction.id)
-    const existing = this.#pending.get(key)
-    if (existing) {
-      if (
-        existing.kind !== interaction.kind ||
-        existing.liveSessionId !== interaction.liveSessionId ||
-        JSON.stringify(existing.outcome) !== JSON.stringify(interaction.outcome)
-      )
-        invalidNative()
-      return existing.outcome
-    }
-    if (this.#completed.has(key)) return undefined
-    if (this.#pending.size >= HERMES_INTERACTION_LIMITS.maxPending)
-      throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
-    this.#completed.delete(key)
-    const pending = {
-      ...interaction,
-      sequence: ++this.#sequence,
-      state: "pending" as const,
-    } as PendingInteraction
-    this.#pending.set(key, pending)
-    return pending.outcome
+  constructor(
+    private readonly transport: HermesInteractionTransport,
+    private readonly attachments: HermesInteractionAttachments,
+    options: { log?: HermesLog } = {}
+  ) {
+    this.#log = options.log
+    this.#stopRequests = transport.onRequest((request) =>
+      this.#deliver(request)
+    )
+    this.#stopEvents = transport.onEvent((event) => this.#observe(event))
   }
 
-  acceptNative(
-    scope: HermesInteractionScope,
-    liveSessionId: string,
-    event: unknown
-  ): RunInterruptOutcome | HermesInteractionResult | undefined {
-    if (!isRecord(event)) return undefined
-    if (
-      event.type !== "approval.request" &&
-      event.type !== "clarify.request" &&
-      event.type !== "clarify.expire"
-    )
-      return undefined
-    if (!boundedJson(event)) invalidNative()
-    if (event.session_id !== liveSessionId) return undefined
-    const established = this.#live.get(sessionKey(scope))
-    if (established && established.liveSessionId !== liveSessionId)
-      return undefined
-    if (!isRecord(event.payload)) invalidNative()
-    if (event.type === "clarify.expire") {
-      const requestId = validString(event.payload.request_id, 256)
-      if (!requestId) invalidNative()
-      const key = interactionKey(scope, requestId)
-      const interaction = this.#pending.get(key)
-      if (
-        !interaction ||
-        interaction.kind !== "questions" ||
-        interaction.liveSessionId !== liveSessionId
-      )
-        return undefined
-      this.#pending.delete(key)
-      const result: HermesInteractionResult = { status: "expired" }
-      this.#complete(key, result)
-      return result
-    }
-    if (event.type === "clarify.request") {
-      const { requestId, questions } = parseClarification(event.payload)
-      const outcome: RunInterruptOutcome = {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: requestId,
-            reason: "question",
-            message:
-              questions.length === 1
-                ? questions[0]!.question
-                : `${questions.length} questions require answers`,
-            responseSchema: {
-              type: "object",
-              properties: {
-                answers: {
-                  type: "array",
-                  prefixItems: questions.map(questionSchema),
-                  minItems: questions.length,
-                  maxItems: questions.length,
-                },
-              },
-              required: ["answers"],
-              additionalProperties: false,
-            },
-            metadata: {
-              "aos.kind": "questions",
-              "aos.scope": "run",
-              "aos.questionCount": questions.length,
-              ...(questions.some(({ locked }) => locked)
-                ? {
-                    "aos.lockedAnswerIndexes": questions.flatMap(
-                      ({ locked }, index) => (locked ? [index] : [])
-                    ),
-                  }
-                : {}),
-            },
-          },
-        ],
-      }
-      const remembered = this.#remember({
-        kind: "questions",
-        scope,
-        liveSessionId,
-        id: requestId,
-        questions,
-        outcome,
-      })
-      this.#live.set(sessionKey(scope), { scope: { ...scope }, liveSessionId })
-      return remembered
-    }
-    const id = validString(event.payload.request_id ?? event.payload.id, 256)
-    const message =
-      validString(
-        event.payload.message ??
-          event.payload.command ??
-          event.payload.description
-      ) ?? "Hermes is requesting permission to continue."
-    if (!id) invalidNative()
-    const choices = approvalChoices(event.payload)
-    if (choices.length === 0) invalidNative()
-    const choiceScopes = Object.fromEntries(
-      choices.map((choice) => [
-        choice,
-        choice === "session"
-          ? "session"
-          : choice === "always"
-            ? "agent"
-            : "request",
-      ])
-    )
-    const outcome: RunInterruptOutcome = {
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "approval",
-          message: publicText(message),
-          responseSchema: { type: "string", enum: choices },
-          metadata: {
-            "aos.kind": "approval",
-            "aos.scope": "run",
-            "aos.choiceScopes": choiceScopes,
-          },
-        },
-      ],
-    }
-    const remembered = this.#remember({
-      kind: "approval",
-      scope,
-      liveSessionId,
-      id,
-      choices,
-      outcome,
-    })
-    this.#live.set(sessionKey(scope), { scope: { ...scope }, liveSessionId })
-    return remembered
+  /** Release both gateway subscriptions, every parked request and retainer. */
+  close() {
+    this.#stopRequests()
+    this.#stopEvents()
+    for (const { timer } of this.#deferred.values()) clearTimeout(timer)
+    this.#deferred.clear()
+    this.#listeners.clear()
+    for (const held of [...this.#retainers.values()])
+      void held.then((release) => release())
+    this.#retainers.clear()
   }
 
+  /** Every interrupt still waiting for this Session, oldest first. */
   pending(scope: HermesInteractionScope) {
     return [...this.#pending.values()]
-      .filter((interaction) => sameScope(interaction.scope, scope))
+      .filter((interaction) => sameSession(interaction.scope, scope))
       .sort((left, right) => left.sequence - right.sequence)
       .map(({ outcome }) => outcome)
+  }
+
+  /** Notify the run observing this Session of every live interrupt. */
+  onInterrupt(
+    scope: HermesInteractionScope,
+    listener: HermesInterruptListener
+  ) {
+    const key = sessionKey(scope)
+    const listeners = this.#listeners.get(key) ?? new Set()
+    this.#listeners.set(key, listeners)
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) this.#listeners.delete(key)
+    }
   }
 
   async respond(
@@ -606,214 +811,74 @@ export class HermesInteractions {
   ): Promise<HermesInteractionResult> {
     const resume = strictResume(candidate)
     const key = interactionKey(scope, resume.interruptId)
+    const fingerprint = JSON.stringify([resume.status, resume.payload ?? null])
     const completed = this.#completed.get(key)
-    const responseFingerprint = JSON.stringify([
-      resume.status,
-      resume.payload ?? null,
-    ])
     if (completed) {
       if (
         completed.fingerprint !== undefined &&
-        completed.fingerprint !== responseFingerprint
+        completed.fingerprint !== fingerprint
       )
         throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
       return completed.result
     }
     const interaction = this.#pending.get(key)
-    if (!interaction || !sameScope(interaction.scope, scope))
+    if (!interaction)
       throw new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    if (interaction.state === "dispatching") return { status: "in-progress" }
-
-    let calls: ReadonlyArray<{
-      method: string
-      params: Readonly<Record<string, unknown>>
-    }>
-    if (interaction.kind === "approval") {
-      const choice = resume.status === "cancelled" ? "deny" : resume.payload
-      if (
-        typeof choice !== "string" ||
-        !interaction.choices.includes(choice as ApprovalChoice)
-      )
-        throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-      calls = [
-        {
-          method: "approval.respond",
-          params: {
-            session_id: interaction.liveSessionId,
-            request_id: interaction.id,
-            choice,
-          },
-        },
-      ]
-    } else if (resume.status === "cancelled") {
-      calls = [
-        {
-          method: "clarify.respond",
-          params: {
-            session_id: interaction.liveSessionId,
-            request_id: interaction.id,
-            answer: "",
-          },
-        },
-      ]
-    } else {
-      const answers = answerSets(resume.payload, interaction.questions)
-      calls = interaction.questions.flatMap((question, index) => {
-        if (answers[index]?.lockedUnchanged) return []
-        return [
-          {
-            method: "clarify.respond",
-            params: {
-              session_id: interaction.liveSessionId,
-              request_id: interaction.id,
-              ...(question.id ? { question_id: question.id } : {}),
-              answer: question.multiple
-                ? JSON.stringify(answers[index]?.values)
-                : (answers[index]?.values[0] ?? ""),
-            },
-          },
-        ]
-      })
-    }
-
-    interaction.state = "dispatching"
-    interaction.responseFingerprint = responseFingerprint
-    try {
-      let expired = false
-      for (const call of calls) {
-        const result = await this.transport.request(call.method, call.params)
-        if (result !== undefined && !boundedJson(result))
-          throw new Error("invalid response")
-        if (
-          interaction.kind === "questions" &&
-          isRecord(result) &&
-          result.status === "expired"
-        )
-          expired = true
-        if (expired) break
-      }
-      const outcome: HermesInteractionResult = {
-        status: expired ? "expired" : "resolved",
-      }
-      this.#pending.delete(key)
-      this.#complete(key, outcome, responseFingerprint)
-      return outcome
-    } catch {
-      const outcome: HermesInteractionResult = { status: "uncertain" }
-      this.#pending.delete(key)
-      this.#complete(key, outcome, responseFingerprint)
-      return outcome
-    }
+    const result: ClarifyResult | ApprovalResult =
+      interaction.kind === "approval"
+        ? approvalResult(interaction, resume)
+        : clarifyResult(interaction, resume)
+    // The handle writes synchronously and swallows a dead socket, so an answer
+    // written now would be lost silently. Keep the card: a reconnect
+    // re-delivers the request and the user can answer it again.
+    if (!this.transport.connected()) return { status: "uncertain" }
+    interaction.request.respond(result)
+    this.#pending.delete(key)
+    this.#complete(key, { status: "resolved" }, fingerprint)
+    this.#release(interaction.scope)
+    return { status: "resolved" }
   }
 
-  resume(scope: HermesInteractionScope) {
-    const reconciliationKey = sessionKey(scope)
-    const inFlight = this.#resuming.get(reconciliationKey)
-    if (inFlight) return inFlight
-    const reconciliation = this.#reconcile(scope, reconciliationKey)
-    this.#resuming.set(reconciliationKey, reconciliation)
-    void reconciliation
-      .finally(() => {
-        if (this.#resuming.get(reconciliationKey) === reconciliation)
-          this.#resuming.delete(reconciliationKey)
-      })
-      .catch(() => undefined)
-    return reconciliation
-  }
-
-  async #reconcile(
-    scope: HermesInteractionScope,
-    reconciliationKey: string
+  /**
+   * Reconcile this Session against Hermes and report what is waiting on it. The
+   * refreshed binding is the registry's single-flight `session.resume`, whose
+   * `open_requests` are re-delivered to the request handler before it resolves:
+   * Hermes lists exactly what is still open, so a request it no longer lists is
+   * expired here.
+   */
+  async resume(
+    scope: HermesInteractionScope
   ): Promise<HermesInteractionResumeSnapshot> {
-    const generation = (this.#resumeGenerations.get(reconciliationKey) ?? 0) + 1
-    this.#resumeGenerations.set(reconciliationKey, generation)
-    let result: unknown
+    const reconciliation = ++this.#reconciliation
+    const key = sessionKey(scope)
+    this.#resuming.set(key, (this.#resuming.get(key) ?? 0) + 1)
     try {
-      result = await this.transport.request("session.resume", {
-        session_id: scope.sessionId,
-        profile: scope.agentId,
-        omit_messages: true,
-      })
-    } catch {
-      throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
-    }
-    if (this.#resumeGenerations.get(reconciliationKey) !== generation)
-      throw new HermesInteractionPublicError("AOS_RECONCILIATION_STALE")
-    if (!boundedJson(result) || !isRecord(result)) invalidNative()
-    const liveSessionId = validString(result.session_id, 512)
-    if (
-      !liveSessionId ||
-      (result.running !== undefined && typeof result.running !== "boolean") ||
-      (result.status !== undefined && typeof result.status !== "string") ||
-      (result.pending_approval !== undefined &&
-        result.pending_approval !== null &&
-        !isRecord(result.pending_approval)) ||
-      (result.pending_clarify !== undefined &&
-        result.pending_clarify !== null &&
-        !isRecord(result.pending_clarify))
-    )
-      invalidNative()
-
-    const pendingSnapshot = new Map(this.#pending)
-    const completedSnapshot = new Map(this.#completed)
-    const liveSnapshot = new Map(this.#live)
-    const interrupts = []
-    try {
-      for (const [key, interaction] of this.#pending) {
-        if (sameScope(interaction.scope, scope)) this.#pending.delete(key)
+      let attachment: { liveSessionId: string; running: boolean }
+      try {
+        attachment = await this.attachments.ensure(scope, { refresh: true })
+      } catch {
+        throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
       }
-      this.#live.set(sessionKey(scope), { scope: { ...scope }, liveSessionId })
-      if (isRecord(result.pending_approval)) {
-        const requestId = validString(
-          result.pending_approval.request_id ?? result.pending_approval.id,
-          256
-        )
-        if (requestId) this.#completed.delete(interactionKey(scope, requestId))
-        const outcome = this.acceptNative(scope, liveSessionId, {
-          type: "approval.request",
-          session_id: liveSessionId,
-          payload: result.pending_approval,
-        })
-        if (outcome && "interrupts" in outcome)
-          interrupts.push(...outcome.interrupts)
+      this.#settleDeferred()
+      this.#expireUnconfirmed(scope, reconciliation)
+      const interrupts = this.pending(scope).flatMap(
+        ({ interrupts: pending }) => pending
+      )
+      return {
+        running: attachment.running,
+        status: interrupts.length
+          ? ("waiting-for-input" as const)
+          : attachment.running
+            ? ("running" as const)
+            : ("idle" as const),
+        ...(interrupts.length
+          ? { outcome: { type: "interrupt" as const, interrupts } }
+          : {}),
       }
-      if (isRecord(result.pending_clarify)) {
-        const requestId = validString(result.pending_clarify.request_id, 256)
-        if (requestId) this.#completed.delete(interactionKey(scope, requestId))
-        const outcome = this.acceptNative(scope, liveSessionId, {
-          type: "clarify.request",
-          session_id: liveSessionId,
-          payload: result.pending_clarify,
-        })
-        if (outcome && "interrupts" in outcome)
-          interrupts.push(...outcome.interrupts)
-      }
-    } catch (error) {
-      this.#pending.clear()
-      for (const entry of pendingSnapshot) this.#pending.set(...entry)
-      this.#completed.clear()
-      for (const entry of completedSnapshot) this.#completed.set(...entry)
-      this.#live.clear()
-      for (const entry of liveSnapshot) this.#live.set(...entry)
-      throw error
-    }
-    return {
-      running: result.running === true,
-      status: interrupts.length
-        ? ("waiting-for-input" as const)
-        : result.running === true
-          ? ("running" as const)
-          : result.status === "idle"
-            ? ("idle" as const)
-            : ("unknown" as const),
-      ...(interrupts.length
-        ? {
-            outcome: {
-              type: "interrupt" as const,
-              interrupts,
-            },
-          }
-        : {}),
+    } finally {
+      const depth = (this.#resuming.get(key) ?? 1) - 1
+      if (depth > 0) this.#resuming.set(key, depth)
+      else this.#resuming.delete(key)
     }
   }
 
@@ -850,13 +915,250 @@ export class HermesInteractions {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Server requests
+  // -------------------------------------------------------------------------
+
+  /**
+   * The one `onRequest` handler. Returning `false` declines: the vendored
+   * channel answers `-32601`, which Hermes reads as a skipped question rather
+   * than a client that will answer later. A method AOS cannot render is
+   * therefore claimed instead: whichever renderer raised that prompt is still
+   * waiting on it, and AOS may not cancel it on that user's behalf.
+   */
+  #deliver(request: ServerRequest): boolean {
+    const method = ANSWERED_METHODS.find(
+      (candidate) => candidate === request.method
+    )
+    if (!method) return this.#hold(request.method)
+    const liveSessionId = nativeId(request.params.session_id, 256)
+    if (!liveSessionId) return this.#decline(request.method)
+    const scope = this.attachments.scopeFor(liveSessionId)
+    if (!scope)
+      return request.replayed
+        ? this.#defer(request)
+        : this.#decline(request.method)
+    return this.#present(scope, liveSessionId, method, request)
+  }
+
+  /** Remember one recognized request and raise its interrupt exactly once. */
+  #present(
+    scope: HermesInteractionScope,
+    liveSessionId: string,
+    method: AnsweredMethod,
+    request: ServerRequest
+  ): boolean {
+    const key = interactionKey(scope, request.id)
+    const existing = this.#pending.get(key)
+    if (existing) {
+      // A re-delivery after a heal answers on the current socket; the card is
+      // already up, so the run is not notified again.
+      existing.request = request
+      existing.liveSessionId = liveSessionId
+      existing.confirmed = this.#reconciliation
+      return true
+    }
+    // An answered request is never re-opened by a duplicate live frame; a
+    // reconnect that still lists it means the answer never reached Hermes.
+    if (this.#completed.has(key)) {
+      if (!request.replayed) return true
+      this.#completed.delete(key)
+    }
+    // AOS being full is AOS' own limit, never a reason to cancel a prompt a
+    // shared Session's other renderer may still answer; the next resume
+    // re-delivers what is still open, so a claimed request can be presented
+    // once this Session has room again.
+    if (this.#pending.size >= HERMES_INTERACTION_LIMITS.maxPending)
+      return this.#hold(method)
+    if (!boundedJson(request.params)) return this.#decline(method)
+    let projected: ProjectedInteraction
+    try {
+      projected =
+        method === "clarify"
+          ? clarifyInteraction(
+              request.id,
+              request.params as ClarifyRequestParams
+            )
+          : approvalInteraction(
+              request.id,
+              request.params as unknown as ApprovalRequestParams
+            )
+    } catch {
+      return this.#decline(method)
+    }
+    this.#pending.set(key, {
+      ...projected,
+      scope,
+      liveSessionId,
+      id: request.id,
+      sequence: ++this.#sequence,
+      request,
+      confirmed: this.#reconciliation,
+    })
+    this.#retain(scope)
+    // A request written while the socket was down reaches AOS only as a
+    // re-delivery, so a first delivery raises the interrupt however it arrived.
+    // Only this Session's own `resume()` stays quiet: it hands the same
+    // interrupt straight back to its caller.
+    if (!this.#resuming.has(sessionKey(scope)))
+      this.#notify(scope, projected.outcome)
+    return true
+  }
+
+  /** Park a re-delivered request until the registry has bound its live id. */
+  #defer(request: ServerRequest): boolean {
+    if (this.#deferred.size >= HERMES_INTERACTION_LIMITS.maxPending)
+      return this.#decline(request.method)
+    // A macrotask lands after the resume promise chain that carried this
+    // request; `resume()` settles it earlier when it is the caller.
+    const timer = setTimeout(() => this.#settleDeferred(request.id), 0)
+    this.#deferred.set(request.id, { request, timer })
+    return true
+  }
+
+  #settleDeferred(id?: string) {
+    for (const key of id === undefined ? [...this.#deferred.keys()] : [id]) {
+      const parked = this.#deferred.get(key)
+      if (!parked) continue
+      clearTimeout(parked.timer)
+      this.#deferred.delete(key)
+      const { request } = parked
+      const method = ANSWERED_METHODS.find(
+        (candidate) => candidate === request.method
+      )
+      const liveSessionId = nativeId(request.params.session_id, 256)
+      const scope = liveSessionId
+        ? this.attachments.scopeFor(liveSessionId)
+        : undefined
+      if (
+        method &&
+        liveSessionId &&
+        scope &&
+        this.#present(scope, liveSessionId, method, request)
+      )
+        continue
+      this.#decline(request.method)
+      request.fail(
+        JSON_RPC_METHOD_NOT_FOUND,
+        "AOS has no Session bound to this Hermes request"
+      )
+    }
+  }
+
+  /** One `request.cancel` withdraws the request Hermes stopped waiting on. */
+  #observe(event: unknown) {
+    if (!isRecord(event) || event.type !== "request.cancel") return
+    const liveSessionId = nativeId(event.session_id, 256)
+    const cancelled: RequestCancelPayload | undefined = cancellation(event)
+    if (!liveSessionId || !cancelled) return
+    const parked = this.#deferred.get(cancelled.id)
+    if (parked) {
+      clearTimeout(parked.timer)
+      this.#deferred.delete(cancelled.id)
+      return
+    }
+    const scope = this.attachments.scopeFor(liveSessionId)
+    if (!scope) return
+    const key = interactionKey(scope, cancelled.id)
+    const interaction = this.#pending.get(key)
+    if (!interaction || interaction.liveSessionId !== liveSessionId) return
+    this.#pending.delete(key)
+    this.#complete(key, { status: "expired" })
+    this.#release(scope)
+  }
+
+  /**
+   * Whatever this reconciliation did not re-deliver is no longer open: Hermes
+   * answered it elsewhere, cancelled it, or minted a new live Session for which
+   * it never existed.
+   */
+  #expireUnconfirmed(scope: HermesInteractionScope, reconciliation: number) {
+    for (const [key, interaction] of [...this.#pending])
+      if (
+        sameSession(interaction.scope, scope) &&
+        interaction.confirmed < reconciliation
+      ) {
+        this.#pending.delete(key)
+        this.#complete(key, { status: "expired" })
+      }
+    this.#release(scope)
+  }
+
+  /** Hold the binding of a Session with a pending request open. */
+  #retain(scope: HermesInteractionScope) {
+    const key = sessionKey(scope)
+    if (this.#retainers.has(key)) return
+    this.#retainers.set(
+      key,
+      this.attachments.retain(scope, "interaction").catch(() => () => undefined)
+    )
+  }
+
+  /** Release it once nothing waits on that Session any more. */
+  #release(scope: HermesInteractionScope) {
+    const key = sessionKey(scope)
+    const held = this.#retainers.get(key)
+    if (
+      !held ||
+      [...this.#pending.values()].some((interaction) =>
+        sameSession(interaction.scope, scope)
+      )
+    )
+      return
+    this.#retainers.delete(key)
+    void held.then((release) => release())
+  }
+
+  #notify(scope: HermesInteractionScope, outcome: RunInterruptOutcome) {
+    for (const listener of [...(this.#listeners.get(sessionKey(scope)) ?? [])])
+      try {
+        listener(outcome)
+      } catch (error) {
+        this.#log?.warn("hermes.interactions.listener_failed", {
+          reason: publicReason(error),
+        })
+      }
+  }
+
+  /** Decline: the vendored channel answers `-32601` on AOS' behalf. */
+  #decline(method: string): false {
+    this.#logMethod("hermes.interactions.request_declined", method)
+    return false
+  }
+
+  /**
+   * Claim a request AOS cannot render and never answer it. The Session may be
+   * shared with Hermes' own renderer, which is still waiting on that prompt.
+   */
+  #hold(method: string): true {
+    this.#logMethod("hermes.interactions.request_unanswered", method)
+    return true
+  }
+
+  /**
+   * Log one line per distinct method and outcome, truncated and bounded: the
+   * same method can be declined for one Session and claimed for another, and
+   * one line must not hide the other.
+   */
+  #logMethod(event: string, method: string) {
+    const name = method.slice(0, MAX_LOGGED_METHOD_CHARS)
+    const key = `${event}\u0000${name}`
+    if (
+      this.#loggedMethods.has(key) ||
+      this.#loggedMethods.size >= MAX_LOGGED_METHODS
+    )
+      return
+    this.#loggedMethods.add(key)
+    this.#log?.warn(event, { method: name })
+  }
+
   #complete(
     key: string,
     result: HermesInteractionResult,
     fingerprint?: string
   ) {
     this.#completed.set(key, {
-      fingerprint,
+      ...(fingerprint === undefined ? {} : { fingerprint }),
       result:
         result.status === "resolved" ? { status: "already-resolved" } : result,
     })

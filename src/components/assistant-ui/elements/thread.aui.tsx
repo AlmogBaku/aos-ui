@@ -1516,7 +1516,9 @@ const MessageError: FC = () => {
   return (
     <MessagePrimitive.Error>
       <ErrorPrimitive.Root className="aui-message-error-root mt-2 rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive dark:bg-destructive/5 dark:text-red-200">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
+        {/* A normalized failure reads as its headline over the provider's own
+            detail, so the line break between them is preserved. */}
+        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-3 whitespace-pre-line" />
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   )
@@ -1786,6 +1788,10 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
 )
 
 const USER_MESSAGE_PART_COMPONENTS = {
+  // The user's own words render through the same Markdown mechanism and the
+  // same body type scale as the assistant's, so neither role carries its own
+  // typography or a second text renderer.
+  Text: MarkdownText,
   File: UserFilePart,
   Image: UserImagePart,
 }

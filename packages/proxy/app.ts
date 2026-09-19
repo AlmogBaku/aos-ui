@@ -34,6 +34,19 @@ export type ProxyAppOptions = {
   attachmentStages?: ServerAttachmentStages
 }
 
+/**
+ * The route a logged request addressed. The query string is deliberately
+ * dropped: it can carry a token or an invitation ref, and the path alone is
+ * what an operator correlates a status or a failure code with.
+ */
+function requestPath(url: string) {
+  try {
+    return new URL(url).pathname
+  } catch {
+    return undefined
+  }
+}
+
 const securityHeaders = {
   "cache-control": "no-store",
   "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
@@ -62,6 +75,7 @@ export function createProxyApp(options: ProxyAppOptions) {
         event: "request.completed",
         requestId,
         method: context.req.method,
+        path: requestPath(context.req.url),
         status: context.res.status,
         durationMs: Math.max(0, clock() - startedAt),
       })
@@ -134,6 +148,7 @@ export function createProxyApp(options: ProxyAppOptions) {
       redactForLog({
         event: "request.failed",
         requestId: context.get("requestId"),
+        path: requestPath(context.req.url),
         code,
         error: cause,
       })

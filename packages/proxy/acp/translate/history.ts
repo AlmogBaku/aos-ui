@@ -71,11 +71,27 @@ function agentUpdates(message: SessionMessage, lane: Lane): SessionUpdate[] {
       content: reasoning,
     })
   const content = contentBlocks(message.content)
-  if (content.length > 0)
+  // A turn the provider failed is replayed even when it streamed no prose: its
+  // durable failure rides on the message it belongs to, because a replay settles
+  // no run of its own.
+  const failure =
+    message.status?.type === "incomplete" ? message.status : undefined
+  if (content.length > 0 || failure)
     updates.push({
       sessionUpdate: "agent_message",
       messageId: message.id,
       content,
+      ...(failure
+        ? {
+            _meta: {
+              [AOS_META_KEY]: {
+                sequence: 0,
+                runId: HISTORY_RUN_ID,
+                status: failure,
+              },
+            },
+          }
+        : {}),
     })
   if (lane === "guest") return updates
   for (const part of message.content)

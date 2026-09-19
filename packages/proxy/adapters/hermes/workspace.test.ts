@@ -193,6 +193,36 @@ describe("Hermes workspace operations", () => {
     })
   })
 
+  it("offers the model a Session already runs even when Hermes omits it", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "retired",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                authenticated: true,
+                models: ["small"],
+              },
+            ],
+          }
+      },
+    })
+
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toEqual({
+      selectedId: '["native","retired"]',
+      options: [
+        { id: '["native","retired"]', label: "retired", group: "native" },
+        { id: '["native","small"]', label: "small", group: "Native models" },
+      ],
+    })
+  })
+
   it("changes a Session's model with Hermes' own Session-scoped config key", async () => {
     const { operations, request } = harness({
       request(method) {
@@ -712,6 +742,40 @@ describe("Hermes workspace operations", () => {
       estimated: true,
       source: "provider-usage-plus-estimate",
       breakdown: { systemTokens: 1_200, toolTokens: 800, messageTokens: 2_200 },
+    })
+  })
+
+  it("truncates a native Todo result no person could read", async () => {
+    const { operations } = harness({
+      history: [
+        {
+          role: "assistant",
+          tool_calls: [
+            { id: "call-1", function: { name: "todo", arguments: "{}" } },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call-1",
+          tool_name: "todo",
+          content: {
+            todos: Array.from({ length: 5_000 }, (_unused, index) => ({
+              id: `todo-${index}`,
+              content: `Step ${index}`,
+              status: "pending",
+            })),
+          },
+        },
+      ],
+    })
+
+    const todos = await operations.todos("research", "hermes:research:stored-1")
+
+    expect(todos).toHaveLength(256)
+    expect(todos?.at(0)).toEqual({
+      id: "todo-0",
+      label: "Step 0",
+      status: "pending",
     })
   })
 

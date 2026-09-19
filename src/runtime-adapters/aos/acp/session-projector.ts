@@ -11,6 +11,7 @@ import {
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
   AosArtifactNotificationSchema,
+  AosHistoryStatusMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -295,16 +296,32 @@ function applyPlan(
  */
 type UpdatePayload = Record<string, unknown>
 
+/**
+ * The durable failure a replayed turn carries, if any. Only the message the
+ * status arrived with takes it, so a replay never restates the Session's state.
+ */
+function replayedStatus(meta: unknown) {
+  const parsed = AosHistoryStatusMetaSchema.safeParse(meta)
+  return parsed.success ? parsed.data.status : undefined
+}
+
 function applyWhole(
   state: ProjectorState,
   kind: string,
-  update: UpdatePayload
+  update: UpdatePayload,
+  meta: unknown
 ): ProjectorState {
   const messageId = text(update.messageId)
   if (messageId === undefined) return state
-  return onMessage(state, messageId, roleOf(kind), (message) =>
-    replaceBlocks(message, sourceOf(kind), blockPatch(update.content))
-  )
+  const status = kind === "agent_message" ? replayedStatus(meta) : undefined
+  return onMessage(state, messageId, roleOf(kind), (message) => {
+    const replaced = replaceBlocks(
+      message,
+      sourceOf(kind),
+      blockPatch(update.content)
+    )
+    return status === undefined ? replaced : withStatus(replaced, status)
+  })
 }
 
 function applyChunk(
@@ -380,7 +397,7 @@ export function applyUpdate(
     case "user_message":
     case "agent_message":
     case "agent_thought":
-      return applyWhole(state, kind, update)
+      return applyWhole(state, kind, update, meta)
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":

@@ -4,7 +4,7 @@ import { createProxyApp } from "./app"
 import {
   HermesAuthenticationError,
   HermesHttpError,
-} from "./adapters/hermes/transport"
+} from "./adapters/hermes/gateway"
 import {
   HermesServerAdapter,
   HermesSessionNotFoundError,
@@ -262,6 +262,43 @@ describe("AOS V1 proxy", () => {
     )
     expect((await proxy.request(`${origin}/api/aos/v1/readyz`)).status).toBe(
       503
+    )
+  })
+
+  it("logs the request path without its query on a completed and a failed request", async () => {
+    const runtime = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesHttpError(503)
+      }),
+    })
+    const logger = { info: vi.fn(), error: vi.fn() }
+    const proxy = createProxyApp({
+      publicOrigin: origin,
+      runtimeInstance: runtimeInstance(runtime),
+      logger,
+    })
+
+    // An artifact read is a REST route that reaches the provider, so an outage
+    // there is the failure a log line has to name its path for.
+    const path = "/api/aos/v1/agents/researcher/sessions/stored/artifacts/art-1"
+    expect((await proxy.request(`${origin}${path}?token=secret`)).status).toBe(
+      503
+    )
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "request.failed",
+        code: "temporarily_unavailable",
+        path,
+      })
+    )
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "request.completed",
+        method: "GET",
+        status: 503,
+        path,
+      })
     )
   })
 })

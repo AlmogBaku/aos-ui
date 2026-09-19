@@ -187,6 +187,26 @@ describe("ModelSelector", () => {
     ).not.toHaveAttribute("aria-busy")
   })
 
+  it("switches the model only when the operator picks one", async () => {
+    const user = userEvent.setup()
+    const onValueChange = vi.fn()
+    renderSelector({ models: largeRoster(), onValueChange })
+
+    const trigger = screen.getByRole("combobox", { name: "Choose model" })
+    await user.click(trigger)
+    // A query that hides the Session's own model must not switch it.
+    await user.type(
+      await screen.findByRole("combobox", { name: "Search models" }),
+      "anthropic"
+    )
+    expect(onValueChange).not.toHaveBeenCalled()
+
+    // Typing against a closed trigger must not switch it either.
+    await user.keyboard("{Escape}")
+    await user.type(trigger, "local")
+    expect(onValueChange).not.toHaveBeenCalled()
+  })
+
   it("commits the model a pointer clicks while the search box holds focus", async () => {
     const user = userEvent.setup()
     const onValueChange = vi.fn()

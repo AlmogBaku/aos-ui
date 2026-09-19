@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto"
+import {
+  containsPrivateValue,
+  isRecord,
+  parseJson,
+  trimmedText,
+  utf8BytesWithin,
+} from "./native"
 
 type HermesMediaArtifact = {
   reference: string
@@ -30,18 +37,9 @@ const POSSIBLE_MEDIA_PREFIX =
   /^\s*(?:M(?:E(?:D(?:I(?:A(?::(?:\s*)?)?)?)?)?)?)?$/u
 const MAX_MEDIA_LINE_BYTES = 4_112
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 function parsedRecord(value: unknown) {
-  if (typeof value !== "string") return isRecord(value) ? value : undefined
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return isRecord(parsed) ? parsed : undefined
-  } catch {
-    return undefined
-  }
+  const parsed = parseJson(value)
+  return isRecord(parsed) ? parsed : undefined
 }
 
 function mediaReference(line: string) {
@@ -52,7 +50,7 @@ function safeAudioReference(reference: string) {
   if (
     reference !== reference.trim() ||
     !reference ||
-    Buffer.byteLength(reference, "utf8") > 4_096 ||
+    utf8BytesWithin(reference, 4_096) === undefined ||
     [...reference].some((character) => {
       const code = character.charCodeAt(0)
       return code < 32 || code === 127
@@ -64,7 +62,7 @@ function safeAudioReference(reference: string) {
     !filename ||
     filename === "." ||
     filename === ".." ||
-    Buffer.byteLength(filename, "utf8") > 255
+    utf8BytesWithin(filename, 255) === undefined
   )
     return undefined
   const extension = filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
@@ -191,7 +189,7 @@ export class HermesMediaTextFilter {
         (POSSIBLE_MEDIA_PREFIX.test(this.#pending) ||
           MEDIA_DIRECTIVE_PREFIX.test(this.#pending))
       ) {
-        if (Buffer.byteLength(this.#pending, "utf8") <= MAX_MEDIA_LINE_BYTES)
+        if (utf8BytesWithin(this.#pending, MAX_MEDIA_LINE_BYTES) !== undefined)
           break
         output += "[Media unavailable]"
         this.#pending = ""
@@ -211,4 +209,116 @@ export function projectHermesMediaText(
 ) {
   const filter = new HermesMediaTextFilter(trustedReferences)
   return `${filter.write(text)}${filter.finish()}`.replace(/\n$/u, "")
+}
+
+// ---------------------------------------------------------------------------
+// Published `aos.artifact` receipts
+// ---------------------------------------------------------------------------
+
+function safeArtifactToken(value: string, maxLength: number) {
+  return (
+    value.length <= maxLength &&
+    !/[\\/]/u.test(value) &&
+    ![...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || code === 127
+    }) &&
+    value !== "." &&
+    value !== ".." &&
+    !containsPrivateValue(value)
+  )
+}
+
+/**
+ * Project a native `present_artifact` receipt into the public opaque artifact
+ * descriptor. The native path never leaves this function; the public reference
+ * is the artifact id the content operations resolve back to a path.
+ */
+export function projectHermesArtifactReceipt(raw: unknown) {
+  const value = parsedRecord(raw)
+  if (!value || value.ok !== true || value.type !== "aos.artifact")
+    return undefined
+  const artifact = value.artifact
+  if (!isRecord(artifact)) return undefined
+  const id = trimmedText(artifact.id)
+  const filename = trimmedText(artifact.filename)
+  const mimeType = trimmedText(artifact.mimeType)
+  const sizeBytes = artifact.sizeBytes
+  if (
+    !id ||
+    !filename ||
+    !safeArtifactToken(id, 256) ||
+    !safeArtifactToken(filename, 255) ||
+    (mimeType !== undefined &&
+      !/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/u.test(
+        mimeType
+      )) ||
+    (sizeBytes !== undefined &&
+      (!Number.isSafeInteger(sizeBytes) || (sizeBytes as number) < 0))
+  )
+    return undefined
+  const descriptor = {
+    id,
+    filename,
+    ...(mimeType ? { mimeType } : {}),
+    ...(typeof sizeBytes === "number" ? { sizeBytes } : {}),
+  }
+  return {
+    result: { ok: true, type: "aos.artifact", artifact: descriptor },
+    part: {
+      type: "data" as const,
+      name: "aos.artifact",
+      data: {
+        ...descriptor,
+        source: { type: "provider", reference: id },
+      },
+    },
+  }
+}
+
+/**
+ * Resolve one already-published artifact id to its native reference by scanning
+ * authoritative history newest-first. Only a native tool receipt grants
+ * authority; a relative, traversal-free path is the sole accepted reference.
+ */
+export function publishedArtifact(
+  rows: readonly unknown[],
+  artifactId: string
+) {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (!isRecord(row)) continue
+    if (row.role === "tool") {
+      const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId)
+      const toolName = trimmedText(row.tool_name ?? row.toolName)
+      if (toolCallId && toolName)
+        for (const media of projectHermesMediaArtifacts(
+          toolCallId,
+          toolName,
+          row.content ?? row.result
+        ))
+          if (media.descriptor.id === artifactId)
+            return {
+              reference: media.reference,
+              filename: media.descriptor.filename,
+            }
+    }
+    const value = parsedRecord(row.content ?? row.result)
+    if (!value || value.ok !== true || value.type !== "aos.artifact") continue
+    const artifact = isRecord(value.artifact) ? value.artifact : undefined
+    const id = trimmedText(artifact?.id)
+    const reference = trimmedText(artifact?.path)
+    const filename = trimmedText(artifact?.filename)
+    if (
+      id !== artifactId ||
+      !reference ||
+      !filename ||
+      reference.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/u.test(reference) ||
+      reference.split(/[\\/]/u).includes("..")
+    )
+      continue
+    return { reference, filename }
+  }
+  return undefined
 }

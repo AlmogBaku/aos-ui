@@ -41,6 +41,15 @@ const areComponentMapsShallowEqual = (
   )
 }
 
+/**
+ * The shared body type scale for conversation text, per DESIGN.md: one scale
+ * for every message regardless of role. User and assistant turns both render
+ * through `MarkdownText`, so this is its single owner; nothing else may set a
+ * message font size.
+ */
+export const MESSAGE_BODY_TYPOGRAPHY =
+  "text-base leading-7 @min-[64rem]/workspace:text-sm @min-[64rem]/workspace:leading-6"
+
 const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, smooth }) => {
   const markdownComponents = useMemo(() => {
     if (!components) return defaultComponents
@@ -54,7 +63,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, smooth }) => {
     <MarkdownTextPrimitive
       smooth={smooth}
       remarkPlugins={[remarkGfm]}
-      className="aui-md text-base leading-7 @min-[64rem]/workspace:text-sm @min-[64rem]/workspace:leading-6"
+      className={cn("aui-md", MESSAGE_BODY_TYPOGRAPHY)}
       components={markdownComponents}
       componentsByLanguage={componentsByLanguage}
       defer

@@ -240,6 +240,16 @@ An adapter is ready when:
 - provider payloads and paths cannot enter normalized or guest output;
 - focused adapter tests and provider-neutral conformance tests pass.
 
+When a runtime's native client is open source and the AOS server-side
+requirements (bounded decoding, credential isolation, uncertain-mutation
+handling, reconciliation) can be satisfied with a thin wrapper, vendor the
+upstream client files byte-identical rather than reimplementing the wire
+protocol. Place the copy in a `vendor/` subdirectory, record the upstream pin,
+per-file hashes, and a sync recipe in that directory's `UPSTREAM.md`, and
+enforce the snapshot with a dedicated test. Keep replay ownership inside the
+adapter — if the upstream client offers a replay mode, disable it and let the
+adapter drive recovery from authoritative history.
+
 Use the Hermes adapter and its tests as a worked example, not as a transport
 template. Its package map is in
 [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md).

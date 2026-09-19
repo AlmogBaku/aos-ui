@@ -640,6 +640,13 @@ describe("Hermes content operations", () => {
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
   })
 
+  it("rejects an empty native transcript", async () => {
+    const h = harness({ transcribe: { ok: true, transcript: "" } })
+    await expect(
+      h.operations.transcribe("research", Uint8Array.of(1), "audio/webm")
+    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
+  })
+
   it("rejects pre-aborted audio without authority or transport I/O", async () => {
     const controller = new AbortController()
     controller.abort()

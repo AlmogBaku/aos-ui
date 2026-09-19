@@ -2,6 +2,7 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "../../../protocol"
+import { isRecord, parseJson, parseJsonOrValue } from "./native"
 
 type NativeRecord = Record<string, unknown>
 
@@ -147,10 +148,6 @@ export type HermesActivity =
 
 type HermesActivityState = "running" | "waiting-for-input" | "idle" | "unknown"
 
-function isRecord(value: unknown): value is NativeRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
 function stringValue(value: unknown, max = 4_096) {
   return typeof value === "string" && value.trim() && value.length <= max
     ? value.trim()
@@ -161,15 +158,6 @@ function tokenCount(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined
-}
-
-function parseJson(value: unknown) {
-  if (typeof value !== "string") return value
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
-  }
 }
 
 const systemCategories = new Set(["system_prompt", "rules", "skills", "memory"])
@@ -402,11 +390,18 @@ function completedToolRow(row: NativeRecord) {
   )
 }
 
+/**
+ * Session Todos are a plan a person reads, and the frame carrying them is bound
+ * by bytes alone. A list longer than this is machine noise or a corrupt payload,
+ * so the projection truncates it instead of publishing an unbounded PLAN.
+ */
+const MAX_PROJECTED_TODOS = 256
+
 export function projectHermesTodos(value: unknown): HermesTodo[] | undefined {
-  const payload = parseJson(value)
+  const payload = parseJsonOrValue(value)
   if (!isRecord(payload) || !Array.isArray(payload.todos)) return undefined
   const seen = new Set<string>()
-  return payload.todos.flatMap((raw, index) => {
+  return payload.todos.slice(0, MAX_PROJECTED_TODOS).flatMap((raw, index) => {
     if (!isRecord(raw)) return []
     const id = stringValue(raw.id, 256) ?? String(index)
     const label = stringValue(raw.label ?? raw.content, 4_096)

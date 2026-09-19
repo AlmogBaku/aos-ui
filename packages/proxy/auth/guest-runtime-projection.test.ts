@@ -3,6 +3,7 @@ import { z } from "zod"
 
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import { RunEventKind, RunEventSchema } from "../core/events"
+import { guestErrorDescription } from "./guest-projection"
 import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   createGuestRunAccess,
@@ -144,6 +145,137 @@ describe("guest AG-UI projection", () => {
     expect(projected.messages[1]).toMatchObject({
       content: [{ type: "text", text: envelope }],
     })
+  })
+
+  it("keeps a restored failed turn failed for a guest", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "ask",
+            role: "user",
+            content: [{ type: "text", text: "Summarize the filing" }],
+            createdAt: "2026-09-15T00:00:00.000Z",
+          },
+          {
+            id: "failed",
+            role: "assistant",
+            content: [{ type: "text", text: "I could not reach the model." }],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error:
+                "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
+            },
+            metadata: {
+              custom: {
+                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+              },
+            },
+          },
+        ],
+        total: 2,
+        limit: 200,
+        offset: 0,
+        nextOffset: 2,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[1]).toMatchObject({
+      id: "failed",
+      role: "assistant",
+      content: [{ type: "text", text: "I could not reach the model." }],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("temporarily_unavailable"),
+      },
+    })
+    expect(projected.messages[1]).not.toHaveProperty("metadata")
+    expect(JSON.stringify(projected)).not.toContain("Hermes")
+  })
+
+  it("keeps a restored failed turn that streamed no text", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "silent",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "Hermes could not complete this run.",
+            },
+          },
+        ],
+        total: 1,
+        limit: 200,
+        offset: 0,
+        nextOffset: 1,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[0]).toMatchObject({
+      id: "silent",
+      content: [],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("request_failed"),
+      },
+    })
+  })
+
+  it("never projects the provider detail of a restored failure to a guest", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "failed",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error:
+                "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+            },
+            metadata: {
+              custom: {
+                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+              },
+            },
+          },
+        ],
+        total: 1,
+        limit: 200,
+        offset: 0,
+        nextOffset: 1,
+      },
+      authorization,
+      "ref"
+    )
+
+    expect(projected.messages[0]).toMatchObject({
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: guestErrorDescription("temporarily_unavailable"),
+      },
+    })
+    expect(JSON.stringify(projected)).not.toContain("ValidationException")
   })
 
   it("preserves only normalized attachment metadata in guest history", () => {
@@ -345,5 +477,53 @@ describe("guest AG-UI projection", () => {
     expect(
       project({ type: RunEventKind.CUSTOM, name: "hermes.native", value: {} })
     ).toBeUndefined()
+  })
+
+  it.each([
+    ["AOS_CONNECTION_INTERRUPTED", "AOS_CONNECTION_INTERRUPTED"],
+    ["AOS_SEND_UNCERTAIN", "AOS_SEND_UNCERTAIN"],
+    ["AOS_INTERACTION_UNCERTAIN", "AOS_INTERACTION_UNCERTAIN"],
+    ["AOS_STOP_UNCERTAIN", "AOS_STOP_UNCERTAIN"],
+    ["AOS_RESET_REQUIRED", "temporarily_unavailable"],
+    ["AOS_STREAM_OVERFLOW", "temporarily_unavailable"],
+    ["AOS_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],
+    ["AOS_PROVIDER_AGENT_UNAVAILABLE", "temporarily_unavailable"],
+    ["AOS_SESSION_BUSY", "rate_limited"],
+    ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
+    ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
+    ["AOS_INTERACTION_EXPIRED", "request_failed"],
+    ["AOS_UNKNOWN_TO_THIS_BUILD", "request_failed"],
+    ["constructor", "request_failed"],
+    ["toString", "request_failed"],
+  ])("projects the run error code %s as %s", (code, expected) => {
+    const projected = project({
+      type: RunEventKind.RUN_ERROR,
+      code,
+      message: "Hermes said something private about /private/path",
+    })
+
+    expect(projected).toMatchObject({
+      type: RunEventKind.RUN_ERROR,
+      code: expected,
+    })
+    expect(String((projected as { message?: string })?.message)).not.toContain(
+      "/private/path"
+    )
+  })
+
+  it("never projects the provider detail of a run failure to a guest", () => {
+    const projected = project({
+      type: RunEventKind.RUN_ERROR,
+      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      message:
+        "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
+    })
+
+    expect(projected).toEqual({
+      type: RunEventKind.RUN_ERROR,
+      code: "temporarily_unavailable",
+      message: guestErrorDescription("temporarily_unavailable"),
+    })
+    expect(JSON.stringify(projected)).not.toContain("ValidationException")
   })
 })

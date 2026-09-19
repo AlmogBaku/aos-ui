@@ -61,11 +61,12 @@ tests, and the history-pagination correction identified by this audit.
   uncertain-send handling, and reconciliation in `run.ts`; adopting upstream
   replay would create two owners unless it is disabled. Upstream also retains
   JSON-RPC error `message` and `data` and provides no AOS frame-depth/body-size
-  policy. The local `transport.ts` adds those proxy trust-boundary controls.
+  policy. The local `gateway.ts` (which replaced `transport.ts`) adds those
+  proxy trust-boundary controls.
 - The web client still places a single-use WebSocket ticket in the URL. Current
-  Hermes also supports the safer `hermes-gateway-ticket.*` WebSocket
-  subprotocol, which AOS already uses, so copying the browser connection code
-  would be a security regression. See the
+  Hermes also supports the `hermes-gateway-ticket.*` WebSocket subprotocol; AOS
+  uses neither, dialling `/api/ws?token=` with a server-held credential, so
+  copying the browser connection code would remove that ownership. See the
   [browser URL construction](https://github.com/NousResearch/hermes-agent/blob/643b3f450df1c6c884b2de8d0832d0af9b6ed272/web/src/lib/gatewayClient.ts#L43-L61)
   and
   [server subprotocol handling](https://github.com/NousResearch/hermes-agent/blob/643b3f450df1c6c884b2de8d0832d0af9b6ed272/hermes_cli/web_server_chat.py#L202-L217).
@@ -128,7 +129,7 @@ and
   on IPC, Electron `net`/cookie partitions/`safeStorage`, browser windows,
   local process pools, and SSH routing. Its Node `fetchJson` buffers an
   unbounded response, preserves native response bodies in HTTP errors, and
-  performs no schema validation. It is not safer than AOS `transport.ts`.
+  performs no schema validation. It is not safer than AOS `gateway.ts`.
   See the
   [preload bridge](https://github.com/NousResearch/hermes-agent/blob/643b3f450df1c6c884b2de8d0832d0af9b6ed272/apps/desktop/electron/preload.ts#L15-L262)
   and
@@ -158,14 +159,14 @@ removing renderer/registry assumptions adds work rather than removing it.
 
 ## Exact fit with the AOS modules
 
-| Local module                                    | Safe upstream reuse                                                 | Keep local                                                                                      |
-| ----------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `transport.ts`                                  | Pinned JSON-RPC/event contract; optionally the request channel only | URL/credential ownership, ticket subprotocol, bounds, validation, redaction, observation socket |
-| `auth-broker.ts`                                | At most pure PKCE/token normalization helpers                       | Entire proxy flow, principal/lane binding, cookie jar, callbacks and origin policy              |
-| `adapter.ts`                                    | None                                                                | AOS capabilities, ownership and normalized projection                                           |
-| `history.ts`                                    | REST field names as contract fixtures                               | Ordering, compacted history, validation and AG-UI projection                                    |
-| `run.ts`                                        | Event names/payload typings                                         | Send semantics, Stop settlement, uncertainty and authoritative reconciliation                   |
-| `content.ts`, `workspace.ts`, `interactions.ts` | Native endpoint/RPC shapes as fixtures                              | Validation, authorization and normalized AOS behavior                                           |
+| Local module                                                | Safe upstream reuse                                          | Keep local                                                                                      |
+| ----------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `transport.ts` (now `gateway.ts` plus the vendored channel) | Pinned JSON-RPC/event contract; the vendored request channel | URL/credential ownership, the `?token=` dial, bounds, validation, redaction, observation socket |
+| `auth-broker.ts`                                            | At most pure PKCE/token normalization helpers                | Entire proxy flow, principal/lane binding, cookie jar, callbacks and origin policy              |
+| `adapter.ts`                                                | None                                                         | AOS capabilities, ownership and normalized projection                                           |
+| `history.ts`                                                | REST field names as contract fixtures                        | Ordering, compacted history, validation and AG-UI projection                                    |
+| `run.ts`                                                    | Event names/payload typings                                  | Send semantics, Stop settlement, uncertainty and authoritative reconciliation                   |
+| `content.ts`, `workspace.ts`, `interactions.ts`             | Native endpoint/RPC shapes as fixtures                       | Validation, authorization and normalized AOS behavior                                           |
 
 ## Minimal plan and estimate
 

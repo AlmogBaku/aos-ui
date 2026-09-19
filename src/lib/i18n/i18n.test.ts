@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { defaultLocale, getLocaleDirection, isLocale, locales } from "./config"
 import { getDictionary } from "./get-dictionary"
+import { runErrorMessage, type RunErrorCode } from "./run-errors"
 import {
   getLocaleFromPathname,
   negotiateLocale,
@@ -94,5 +95,59 @@ describe("typed dictionaries", () => {
       )
     }
     expect(hebrew.artifacts).not.toEqual(english.artifacts)
+  })
+})
+
+describe("run error messages", () => {
+  it("localizes every public run error code in both locales", async () => {
+    const english = await getDictionary("en")
+    const hebrew = await getDictionary("he")
+
+    expect(Object.keys(hebrew.runErrors)).toEqual(
+      Object.keys(english.runErrors)
+    )
+    expect(Object.keys(english.runErrors)).toContain("AOS_RECONNECT_EXHAUSTED")
+    for (const code of Object.keys(english.runErrors) as RunErrorCode[]) {
+      expect(english.runErrors[code].trim().length).toBeGreaterThan(0)
+      expect(hebrew.runErrors[code].trim().length).toBeGreaterThan(0)
+      expect(hebrew.runErrors[code]).not.toBe(english.runErrors[code])
+      expect(runErrorMessage(english, code, "proxy text")).toBe(
+        english.runErrors[code]
+      )
+      expect(runErrorMessage(hebrew, code, "proxy text")).toBe(
+        hebrew.runErrors[code]
+      )
+    }
+  })
+
+  it("names no provider slash command the browser cannot know exists", async () => {
+    const english = await getDictionary("en")
+    const hebrew = await getDictionary("he")
+
+    for (const dictionary of [english, hebrew])
+      for (const code of Object.keys(dictionary.runErrors) as RunErrorCode[])
+        expect(dictionary.runErrors[code]).not.toMatch(/\/[A-Za-z]/u)
+    expect(english.runErrors.AOS_PROVIDER_RETRYABLE_FAILURE).toBe(
+      "The model provider returned an error for this turn. Retry, switch models, or continue in a new Session."
+    )
+    expect(hebrew.runErrors.AOS_PROVIDER_RETRYABLE_FAILURE).toBe(
+      "ספק המודל החזיר שגיאה בפנייה הזו. נסו שוב, החליפו מודל, או המשיכו בשיחה חדשה."
+    )
+  })
+
+  it("keeps the proxy description for an unknown or absent run error code", async () => {
+    const english = await getDictionary("en")
+
+    expect(runErrorMessage(english, "AOS_NOT_A_CODE", "Proxy said this")).toBe(
+      "Proxy said this"
+    )
+    expect(runErrorMessage(english, undefined, "Proxy said this")).toBe(
+      "Proxy said this"
+    )
+    // An inherited object key is not a run error code.
+    for (const inherited of ["constructor", "toString", "hasOwnProperty"])
+      expect(runErrorMessage(english, inherited, "Proxy said this")).toBe(
+        "Proxy said this"
+      )
   })
 })

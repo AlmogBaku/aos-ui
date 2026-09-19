@@ -3,8 +3,8 @@
 This document explains how the Hermes `/api/ws` protocol represents one model
 turn and how the AOS Hermes adapter maps that turn to the proxy-owned run
 vocabulary defined in `packages/proxy/core/events.ts`. The ACP layer then
-delivers those events to the browser. This is a reference for contributors changing
-`transport.ts`, `run.ts`, recovery, or history.
+delivers those events to the browser. This is a reference for contributors
+changing `gateway.ts`, `gateway-socket.ts`, `run.ts`, recovery, or history.
 
 ## The socket is not the turn
 
@@ -15,8 +15,10 @@ model turn.
 
 The layers have separate responsibilities:
 
-1. `transport.ts` authenticates the socket, correlates JSON-RPC responses, and
-   delivers ordered native events.
+1. `vendor/hermes-shared/` (`JsonRpcGatewayClient`) correlates JSON-RPC
+   responses, drives the heartbeat, and manages socket generations.
+   `gateway.ts` / `gateway-socket.ts` wrap it with the token dial, bounded
+   decoding, error classification, and one event fan-out.
 2. `run.ts` validates events for one attached Session and maps their semantics
    to a proxy-owned run segment.
 3. The shared run coordinator owns subscriber replay and terminal settlement.
@@ -30,17 +32,17 @@ socket close, or the end of an individual assistant text segment.
 Hermes emits `message.start` when it accepts a prompt. A turn may then contain
 any number of assistant text segments and tool calls in source order.
 
-| Native event                                 | Meaning                                                                                                                                       | Ends the turn?               |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| `message.delta`                              | Streaming text for the current assistant segment.                                                                                             | No                           |
-| `message.interim`                            | Seals assistant commentary before subsequent work. `already_streamed` says whether preceding deltas already carried the text.                 | No                           |
-| `tool.start`, `tool.progress`                | Tool execution lifecycle.                                                                                                                     | No                           |
-| `tool.complete` success                      | A successful tool result.                                                                                                                     | No                           |
-| `tool.complete` failure                      | A failed tool attempt. Hermes may recover with more text and tools.                                                                           | No                           |
-| `message.complete` with `status: "complete"` | Successful terminal assistant outcome for the native turn.                                                                                    | Yes                          |
-| `message.complete` with `status: "error"`    | Terminal failure of the native turn. `recoverable` preserves a failed turn for retry; it does not keep that same turn running.                | Yes                          |
-| `error`                                      | Ambiguous failure notification. Hermes also uses it for advisory failures, such as a rejected pending model switch, while the turn continues. | No; reconcile Session status |
-| `session.info` with `running: false`         | Fallback settlement signal when the expected completion frame was lost or native work stopped abnormally.                                     | Fallback only                |
+| Native event                                 | Meaning                                                                                                                                                                                                                                                    | Ends the turn?               |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `message.delta`                              | Streaming text for the current assistant segment.                                                                                                                                                                                                          | No                           |
+| `message.interim`                            | Seals assistant commentary before subsequent work. `already_streamed` says whether preceding deltas already carried the text.                                                                                                                              | No                           |
+| `tool.start`, `tool.progress`                | Tool execution lifecycle.                                                                                                                                                                                                                                  | No                           |
+| `tool.complete` success                      | A successful tool result.                                                                                                                                                                                                                                  | No                           |
+| `tool.complete` failure                      | A failed tool attempt. Hermes may recover with more text and tools.                                                                                                                                                                                        | No                           |
+| `message.complete` with `status: "complete"` | Successful terminal assistant outcome for the native turn.                                                                                                                                                                                                 | Yes                          |
+| `message.complete` with `status: "error"`    | Terminal failure of the native turn. `recoverable` preserves a failed turn for retry; it does not keep that same turn running. `text` is the model's own prose only when `partial` is true; without it Hermes composed the copy that explains the failure. | Yes                          |
+| `error`                                      | Ambiguous failure notification. Hermes also uses it for advisory failures, such as a rejected pending model switch, while the turn continues.                                                                                                              | No; reconcile Session status |
+| `session.info` with `running: false`         | Fallback settlement signal when the expected completion frame was lost or native work stopped abnormally.                                                                                                                                                  | Fallback only                |
 
 Hermes sets the Session to idle after emitting the turn's completion frame. A
 consumer should prefer `message.complete` as the semantic terminal event and
@@ -115,8 +117,12 @@ proxy-owned vocabulary for the browser):
 - Tool failure terminates that tool call, not the run.
 - A successful `message.complete` closes outstanding message/tool structures
   and emits exactly one `RUN_FINISHED`.
-- A terminal native error becomes a sanitized, localized AOS run error. Native
-  exception strings and transport details must not reach the browser.
+- A terminal native error becomes a localized AOS run error, never an assistant
+  message: a failed completion's `text` is published as assistant text only when
+  `partial` is true, so Hermes' own failure copy never reads as a reply. The run
+  error carries the catalogue headline for the mapped code, followed by Hermes'
+  own error text bounded to 500 characters and dropped whole when it trips the
+  adapter's redaction rule. Transport details never reach the browser.
 - A generic `error` frame records a possible failure and triggers an
   authoritative Session-status read. `running` or `waiting` keeps the run open;
   `idle` confirms the failure. A failed status read cannot prove termination,
@@ -125,42 +131,54 @@ proxy-owned vocabulary for the browser):
   rule.
 - Live mapping and authoritative history must use the same tool-result failure
   classifier so refresh does not erase a failed attempt.
+- Hermes retains a failed turn (`error_retained=True`) in the Session's inflight
+  snapshot instead of its transcript, and only `session.resume` returns that
+  snapshot. A history load whose last page ends with an unanswered prompt
+  therefore resumes the Session once and restores the retained turn with the
+  same public failure code and message the live run published, restoring the
+  retained assistant text only when Hermes streamed prose before failing. No
+  other history load resumes anything.
 
-## Why AOS does not import `GatewayClient`
+## How AOS vendors `JsonRpcGatewayClient`
 
-Hermes' web [`GatewayClient`](https://github.com/NousResearch/hermes-agent/blob/b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b/web/src/lib/gatewayClient.ts)
-is a browser-specific wrapper around
-[`JsonRpcGatewayClient`](https://github.com/NousResearch/hermes-agent/blob/b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b/apps/shared/src/json-rpc-gateway.ts).
-The implementation package is a private Hermes workspace package named
-`@hermes/shared`, version `0.0.0`; it is not a supported published dependency.
-AOS also runs its transport server-side and requires boundaries absent from the
-browser client:
+AOS vendors `JsonRpcGatewayClient` and its companions byte-identical from
+`NousResearch/hermes-agent apps/shared` at commit
+`47685348eaca9d673719003b9e03a71becfa6423` into
+`vendor/hermes-shared/`. The vendored client owns correlation, per-call
+timeouts and `AbortSignal`, JSON-RPC error typing, the `gateway.ping`
+heartbeat, socket generations, and server-to-client request routing. The AOS
+`gateway.ts` wrapper owns the token dial, eager dial and jittered redial, 20 s
+heal grace, auth-close stop, 8 MiB wire-fault guard, 2 MiB event drop, bounded
+JSON, three-way error classification (rejected with code / uncertain when
+written / unavailable when nothing was written), one event fan-out, epoch
+changes, and `close()`. Vendored replay is disabled (`replay: false`) because
+`run.ts` owns native replay and catch-up.
 
-- bounded socket frames, decoded JSON depth, node count, and HTTP bodies;
-- server credential handling without exposing the Hermes token;
-- sanitized native errors and explicit uncertain-mutation outcomes;
-- exact Session routing and bounded multi-subscriber fan-out;
-- authoritative HTTP reconciliation under the AOS coordinator.
-
-For those reasons AOS adapts the wire protocol instead of importing the browser
-class. This is intentional adaptation, but it creates compatibility work. When
-the pinned Hermes revision changes, compare `transport.ts` with the upstream
-shared client for authentication, heartbeat, sequence watermark, replay epoch,
-and live/replay race behavior. Compare `run.ts` separately with Hermes Desktop's
+See [`vendor/hermes-shared/UPSTREAM.md`](vendor/hermes-shared/UPSTREAM.md) for
+per-file hashes, the shim rationale, and the sync recipe. When the pinned
+revision changes, compare `gateway.ts` and `gateway-socket.ts` against the
+updated shared client for authentication, dial parameters, sequence watermarks,
+and replay epoch behavior. Compare `run.ts` separately against Hermes Desktop's
 event reducer for message, tool, and terminal semantics. Transport parity does
 not replace correct turn interpretation.
 
 ## Verification contract
 
-Focused tests must cover at least these sequences:
+The following test titles in `run.test.ts` cover the sequences described in
+this document. Changing any of these behaviors requires updating the test.
 
-- failed tool, interim assistant text, successful tools, successful completion;
-- already-streamed interim text without duplication;
-- successful completion emits exactly one terminal run event;
-- terminal message error and idle fallback produce a friendly public error;
-- an advisory `error` while Hermes is running permits later tools and a
-  successful completion;
-- an `error` confirmed by authoritative idle status produces one friendly
-  terminal error;
-- reconnect replay preserves native sequence without duplicating live frames;
-- refreshed history retains both failed and successful tools in source order.
+- `keeps one AOS run while redirecting into a distinct assistant generation`
+- `keeps the run open across a failed tool, interim text, and recovered tools`
+- `seals already-streamed interim text without duplicating it`
+- `settles a run when its native turn later completes`
+- `treats a failed message completion as a run error with its cause`
+- `keeps Hermes partial output visible when message completion fails`
+- `never publishes Hermes' failure copy as assistant text`
+- `terminalizes a confirmed idle native failure with its bounded cause`
+- `keeps the run open after an advisory native error while Hermes is running`
+- `completes the advisory-error sequence without a run error`
+- `fails the terminal-error sequence once at the idle edge`
+- `replays missed events from the same Hermes epoch before buffered live events`
+- `reattaches an interrupted active run and replays without resubmitting the prompt`
+- `classifies a changed Hermes replay epoch as reset-required`
+- `live and refreshed Hermes tool projection agree` (describe block with multiple cases)

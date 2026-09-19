@@ -118,6 +118,13 @@ type ModelSelectorContextValue = {
   readonly onEffortChange?: ((effortId: string) => void) | undefined
 }
 
+/**
+ * The one change reason that means the operator activated an item. Typed against
+ * the Combobox's own reason union so an upstream rename fails the build instead
+ * of silently switching models on the library's own bookkeeping.
+ */
+const OPERATOR_PICKED: ComboboxPrimitive.Root.ChangeEventReason = "item-press"
+
 const ModelSelectorContext = createContext<ModelSelectorContextValue | null>(
   null
 )
@@ -194,8 +201,16 @@ export function ModelSelectorRoot({
           items={groups}
           itemToStringLabel={(model) => model.name}
           modal={false}
-          onValueChange={(next) => {
-            if (next) onValueChange(next.id)
+          // Only a deliberate pick may switch the Session's model. The
+          // Combobox also reports its own bookkeeping: typeahead against the
+          // closed trigger label-matches every keystroke against the whole
+          // roster, and a filtered item set that no longer holds the controlled
+          // value restores another one. Either commits a model the operator
+          // never chose, and because the trigger renders the controlled value
+          // the picker follows it. Activation covers pointer and keyboard alike.
+          onValueChange={(next, details) => {
+            if (next && details.reason === OPERATOR_PICKED)
+              onValueChange(next.id)
           }}
           value={selected}
         >

@@ -216,17 +216,33 @@ const SessionMessageAttachmentSchema = z.strictObject({
   content: z.array(z.never()).max(0),
 })
 
+/**
+ * The failure a durable message carries when the provider failed its turn. The
+ * run stream reports the same failure live, so a reload reads identically.
+ */
+export const SessionMessageErrorStatusSchema = z.strictObject({
+  type: z.literal("incomplete"),
+  reason: z.literal("error"),
+  error: z.string().min(1).max(4096),
+})
+
 export const SessionMessageSchema = z.strictObject({
   id: IdentifierSchema,
   role: z.enum(["user", "assistant", "system"]),
   content: z.array(SessionMessagePartSchema).max(2_000),
   attachments: z.array(SessionMessageAttachmentSchema).max(16).optional(),
   createdAt: z.string().datetime(),
+  // The two states a durable message may carry besides a plain completion: a
+  // turn still waiting on the user, and a turn the provider failed. Both shapes
+  // are the ones the workspace already renders for a live run.
   status: z
-    .strictObject({
-      type: z.literal("requires-action"),
-      reason: z.literal("interrupt"),
-    })
+    .union([
+      z.strictObject({
+        type: z.literal("requires-action"),
+        reason: z.literal("interrupt"),
+      }),
+      SessionMessageErrorStatusSchema,
+    ])
     .optional(),
   metadata: z
     .strictObject({ custom: z.record(z.string(), z.json()) })

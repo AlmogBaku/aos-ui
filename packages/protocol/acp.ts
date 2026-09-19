@@ -3,6 +3,7 @@ import { z } from "zod"
 import {
   AgentCatalogResponseSchema,
   RunSteerResponseSchema,
+  SessionMessageErrorStatusSchema,
   SessionStatusSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -263,6 +264,17 @@ export const AosStateMetaSchema = z.strictObject({
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
 export const AosChunkMetaSchema = z.strictObject(RunMetaBase)
+
+/**
+ * `agent_message._meta.aos` on a replayed turn the provider failed. A replay has
+ * no run of its own to settle, so the durable failure travels with the message
+ * it belongs to instead of through a run's `state_update`.
+ */
+export const AosHistoryStatusMetaSchema = z.strictObject({
+  ...RunMetaBase,
+  status: SessionMessageErrorStatusSchema,
+})
+export type AosHistoryStatusMeta = z.infer<typeof AosHistoryStatusMetaSchema>
 
 /** `tool_call_update._meta.aos` */
 export const AosToolCallMetaSchema = z.strictObject({

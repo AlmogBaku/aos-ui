@@ -282,6 +282,47 @@ describe("applyUpdate messages", () => {
     ).toBe(streamed)
   })
 
+  it("carries a replayed turn's own failure without settling the Session", () => {
+    const status = {
+      type: "incomplete",
+      reason: "error",
+      error: "The model provider rejected this turn.",
+    } as const
+    const replayed = fold([
+      [
+        {
+          sessionUpdate: "agent_message",
+          messageId: "a1",
+          content: [{ type: "text", text: "Half an answer" }],
+        },
+        { sequence: 0, runId: "history", status },
+      ],
+    ])
+
+    expect(toThreadMessages(replayed)[0]).toMatchObject({ status })
+    // A replay settles no run: only the message the status arrived with takes it.
+    expect(replayed.execution).toEqual({ status: "idle" })
+  })
+
+  it("ignores a replayed status on a turn that is not the agent's message", () => {
+    const thought = fold([
+      [
+        {
+          sessionUpdate: "agent_thought",
+          messageId: "a1",
+          content: [{ type: "text", text: "weighing" }],
+        },
+        {
+          sequence: 0,
+          runId: "history",
+          status: { type: "incomplete", reason: "error", error: "no" },
+        },
+      ],
+    ])
+
+    expect(toThreadMessages(thought)[0]?.status).toBeUndefined()
+  })
+
   it("keeps unchanged turns reference-equal across updates", () => {
     const first = fold([userChunk("u1", "Hi")])
     const second = fold([agentChunk("a1", "Hello")], first)

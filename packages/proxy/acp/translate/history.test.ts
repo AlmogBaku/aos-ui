@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
   AOS_META_KEY,
+  AosHistoryStatusMetaSchema,
   AosPlanMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
@@ -181,6 +182,45 @@ describe("translateHistory", () => {
         ({ sessionUpdate }) => sessionUpdate
       )
     ).toEqual(["user_message", "agent_message", "plan_update", "agent_message"])
+  })
+
+  it("replays a failed turn that streamed nothing, carrying its failure", () => {
+    const updates = translateHistory(
+      {
+        ...history,
+        messages: [
+          {
+            id: "a3",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-19T09:00:04.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "The model provider rejected this turn.",
+            },
+          },
+        ],
+      },
+      "operator"
+    )
+
+    expect(updates).toHaveLength(1)
+    const [update] = updates
+    expect(update).toMatchObject({
+      sessionUpdate: "agent_message",
+      messageId: "a3",
+      content: [],
+    })
+    expect(
+      AosHistoryStatusMetaSchema.parse(
+        (update as { _meta: Record<string, unknown> })._meta[AOS_META_KEY]
+      ).status
+    ).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: "The model provider rejected this turn.",
+    })
   })
 
   it("replays a message with no renderable content as nothing", () => {

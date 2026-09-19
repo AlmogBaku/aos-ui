@@ -6,6 +6,7 @@ import {
   SessionPlanActivityMessageSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type SessionHistoryResponse,
+  type SessionMessage,
 } from "../../protocol"
 import type {
   GuestAuthorization,
@@ -89,6 +90,15 @@ export function projectGuestError(
     : new Response(null, { status })
 }
 
+/** The normalized run failure code a restored failed turn carries, if any. */
+function restoredRunErrorCode(metadata: SessionMessage["metadata"]) {
+  const aos = metadata?.custom.aos
+  if (typeof aos !== "object" || aos === null || Array.isArray(aos))
+    return undefined
+  const code = (aos as Record<string, unknown>).runErrorCode
+  return typeof code === "string" ? code : undefined
+}
+
 export function projectGuestHistory(
   history: SessionHistoryResponse,
   authorization: GuestAuthorization,
@@ -148,9 +158,17 @@ export function projectGuestHistory(
           authorization
         )
       : undefined
+    // A turn the provider failed reaches a guest as a failed turn, never as an
+    // ordinary reply: its public text is projected like any other, and its
+    // status carries the guest catalogue's description of the mapped failure.
+    const failure =
+      message.role === "assistant" && message.status?.type === "incomplete"
+        ? publicRunError(restoredRunErrorCode(message.metadata))
+        : undefined
     if (
       content.length === 0 &&
       projectedInterrupts?.payload.type !== "interrupt" &&
+      failure === undefined &&
       !message.attachments?.length
     )
       continue
@@ -161,6 +179,15 @@ export function projectGuestHistory(
       createdAt: message.createdAt,
       ...(message.role === "user" && message.attachments?.length
         ? { attachments: message.attachments }
+        : {}),
+      ...(failure
+        ? {
+            status: {
+              type: "incomplete" as const,
+              reason: "error" as const,
+              error: guestErrorDescription(failure.code),
+            },
+          }
         : {}),
       ...(projectedInterrupts?.payload.type === "interrupt"
         ? {
@@ -224,15 +251,51 @@ export function projectGuestCapabilities(value: unknown) {
   })
 }
 
+/**
+ * Guest-visible run failures. Only a code a guest client can act on keeps its
+ * identity; every other normalized failure collapses into a generic one.
+ */
+const guestRunErrors: Readonly<
+  Record<string, { code: GuestPublicErrorCode; retryable: boolean }>
+> = {
+  AOS_CONNECTION_INTERRUPTED: {
+    code: "AOS_CONNECTION_INTERRUPTED",
+    retryable: true,
+  },
+  AOS_SEND_UNCERTAIN: { code: "AOS_SEND_UNCERTAIN", retryable: true },
+  AOS_INTERACTION_UNCERTAIN: {
+    code: "AOS_INTERACTION_UNCERTAIN",
+    retryable: true,
+  },
+  AOS_STOP_UNCERTAIN: { code: "AOS_STOP_UNCERTAIN", retryable: true },
+  AOS_RESET_REQUIRED: { code: "temporarily_unavailable", retryable: true },
+  AOS_STREAM_OVERFLOW: { code: "temporarily_unavailable", retryable: true },
+  AOS_PROVIDER_RETRYABLE_FAILURE: {
+    code: "temporarily_unavailable",
+    retryable: true,
+  },
+  AOS_PROVIDER_AGENT_UNAVAILABLE: {
+    code: "temporarily_unavailable",
+    retryable: true,
+  },
+  AOS_PROVIDER_UNAVAILABLE: {
+    code: "temporarily_unavailable",
+    retryable: true,
+  },
+  AOS_SESSION_BUSY: { code: "rate_limited", retryable: true },
+}
+
 function publicRunError(code: string | undefined) {
-  if (code === "AOS_CONNECTION_INTERRUPTED")
-    return { code, retryable: true } as const
-  if (code === "AOS_SEND_UNCERTAIN") return { code, retryable: true } as const
-  if (code === "AOS_INTERACTION_UNCERTAIN")
-    return { code, retryable: true } as const
-  if (code === "AOS_RESET_REQUIRED")
-    return { code: "temporarily_unavailable", retryable: true } as const
-  return { code: "request_failed", retryable: false } as const
+  // Only an own entry names a guest-visible failure: an inherited object key
+  // must collapse into the generic one like any unknown code.
+  return (
+    (code !== undefined && Object.hasOwn(guestRunErrors, code)
+      ? guestRunErrors[code]
+      : undefined) ?? {
+      code: "request_failed" as const,
+      retryable: false,
+    }
+  )
 }
 
 function guestMessageId(tokenId: string, sourceId: string) {
