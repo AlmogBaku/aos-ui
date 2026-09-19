@@ -60,6 +60,24 @@ export const AOS_PERMISSION_KIND_SESSION = "_allow_session" as const
 /** The single plan a Session carries: its Todos. */
 export const AOS_PLAN_ID = "todos" as const
 
+/**
+ * JSON-RPC error codes the proxy returns beyond the standard ones. Both ends
+ * import this table; the proxy maps `ServerRuntimePublicError` codes onto it.
+ */
+export const AOS_JSONRPC_ERRORS = {
+  authenticationRequired: -32001,
+  runInProgress: -32002,
+  staleInterrupt: -32003,
+  notFound: -32004,
+  revisionConflict: -32005,
+  temporarilyUnavailable: -32006,
+  connectionInterrupted: -32007,
+  uncertainMutation: -32008,
+  invalidRequest: -32602,
+} as const
+export type AosJsonRpcErrorCode =
+  (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
+
 const IdentifierSchema = z
   .string()
   .min(1)

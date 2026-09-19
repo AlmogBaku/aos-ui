@@ -20,6 +20,7 @@ export function getWorkspaceCapabilities(
     agentCreation:
       agents.filter((agent) => agent.role === "creator").length === 1,
     activityEvents: typeof workspace.subscribeActivity === "function",
+    sessionReadState: typeof workspace.markSessionRead === "function",
   }
 }
 

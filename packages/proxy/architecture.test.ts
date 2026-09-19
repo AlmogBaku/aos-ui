@@ -27,7 +27,7 @@ describe("runtime adapter boundary", () => {
     const repositoryRoot = join(proxyRoot, "../..")
     const commonProxyFiles = (
       await Promise.all(
-        ["auth", "core", "events", "guest", "routes"].map((directory) =>
+        ["acp", "auth", "core", "events", "guest", "routes"].map((directory) =>
           productionFiles(join(proxyRoot, directory))
         )
       )
@@ -40,6 +40,25 @@ describe("runtime adapter boundary", () => {
         /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
       )
       expect(source, path).not.toMatch(/\bHermes(?:Rpc|Http|Server|Session)/u)
+    }
+  })
+
+  it("confines the AG-UI vocabulary to adapters and the alias layer", async () => {
+    const proxyRoot = import.meta.dirname
+    const allowed = [
+      join(proxyRoot, "adapters"),
+      join(proxyRoot, "core/events.ts"),
+      // The AG-UI browser wire; deleted in Phase D of the ACP cutover.
+      join(proxyRoot, "routes/runs.ts"),
+      join(proxyRoot, "guest/routes/runs.ts"),
+      join(proxyRoot, "auth/guest-runtime-projection.ts"),
+    ]
+    const files = await productionFiles(proxyRoot)
+
+    for (const path of files) {
+      if (allowed.some((prefix) => path.startsWith(prefix))) continue
+      const source = await readFile(path, "utf8")
+      expect(source, path).not.toMatch(/(?:from\s+|import\s*\()["']@ag-ui\//u)
     }
   })
 

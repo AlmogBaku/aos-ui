@@ -84,6 +84,8 @@ export type SessionMetadata = {
   agentId: string
   updatedAt: string
   status: SessionStatus
+  /** Provider read state; absent when the runtime does not track it. */
+  unread?: boolean
 }
 
 export type TodoStatus = "pending" | "active" | "completed" | "failed"
@@ -145,6 +147,10 @@ export type WorkspaceAdapter = {
     listener: (event: WorkspaceActivityEvent) => void,
     onError?: (error: Error) => void
   ) => () => void
+  /** Idempotent ack that the operator has seen this Session. */
+  markSessionRead?: (threadId: string) => Promise<void>
+  /** The Session that is visible, focused, and unobscured, or none. */
+  reportFocus?: (threadId: string | null) => void
 }
 
 export type RuntimeQuestionOption = {
@@ -256,6 +262,7 @@ export type WorkspaceCapabilities = {
   todos: boolean
   agentCreation: boolean
   activityEvents: boolean
+  sessionReadState: boolean
 }
 
 export type WorkspaceProviderEvent<TPayload = unknown> = {

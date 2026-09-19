@@ -23,6 +23,7 @@ describe("workspace capabilities", () => {
       todos: false,
       agentCreation: false,
       activityEvents: false,
+      sessionReadState: false,
     })
 
     expect(
@@ -44,6 +45,7 @@ describe("workspace capabilities", () => {
       todos: true,
       agentCreation: true,
       activityEvents: true,
+      sessionReadState: false,
     })
   })
 })
