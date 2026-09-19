@@ -934,14 +934,24 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
     const runId = proxy.inputs[0]!.runId
-    // Hermes streams the reasoning half of a turn under `<id>:reasoning`,
-    // before the prose it belongs to.
     act(() => {
       segment.emit({
         type: RunEventKind.RUN_STARTED,
         threadId: SESSION_ID,
         runId,
       })
+    })
+    // The run has started but written nothing yet, so the replayed turn keeps
+    // the settled disclosure it was projected with.
+    await waitFor(() =>
+      expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(true)
+    )
+    expect(screen.getAllByRole("button", { name: "Reasoning" })).toHaveLength(1)
+    expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
+
+    // Hermes streams the reasoning half of a turn under `<id>:reasoning`,
+    // before the prose it belongs to.
+    act(() => {
       segment.emit({
         type: RunEventKind.REASONING_MESSAGE_START,
         messageId: "assistant-1:reasoning",
@@ -1005,6 +1015,12 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     // One execution disclosure per assistant turn, not one per streamed id.
     expect(screen.getAllByText("Reasoning")).toHaveLength(2)
     expect(screen.getAllByText("Shipping it.")).toHaveLength(1)
+    // Both turns are finished, so neither disclosure reports a running run.
+    const disclosures = screen.getAllByRole("button", { name: "Reasoning" })
+    expect(disclosures).toHaveLength(2)
+    for (const disclosure of disclosures)
+      expect(disclosure).toHaveAccessibleDescription("Complete")
+    expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
     await proxy.close()
   })
 })

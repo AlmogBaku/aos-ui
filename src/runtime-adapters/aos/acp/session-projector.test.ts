@@ -425,40 +425,106 @@ describe("applyUpdate tool calls", () => {
 })
 
 describe("applyUpdate execution", () => {
-  const answered = fold([userChunk("u1", "Hi"), agentChunk("a1", "Hello")])
+  /** One finished turn, exactly as a replay from the start projects it. */
+  const replayed = fold([
+    userChunk("u1", "Hi"),
+    stateUpdate({ state: "running" }),
+    agentChunk("a1", "Hello"),
+    stateUpdate({ state: "idle", stopReason: "end_turn" }),
+  ])
+  const COMPLETE = { status: { type: "complete", reason: "stop" } }
+  /** The next run, with the turn its first chunk opened. */
+  const answering = fold(
+    [stateUpdate({ state: "running" }), agentChunk("a2", "Sure")],
+    replayed
+  )
 
-  it("reports a running run on the Session and the latest turn", () => {
-    const running = fold([stateUpdate({ state: "running" })], answered)
-    expect(running.execution).toEqual({ status: "running", runId: "run-1" })
-    expect(toThreadMessages(running)[1]).toMatchObject({
+  it("opens the turn the running run streams into", () => {
+    expect(answering.execution).toEqual({ status: "running", runId: "run-1" })
+    expect(toThreadMessages(answering)[2]).toMatchObject({
+      id: "a2",
       status: { type: "running" },
     })
   })
 
+  it("opens the turn a running run's first tool call belongs to", () => {
+    const working = fold(
+      [
+        stateUpdate({ state: "running" }),
+        toolCall({ title: "grep" }, { ...RUN_META, messageId: "a2" }),
+      ],
+      replayed
+    )
+    expect(toThreadMessages(working)[2]).toMatchObject({
+      id: "a2",
+      status: { type: "running" },
+    })
+  })
+
+  it("leaves the finished turn behind a starting run finished", () => {
+    const started = fold([stateUpdate({ state: "running" })], replayed)
+    expect(started.execution).toEqual({ status: "running", runId: "run-1" })
+    expect(started.messages).toBe(replayed.messages)
+    expect(toThreadMessages(started)[1]).toMatchObject(COMPLETE)
+  })
+
   it("reports a blocked run as waiting for input", () => {
-    const blocked = fold([stateUpdate({ state: "requires_action" })], answered)
+    const blocked = fold([stateUpdate({ state: "requires_action" })], answering)
     expect(blocked.execution).toEqual({
       status: "waiting-for-input",
       runId: "run-1",
     })
-    expect(toThreadMessages(blocked)[1]).toMatchObject({
+    expect(toThreadMessages(blocked)[2]).toMatchObject({
       status: { type: "requires-action", reason: "interrupt" },
     })
+  })
+
+  it("hosts an interrupt that arrives before the run's first turn", () => {
+    const blocked = fold(
+      [
+        stateUpdate({ state: "running" }),
+        stateUpdate({ state: "requires_action" }),
+      ],
+      replayed
+    )
+    const messages = toThreadMessages(blocked)
+    expect(messages).toHaveLength(3)
+    expect(messages[2]).toMatchObject({
+      role: "assistant",
+      content: [],
+      status: { type: "requires-action", reason: "interrupt" },
+    })
+    expect(messages[1]).toMatchObject(COMPLETE)
+    // The hosted turn is the one the run settles when it ends.
+    const ended = fold(
+      [stateUpdate({ state: "idle", stopReason: "end_turn" })],
+      blocked
+    )
+    expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
   })
 
   it("completes the turn when the run ends its turn", () => {
     const idle = fold(
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
-      answered
+      answering
     )
     expect(idle.execution).toEqual({
       status: "idle",
       runId: "run-1",
       stopReason: "end_turn",
     })
-    expect(toThreadMessages(idle)[1]).toMatchObject({
-      status: { type: "complete", reason: "stop" },
-    })
+    expect(toThreadMessages(idle)[2]).toMatchObject(COMPLETE)
+  })
+
+  it("leaves the history alone when a run ends without a turn", () => {
+    const started = fold([stateUpdate({ state: "running" })], replayed)
+    const ended = fold(
+      [stateUpdate({ state: "idle", stopReason: "cancelled" })],
+      started
+    )
+    expect(ended.execution.status).toBe("idle")
+    expect(ended.messages).toBe(replayed.messages)
+    expect(toThreadMessages(ended)[1]).toMatchObject(COMPLETE)
   })
 
   it("fails the Session on a vendor error stop reason", () => {
@@ -473,7 +539,7 @@ describe("applyUpdate execution", () => {
           }
         ),
       ],
-      answered
+      answering
     )
     expect(failed.execution).toEqual({
       status: "failed",
@@ -481,7 +547,7 @@ describe("applyUpdate execution", () => {
       stopReason: AOS_STOP_REASONS.error,
       error: { code: "provider_error", message: "Broke" },
     })
-    expect(toThreadMessages(failed)[1]).toMatchObject({
+    expect(toThreadMessages(failed)[2]).toMatchObject({
       status: {
         type: "incomplete",
         reason: "error",
@@ -493,7 +559,7 @@ describe("applyUpdate execution", () => {
   it("fails the Session on an uncertain stop reason", () => {
     const uncertain = fold(
       [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.uncertain })],
-      answered
+      answering
     )
     expect(uncertain.execution.status).toBe("failed")
   })
@@ -501,17 +567,17 @@ describe("applyUpdate execution", () => {
   it("marks a cancelled turn incomplete and the Session idle", () => {
     const cancelled = fold(
       [stateUpdate({ state: "idle", stopReason: "cancelled" })],
-      answered
+      answering
     )
     expect(cancelled.execution.status).toBe("idle")
-    expect(toThreadMessages(cancelled)[1]).toMatchObject({
+    expect(toThreadMessages(cancelled)[2]).toMatchObject({
       status: { type: "incomplete", reason: "cancelled" },
     })
   })
 
   it("ignores a state it does not know", () => {
-    expect(fold([stateUpdate({ state: "_compacting" })], answered)).toBe(
-      answered
+    expect(fold([stateUpdate({ state: "_compacting" })], answering)).toBe(
+      answering
     )
   })
 })

@@ -57,6 +57,8 @@ export type ProjectorExecution = {
 export type ProjectorState = {
   readonly messages: readonly ProjectedMessage[]
   readonly execution: ProjectorExecution
+  /** The turn the running run opened, and the only one its state settles. */
+  readonly activeAssistantId?: string
   readonly todos: readonly TodoItem[]
   readonly usage?: { readonly used: number; readonly size: number }
   readonly title?: string
@@ -109,14 +111,31 @@ function withMessages(
   return messages === state.messages ? state : { ...state, messages }
 }
 
-/** Upserts the addressed turn, creating it with `role` when it is new. */
+/**
+ * Upserts the addressed turn, creating it with `role` when it is new. The one
+ * place a turn's status is opened: an assistant turn the running run creates is
+ * born running and becomes the turn that run's later state settles, so a run
+ * that has written nothing yet never re-opens the finished turn behind it.
+ */
 function onMessage(
   state: ProjectorState,
   id: string,
   role: MessageRole,
   patch: (message: ProjectedMessage) => ProjectedMessage
 ): ProjectorState {
-  return withMessages(state, withMessage(state.messages, id, role, patch))
+  const opened =
+    role === "assistant" &&
+    state.execution.status === "running" &&
+    !state.messages.some((message) => message.id === id)
+  const next = withMessages(
+    state,
+    // `opened` already proved the id is new, so only the created turn is patched
+    // with the status of the run that opened it.
+    withMessage(state.messages, id, role, (message) =>
+      patch(opened ? withStatus(message, { type: "running" }) : message)
+    )
+  )
+  return opened ? { ...next, activeAssistantId: id } : next
 }
 
 function withLastAssistant(
@@ -126,6 +145,18 @@ function withLastAssistant(
   const id = latestAssistantId(state.messages)
   return id === undefined ? state : onMessage(state, id, "assistant", patch)
 }
+
+/** The turn the run opened, while it is still part of the projection. */
+function activeAssistantId(state: ProjectorState): string | undefined {
+  const id = state.activeAssistantId
+  return id !== undefined && state.messages.some((message) => message.id === id)
+    ? id
+    : undefined
+}
+
+/** An interrupt before the run's first update still needs a turn to host it. */
+const interruptHostId = (runId: string | undefined) =>
+  `aos-interrupt-${runId ?? "current"}`
 
 /** The owning message comes from `_meta.aos`; without it, the latest turn. */
 function applyToolCall(
@@ -181,9 +212,19 @@ function applyIdle(
     : stopReason === "cancelled"
       ? { type: "incomplete", reason: "cancelled" }
       : { type: "complete", reason: "stop" }
-  return withLastAssistant({ ...state, execution }, (message) =>
-    withStatus(message, status)
-  )
+  const id = activeAssistantId(state)
+  // A run that wrote no turn settles the Session alone: the history before it
+  // keeps the status it was projected with.
+  const settled: ProjectorState = {
+    ...state,
+    execution,
+    activeAssistantId: undefined,
+  }
+  return id === undefined
+    ? settled
+    : onMessage(settled, id, "assistant", (message) =>
+        withStatus(message, status)
+      )
 }
 
 function applyState(
@@ -195,17 +236,23 @@ function applyState(
   const runId = parsed.success ? parsed.data.runId : state.execution.runId
   const carried = runId === undefined ? {} : { runId }
   const next = text(update.state)
+  // The run owns no turn until one of its updates opens one, so starting only
+  // moves the Session's own status.
   if (next === "running")
-    return withLastAssistant(
-      { ...state, execution: { status: "running", ...carried } },
-      (message) => withStatus(message, { type: "running" })
-    )
-  if (next === "requires_action")
-    return withLastAssistant(
-      { ...state, execution: { status: "waiting-for-input", ...carried } },
-      (message) =>
+    return { ...state, execution: { status: "running", ...carried } }
+  if (next === "requires_action") {
+    const blocked: ProjectorState = {
+      ...state,
+      execution: { status: "waiting-for-input", ...carried },
+    }
+    const id = activeAssistantId(state) ?? interruptHostId(runId)
+    return {
+      ...onMessage(blocked, id, "assistant", (message) =>
         withStatus(message, { type: "requires-action", reason: "interrupt" })
-    )
+      ),
+      activeAssistantId: id,
+    }
+  }
   if (next !== "idle") return state
   return applyIdle(state, carried, text(update.stopReason), meta)
 }
