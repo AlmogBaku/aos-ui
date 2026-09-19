@@ -9,6 +9,8 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { ReactNode } from "react"
+import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react"
 
 import {
   RichToolRenderer,
@@ -21,7 +23,10 @@ import {
   type RichToolPart,
 } from "./index"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
-import type { RuntimeInteractionAdapter } from "@/runtime-adapters/contracts"
+import type {
+  RuntimeInteractionAdapter,
+  RuntimeQuestionRequest,
+} from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
 import { Plan } from "./plan/index"
 import { SerializablePlanSchema } from "./plan/schema"
@@ -66,14 +71,52 @@ function toolPart(
   }
 }
 
+/** A request the composer is putting to the operator beside the transcript. */
+const pendingQuestionRequest: RuntimeQuestionRequest = {
+  kind: "question",
+  requestId: "question-1",
+  sessionId: "pending",
+  questions: [
+    {
+      header: "Choice",
+      prompt: "Where do you live?",
+      options: [{ label: "Tel Aviv" }, { label: "Haifa" }],
+    },
+  ],
+}
+
 /** A runtime that raises questions out of band and answers them elsewhere. */
-function outOfBandInteractions(): RuntimeInteractionAdapter {
+function outOfBandInteractions(
+  pending?: RuntimeQuestionRequest
+): RuntimeInteractionAdapter {
   return {
     respond: vi.fn().mockResolvedValue(undefined),
     reject: vi.fn().mockResolvedValue(undefined),
-    getPending: () => undefined,
+    // The gate reads the mounted thread's own id, so the fake answers for it.
+    getPending: () => pending,
     subscribe: () => () => {},
   }
+}
+
+/**
+ * The out-of-band record reads whether the mounted thread is waiting on the
+ * operator, so these cases mount the call inside a thread the gate can read.
+ */
+function OutOfBandThread({
+  interactions,
+  children,
+}: {
+  interactions: RuntimeInteractionAdapter
+  children: ReactNode
+}) {
+  const runtime = useLocalRuntime({ run: async () => ({ content: [] }) })
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <PendingInteractionProvider interactions={interactions}>
+        {children}
+      </PendingInteractionProvider>
+    </AssistantRuntimeProvider>
+  )
 }
 
 describe("normalizeRichToolState", () => {
@@ -692,9 +735,9 @@ describe("QuestionFlow renderer", () => {
     expect(screen.getByText("נענה")).toBeInTheDocument()
   })
 
-  it("keeps a batched question read-only when the runtime answers it out of band", async () => {
+  it("keeps a batched question read-only when no out-of-band request is pending", async () => {
     await renderTool(
-      <PendingInteractionProvider interactions={outOfBandInteractions()}>
+      <OutOfBandThread interactions={outOfBandInteractions()}>
         <RichToolRenderer
           {...toolPart({
             toolName: "question",
@@ -713,7 +756,7 @@ describe("QuestionFlow renderer", () => {
             status: { type: "requires-action", reason: "tool-calls" },
           })}
         />
-      </PendingInteractionProvider>
+      </OutOfBandThread>
     )
 
     expect(screen.getByText("Needs response")).toBeVisible()
@@ -733,7 +776,9 @@ describe("QuestionFlow renderer", () => {
 
   it("reads a cancelled out-of-band result as unanswered rather than an answer form", async () => {
     await renderTool(
-      <PendingInteractionProvider interactions={outOfBandInteractions()}>
+      <OutOfBandThread
+        interactions={outOfBandInteractions(pendingQuestionRequest)}
+      >
         <RichToolRenderer
           {...toolPart({
             toolName: "question",
@@ -758,12 +803,96 @@ describe("QuestionFlow renderer", () => {
             status: { type: "complete" },
           })}
         />
-      </PendingInteractionProvider>
+      </OutOfBandThread>
     )
 
     expect(screen.getByText("Cancelled")).toBeVisible()
     expect(screen.getByText("Where do you live?")).toBeVisible()
     expect(screen.getAllByText("Discarded")).toHaveLength(2)
+    expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
+  })
+
+  it("leaves the composer the only place a pending question is asked", async () => {
+    await renderTool(
+      <OutOfBandThread
+        interactions={outOfBandInteractions(pendingQuestionRequest)}
+      >
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "question",
+            args: {
+              question: "2 questions",
+              questions: [
+                {
+                  question: "Where do you live?",
+                  options: ["Tel Aviv", "Haifa"],
+                },
+                { question: "When should I follow up?", allowFreeform: true },
+              ],
+              allowFreeform: true,
+            },
+            status: { type: "requires-action", reason: "tool-calls" },
+          })}
+        />
+      </OutOfBandThread>
+    )
+
+    for (const asked of [
+      "2 questions",
+      "Where do you live?",
+      "When should I follow up?",
+      "Tel Aviv",
+      "Haifa",
+      "Needs response",
+    ]) {
+      expect(screen.queryByText(asked)).toBeNull()
+    }
+  })
+
+  it("records the answers once the operator responds beside the composer", async () => {
+    await renderTool(
+      <OutOfBandThread
+        interactions={outOfBandInteractions(pendingQuestionRequest)}
+      >
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "question",
+            args: {
+              question: "2 questions",
+              questions: [
+                {
+                  question: "Where do you live?",
+                  options: ["Tel Aviv", "Haifa"],
+                },
+                { question: "When should I follow up?", allowFreeform: true },
+              ],
+              allowFreeform: true,
+            },
+            result: {
+              responses: [
+                { question: "Where do you live?", answers: ["Ramat Gan"] },
+                {
+                  question: "When should I follow up?",
+                  answers: ["Next week"],
+                },
+              ],
+            },
+            status: { type: "complete" },
+          })}
+        />
+      </OutOfBandThread>
+    )
+
+    expect(screen.getByText("Answered")).toBeVisible()
+    for (const shown of [
+      "Where do you live?",
+      "When should I follow up?",
+      "Ramat Gan",
+      "Next week",
+    ]) {
+      expect(screen.getByText(shown)).toBeVisible()
+    }
     expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
   })

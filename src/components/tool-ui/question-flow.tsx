@@ -5,7 +5,10 @@ import type { QuestionPayload } from "./payloads/question-flow"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { useOutOfBandQuestions } from "@/components/runtime-interactions/pending-interaction-context"
+import {
+  useOutOfBandQuestions,
+  usePendingInteractionGate,
+} from "@/components/runtime-interactions/pending-interaction-context"
 
 import { OptionList } from "./option-list"
 import { QuestionFlow } from "./question-flow/index"
@@ -49,9 +52,19 @@ export function QuestionFlowTool(props: QuestionToolProps) {
   )
 }
 
+/**
+ * The lasting record of what the runtime asked. While the operator is actually
+ * being asked, the composer's form is the only place those questions appear, so
+ * the record stays silent until the call settles. A call left unanswered with
+ * nothing pending — a request that never reached the browser — keeps its
+ * "Needs response" record rather than emptying the turn.
+ */
 function QuestionRecord({ part, payload }: QuestionToolProps) {
   const { labels } = useToolUiLocale()
+  const beingAsked = usePendingInteractionGate()
   const state = readQuestionState(part, { interactive: true })
+  if (beingAsked && state.phase === "pending") return null
+
   const recorded = readRecordedAnswers(part)
   const asked = readAskedQuestions(payload)
 
