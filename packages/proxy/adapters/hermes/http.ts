@@ -210,7 +210,15 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
           },
           ...(init.body ? { body: JSON.stringify(init.body) } : {}),
         })
-        if (response.status === 401 || response.status === 403) {
+        // Hermes answers 401 for every authentication rejection on this REST
+        // surface (`hermes_cli/web_server.py:665` `auth_middleware`, `:443`
+        // `_require_token`, `hermes_cli/dashboard_auth/middleware.py:76`,
+        // `dashboard_auth/token_auth.py:96`) and never 403. Its 403 means the
+        // resource: a file it will not read, a sensitive path, or one outside
+        // the managed root (`hermes_cli/web_routers/files.py:165`, `:173`,
+        // `:185`). That keeps its status so the caller classifies it as a
+        // refusal instead of sending the operator to fix a working credential.
+        if (response.status === 401) {
           cancelBody(response)
           throw new HermesAuthenticationError()
         }

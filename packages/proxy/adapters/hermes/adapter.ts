@@ -102,10 +102,15 @@ type NativeRecord = Record<string, unknown>
  * request and refuses the file itself: 404 for a path it cannot find (a default
  * `text_to_speech` output lives in the media cache Hermes prunes hourly at a
  * 24-hour age, so its receipt outlives its bytes), 400 for a path it rejects or
- * a directory, and 413 for a file past its own data-URL ceiling. None of those
- * change on a retry.
+ * a directory, 403 for one it will not read — unreadable, sensitive, or outside
+ * the managed root (`hermes_cli/web_routers/files.py:165`, `:173`, `:185`,
+ * `hermes_cli/web_server_files.py:171`) — and 413 for a file past its own
+ * data-URL ceiling. Authentication is never among them: the dashboard answers
+ * 401 for a rejected credential. None of these change on a retry.
  */
-const UNREADABLE_ARTIFACT_STATUS: ReadonlySet<number> = new Set([400, 404, 413])
+const UNREADABLE_ARTIFACT_STATUS: ReadonlySet<number> = new Set([
+  400, 403, 404, 413,
+])
 
 function historyPagination(
   requestedLimit: number,

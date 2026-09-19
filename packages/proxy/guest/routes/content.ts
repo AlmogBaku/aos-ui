@@ -245,14 +245,21 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
             "content-disposition": `attachment; filename*=UTF-8''${encodedFilename(projected.payload.name)}`,
           },
         })
-      } catch {
+      } catch (error) {
+        // The same classification the operator route answers with: an artifact
+        // the provider can no longer read is gone, and only an unclassified
+        // failure is an outage worth retrying. The projected body carries a
+        // fixed description, so neither answer names a native path.
+        const gone =
+          routes.options.runtime.runtime.publicError(error)?.code ===
+          "not_found"
         return routes.projectedError(
           identity,
           agentId,
           ref,
-          "temporarily_unavailable",
-          true,
-          503
+          gone ? "not_found" : "temporarily_unavailable",
+          !gone,
+          gone ? 404 : 503
         )
       }
     }

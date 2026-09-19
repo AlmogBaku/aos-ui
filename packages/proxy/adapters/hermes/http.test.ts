@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { createHermesHttp, HermesHttpError } from "./http"
+import {
+  createHermesHttp,
+  HermesAuthenticationError,
+  HermesHttpError,
+} from "./http"
 
 describe("bounded Hermes HTTP", () => {
-  it.each([404, 409])(
+  it.each([403, 404, 409])(
     "preserves native REST status %i without exposing its response body",
     async (status) => {
       const { http } = createHermesHttp({
@@ -20,6 +24,34 @@ describe("bounded Hermes HTTP", () => {
       await expect(request).rejects.not.toThrow("private/path")
     }
   )
+
+  it("maps only a native 401 to a Hermes authentication failure", async () => {
+    // Hermes answers 401 for a rejected dashboard credential and 403 for a file
+    // it refuses on its own merits, so collapsing the two would report a
+    // working gateway token as broken.
+    const refusing = (status: number) =>
+      createHermesHttp({
+        baseUrl: "http://hermes.test",
+        credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
+        fetcher: vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                detail: "Access to sensitive files is not allowed",
+              }),
+              { status }
+            )
+        ),
+      }).http("/api/fs/read-data-url?path=%2Fsynthetic%2Fcache%2Ftts.mp3")
+
+    await expect(refusing(401)).rejects.toBeInstanceOf(
+      HermesAuthenticationError
+    )
+    const refused = refusing(403)
+    await expect(refused).rejects.toBeInstanceOf(HermesHttpError)
+    await expect(refused).rejects.not.toBeInstanceOf(HermesAuthenticationError)
+    await expect(refused).rejects.toMatchObject({ status: 403 })
+  })
 
   it("keeps static credentials server-side for native REST Session reads", async () => {
     const fetcher = vi.fn(async () => Response.json({ sessions: [] }))

@@ -468,6 +468,20 @@ describe("Hermes server adapter", () => {
       mimeType: "text/markdown",
     })
 
+    // A file Hermes refuses on its own merits answers 403, not 401: reporting
+    // that as a credential failure would send the operator to fix a gateway
+    // token that is working.
+    audioFailure = new HermesHttpError(403)
+    const refused = await adapter
+      .artifact("researcher", "stored", mediaId.data.id)
+      .then(() => undefined)
+      .catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(HermesContentUnreadableError)
+    expect(adapter.publicError(refused)).toEqual({
+      code: "not_found",
+      status: 404,
+    })
+
     // A provider outage stays retryable: only a refusal of the file itself is
     // reported as the output being gone.
     audioFailure = new HermesHttpError(500)

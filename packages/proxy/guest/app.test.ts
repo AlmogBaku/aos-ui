@@ -109,6 +109,12 @@ function harness(options: { existing?: boolean } = {}) {
         ? { sessionId: STORED, created: !options.existing }
         : undefined
   )
+  const artifact = vi.fn(async () => ({
+    bytes: Uint8Array.of(9, 8, 7),
+    mimeType: "audio/mpeg",
+    filename: "briefing.mp3",
+  }))
+  const publicError = vi.fn<ServerRuntime["publicError"]>(() => undefined)
   const runtime = {
     runs: engine,
     resolveInvitedSession,
@@ -197,7 +203,8 @@ function harness(options: { existing?: boolean } = {}) {
       bytes: Uint8Array.of(1, 2, 3),
       mimeType: "audio/mpeg",
     })),
-    publicError: vi.fn(() => undefined),
+    artifact,
+    publicError,
   } as unknown as ServerRuntime
   const instance: RuntimeInstance = {
     id: "hermes-primary",
@@ -224,6 +231,8 @@ function harness(options: { existing?: boolean } = {}) {
     runtime,
     engine,
     resolveInvitedSession,
+    artifact,
+    publicError,
     invitationService,
   }
 }
@@ -487,5 +496,58 @@ describe("guest app", () => {
       expect.any(AbortSignal)
     )
     expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
+  })
+
+  it("tells an invited guest whether an artifact is gone or the provider is down", async () => {
+    const subject = harness({ existing: true })
+    const unreadable = new Error(
+      "cannot read /home/synthetic/.hermes/cache/audio/tts_20260915_184023.mp3"
+    )
+    const outage = new Error("Hermes request failed")
+    subject.publicError.mockImplementation((cause) =>
+      cause === unreadable
+        ? { code: "not_found", status: 404 }
+        : cause === outage
+          ? { code: "temporarily_unavailable", status: 503 }
+          : undefined
+    )
+    const invite = await token(subject.invitationService)
+    const url = `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/artifacts/artifact-1`
+
+    subject.artifact.mockRejectedValueOnce(unreadable)
+    const gone = await subject.app.request(url, { headers: headers(invite) })
+    const goneBody = await gone.text()
+
+    expect(gone.status).toBe(404)
+    expect(JSON.parse(goneBody)).toEqual({
+      error: {
+        code: "not_found",
+        description: "The requested item was not found.",
+      },
+    })
+    expect(goneBody).not.toContain(".hermes")
+
+    subject.artifact.mockRejectedValueOnce(outage)
+    const unavailable = await subject.app.request(url, {
+      headers: headers(invite),
+    })
+
+    expect(unavailable.status).toBe(503)
+    await expect(unavailable.json()).resolves.toEqual({
+      error: {
+        code: "temporarily_unavailable",
+        description:
+          "The service is temporarily unavailable. Please try again.",
+      },
+    })
+
+    // The unchanged read still serves the bytes under the invited scope.
+    const served = await subject.app.request(url, { headers: headers(invite) })
+    expect(served.status).toBe(200)
+    expect(subject.artifact).toHaveBeenLastCalledWith(
+      AGENT,
+      STORED,
+      "artifact-1"
+    )
   })
 })
