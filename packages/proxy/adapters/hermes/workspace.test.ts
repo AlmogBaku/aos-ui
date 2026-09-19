@@ -407,6 +407,85 @@ describe("Hermes workspace operations", () => {
     })
   })
 
+  it("reports the model the Session is on over the one its live agent holds", async () => {
+    const { operations } = harness({
+      request(method) {
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                models: ["small", "large"],
+                capabilities: {
+                  small: { fast: true, reasoning: false },
+                  large: { fast: false, reasoning: true },
+                },
+              },
+            ],
+          }
+      },
+      // Hermes stashes a pick made while a turn streams for the next turn start,
+      // so its catalog still names the model the Session is leaving.
+      sessionInfo: { model: "large", provider: "native" },
+    })
+
+    await expect(
+      operations.models("research", "hermes:research:stored-1")
+    ).resolves.toMatchObject({ selectedId: '["native","large"]' })
+  })
+
+  it("keeps the catalog's model when Hermes names none for the Session", async () => {
+    const withoutModel = harness({
+      request: modelOptions,
+      sessionInfo: { running: false },
+    })
+    const withoutReader = harness({ request: modelOptions })
+
+    await expect(
+      withoutModel.operations.models("research", "hermes:research:stored-1")
+    ).resolves.toMatchObject({ selectedId: '["native","small"]' })
+    await expect(
+      withoutReader.operations.models("research", "hermes:research:stored-1")
+    ).resolves.toMatchObject({ selectedId: '["native","small"]' })
+  })
+
+  it("offers a reasoning level for the model the Session reports", async () => {
+    const { operations, request } = harness({
+      request(method) {
+        if (method === "config.set") return { key: "reasoning", value: "high" }
+        if (method === "model.options")
+          return {
+            provider: "native",
+            model: "small",
+            providers: [
+              {
+                slug: "native",
+                name: "Native models",
+                models: ["small", "large"],
+                capabilities: {
+                  small: { fast: true, reasoning: false },
+                  large: { fast: false, reasoning: true },
+                },
+              },
+            ],
+          }
+      },
+      sessionInfo: { model: "large", provider: "native" },
+    })
+
+    await expect(
+      operations.selectEffort("research", "hermes:research:stored-1", "high")
+    ).resolves.toEqual({ effortId: "high" })
+    expect(request).toHaveBeenLastCalledWith("config.set", {
+      session_id: "live-private-1",
+      key: "reasoning",
+      value: "high",
+    })
+  })
+
   it("reports the reasoning effort Hermes holds for the Session", async () => {
     const { operations } = harness({
       request: modelOptions,

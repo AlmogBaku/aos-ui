@@ -237,8 +237,23 @@ function projectEffortId(value: unknown) {
     : undefined
 }
 
+/**
+ * The model a Session is on, as Hermes reports it for the Session itself. A pick
+ * made while a turn streams is stashed for the next turn start, so the catalog —
+ * which reports the model the live agent holds — still names the model the
+ * Session is leaving.
+ */
+function projectSessionModel(info: unknown) {
+  if (!isRecord(info)) return undefined
+  const provider = stringValue(info.provider, 256)
+  const model = stringValue(info.model, 256)
+  return provider && model ? { provider, model } : undefined
+}
+
 function projectModels(
-  value: unknown
+  value: unknown,
+  /** Overrides the catalog's own idea of the current model, when reported. */
+  current?: { provider: string; model: string } | undefined
 ): HermesModelChoices & { native: NativeModel[] } {
   if (!isRecord(value) || !Array.isArray(value.providers))
     throw new HermesWorkspaceUnavailableError()
@@ -274,10 +289,12 @@ function projectModels(
       })
     }
   }
-  const selectedProvider = stringValue(value.provider, 256)
-  const selectedModel = stringValue(value.model, 256)
-  if (!selectedProvider || !selectedModel)
+  const catalogProvider = stringValue(value.provider, 256)
+  const catalogModel = stringValue(value.model, 256)
+  if (!catalogProvider || !catalogModel)
     throw new HermesWorkspaceUnavailableError()
+  const selectedProvider = current?.provider ?? catalogProvider
+  const selectedModel = current?.model ?? catalogModel
   const selectedId = JSON.stringify([selectedProvider, selectedModel])
   // The selected model must be one of the offered options. A picker holding a
   // value no item carries renders an empty selection, so publish the Session's
@@ -466,10 +483,13 @@ export function createHermesWorkspaceOperations(input: {
       session_id: session.liveSessionId,
       profile: session.agentId,
     })
-    const projected = projectModels(value)
     const info = await input.transport
       .sessionInfo?.(session)
       .catch(() => undefined)
+    // The Session's own model leads the catalog's: a client that trusted the
+    // catalog would show a pick stashed mid-turn settling back to the model the
+    // Session is leaving, and would keep doing so until that turn ended.
+    const projected = projectModels(value, projectSessionModel(info))
     const effortId = isRecord(info)
       ? projectEffortId(info.reasoning_effort)
       : undefined
@@ -556,11 +576,17 @@ export function createHermesWorkspaceOperations(input: {
     async selectEffort(agentId, sessionId, effortId) {
       const session = await requireScope(agentId, sessionId)
       if (!session.attached) throw new HermesWorkspaceUnavailableError()
+      const info = await input.transport
+        .sessionInfo?.(session)
+        .catch(() => undefined)
+      // The level is offered for the model the Session reports, which is the one
+      // the roster shows it on, pick stashed mid-turn included.
       const catalog = projectModels(
         await request("model.options", {
           session_id: session.liveSessionId,
           profile: session.agentId,
-        })
+        }),
+        projectSessionModel(info)
       )
       const selected = catalog.native.find(
         (option) => option.id === catalog.selectedId
