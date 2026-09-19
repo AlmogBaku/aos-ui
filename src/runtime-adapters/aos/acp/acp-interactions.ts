@@ -52,10 +52,17 @@ export function createAcpInteractions({
     listeners.get(sessionId)?.forEach((listener) => listener())
   }
 
+  /**
+   * The composer's view of one native request, or `undefined` when the proxy's
+   * projection cannot be read. An elicitation carries its questions only in
+   * `_meta.aos`, so a payload this contract rejects has nothing to render;
+   * failing here instead would answer the runtime on the operator's behalf.
+   * The request stays pending for the re-issue a later resume performs.
+   */
   function project(
     pending: AcpPendingRequest,
     sessionId: string
-  ): RuntimeQuestionRequest {
+  ): RuntimeQuestionRequest | undefined {
     if (pending.kind === "permission") {
       const meta = AosPermissionMetaSchema.safeParse(
         pending.request._meta?.[AOS_META_KEY]
@@ -83,14 +90,15 @@ export function createAcpInteractions({
         ],
       }
     }
-    const meta = AosElicitationMetaSchema.parse(
+    const meta = AosElicitationMetaSchema.safeParse(
       pending.request._meta?.[AOS_META_KEY]
     )
+    if (!meta.success) return undefined
     return {
       kind: "question",
-      requestId: meta.interruptId,
+      requestId: meta.data.interruptId,
       sessionId,
-      questions: meta.questions,
+      questions: meta.data.questions,
     }
   }
 
@@ -106,7 +114,9 @@ export function createAcpInteractions({
     // Request-scoped elicitations belong to no Session the operator can see.
     const sessionId = pending.sessionId
     if (sessionId === undefined) return
-    entries.set(sessionId, { request: project(pending, sessionId), pending })
+    const request = project(pending, sessionId)
+    if (request === undefined) return
+    entries.set(sessionId, { request, pending })
     notify(sessionId)
   })
 

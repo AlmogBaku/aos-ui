@@ -16,6 +16,13 @@ import type { AcpConnection } from "./types"
  * Bytes stay on REST, which the normalized client already owns.
  */
 
+/**
+ * A burst of native catalog changes costs one `session/list` page. Rows the
+ * browser has not attached learn their `unread`, `status`, and title only from
+ * a list, so an invalidation has to re-read one rather than patch a guess in.
+ */
+const CATALOG_RELIST_DEBOUNCE_MS = 300
+
 /** What the workspace still reads over REST, delegated to the AOS client. */
 type AcpRestClient = Pick<
   AosRemoteClient,
@@ -89,12 +96,40 @@ export function createAcpWorkspaceClient({
     for (const session of page.sessions) {
       const row = rowOf(session)
       remember(row.threadId, row.info, row.updatedAt)
+      if (row.title) store.setTitle(row.threadId, row.title)
     }
     return {
       sessions: store.rowsFor(page.sessions.map(({ sessionId }) => sessionId)),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     }
   }
+
+  let relistTimer: ReturnType<typeof setTimeout> | undefined
+  let relisting = false
+
+  /**
+   * Re-reads page one once a burst of invalidations settles. One read is in
+   * flight at a time: the next invalidation schedules the next read, so a
+   * skipped one costs nothing and nothing here retries.
+   */
+  function scheduleSessionRelist() {
+    if (relistTimer !== undefined) clearTimeout(relistTimer)
+    relistTimer = setTimeout(() => {
+      relistTimer = undefined
+      if (relisting) return
+      relisting = true
+      void listSessions()
+        .catch(() => undefined)
+        .finally(() => {
+          relisting = false
+        })
+    }, CATALOG_RELIST_DEBOUNCE_MS)
+  }
+
+  connection.onNotification(
+    AOS_METHODS.notify.catalogInvalidated,
+    scheduleSessionRelist
+  )
 
   const client = {
     // Agents

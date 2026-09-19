@@ -23,6 +23,7 @@ type PromptParams = PromptRequest
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "session-1"
+const SECOND_SESSION_ID = "session-2"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
@@ -65,6 +66,7 @@ const configOptions: SessionConfigOption[] = []
 function createProxyAgent() {
   let peer: AgentContext | undefined
   const prompts: PromptParams[] = []
+  const cancelled: string[] = []
   // The proxy streams a Session only to a client attached to it, so updates
   // raised before an attach wait for the resume that replays them.
   const waiting = new Map<string, SessionUpdate[]>()
@@ -109,15 +111,13 @@ function createProxyAgent() {
       },
     }))
     .onRequest(methods.agent.session.list, () => ({
-      sessions: [
-        {
-          sessionId: SESSION_ID,
-          cwd: "/workspace",
-          title: "Older",
-          updatedAt: UPDATED_AT,
-          _meta: { [AOS_META_KEY]: sessionInfo },
-        },
-      ],
+      sessions: [SESSION_ID, SECOND_SESSION_ID].map((sessionId) => ({
+        sessionId,
+        cwd: "/workspace",
+        title: sessionId === SESSION_ID ? "Older" : "Newer",
+        updatedAt: UPDATED_AT,
+        _meta: { [AOS_META_KEY]: sessionInfo },
+      })),
     }))
     .onRequest(methods.agent.session.resume, ({ params }) => {
       const { sessionId } = params
@@ -172,11 +172,45 @@ function createProxyAgent() {
         },
       ],
     }))
+    .onNotification(methods.agent.session.cancel, ({ params }) => {
+      cancelled.push(params.sessionId)
+    })
     .onNotification(AOS_METHODS.session.focus, z.unknown(), () => undefined)
     .onConnect((connection) => {
       peer = connection.client
     })
-  return { app, prompts }
+  return {
+    app,
+    prompts,
+    cancelled,
+    push,
+    /** One question interrupt, exactly as the proxy issues it. */
+    ask: (sessionId: string, interruptId: string) =>
+      peer?.request(methods.client.elicitation.create, {
+        mode: "form",
+        sessionId,
+        requestId: interruptId,
+        message: "The runtime needs an answer",
+        requestedSchema: {
+          type: "object",
+          properties: { q0: { type: "string", enum: ["Yes", "No"] } },
+        },
+        _meta: {
+          [AOS_META_KEY]: {
+            interruptId,
+            questions: [
+              {
+                header: "Confirm",
+                prompt: "Continue the migration?",
+                options: [{ label: "Yes" }, { label: "No" }],
+                multiple: false,
+                custom: false,
+              },
+            ],
+          },
+        },
+      }),
+  }
 }
 
 /** A WebSocket-shaped pipe to the in-process proxy agent. */
@@ -289,6 +323,7 @@ describe("provider-neutral AOS runtime composition", () => {
     await supplied.assistantRuntime.threads.getLoadThreadsPromise()
     expect(supplied.assistantRuntime.threads.getState().threadIds).toEqual([
       SESSION_ID,
+      SECOND_SESSION_ID,
     ])
 
     await act(async () => {
@@ -313,5 +348,77 @@ describe("provider-neutral AOS runtime composition", () => {
         "Shipping it",
       ])
     )
+  })
+
+  it("switching threads does not stop the provider run", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const supplied = runtime()!
+    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    await screen.findByText("Ready")
+
+    act(() => {
+      supplied.assistantRuntime.thread.composer.setText("Ship it")
+      supplied.assistantRuntime.thread.composer.send()
+    })
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    act(() => {
+      proxy.push(SESSION_ID, {
+        sessionUpdate: "state_update",
+        state: "running",
+        _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 3 } },
+      })
+    })
+    await waitFor(() =>
+      expect(supplied.assistantRuntime.thread.getState().isRunning).toBe(true)
+    )
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SECOND_SESSION_ID)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(proxy.cancelled).toEqual([])
+  })
+
+  it("switching threads leaves a question pending instead of cancelling it", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const supplied = runtime()!
+    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    await screen.findByText("Ready")
+
+    let answered: unknown
+    void proxy.ask(SESSION_ID, "interrupt-1")?.then((response) => {
+      answered = response
+    })
+    await waitFor(() =>
+      expect(supplied.interactions?.getPending(SESSION_ID)).toMatchObject({
+        requestId: "interrupt-1",
+      })
+    )
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SECOND_SESSION_ID)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(answered).toBeUndefined()
+    expect(proxy.cancelled).toEqual([])
+
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    expect(supplied.interactions?.getPending(SESSION_ID)).toMatchObject({
+      requestId: "interrupt-1",
+    })
   })
 })

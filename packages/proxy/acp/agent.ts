@@ -30,6 +30,7 @@ import {
 import type { SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import { buildNewTurnInput } from "../core/turn-input"
+import { redactForLog } from "../redaction"
 import {
   commandsUpdate,
   createSessions,
@@ -155,6 +156,18 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { workspace } = sessions
 
   const app = agent({ name: "aos-proxy" })
+
+  /** One structured, redacted line per connection-level ACP event. */
+  const log = (event: string, fields?: Record<string, unknown>) => {
+    context.logger?.info(
+      redactForLog({
+        event,
+        connectionId: context.connectionId,
+        lane,
+        ...fields,
+      })
+    )
+  }
 
   /**
    * Gates one method on the guest lane and returns what its handler runs under.
@@ -473,6 +486,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
+    log("acp.run.cancel", { sessionId: params.sessionId })
     // Only a resumed or prompted Session is attached, so an unauthenticated
     // guest reaches nothing here.
     const attachment = sessions.attached(params.sessionId)
@@ -589,6 +603,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     } catch {
       return
     }
+    // A connection that never finished its handshake is not an open ACP
+    // connection, so the opened and closed lines always pair.
+    log("acp.connection.opened")
     const notify = (method: `_${string}`, params?: unknown) => {
       void client.notify(method, params).catch(() => undefined)
     }
@@ -616,6 +633,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           ]),
     ]
     await connection.closed
+    log("acp.connection.closed")
     for (const stop of stops) stop?.()
     sessions.close()
     context.readState.close()

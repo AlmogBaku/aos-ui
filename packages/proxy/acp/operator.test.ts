@@ -456,6 +456,7 @@ async function harness(options: HarnessOptions = {}) {
     sessionRows,
     translators,
     attachmentStages: new AttachmentStageRegistry(),
+    logger: { info: vi.fn(), error: vi.fn() },
     readState: createReadState({
       runtimeInstance,
       sessionRows,

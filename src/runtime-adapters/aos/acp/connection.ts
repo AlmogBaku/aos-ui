@@ -189,7 +189,14 @@ export function createAcpConnection(
   }
 
   function emitPending(request: AcpPendingRequest) {
-    for (const listener of pendingListeners) listener(request)
+    for (const listener of pendingListeners)
+      try {
+        listener(request)
+      } catch {
+        // A consumer that cannot show one request must not fail it for the
+        // others: an unanswered request stays pending for the proxy to
+        // re-issue, which never answers the runtime on the operator's behalf.
+      }
   }
 
   function permissionRequest(request: RequestPermissionRequest) {

@@ -19,6 +19,7 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
+  AOS_STOP_REASONS,
   type AosActivityNotification,
 } from "../../protocol/acp"
 import {
@@ -271,6 +272,21 @@ const translators: Translators = {
               sessionUpdate: "agent_message_chunk",
               messageId: event.messageId,
               content: { type: "text", text: event.delta },
+              ...meta,
+            },
+          },
+        ],
+      }
+    if (event.type === RunEventKind.RUN_ERROR)
+      return {
+        state,
+        outbound: [
+          {
+            kind: "update",
+            update: {
+              sessionUpdate: "state_update",
+              state: "idle",
+              stopReason: AOS_STOP_REASONS.uncertain,
               ...meta,
             },
           },
@@ -530,6 +546,7 @@ async function harness(options: HarnessOptions = {}) {
     close: vi.fn(),
   }
 
+  const logger = { info: vi.fn(), error: vi.fn() }
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
@@ -540,6 +557,7 @@ async function harness(options: HarnessOptions = {}) {
     activityFeed,
     translators,
     attachmentStages: new AttachmentStageRegistry(),
+    logger,
   }
 
   const recorder = createRecorder()
@@ -595,6 +613,12 @@ async function harness(options: HarnessOptions = {}) {
     listAllSessions,
     readState,
     rows,
+    logger,
+    /** Every structured line the connection wrote, whatever its level. */
+    logged: () =>
+      [...logger.info.mock.calls, ...logger.error.mock.calls].map(
+        ([value]) => value
+      ),
     /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
     list: () => connection.agent.request(methods.agent.session.list, {}),
     create: () =>
@@ -1131,7 +1155,107 @@ describe("AOS ACP agent", () => {
       sessionId: CREATED,
       code: "stale_interrupt",
     })
+    expect(test.logged()).toContainEqual({
+      event: "acp.error",
+      connectionId: "connection-1",
+      sessionId: CREATED,
+      errorCode: "stale_interrupt",
+      message: "stale_interrupt",
+    })
     expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("logs the connection, the Stop it received, and the reply it settled", async () => {
+    const test = await harness()
+    await test.create()
+    await test.agent.request(methods.agent.session.prompt, {
+      sessionId: CREATED,
+      prompt: [{ type: "text", text: "Delete it" }],
+      _meta: { [AOS_META_KEY]: {} },
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const source = test.sources[0]
+    source?.emit(runStarted("run-1", CREATED))
+    source?.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: CREATED,
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-1", reason: "permission-required" }],
+      },
+    })
+    source?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+
+    await test.agent.notify(methods.agent.session.cancel, {
+      sessionId: CREATED,
+    })
+    await vi.waitFor(() =>
+      expect(test.logged()).toContainEqual({
+        event: "acp.run.cancel",
+        connectionId: "connection-1",
+        lane: "operator",
+        sessionId: CREATED,
+      })
+    )
+
+    expect(test.logged()).toContainEqual({
+      event: "acp.connection.opened",
+      connectionId: "connection-1",
+      lane: "operator",
+    })
+    expect(test.logged()).toContainEqual({
+      event: "acp.request.answered",
+      connectionId: "connection-1",
+      sessionId: CREATED,
+      interruptId: "approval-1",
+      status: "resolved",
+    })
+
+    test.close()
+    await vi.waitFor(() =>
+      expect(test.logged()).toContainEqual({
+        event: "acp.connection.closed",
+        connectionId: "connection-1",
+        lane: "operator",
+      })
+    )
+  })
+
+  it("logs the stop reason a failed run reported", async () => {
+    const test = await harness()
+    await test.create()
+    await test.agent.request(methods.agent.session.prompt, {
+      sessionId: CREATED,
+      prompt: [{ type: "text", text: "Long job" }],
+      _meta: { [AOS_META_KEY]: {} },
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const source = test.sources[0]
+    source?.emit(runStarted("run-1", CREATED))
+    source?.emit({
+      type: RunEventKind.RUN_ERROR,
+      message: "the transport dropped",
+      code: "AOS_CONNECTION_INTERRUPTED",
+    })
+    source?.finish()
+
+    // The proxy mints the run id the browser sees, so the line reports that one.
+    await vi.waitFor(() =>
+      expect(test.logged()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "acp.run.failed",
+            connectionId: "connection-1",
+            sessionId: CREATED,
+            stopReason: AOS_STOP_REASONS.uncertain,
+            runId: expect.any(String),
+          }),
+        ])
+      )
+    )
     test.close()
   })
 })

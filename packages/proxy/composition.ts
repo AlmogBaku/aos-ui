@@ -1,4 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
+import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
   type RuntimeFactory,
@@ -18,7 +19,7 @@ import { readSecretKeyFile } from "./secrets"
 
 export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
-  logger: { info(value: unknown): void; error(value: unknown): void }
+  logger: AcpLogger
   clock?: () => number
 }
 
@@ -79,6 +80,7 @@ export async function createConfiguredProxy(
         runtimeInstance,
         invitations: service,
         attachmentStages,
+        logger: dependencies.logger,
         ...clock,
       }),
     }
@@ -92,6 +94,7 @@ export async function createConfiguredProxy(
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
+    logger: dependencies.logger,
     ...(dependencies.clock === undefined ? {} : { now: dependencies.clock }),
   })
   const app = createProxyApp({

@@ -187,6 +187,22 @@ describe("ACP runtime interactions", () => {
     expect(interactions.getPending("session-1")).toBeUndefined()
   })
 
+  it("leaves an unreadable elicitation pending instead of answering it", () => {
+    const { interactions, emit } = harness()
+    const shown = elicitation()
+    emit(shown.pending)
+    const unreadable = elicitation({ interruptId: "interrupt-3" })
+    // The proxy carries the questions only here, and this contract rejects an
+    // empty header, so there is nothing the composer could render.
+    unreadable.pending.request._meta = {
+      aos: { interruptId: "interrupt-3", questions: [{ header: "" }] },
+    }
+
+    expect(() => emit(unreadable.pending)).not.toThrow()
+    expect(unreadable.respond).not.toHaveBeenCalled()
+    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-2")
+  })
+
   it("answers a permission with the selected option and clears the Session", async () => {
     const { interactions, emit } = harness()
     const { pending, respond } = permission()

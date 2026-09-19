@@ -5,13 +5,15 @@ import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
 import * as translators from "./translate"
-import type { AcpConnectionContext } from "./types"
+import type { AcpConnectionContext, AcpLogger } from "./types"
 
 export type OperatorAcpServiceOptions = {
   publicOrigin: string
   runtimeInstance: RuntimeInstance
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
+  /** Where this lane's connections write their structured lines. */
+  logger?: AcpLogger
   now?: () => number
 }
 
@@ -23,6 +25,7 @@ export function createOperatorAcpService({
   publicOrigin,
   runtimeInstance,
   attachmentStages,
+  logger,
   now = Date.now,
 }: OperatorAcpServiceOptions) {
   const lane = "operator" as const
@@ -39,6 +42,7 @@ export function createOperatorAcpService({
       sessionRows,
       translators,
       attachmentStages,
+      logger,
       readState: createReadState({
         runtimeInstance,
         sessionRows,

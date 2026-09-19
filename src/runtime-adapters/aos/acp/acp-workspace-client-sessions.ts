@@ -223,6 +223,8 @@ export function createAcpSessionStore({
     observe,
     put,
     rowsFor,
+    /** The provider's title, as a list page or an attached Session reports it. */
+    setTitle: (threadId: string, title: string) => titles.set(threadId, title),
     /** The proxy's read state, or the operator's own optimistic ack. */
     setUnread: (threadId: string, unread: boolean) =>
       patch(threadId, { unread }),
@@ -294,5 +296,6 @@ export function rowOf(session: SessionInfo) {
     threadId: session.sessionId,
     info: AosSessionInfoMetaSchema.parse(session._meta?.aos),
     updatedAt: session.updatedAt,
+    title: session.title,
   }
 }

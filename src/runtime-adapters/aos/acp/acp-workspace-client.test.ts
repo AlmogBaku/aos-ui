@@ -116,12 +116,13 @@ function sessionInfoMeta(unread?: boolean) {
   }
 }
 
-function listEntry(): SessionInfo {
+function listEntry(unread = true, title?: string): SessionInfo {
   return {
     sessionId: SESSION_ID,
     cwd: "/workspace",
     updatedAt: UPDATED_AT,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(true) },
+    ...(title === undefined ? {} : { title }),
+    _meta: { [AOS_META_KEY]: sessionInfoMeta(unread) },
   }
 }
 
@@ -182,6 +183,7 @@ function createFakeConnection() {
   }
   let model = "sonnet"
   let effort = "low"
+  let listed = listEntry()
 
   const connection: AcpConnection = {
     status: "ready",
@@ -201,7 +203,7 @@ function createFakeConnection() {
     },
     async listSessions(meta, cursor) {
       record("listSessions", meta, cursor)
-      return { sessions: [listEntry()], nextCursor: "cursor-2" }
+      return { sessions: [listed], nextCursor: "cursor-2" }
     },
     async resumeSession(sessionId, resume) {
       record("resumeSession", sessionId, resume)
@@ -270,6 +272,10 @@ function createFakeConnection() {
   return {
     connection,
     calls,
+    /** What the next `session/list` page reports for the Session. */
+    setListed: (entry: SessionInfo) => {
+      listed = entry
+    },
     argsOf: (method: string) =>
       calls.find((call) => call.method === method)?.args,
     emitUpdate(
@@ -619,6 +625,43 @@ describe("ACP workspace client", () => {
 
     expect(sessionInvalidations).toBe(1)
     expect(catalogInvalidations).toBe(1)
+  })
+
+  it("re-lists Session rows once for a burst of catalog invalidations", async () => {
+    vi.useFakeTimers()
+    try {
+      const { client, calls, emitNotification, setListed } = createClient()
+      await client.getSessionMetadata([SESSION_ID])
+      const published: SessionMetadata[][] = []
+      client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+        published.push(metadata)
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      await client.markSessionRead(SESSION_ID)
+      published.length = 0
+
+      setListed(listEntry(true, "Renamed by the provider"))
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      await vi.advanceTimersByTimeAsync(300)
+
+      expect(
+        calls.filter((call) => call.method === "listSessions")
+      ).toHaveLength(2)
+      expect(published.at(-1)).toEqual([
+        {
+          threadId: SESSION_ID,
+          agentId: AGENT_ID,
+          updatedAt: UPDATED_AT,
+          status: "idle",
+          unread: true,
+        },
+      ])
+      expect(client.sessionTitle(SESSION_ID)).toBe("Renamed by the provider")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("delegates byte and runtime reads to the REST client", async () => {

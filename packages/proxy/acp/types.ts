@@ -34,6 +34,17 @@ import type { SessionRows } from "../core/session-rows"
 
 export type Lane = "operator" | "guest"
 
+/**
+ * Where the ACP lanes write their structured lines, in the shape the proxy
+ * composition already receives. Every value passes through `redactForLog`
+ * first. A context built without one logs nothing, which is what a harness
+ * asserting only protocol behavior wants.
+ */
+export type AcpLogger = {
+  info(value: unknown): void
+  error(value: unknown): void
+}
+
 export type WorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
 >
@@ -52,6 +63,7 @@ export type AcpConnectionContext = {
   attachmentStages: ServerAttachmentStages
   /** Present only on the guest lane; absent means an operator connection. */
   guest?: GuestPolicy
+  logger?: AcpLogger
 }
 
 /**

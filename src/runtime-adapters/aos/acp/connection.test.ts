@@ -618,6 +618,28 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it("keeps a pending request answerable when one consumer cannot show it", async () => {
+    const proxy = createProxyAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+    const pending: AcpPendingRequest[] = []
+    connection.onPendingRequest(() => {
+      throw new Error("this consumer cannot project the request")
+    })
+    connection.onPendingRequest((request) => pending.push(request))
+
+    const answered = proxy.askPermission()
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
+    const request = pending[0]
+    if (request?.kind !== "permission") throw new Error("expected permission")
+    request.respond({ outcome: { outcome: "selected", optionId: "allow" } })
+
+    await expect(answered).resolves.toMatchObject({
+      outcome: { outcome: "selected", optionId: "allow" },
+    })
+    connection.close()
+  })
+
   it("reconnects a dropped transport and resumes every attached Session", async () => {
     const proxy = createProxyAgent({ resyncOnResume: 2 })
     const sockets: { close: () => void }[] = []

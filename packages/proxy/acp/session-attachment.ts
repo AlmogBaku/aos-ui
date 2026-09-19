@@ -1,10 +1,16 @@
 import {
   methods,
+  SessionUpdate,
+  StateUpdate,
   type AgentContext,
-  type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { AOS_METHODS, AOS_META_KEY, AOS_STOP_REASONS } from "../../protocol/acp"
+import {
+  AOS_METHODS,
+  AOS_META_KEY,
+  AOS_STOP_REASONS,
+  AosStateMetaSchema,
+} from "../../protocol/acp"
 import type { PendingRequest, RequestReply } from "../core/events"
 import type {
   NewTurnRunInput,
@@ -12,6 +18,7 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import type { CoordinatedRunSubscription } from "../core/session-coordinator"
+import { redactForLog } from "../redaction"
 import {
   initialTranslateState,
   type AcpConnectionContext,
@@ -49,6 +56,27 @@ type ModedElicitation = Extract<ElicitationRequest, { mode: string }>
 
 function hasMode(request: ElicitationRequest): request is ModedElicitation {
   return typeof request.mode === "string"
+}
+
+/** The vendor stop reasons that mean the run failed rather than finished. */
+const AOS_STOP_CODES: ReadonlySet<string> = new Set(
+  Object.values(AOS_STOP_REASONS)
+)
+
+/**
+ * The failure an idle `state_update` reports, when it reports one. Every other
+ * update — including every streamed chunk — falls out on the first check.
+ * `redactForLog` masks any field named `code`, so each logged machine code
+ * travels under the protocol's own name for it.
+ */
+function runFailureOf(update: SessionUpdate) {
+  if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
+    return undefined
+  const stopReason = update.stopReason
+  if (typeof stopReason !== "string" || !AOS_STOP_CODES.has(stopReason))
+    return undefined
+  const meta = AosStateMetaSchema.safeParse(update._meta?.[AOS_META_KEY])
+  return { stopReason, ...(meta.success ? { runId: meta.data.runId } : {}) }
 }
 
 export type SessionAttachmentOptions = {
@@ -169,6 +197,8 @@ class SessionAttachment {
   }
 
   update(update: SessionUpdate) {
+    const failure = runFailureOf(update)
+    if (failure) this.#log("error", "acp.run.failed", failure)
     return this.#client.notify(methods.client.session.update, {
       sessionId: this.#scope.threadId,
       update,
@@ -178,10 +208,15 @@ class SessionAttachment {
   /** Reports a failure that has no request to answer. */
   async report(cause: unknown) {
     const { runtime } = this.#context.runtimeInstance
+    const failure = errorNotificationOf(runtime, cause)
+    this.#log("error", "acp.error", {
+      errorCode: failure.code,
+      message: failure.message,
+    })
     await this.#client
       .notify(AOS_METHODS.notify.error, {
         sessionId: this.#scope.threadId,
-        ...errorNotificationOf(runtime, cause),
+        ...failure,
       })
       .catch(() => undefined)
   }
@@ -195,6 +230,22 @@ class SessionAttachment {
 
   get #coordinator() {
     return this.#context.runtimeInstance.sessions
+  }
+
+  /** One structured, redacted line per Session-level ACP event. */
+  #log(
+    level: "info" | "error",
+    event: string,
+    fields: Record<string, unknown>
+  ) {
+    this.#context.logger?.[level](
+      redactForLog({
+        event,
+        connectionId: this.#context.connectionId,
+        sessionId: this.#scope.threadId,
+        ...fields,
+      })
+    )
   }
 
   /**
@@ -357,6 +408,10 @@ class SessionAttachment {
 
   /** Starts the next run segment once every pending interrupt is answered. */
   async #settle(request: PendingRequest, reply: RequestReply) {
+    this.#log("info", "acp.request.answered", {
+      interruptId: request.id,
+      status: reply.status,
+    })
     if (this.#pending?.interruptId === request.id) this.#pending = undefined
     this.#replies.set(request.id, reply)
     const { interrupts } = this.#coordinator.snapshot(this.#scope)

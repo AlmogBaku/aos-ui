@@ -9,6 +9,7 @@ import { createAcpService } from "../acp/service"
 import * as translators from "../acp/translate"
 import type {
   AcpConnectionContext,
+  AcpLogger,
   GuestGrant,
   GuestPolicy,
   WorkspaceCapabilities,
@@ -44,6 +45,8 @@ export type GuestAcpServiceOptions = {
   invitations: GuestInvitationService
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
   attachmentStages: ServerAttachmentStages
+  /** Where this lane's connections write their structured lines. */
+  logger?: AcpLogger
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
   cancel?: (timer: unknown) => void
@@ -219,6 +222,7 @@ export function createGuestConnection(
     sessionRows,
     translators,
     attachmentStages: options.attachmentStages,
+    logger: options.logger,
     guest,
     readState: createReadState({
       runtimeInstance,
