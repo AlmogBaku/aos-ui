@@ -329,6 +329,8 @@ const translators: Translators = {
       }
     return { state, outbound: [] }
   },
+  // The from-start resume paths read this count; this harness replays none.
+  persistedCorrections: () => 0,
   translateHistory: (history) =>
     history.messages.map((message) => ({
       kind: "update",

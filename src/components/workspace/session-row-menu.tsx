@@ -292,15 +292,17 @@ export function SessionRowContextMenu({
 /** The always-visible overflow trigger for the same row menu. */
 export function SessionRowMenuButton({
   className,
+  size,
   ...menu
-}: SessionRowMenuProps & { className?: string }) {
+}: SessionRowMenuProps &
+  Pick<ComponentProps<typeof Button>, "className" | "size">) {
   const entries = sessionMenuEntries(menu)
   if (entries.items.length === 0 && !entries.destructive) return null
 
   return (
     <Menu.Root>
       <Menu.Trigger
-        render={<Button variant="ghost" className={className} />}
+        render={<Button variant="ghost" size={size} className={className} />}
         aria-label={`${menu.copy.sessionActions}: ${menu.session.title}`}
         data-session-menu={menu.session.threadId}
       >

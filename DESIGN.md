@@ -112,10 +112,11 @@ semantic state roles that remain meaningful in both light and dark themes.
   tonal hierarchy; `foreground` and `border` keep content and boundaries
   readable without heavy lines.
 - **Semantic state:** `success` represents completed or healthy work and the
-  unread signal on navigation rows, `info` represents work waiting on the
-  operator, and `destructive` represents failure, cancellation, or destructive
-  intent. A row states execution status and unread state as two separate dots;
-  neither one hides the other.
+  unread signal on navigation rows, and `destructive` represents failure,
+  cancellation, or destructive
+  intent. `warning` represents work waiting on the operator. A navigation row
+  shows one dot: a state that needs the operator outranks unread, and unread
+  outranks a run in progress.
 - **Five-series data vocabulary:** `chart-1` through `chart-5` are the sole
   chart-series roles. Chart and rich-tool code uses these semantic roles rather
   than introducing local color literals.
@@ -254,13 +255,16 @@ standard component cannot express and record that reason.
 
 #### Session status dots
 
-Two independent dots may appear together on a navigation row; neither hides the other.
+A navigation row shows at most one dot. Priority, highest first:
 
-| State   | Color                        | Meaning                                                            |
-| ------- | ---------------------------- | ------------------------------------------------------------------ |
-| Unread  | `--success` (green)          | Session has content the user has not seen. Clears on focused view. |
-| Waiting | `--info` (blue)              | Session is waiting for user input.                                 |
-| Running | `--success` (teal-breathing) | Active model turn in progress.                                     |
+| State   | Color                      | Meaning                                                            |
+| ------- | -------------------------- | ------------------------------------------------------------------ |
+| Waiting | `--warning` (orange)       | Session is waiting for user input. Also covers attention.          |
+| Failed  | `--destructive`            | The last run failed.                                               |
+| Unread  | `--success` (green)        | Session has content the user has not seen. Clears on focused view. |
+| Running | `--info` (blue), breathing | Active model turn in progress.                                     |
+
+The row's accessible name still lists every state; only the visual dot collapses.
 
 Row count pills (violet) were removed; the bell count replaces them as the sole
 derived unread count. Browsing the Activity drawer marks nothing read.

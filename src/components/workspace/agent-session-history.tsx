@@ -187,7 +187,7 @@ function SessionRow({
         locale={locale}
         availability={availability}
         handlers={handlers}
-        className={styles.iconButton}
+        size="icon"
       />
     </div>
   )
@@ -374,9 +374,7 @@ export function AgentSessionHistory({
         role="group"
         aria-label={copy.sessionActions}
       >
-        <label
-          className={cn(styles.searchField, "min-h-11 gap-2.5 px-3 text-sm")}
-        >
+        <label className={cn(styles.searchField, "h-8 gap-2 px-2.5 text-sm")}>
           <Search aria-hidden="true" />
           <span className={styles.srOnly}>{copy.searchSessions}</span>
           <input

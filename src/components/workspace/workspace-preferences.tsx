@@ -88,6 +88,7 @@ export function WorkspacePreferences({
       <TooltipProvider>
         <ToggleGroup
           className={styles.themeControl}
+          size="sm"
           spacing={0.5}
           role="group"
           aria-label={dictionary.appearance.label}

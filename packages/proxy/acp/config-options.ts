@@ -1,9 +1,32 @@
-import type { SessionConfigOption } from "@agentclientprotocol/sdk/experimental/v2"
+import type {
+  SessionConfigOption,
+  SessionConfigSelectGroup,
+} from "@agentclientprotocol/sdk/experimental/v2"
+
+import type { SessionModelsResponse } from "../../protocol"
 
 import type { ConfigOptionsOf, ConfigWriteOf } from "./types"
 
 const MODEL_CONFIG_ID = "model"
 const THOUGHT_CONFIG_ID = "thought_level"
+
+/** One ACP group per provider, in the order the catalog first names them. */
+function modelGroupsOf(
+  options: SessionModelsResponse["options"]
+): SessionConfigSelectGroup[] {
+  const groups = new Map<string, SessionConfigSelectGroup>()
+  for (const { id, label, group } of options) {
+    const known = groups.get(group)
+    if (known) known.options.push({ value: id, name: label })
+    else
+      groups.set(group, {
+        groupId: group,
+        name: group,
+        options: [{ value: id, name: label }],
+      })
+  }
+  return [...groups.values()]
+}
 
 export const configOptionsOf = ((models) => {
   const options: SessionConfigOption[] = [
@@ -13,10 +36,7 @@ export const configOptionsOf = ((models) => {
       name: "Model",
       category: "model",
       currentValue: models.selectedId,
-      options: models.options.map(({ id, label }) => ({
-        value: id,
-        name: label,
-      })),
+      options: modelGroupsOf(models.options),
     },
   ]
   const efforts = models.options.find(

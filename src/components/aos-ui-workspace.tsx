@@ -107,7 +107,7 @@ const workspaceCopy = {
     retry: "Try again",
     loading: "Loading workspace…",
     unavailable: "The workspace could not be loaded.",
-    tasks: "Session todos.",
+    tasks: "Session todos",
     tasksUnavailable: "Execution tasks are not available from this provider.",
     tasksFailed: "Todos could not be loaded.",
     taskSummary: (done: number, total: number) =>
@@ -233,7 +233,7 @@ function TodoDock({
       aria-label={copy.tasks}
       open={error ? true : undefined}
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring @md:gap-3 @md:px-4 @md:py-3 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring @md:gap-3 @md:px-4 @md:py-2 [&::-webkit-details-marker]:hidden [@media(pointer:coarse)]:min-h-11">
         <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" />
         <span className="font-medium">{copy.tasks}</span>
         {supported && todos.length > 0 ? (

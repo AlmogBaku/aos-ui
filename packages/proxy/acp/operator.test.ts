@@ -219,6 +219,7 @@ class EventSource implements ServerRunHandle {
   readonly #values: RunEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
+  readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
   #closed = false
@@ -521,6 +522,7 @@ async function harness(options: HarnessOptions = {}) {
     agent: connection.agent,
     close: () => connection.close(),
     clock,
+    coordinator,
     initialize,
     recorder,
     sources,
@@ -631,6 +633,83 @@ function unreadChanges(recorder: Recorder) {
       ? [parsed.data]
       : []
   })
+}
+
+/** The Session the seeded row names, as the coordinator and the routes see it. */
+const SCOPE = { agentId: AGENT, sessionId: SESSION, threadId: SESSION }
+
+/**
+ * A steered run this connection does not own: the coordinator holds it for a
+ * REST subscriber, so a later resume replays its journal from the first event.
+ * Each accepted steer publishes the `aos.steer.accepted` the browser owes.
+ */
+async function steeredRun(test: Harness, corrections: readonly string[]) {
+  await test.coordinator.start(
+    SCOPE,
+    {
+      threadId: SESSION,
+      runId: "run-live",
+      state: {},
+      messages: [
+        { id: "message-user", role: "user", content: "Summarize the notes" },
+      ],
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    },
+    {
+      subscriberId: "rest",
+      controllerId: "operator",
+      lane: "operator",
+      canControl: true,
+    }
+  )
+  const source = test.sources[0]
+  if (!source) throw new Error("The engine opened no run segment")
+  source.emit(runStarted("run-live", SESSION))
+  await vi.waitFor(() => expect(test.coordinator.state(SCOPE)).toBe("running"))
+  for (const [index, text] of corrections.entries())
+    await test.coordinator.steer(
+      SCOPE,
+      { requestId: `steer-${index + 1}`, expectedRunId: "run-live", text },
+      "operator"
+    )
+  return source
+}
+
+/** History whose last user turn is the correction Hermes persisted mid-turn. */
+function correctedHistory(text: string): SessionHistoryResponse {
+  return {
+    ...HISTORY,
+    messages: [
+      HISTORY.messages[0]!,
+      {
+        id: "message-correction",
+        role: "user",
+        content: [{ type: "text", text }],
+        createdAt: NOW,
+        metadata: { custom: { correction: true } },
+      },
+    ],
+  }
+}
+
+/** Waits for the live delta that follows the replay, so a drop is observable. */
+async function drainedReplay(test: Harness, source: EventSource) {
+  source.emit({
+    type: RunEventKind.TEXT_MESSAGE_CONTENT,
+    messageId: "assistant-live",
+    delta: "Live",
+  })
+  await test.recorder.wait((entry) =>
+    JSON.stringify(entry.params).includes("Live")
+  )
+}
+
+function steerAccepted(recorder: Recorder) {
+  return recorder
+    .of(AOS_METHODS.notify.steerAccepted)
+    .map(({ params }) => params)
 }
 
 function runStarted(runId: string, threadId: string): RunEvent {
@@ -1152,6 +1231,80 @@ describe("operator ACP lane", () => {
       AosSessionResumeResponseMetaSchema.parse(aosMetaOf(resumed)).execution
         .status
     ).toBe("idle")
+    test.close()
+  })
+
+  it("announces a persisted correction once on a from-start resume", async () => {
+    const test = await harness({ history: correctedHistory("Use the tables") })
+    const source = await steeredRun(test, ["Use the tables"])
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+    })
+    await drainedReplay(test, source)
+
+    expect(
+      turnUpdates(test.recorder).filter((update) =>
+        JSON.stringify(update).includes("Use the tables")
+      )
+    ).toMatchObject([
+      {
+        sessionId: SESSION,
+        update: {
+          sessionUpdate: "user_message",
+          messageId: "message-correction",
+          content: [{ type: "text", text: "Use the tables" }],
+        },
+      },
+    ])
+    expect(steerAccepted(test.recorder)).toEqual([])
+    test.close()
+  })
+
+  it("announces the correction history could not carry yet", async () => {
+    const test = await harness({ history: correctedHistory("Use the tables") })
+    const source = await steeredRun(test, ["Use the tables", "And the totals"])
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+    })
+    await drainedReplay(test, source)
+
+    expect(steerAccepted(test.recorder)).toMatchObject([
+      {
+        sessionId: SESSION,
+        runId: "run-live",
+        requestId: "steer-2",
+        text: "And the totals",
+        delivery: "steered",
+      },
+    ])
+    test.close()
+  })
+
+  it("forwards every acknowledgement to a cursor resume, which replays no history", async () => {
+    const test = await harness({ history: correctedHistory("Use the tables") })
+    const source = await steeredRun(test, ["Use the tables", "And the totals"])
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      _meta: {
+        [AOS_META_KEY]: { agentId: AGENT, runId: "run-live", after: 0 },
+      },
+    })
+    await drainedReplay(test, source)
+
+    expect(steerAccepted(test.recorder).map((params) => params)).toMatchObject([
+      { requestId: "steer-1", text: "Use the tables" },
+      { requestId: "steer-2", text: "And the totals" },
+    ])
     test.close()
   })
 

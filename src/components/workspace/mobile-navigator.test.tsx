@@ -203,7 +203,7 @@ describe("MobileNavigator", () => {
 
     const writer = screen.getByRole("button", { name: /Writer.*Unread/ })
     expect(within(writer).getByTitle("Needs attention")).toBeVisible()
-    expect(within(writer).getByTitle("Unread")).toBeVisible()
+    expect(within(writer).queryByTitle("Unread")).toBeNull()
     fireEvent.change(screen.getByRole("searchbox", { name: "Search Agents" }), {
       target: { value: "primary sources" },
     })

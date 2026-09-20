@@ -22,13 +22,13 @@
 
 .statusDot[data-status="active"],
 .statusDot[data-status="running"] {
-  background: var(--workspace-status-running, var(--chart-2));
+  background: var(--workspace-status-running, var(--info));
   animation: status-breathe 2.2s ease-in-out infinite;
 }
 
 .statusDot[data-status="attention"],
 .statusDot[data-status="waiting-for-input"] {
-  background: var(--workspace-status-attention, var(--info));
+  background: var(--workspace-status-attention, var(--warning));
 }
 
 .statusDot[data-status="failed"] {
@@ -45,7 +45,7 @@
     box-shadow: 0 0 0 0
       color-mix(
         in oklab,
-        var(--workspace-status-running, var(--chart-2)) 0%,
+        var(--workspace-status-running, var(--info)) 0%,
         transparent
       );
     opacity: 0.62;
@@ -55,7 +55,7 @@
     box-shadow: 0 0 0 0.2rem
       color-mix(
         in oklab,
-        var(--workspace-status-running, var(--chart-2)) 16%,
+        var(--workspace-status-running, var(--info)) 16%,
         transparent
       );
     opacity: 1;

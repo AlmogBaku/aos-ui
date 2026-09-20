@@ -1,5 +1,5 @@
 export { configOptionsOf, configWriteOf } from "../config-options"
-export { translateHistory } from "./history"
+export { persistedCorrections, translateHistory } from "./history"
 export {
   pendingRequestToOutbound,
   replyFromElicitation,
