@@ -191,6 +191,8 @@ Additional checks by area:
   AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
     docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
   docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+  AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/key \
+    docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
   ```
 
   Build affected images and smoke their health and streaming endpoints when runtime container
