@@ -584,17 +584,29 @@ describe("the one-time ask", () => {
     expect(screen.getByText(en.activity.askClosed)).toBeVisible()
   })
 
-  it("asks an uninstalled iPhone to install AOS instead of answering", () => {
+  it("asks an uninstalled iPhone to install AOS, and stays dismissible", async () => {
+    const user = userEvent.setup()
+    const onDeclineAsk = vi.fn()
     render(
       <ActivityAsk
         dictionary={en}
-        settings={browserSettings({ ask: true, iosInstallHint: true })}
+        settings={browserSettings({
+          ask: true,
+          iosInstallHint: true,
+          onDeclineAsk,
+        })}
       />
     )
+
     expect(screen.getByText(en.activity.pushIosHint)).toBeVisible()
+    // There is nothing to turn on yet, but the ask must still be answerable.
     expect(
       screen.queryByRole("button", { name: en.activity.askAccept })
     ).toBeNull()
+    await user.click(
+      screen.getByRole("button", { name: en.activity.askDecline })
+    )
+    expect(onDeclineAsk).toHaveBeenCalledOnce()
   })
 
   it("labels the ask in Hebrew as well", () => {

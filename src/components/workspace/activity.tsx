@@ -297,22 +297,24 @@ export function ActivityAsk({
         <h2 id={headingId} className={styles.askTitle}>
           {copy.askTitle}
         </h2>
-        {settings.push === "available" ? (
+        {installFirst ? (
+          <p className={styles.explanation}>{copy.pushIosHint}</p>
+        ) : settings.push === "available" ? (
           <p className={styles.explanation}>{copy.askClosed}</p>
         ) : null}
       </div>
-      {installFirst ? (
-        <p className={styles.explanation}>{copy.pushIosHint}</p>
-      ) : (
-        <div className={styles.askActions}>
+      {/* Nothing can be turned on before the install, but the ask must still be
+          answerable or it would never leave. */}
+      <div className={styles.askActions}>
+        {installFirst ? null : (
           <Button size="sm" onClick={settings.onAcceptAsk}>
             {copy.askAccept}
           </Button>
-          <Button variant="ghost" size="sm" onClick={settings.onDeclineAsk}>
-            {copy.askDecline}
-          </Button>
-        </div>
-      )}
+        )}
+        <Button variant="ghost" size="sm" onClick={settings.onDeclineAsk}>
+          {copy.askDecline}
+        </Button>
+      </div>
     </section>
   )
 }
