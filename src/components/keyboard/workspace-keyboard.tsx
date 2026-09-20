@@ -99,6 +99,33 @@ function runAction(action: (() => void | Promise<unknown>) | undefined) {
   }
 }
 
+function clampToViewport(value: number, size: number) {
+  return Math.min(Math.max(value, 0), Math.max(size - 1, 0))
+}
+
+/**
+ * Keyboard-invoked context menus carry no pointer, and a menu anchored to a
+ * virtual 0,0 point lands off the control. Anchor it just inside the focused
+ * element's logical-start edge instead.
+ */
+function contextMenuPoint(element: HTMLElement) {
+  const view = element.ownerDocument.defaultView
+  const rect = element.getBoundingClientRect()
+  const rtl =
+    (view?.getComputedStyle(element).direction ?? element.ownerDocument.dir) ===
+    "rtl"
+  return {
+    clientX: clampToViewport(
+      rtl ? rect.right - 1 : rect.left + 1,
+      view?.innerWidth ?? 0
+    ),
+    clientY: clampToViewport(
+      rect.top + rect.height / 2,
+      view?.innerHeight ?? 0
+    ),
+  }
+}
+
 export function WorkspaceKeyboard({
   locale,
   rootRef,
@@ -164,7 +191,11 @@ export function WorkspaceKeyboard({
         const active = document.activeElement
         if (active instanceof HTMLElement)
           active.dispatchEvent(
-            new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              ...contextMenuPoint(active),
+            })
           )
       } else if (actionId === "workspace.newAgent")
         runAction(agentBuilderAvailable ? onOpenAgentBuilder : undefined)

@@ -87,6 +87,8 @@ export type Dictionary = {
     removeOpenSession: string
     selected: string
     lastSelected: string
+    archived: string
+    noArchivedSessions: string
   }
   actions: {
     newAgent: string
@@ -97,6 +99,21 @@ export type Dictionary = {
     closeSession: string
     closeTab: string
     sessionActions: string
+    rename: string
+    renameSessionTitle: string
+    sessionTitleLabel: string
+    save: string
+    cancel: string
+    pinSession: string
+    unpinSession: string
+    archiveSession: string
+    unarchiveSession: string
+    deleteSession: string
+    deleteSessionTitle: string
+    deleteSessionDescription: string
+    deleteSessionConfirm: string
+    /** Named on a Session action the selected runtime does not perform. */
+    actionUnavailable: string
     undo: string
     tabClosed: string
     openSession: string
@@ -121,6 +138,8 @@ export type Dictionary = {
     waitingForInput: string
     failed: string
     unread: string
+    pinned: string
+    archived: string
   }
   /** Localized copy for the normalized `AOS_*` run failure codes. */
   runErrors: {

@@ -473,6 +473,11 @@ function WorkspaceContent({
     openSession,
     closeSession,
     undoCloseSession,
+    renameSession,
+    setSessionPinned,
+    archiveSession,
+    unarchiveSession,
+    deleteSession,
     createSession,
     openAgentBuilder,
     refreshAfterVisibilityChange,
@@ -563,6 +568,12 @@ function WorkspaceContent({
             : null
         }
         onCreateSession={createSession}
+        onRenameSession={renameSession}
+        onSetSessionPinned={setSessionPinned}
+        onArchiveSession={archiveSession}
+        onUnarchiveSession={unarchiveSession}
+        onDeleteSession={deleteSession}
+        sessionActions={sessionActions}
         onOpenAgentBuilder={openAgentBuilder}
         onManageAgents={() => setManagementOpen(true)}
         onConversationObscuredChange={setConversationObscured}

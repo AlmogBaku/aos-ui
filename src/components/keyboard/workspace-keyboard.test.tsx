@@ -97,11 +97,23 @@ describe("workspace keyboard discovery", () => {
     )
 
     const contextMenu = vi.fn()
-    screen
-      .getByRole("tab", { name: "A" })
-      .addEventListener("contextmenu", contextMenu)
+    const tab = screen.getByRole("tab", { name: "A" })
+    vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
+      left: 40,
+      right: 160,
+      top: 12,
+      bottom: 48,
+      width: 120,
+      height: 36,
+    } as DOMRect)
+    tab.addEventListener("contextmenu", contextMenu)
     await user.keyboard("{Shift>}{F10}{/Shift}")
     expect(contextMenu).toHaveBeenCalledOnce()
+    // The menu must anchor inside the focused control, not at the viewport origin.
+    const event = contextMenu.mock.calls[0]![0] as MouseEvent
+    expect(event.clientX).toBeGreaterThanOrEqual(40)
+    expect(event.clientX).toBeLessThan(160)
+    expect(event.clientY).toBe(30)
   })
 
   it("renders one command for a session shared by open and older lists", async () => {

@@ -590,9 +590,27 @@
   background: var(--accent);
   color: var(--accent-foreground);
 }
+.sessionMenuItemDestructive,
+.sessionMenuItemDestructive[data-highlighted] {
+  color: var(--destructive);
+}
+.sessionMenuItemDestructive[data-highlighted] {
+  background: color-mix(in oklch, var(--destructive), transparent 88%);
+}
+.sessionMenuItem[aria-disabled="true"],
+.sessionMenuItemDestructive[aria-disabled="true"] {
+  color: var(--muted-foreground);
+  cursor: default;
+}
 .sessionMenuItem svg {
   inline-size: 1rem;
   block-size: 1rem;
+}
+.sessionMenuSeparator {
+  block-size: 1px;
+  margin-block: 0.25rem;
+  margin-inline: 0.5rem;
+  background: var(--border);
 }
 .tabUndo {
   position: absolute;

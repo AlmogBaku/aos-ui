@@ -23,12 +23,14 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 import type { WorkspaceAgent, WorkspaceSession } from "./workspace-shell"
 import styles from "./mobile-navigator.module.css"
 import {
   AgentSessionHistory,
   type AgentSessionHistoryCopy,
 } from "./agent-session-history"
+import type { SessionRowMenuHandlers } from "./session-row-menu"
 import { RowIndicators, UnreadDot } from "./status-dots"
 
 export type MobileNavigatorState =
@@ -70,6 +72,7 @@ export type MobileAgentSessionCatalog = {
   agentId: string
   openSessions: readonly WorkspaceSession[]
   historySessions: readonly WorkspaceSession[]
+  archivedSessions: readonly WorkspaceSession[]
   lastSelectedThreadId: string | null
 }
 
@@ -106,6 +109,9 @@ export type MobileNavigatorProps = {
   otherAgentsUnread?: boolean
   locale: "en" | "he"
   copy: MobileNavigatorCopy
+  /** Runtime-declared Session actions, or `null` until the runtime answers. */
+  availability?: SessionActionCapabilities | null
+  sessionMenu?: SessionRowMenuHandlers
   onStateChange: (event: MobileNavigatorEvent) => void
   onOpenSession: (agentId: string, threadId: string) => void
   onCreateSession: (agentId: string) => void
@@ -248,6 +254,8 @@ export function MobileNavigator({
   otherAgentsUnread = false,
   locale,
   copy,
+  availability,
+  sessionMenu,
   onStateChange,
   onOpenSession,
   onCreateSession,
@@ -432,10 +440,13 @@ export function MobileNavigator({
           lastSelectedThreadId={catalog!.lastSelectedThreadId}
           openSessions={stableSections.openSessions}
           historySessions={stableSections.historySessions}
+          archivedSessions={catalog!.archivedSessions}
           otherAgentsUnread={otherAgentsUnread}
           query={sessionQueries[state.agentId] ?? ""}
           locale={locale}
           copy={copy}
+          availability={availability}
+          sessionMenu={sessionMenu}
           renderAgentIcon={renderAgentIcon}
           onQueryChange={(query) =>
             setSessionQueries((current) => ({
@@ -480,10 +491,13 @@ type SessionsViewProps = {
   lastSelectedThreadId: string | null
   openSessions: readonly WorkspaceSession[]
   historySessions: readonly WorkspaceSession[]
+  archivedSessions: readonly WorkspaceSession[]
   otherAgentsUnread: boolean
   query: string
   locale: "en" | "he"
   copy: MobileNavigatorCopy
+  availability?: SessionActionCapabilities | null
+  sessionMenu?: SessionRowMenuHandlers
   renderAgentIcon?: (agent: WorkspaceAgent) => ReactNode
   onQueryChange: (query: string) => void
   onBack: () => void
@@ -502,10 +516,13 @@ function SessionsView({
   lastSelectedThreadId,
   openSessions,
   historySessions,
+  archivedSessions,
   otherAgentsUnread,
   query,
   locale,
   copy,
+  availability,
+  sessionMenu,
   renderAgentIcon,
   onQueryChange,
   onBack,
@@ -578,13 +595,15 @@ function SessionsView({
           agentId: agent.id,
           openSessions,
           historySessions,
-          archivedSessions: [],
+          archivedSessions,
           lastSelectedThreadId,
         }}
         activeThreadId={activeThreadId}
         locale={locale}
         copy={copy}
         query={query}
+        availability={availability}
+        sessionMenu={sessionMenu}
         onQueryChange={onQueryChange}
         onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
         onRemoveOpenSession={

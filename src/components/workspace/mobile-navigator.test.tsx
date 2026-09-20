@@ -5,6 +5,7 @@ import {
   screen,
   within,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -82,6 +83,22 @@ const copy: MobileNavigatorCopy = {
     failed: "Failed",
   },
   unread: "Unread",
+  archivedSessions: "Archived",
+  noArchivedSessions: "No archived Sessions",
+  pinned: "Pinned",
+  archived: "In archive",
+  sessionMenu: {
+    sessionActions: "Session actions",
+    rename: "Rename",
+    pin: "Pin",
+    unpin: "Unpin",
+    archive: "Archive",
+    unarchive: "Unarchive",
+    delete: "Delete",
+    closeTab: "Close tab",
+    removeOpenSession: "Remove from open sessions",
+    unavailable: "Unavailable for this runtime",
+  },
 }
 
 const defaultProps = (): MobileNavigatorProps => ({
@@ -97,6 +114,7 @@ const defaultProps = (): MobileNavigatorProps => ({
         session("a-2", "Secondary investigation"),
       ],
       historySessions: [session("a-old", "Earlier findings")],
+      archivedSessions: [session("a-archived", "Campaign retrospective")],
       lastSelectedThreadId: "a-1",
     },
     {
@@ -105,6 +123,7 @@ const defaultProps = (): MobileNavigatorProps => ({
         session("b-1", "Draft release", "waiting-for-input", true),
       ],
       historySessions: [],
+      archivedSessions: [],
       lastSelectedThreadId: "b-1",
     },
   ],
@@ -227,7 +246,8 @@ describe("MobileNavigator", () => {
     expect(props.onOpenSession).not.toHaveBeenCalled()
   })
 
-  it("keeps the Session row and its overflow action as separate controls", () => {
+  it("keeps the Session row and its overflow action as separate controls", async () => {
+    const user = userEvent.setup()
     const props = defaultProps()
     props.state = { view: "sessions", agentId: "agent-a" }
     render(<MobileNavigator {...props} />)
@@ -242,12 +262,48 @@ describe("MobileNavigator", () => {
     })
     expect(openButton.contains(actionsButton)).toBe(false)
 
-    fireEvent.click(actionsButton)
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Remove from open sessions" })
+    await user.click(actionsButton)
+    await user.click(
+      await screen.findByRole("menuitem", {
+        name: "Remove from open sessions",
+      })
     )
     expect(props.onRemoveOpenSession).toHaveBeenCalledWith("agent-a", "a-2")
     expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })
+  })
+
+  it("offers the runtime Session actions and the archived disclosure in the drawer", async () => {
+    const user = userEvent.setup()
+    const props = defaultProps()
+    props.state = { view: "sessions", agentId: "agent-a" }
+    props.availability = {
+      rename: true,
+      archive: true,
+      delete: false,
+      pin: true,
+    }
+    const onRename = vi.fn()
+    props.sessionMenu = { onRename, onDelete: vi.fn() }
+    render(<MobileNavigator {...props} />)
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Session actions: Current investigation/i,
+      })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
+    expect(onRename).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ threadId: "a-1" })
+    )
+
+    const archived = screen.getByRole("region", { name: "Archived" })
+    expect(
+      within(archived).getByText("Campaign retrospective")
+    ).not.toBeVisible()
+    await user.click(
+      within(archived).getByRole("heading", { name: "Archived" })
+    )
+    expect(within(archived).getByText("Campaign retrospective")).toBeVisible()
   })
 
   it("preserves visible Session ordering while open, removes missing rows, and appends discoveries", () => {
@@ -265,6 +321,7 @@ describe("MobileNavigator", () => {
           session("a-2", "Secondary investigation updated"),
         ],
         historySessions: [session("a-old", "Earlier findings")],
+        archivedSessions: [],
         lastSelectedThreadId: "a-2",
       },
     ]
