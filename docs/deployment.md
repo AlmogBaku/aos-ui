@@ -117,6 +117,59 @@ the supplied private example. Its operator health endpoint is
 
 Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
+## Web Push state and VAPID secret
+
+Web Push is optional. Add the `push` block to `proxy-config.json` and supply
+the two Compose variables when you want OS notifications to reach devices with
+no open AOS tab. Omitting the block leaves tab-only delivery active.
+
+```bash
+AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push     # operator-owned directory
+AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key
+```
+
+**State directory.** The proxy writes device registrations to
+`${AOS_UI_PUSH_STATE_DIR}`. Create it before the first start and ensure the
+proxy user owns it:
+
+```bash
+mkdir -p /var/lib/aos-ui/push
+chown <UID>:<GID> /var/lib/aos-ui/push
+```
+
+The Compose overlays mount this directory as a bind mount rather than a named
+volume because a named volume is initially root-owned while the proxy runs as
+the host UID. The proxy refuses to start if the directory is missing or
+unwritable.
+
+**VAPID secret.** Generate a key pair once and keep only the private key:
+
+```bash
+bunx web-push generate-vapid-keys
+# copy only the private key (43-character base64url) into the key file
+chmod 0600 /absolute/private/path/vapid-private-key
+```
+
+**HTTPS and outbound access.** Web Push requires an HTTPS origin (or
+`localhost`). Plain-HTTP deployments keep tab-only delivery; the notification
+settings UI reflects this. The proxy must also be able to reach the browser
+vendors' push services outbound (Firebase FCM, Apple APNs, Mozilla Autopush,
+and equivalents); block that egress only if you intend to disable push.
+
+**Security posture.** The operator lane is unauthenticated by design on a
+trusted private network. Push adds device registration routes and the proxy's
+first outbound requests to caller-supplied endpoints. Mitigations: mutating
+routes require the AOS origin; endpoints are validated (HTTPS, default port,
+no credentials or query string) and every resolved address must be publicly
+routable — private, loopback, link-local, and carrier-grade-NAT ranges such as
+a tailnet's 100.64/10 block are refused before any outbound request; payloads
+are end-to-end encrypted and content-free; push topics are opaque. Accepted
+residual: anyone who can reach the listener may register, delete, or fill the
+32 device slots; an invited guest whose prompts cause the Agent to ask
+questions can raise input notifications for the operator at the coalescing rate
+(nothing is dropped; revoke the invitation to stop); a small DNS
+check-to-connect window remains.
+
 ## Use hot reload in containers
 
 Add `compose.dev.yaml` to the selected composition. For example:

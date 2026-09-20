@@ -44,13 +44,31 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 Session read state is provider-owned: the browser reports which Session is
 exposed, and the runtime decides when that Session becomes read. Activity
 presents the resulting history alongside inline conversation state, coalesced
-in-app notices, and opt-in live browser notifications. Completion in the exact
-visible, focused Session is already read and suppresses alerts. Other Sessions
-in a focused workspace produce unread markers and one coalesced notice. Hidden
-tabs and visible but unfocused windows/apps can deliver eligible generic OS
-notifications after explicit opt-in and granted permission.
+in-app notices, and default-on live browser notifications. Completion in the
+exact visible, focused Session is already read and suppresses alerts. Other
+Sessions in a focused workspace produce unread markers and one coalesced notice.
+Hidden tabs and visible but unfocused windows/apps deliver eligible generic OS
+notifications; when the proxy is configured for Web Push, notifications reach
+the operator's devices even with no AOS tab open.
 
-Browser notifications require at least one loaded AOS tab; no delivery occurs after all tabs close. V1 includes no service worker, Web Push, backend notification service, email, remote approval, or scheduled-work notifications. Permission denial and unsupported browsers preserve Activity. Multiple tabs elect one delivery tab, announce a raised alert so no peer repeats it, and persist notification preferences only; Activity history stays in memory and never replays OS alerts. Clicks focus AOS and validate provider ownership before selecting the owning Agent and Session; deleted targets remain unavailable.
+Notification preferences are on by default. The browser asks for permission
+once, from a click on an inline card that appears after the operator's first
+message; "Not now" opts out durably and settings can re-enable. Three
+categories: input requests, failures, completions. A short in-tab audio cue
+plays for input requests and failures (not completions) only in the focused tab
+for events in another Session. OS notifications use the OS default sound and
+follow OS Do Not Disturb; the in-tab cue is page audio and does not. Bursts
+coalesce per category (3 s / 5 s / 20 s windows) into one notification per
+device carrying a count. Payloads and OS text carry no conversation content and
+no Agent or Session labels — only a category, a count, opaque identifiers,
+timestamp, and locale. Cross-device suppression: push is not sent while the
+operator is present on any device (foreground, active within ~3 minutes; 60-second
+heartbeat, 60-second grace); a Session on screen never alerts. Guest sessions
+receive no notifications. Permission denial and unsupported browsers preserve
+Activity. Multiple tabs elect one delivery tab; Activity history stays in memory
+and never replays OS alerts. Clicks focus AOS and validate provider ownership
+before selecting the owning Agent and Session; deleted targets remain
+unavailable.
 
 Stored Activity and OS payloads contain no conversation, tool, question,
 permission, or error content. OS text also omits Agent and Session labels.

@@ -166,6 +166,8 @@ describe("container orchestration", () => {
       ),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
+      AOS_UI_PUSH_STATE_DIR: root,
+      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -216,7 +218,21 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
+      expect.objectContaining({
+        source: "vapid-private-key",
+        target: "vapid-private-key",
+        mode: "0400",
+        uid: "1234",
+        gid: "2345",
+      }),
     ])
+    expect(config.services.web.volumes).toContainEqual(
+      expect.objectContaining({
+        type: "bind",
+        source: root,
+        target: "/var/lib/aos-ui/push",
+      })
+    )
     expect(config.services.opencode.environment).toMatchObject({
       OPENCODE_SERVER_USERNAME: "aos-ui",
       AOS_UI_OPENCODE_PASSWORD_FILE: "/run/secrets/opencode-password",
@@ -271,6 +287,8 @@ describe("container orchestration", () => {
       ),
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_PUSH_STATE_DIR: root,
+      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -320,7 +338,21 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
+      expect.objectContaining({
+        source: "vapid-private-key",
+        target: "vapid-private-key",
+        mode: "0400",
+        uid: "1234",
+        gid: "2345",
+      }),
     ])
+    expect(config.services.web.volumes).toContainEqual(
+      expect.objectContaining({
+        type: "bind",
+        source: root,
+        target: "/var/lib/aos-ui/push",
+      })
+    )
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.hermes.json")
     )
@@ -333,9 +365,13 @@ describe("container orchestration", () => {
     expect(config.secrets?.["guest-invite-signing-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
+    expect(config.secrets?.["vapid-private-key"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
     expect(Object.keys(config.secrets ?? {}).sort()).toEqual([
       "guest-invite-signing-key",
       "hermes-token",
+      "vapid-private-key",
     ])
     expect(JSON.stringify(config.services.web.environment)).not.toMatch(
       /HERMES|TOKEN|OIDC|SECRET/u
@@ -355,6 +391,8 @@ describe("container orchestration", () => {
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
+      AOS_UI_PUSH_STATE_DIR: root,
+      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -412,7 +450,21 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
+      expect.objectContaining({
+        source: "vapid-private-key",
+        target: "vapid-private-key",
+        mode: "0400",
+        uid: "1234",
+        gid: "2345",
+      }),
     ])
+    expect(config.services.web.volumes).toContainEqual(
+      expect.objectContaining({
+        type: "bind",
+        source: root,
+        target: "/var/lib/aos-ui/push",
+      })
+    )
     expect(config.secrets?.["openclaw-device-identity"]?.file).toBe(
       resolve(root, ".env.example")
     )

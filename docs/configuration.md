@@ -90,3 +90,37 @@ guest surface hides them by default; set
 `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them there.
 This flag changes presentation only. A guest submission is still routed by the
 runtime according to the invitation's existing message permissions.
+
+### Web Push (optional)
+
+Add a `push` block to enable closed-app OS notifications via Web Push. Omitting
+the block leaves tab-only delivery active; no other behavior changes.
+
+```json
+"push": {
+  "stateDir": "/var/lib/aos-ui/push",
+  "vapid": {
+    "subject": "mailto:ops@example.com",
+    "privateKeyFile": "/run/secrets/vapid-private-key"
+  }
+}
+```
+
+`stateDir` must exist and be writable by the proxy user before the proxy starts.
+It holds one JSON file of device registrations (push endpoints and their keys;
+no conversation content), up to 32 per operator. The proxy refuses to start if
+the directory is missing or unwritable — there is no silent fallback.
+
+Generate a VAPID key pair once:
+
+```bash
+bunx web-push generate-vapid-keys
+```
+
+Keep only the private key (a 43-character base64url scalar). Write it to a
+file, set its permissions to `0600`, and pass the path as `privateKeyFile`. The
+public key is derived at proxy startup; do not configure it separately.
+
+For Compose deployments set `AOS_UI_PUSH_STATE_DIR` and
+`AOS_UI_VAPID_PRIVATE_KEY_FILE` before starting a runtime overlay (see
+[Deployment](deployment.md#web-push-state-and-vapid-secret)).
