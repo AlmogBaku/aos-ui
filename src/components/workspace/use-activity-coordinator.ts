@@ -350,6 +350,12 @@ export function useActivityCoordinator(
         if (active) setError(true)
       })
     }
+    // An attended tab holds this device's pushes back, so going idle and staying
+    // present are both reports the proxy has to hear. The tracker listens to
+    // `focus` first, so a return to the window is attended before it is reported.
+    const idleTracker = createIdleTracker({ target: window })
+    idleRef.current = idleTracker
+    const stopWatchingIdle = idleTracker.onChange(() => reportPresence())
     const onFocus = () => {
       browser?.recheckPermission()
       refresh()
@@ -357,11 +363,6 @@ export function useActivityCoordinator(
     window.addEventListener("focus", onFocus)
     window.addEventListener("blur", refresh)
     document.addEventListener("visibilitychange", refresh)
-    // An attended tab holds this device's pushes back, so going idle and staying
-    // present are both reports the proxy has to hear.
-    const idleTracker = createIdleTracker({ target: window })
-    idleRef.current = idleTracker
-    const stopWatchingIdle = idleTracker.onChange(() => reportPresence())
     const heartbeat = createHeartbeat({
       active: () =>
         document.visibilityState === "visible" && document.hasFocus(),

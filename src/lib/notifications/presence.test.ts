@@ -27,7 +27,20 @@ describe("an unattended foreground tab", () => {
     tracker.stop()
   })
 
-  it.each(["pointerdown", "pointermove", "wheel", "touchstart"])(
+  it("treats a return to the window as attendance before any input", () => {
+    vi.useFakeTimers()
+    const target = new EventTarget()
+    const tracker = createIdleTracker({ target })
+
+    vi.advanceTimersByTime(PRESENCE_IDLE_MS)
+    expect(tracker.idle()).toBe(true)
+    target.dispatchEvent(new Event("focus"))
+
+    expect(tracker.idle()).toBe(false)
+    tracker.stop()
+  })
+
+  it.each(["pointerdown", "pointermove", "wheel", "touchstart", "focus"])(
     "stays present while %s keeps arriving",
     (event) => {
       vi.useFakeTimers()

@@ -17,8 +17,18 @@ export type IdleTracker = {
   stop(): void
 }
 
-/** Input that proves the operator is still at this tab. */
-const INPUT_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const
+/**
+ * Input that proves the operator is still at this tab. Returning to the window
+ * counts too: a tab brought back by keyboard is attended before any pointer or
+ * key reaches the page.
+ */
+const INPUT_EVENTS = [
+  "pointerdown",
+  "keydown",
+  "wheel",
+  "touchstart",
+  "focus",
+] as const
 /** A moving pointer reports continuously; once a second is enough to stay present. */
 const MOVE_THROTTLE_MS = 1_000
 
