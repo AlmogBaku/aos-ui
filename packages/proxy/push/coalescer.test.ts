@@ -7,42 +7,11 @@ import {
   type PresenceVerdict,
   type PushCoalescerOptions,
 } from "./coalescer"
+import { createTestTimers } from "./test-utils/timers"
 
 const START = 1_700_000_000_000
 const GRACE_MS = 60_000
 const OPERATOR = "operator"
-
-/** A clock and a timer queue the test steps through by hand. */
-function timers() {
-  const scheduled = new Map<number, { at: number; callback: () => void }>()
-  let handles = 0
-  let current = START
-  return {
-    now: () => current,
-    pending: () => scheduled.size,
-    schedule(callback: () => void, delayMs: number) {
-      const handle = (handles += 1)
-      scheduled.set(handle, { at: current + delayMs, callback })
-      return () => {
-        scheduled.delete(handle)
-      }
-    },
-    /** Fires every callback due within the step, in due order. */
-    advance(ms: number) {
-      const until = current + ms
-      for (;;) {
-        const due = [...scheduled.entries()]
-          .filter(([, timer]) => timer.at <= until)
-          .sort(([, left], [, right]) => left.at - right.at)[0]
-        if (!due) break
-        scheduled.delete(due[0])
-        current = due[1].at
-        due[1].callback()
-      }
-      current = until
-    },
-  }
-}
 
 type Emitted = {
   principalId: string
@@ -56,7 +25,7 @@ function harness(
     Pick<PushCoalescerOptions, "filter" | "presence" | "windowMs">
   > = {}
 ) {
-  const clock = timers()
+  const clock = createTestTimers(START)
   const emitted: Emitted[] = []
   const coalescer = createPushCoalescer({
     now: clock.now,
