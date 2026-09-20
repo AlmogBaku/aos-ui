@@ -285,3 +285,77 @@ describe("normalized AOS REST byte client", () => {
     ).rejects.toMatchObject({ kind: "provider-unavailable" })
   })
 })
+
+describe("this device's push subscription", () => {
+  const subscription = {
+    endpoint: "https://push.example/endpoint-1",
+    keys: { p256dh: "p".repeat(87), auth: "a".repeat(22) },
+  }
+  const registration = {
+    subscription,
+    locale: "he" as const,
+    categories: { input: true, failure: true, completion: false },
+  }
+
+  it("reads what the deployment offers and refuses a descriptor it cannot trust", async () => {
+    const available = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json({ status: "available", publicKey: "k".repeat(87) })
+      ),
+    })
+    const malformed = new AosRemoteClient({
+      fetcher: vi.fn(async () =>
+        Response.json({ status: "available", publicKey: "too-short" })
+      ),
+    })
+
+    await expect(available.pushInfo()).resolves.toEqual({
+      status: "available",
+      publicKey: "k".repeat(87),
+    })
+    await expect(malformed.pushInfo()).rejects.toMatchObject({
+      kind: "proxy-failure",
+    })
+  })
+
+  it("registers and retires this device on the subscriptions route", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
+    const client = new AosRemoteClient({ fetcher })
+
+    await expect(
+      client.putPushSubscription(registration)
+    ).resolves.toBeUndefined()
+    await expect(
+      client.deletePushSubscription(subscription.endpoint)
+    ).resolves.toBeUndefined()
+
+    expect(
+      fetcher.mock.calls.map(([input, init]) => [
+        String(input),
+        init?.method,
+        init?.body,
+      ])
+    ).toEqual([
+      ["/api/aos/v1/push/subscriptions", "PUT", JSON.stringify(registration)],
+      [
+        "/api/aos/v1/push/subscriptions",
+        "DELETE",
+        JSON.stringify({ endpoint: subscription.endpoint }),
+      ],
+    ])
+  })
+
+  it("refuses an endpoint it cannot send and reports proxy failures", async () => {
+    const client = new AosRemoteClient({
+      fetcher: vi.fn(async () => new Response(null, { status: 500 })),
+    })
+
+    await expect(client.deletePushSubscription("")).rejects.toMatchObject({
+      kind: "proxy-failure",
+      message: "Invalid push subscription",
+    })
+    await expect(
+      client.putPushSubscription(registration)
+    ).rejects.toMatchObject({ kind: "proxy-failure" })
+  })
+})
