@@ -1,6 +1,13 @@
-import { access, constants, readFile, stat } from "node:fs/promises"
+import {
+  access,
+  chmod,
+  constants,
+  readFile,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { join } from "node:path"
-import { Writer } from "steno"
 import { z } from "zod"
 
 import {
@@ -44,9 +51,9 @@ export type PushRegistrationsOptions = {
 }
 
 /**
- * The operator's push devices, in one JSON file. Reads are served from memory
- * and every write replaces the whole file through `steno`, which writes to a
- * temporary file and renames it, coalescing writes that overlap.
+ * The operator's push devices, in one owner-only JSON file. Reads are served
+ * from memory, and every write replaces the whole file by writing a temporary
+ * file and renaming it, so a reader never sees a half-written state.
  */
 export interface PushRegistrations {
   list(principalId: string): StoredRegistration[]
@@ -63,6 +70,29 @@ async function requireWritableDirectory(stateDir: string) {
     await access(stateDir, constants.W_OK)
   } catch {
     throw new Error(`Push state directory is not writable: ${stateDir}`)
+  }
+}
+
+/**
+ * Replaces the whole file, owner-only, one write at a time. Every write carries
+ * the complete state, so the last one queued is the one that must land; a failed
+ * write is reported to its own caller and does not poison the ones behind it.
+ */
+function createStateWriter(path: string) {
+  const temporaryPath = `${path}.tmp`
+  let queue: Promise<void> = Promise.resolve()
+  return (contents: string) => {
+    const write = queue
+      .catch(() => undefined)
+      .then(async () => {
+        await writeFile(temporaryPath, contents, { mode: 0o600 })
+        // `mode` applies only when the file is created, so a temporary file left
+        // behind by an interrupted write cannot widen this one.
+        await chmod(temporaryPath, 0o600)
+        await rename(temporaryPath, path)
+      })
+    queue = write
+    return write
   }
 }
 
@@ -103,11 +133,10 @@ export async function openPushRegistrations({
   const principals = new Map<string, StoredRegistration[]>(
     Object.entries(stored?.principals ?? {})
   )
-  const writer = new Writer(path)
+  const write = createStateWriter(path)
 
-  /** Writes the whole state; overlapping writes settle on the last one. */
   const flush = () =>
-    writer.write(
+    write(
       JSON.stringify({
         version: 1,
         principals: Object.fromEntries(principals),

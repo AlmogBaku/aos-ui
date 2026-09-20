@@ -1,6 +1,13 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -71,6 +78,17 @@ describe("push registration file", () => {
     expect(reopened.list("operator")).toEqual([
       { ...replacement, createdAt: new Date(NOW).toISOString() },
     ])
+  })
+
+  it("keeps the devices in an owner-only file and leaves nothing beside it", async () => {
+    const directory = await stateDir()
+    const registrations = await openPushRegistrations({ stateDir: directory })
+
+    await registrations.put("operator", registration("device-1"))
+
+    const details = await stat(join(directory, PUSH_REGISTRATIONS_FILE))
+    expect(details.mode & 0o077).toBe(0)
+    expect(await readdir(directory)).toEqual([PUSH_REGISTRATIONS_FILE])
   })
 
   it("refuses the device past the limit instead of evicting one", async () => {
