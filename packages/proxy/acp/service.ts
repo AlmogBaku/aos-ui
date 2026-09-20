@@ -41,13 +41,17 @@ export type AcpServiceOptions = {
   agent: AosAcpAgentFactory
   /** Builds the per-connection proxy state the agent app runs against. */
   connection(connectionId: string, principalId: string): AcpConnectionContext
-  /** The operator lane has one trusted principal; the guest lane passes its own. */
-  principalId?: string
+  /**
+   * Who every connection on this lane belongs to. It keys per-operator state the
+   * proxy holds outside one connection, so each lane states it rather than
+   * letting a lane name stand in for an identity.
+   */
+  principalId: string
 }
 
 /** Hosts one ACP v2 lane over WebSocket beside the invalidation socket. */
 export function createAcpService(options: AcpServiceOptions) {
-  const principalId = options.principalId ?? options.lane
+  const { principalId } = options
 
   async function authorizeUpgrade(
     request: Request

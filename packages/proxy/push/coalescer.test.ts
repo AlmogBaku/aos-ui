@@ -132,6 +132,22 @@ describe("push coalescer", () => {
     expect(emitted[0]!.closedAt).toBe(START + GRACE_MS)
   })
 
+  it("waits out one grace only, then sends to an operator who is still away", () => {
+    const { clock, coalescer, emitted } = harness({
+      // A grace that keeps moving: without a cap the window would never close.
+      presence: () => ({ state: "grace", untilMs: clock.now() + GRACE_MS }),
+    })
+
+    coalescer.add(OPERATOR, "input", session("session-1"))
+    clock.advance(COALESCE_WINDOW_MS.input)
+    expect(emitted).toEqual([])
+
+    clock.advance(GRACE_MS)
+
+    expect(emitted).toHaveLength(1)
+    expect(clock.pending()).toBe(0)
+  })
+
   it("sends nothing when the operator is back before the grace ends", () => {
     let verdict: PresenceVerdict = {
       state: "grace",

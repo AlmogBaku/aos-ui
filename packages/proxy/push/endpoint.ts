@@ -12,7 +12,12 @@ export class PushEndpointError extends Error {
   }
 }
 
-/** Hostnames that name something inside the deployment rather than a service. */
+/**
+ * Hostnames that name something inside the deployment rather than a service.
+ * This is a courtesy check that fails a plainly local name early: what actually
+ * keeps the proxy off the deployment's network is `resolvePublicAddresses`,
+ * which every send waits on.
+ */
 const PRIVATE_SUFFIXES = [".local", ".internal", ".home.arpa"] as const
 
 /**

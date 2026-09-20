@@ -40,7 +40,12 @@ export interface PushCoalescer {
   close(): void
 }
 
-type Window = { sessions: Map<string, CoalescedSession>; cancel: () => void }
+type Window = {
+  sessions: Map<string, CoalescedSession>
+  cancel: () => void
+  /** One window waits out one grace; a second verdict is decided, not deferred. */
+  graced: boolean
+}
 
 const windowKey = (principalId: string, category: PushCategory) =>
   `${principalId}\u0000${category}`
@@ -52,8 +57,8 @@ const sessionKey = ({ agentId, sessionId }: CoalescedSession) =>
  * Collapses a burst of events into one push per principal and category. The
  * first event opens a window fixed from that instant, so a busy Agent can never
  * keep extending it, and the window is what a presence check is applied to:
- * somebody watching needs no push at all, and somebody who has just left keeps
- * the window open until their grace runs out.
+ * somebody watching needs no push at all, and somebody who has just left holds
+ * the window open for one grace, after which the next verdict settles it.
  */
 export function createPushCoalescer({
   now,
@@ -85,7 +90,10 @@ export function createPushCoalescer({
       windows.delete(key)
       return
     }
-    if (verdict.state === "grace") {
+    if (verdict.state === "grace" && !window.graced) {
+      // The operator has only just left: hold the window until their grace ends,
+      // once. Whatever the verdict is then settles it.
+      window.graced = true
       const delayMs = Math.min(Math.max(0, verdict.untilMs - now()), graceMs)
       window.cancel = schedule(() => close(principalId, category), delayMs)
       return
@@ -106,6 +114,7 @@ export function createPushCoalescer({
       const window: Window = {
         sessions: new Map([[sessionKey(session), session]]),
         cancel: () => undefined,
+        graced: false,
       }
       windows.set(key, window)
       window.cancel = schedule(

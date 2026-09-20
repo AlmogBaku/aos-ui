@@ -1,6 +1,7 @@
 import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
+import { OPERATOR_PRINCIPAL } from "../core/principal"
 import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
 
@@ -42,6 +43,7 @@ function service() {
     acp: createAcpService({
       publicOrigin: ORIGIN,
       lane: "operator",
+      principalId: OPERATOR_PRINCIPAL,
       agent(context) {
         contexts.push(context)
         return agent({ name: "spec" }).onRequest(
@@ -136,23 +138,7 @@ describe("ACP WebSocket service", () => {
     expect(transport.frames).toHaveLength(1)
   })
 
-  it("names the guest lane's principal when none is configured", async () => {
-    const acp = createAcpService({
-      publicOrigin: ORIGIN,
-      lane: "guest",
-      agent: () => agent({ name: "spec" }),
-      connection: connectionContext,
-    })
-
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}/api/guest/v1/acp`, { headers: { origin: ORIGIN } })
-    )
-
-    expect(upgrade?.principalId).toBe("guest")
-    expect(upgrade?.lane).toBe("guest")
-  })
-
-  it("carries a configured principal into the connection context", async () => {
+  it("carries the configured principal into the connection context", async () => {
     const contexts: AcpConnectionContext[] = []
     const acp = createAcpService({
       publicOrigin: ORIGIN,
