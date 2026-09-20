@@ -418,6 +418,8 @@ type HarnessOptions = {
   discover?: ServerRunEngine["discover"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
+  /** Runs before each model catalog read; a slow one stands for a real provider. */
+  beforeModels?: () => Promise<void>
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -517,7 +519,10 @@ async function harness(options: HarnessOptions = {}) {
     },
     mutateSession,
     workspaceCapabilities: async () => CAPABILITIES,
-    models: async () => models,
+    models: async () => {
+      await options.beforeModels?.()
+      return models
+    },
     updateModel,
     context: options.context ?? (async () => USAGE),
     subscribeSessionInvalidation: unsupported,
@@ -1063,6 +1068,33 @@ describe("AOS ACP agent", () => {
         _meta: { [AOS_META_KEY]: { source: "provider-usage" } },
       },
     })
+    test.close()
+  })
+
+  it("writes the resume response before the usage it pushes, however slow the provider reads", async () => {
+    // A real provider answers the model catalog in its own time. The browser
+    // starts listening for a Session's updates only once the resume response
+    // arrives, so a reading that overtakes the response is simply lost.
+    const test = await harness({
+      beforeModels: () => new Promise((resolve) => setTimeout(resolve, 50)),
+    })
+    await test.list()
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+    test.recorder.add({ method: "resume-resolved", params: undefined })
+
+    await usageOf(test)
+    const order = test.recorder.entries.map((entry) =>
+      entry.method === "resume-resolved"
+        ? entry.method
+        : JSON.stringify(entry.params).includes("usage_update")
+          ? "usage_update"
+          : undefined
+    )
+    expect(order.filter(Boolean)).toEqual(["resume-resolved", "usage_update"])
     test.close()
   })
 

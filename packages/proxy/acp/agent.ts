@@ -135,7 +135,12 @@ function promptText(prompt: readonly ContentBlock[]) {
     .join("\n")
 }
 
-/** Runs work once the response for the current request has been written. */
+/**
+ * Runs work once the response for the current request has been written. The
+ * caller must have settled every await its response needs before calling this:
+ * the task fires on the next turn of the loop, so anything still pending in the
+ * handler lets these notifications reach the client before the response does.
+ */
 function afterResponse(
   attachment: SessionAttachment,
   task: () => Promise<void>
@@ -422,6 +427,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // bounded replay cannot be served: both need a full reload.
     const resync = await attachPositioned(attachment, scope, meta)
     const execution = coordinator.snapshot(scope)
+    // Every provider read the response needs settles before the follow-up is
+    // scheduled: `afterResponse` fires on the next task, so a read awaited
+    // after it lets the notifications overtake the very response that tells
+    // the browser to start listening for them.
+    const models = await workspace.models(scope)
+    const capabilities = await workspace.capabilities(scope)
     afterResponse(attachment, async () => {
       await attachment.reportExecution()
       // A resumed Session carries the window every earlier turn already grew;
@@ -431,12 +442,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await attachment.reissuePending()
     })
     return {
-      configOptions: translators.configOptionsOf(await workspace.models(scope)),
+      configOptions: translators.configOptionsOf(models),
       _meta: {
         [AOS_META_KEY]: {
           session: sessionInfoMeta(row, sessions.status(row)),
           execution: executionMeta(execution),
-          capabilities: await workspace.capabilities(scope),
+          capabilities,
           ...resync,
         },
       },
