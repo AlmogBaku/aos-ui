@@ -24,6 +24,10 @@ describe("workspace capabilities", () => {
       agentCreation: false,
       activityEvents: false,
       sessionReadState: false,
+      sessionRename: false,
+      sessionArchival: false,
+      sessionDeletion: false,
+      sessionPin: false,
     })
 
     expect(
@@ -46,6 +50,26 @@ describe("workspace capabilities", () => {
       agentCreation: true,
       activityEvents: true,
       sessionReadState: false,
+      sessionRename: false,
+      sessionArchival: false,
+      sessionDeletion: false,
+      sessionPin: false,
+    })
+  })
+
+  it("offers only the Session actions the runtime declares", () => {
+    expect(
+      getWorkspaceCapabilities(minimumAdapter, [], {
+        rename: true,
+        archive: true,
+        delete: false,
+        pin: true,
+      })
+    ).toMatchObject({
+      sessionRename: true,
+      sessionArchival: true,
+      sessionDeletion: false,
+      sessionPin: true,
     })
   })
 })
