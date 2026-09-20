@@ -2,6 +2,7 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "../../../protocol"
+import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson, parseJsonOrValue } from "./native"
 
 type NativeRecord = Record<string, unknown>
@@ -478,8 +479,16 @@ export function createHermesWorkspaceOperations(input: {
     let scope: HermesWorkspaceSession
     try {
       scope = await input.authority.requireSession(agentId, sessionId)
-    } catch {
-      throw new HermesWorkspaceScopeError()
+    } catch (cause) {
+      // Only the authority's own verdict that the Agent or the Session does not
+      // exist is a scope failure. Every other cause — a refused transport, an
+      // attach that did not settle — is an outage, and reporting it as "not
+      // found" would tell the browser to stop asking for a Session that is
+      // merely unreachable.
+      throw cause instanceof HermesAgentNotFoundError ||
+        cause instanceof HermesSessionNotFoundError
+        ? new HermesWorkspaceScopeError()
+        : new HermesWorkspaceUnavailableError()
     }
     if (
       scope.agentId !== agentId ||

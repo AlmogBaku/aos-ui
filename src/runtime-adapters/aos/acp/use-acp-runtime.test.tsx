@@ -1,4 +1,7 @@
-import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  RequestError,
+  type SessionUpdate,
+} from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import {
   act,
@@ -7,12 +10,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { CompleteAttachment } from "@assistant-ui/core"
 
 import {
   AOS_ATTACHMENT_URI_SCHEME,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
 } from "@aos/protocol/acp"
@@ -221,6 +225,119 @@ describe("useAcpRuntime", () => {
     expect(visible(result.current)).toEqual([
       { id: "a1", role: "assistant", text: "Attached" },
     ])
+  })
+
+  describe("while the provider is still bringing the Session up", () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const unavailable = () =>
+      new RequestError(
+        AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        "temporarily_unavailable"
+      )
+
+    /** Runs a settled resume's handlers without reaching the next retry. */
+    const settleAttempt = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+    const mountSession = (fake: Fake, session: string) =>
+      renderHook(
+        (props: { session: string }) =>
+          useAcpRuntime({
+            connection: fake.connection,
+            sessionId: props.session,
+            agentId: "agent-1",
+          }),
+        { initialProps: { session } }
+      )
+
+    it("resumes again once a temporarily unavailable Session is up", async () => {
+      const fake = createFakeConnection()
+      fake.resumeSession
+        .mockRejectedValueOnce(unavailable())
+        .mockResolvedValueOnce(resumeReply())
+      const { result } = mountSession(fake, SESSION_ID)
+      await settleAttempt()
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      // The thread is still waiting for the history the retry will replay.
+      expect(result.current.thread.getState().isLoading).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(result.current.thread.getState().isLoading).toBe(false)
+      act(() => {
+        fake.emit(textUpdate("agent_message", "a1", "Resumed"))
+      })
+      expect(visible(result.current)).toEqual([
+        { id: "a1", role: "assistant", text: "Resumed" },
+      ])
+    })
+
+    it("stops at a refusal the provider will not take back", async () => {
+      const fake = createFakeConnection()
+      fake.resumeSession.mockRejectedValue(
+        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+      )
+      const { result } = mountSession(fake, SESSION_ID)
+      await settleAttempt()
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(result.current.thread.getState().isLoading).toBe(false)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    })
+
+    it("abandons the retry when the thread binds another Session", async () => {
+      const fake = createFakeConnection()
+      fake.resumeSession.mockRejectedValueOnce(unavailable())
+      const { rerender } = mountSession(fake, SESSION_ID)
+      await settleAttempt()
+      expect(fake.resumeSession).toHaveBeenCalledWith(SESSION_ID, {
+        replayFromStart: true,
+      })
+
+      await act(async () => {
+        rerender({ session: "session-2" })
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(fake.resumeSession).toHaveBeenLastCalledWith("session-2", {
+        replayFromStart: true,
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+    })
+
+    it("gives the Session three retries before it stops waiting", async () => {
+      const fake = createFakeConnection()
+      fake.resumeSession.mockRejectedValue(unavailable())
+      const { result } = mountSession(fake, SESSION_ID)
+      await settleAttempt()
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500)
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(4)
+      expect(result.current.thread.getState().isLoading).toBe(false)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(4)
+      expect(vi.getTimerCount()).toBe(0)
+    })
   })
 
   it("tracks the run state the Session reports", async () => {

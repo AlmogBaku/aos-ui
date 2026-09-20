@@ -232,6 +232,12 @@ const script = {
     text: "Recovered after reconnect.",
   },
   reply: ["Streamed by AOS.", "Both chunks arrived."],
+  /**
+   * Whether the window is held back after the resume answers until the test
+   * releases it with `__acpStub.pushUsage()`. A provider that cannot report
+   * usage at attach time makes the proxy push it late instead.
+   */
+  deferUsage: false,
   // 42k of a 200k window, attributed the way a provider reports it: the counts
   // are ACP's own fields, the attribution is the AOS extension's meta.
   usage: {
@@ -269,6 +275,8 @@ declare global {
       sequence: number
       /** Drops the live transport, as a proxy restart would. */
       dropSocket: () => void
+      /** Releases the window a deferred resume is holding back. */
+      pushUsage: () => void
     }
   }
 }
@@ -284,6 +292,7 @@ function installAcpStub(script: AcpScript) {
     connections: 0,
     sequence: 0,
     dropSocket: () => {},
+    pushUsage: () => {},
   }
   window.__acpStub = stub
   let turn = 0
@@ -419,7 +428,10 @@ function installAcpStub(script: AcpScript) {
           configOptions: script.configOptions,
           _meta: { aos: script.resumeMeta },
         })
-        this.update({ sessionUpdate: "usage_update", ...script.usage })
+        const pushUsage = () =>
+          this.update({ sessionUpdate: "usage_update", ...script.usage })
+        if (script.deferUsage) stub.pushUsage = pushUsage
+        else pushUsage()
       })
       // The prompt is acknowledged with the minted user message id, then the
       // turn streams. The pending prompt stays running until it is cancelled.
@@ -483,8 +495,8 @@ function installAcpStub(script: AcpScript) {
   })
 }
 
-async function serveAcp(page: Page) {
-  await page.addInitScript(installAcpStub, script)
+async function serveAcp(page: Page, overrides: Partial<AcpScript> = {}) {
+  await page.addInitScript(installAcpStub, { ...script, ...overrides })
   await page.route("**/runtime-config.json", (route) =>
     route.fulfill({ json: { mode: "aos" } })
   )
@@ -585,4 +597,30 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
     .toEqual({ agentId: AGENT_ID, after: sequence, runId: RUN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
+})
+
+test("AOS proxy shows the context gauge when the window arrives after the resume", async ({
+  page,
+}) => {
+  await serveAcp(page, { deferUsage: true })
+  await page.goto("/")
+
+  // A provider that cannot report the window at attach time opens the Session
+  // without a reading, so the composer offers no gauge to read.
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await expect(
+    page.getByRole("textbox", { name: "Message input" })
+  ).toBeVisible()
+  const gauge = page.getByRole("button", { name: "Context usage" })
+  await expect(gauge).toHaveCount(0)
+
+  // The late push is still the window this Session carries: it reaches the
+  // composer attributed, without another turn or another resume.
+  await page.evaluate(() => window.__acpStub.pushUsage())
+  await expect(gauge).toBeVisible()
+  await gauge.focus()
+  await expect(page.getByText("42k / 200k")).toBeVisible()
+  for (const shown of ["System", "8k", "Tools", "12k", "Messages", "22k"])
+    await expect(page.getByText(shown, { exact: true })).toBeVisible()
+  expect(await recorded(page, "session/resume")).toHaveLength(1)
 })

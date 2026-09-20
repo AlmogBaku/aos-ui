@@ -178,6 +178,13 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [AOS_JSONRPC_ERRORS.runInProgress]: "AOS_SESSION_BUSY",
 }
 
+/** How long a refused resume waits before each further attempt. */
+const RESUME_RETRY_DELAYS_MS = [500, 1000, 2000]
+
+/** Whether the provider refused only because it is not ready yet. */
+const isTemporarilyUnavailable = (error: unknown) =>
+  isRecord(error) && error.code === AOS_JSONRPC_ERRORS.temporarilyUnavailable
+
 /**
  * What the proxy refused a turn with, as copy the operator can read. The
  * normalized code carries the workspace's own wording; anything else keeps the
@@ -234,6 +241,9 @@ function createAcpController({
   let unsubscribe: (() => void) | undefined
   /** Whether the Session the thread opened with has replayed its history. */
   let loading = openedWith !== undefined
+  /** Rises with every binding, so an abandoned resume stops retrying. */
+  let bindings = 0
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
   let version = 0
   let locals = 0
   let repository = ExportedMessageRepository.fromArray([])
@@ -270,6 +280,42 @@ function createAcpController({
     return resolved && sourceId ? { meta: resolved, sourceId } : undefined
   }
 
+  /** Whether a resume still belongs to the binding that started it. */
+  const isBound = (session: string, generation: number) =>
+    bound === session && generation === bindings
+
+  /**
+   * Resumes one Session until its history is on its way. A rejection otherwise
+   * surfaces through the connection's status and `_aos/error`; the thread only
+   * stops waiting for its history. A `temporarily_unavailable` refusal is the
+   * exception: the provider is still bringing the Session up, so the resume is
+   * worth another try shortly, as long as this binding is still the live one.
+   */
+  const attemptResume = async (
+    session: string,
+    generation: number,
+    retry = 0
+  ) => {
+    try {
+      await resume(session)
+    } catch (error) {
+      if (
+        isTemporarilyUnavailable(error) &&
+        retry < RESUME_RETRY_DELAYS_MS.length &&
+        isBound(session, generation)
+      ) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined
+          void attemptResume(session, generation, retry + 1)
+        }, RESUME_RETRY_DELAYS_MS[retry])
+        return
+      }
+    }
+    if (!loading) return
+    loading = false
+    notify()
+  }
+
   /**
    * Subscribes to one Session and replays it from the start. Attaching is what
    * binds a Session, so a draft's first turn attaches the Session it creates.
@@ -278,6 +324,8 @@ function createAcpController({
     if (next === bound) return
     unsubscribe?.()
     bound = next
+    bindings += 1
+    const generation = bindings
     const { artifact, steerAccepted, composerPrefill } = AOS_METHODS.notify
     const subscriptions = [
       connection.onSessionUpdate(next, (update, meta) => {
@@ -292,17 +340,11 @@ function createAcpController({
       connection.onNotification(composerPrefill, observePrefill),
     ]
     unsubscribe = () => {
+      clearTimeout(retryTimer)
+      retryTimer = undefined
       for (const off of subscriptions) off()
     }
-    // A resume rejection surfaces through the connection's status and
-    // `_aos/error`; the thread only stops waiting for its history.
-    void resume(next)
-      .catch(() => undefined)
-      .finally(() => {
-        if (!loading) return
-        loading = false
-        notify()
-      })
+    void attemptResume(next, generation)
   }
 
   /** The bound Session, creating one for a local draft's first turn. */

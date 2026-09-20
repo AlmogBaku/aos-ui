@@ -101,6 +101,15 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
   }
 }
 
+/**
+ * What a deferred usage report waits before each re-read, in order. The budget
+ * is bounded: a provider that has not built its agent within half a minute is
+ * not building one, and the next turn owes the client a reading anyway.
+ */
+const USAGE_RETRY_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 4_000, 8_000, 16_000,
+]
+
 export type SessionAttachmentOptions = {
   context: AcpConnectionContext
   /** The Session's Agent, provider identity, and public `threadId`. */
@@ -123,6 +132,9 @@ class SessionAttachment {
   #sequence = 0
   #stopRequested = false
   #detached = false
+  #usageRetry: ReturnType<typeof setTimeout> | undefined
+  /** Which usage report is live; a chain a newer trigger replaced stops. */
+  #usageChain = 0
 
   constructor(options: SessionAttachmentOptions) {
     this.#context = options.context
@@ -217,16 +229,20 @@ class SessionAttachment {
    * owes the client one of these, because the window moves with the
    * conversation and its size moves with the model the Session runs.
    *
-   * A provider that cannot answer leaves the last reading standing: an
+   * A window that is unreadable right after an attach is usually the provider's
+   * agent still being built, so the report is deferred through a bounded
+   * backoff rather than dropped. Each trigger replaces whatever the previous one
+   * left deferred, so one Session never has two reports in flight.
+   *
+   * A provider that cannot answer at all leaves the last reading standing: an
    * unreadable window is not an outcome the operator is owed a notice about,
    * and clearing the gauge would claim an empty context instead of an unknown
    * one.
    */
   async reportUsage() {
-    if (this.#detached) return
-    const usage = await this.#readUsage().catch(() => undefined)
-    if (!usage || this.#detached) return
-    await this.update(usageUpdate(usage))
+    this.#cancelUsageRetry()
+    this.#usageChain += 1
+    await this.#sendUsage(this.#usageChain, 0)
   }
 
   /** Re-issues the requests a recovered wait is still holding. */
@@ -275,9 +291,44 @@ class SessionAttachment {
 
   detach() {
     this.#detached = true
+    this.#cancelUsageRetry()
     this.#subscription?.close()
     this.#subscription = undefined
     this.#replies.clear()
+  }
+
+  /**
+   * One reading of the window, or one deferred attempt at the next. A chain a
+   * newer trigger replaced stops here rather than sending a reading the client
+   * has already moved past.
+   */
+  async #sendUsage(chain: number, attempt: number) {
+    if (this.#detached || chain !== this.#usageChain) return
+    const usage = await this.#readUsage().catch(() => undefined)
+    if (this.#detached || chain !== this.#usageChain) return
+    if (!usage) {
+      this.#scheduleUsageRetry(chain, attempt)
+      return
+    }
+    await this.update(usageUpdate(usage))
+  }
+
+  /** Defers one chain's next attempt, while its backoff budget lasts. */
+  #scheduleUsageRetry(chain: number, attempt: number) {
+    if (attempt >= USAGE_RETRY_DELAYS_MS.length) return
+    this.#usageRetry = setTimeout(() => {
+      this.#usageRetry = undefined
+      // Nothing awaits a deferred report, so it reports its own failure rather
+      // than rejecting into nowhere, exactly as the run pump's report does.
+      void this.#sendUsage(chain, attempt + 1).catch((cause: unknown) =>
+        this.report(cause)
+      )
+    }, USAGE_RETRY_DELAYS_MS[attempt])
+  }
+
+  #cancelUsageRetry() {
+    clearTimeout(this.#usageRetry)
+    this.#usageRetry = undefined
   }
 
   get #coordinator() {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import {
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
@@ -42,6 +43,8 @@ function modelOptions(method: string) {
 
 function harness(overrides?: {
   scope?: Partial<typeof scope>
+  /** The failure the authority raises instead of answering with a scope. */
+  scopeFailure?: unknown
   request?: (
     method: string,
     params: Readonly<Record<string, unknown>>
@@ -54,7 +57,10 @@ function harness(overrides?: {
     async (method: string, params: Readonly<Record<string, unknown>>) =>
       overrides?.request?.(method, params)
   )
-  const requireSession = vi.fn(async () => ({ ...scope, ...overrides?.scope }))
+  const requireSession = vi.fn(async () => {
+    if (overrides?.scopeFailure) throw overrides.scopeFailure
+    return { ...scope, ...overrides?.scope }
+  })
   const history = vi.fn(async () => overrides?.history ?? [])
   // The retained Session info the adapter holds, write-through included.
   let retained = overrides?.sessionInfo
@@ -984,6 +990,40 @@ describe("Hermes workspace operations", () => {
     await expect(
       operations.models("research", "hermes:research:stored-1")
     ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("reports a Session the authority does not know as out of scope", async () => {
+    const { operations, request } = harness({
+      scopeFailure: new HermesSessionNotFoundError(),
+    })
+
+    await expect(
+      operations.context("research", "hermes:research:stored-1")
+    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("reports an Agent the authority does not know as out of scope", async () => {
+    const { operations } = harness({
+      scopeFailure: new HermesAgentNotFoundError(),
+    })
+
+    await expect(
+      operations.context("research", "hermes:research:stored-1")
+    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
+  })
+
+  it("reports a Session the authority cannot reach as unavailable", async () => {
+    const { operations, request } = harness({
+      scopeFailure: new Error("attach did not settle"),
+    })
+
+    // A Session that cannot be reached is not a Session that does not exist:
+    // reporting it as out of scope would turn one outage into a 404.
+    await expect(
+      operations.context("research", "hermes:research:stored-1")
+    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
     expect(request).not.toHaveBeenCalled()
   })
 })

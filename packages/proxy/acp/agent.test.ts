@@ -669,6 +669,28 @@ async function usageOf(
   return usages(test.recorder).at(-1)
 }
 
+/**
+ * A provider whose window only becomes readable on the given attempt, which is
+ * how a cold Session answers while its agent is still being built. `Infinity`
+ * stands for one that never becomes readable.
+ */
+function coldWindow(readableAttempt: number): ServerRuntime["context"] {
+  let attempts = 0
+  return async () => {
+    attempts += 1
+    if (attempts < readableAttempt) throw new Error("no window")
+    return USAGE
+  }
+}
+
+/**
+ * Fakes only the timers a deferred usage report uses, so the in-process ACP
+ * connection and the test runner keep their own clocks.
+ */
+function useUsageTimers() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+}
+
 describe("AOS ACP agent", () => {
   it("reports the AOS extension contract on initialize", async () => {
     const test = await harness()
@@ -1098,31 +1120,120 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("leaves the last reading standing when the provider cannot report usage", async () => {
-    const test = await harness({
-      context: async () => {
-        throw new Error("no window")
-      },
-    })
+  it("defers the reading a resumed Session cannot take yet", async () => {
+    const test = await harness({ context: coldWindow(3) })
     await test.list()
+    useUsageTimers()
+    try {
+      await test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
 
-    await test.agent.request(methods.agent.session.resume, {
-      sessionId: SESSION,
-      cwd: "/",
-    })
-    await test.recorder.wait(
-      (entry) =>
-        entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes("state_update")
-    )
+      // The first two reads find a provider still building its agent; the
+      // backoff waits 1s and then 2s before the third one succeeds.
+      await vi.advanceTimersByTimeAsync(2_999)
+      expect(usages(test.recorder)).toEqual([])
 
-    // An unreadable window is not an outcome the operator is owed a notice
-    // about, and no reading is sent rather than one claiming an empty context.
-    expect(usages(test.recorder)).toEqual([])
-    expect(
-      test.recorder.of(AOS_METHODS.notify.error).map((entry) => entry.params)
-    ).toEqual([])
-    test.close()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(usages(test.recorder)).toMatchObject([
+        {
+          sessionId: SESSION,
+          update: { sessionUpdate: "usage_update", used: 1_200, size: 20_000 },
+        },
+      ])
+
+      // One reading settles the report: nothing is pending and nothing repeats.
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(usages(test.recorder)).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(0)
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("leaves the last reading standing when the provider cannot report usage", async () => {
+    const test = await harness({ context: coldWindow(Infinity) })
+    await test.list()
+    useUsageTimers()
+    try {
+      await test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      // An unreadable window is not an outcome the operator is owed a notice
+      // about, and no reading is sent rather than one claiming an empty context.
+      // The backoff gives up after its budget instead of retrying forever.
+      expect(usages(test.recorder)).toEqual([])
+      expect(
+        test.recorder.of(AOS_METHODS.notify.error).map((entry) => entry.params)
+      ).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("drops a deferred reading once the client closes the Session", async () => {
+    const test = await harness({ context: coldWindow(2) })
+    await test.list()
+    useUsageTimers()
+    try {
+      await test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+      await vi.advanceTimersByTimeAsync(0)
+
+      await test.agent.request(methods.agent.session.close, {
+        sessionId: SESSION,
+      })
+
+      // A detached attachment has no client to report a window to, so closing
+      // the Session cancels the deferred attempt instead of leaving it pending.
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(usages(test.recorder)).toEqual([])
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("replaces a deferred reading with the one a later trigger takes", async () => {
+    const test = await harness({ context: coldWindow(2) })
+    await test.list()
+    useUsageTimers()
+    try {
+      await test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(usages(test.recorder)).toEqual([])
+
+      await test.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value: "opus",
+      })
+      await vi.advanceTimersByTimeAsync(0)
+
+      // The model switch takes the reading the resume was still waiting for, so
+      // the deferred attempt is cancelled rather than left to report a second.
+      expect(usages(test.recorder)).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(usages(test.recorder)).toHaveLength(1)
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("renames a Session and reports the new row", async () => {
