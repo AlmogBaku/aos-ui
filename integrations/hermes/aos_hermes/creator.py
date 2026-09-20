@@ -239,6 +239,9 @@ class Creator:
         except subprocess.TimeoutExpired:
             logger.warning("Hermes creator step timed out: %s", argv)
             return "Plugin setup timed out"
+        except OSError:
+            logger.exception("Hermes creator step could not start: %s", argv)
+            return failure
         if result.returncode != 0:
             logger.error(
                 "Hermes creator step failed (%s): %s: %s",

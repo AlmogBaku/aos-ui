@@ -255,6 +255,20 @@ def test_timeout_is_setup_needed():
     }
 
 
+def test_missing_hermes_executable_is_setup_needed():
+    api = FakeProfileApi()
+    runner = FakeRunner(raises=FileNotFoundError("/usr/local/bin/hermes"))
+
+    result = _create(_creator(api, runner))
+
+    assert result == {
+        "status": "setup-needed",
+        "agentId": "data-helper",
+        "error": "Plugin install failed",
+    }
+    assert "/" not in json.dumps(result)
+
+
 def test_ready_requires_toolsets_in_both_platforms():
     api = FakeProfileApi(config_yaml={
         "platform_toolsets": {"api_server": list(TOOLSETS), "cli": ["aos-session-handoff"]},
