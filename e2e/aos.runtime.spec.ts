@@ -500,12 +500,18 @@ async function serveAcp(page: Page, overrides: Partial<AcpScript> = {}) {
   await page.route("**/runtime-config.json", (route) =>
     route.fulfill({ json: { mode: "aos" } })
   )
-  // The runtime read is the only REST route this journey still needs.
-  await page.route("**/api/aos/v1/**", (route) =>
-    new URL(route.request().url()).pathname.endsWith("/runtime")
-      ? route.fulfill({ json: runtime })
-      : route.fulfill({ status: 404, json: { error: { code: "not_found" } } })
-  )
+  // The runtime read and the push status probe are the only REST routes this
+  // journey needs; the real proxy answers the probe even without push set up.
+  await page.route("**/api/aos/v1/**", (route) => {
+    const { pathname } = new URL(route.request().url())
+    if (pathname.endsWith("/runtime")) return route.fulfill({ json: runtime })
+    if (pathname.endsWith("/push"))
+      return route.fulfill({ json: { status: "not-configured" } })
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found" } },
+    })
+  })
 }
 
 function recorded(page: Page, method: string) {
