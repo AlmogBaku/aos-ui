@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import type { PushRegistration } from "@aos/protocol/push"
 import { OPEN_MESSAGE_TYPE } from "@/sw/logic"
 import { defaultBrowserPreferences } from "./policy"
 import {
@@ -44,8 +45,12 @@ function setup(
       options.info ?? { status: "available" as const, publicKey: PUBLIC_KEY }
     )
   })
-  const putPushSubscription = vi.fn(async () => {})
-  const deletePushSubscription = vi.fn(async () => {})
+  const putPushSubscription = vi.fn<(body: PushRegistration) => Promise<void>>(
+    async () => {}
+  )
+  const deletePushSubscription = vi.fn<(endpoint: string) => Promise<void>>(
+    async () => {}
+  )
   const register = vi.fn(async () => {})
   const subscribe = vi.fn(
     (key: string): Promise<PushSubscriptionLike> | null => {

@@ -319,7 +319,9 @@ describe("this device's push subscription", () => {
   })
 
   it("registers and retires this device on the subscriptions route", async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
+    const fetcher = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => new Response(null, { status: 204 }))
     const client = new AosRemoteClient({ fetcher })
 
     await expect(
