@@ -582,12 +582,13 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(input).toBeVisible()
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible()
 
-  // The exposed Session is reported to the proxy, which owns read state.
+  // The exposed Session is reported to the proxy, which owns read state, along
+  // with this connection's presence for push delivery.
   await expect
     .poll(() => recorded(page, "_aos/session/focus"))
     .toContainEqual({
       method: "_aos/session/focus",
-      params: { sessionId: SESSION_ID },
+      params: { sessionId: SESSION_ID, foreground: true, idle: false },
     })
 
   // A dropped transport re-initializes and resumes from the last sequence seen.
