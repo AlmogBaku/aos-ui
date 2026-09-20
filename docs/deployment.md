@@ -119,14 +119,28 @@ Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
 ## Web Push state and VAPID secret
 
-Web Push is optional. Add the `push` block to `proxy-config.json` and supply
-the two Compose variables when you want OS notifications to reach devices with
-no open AOS tab. Omitting the block leaves tab-only delivery active.
+Web Push is optional. When `proxy-config.json` includes a `push` block, add
+`-f compose.push.yaml` after the runtime overlay and set the two variables:
 
 ```bash
 AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push     # operator-owned directory
 AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key
 ```
+
+For example, with Hermes:
+
+```bash
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push \
+AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+  docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml up --build
+```
+
+Omitting `-f compose.push.yaml` leaves tab-only delivery active and requires
+neither variable.
 
 **State directory.** The proxy writes device registrations to
 `${AOS_UI_PUSH_STATE_DIR}`. Create it before the first start and ensure the
@@ -137,10 +151,9 @@ mkdir -p /var/lib/aos-ui/push
 chown <UID>:<GID> /var/lib/aos-ui/push
 ```
 
-The Compose overlays mount this directory as a bind mount rather than a named
-volume because a named volume is initially root-owned while the proxy runs as
-the host UID. The proxy refuses to start if the directory is missing or
-unwritable.
+`compose.push.yaml` mounts this as a bind mount rather than a named volume
+because a named volume is initially root-owned while the proxy runs as the host
+UID. The proxy refuses to start if the directory is missing or unwritable.
 
 **VAPID secret.** Generate a key pair once and keep only the private key:
 

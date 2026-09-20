@@ -166,8 +166,6 @@ describe("container orchestration", () => {
       ),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
-      AOS_UI_PUSH_STATE_DIR: root,
-      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -218,21 +216,7 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
-      expect.objectContaining({
-        source: "vapid-private-key",
-        target: "vapid-private-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
     ])
-    expect(config.services.web.volumes).toContainEqual(
-      expect.objectContaining({
-        type: "bind",
-        source: root,
-        target: "/var/lib/aos-ui/push",
-      })
-    )
     expect(config.services.opencode.environment).toMatchObject({
       OPENCODE_SERVER_USERNAME: "aos-ui",
       AOS_UI_OPENCODE_PASSWORD_FILE: "/run/secrets/opencode-password",
@@ -287,8 +271,6 @@ describe("container orchestration", () => {
       ),
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
-      AOS_UI_PUSH_STATE_DIR: root,
-      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -338,21 +320,7 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
-      expect.objectContaining({
-        source: "vapid-private-key",
-        target: "vapid-private-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
     ])
-    expect(config.services.web.volumes).toContainEqual(
-      expect.objectContaining({
-        type: "bind",
-        source: root,
-        target: "/var/lib/aos-ui/push",
-      })
-    )
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.hermes.json")
     )
@@ -365,13 +333,9 @@ describe("container orchestration", () => {
     expect(config.secrets?.["guest-invite-signing-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    expect(config.secrets?.["vapid-private-key"]?.file).toBe(
-      resolve(root, ".env.example")
-    )
     expect(Object.keys(config.secrets ?? {}).sort()).toEqual([
       "guest-invite-signing-key",
       "hermes-token",
-      "vapid-private-key",
     ])
     expect(JSON.stringify(config.services.web.environment)).not.toMatch(
       /HERMES|TOKEN|OIDC|SECRET/u
@@ -391,8 +355,6 @@ describe("container orchestration", () => {
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE: resolve(root, ".env.example"),
-      AOS_UI_PUSH_STATE_DIR: root,
-      AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_HOST_UID: "1234",
       AOS_UI_HOST_GID: "2345",
     })
@@ -450,21 +412,7 @@ describe("container orchestration", () => {
         uid: "1234",
         gid: "2345",
       }),
-      expect.objectContaining({
-        source: "vapid-private-key",
-        target: "vapid-private-key",
-        mode: "0400",
-        uid: "1234",
-        gid: "2345",
-      }),
     ])
-    expect(config.services.web.volumes).toContainEqual(
-      expect.objectContaining({
-        type: "bind",
-        source: root,
-        target: "/var/lib/aos-ui/push",
-      })
-    )
     expect(config.secrets?.["openclaw-device-identity"]?.file).toBe(
       resolve(root, ".env.example")
     )
@@ -504,6 +452,71 @@ describe("container orchestration", () => {
         )
       )
     ).toMatchObject({ mode: "aos" })
+  })
+
+  it("mounts push state and VAPID secret when the push overlay is added", () => {
+    const config = composeConfig(
+      ["compose.yaml", "compose.hermes.yaml", "compose.push.yaml"],
+      {
+        AOS_UI_RUNTIME_CONFIG_FILE: resolve(
+          root,
+          "deploy/runtime-config.hermes.json"
+        ),
+        AOS_UI_PROXY_CONFIG_FILE: resolve(
+          root,
+          "deploy/proxy-config.hermes.example.json"
+        ),
+        AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
+        AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+        AOS_UI_PUSH_STATE_DIR: root,
+        AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
+        AOS_UI_HOST_UID: "1234",
+        AOS_UI_HOST_GID: "2345",
+      }
+    )
+
+    expect(config.services.web.volumes).toContainEqual(
+      expect.objectContaining({
+        type: "bind",
+        source: root,
+        target: "/var/lib/aos-ui/push",
+      })
+    )
+    expect(config.services.web.secrets).toContainEqual(
+      expect.objectContaining({
+        source: "vapid-private-key",
+        target: "vapid-private-key",
+        mode: "0400",
+        uid: "1234",
+        gid: "2345",
+      })
+    )
+    expect(config.secrets?.["vapid-private-key"]?.file).toBe(
+      resolve(root, ".env.example")
+    )
+  })
+
+  it("does not require push variables and carries no push state without the push overlay", () => {
+    // Push vars must be absent from the override map to prove they are not required.
+    const config = composeConfig(["compose.yaml", "compose.hermes.yaml"], {
+      AOS_UI_RUNTIME_CONFIG_FILE: resolve(
+        root,
+        "deploy/runtime-config.hermes.json"
+      ),
+      AOS_UI_PROXY_CONFIG_FILE: resolve(
+        root,
+        "deploy/proxy-config.hermes.example.json"
+      ),
+      AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
+      AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
+      AOS_UI_HOST_UID: "1234",
+      AOS_UI_HOST_GID: "2345",
+    })
+
+    expect(config.secrets).not.toHaveProperty("vapid-private-key")
+    expect(config.services.web.volumes ?? []).not.toContainEqual(
+      expect.objectContaining({ target: "/var/lib/aos-ui/push" })
+    )
   })
 
   it("uses the Vite development target and source mount", () => {

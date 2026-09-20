@@ -121,6 +121,7 @@ Keep only the private key (a 43-character base64url scalar). Write it to a
 file, set its permissions to `0600`, and pass the path as `privateKeyFile`. The
 public key is derived at proxy startup; do not configure it separately.
 
-For Compose deployments set `AOS_UI_PUSH_STATE_DIR` and
-`AOS_UI_VAPID_PRIVATE_KEY_FILE` before starting a runtime overlay (see
-[Deployment](deployment.md#web-push-state-and-vapid-secret)).
+For Compose deployments, add `-f compose.push.yaml` after the runtime overlay
+and set `AOS_UI_PUSH_STATE_DIR` and `AOS_UI_VAPID_PRIVATE_KEY_FILE` (see
+[Deployment](deployment.md#web-push-state-and-vapid-secret)). Omitting the
+overlay leaves tab-only delivery active with no additional variables required.

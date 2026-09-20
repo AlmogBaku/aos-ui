@@ -29,17 +29,6 @@ services:
         uid: "${AOS_UI_HOST_UID:-1000}"
         gid: "${AOS_UI_HOST_GID:-1000}"
         mode: 0400
-      - source: vapid-private-key
-        target: vapid-private-key
-        uid: "${AOS_UI_HOST_UID:-1000}"
-        gid: "${AOS_UI_HOST_GID:-1000}"
-        mode: 0400
-    volumes:
-      # Bind-mount rather than a named volume: a named volume is initially
-      # root-owned, but the proxy runs as the host UID.
-      - type: bind
-        source: ${AOS_UI_PUSH_STATE_DIR:?set AOS_UI_PUSH_STATE_DIR to an operator-owned directory}
-        target: /var/lib/aos-ui/push
     healthcheck:
       test:
         - CMD
@@ -122,5 +111,3 @@ secrets:
     file: ${AOS_UI_OPENCODE_PASSWORD_FILE:?Set AOS_UI_OPENCODE_PASSWORD_FILE to the private OpenCode server password file}
   guest-invite-signing-key:
     file: ${AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE:?Set AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE to the private guest invitation key file}
-  vapid-private-key:
-    file: ${AOS_UI_VAPID_PRIVATE_KEY_FILE:?set AOS_UI_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}
