@@ -43,6 +43,12 @@ export const COALESCE_WINDOW_MS: Readonly<Record<PushCategory, number>> = {
   completion: 20_000,
 }
 
+/**
+ * `type` of the message the service worker posts to a focused window when a
+ * notification is clicked: `{ type, agentId?, sessionId? }`, ids iff one Session.
+ */
+export const OPEN_MESSAGE_TYPE = "aos:open"
+
 /** The encrypted payload a device receives; ids are present iff count is 1. */
 export const PushMessageSchema = z
   .strictObject({

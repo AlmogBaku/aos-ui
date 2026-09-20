@@ -2,12 +2,11 @@ import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
-import type { PushMessage } from "@aos/protocol/push"
+import { OPEN_MESSAGE_TYPE, type PushMessage } from "@aos/protocol/push"
 
 import {
   handleNotificationClick,
   handlePush,
-  OPEN_MESSAGE_TYPE,
   type PushNotificationOptions,
 } from "./logic"
 

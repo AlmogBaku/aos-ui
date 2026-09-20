@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { PushRegistration } from "@aos/protocol/push"
-import { OPEN_MESSAGE_TYPE } from "@/sw/logic"
+import { OPEN_MESSAGE_TYPE, type PushRegistration } from "@aos/protocol/push"
 import { defaultBrowserPreferences } from "./policy"
 import {
   createBrowserPushPlatform,

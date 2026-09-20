@@ -1,7 +1,16 @@
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { buildWorkspacePathname } from "@/lib/workspace-routing"
-import type { PushCategory, PushLocale, PushMessage } from "@aos/protocol/push"
+import type {
+  OPEN_MESSAGE_TYPE as PROTOCOL_OPEN_MESSAGE_TYPE,
+  PushCategory,
+  PushLocale,
+  PushMessage,
+} from "@aos/protocol/push"
+
+// A literal typed against the protocol's constant: the worker must not import
+// the protocol module at runtime (it would pull zod into the bundle).
+const OPEN_MESSAGE_TYPE: typeof PROTOCOL_OPEN_MESSAGE_TYPE = "aos:open"
 
 /**
  * Push handling for the service worker, kept free of worker globals so the
@@ -51,9 +60,6 @@ type ClientsSurface = {
   }): Promise<readonly WindowClientSurface[]>
   openWindow(url: string): Promise<unknown>
 }
-
-/** A focused tab opens the Session itself rather than being navigated. */
-export const OPEN_MESSAGE_TYPE = "aos:open"
 
 const TITLE = en.productName
 const ICON = "/icons/pwa-192x192.png"

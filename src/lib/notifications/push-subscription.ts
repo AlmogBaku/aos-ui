@@ -7,7 +7,7 @@ import {
   type PushRegistration,
 } from "@aos/protocol/push"
 
-import { OPEN_MESSAGE_TYPE } from "@/sw/logic"
+import { OPEN_MESSAGE_TYPE } from "@aos/protocol/push"
 import type { BrowserPermission, BrowserPreferences } from "./policy"
 
 /**
