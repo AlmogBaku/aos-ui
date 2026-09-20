@@ -151,8 +151,38 @@ describe("push notifications", () => {
   it.each([
     ["no payload", undefined],
     ["unparseable text", "not json"],
+    ["a payload that is not an object", "[1, 2]"],
     ["an unknown version", singlePush({ v: 2 as 1 })],
+    ["a version that is not a number", { ...singlePush(), v: "1" }],
     ["an unexpected key", { ...singlePush(), agentName: "Research" }],
+    [
+      "an unknown key the OS would understand",
+      { ...singlePush(), badge: "/b" },
+    ],
+    ["an unknown category", singlePush({ category: "attention" as never })],
+    [
+      "a category named after a prototype member",
+      { ...singlePush(), category: "constructor" },
+    ],
+    ["an unknown locale", singlePush({ locale: "ar" as never })],
+    [
+      "a fractional count",
+      { v: 1, category: "input", count: 1.5, occurredAt, locale: "en" },
+    ],
+    [
+      "a count below one",
+      { v: 1, category: "input", count: 0, occurredAt, locale: "en" },
+    ],
+    ["an unreadable date", singlePush({ occurredAt: "soon" })],
+    [
+      "an id carrying a control character",
+      singlePush({ agentId: "agent\u0007" }),
+    ],
+    [
+      "an id longer than the protocol allows",
+      singlePush({ agentId: "a".repeat(257) }),
+    ],
+    ["an empty id", singlePush({ agentId: "" })],
     ["a single Session without ids", { ...singlePush(), agentId: undefined }],
     ["a count carrying ids", singlePush({ count: 2 })],
   ])("shows one content-free notification for %s", async (_, payload) => {

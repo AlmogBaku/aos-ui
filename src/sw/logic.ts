@@ -1,17 +1,18 @@
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { buildWorkspacePathname } from "@/lib/workspace-routing"
-import {
-  PushMessageSchema,
-  type PushCategory,
-  type PushMessage,
-} from "@aos/protocol/push"
+import type { PushCategory, PushLocale, PushMessage } from "@aos/protocol/push"
 
 /**
  * Push handling for the service worker, kept free of worker globals so the
  * notification a device is shown can be asserted directly. A push that cannot
  * be read still owes exactly one notification: swallowing it revokes the
  * subscription on Safari and shows a browser-authored notice on Chrome.
+ *
+ * Payloads are read by hand rather than with `PushMessageSchema`, because a
+ * worker woken by every push should not pay for the validator: importing it
+ * pulled the whole zod runtime into this bundle. `readMessage` mirrors that
+ * schema and must change with it.
  */
 
 /** `NotificationOptions` plus `timestamp`, which the DOM types omit. */
@@ -65,11 +66,59 @@ const bodyKeys = {
   completion: { one: "runFinished", many: "runFinishedMany" },
 } as const satisfies Record<PushCategory, { one: string; many: string }>
 
-const dictionaries = { en, he }
+const dictionaries = { en, he } satisfies Record<PushLocale, unknown>
+
+/** Both key sets are exhaustive above, so membership is the value check. */
+function isCategory(value: unknown): value is PushCategory {
+  return typeof value === "string" && Object.hasOwn(bodyKeys, value)
+}
+
+function isLocale(value: unknown): value is PushLocale {
+  return typeof value === "string" && Object.hasOwn(dictionaries, value)
+}
+
+/** Mirrors the protocol's `IdentifierSchema`: 1-256 printable characters. */
+function isIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 256 &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0)
+      return code >= 32 && code !== 127
+    })
+  )
+}
 
 function readMessage(value: unknown): PushMessage | undefined {
-  const parsed = PushMessageSchema.safeParse(value)
-  return parsed.success ? parsed.data : undefined
+  if (typeof value !== "object" || value === null) return undefined
+  const {
+    v,
+    category,
+    count,
+    occurredAt,
+    locale,
+    agentId,
+    sessionId,
+    ...rest
+  } = value as Record<string, unknown>
+  if (Object.keys(rest).length > 0) return undefined
+  if (v !== 1) return undefined
+  if (!isCategory(category) || !isLocale(locale)) return undefined
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
+    return undefined
+  }
+  // Looser than the schema's ISO 8601: a readable date is all a timestamp needs.
+  if (typeof occurredAt !== "string" || Number.isNaN(Date.parse(occurredAt))) {
+    return undefined
+  }
+  const counted: PushMessage = { v: 1, category, count, occurredAt, locale }
+  // A single Session carries both ids; a count carries neither.
+  const identified = agentId !== undefined || sessionId !== undefined
+  if (identified !== (count === 1)) return undefined
+  if (!identified) return counted
+  if (!isIdentifier(agentId) || !isIdentifier(sessionId)) return undefined
+  return { ...counted, agentId, sessionId }
 }
 
 function readPayload(payload: string | undefined): PushMessage | undefined {
