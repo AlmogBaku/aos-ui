@@ -14,6 +14,7 @@ describe("deterministic fixture scenarios", () => {
       ["render a chart", "chart"],
       ["publish an artifact", "artifact"],
       ["publish an image", "image"],
+      ["publish an audio note", "audio"],
       ["show a map", "map"],
       ["show metrics", "stats"],
       ["show mermaid", "mermaid"],

@@ -898,7 +898,7 @@ describe("artifact workspace", () => {
       </ArtifactWorkspaceProvider>
     )
 
-  it("plays a published audio artifact inline instead of opening the viewer", async () => {
+  it("plays a published audio artifact inline with no download of its own", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audio-artifact")
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
     renderPublishedArtifact({
@@ -911,7 +911,9 @@ describe("artifact workspace", () => {
     expect(player).toHaveAttribute("src", "blob:audio-artifact")
     expect(player).toHaveAttribute("controls")
     expect(player).toHaveAttribute("preload", "metadata")
-    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /^Open/ })
     ).not.toBeInTheDocument()
@@ -933,13 +935,70 @@ describe("artifact workspace", () => {
     expect(player).toHaveAttribute("src", "blob:video-artifact")
     expect(player).toHaveAttribute("controls")
     expect(player).toHaveAttribute("preload", "metadata")
-    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("region", { name: "Output preview" })
     ).not.toBeInTheDocument()
   })
 
-  it("shows a published image inline as a bounded preview that opens the viewer", async () => {
+  it("reads an inline image's bytes once while the conversation keeps streaming", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    const resolve = vi.fn<ArtifactAdapter["resolve"]>(
+      async () => new Blob(["PNG"], { type: "image/png" })
+    )
+    // The workspace holds one adapter instance; what churns while an answer
+    // streams is the projected descriptor, a new object for the same bytes.
+    const adapter = { resolve }
+    const surface = (text: string) => (
+      <ArtifactWorkspaceProvider
+        locale="en"
+        adapter={adapter}
+        agentId="agent-aster"
+        threadId="thread-aster-market"
+        messages={[
+          {
+            id: "media-message",
+            role: "assistant",
+            content: [
+              {
+                type: "data",
+                name: "aos.artifact",
+                data: { ...imageArtifact },
+              },
+            ],
+          },
+          {
+            id: "streaming",
+            role: "assistant",
+            content: [{ type: "text", text }],
+          },
+        ]}
+      >
+        <ArtifactToolResultCard
+          result={{ ...imageArtifact }}
+          occurrenceKey="media-message:0"
+        />
+      </ArtifactWorkspaceProvider>
+    )
+
+    const { rerender } = render(surface("First token"))
+    expect(
+      await screen.findByRole("img", { name: "diagram.png" })
+    ).toBeVisible()
+    expect(resolve).toHaveBeenCalledTimes(1)
+
+    rerender(surface("First token, then another"))
+    rerender(surface("First token, then another, and more"))
+    expect(
+      await screen.findByRole("img", { name: "diagram.png" })
+    ).toBeVisible()
+    expect(resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows a published image inline as a bounded preview whose viewer holds the download", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
     renderPublishedArtifact({
@@ -949,7 +1008,9 @@ describe("artifact workspace", () => {
 
     const preview = await screen.findByRole("img", { name: "diagram.png" })
     expect(preview).toHaveAttribute("src", "blob:image-artifact")
-    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Download" })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("region", { name: "Output preview" })
     ).not.toBeInTheDocument()

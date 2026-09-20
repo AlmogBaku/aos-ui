@@ -17,6 +17,7 @@ export const fixtureScenarioNames = [
   "stats",
   "artifact",
   "image",
+  "audio",
   "mermaid",
   "mermaid-incomplete",
   "mermaid-malformed",
@@ -258,6 +259,19 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
             ],
           }
         ),
+      ],
+    }
+  }
+
+  if (input.includes("audio")) {
+    return {
+      name: "audio",
+      parts: [
+        {
+          type: "data",
+          name: "aos.artifact",
+          data: FIXTURE_ARTIFACT_CATALOG.examples.audio,
+        } as AssistantPart,
       ],
     }
   }

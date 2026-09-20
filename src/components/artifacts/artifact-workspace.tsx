@@ -569,9 +569,10 @@ function ArtifactDownloadAction({
  * a sent media attachment so both conversation surfaces read the same.
  */
 /**
- * A published audio, video, or image outcome shown in the message itself. An
- * image is bounded, never at its original size; the viewer holds the full
- * picture, and nothing about audio or video opens it.
+ * A published audio, video, or image outcome shown in the message itself, with
+ * no download of its own: the native player controls carry one, and an image
+ * — bounded here, never at its original size — opens the viewer, which holds
+ * the full picture and the download. Nothing about audio or video opens it.
  */
 function ArtifactInlineMedia({
   artifact,
@@ -610,8 +611,10 @@ function ArtifactInlineMedia({
     )
   }
 
+  // A definite width: a native player inside a shrink-to-fit box collapses to
+  // its minimal pill.
   return (
-    <div className="grid w-fit max-w-full gap-2">
+    <div className="w-full max-w-[30rem]">
       {url === undefined ? (
         <p
           className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -641,7 +644,7 @@ function ArtifactInlineMedia({
       ) : kind === "audio" ? (
         <audio
           aria-label={`${labels.audio}: ${published.filename}`}
-          className="block w-full max-w-[30rem]"
+          className="block w-full"
           controls
           preload="metadata"
           src={url}
@@ -649,13 +652,12 @@ function ArtifactInlineMedia({
       ) : (
         <video
           aria-label={`${labels.video}: ${published.filename}`}
-          className="block h-auto max-h-96 w-full max-w-[30rem] rounded-lg bg-black object-contain"
+          className="block h-auto max-h-96 w-full rounded-lg bg-black object-contain"
           controls
           preload="metadata"
           src={url}
         />
       )}
-      <ArtifactDownloadAction artifact={published} />
     </div>
   )
 }
@@ -744,11 +746,28 @@ function ArtifactCopyButton({
   )
 }
 
+/**
+ * The same descriptor for as long as its bytes are the same. A re-projected
+ * conversation hands an inline player a new object for an artifact that has not
+ * changed, and resolving by reference would download it again on every streamed
+ * token — restarting playback along the way.
+ */
+function useArtifactByValue(artifact: ArtifactDescriptor | null) {
+  const [held, setHeld] = useState(artifact)
+  const settled =
+    held !== null && artifact !== null && sameArtifactDescriptor(held, artifact)
+  if (!settled && held !== artifact) {
+    setHeld(artifact)
+    return artifact
+  }
+  return settled ? held : artifact
+}
+
 /** Loads one artifact's bytes: the opened viewer by default, or an inline player. */
 export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
   const { adapter, agentId, selectedArtifact, threadId } =
     useArtifactWorkspace()
-  const previewArtifact = artifact ?? selectedArtifact
+  const previewArtifact = useArtifactByValue(artifact ?? selectedArtifact)
   const [resolved, setResolved] = useState<{
     artifact: ArtifactDescriptor
     adapter: ArtifactAdapter
