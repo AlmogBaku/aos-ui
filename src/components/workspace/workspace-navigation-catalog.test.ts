@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { SessionMetadata } from "@/runtime-adapters/contracts"
+import { buildAgentSessionView } from "@/lib/workspace-view-model"
 import { buildWorkspaceNavigationCatalog } from "./workspace-navigation-catalog"
 
 const sessions: SessionMetadata[] = [
@@ -69,11 +70,140 @@ describe("buildWorkspaceNavigationCatalog", () => {
       visibleThreadId: "a-current",
     })
 
-    expect(catalog.get("agent-a")?.openSessions.map((item) => item.threadId)).toEqual([
-      "a-current",
+    expect(
+      catalog.get("agent-a")?.openSessions.map((item) => item.threadId)
+    ).toEqual(["a-current"])
+    expect(
+      catalog.get("agent-a")?.historySessions.map((item) => item.threadId)
+    ).toEqual(["a-old"])
+  })
+
+  const pinNow = new Date("2026-09-08T10:00:00.000Z")
+  const pinned: SessionMetadata[] = [
+    {
+      threadId: "open-new",
+      agentId: "agent-p",
+      updatedAt: "2026-09-08T09:30:00.000Z",
+      status: "idle",
+    },
+    {
+      threadId: "open-pinned",
+      agentId: "agent-p",
+      updatedAt: "2026-09-08T09:00:00.000Z",
+      status: "idle",
+      pinned: true,
+    },
+    {
+      threadId: "open-old",
+      agentId: "agent-p",
+      updatedAt: "2026-09-08T08:30:00.000Z",
+      status: "idle",
+    },
+    {
+      threadId: "open-pinned-old",
+      agentId: "agent-p",
+      updatedAt: "2026-09-08T08:00:00.000Z",
+      status: "idle",
+      pinned: true,
+    },
+    {
+      threadId: "history-new",
+      agentId: "agent-p",
+      updatedAt: "2026-09-01T09:30:00.000Z",
+      status: "idle",
+    },
+    {
+      threadId: "history-pinned",
+      agentId: "agent-p",
+      updatedAt: "2026-09-01T09:00:00.000Z",
+      status: "idle",
+      pinned: true,
+    },
+    {
+      threadId: "history-old",
+      agentId: "agent-p",
+      updatedAt: "2026-09-01T08:30:00.000Z",
+      status: "idle",
+    },
+    {
+      threadId: "archived-pinned",
+      agentId: "agent-p",
+      updatedAt: "2026-09-08T09:15:00.000Z",
+      status: "idle",
+      archived: true,
+      pinned: true,
+    },
+  ]
+
+  it("leads both drawer lists with pinned Sessions without reordering tabs", () => {
+    const navigation = buildWorkspaceNavigationCatalog({
+      agentIds: ["agent-p"],
+      sessions: pinned,
+      manuallyOpened: {},
+      dismissedTabs: {},
+      lastSelected: new Map(),
+      titles: new Map(),
+      now: pinNow,
+      untitledLabel: "New Session",
+      visibleThreadId: null,
+    }).get("agent-p")
+
+    expect(navigation?.openSessions.map((item) => item.threadId)).toEqual([
+      "open-pinned",
+      "open-pinned-old",
+      "open-new",
+      "open-old",
     ])
-    expect(catalog.get("agent-a")?.historySessions.map((item) => item.threadId)).toEqual([
-      "a-old",
+    expect(navigation?.historySessions.map((item) => item.threadId)).toEqual([
+      "history-pinned",
+      "history-new",
+      "history-old",
     ])
+    // Tabs answer to provider recency; pins only lead the drawer lists.
+    expect(
+      buildAgentSessionView({
+        agentId: "agent-p",
+        sessions: pinned,
+        manuallyOpenedThreadIds: new Set(),
+        titles: new Map(),
+        now: pinNow,
+      }).openSessions.map((item) => item.threadId)
+    ).toEqual(["open-new", "open-pinned", "open-old", "open-pinned-old"])
+  })
+
+  it("lists archived Sessions on their own and never offers to close them", () => {
+    const navigation = buildWorkspaceNavigationCatalog({
+      agentIds: ["agent-p"],
+      sessions: pinned,
+      manuallyOpened: { "agent-p": ["archived-pinned"] },
+      dismissedTabs: {},
+      lastSelected: new Map(),
+      titles: new Map([["archived-pinned", "Campaign retrospective"]]),
+      now: pinNow,
+      untitledLabel: "New Session",
+      visibleThreadId: null,
+    }).get("agent-p")
+
+    expect(
+      navigation?.archivedSessions.map(({ threadId, title }) => ({
+        threadId,
+        title,
+      }))
+    ).toEqual([
+      { threadId: "archived-pinned", title: "Campaign retrospective" },
+    ])
+    expect(
+      navigation?.archivedSessions.every((item) => item.canClose === undefined)
+    ).toBe(true)
+    expect(
+      navigation?.openSessions.some(
+        (item) => item.threadId === "archived-pinned"
+      )
+    ).toBe(false)
+    expect(
+      navigation?.historySessions.some(
+        (item) => item.threadId === "archived-pinned"
+      )
+    ).toBe(false)
   })
 })

@@ -63,6 +63,8 @@ type BuildAgentSessionViewOptions = {
   titles: ReadonlyMap<string, string>
   now: Date
   untitledLabel?: string
+  /** The Session on screen stays listed even once the provider archives it. */
+  visibleThreadId?: string | null
 }
 
 function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
@@ -90,22 +92,32 @@ export function buildAgentSessionView({
   titles,
   now,
   untitledLabel = "Untitled session",
+  visibleThreadId = null,
 }: BuildAgentSessionViewOptions) {
   const toView = (session: SessionMetadata): WorkspaceSessionView => ({
     ...session,
     title: titles.get(session.threadId)?.trim() || untitledLabel,
   })
-  const allSessions = newestUniqueSessions(
-    sessions.filter((session) => session.agentId === agentId)
+  // Archived Sessions leave the open and history lists for their own list.
+  const listed = sessions.filter(
+    (session) =>
+      session.archived !== true || session.threadId === visibleThreadId
   )
 
   return {
     openSessions: activeSessionsForAgent(
-      [...sessions],
+      listed,
       agentId,
       now,
       manuallyOpenedThreadIds
     ).map(toView),
-    allSessions: allSessions.map(toView),
+    allSessions: newestUniqueSessions(
+      listed.filter((session) => session.agentId === agentId)
+    ).map(toView),
+    archivedSessions: newestUniqueSessions(
+      sessions.filter(
+        (session) => session.agentId === agentId && session.archived === true
+      )
+    ).map(toView),
   }
 }

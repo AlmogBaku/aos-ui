@@ -6,7 +6,18 @@ export type AgentSessionNavigation = {
   agentId: string
   openSessions: readonly WorkspaceSession[]
   historySessions: readonly WorkspaceSession[]
+  archivedSessions: readonly WorkspaceSession[]
   lastSelectedThreadId: string | null
+}
+
+/** Pinned rows lead their list; recency still orders within either group. */
+function pinnedFirst<Session extends { pinned?: boolean }>(
+  sessions: readonly Session[]
+) {
+  return [
+    ...sessions.filter((session) => session.pinned === true),
+    ...sessions.filter((session) => session.pinned !== true),
+  ]
 }
 
 export function buildWorkspaceNavigationCatalog({
@@ -51,6 +62,7 @@ export function buildWorkspaceNavigationCatalog({
         titles,
         now,
         untitledLabel,
+        visibleThreadId,
       })
       const openSessions = view.openSessions
         .filter((session) => !dismissed.has(session.threadId))
@@ -60,10 +72,11 @@ export function buildWorkspaceNavigationCatalog({
         agentId,
         {
           agentId,
-          openSessions,
-          historySessions: view.allSessions.filter(
-            (session) => !openIds.has(session.threadId)
+          openSessions: pinnedFirst(openSessions),
+          historySessions: pinnedFirst(
+            view.allSessions.filter((session) => !openIds.has(session.threadId))
           ),
+          archivedSessions: view.archivedSessions,
           lastSelectedThreadId: lastSelected.get(agentId) ?? null,
         },
       ]

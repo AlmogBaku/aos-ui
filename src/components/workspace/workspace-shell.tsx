@@ -101,6 +101,10 @@ export type WorkspaceSession = {
   status: WorkspaceSessionStatus
   updatedAt: string
   unread?: boolean
+  /** Provider archival state; absent until a provider read reports it. */
+  archived?: boolean
+  /** Provider pin; absent when the runtime does not track it. */
+  pinned?: boolean
   canClose?: boolean
 }
 
@@ -1157,6 +1161,7 @@ export function WorkspaceShell({
       historySessions: olderSessions.filter(
         (session) => !openIds.has(session.threadId)
       ),
+      archivedSessions: [],
       lastSelectedThreadId: activeThreadId,
     }
   }, [

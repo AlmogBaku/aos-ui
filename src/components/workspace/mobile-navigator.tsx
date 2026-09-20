@@ -578,6 +578,7 @@ function SessionsView({
           agentId: agent.id,
           openSessions,
           historySessions,
+          archivedSessions: [],
           lastSelectedThreadId,
         }}
         activeThreadId={activeThreadId}

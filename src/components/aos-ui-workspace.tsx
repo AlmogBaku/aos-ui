@@ -443,10 +443,6 @@ function WorkspaceContent({
     () => ({ ...threadComponents, Composer: composer }),
     [composer]
   )
-  const capabilities = useMemo(
-    () => getWorkspaceCapabilities(workspace),
-    [workspace]
-  )
   const [managementOpen, setManagementOpen] = useState(false)
   const [conversationObscured, setConversationObscured] = useState(false)
   const {
@@ -471,6 +467,7 @@ function WorkspaceContent({
     retryTodos,
     sessions,
     titles,
+    sessionActions,
     setPreferredAgentId,
     selectAgent,
     openSession,
@@ -481,6 +478,15 @@ function WorkspaceContent({
     refreshAfterVisibilityChange,
     retryWorkspace,
   } = useWorkspaceNavigation({ bundle, locale, dictionary, now, readNow })
+  const capabilities = useMemo(
+    () =>
+      getWorkspaceCapabilities(
+        workspace,
+        displayAgents,
+        sessionActions ?? undefined
+      ),
+    [displayAgents, sessionActions, workspace]
+  )
   const workspaceError = agentError ?? sessionError ?? actionError
   const threadChrome = useMemo<WorkspaceThreadChrome>(
     () => ({
