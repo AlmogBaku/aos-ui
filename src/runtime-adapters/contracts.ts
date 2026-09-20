@@ -2,6 +2,7 @@ import type { AssistantRuntime, Toolkit } from "@assistant-ui/react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
+import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -250,6 +251,8 @@ export type HarnessRuntime = {
   media?: VoiceMediaController
   assistantConfig?: { instructions?: string; toolkit?: Toolkit }
   activityCoverage: "workspace" | "active-session"
+  /** Present only where the provider can subscribe this device to Web Push. */
+  push?: PushSubscriptionManager
   environmentLabel?: string
 }
 

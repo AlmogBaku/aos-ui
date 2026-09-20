@@ -70,6 +70,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     sessions: [session],
     titles: new Map([["t", "Secret session"]]),
     selection: { agentId: "a", threadId: "t" },
+    locale: "en" as const,
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: open,
     browser: {
@@ -202,6 +203,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
       sessions,
       titles: new Map<string, string>(),
       selection: { agentId: "a", threadId: "t" },
+      locale: "en" as const,
       readNow: () => new Date(watched.updatedAt),
       onOpenTarget: async () => {},
       browser: {
@@ -266,4 +268,111 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
     enabled: true,
     prompt: "accepted",
   })
+})
+
+it("hands this device's push subscription to the policy and the settings", async () => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(false)
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")
+  let emit: (event: WorkspaceActivityEvent) => void = () => {}
+  const shown: unknown[] = []
+  const session = {
+    agentId: "a",
+    threadId: "t",
+    status: "idle" as const,
+    updatedAt: "2026-09-05T12:00:00Z",
+    unread: true,
+  }
+  const workspace: WorkspaceAdapter = {
+    listAgents: async () => [],
+    refreshAgents: async () => [],
+    createSession: async () => ({ threadId: "t" }),
+    getSessionMetadata: async () => [session],
+    subscribeActivity: (listener) => {
+      emit = listener
+      return () => {}
+    },
+    markSessionRead: async () => {},
+  }
+  let subscribed = true
+  const sync = vi.fn(async () => {})
+  const push = {
+    status: () => "available" as const,
+    active: () => subscribed,
+    prepare: vi.fn(async () => {}),
+    subscribeFromGesture: vi.fn(async () => "granted" as const),
+    sync,
+    listen: () => () => {},
+    stop: vi.fn(),
+  }
+  const props = {
+    workspace,
+    agents: [{ id: "a", name: "Aster" }],
+    sessions: [session],
+    titles: new Map<string, string>(),
+    selection: null,
+    locale: "he" as const,
+    readNow: () => new Date(session.updatedAt),
+    onOpenTarget: async () => {},
+    browser: {
+      port: {
+        getPermission: () => "granted" as const,
+        requestPermission: async () => "granted" as const,
+        show: (payload: unknown) => {
+          shown.push(payload)
+          return { close() {} }
+        },
+      },
+      push,
+      sound: { play() {}, stop() {} },
+      platform: {
+        read: () => null,
+        write() {},
+        send() {},
+        subscribe: () => () => {},
+        startLeadership: () => () => {},
+        isLeader: () => true,
+        settleDelivery: (callback: () => void) => {
+          callback()
+          return () => {}
+        },
+        focus() {},
+      },
+      copy: {
+        completion: en.activity.runFinished,
+        failure: en.activity.runFailed,
+        input: en.activity.inputRequested,
+      },
+    },
+  }
+  const { result } = renderHook(useActivityCoordinator, { initialProps: props })
+  await act(async () => {})
+
+  expect(push.prepare).toHaveBeenCalledWith("granted")
+  expect(result.current.browserSettings.push).toBe("available")
+  expect(result.current.browserSettings.pushActive).toBe(true)
+  expect(sync).toHaveBeenCalledWith(
+    expect.objectContaining({ permission: "granted", locale: "he" })
+  )
+
+  // A subscribed device leaves the background alert to the push it will receive.
+  await act(async () =>
+    emit({
+      id: "ready",
+      ...session,
+      type: "agent-ready",
+      occurredAt: session.updatedAt,
+    })
+  )
+  expect(shown).toEqual([])
+
+  subscribed = false
+  await act(async () =>
+    emit({
+      id: "next",
+      ...session,
+      type: "agent-ready",
+      occurredAt: session.updatedAt,
+    })
+  )
+  expect(shown).toHaveLength(1)
 })

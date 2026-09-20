@@ -498,12 +498,14 @@ function WorkspaceContent({
     workspace,
     browser: {
       port: browserNotificationPort,
+      push: bundle.push,
       copy: {
         completion: dictionary.activity.runFinished,
         failure: dictionary.activity.runFailed,
         input: dictionary.activity.inputRequested,
       },
     },
+    locale,
     agents: displayAgents,
     sessions,
     titles,

@@ -28,6 +28,11 @@ import {
   createActivitySoundPort,
   type ActivitySoundPort,
 } from "@/lib/notifications/sound"
+import type {
+  PushOpenTarget,
+  PushSubscriptionManager,
+} from "@/lib/notifications/push-subscription"
+import type { Locale } from "@/lib/i18n/config"
 import type { BrowserSettingsView } from "./activity"
 import { useInstallPrompt } from "./use-install-prompt"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
@@ -60,12 +65,16 @@ type Options = {
   titles: ReadonlyMap<string, string>
   selection: ActivityContext["selection"]
   conversationExposed?: boolean
+  /** Push notifications are authored on the proxy, in the device's language. */
+  locale: Locale
   readNow: () => Date
   onOpenTarget: (agentId: string, threadId: string) => Promise<void>
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
     sound?: ActivitySoundPort
+    /** Present only where a provider can subscribe this device to Web Push. */
+    push?: PushSubscriptionManager
     copy: { completion: string; failure: string; input: string }
   }
 }
@@ -80,6 +89,7 @@ export function useActivityCoordinator(
   const storeRef = useRef<ActivityStore | null>(null)
   const browserRef = useRef<BrowserActivityCoordinator | null>(null)
   const openRef = useRef<(id: string) => Promise<boolean>>(async () => false)
+  const syncPushRef = useRef<() => void>(() => {})
   const [browserState, setBrowserState] = useState<
     Pick<BrowserSettingsView, "status" | "preferences" | "ask" | "pushActive">
   >({
@@ -88,6 +98,8 @@ export function useActivityCoordinator(
     ask: false,
     pushActive: false,
   })
+  const [pushStatus, setPushStatus] =
+    useState<BrowserSettingsView["push"]>("not-configured")
   const install = useInstallPrompt()
   const validateOwnerRef = useRef<
     (threadId: string, revalidate?: boolean) => Promise<string | undefined>
@@ -183,6 +195,7 @@ export function useActivityCoordinator(
     const sound = browserOptions
       ? (browserOptions.sound ?? createActivitySoundPort())
       : null
+    const push = browserOptions?.push
     const browser = browserOptions
       ? new BrowserActivityCoordinator({
           store,
@@ -192,16 +205,65 @@ export function useActivityCoordinator(
           context,
           copy: () => current.current.browser!.copy,
           open: (id) => openRef.current(id),
+          // A subscribed device leaves the OS alerts to push.
+          ...(push ? { push } : {}),
           onChange: () =>
             queueMicrotask(() => {
               if (!active) return
               setRecords(store.records())
               if (browser) setBrowserState(browser.settings())
+              syncPush()
             }),
         })
       : null
     browserRef.current = browser
+    // Preferences, permission, and locale are what the proxy has to be told.
+    let pushQueue = Promise.resolve()
+    function syncPush() {
+      if (!push || !browser) return
+      pushQueue = pushQueue.then(async () => {
+        if (!active || !browser) return
+        const { status, preferences } = browser.settings()
+        await push.sync({
+          permission: status,
+          preferences,
+          locale: current.current.locale,
+        })
+      })
+    }
+    syncPushRef.current = syncPush
+    /** A notification click routes through the same ownership check as Activity. */
+    async function openPushed(target?: PushOpenTarget) {
+      // Without ids the worker already focused this tab and nothing more is owed.
+      if (!target) return
+      try {
+        const validated = await validateOwner(target.sessionId, true)
+        if (!active || validated !== target.agentId) return
+        await current.current.onOpenTarget(target.agentId, target.sessionId)
+        if (!active) return
+        void Promise.resolve(
+          current.current.workspace.markSessionRead?.(target.sessionId)
+        ).catch(() => {})
+        setRecords(store.records())
+        setNotice(null)
+      } catch {
+        if (active) setError(true)
+      }
+    }
+    const stopPushListening = push?.listen({
+      onChange: () =>
+        queueMicrotask(() => {
+          if (active) setPushStatus(push.status())
+        }),
+      onOpen: (target) => void openPushed(target),
+    })
     browser?.start()
+    if (push && browser)
+      void push.prepare(browser.settings().status).then(() => {
+        if (!active) return
+        setPushStatus(push.status())
+        syncPush()
+      })
     queueMicrotask(() => {
       if (!active) return
       setRecords(store.records())
@@ -276,6 +338,8 @@ export function useActivityCoordinator(
       }
       browser?.stop()
       sound?.stop()
+      stopPushListening?.()
+      if (syncPushRef.current === syncPush) syncPushRef.current = () => {}
       if (browserRef.current === browser) browserRef.current = null
       if (storeRef.current === store) storeRef.current = null
       window.removeEventListener("focus", onFocus)
@@ -303,6 +367,10 @@ export function useActivityCoordinator(
     const timeout = window.setTimeout(() => setNotice(null), 8000)
     return () => window.clearTimeout(timeout)
   }, [notice])
+  // The proxy authors push bodies, so a language change is a registration change.
+  useEffect(() => {
+    syncPushRef.current()
+  }, [options.locale])
 
   const unreadCount = workspaceUnreadCount(options.sessions)
   /** Reading a Session is a provider write; the browser never stores it. */
@@ -386,8 +454,7 @@ export function useActivityCoordinator(
     ...view,
     browserSettings: {
       ...browserState,
-      // T9 replaces this with the push manager's own status.
-      push: "not-configured",
+      push: pushStatus,
       installable: install.installable,
       iosInstallHint: install.iosInstallHint,
       onInstall: install.install,

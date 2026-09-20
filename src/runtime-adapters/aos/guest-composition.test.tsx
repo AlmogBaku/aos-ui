@@ -443,13 +443,17 @@ describe("AOS guest browser composition", () => {
       value: { register },
     })
     try {
-      mount()
+      const { fetcher } = mount()
       await screen.findByText("Earlier guest answer")
 
       expect(screen.queryByText(en.activity.settings)).toBeNull()
       expect(screen.queryByText(en.activity.askTitle)).toBeNull()
       expect(requestPermission).not.toHaveBeenCalled()
       expect(register).not.toHaveBeenCalled()
+      // An invited guest never subscribes this device to operator alerts.
+      expect(
+        fetcher.mock.calls.filter(([input]) => String(input).includes("/push"))
+      ).toEqual([])
     } finally {
       Reflect.deleteProperty(navigator, "serviceWorker")
     }

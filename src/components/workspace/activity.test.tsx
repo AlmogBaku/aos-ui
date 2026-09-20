@@ -128,6 +128,7 @@ function options(
       ["two", "Second"],
     ]),
     selection: { agentId: "a", threadId: "one" },
+    locale: "en",
     readNow: () => now,
     onOpenTarget: vi.fn(async () => {}),
   }

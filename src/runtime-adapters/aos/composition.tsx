@@ -41,6 +41,10 @@ import {
   useAosSessionCapabilities,
 } from "./aos-composer-features"
 import { AosRemoteClient } from "./aos-client"
+import {
+  createBrowserPushPlatform,
+  createPushSubscriptionManager,
+} from "@/lib/notifications/push-subscription"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
 
 /**
@@ -81,6 +85,17 @@ function ReadyAosRuntimeProvider({
   locale,
 }: RuntimeAdapterProps<"aos">) {
   const rest = useMemo(() => new AosRemoteClient(), [])
+  // Only an operator workspace with the real proxy client can subscribe this
+  // device; every other surface simply has no manager.
+  const push = useMemo(
+    () =>
+      createPushSubscriptionManager({
+        client: rest,
+        platform: createBrowserPushPlatform(),
+      }),
+    [rest]
+  )
+  useEffect(() => () => push.stop(), [push])
   const connection = useMemo(
     () => createAcpConnection({ clientInfo: CLIENT_INFO }),
     []
@@ -428,6 +443,7 @@ function ReadyAosRuntimeProvider({
     messageRewind,
     media,
     activityCoverage: "workspace",
+    push,
   })
 }
 
