@@ -126,10 +126,21 @@ export function createAcpSessionStore({
     })
   }
 
+  /**
+   * A snapshot answers for every Session it was asked about. One that omits a
+   * Session the catalog has not reached yet — a reloaded deep link naming a
+   * Session past page one — would read as a Session the workspace does not
+   * have, so the read that resolves it publishes instead.
+   */
+  function notify(subscription: MetadataSubscription) {
+    for (const threadId of subscription.threadIds)
+      if (!rows.has(threadId)) return
+    subscription.listener(rowsFor(subscription.threadIds))
+  }
+
   function publish(threadId: string) {
     for (const subscription of subscriptions)
-      if (subscription.threadIds.has(threadId))
-        subscription.listener(rowsFor(subscription.threadIds))
+      if (subscription.threadIds.has(threadId)) notify(subscription)
   }
 
   function write(threadId: string, next: SessionMetadata) {
@@ -244,8 +255,7 @@ export function createAcpSessionStore({
       const subscription = { threadIds: new Set(threadIds), listener }
       subscriptions.add(subscription)
       queueMicrotask(() => {
-        if (subscriptions.has(subscription))
-          listener(rowsFor(subscription.threadIds))
+        if (subscriptions.has(subscription)) notify(subscription)
       })
       return () => subscriptions.delete(subscription)
     },

@@ -22,6 +22,8 @@ import type { AcpConnection, AcpSessionUpdateListener } from "./types"
 const SESSION_ID = "session-1"
 const AGENT_ID = "agent-1"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
+/** A Session no catalog page this fake answers with has described. */
+const UNLISTED_SESSION_ID = "session-2"
 
 type AcpCapabilities = z.infer<
   typeof AosSessionNewResponseMetaSchema
@@ -379,6 +381,29 @@ describe("ACP workspace client", () => {
     const latest = published.at(-1)?.[0]
     expect(latest?.unread).toBe(true)
     expect(latest?.status).toBe("waiting-for-input")
+  })
+
+  it("publishes no snapshot until every named Session has a row", async () => {
+    const { client } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata(
+      [SESSION_ID, UNLISTED_SESSION_ID],
+      (metadata) => published.push(metadata)
+    )
+    await settle()
+
+    // The catalog has not reached the second Session yet. A snapshot naming
+    // only the first would report the second as one the workspace does not
+    // have, which is how a reloaded deep link loses its Session.
+    expect(published).toEqual([])
+
+    await client.attachSession(UNLISTED_SESSION_ID)
+
+    expect(published.at(-1)?.map(({ threadId }) => threadId)).toEqual([
+      SESSION_ID,
+      UNLISTED_SESSION_ID,
+    ])
   })
 
   it("acks read state optimistically before the provider write", async () => {

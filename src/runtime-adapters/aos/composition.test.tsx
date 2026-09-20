@@ -97,6 +97,12 @@ const sessionInfo = {
 
 const configOptions: SessionConfigOption[] = []
 
+/** One task of latency, which every pending replay settles ahead of. */
+const catalogLatency = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+
 /** The AOS proxy end of the operator connection, in process. */
 function createProxyAgent() {
   let peer: AgentContext | undefined
@@ -171,7 +177,10 @@ function createProxyAgent() {
         },
       },
     }))
-    .onRequest(methods.agent.session.list, ({ params }) => {
+    .onRequest(methods.agent.session.list, async ({ params }) => {
+      // A catalog page crosses the network, so a read that races a resume is
+      // answered after the replay that resume streams first.
+      await catalogLatency()
       const page = params.cursor === undefined ? 0 : Number(params.cursor)
       return {
         sessions: (CATALOG_PAGES[page] ?? []).map((sessionId) => ({
@@ -189,19 +198,18 @@ function createProxyAgent() {
           : {}),
       }
     })
-    .onRequest(methods.agent.session.resume, ({ params }) => {
+    .onRequest(methods.agent.session.resume, async ({ params }) => {
       const { sessionId } = params
       resumed.push(sessionId)
-      const replayFromStart = params.replayFrom?.type === "start"
-      queueMicrotask(() => {
-        attached.add(sessionId)
-        if (!replayFromStart) return
+      attached.add(sessionId)
+      // The proxy replays inside the resume request, before answering it, so a
+      // browser that waits for the response has already seen the history.
+      if (params.replayFrom?.type === "start")
         for (const update of history.get(sessionId) ?? [])
-          void peer?.notify(methods.client.session.update, {
+          await peer?.notify(methods.client.session.update, {
             sessionId,
             update,
           })
-      })
       return {
         configOptions,
         _meta: {
@@ -589,11 +597,13 @@ function mountWorkspace(pathname: string) {
 
 describe("the workspace over one ACP connection", () => {
   it("renders the Session a URL names on a cold load", async () => {
-    mountWorkspace(`/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`)
+    const { proxy } = mountWorkspace(`/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`)
 
     // The Session sits past the first catalog page, so nothing has listed it
-    // when the URL names it.
+    // when the URL names it: the workspace opens that Session and no other
+    // while the pages that describe it are still being read.
     expect(await screen.findByText("Bookmarked answer")).toBeVisible()
+    expect(proxy.resumed).toEqual([BOOKMARKED_SESSION_ID])
     expect(screen.queryByText("Ready")).toBeNull()
     expect(window.location.pathname).toBe(
       `/${AGENT_ID}/${BOOKMARKED_SESSION_ID}`
