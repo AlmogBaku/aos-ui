@@ -67,6 +67,7 @@ import {
   SessionThreadListTrigger,
 } from "./session-thread-list-item"
 import { RowIndicators, StatusDot } from "./status-dots"
+import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -482,6 +483,8 @@ function AgentsPanel({
           const statusLabel = agentStatusLabel(agent.status, dictionary)
           const accessibleName = [
             agent.name,
+            // An unfinished interview is named as the draft it is.
+            isDraftAgentId(agent.id) ? dictionary.creator.draftLabel : null,
             agent.status && agent.status !== "idle"
               ? `${dictionary.status.label}: ${statusLabel}`
               : null,

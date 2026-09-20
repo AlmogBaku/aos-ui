@@ -41,6 +41,14 @@ import {
   getAgentCreator,
   isRosterAgent,
 } from "@/runtime-adapters/agent-identity"
+import {
+  draftAgentId,
+  draftThreadId,
+  isDraftAgentId,
+  nextDraftExpiry,
+  projectDraftAgents,
+  readResolvedDrafts,
+} from "@/runtime-adapters/draft-agents"
 
 const emptySessions: SessionMetadata[] = []
 const emptyTodos: TodoItem[] = []
@@ -48,6 +56,15 @@ const MAX_TIMEOUT_MS = 2_147_483_647
 
 function readBrowserPathname() {
   return window.location.pathname
+}
+
+function readStoredResolvedDrafts(): ReadonlySet<string> {
+  if (typeof window === "undefined") return new Set()
+  try {
+    return readResolvedDrafts(window.localStorage)
+  } catch {
+    return new Set()
+  }
 }
 
 function useThreadListState(runtime: AssistantRuntime) {
@@ -109,6 +126,12 @@ export function useWorkspaceNavigation({
     error: null,
   })
   const [preferredAgentId, setPreferredAgentId] = useState<string | null>(null)
+  const [resolvedDrafts, setResolvedDrafts] = useState<ReadonlySet<string>>(
+    readStoredResolvedDrafts
+  )
+  const [creatorNotice, setCreatorNotice] = useState<string | undefined>(
+    undefined
+  )
   const [manuallyOpened, setManuallyOpened] = useState<
     Record<string, string[]>
   >({})
@@ -162,10 +185,38 @@ export function useWorkspaceNavigation({
             : "Multiple creator Agents are configured"
         )
       : null)
+  // Drafts are derived from the last published metadata rather than the current
+  // query, so a selected draft survives a Session metadata refresh.
+  const publishedSessions = sessionSnapshot.sessions
+  const draftProjection = useMemo(
+    () =>
+      projectDraftAgents({
+        creator: agentCreator,
+        agents,
+        sessions: publishedSessions,
+        resolvedThreadIds: resolvedDrafts,
+        now: eligibilityNow.getTime(),
+        name: dictionary.actions.newAgent,
+      }),
+    [
+      agentCreator,
+      agents,
+      dictionary.actions.newAgent,
+      eligibilityNow,
+      publishedSessions,
+      resolvedDrafts,
+    ]
+  )
+  const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
-  const selectedAgentId = agents.some(({ id }) => id === preferredAgentId)
+  const selectedAgentId = navigableAgents.some(
+    ({ id }) => id === preferredAgentId
+  )
     ? preferredAgentId
     : defaultAgentId
+  const selectedAgentIsDraft = selectedAgentId
+    ? isDraftAgentId(selectedAgentId)
+    : false
 
   const runtimeThreads = useMemo(() => {
     return threadState.threadIds.map((threadId) => {
@@ -187,7 +238,7 @@ export function useWorkspaceNavigation({
   const sessionQueryKey = `${refreshKey}:${runtimeThreadIds.join("\u001f")}`
   const sessionSnapshotIsCurrent = sessionSnapshot.key === sessionQueryKey
   const sessions = sessionSnapshotIsCurrent
-    ? sessionSnapshot.sessions
+    ? draftProjection.sessions
     : emptySessions
   const sessionError = sessionSnapshotIsCurrent ? sessionSnapshot.error : null
   const sessionsLoading =
@@ -235,8 +286,16 @@ export function useWorkspaceNavigation({
   )
 
   useEffect(() => {
-    const boundary = nextSessionEligibilityBoundary(sessions, eligibilityNow)
-    if (boundary === null) return
+    const boundary = Math.min(
+      nextSessionEligibilityBoundary(sessions, eligibilityNow) ??
+        Number.POSITIVE_INFINITY,
+      nextDraftExpiry(
+        publishedSessions,
+        agentCreator?.id,
+        eligibilityNow.getTime()
+      ) ?? Number.POSITIVE_INFINITY
+    )
+    if (!Number.isFinite(boundary)) return
 
     const delay = Math.min(
       Math.max(0, boundary - readNow().getTime()),
@@ -247,7 +306,18 @@ export function useWorkspaceNavigation({
     }, delay)
 
     return () => window.clearTimeout(timeout)
-  }, [eligibilityNow, initialNowMs, readNow, sessions])
+  }, [
+    agentCreator?.id,
+    eligibilityNow,
+    initialNowMs,
+    publishedSessions,
+    readNow,
+    sessions,
+  ])
+
+  useEffect(() => {
+    setCreatorNotice(undefined)
+  }, [pathname])
 
   const selectRuntimeThread = useCallback(
     async (threadId: string) => {
@@ -417,11 +487,12 @@ export function useWorkspaceNavigation({
   useEffect(() => {
     if (readBrowserPathname() !== pathname) return
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
-    const draftAgentId = localDraftAgent.current
-    if (draftAgentId && !activeThreadId) {
-      if (selectedAgentId !== draftAgentId) setPreferredAgentId(draftAgentId)
-      lastSelected.current.set(draftAgentId, null)
-      const selection = { agentId: draftAgentId, sessionId: null }
+    const localDraftAgentId = localDraftAgent.current
+    if (localDraftAgentId && !activeThreadId) {
+      if (selectedAgentId !== localDraftAgentId)
+        setPreferredAgentId(localDraftAgentId)
+      lastSelected.current.set(localDraftAgentId, null)
+      const selection = { agentId: localDraftAgentId, sessionId: null }
       const canonicalPathname = buildWorkspacePathname(selection)
       if (pathname !== canonicalPathname) updateRoute(selection, "replace")
       else appliedPathname.current = canonicalPathname
@@ -432,7 +503,7 @@ export function useWorkspaceNavigation({
       routeTransitionPathname.current = pathname
       const requested = parseWorkspacePathname(pathname)
       const requestedAgent = requested?.agentId
-        ? agents.find(({ id }) => id === requested.agentId)
+        ? navigableAgents.find(({ id }) => id === requested.agentId)
         : undefined
       const agentId = requestedAgent?.id ?? defaultAgentId
       if (!agentId) {
@@ -569,7 +640,7 @@ export function useWorkspaceNavigation({
     }
   }, [
     activeThreadId,
-    agents,
+    navigableAgents,
     agentsLoading,
     dictionary.actions.newSession,
     defaultAgentId,
@@ -641,7 +712,7 @@ export function useWorkspaceNavigation({
   const todos = todoSnapshotIsCurrent ? todoSnapshot.todos : emptyTodos
   const todoError = todoSnapshotIsCurrent ? todoSnapshot.error : null
 
-  const displayAgents = agents.map((agent) => ({
+  const displayAgents = navigableAgents.map((agent) => ({
     ...agent,
     status: agentStatusFromSessions(agent, sessions),
     unread: agentUnreadFromSessions(agent, sessions),
@@ -890,13 +961,15 @@ export function useWorkspaceNavigation({
       )
     }
     setAgents(nextAgents)
-    setPreferredAgentId(creator.id)
+    // The operator only ever sees the interview as its own draft Agent.
+    const draftId = draftAgentId(threadId)
+    setPreferredAgentId(draftId)
     setManuallyOpened((current) => ({
       ...current,
-      [creator.id]: [...new Set([...(current[creator.id] ?? []), threadId])],
+      [draftId]: [...new Set([...(current[draftId] ?? []), threadId])],
     }))
-    lastSelected.current.set(creator.id, threadId)
-    updateRoute({ agentId: creator.id, sessionId: threadId }, "push")
+    lastSelected.current.set(draftId, threadId)
+    updateRoute({ agentId: draftId, sessionId: threadId }, "push")
     await selectRuntimeThread(threadId)
     // A newer navigation may have won while the asynchronous switch completed.
     // Never submit the interview to whichever unrelated Session is now selected.
@@ -911,16 +984,18 @@ export function useWorkspaceNavigation({
     }
     runtime.thread.append({
       role: "user",
-      content: [
-        {
-          type: "text",
-          text:
-            locale === "he"
-              ? "בוא ניצור סוכן חדש."
-              : "Let's create a new Agent.",
-        },
-      ],
+      content: [{ type: "text", text: dictionary.creator.kickoff }],
     })
+  }
+
+  /** Deleting the interview Session is the only way to retire a draft. */
+  async function discardDraft() {
+    const threadId = selectedAgentId
+      ? draftThreadId(selectedAgentId)
+      : undefined
+    if (!threadId) return
+    await runtime.threads.getItemById(threadId).delete()
+    if (defaultAgentId) await selectAgent(defaultAgentId)
   }
 
   async function refreshAfterVisibilityChange() {
@@ -959,6 +1034,9 @@ export function useWorkspaceNavigation({
 
   return {
     agentCreator,
+    creatorNotice,
+    selectedAgentIsDraft,
+    discardDraft,
     displayAgents,
     shellOpenSessions,
     sessionView,

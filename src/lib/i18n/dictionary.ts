@@ -104,6 +104,7 @@ export type Dictionary = {
     hideAgentDetails: string
     switchToEnglish: string
     switchToHebrew: string
+    discardDraft: string
   }
   appearance: {
     label: string
@@ -171,6 +172,13 @@ export type Dictionary = {
     providerActive: string
     pendingReload: string
     retry: string
+  }
+  creator: {
+    kickoff: string
+    draftLabel: string
+    discardConfirm: string
+    createdPending: string
+    createdHidden: string
   }
   accessibility: {
     selectedAgent: string

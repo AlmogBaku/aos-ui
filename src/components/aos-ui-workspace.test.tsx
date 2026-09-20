@@ -52,8 +52,13 @@ vi.mock("react-router", () => ({
   },
 }))
 
-beforeEach(() => window.history.replaceState({}, "", "/"))
+beforeEach(() => {
+  window.history.replaceState({}, "", "/")
+  window.localStorage.clear()
+})
 afterEach(cleanup)
+
+const fixtureClock = () => FIXTURE_NOW
 
 function asHarnessRuntime(bundle: WorkspaceFixtureRuntime): HarnessRuntime {
   return {
@@ -267,23 +272,66 @@ function TabWorkspace({
   )
 }
 
-function CreatorFixtureAosUiApp({ locale }: { locale: "en" | "he" }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
+function CreatorFixtureAosUiApp({
+  locale,
+  workspace,
+  initialThreadId = "thread-aster-market",
+  capture,
+}: {
+  locale: "en" | "he"
+  workspace?: FixtureWorkspace
+  initialThreadId?: string
+  capture?: (bundle: WorkspaceFixtureRuntime) => void
+}) {
+  const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
   const bundle = useFixtureRuntimeBundle({
     threadId,
     onThreadIdChange: setThreadId,
     enableAgentCreator: true,
+    ...(workspace ? { testOnly: { workspace } } : {}),
   })
+  useEffect(() => capture?.(bundle), [bundle, capture])
   return (
     <AosUiWorkspace
       runtime={asHarnessRuntime(bundle)}
       locale={locale}
       dictionary={locale === "he" ? he : en}
       now={FIXTURE_NOW}
+      readNow={fixtureClock}
     />
   )
+}
+
+/** One Agent, one of its Sessions, and one creator interview of a chosen age. */
+function interviewWorkspace(interviewAgeMs: number) {
+  return createFixtureWorkspace({
+    clock: () => FIXTURE_NOW,
+    agents: [
+      { kind: "ready", id: "agent-aster", name: "Aster" },
+      { kind: "ready", id: "agent-mica", name: "Mica" },
+    ],
+    sessions: [
+      {
+        threadId: "thread-aster-market",
+        agentId: "agent-aster",
+        updatedAt: FIXTURE_NOW.toISOString(),
+        status: "idle",
+      },
+      {
+        threadId: "interview-thread",
+        agentId: "agent-builder",
+        updatedAt: new Date(
+          FIXTURE_NOW.getTime() - interviewAgeMs
+        ).toISOString(),
+        status: "idle",
+      },
+    ],
+    todos: {},
+    sessionTitles: {
+      "thread-aster-market": "Market brief",
+      "interview-thread": "New Agent",
+    },
+  })
 }
 
 describe("reversible local Session tabs", () => {
@@ -894,6 +942,51 @@ function workspaceFacade(
   }
 }
 
+function GatedMetadataCreatorFixture({
+  workspace: seed,
+  hold,
+  capture,
+}: {
+  workspace: FixtureWorkspace
+  hold: () => Promise<void>
+  capture: (runtime: WorkspaceFixtureRuntime["assistantRuntime"]) => void
+}) {
+  const [threadId, setThreadId] = useState<string | undefined>(
+    "thread-aster-market"
+  )
+  const fixture = useFixtureRuntimeBundle({
+    threadId,
+    onThreadIdChange: setThreadId,
+    testOnly: { workspace: seed },
+  })
+  const bundle = useMemo<WorkspaceFixtureRuntime>(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: workspaceFacade(fixture.workspace, {
+        getSessionMetadata: async (threadIds) => {
+          await hold()
+          return fixture.workspace.getSessionMetadata(threadIds)
+        },
+      }),
+    }),
+    [fixture.assistantRuntime, fixture.workspace, hold]
+  )
+  useEffect(
+    () => capture(fixture.assistantRuntime),
+    [capture, fixture.assistantRuntime]
+  )
+
+  return (
+    <AosUiWorkspace
+      runtime={asHarnessRuntime(bundle)}
+      locale="en"
+      dictionary={en}
+      now={FIXTURE_NOW}
+      readNow={fixtureClock}
+    />
+  )
+}
+
 function BuilderSignalFixture({
   captureCatalogEvent,
 }: {
@@ -956,6 +1049,7 @@ function BuilderSignalFixture({
       dictionary={en}
       runtime={asHarnessRuntime(bundle)}
       now={FIXTURE_NOW}
+      readNow={fixtureClock}
     />
   )
 }
@@ -983,6 +1077,7 @@ function BuilderLifecycleFixture({
       dictionary={en}
       runtime={asHarnessRuntime(fixture)}
       now={FIXTURE_NOW}
+      readNow={fixtureClock}
     />
   )
 }
@@ -1577,33 +1672,132 @@ describe("AosUiApp fixture composition", () => {
     ).toBeNull()
   })
 
-  it("opens an ordinary closable creator Session and sends one interview kickoff", async () => {
-    const startedAt = performance.now()
+  it("opens the interview as its own New Agent draft", async () => {
     const user = userEvent.setup()
-    render(<CreatorFixtureAosUiApp locale="en" />)
-    console.info("creator:render", performance.now() - startedAt)
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <CreatorFixtureAosUiApp
+        locale="en"
+        capture={(bundle) => {
+          workspace = bundle.workspace
+        }}
+      />
+    )
+
     await user.click(await screen.findByRole("button", { name: "New Agent" }))
-    console.info("creator:click", performance.now() - startedAt)
+
     expect(await screen.findByText("Let's create a new Agent.")).toBeVisible()
-    console.info("creator:prompt", performance.now() - startedAt)
-    expect(
-      await screen.findByRole("button", { name: "Close session: New Agent" })
-    ).toBeEnabled()
-    console.info("creator:close", performance.now() - startedAt)
-    expect(window.location.pathname).toContain("agent-builder")
-    expect(screen.queryByRole("button", { name: /^Agent Creator,/ })).toBeNull()
-    expect(screen.queryByText("Delete Agent draft")).toBeNull()
+    const draftRow = await screen.findByRole("button", {
+      name: /^New Agent, draft/,
+    })
+    expect(draftRow).toHaveAttribute("aria-current", "true")
+    const interview = workspace!
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+    expect(window.location.pathname).toBe(
+      `/draft%3A${interview.threadId}/${interview.threadId}`
+    )
+    expect(screen.queryByRole("button", { name: /^Agent Creator/ })).toBeNull()
   })
 
-  it("uses the active locale for the creator Session and interview prompt", async () => {
+  it("uses the active locale for the interview draft and its prompt", async () => {
     const user = userEvent.setup()
     render(<CreatorFixtureAosUiApp locale="he" />)
+
     await user.click(await screen.findByRole("button", { name: "סוכן חדש" }))
+
     expect(await screen.findByText("בוא ניצור סוכן חדש.")).toBeVisible()
-    expect(screen.getByRole("tab", { name: "סוכן חדש" })).toHaveAttribute(
-      "aria-selected",
+    expect(
+      await screen.findByRole("button", { name: /^סוכן חדש, טיוטה/ })
+    ).toHaveAttribute("aria-current", "true")
+  })
+
+  it("rebuilds an unresolved draft from provider Sessions after a reload", async () => {
+    const workspace = interviewWorkspace(0)
+    render(<CreatorFixtureAosUiApp locale="en" workspace={workspace} />)
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+
+    cleanup()
+    render(<CreatorFixtureAosUiApp locale="en" workspace={workspace} />)
+
+    expect(
+      await screen.findByRole("button", { name: /^New Agent, draft/ })
+    ).toBeVisible()
+  })
+
+  it("hides an interview older than the draft window", async () => {
+    render(
+      <CreatorFixtureAosUiApp
+        locale="en"
+        workspace={interviewWorkspace(48 * 60 * 60 * 1000)}
+      />
+    )
+
+    await screen.findByRole("button", { name: /^Aster/ })
+    expect(
+      screen.queryByRole("button", { name: /^New Agent, draft/ })
+    ).toBeNull()
+  })
+
+  it("never treats a draft as the default Agent", async () => {
+    render(
+      <CreatorFixtureAosUiApp locale="en" workspace={interviewWorkspace(0)} />
+    )
+
+    expect(
+      await screen.findByRole("button", { name: /^Aster/ })
+    ).toHaveAttribute("aria-current", "true")
+    expect(
+      await screen.findByRole("button", { name: /^New Agent, draft/ })
+    ).not.toHaveAttribute("aria-current", "true")
+  })
+
+  it("keeps a selected draft selected while Session metadata refreshes", async () => {
+    const user = userEvent.setup()
+    const workspace = interviewWorkspace(0)
+    const refresh = deferred<void>()
+    let holding = false
+    const hold = async () => {
+      if (holding) await refresh.promise
+    }
+    let runtime: WorkspaceFixtureRuntime["assistantRuntime"] | undefined
+    render(
+      <GatedMetadataCreatorFixture
+        workspace={workspace}
+        hold={hold}
+        capture={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await user.click(
+      await screen.findByRole("button", { name: /^New Agent, draft/ })
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^New Agent, draft/ })
+      ).toHaveAttribute("aria-current", "true")
+    )
+
+    holding = true
+    await act(async () => {
+      await workspace.createSession("agent-mica", { title: "Later" })
+      await runtime!.threads.reload()
+    })
+
+    expect(
+      screen.getByRole("button", { name: /^New Agent, draft/ })
+    ).toHaveAttribute("aria-current", "true")
+    expect(screen.getByRole("button", { name: /^Aster/ })).not.toHaveAttribute(
+      "aria-current",
       "true"
     )
+
+    holding = false
+    await act(async () => refresh.resolve())
+    expect(
+      await screen.findByRole("button", { name: /^New Agent, draft/ })
+    ).toHaveAttribute("aria-current", "true")
   })
 
   it("keeps the interview selected when a usable Agent is discovered, without creating its first Session", async () => {
@@ -1651,7 +1845,7 @@ describe("AosUiApp fixture composition", () => {
     )
 
     await user.click(await screen.findByRole("button", { name: "New Agent" }))
-    await screen.findByRole("tab", { name: "New Agent" })
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
     expect(screen.queryByRole("button", { name: "Sora" })).toBeNull()
 
     await act(async () => completeBuilder())
