@@ -165,7 +165,24 @@ ui_meta:
     hidden: true
 ```
 
-The integration reads this metadata; it does not grant creator authority itself. Automated creation currently fails closed because the verified Hermes versions do not provide an atomic no-overwrite profile-create operation. The interview remains available, but no native profile is written.
+The integration reads this metadata; it does not grant creator authority itself.
+`aos_create_agent` creates the profile in-process through Hermes's own profile
+creation (atomic since upstream a0500081). It writes the profile hidden first,
+installs the AOS plugin and enables only the requested toolsets, verifies the
+configuration, and only then reveals the profile. If plugin setup fails the
+result is `setup-needed`: the profile exists but stays hidden until an operator
+finishes setup (commands in the Hermes integration README) and makes it visible
+in Manage Agents. Results carry only constant messages plus status and Agent id;
+they never include paths or secrets. The writer refuses to create when the
+creator profile's model configuration holds a literal credential — it must use
+`${VAR}` placeholders — because Hermes copies that block into every created
+profile.
+
+Provision the creator profile:
+
+```bash
+integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
+```
 
 ## Operational behavior
 

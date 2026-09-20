@@ -250,6 +250,9 @@ standard component cannot express and record that reason.
   badges.
 - **Agents:** retain a persistent distinctive icon plus a separate status
   indicator; status must not be conveyed by icon color alone.
+- **Draft Agent rows:** a `New Agent` draft row uses the neutral `unassigned`
+  glyph, carries the accessible name "New Agent, draft", and shows the status
+  dot of its single creator-owned Session.
 - **Narrow capacity:** use the established drawers and preserve focus
   restoration rather than creating parallel mobile navigation.
 

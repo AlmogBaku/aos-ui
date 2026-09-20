@@ -19,6 +19,8 @@ Implementation invariants:
   Session's explicitly published Artifacts. Opening an Artifact may temporarily
   replace the inspector with its read-only viewer; closing it restores the
   Agent inspector. Narrow layouts use the established focus-managed drawer.
+- A selected `New Agent` draft shows neither the Session tab strip nor the
+  inspector; a `Discard draft` control takes the tab strip's place.
 - Do not add department navigation, window traffic lights, dashboard cards, or ornamental effects.
 - Prefer native-feeling shadcn controls, comfortable spacing, clear contrast, and progressive disclosure.
 

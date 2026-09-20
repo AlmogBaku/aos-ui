@@ -72,8 +72,10 @@ external reverse proxy is optional.
   metadata, creator identity, and provider capabilities. Session Todos arrive
   as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation uses
   an ordinary creator-owned Session opened through `New Agent`; the hidden
-  creator is excluded from normal roster and management surfaces. There are no
-  provisional Agents or ownership promotion.
+  creator is excluded from normal roster and management surfaces.
+  Creation opens a creator-owned Session that the browser alone projects as a
+  `New Agent` draft row until the creator tool reports its outcome; there is no
+  ownership transfer and no automatic first Session.
 - Provider data is authoritative. Every Session belongs to one Agent; delayed
   events stay scoped to their originating Agent and Session. Plans are
   message-scoped and Todos are Session-scoped.
