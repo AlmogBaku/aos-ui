@@ -121,6 +121,18 @@ export function createReadState({
     pending = { handle, target, forced }
   }
 
+  /**
+   * A provider re-lights a Session for activity the operator is already
+   * reading, and only a list read reports it. The browser never asks for
+   * unread, so a settled `unread` on the focused row is always the provider
+   * and never an operator who wants it kept unread.
+   */
+  const unlisten = sessionRows.subscribe((row) => {
+    if (row.unread !== true || !focused) return
+    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id })) return
+    arm(focused, false)
+  })
+
   return {
     focus(agentId, sessionId) {
       focused = { agentId, sessionId }
@@ -146,6 +158,7 @@ export function createReadState({
       closed = true
       focused = undefined
       clearPending()
+      unlisten()
     },
   }
 }

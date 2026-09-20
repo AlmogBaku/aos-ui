@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
-import { createSessionRows } from "../core/session-rows"
+import { createSessionRows, READ_GUARD_MS } from "../core/session-rows"
 import {
   createReadState,
   FOCUS_DEBOUNCE_MS,
@@ -192,6 +192,41 @@ describe("createReadState", () => {
     expect(mutateSession).toHaveBeenCalledTimes(1)
     expect(onUnreadChanged).toHaveBeenCalledWith(AGENT, SESSION, false)
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+  })
+
+  it("acknowledges a Session the provider re-lights under the operator's eyes", async () => {
+    const { mutateSession, readState, sessionRows } = harness()
+    const relight = (sessionId: string) => {
+      sessionRows.rememberList([
+        {
+          id: sessionId,
+          agentId: AGENT,
+          title: "Weekly digest",
+          archived: false,
+          updatedAt: "2026-09-19T10:05:00.000Z",
+          status: "idle",
+          unread: true,
+        },
+      ])
+    }
+
+    readState.focus(AGENT, SESSION)
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(1)
+
+    // Past the write guard, so the list read is believed rather than coerced.
+    await settle(READ_GUARD_MS)
+    relight(SESSION)
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
+
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+
+    await settle(READ_GUARD_MS)
+    relight("session-2")
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(2)
   })
 
   it("writes nothing when the runtime does not track read state", async () => {
