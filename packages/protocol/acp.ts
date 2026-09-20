@@ -80,7 +80,7 @@ export const AOS_JSONRPC_ERRORS = {
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
 
-const IdentifierSchema = z
+export const IdentifierSchema = z
   .string()
   .min(1)
   .max(256)

@@ -12,6 +12,10 @@ export default defineConfig({
         import.meta.dirname,
         "packages/protocol/acp.ts"
       ),
+      "@aos/protocol/push": path.resolve(
+        import.meta.dirname,
+        "packages/protocol/push.ts"
+      ),
       "@aos/protocol": path.resolve(
         import.meta.dirname,
         "packages/protocol/index.ts"
