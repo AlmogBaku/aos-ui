@@ -46,6 +46,7 @@ import styles from "./workspace-shell.module.css"
 import { SessionActions } from "./session-actions"
 import { neighborAfterClose } from "./session-tab-undo"
 import {
+  ActivityAsk,
   ActivityBell,
   ActivityNotice,
   ActivityPanel,
@@ -1691,11 +1692,15 @@ export function WorkspaceShell({
         </FocusDrawer>
 
         {!navigationHidden && !modalDrawerOpen ? (
-          <ActivityNotice
-            notice={activity?.notice ?? null}
-            dictionary={dictionary}
-            onDismiss={() => activity?.dismissNotice()}
-          />
+          activity?.notice ? (
+            <ActivityNotice
+              notice={activity.notice}
+              dictionary={dictionary}
+              onDismiss={() => activity.dismissNotice()}
+            />
+          ) : (
+            <ActivityAsk dictionary={dictionary} settings={browserSettings} />
+          )
         ) : null}
         {!navigationHidden ? (
           <FocusDrawer

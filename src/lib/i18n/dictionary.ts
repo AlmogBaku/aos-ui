@@ -52,12 +52,24 @@ export type Dictionary = {
     dismiss: string
     settings: string
     browserNotifications: string
-    liveTab: string
     notConfigured: string
-    permissionDefault: string
     permissionGranted: string
     permissionDenied: string
     unsupported: string
+    /** The one-time ask that replaces a silent permission opt-in. */
+    askTitle: string
+    askClosed: string
+    askAccept: string
+    askDecline: string
+    /** Whether alerts also arrive while no AOS tab is open. */
+    whenClosed: string
+    pushOn: string
+    pushInsecure: string
+    pushNotConfigured: string
+    pushUnsupported: string
+    pushIosHint: string
+    sound: string
+    install: string
     activeSessionOnly: string
     activityUnavailable: string
     connectionError: string

@@ -23,11 +23,22 @@ export type BrowserSettingsView = {
   status: BrowserPermission | "not-configured"
   coverage: "workspace" | "active-session" | "unavailable"
   preferences: BrowserPreferences
+  /** True while the one-time ask is due on this device. */
+  ask: boolean
+  /** True while this device receives alerts through Web Push. */
+  pushActive: boolean
+  push: "available" | "insecure-context" | "not-configured" | "unsupported"
+  installable: boolean
+  iosInstallHint: boolean
   onEnabledChange: (enabled: boolean) => void
   onCategoryChange: (
     category: "completion" | "failure" | "input",
     enabled: boolean
   ) => void
+  onSoundChange: (enabled: boolean) => void
+  onAcceptAsk: () => void
+  onDeclineAsk: () => void
+  onInstall: () => void
 }
 export function ActivityBell({
   dictionary,
@@ -266,6 +277,44 @@ export function ActivityNotice({
   )
 }
 
+/** The one-time offer to turn OS alerts on, shown beside the conversation. */
+export function ActivityAsk({
+  dictionary,
+  settings,
+}: {
+  dictionary: Dictionary
+  settings?: BrowserSettingsView
+}) {
+  const copy = dictionary.activity
+  const headingId = useId()
+  if (!settings?.ask) return null
+  // iOS only exposes notifications to an installed app, so there is nothing
+  // this browser could be asked for yet.
+  const installFirst = settings.iosInstallHint && !("Notification" in window)
+  return (
+    <section className={styles.ask} aria-labelledby={headingId}>
+      <h2 id={headingId} className={styles.askTitle}>
+        {copy.askTitle}
+      </h2>
+      {settings.push === "available" ? (
+        <p className={styles.explanation}>{copy.askClosed}</p>
+      ) : null}
+      {installFirst ? (
+        <p className={styles.explanation}>{copy.pushIosHint}</p>
+      ) : (
+        <div className={styles.askActions}>
+          <Button size="sm" onClick={settings.onAcceptAsk}>
+            {copy.askAccept}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={settings.onDeclineAsk}>
+            {copy.askDecline}
+          </Button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function ActivitySettings({
   dictionary,
   settings,
@@ -275,21 +324,30 @@ export function ActivitySettings({
 }) {
   const copy = dictionary.activity
   const status = settings?.status ?? "not-configured"
+  const unavailable = settings?.coverage === "unavailable"
   const disabled =
     status === "not-configured" ||
     status === "unsupported" ||
     status === "denied" ||
-    settings?.coverage === "unavailable"
+    unavailable
   const explanation = {
     "not-configured": copy.notConfigured,
     unsupported: copy.unsupported,
     denied: copy.permissionDenied,
-    default: copy.permissionDefault,
     granted: copy.permissionGranted,
+    // A device that has not been asked yet is described by the ask itself.
+    default: undefined,
   }[status]
+  const whenClosed = settings?.iosInstallHint
+    ? copy.pushIosHint
+    : {
+        available: copy.pushOn,
+        "insecure-context": copy.pushInsecure,
+        "not-configured": copy.pushNotConfigured,
+        unsupported: copy.pushUnsupported,
+      }[settings?.push ?? "not-configured"]
   return (
     <div className={styles.settingsBody}>
-      <p className={styles.explanation}>{copy.liveTab}</p>
       <label className={styles.setting}>
         <input
           type="checkbox"
@@ -299,10 +357,13 @@ export function ActivitySettings({
         />
         {copy.browserNotifications}
       </label>
-      <p className={styles.explanation}>{explanation}</p>
+      {explanation ? <p className={styles.explanation}>{explanation}</p> : null}
       {settings?.coverage === "active-session" ? (
         <p className={styles.explanation}>{copy.activeSessionOnly}</p>
       ) : null}
+      <p role="status" className={styles.explanation}>
+        {copy.whenClosed}: {whenClosed}
+      </p>
       {(["completion", "failure", "input"] as const).map((category) => (
         <label className={styles.setting} key={category}>
           <input
@@ -316,6 +377,27 @@ export function ActivitySettings({
           {copy[category]}
         </label>
       ))}
+      <label className={styles.setting}>
+        <input
+          type="checkbox"
+          checked={settings?.preferences.sound ?? true}
+          disabled={unavailable}
+          onChange={(event) => settings?.onSoundChange(event.target.checked)}
+        />
+        {copy.sound}
+      </label>
+      {/* The Home Screen hint is already the line above, so only an installable
+          browser adds anything here. */}
+      {settings?.installable ? (
+        <Button
+          className={styles.install}
+          variant="outline"
+          size="sm"
+          onClick={settings.onInstall}
+        >
+          {copy.install}
+        </Button>
+      ) : null}
     </div>
   )
 }

@@ -20,6 +20,8 @@ import {
   AOS_META_KEY,
 } from "@aos/protocol/acp"
 
+import { en } from "@/lib/i18n/dictionaries/en"
+
 import { fetchGuestRuntimeContext, GuestAosSurface } from "./guest-composition"
 
 const AGENT_ID = "researcher"
@@ -427,5 +429,29 @@ describe("AOS guest browser composition", () => {
     await expect(answered).resolves.toMatchObject({
       outcome: { outcome: "selected", optionId: "once" },
     })
+  })
+
+  it("keeps operator notification surfaces out of the invited lane", async () => {
+    const requestPermission = vi.fn()
+    vi.stubGlobal(
+      "Notification",
+      Object.assign(vi.fn(), { permission: "default", requestPermission })
+    )
+    const register = vi.fn()
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true,
+      value: { register },
+    })
+    try {
+      mount()
+      await screen.findByText("Earlier guest answer")
+
+      expect(screen.queryByText(en.activity.settings)).toBeNull()
+      expect(screen.queryByText(en.activity.askTitle)).toBeNull()
+      expect(requestPermission).not.toHaveBeenCalled()
+      expect(register).not.toHaveBeenCalled()
+    } finally {
+      Reflect.deleteProperty(navigator, "serviceWorker")
+    }
   })
 })

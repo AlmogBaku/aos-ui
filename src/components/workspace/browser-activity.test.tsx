@@ -104,9 +104,23 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
       settings={{ ...result.current.browserSettings, coverage: "workspace" }}
     />
   )
-  await userEvent.click(
+  // Notifications ship on, so the checkbox starts checked and permission is
+  // still the operator's to give.
+  const checkbox = () =>
     screen.getByRole("checkbox", { name: en.activity.browserNotifications })
+  expect(checkbox()).toBeChecked()
+  await userEvent.click(checkbox())
+  expect(request).not.toHaveBeenCalled()
+  await act(async () => {})
+  expect(result.current.browserSettings.preferences.enabled).toBe(false)
+  view.rerender(
+    <ActivitySettings
+      dictionary={en}
+      settings={{ ...result.current.browserSettings, coverage: "workspace" }}
+    />
   )
+  expect(checkbox()).not.toBeChecked()
+  await userEvent.click(checkbox())
   expect(request).toHaveBeenCalledOnce()
   expect(result.current.browserSettings.preferences).toEqual({
     ...defaultBrowserPreferences,
@@ -143,4 +157,113 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     result.current.items.find((item) => item.id === "stale")
   ).toMatchObject({ available: false, resolved: true })
   view.unmount()
+})
+
+it("earns the ask from a watched run, chimes for input elsewhere, and asks from the gesture", async () => {
+  // The operator is watching this tab, which is what the ask waits for.
+  vi.spyOn(document, "hasFocus").mockReturnValue(true)
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+  let emit: (event: WorkspaceActivityEvent) => void = () => {}
+  const request = vi.fn(async () => "granted" as NotificationPermission)
+  const port: BrowserNotificationPort = {
+    getPermission: () => "default",
+    requestPermission: request,
+    show: () => ({ close() {} }),
+  }
+  const sound = { play: vi.fn(), stop: vi.fn() }
+  const watched = {
+    agentId: "a",
+    threadId: "t",
+    status: "idle" as const,
+    updatedAt: "2026-09-05T12:00:00Z",
+    unread: true,
+  }
+  const elsewhere = { ...watched, agentId: "b", threadId: "other" }
+  const sessions = [watched, elsewhere]
+  const workspace: WorkspaceAdapter = {
+    listAgents: async () => [],
+    refreshAgents: async () => [],
+    createSession: async () => ({ threadId: "t" }),
+    getSessionMetadata: async (ids) =>
+      sessions.filter((session) => ids.includes(session.threadId)),
+    subscribeActivity: (listener) => {
+      emit = listener
+      return () => {}
+    },
+    markSessionRead: async () => {},
+  }
+  const { result } = renderHook(useActivityCoordinator, {
+    initialProps: {
+      workspace,
+      agents: [
+        { id: "a", name: "Aster" },
+        { id: "b", name: "Mica" },
+      ],
+      sessions,
+      titles: new Map<string, string>(),
+      selection: { agentId: "a", threadId: "t" },
+      readNow: () => new Date(watched.updatedAt),
+      onOpenTarget: async () => {},
+      browser: {
+        port,
+        sound,
+        platform: {
+          read: () => null,
+          write() {},
+          send() {},
+          subscribe: () => () => {},
+          startLeadership: () => () => {},
+          isLeader: () => true,
+          settleDelivery: (callback: () => void) => {
+            callback()
+            return () => {}
+          },
+          focus() {},
+        },
+        copy: {
+          completion: en.activity.runFinished,
+          failure: en.activity.runFailed,
+          input: en.activity.inputRequested,
+        },
+      },
+    },
+  })
+  await act(async () => {})
+  expect(result.current.browserSettings.ask).toBe(false)
+
+  await act(async () =>
+    emit({
+      id: "start",
+      agentId: "a",
+      threadId: "t",
+      type: "run-started",
+      lifecycleId: "run-1",
+      occurredAt: watched.updatedAt,
+    })
+  )
+  expect(result.current.browserSettings.ask).toBe(true)
+  expect(sound.play).not.toHaveBeenCalled()
+
+  await act(async () =>
+    emit({
+      id: "input",
+      agentId: "b",
+      threadId: "other",
+      type: "attention-requested",
+      attentionKind: "question",
+      requestId: "request-1",
+      occurredAt: watched.updatedAt,
+    })
+  )
+  expect(sound.play).toHaveBeenCalledOnce()
+
+  // The ask answers from the click itself, so the request cannot wait.
+  act(() => result.current.browserSettings.onAcceptAsk())
+  expect(request).toHaveBeenCalledOnce()
+  await act(async () => {})
+  expect(result.current.browserSettings.ask).toBe(false)
+  expect(result.current.browserSettings.preferences).toMatchObject({
+    enabled: true,
+    prompt: "accepted",
+  })
 })

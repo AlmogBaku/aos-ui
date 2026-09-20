@@ -139,6 +139,41 @@
   outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
+.install {
+  justify-self: start;
+}
+.ask {
+  position: absolute;
+  z-index: 10;
+  inset-block-end: 1rem;
+  inset-inline-end: 1rem;
+  display: grid;
+  gap: 0.5rem;
+  max-inline-size: min(26rem, calc(100% - 2rem));
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 0.875rem;
+  animation: ask-arrive 200ms ease-out;
+}
+.askTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.askActions {
+  display: flex;
+  gap: 0.5rem;
+}
+@keyframes ask-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 .notice {
   position: absolute;
   z-index: 10;
@@ -169,7 +204,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .notice {
+  .notice,
+  .ask {
     animation: none;
   }
 }

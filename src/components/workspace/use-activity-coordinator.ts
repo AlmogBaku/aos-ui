@@ -1,11 +1,13 @@
 "use client"
 
 import type { ActivityRecord } from "@/lib/notifications/activity"
+import { categoryOf } from "@aos/protocol/push"
 import type { ActivityContext } from "@/lib/notifications/policy"
 import {
   defaultBrowserPreferences,
   getActivityPolicy,
   isSelectionExposed,
+  shouldChime,
 } from "@/lib/notifications/policy"
 import {
   isSessionUnread,
@@ -22,7 +24,12 @@ import {
   createBrowserNotificationPort,
 } from "@/lib/notifications/browser-platform"
 import type { BrowserNotificationPort } from "@/lib/notifications/browser-port"
+import {
+  createActivitySoundPort,
+  type ActivitySoundPort,
+} from "@/lib/notifications/sound"
 import type { BrowserSettingsView } from "./activity"
+import { useInstallPrompt } from "./use-install-prompt"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 import type {
   SessionMetadata,
@@ -58,6 +65,7 @@ type Options = {
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
+    sound?: ActivitySoundPort
     copy: { completion: string; failure: string; input: string }
   }
 }
@@ -73,8 +81,14 @@ export function useActivityCoordinator(
   const browserRef = useRef<BrowserActivityCoordinator | null>(null)
   const openRef = useRef<(id: string) => Promise<boolean>>(async () => false)
   const [browserState, setBrowserState] = useState<
-    Pick<BrowserSettingsView, "status" | "preferences">
-  >({ status: "not-configured", preferences: { ...defaultBrowserPreferences } })
+    Pick<BrowserSettingsView, "status" | "preferences" | "ask" | "pushActive">
+  >({
+    status: "not-configured",
+    preferences: { ...defaultBrowserPreferences },
+    ask: false,
+    pushActive: false,
+  })
+  const install = useInstallPrompt()
   const validateOwnerRef = useRef<
     (threadId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
@@ -166,6 +180,9 @@ export function useActivityCoordinator(
     })
     storeRef.current = store
     const browserOptions = current.current.browser
+    const sound = browserOptions
+      ? (browserOptions.sound ?? createActivitySoundPort())
+      : null
     const browser = browserOptions
       ? new BrowserActivityCoordinator({
           store,
@@ -205,24 +222,26 @@ export function useActivityCoordinator(
           if (!active) return
           if (validatedOwner !== event.agentId) return
           const state = context()
+          // A start is bookkeeping the store drops, but it is the proof the
+          // operator is watching this Session work.
+          if (event.type === "run-started") browser?.noteRunStarted(event)
           const arrival = store.ingest(event)
           browser?.publish(arrival)
           setRecords(store.records())
           setError(false)
-          if (
-            arrival &&
-            getActivityPolicy(
-              arrival,
-              state,
-              defaultBrowserPreferences,
-              "unsupported"
-            ).inAppNotice
-          ) {
-            const urgent =
-              arrival.type === "attention-requested" ||
-              arrival.type === "run-failed" ||
-              arrival.type === "agent-activation-failed"
-            setNotice((previous) => ({ urgent: urgent || !!previous?.urgent }))
+          if (arrival) {
+            const preferences =
+              browser?.settings().preferences ?? defaultBrowserPreferences
+            if (
+              getActivityPolicy(arrival, state, preferences, "unsupported")
+                .inAppNotice
+            )
+              setNotice((previous) => ({
+                urgent:
+                  categoryOf(arrival.type) !== "completion" ||
+                  !!previous?.urgent,
+              }))
+            if (shouldChime(arrival, state, preferences)) sound?.play()
           }
         })
         .catch(() => {
@@ -256,6 +275,7 @@ export function useActivityCoordinator(
         /* A provider that cannot accept the report keeps the workspace usable. */
       }
       browser?.stop()
+      sound?.stop()
       if (browserRef.current === browser) browserRef.current = null
       if (storeRef.current === store) storeRef.current = null
       window.removeEventListener("focus", onFocus)
@@ -366,11 +386,21 @@ export function useActivityCoordinator(
     ...view,
     browserSettings: {
       ...browserState,
+      // T9 replaces this with the push manager's own status.
+      push: "not-configured",
+      installable: install.installable,
+      iosInstallHint: install.iosInstallHint,
+      onInstall: install.install,
       onEnabledChange: (enabled) => {
         void browserRef.current?.setEnabled(enabled)
       },
       onCategoryChange: (category, enabled) =>
         browserRef.current?.setCategory(category, enabled),
+      onSoundChange: (enabled) => browserRef.current?.setSound(enabled),
+      onAcceptAsk: () => {
+        void browserRef.current?.acceptAsk()
+      },
+      onDeclineAsk: () => browserRef.current?.declineAsk(),
     },
   }
 }

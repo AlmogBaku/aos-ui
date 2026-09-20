@@ -54,12 +54,9 @@ export const en = {
     urgentNotice: "New activity needs your attention",
     dismiss: "Dismiss notice",
     settings: "Notification settings",
-    browserNotifications: "Browser notifications",
-    liveTab:
-      "Notifications work while at least one AOS tab is loaded. Keep a tab open to follow your work.",
+    browserNotifications: "Notifications on this device",
     notConfigured:
       "Browser notifications are not configured yet. Activity is available here.",
-    permissionDefault: "Enable to ask your browser for permission.",
     permissionGranted: "Browser permission is granted.",
     permissionDenied:
       "Notifications are blocked. Change permission in your browser settings to enable them.",
@@ -77,6 +74,19 @@ export const en = {
     runFailedMany: "{count} turns failed",
     runFinishedMany: "{count} turns finished",
     pushGeneric: "AOS has new activity",
+    askTitle: "Get told when Agents finish or need you",
+    askClosed: "Works on this device even when AOS is closed.",
+    askAccept: "Turn on",
+    askDecline: "Not now",
+    whenClosed: "Also when AOS is closed",
+    pushOn: "On for this device.",
+    pushInsecure: "Needs an HTTPS address to work while AOS is closed.",
+    pushNotConfigured:
+      "Not set up on this deployment; alerts need an open AOS tab.",
+    pushUnsupported: "This browser cannot receive alerts while AOS is closed.",
+    pushIosHint: "On iPhone and iPad, add AOS to the Home Screen first.",
+    sound: "Sound for input requests and failures",
+    install: "Install AOS",
   },
   workspace: {
     agents: "Agents",

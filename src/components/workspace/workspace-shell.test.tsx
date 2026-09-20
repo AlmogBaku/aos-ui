@@ -21,6 +21,26 @@ import {
   type WorkspaceAgent,
   type WorkspaceSession,
 } from "./workspace-shell"
+import type { BrowserSettingsView } from "./activity"
+import { defaultBrowserPreferences } from "@/lib/notifications/policy"
+
+/** A device that has not answered the one-time notification ask yet. */
+const askSettings: BrowserSettingsView = {
+  status: "default",
+  coverage: "workspace",
+  preferences: { ...defaultBrowserPreferences },
+  ask: true,
+  pushActive: false,
+  push: "not-configured",
+  installable: false,
+  iosInstallHint: false,
+  onEnabledChange: vi.fn(),
+  onCategoryChange: vi.fn(),
+  onSoundChange: vi.fn(),
+  onAcceptAsk: vi.fn(),
+  onDeclineAsk: vi.fn(),
+  onInstall: vi.fn(),
+}
 
 afterEach(() => {
   cleanup()
@@ -1077,5 +1097,35 @@ describe("WorkspaceShell", () => {
     )
 
     await waitFor(() => expect(onActionError).toHaveBeenCalledWith(error))
+  })
+
+  it("offers the notification ask beside the conversation, behind an arriving notice", () => {
+    const ask = renderShell({ browserSettings: askSettings })
+
+    expect(
+      screen.getByRole("region", { name: en.activity.askTitle })
+    ).toBeVisible()
+    ask.unmount()
+
+    renderShell({
+      browserSettings: askSettings,
+      activity: {
+        items: [],
+        unreadCount: 2,
+        notice: { count: 2, urgent: true },
+        error: false,
+        supported: true,
+        openActivity: async () => false,
+        markAllRead: () => {},
+        dismissNotice: () => {},
+      },
+    })
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      en.activity.urgentNotice
+    )
+    expect(
+      screen.queryByRole("region", { name: en.activity.askTitle })
+    ).toBeNull()
   })
 })
