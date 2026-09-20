@@ -2,11 +2,17 @@ import type { Locator } from "@playwright/test"
 
 import { expect, test, type Page } from "./test"
 import { exerciseAgentManagement } from "./agent-management"
+import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
 
 for (const locale of ["en", "he"] as const) {
   test(`desktop Session tabs and identity in ${locale}`, async ({ page }) => {
     await exerciseSessionTabs(page, false, locale)
+  })
+  test(`desktop Session rows rename, pin, archive, and delete in ${locale}`, async ({
+    page,
+  }) => {
+    await exerciseSessionActions(page, false, locale)
   })
   test(`Manage Agents supports visibility controls in ${locale}`, async ({
     page,

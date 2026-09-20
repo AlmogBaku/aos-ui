@@ -14,9 +14,9 @@ import {
 } from "lucide-react"
 import {
   useRef,
+  type ComponentProps,
   type ReactElement,
   type ReactNode,
-  type RefObject,
 } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -224,7 +224,7 @@ function SessionMenuPopup({
   copy: SessionRowMenuCopy
   locale: Locale
   entries: MenuEntries
-  finalFocus?: RefObject<HTMLElement | null>
+  finalFocus?: ComponentProps<typeof Menu.Popup>["finalFocus"]
 }) {
   return (
     <Menu.Portal>
@@ -257,9 +257,13 @@ function SessionMenuPopup({
   )
 }
 
+/** The row's own focusable control; the row wrapper cannot take focus. */
+const ROW_CONTROL = '[role="tab"], button, [tabindex]:not([tabindex="-1"])'
+
 /**
  * Opens the row menu from a right click or a long press. The row element is
- * the trigger, so the pointer target stays the whole row.
+ * the trigger, so the pointer target stays the whole row, and focus returns to
+ * the row's control when the menu closes.
  */
 export function SessionRowContextMenu({
   children,
@@ -276,7 +280,10 @@ export function SessionRowContextMenu({
         copy={menu.copy}
         locale={menu.locale}
         entries={entries}
-        finalFocus={triggerRef}
+        finalFocus={() =>
+          triggerRef.current?.querySelector<HTMLElement>(ROW_CONTROL) ??
+          triggerRef.current
+        }
       />
     </ContextMenu.Root>
   )

@@ -108,6 +108,25 @@ test("a captured shortcut drives its new behavior and Reset restores the default
   await expect(page.getByRole("dialog", { name: "Commands" })).toBeVisible()
 })
 
+test("Shift+F10 opens the Session menu on the focused tab and Escape closes it", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  const tab = page.getByRole("tab", { name: "Launch review" })
+  await tab.focus()
+  await page.keyboard.press("Shift+F10")
+
+  const menu = page.getByRole("menu")
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible()
+  await expect(menu.getByRole("menuitem", { name: "Close tab" })).toBeVisible()
+
+  await page.keyboard.press("Escape")
+  await expect(menu).toHaveCount(0)
+  await expect(tab).toBeFocused()
+})
+
 test("desktop Shift+Enter inserts a newline while Enter sends the draft", async ({
   page,
 }) => {
