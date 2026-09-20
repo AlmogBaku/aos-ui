@@ -25,7 +25,10 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "./index"
-import { AosArtifactDescriptorSchema } from "./acp"
+import {
+  AosArtifactDescriptorSchema,
+  AosSessionUpdateRequestSchema,
+} from "./acp"
 
 describe("AOS v1 normalized protocol", () => {
   it("preserves provider-specific approval choices and question cancellation", () => {
@@ -452,6 +455,7 @@ describe("AOS v1 normalized protocol", () => {
           sessionCreation: { status: "available" },
           sessionTitle: { status: "available" },
           sessionArchival: { status: "available" },
+          sessionPin: { status: "available" },
           sessionDeletion: { status: "available" },
           sessionRun: { status: "available" },
           sessionStop: { status: "available" },
@@ -589,10 +593,35 @@ describe("AOS v1 normalized protocol", () => {
     expect(SessionPatchRequestSchema.parse({ unread: false })).toEqual({
       unread: false,
     })
+    expect(SessionPatchRequestSchema.parse({ pinned: true })).toEqual({
+      pinned: true,
+    })
     expect(() =>
       SessionPatchRequestSchema.parse({ unread: false, archived: true })
     ).toThrow()
+    expect(() =>
+      SessionPatchRequestSchema.parse({ pinned: true, archived: true })
+    ).toThrow()
     expect(() => SessionPatchRequestSchema.parse({})).toThrow()
+  })
+
+  it("admits exactly one Session mutation intent per ACP update", () => {
+    const sessionId = "hermes:researcher:stored-1"
+
+    expect(
+      AosSessionUpdateRequestSchema.parse({ sessionId, pinned: true })
+    ).toEqual({ sessionId, pinned: true })
+    expect(
+      AosSessionUpdateRequestSchema.parse({ sessionId, unread: false })
+    ).toEqual({ sessionId, unread: false })
+    expect(() =>
+      AosSessionUpdateRequestSchema.parse({
+        sessionId,
+        pinned: true,
+        archived: true,
+      })
+    ).toThrow()
+    expect(() => AosSessionUpdateRequestSchema.parse({ sessionId })).toThrow()
   })
 
   it("accepts only normalized history parts and stable Session creation identities", () => {

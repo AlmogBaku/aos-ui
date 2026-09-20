@@ -1314,6 +1314,75 @@ describe("Hermes server adapter", () => {
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
+  it("projects the native pin per catalog row and omits it when absent", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [
+          { id: "stored/1", profile: "researcher", title: "One", pinned: true },
+          {
+            id: "stored/2",
+            profile: "researcher",
+            title: "Two",
+            pinned: false,
+          },
+          { id: "stored/3", profile: "researcher", title: "Three" },
+        ],
+        total: 3,
+      })),
+    })
+
+    const page = await adapter.listSessions("researcher", 50, 0)
+
+    expect(page.sessions.map((entry) => entry.pinned)).toEqual([
+      true,
+      false,
+      undefined,
+    ])
+    expect(Object.keys(page.sessions[2])).not.toContain("pinned")
+  })
+
+  it("treats a non-boolean native pin as a malformed catalog payload", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [
+          { id: "stored/1", profile: "researcher", title: "One", pinned: 1 },
+        ],
+        total: 1,
+      })),
+    })
+
+    await expect(
+      adapter.listSessions("researcher", 50, 0)
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("reads the stored flags the Session detail read reports as integers", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        id: "stored/1",
+        profile: "researcher",
+        title: "One",
+        archived: 1,
+        pinned: 1,
+      })),
+    })
+
+    await expect(adapter.getSession("researcher", "stored/1")).resolves.toEqual(
+      {
+        id: "stored/1",
+        agentId: "researcher",
+        title: "One",
+        archived: true,
+        pinned: true,
+        updatedAt: "1970-01-01T00:00:00.000Z",
+        status: "idle",
+      }
+    )
+  })
+
   it("omits read state from the Session detail read that cannot derive it", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(),
@@ -1346,6 +1415,34 @@ describe("Hermes server adapter", () => {
       "/api/sessions/stored%2F1?profile=researcher",
       { method: "PATCH", body: { unread: false, profile: "researcher" } }
     )
+  })
+
+  it("pins a Session with the exact native profile-scoped patch body", async () => {
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored%2F1?"))
+        return { id: "stored/1", profile: "researcher", title: "One" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+
+    await adapter.mutateSession("researcher", "stored/1", "PATCH", {
+      pinned: true,
+    })
+
+    expect(http).toHaveBeenLastCalledWith(
+      "/api/sessions/stored%2F1?profile=researcher",
+      { method: "PATCH", body: { pinned: true, profile: "researcher" } }
+    )
+  })
+
+  it("declares the native pin available", async () => {
+    const ready = new HermesServerAdapter({
+      request: vi.fn(async () => ({ profiles: [profile()] })),
+    })
+
+    expect((await ready.runtimeInfo()).capabilities.sessionPin).toEqual({
+      status: "available",
+    })
   })
 
   it("declares native read state available and temporarily unavailable during an outage", async () => {

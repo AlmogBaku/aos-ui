@@ -3,7 +3,8 @@ import type { Session } from "../../protocol"
 /**
  * One cached Session row. `unread` is present only when a list read reported
  * it or a mark-read write settled it; detail reads never carry it and never
- * clear a known value.
+ * clear a known value. `pinned` comes from whichever read reports it, and a
+ * read that omits it likewise never clears a known value.
  */
 export type SessionRow = Session & { unread?: boolean }
 
@@ -30,8 +31,10 @@ export interface SessionRows {
 export const READ_GUARD_MS = 10_000
 
 /**
- * Fields a merge compares. `unread` is the only one a read may legitimately
- * omit, so it is resolved before the comparison rather than inside it.
+ * Fields a merge compares. `unread` and `pinned` are the ones a read may
+ * legitimately omit; the merging spread already carries a known `pinned`
+ * forward, while `unread` is resolved before the comparison rather than inside
+ * it, because our own mark-read outranks a stale page.
  */
 const COMPARED: readonly (keyof SessionRow)[] = [
   "id",
@@ -41,6 +44,7 @@ const COMPARED: readonly (keyof SessionRow)[] = [
   "updatedAt",
   "status",
   "unread",
+  "pinned",
 ]
 
 function rowKey(agentId: string, sessionId: string) {

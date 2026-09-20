@@ -132,6 +132,10 @@ function unavailableRuntimeInfo(): RuntimeInfo {
         status: "unavailable",
         reason: "native-session-title-unavailable",
       },
+      sessionPin: {
+        status: "unavailable",
+        reason: "native-session-pin-unavailable",
+      },
       sessionDeletion: {
         status: "unavailable",
         reason: "native-session-delete-unavailable",
@@ -185,6 +189,10 @@ function readyRuntimeInfo(): RuntimeInfo {
       sessionArchival: {
         status: "unavailable",
         reason: "native-session-title-unavailable",
+      },
+      sessionPin: {
+        status: "unavailable",
+        reason: "native-session-pin-unavailable",
       },
       sessionDeletion: {
         status: "unavailable",

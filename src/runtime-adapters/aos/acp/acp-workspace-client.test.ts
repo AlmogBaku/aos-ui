@@ -100,6 +100,7 @@ function runtimeInfo(): RuntimeInfo {
       sessionCreation: unavailable,
       sessionTitle: unavailable,
       sessionArchival: unavailable,
+      sessionPin: unavailable,
       sessionDeletion: unavailable,
       sessionRun: unavailable,
       sessionStop: unavailable,

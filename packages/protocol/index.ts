@@ -81,6 +81,7 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionCreation: OperationCapabilitySchema,
     sessionTitle: OperationCapabilitySchema,
     sessionArchival: OperationCapabilitySchema,
+    sessionPin: OperationCapabilitySchema,
     sessionDeletion: OperationCapabilitySchema,
     sessionRun: OperationCapabilitySchema,
     sessionStop: OperationCapabilitySchema,
@@ -150,6 +151,8 @@ export const SessionSchema = z.strictObject({
   status: SessionStatusSchema,
   /** Provider read state; absent when untracked or unknowable on this read. */
   unread: z.boolean().optional(),
+  /** Provider pin state; absent when untracked or unknowable on this read. */
+  pinned: z.boolean().optional(),
 })
 export type Session = z.infer<typeof SessionSchema>
 export const SessionCatalogResponseSchema = z.strictObject({
@@ -303,13 +306,14 @@ export const SessionPatchRequestSchema = z
     title: z.string().min(1).max(4096).optional(),
     archived: z.boolean().optional(),
     unread: z.boolean().optional(),
+    pinned: z.boolean().optional(),
   })
   .refine(
     (value) =>
-      [value.title, value.archived, value.unread].filter(
+      [value.title, value.archived, value.unread, value.pinned].filter(
         (intent) => intent !== undefined
       ).length === 1,
-    "Exactly one of title, archived, unread"
+    "Exactly one of title, archived, unread, pinned"
   )
 
 export const RunStopResponseSchema = z.strictObject({

@@ -373,6 +373,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
         sessionCreation: operation,
         sessionTitle: unavailable("native-session-title-unavailable"),
         sessionArchival: unavailable("native-session-archive-unavailable"),
+        sessionPin: unavailable("native-session-pin-unavailable"),
         sessionDeletion: unavailable("native-session-delete-unavailable"),
         sessionRun: operation,
         sessionStop: operation,

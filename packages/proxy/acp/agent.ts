@@ -557,12 +557,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           ? { title: params.title }
           : params.archived !== undefined
             ? { archived: params.archived }
-            : { unread: true }
+            : params.pinned !== undefined
+              ? { pinned: params.pinned }
+              : { unread: true }
       )
       const row = await workspace.session(scope)
       await sessions
         .attach(client, scope)
         .update(sessionInfoUpdate(row, sessions.status(row)))
+      // Archiving and pinning move the Session's membership and order in the
+      // catalog, which only a relist settles; a provider's catalog watcher may
+      // be debounced or absent. A rename or a read marker moves neither.
+      if (params.archived !== undefined || params.pinned !== undefined)
+        await client.notify(AOS_METHODS.notify.catalogInvalidated)
       return {}
     }
   )
