@@ -40,5 +40,12 @@
     "subscriberEvents": 512,
     "subscriberBytes": 2097152
   },
+  "push": {
+    "stateDir": "/var/lib/aos-ui/push",
+    "vapid": {
+      "subject": "mailto:ops@example.com",
+      "privateKeyFile": "/run/secrets/vapid-private-key"
+    }
+  },
   "shutdownGraceMs": 5000
 }

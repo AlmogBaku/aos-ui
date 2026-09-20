@@ -44,4 +44,24 @@ describe("log redaction", () => {
       safe: "kept",
     })
   })
+
+  it("masks the keys a push subscription and a VAPID pair carry", () => {
+    expect(
+      redactForLog({
+        event: "push.delivery.failed",
+        privateKey: "secret",
+        applicationServerKey: "secret",
+        endpoint: "https://push.example.test/subscription-id",
+        keys: { p256dh: "secret", auth: "secret" },
+        category: "input",
+      })
+    ).toEqual({
+      event: "push.delivery.failed",
+      privateKey: "[REDACTED]",
+      applicationServerKey: "[REDACTED]",
+      endpoint: "[REDACTED]",
+      keys: { p256dh: "[REDACTED]", auth: "[REDACTED]" },
+      category: "input",
+    })
+  })
 })

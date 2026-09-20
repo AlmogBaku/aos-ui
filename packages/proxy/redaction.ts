@@ -1,11 +1,13 @@
 /**
- * Credential-bearing field names. `code` is deliberately absent: it is the
+ * Credential-bearing field names, including everything a push subscription and
+ * a VAPID pair carry: a subscription endpoint is a bearer capability to wake one
+ * device, so it is a credential too. `code` is deliberately absent: it is the
  * classification an operator diagnoses a failure by, and the only credential
  * spelled that way is an OAuth `?code=` query value, which `redactUrl` strips
  * from every logged URL.
  */
 const SECRET_KEY =
-  /^(?:authorization|cookie|set-cookie|token|accessToken|refreshToken|secret|clientSecret)$/iu
+  /^(?:authorization|cookie|set-cookie|token|accessToken|refreshToken|secret|clientSecret|privateKey|p256dh|auth|applicationServerKey|endpoint)$/iu
 
 function redactUrl(value: string) {
   try {
