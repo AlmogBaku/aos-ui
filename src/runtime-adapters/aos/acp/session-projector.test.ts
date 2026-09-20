@@ -812,7 +812,7 @@ describe("applyUpdate Session metadata", () => {
     expect(fold([[plan(AOS_PLAN_ID), RUN_META]])).toBe(initialProjectorState)
   })
 
-  it("records usage, title, config options, and commands", () => {
+  it("records title, config options, and commands, and leaves usage to the composer", () => {
     const projected = fold([
       [{ sessionUpdate: "usage_update", used: 10, size: 100 }, RUN_META],
       [{ sessionUpdate: "session_info_update", title: "Ship it" }],
@@ -837,7 +837,6 @@ describe("applyUpdate Session metadata", () => {
         },
       ],
     ])
-    expect(projected.usage).toEqual({ used: 10, size: 100 })
     expect(projected.title).toBe("Ship it")
     expect(projected.configOptions).toEqual([
       {

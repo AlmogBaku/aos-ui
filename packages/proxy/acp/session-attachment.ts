@@ -5,6 +5,7 @@ import {
   type AgentContext,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
+import type { SessionContextResponse } from "../../protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
@@ -80,18 +81,41 @@ function runFailureOf(update: SessionUpdate) {
   return { stopReason, ...(meta.success ? { runId: meta.data.runId } : {}) }
 }
 
+/**
+ * One `usage_update`. ACP's own fields carry the two token counts; everything
+ * the provider reported about them travels in `_meta.aos`, which is what lets
+ * the composer attribute the window instead of showing one opaque total.
+ */
+function usageUpdate(usage: SessionContextResponse): SessionUpdate {
+  return {
+    sessionUpdate: "usage_update",
+    used: usage.usedTokens,
+    size: usage.maxTokens,
+    _meta: {
+      [AOS_META_KEY]: {
+        source: usage.source,
+        ...(usage.estimated ? { estimated: usage.estimated } : {}),
+        ...(usage.breakdown ? { breakdown: usage.breakdown } : {}),
+      },
+    },
+  }
+}
+
 export type SessionAttachmentOptions = {
   context: AcpConnectionContext
   /** The Session's Agent, provider identity, and public `threadId`. */
   scope: SessionScope
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
+  /** The Session's context usage, as the workspace reads and validates it. */
+  readUsage: () => Promise<SessionContextResponse>
 }
 
 class SessionAttachment {
   readonly #context: AcpConnectionContext
   readonly #scope: SessionScope
   readonly #client: AgentContext
+  readonly #readUsage: () => Promise<SessionContextResponse>
   #subscription: CoordinatedRunSubscription | undefined
   #pending: { interruptId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
@@ -104,6 +128,7 @@ class SessionAttachment {
     this.#context = options.context
     this.#scope = options.scope
     this.#client = options.client
+    this.#readUsage = options.readUsage
   }
 
   /** Subscribes to the Session's live run, if one is still in flight. */
@@ -185,6 +210,23 @@ class SessionAttachment {
         : {}),
       ...meta,
     })
+  }
+
+  /**
+   * Reports the Session's context usage. Every attach and every settled turn
+   * owes the client one of these, because the window moves with the
+   * conversation and its size moves with the model the Session runs.
+   *
+   * A provider that cannot answer leaves the last reading standing: an
+   * unreadable window is not an outcome the operator is owed a notice about,
+   * and clearing the gauge would claim an empty context instead of an unknown
+   * one.
+   */
+  async reportUsage() {
+    if (this.#detached) return
+    const usage = await this.#readUsage().catch(() => undefined)
+    if (!usage || this.#detached) return
+    await this.update(usageUpdate(usage))
   }
 
   /** Re-issues the requests a recovered wait is still holding. */
@@ -321,6 +363,11 @@ class SessionAttachment {
     } finally {
       if (this.#subscription === subscription) this.#subscription = undefined
     }
+    // The turn this segment carried has settled, so the window it grew is now
+    // readable. A failed or cancelled turn still consumed context, so this
+    // follows the drain rather than a successful outcome. Nothing awaits the
+    // pump, so this reports its own failure rather than rejecting into nowhere.
+    await this.reportUsage().catch((cause: unknown) => this.report(cause))
   }
 
   async #send(outbound: AcpOutbound, sequence: number) {

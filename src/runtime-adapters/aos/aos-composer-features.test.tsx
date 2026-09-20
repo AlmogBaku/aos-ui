@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
@@ -118,6 +118,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities,
       models,
       context,
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
@@ -157,21 +158,27 @@ describe("AOS composer features", () => {
     expect(client.subscribeSessionInvalidation).not.toHaveBeenCalled()
   })
 
-  it("projects normalized selected model and context for only the selected Session", async () => {
+  it("projects normalized selected model and the provider's attributed context for only the selected Session", async () => {
     const models = vi.fn(async () => ({
       selectedId: "small",
       options: [{ id: "small", label: "Small", group: "Native" }],
     }))
-    const context = vi.fn(async () => ({
+    let reading = {
       usedTokens: 1_200,
       maxTokens: 8_000,
       source: "provider-usage" as const,
       breakdown: { systemTokens: 100, toolTokens: 200, messageTokens: 900 },
-    }))
+    }
+    let announce: (() => void) | undefined
+    const context = vi.fn(() => reading)
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context,
+      subscribeContext: vi.fn((_threadId: string, listener: () => void) => {
+        announce = listener
+        return () => undefined
+      }),
       updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
@@ -189,14 +196,88 @@ describe("AOS composer features", () => {
     })
 
     await waitFor(() => expect(result.current.model?.selectedId).toBe("small"))
-    expect(result.current.context?.usage).toEqual({
-      system: 0,
-      tools: 0,
-      messages: 1,
-      total: 8,
+    // The provider's own attribution reaches the gauge as three segments.
+    expect(result.current.context).toEqual({
+      usage: { system: 0, tools: 0, messages: 1, total: 8 },
+      segments: ["system", "tools", "messages"],
     })
     expect(models).toHaveBeenCalledWith("session-1")
-    expect(context).toHaveBeenCalledWith("session-1")
+    expect(client.subscribeContext).toHaveBeenCalledWith(
+      "session-1",
+      expect.any(Function)
+    )
+
+    // A later reading is what the composer shows: the window grows with the
+    // conversation, so one read at attach time cannot stay correct.
+    reading = { ...reading, usedTokens: 4_400 }
+    act(() => announce?.())
+
+    await waitFor(() =>
+      // The provider's shares are reapportioned over the larger total.
+      expect(result.current.context?.usage).toEqual({
+        system: 0,
+        tools: 1,
+        messages: 3,
+        total: 8,
+      })
+    )
+  })
+
+  it("shows an unattributed reading as one total rather than hiding the gauge", async () => {
+    const unattributed = {
+      usedTokens: 2_000,
+      maxTokens: 10_000,
+      source: "local-estimate" as const,
+      estimated: true as const,
+    }
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models: vi.fn(),
+      context: vi.fn(() => unattributed),
+      subscribeContext: () => () => undefined,
+      updateModel: vi.fn(),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: false, contextEnabled: true },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.context).toBeDefined())
+    expect(result.current.context).toEqual({
+      usage: { system: 0, tools: 0, messages: 2, total: 10 },
+      segments: [],
+    })
+  })
+
+  it("reports no context for a runtime that pushes no reading", async () => {
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models: vi.fn(),
+      context: vi.fn(() => undefined),
+      subscribeContext: () => () => undefined,
+      updateModel: vi.fn(),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: false, contextEnabled: true },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() =>
+      expect(client.workspaceCapabilities).toHaveBeenCalledOnce()
+    )
+    expect(result.current.context).toBeUndefined()
   })
 
   it("shows the picked model at once and settles on the provider's own answer", async () => {
@@ -219,6 +300,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(
         () =>
           new Promise<{ selectedId: string; effortId?: string }>((resolve) => {
@@ -277,6 +359,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(
         () =>
           new Promise<{ selectedId: string }>((resolve) => {
@@ -328,6 +411,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(
         () =>
           new Promise<{ selectedId: string }>((resolve, reject) => {
@@ -383,6 +467,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(async () => ({ selectedId: "a", effortId: "high" })),
       steerRun: vi.fn(),
     }
@@ -421,6 +506,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(async () => {
         throw failure
       }),
@@ -475,6 +561,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(
         () =>
           new Promise<{ selectedId: string }>((resolve) => {
@@ -517,6 +604,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(),
       steerRun: vi.fn(),
     }
@@ -544,6 +632,7 @@ describe("AOS composer features", () => {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models: vi.fn(),
       context: vi.fn(),
+      subscribeContext: () => () => undefined,
       updateModel: vi.fn(),
       steerRun,
     }

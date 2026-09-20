@@ -7,7 +7,10 @@ import {
 import type { z } from "zod"
 
 import type { SlashCommand } from "@aos/protocol"
-import type { AosSessionResumeResponseMetaSchema } from "@aos/protocol/acp"
+import {
+  AosUsageMetaSchema,
+  type AosSessionResumeResponseMetaSchema,
+} from "@aos/protocol/acp"
 
 import type {
   AosContext,
@@ -31,6 +34,8 @@ const EFFORT_CATEGORY = "thought_level"
 type AcpCapabilities = z.infer<
   typeof AosSessionResumeResponseMetaSchema
 >["capabilities"]
+
+type UsageUpdate = Extract<SessionUpdate, { sessionUpdate: "usage_update" }>
 
 function selectOf(option: SessionConfigOption, category: string) {
   return SessionConfigOption.isSelect(option) && option.category === category
@@ -114,6 +119,31 @@ export function projectModels(
   }
 }
 
+/**
+ * Translates one `usage_update` into the composer's context projection. ACP's
+ * own fields carry the two counts; `_meta.aos` carries what the provider
+ * attributed them to and how it arrived at them, and a meta this build cannot
+ * read degrades to the counts alone rather than to nothing.
+ */
+function projectContext(
+  update: UsageUpdate,
+  meta: unknown
+): AosContext | undefined {
+  if (update.size <= 0) return undefined
+  const aos = AosUsageMetaSchema.safeParse(meta)
+  return {
+    usedTokens: update.used,
+    maxTokens: update.size,
+    source: aos.success ? aos.data.source : "provider-usage",
+    ...(aos.success && aos.data.estimated
+      ? { estimated: aos.data.estimated }
+      : {}),
+    ...(aos.success && aos.data.breakdown
+      ? { breakdown: aos.data.breakdown }
+      : {}),
+  }
+}
+
 /** Slash commands stay part of the capability projection the composer reads. */
 function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
   if (!entry.commands) return entry.capabilities
@@ -133,6 +163,7 @@ function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
 export function createAcpComposerStore(connection: AcpConnection) {
   const sessions = new Map<string, SessionEntry>()
   const observed = new Set<string>()
+  const contextListeners = new Map<string, Set<() => void>>()
 
   function entry(threadId: string) {
     const known = sessions.get(threadId)
@@ -141,7 +172,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
     return known
   }
 
-  function accept(threadId: string, update: SessionUpdate) {
+  function accept(threadId: string, update: SessionUpdate, meta: unknown) {
     const known = sessions.get(threadId)
     if (!known) return
     if (SessionUpdate.isConfigOptionUpdate(update))
@@ -150,12 +181,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
       )
-    else if (SessionUpdate.isUsageUpdate(update) && update.size > 0)
-      known.context = {
-        usedTokens: update.used,
-        maxTokens: update.size,
-        source: "provider-usage",
-      }
+    else if (SessionUpdate.isUsageUpdate(update)) {
+      const context = projectContext(update, meta)
+      if (!context) return
+      known.context = context
+      for (const listener of contextListeners.get(threadId) ?? []) listener()
+    }
   }
 
   /** Records what `session/new` and `session/resume` reported for a Session. */
@@ -175,7 +206,9 @@ export function createAcpComposerStore(connection: AcpConnection) {
     })
     if (observed.has(threadId)) return
     observed.add(threadId)
-    connection.onSessionUpdate(threadId, (update) => accept(threadId, update))
+    connection.onSessionUpdate(threadId, (update, meta) =>
+      accept(threadId, update, meta)
+    )
   }
 
   function models(threadId: string) {
@@ -204,7 +237,17 @@ export function createAcpComposerStore(connection: AcpConnection) {
     attach,
     capabilities: (threadId: string) => capabilitiesOf(entry(threadId)),
     models,
-    context: (threadId: string) => entry(threadId).context,
+    /** The newest reading, or none while the provider has reported none. */
+    context: (threadId: string) => sessions.get(threadId)?.context,
+    subscribeContext(threadId: string, listener: () => void) {
+      const listeners = contextListeners.get(threadId) ?? new Set()
+      listeners.add(listener)
+      contextListeners.set(threadId, listeners)
+      return () => {
+        listeners.delete(listener)
+        if (!listeners.size) contextListeners.delete(threadId)
+      }
+    },
     selectModel: (threadId: string, selectedId: string) =>
       select(threadId, MODEL_CATEGORY, selectedId),
     selectEffort: (threadId: string, effortId: string) =>

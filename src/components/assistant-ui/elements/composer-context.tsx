@@ -95,16 +95,28 @@ export function ComposerContext({
             className={cn(
               mono,
               "tabular-nums",
-              warn
-                ? "text-red-500 dark:text-red-400"
-                : "text-foreground/35"
+              warn ? "text-red-500 dark:text-red-400" : "text-foreground/35"
             )}
           >
             {Math.round(fraction * 100)}%
           </p>
         </div>
         <div className="flex h-[5px] w-full gap-px overflow-hidden rounded-full bg-foreground/[0.06]">
-          {segments.map((segment) => (
+          {/*
+            A provider that attributes nothing still knows what it used, so the
+            bar reports that one unlabeled amount rather than reading empty
+            against a ring that shows the same context as filled.
+          */}
+          {(segments.length
+            ? segments
+            : [
+                {
+                  label: labels.total,
+                  value: used,
+                  className: "bg-foreground/80",
+                },
+              ]
+          ).map((segment) => (
             <span
               key={segment.label}
               className={cn(
@@ -126,7 +138,7 @@ export function ComposerContext({
                 className={cn("size-1.5 rounded-full", segment.className)}
               />
               <span className="flex-1">{segment.label}</span>
-              <span className={cn(mono, "tabular-nums text-foreground/40")}>
+              <span className={cn(mono, "text-foreground/40 tabular-nums")}>
                 {segment.value}k
               </span>
             </div>
@@ -135,7 +147,7 @@ export function ComposerContext({
         <div className="h-px bg-foreground/[0.06]" />
         <div className="flex items-center justify-between text-[13px] text-foreground/55">
           <span>{labels.total}</span>
-          <span className={cn(mono, "tabular-nums text-foreground/40")}>
+          <span className={cn(mono, "text-foreground/40 tabular-nums")}>
             {used}k / {usage.total}k
           </span>
         </div>

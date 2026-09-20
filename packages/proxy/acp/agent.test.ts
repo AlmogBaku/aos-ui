@@ -167,6 +167,7 @@ const USAGE = {
   usedTokens: 1_200,
   maxTokens: 20_000,
   source: "provider-usage" as const,
+  breakdown: { systemTokens: 300, toolTokens: 400, messageTokens: 500 },
 }
 
 /** One provider run segment the test drives event by event. */
@@ -415,6 +416,8 @@ type HarnessOptions = {
   activity?: AosActivityNotification[]
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
   discover?: ServerRunEngine["discover"]
+  /** Defaults to a readable window; a rejection stands for one that is not. */
+  context?: ServerRuntime["context"]
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -516,7 +519,7 @@ async function harness(options: HarnessOptions = {}) {
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => models,
     updateModel,
-    context: async () => USAGE,
+    context: options.context ?? (async () => USAGE),
     subscribeSessionInvalidation: unsupported,
     subscribeCatalogChanges: async () => () => undefined,
     stageAttachments: unsupported,
@@ -645,6 +648,22 @@ function updates(recorder: ReturnType<typeof createRecorder>) {
   return recorder.of(methods.client.session.update).map((entry) => entry.params)
 }
 
+/** Every context reading this connection has pushed, newest last. */
+function usages(recorder: ReturnType<typeof createRecorder>) {
+  return updates(recorder).filter((update) =>
+    JSON.stringify(update).includes("usage_update")
+  )
+}
+
+/** The newest reading, once the connection has pushed `count` of them. */
+async function usageOf(
+  test: { recorder: ReturnType<typeof createRecorder> },
+  count = 1
+) {
+  await test.recorder.wait(() => usages(test.recorder).length >= count)
+  return usages(test.recorder).at(-1)
+}
+
 describe("AOS ACP agent", () => {
   it("reports the AOS extension contract on initialize", async () => {
     const test = await harness()
@@ -697,7 +716,23 @@ describe("AOS ACP agent", () => {
       },
       {
         sessionId: CREATED,
-        update: { sessionUpdate: "usage_update", used: 1_200, size: 20_000 },
+        update: {
+          sessionUpdate: "usage_update",
+          used: 1_200,
+          size: 20_000,
+          // ACP carries the counts; the provider's attribution of them and how
+          // it arrived at them travel in the AOS extension's own meta.
+          _meta: {
+            [AOS_META_KEY]: {
+              source: "provider-usage",
+              breakdown: {
+                systemTokens: 300,
+                toolTokens: 400,
+                messageTokens: 500,
+              },
+            },
+          },
+        },
       },
     ])
     test.close()
@@ -840,7 +875,9 @@ describe("AOS ACP agent", () => {
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("end_turn")
     )
-    // `session/new` pushes usage once the provider answers, out of band.
+    // `session/new` and the settled turn each push usage out of band: the turn
+    // grew the window, so the composer is owed the reading it left behind.
+    await usageOf(test, 2)
     expect(
       updates(test.recorder).filter(
         (update) => !JSON.stringify(update).includes("usage_update")
@@ -984,6 +1021,75 @@ describe("AOS ACP agent", () => {
     expect(written).toMatchObject({
       configOptions: [{ configId: "model", currentValue: "opus" }],
     })
+    test.close()
+  })
+
+  it("restates context usage after a config option changes the model", async () => {
+    const test = await harness()
+    await test.list()
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+    await usageOf(test)
+
+    await test.agent.request(methods.agent.session.setConfigOption, {
+      sessionId: SESSION,
+      configId: "model",
+      type: "id",
+      value: "opus",
+    })
+
+    // The window's size belongs to the model, so a switch owes a fresh reading.
+    await usageOf(test, 2)
+    test.close()
+  })
+
+  it("reports context usage on resume so a returning composer has a window", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+
+    expect(await usageOf(test)).toMatchObject({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "usage_update",
+        used: 1_200,
+        size: 20_000,
+        _meta: { [AOS_META_KEY]: { source: "provider-usage" } },
+      },
+    })
+    test.close()
+  })
+
+  it("leaves the last reading standing when the provider cannot report usage", async () => {
+    const test = await harness({
+      context: async () => {
+        throw new Error("no window")
+      },
+    })
+    await test.list()
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+    await test.recorder.wait(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes("state_update")
+    )
+
+    // An unreadable window is not an outcome the operator is owed a notice
+    // about, and no reading is sent rather than one claiming an empty context.
+    expect(usages(test.recorder)).toEqual([])
+    expect(
+      test.recorder.of(AOS_METHODS.notify.error).map((entry) => entry.params)
+    ).toEqual([])
     test.close()
   })
 

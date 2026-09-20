@@ -3,6 +3,7 @@ import { z } from "zod"
 import {
   AgentCatalogResponseSchema,
   RunSteerResponseSchema,
+  SessionContextResponseSchema,
   SessionMessageErrorStatusSchema,
   SessionStatusSchema,
   SessionTodosResponseSchema,
@@ -291,6 +292,20 @@ export const AosPlanMetaSchema = z.strictObject({
   runId: IdentifierSchema.optional(),
   todos: SessionTodosResponseSchema.shape.todos,
 })
+
+/**
+ * `usage_update._meta.aos`. ACP's `usage_update` carries the used and total
+ * token counts alone, so how the provider arrived at them and its own
+ * attribution of what they hold travel here. A provider that attributes nothing
+ * sends no breakdown rather than a guessed one, and usage belongs to the Session
+ * rather than to a run, so this meta names neither a run nor a sequence.
+ */
+export const AosUsageMetaSchema = z.strictObject({
+  source: SessionContextResponseSchema.shape.source,
+  estimated: SessionContextResponseSchema.shape.estimated,
+  breakdown: SessionContextResponseSchema.shape.breakdown,
+})
+export type AosUsageMeta = z.infer<typeof AosUsageMetaSchema>
 
 // ---------------------------------------------------------------------------
 // pending requests `_meta.aos`

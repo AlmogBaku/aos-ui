@@ -1,6 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import {
   composerUsageFromTokens,
@@ -26,8 +33,13 @@ type SessionCapabilityClient = {
 
 type ComposerClient = SessionCapabilityClient & {
   models(threadId: string): Promise<AosModelChoices>
-  /** Absent until the provider reports usage for the attached Session. */
-  context(threadId: string): Promise<AosContext | undefined>
+  /**
+   * The newest usage the provider reported, absent until it reports one. One
+   * reading is one value: the same reference until the next reading replaces
+   * it, which is what lets the composer read it without re-rendering forever.
+   */
+  context(threadId: string): AosContext | undefined
+  subscribeContext(threadId: string, listener: () => void): () => void
   updateModel(
     threadId: string,
     patch: SessionModelUpdateRequest
@@ -112,7 +124,20 @@ export function useAosComposerFeatures(
 ): ComposerFeatureViewModel {
   const slashCommands = useAosSlashCommands(capabilities)
   const [models, setModels] = useState<AosModelChoices>()
-  const [context, setContext] = useState<AosContext>()
+  // Usage is pushed, not polled: the provider restates it on every attach, every
+  // settled turn, and every model change, so the composer reads the newest one
+  // rather than whatever a single read at attach time happened to catch.
+  const context = useSyncExternalStore(
+    useCallback(
+      (listener: () => void) =>
+        threadId
+          ? client.subscribeContext(threadId, listener)
+          : () => undefined,
+      [client, threadId]
+    ),
+    () => (threadId ? client.context(threadId) : undefined),
+    () => undefined
+  )
   // In-flight switch state is tagged with its Session so a switch that settles
   // after the selected Session changed neither shows nor lands in the new one.
   const [selectionRecord, setSelectionRecord] = useState<SelectionRecord>()
@@ -126,8 +151,6 @@ export function useAosComposerFeatures(
     currentThreadId.current = threadId
   }, [threadId])
   const modelsAvailable = capabilities?.workspace.models.status === "available"
-  const contextAvailable =
-    capabilities?.workspace.context.status === "available"
   const steeringAvailable =
     capabilities?.interactions.steering.status === "available"
 
@@ -146,27 +169,10 @@ export function useAosComposerFeatures(
             reason instanceof Error ? reason : new Error(String(reason))
           )
       )
-    if (config.contextEnabled && contextAvailable)
-      void client.context(threadId).then(
-        (next) => active && setContext(next),
-        (reason) =>
-          active &&
-          onError?.(
-            reason instanceof Error ? reason : new Error(String(reason))
-          )
-      )
     return () => {
       active = false
     }
-  }, [
-    client,
-    config.contextEnabled,
-    config.modelSelectorEnabled,
-    contextAvailable,
-    modelsAvailable,
-    onError,
-    threadId,
-  ])
+  }, [client, config.modelSelectorEnabled, modelsAvailable, onError, threadId])
 
   return useMemo(
     () => ({
@@ -248,8 +254,10 @@ export function useAosComposerFeatures(
             : {}),
         }
       })(),
+      // A reading the provider pushed is its own evidence the window is
+      // readable: a runtime that cannot report one never sends it.
       context:
-        config.contextEnabled && contextAvailable && context
+        config.contextEnabled && context
           ? {
               usage: composerUsageFromTokens({
                 systemTokens: context.breakdown?.systemTokens ?? 0,
@@ -270,7 +278,6 @@ export function useAosComposerFeatures(
       config.contextEnabled,
       config.modelSelectorEnabled,
       context,
-      contextAvailable,
       models,
       modelsAvailable,
       onError,

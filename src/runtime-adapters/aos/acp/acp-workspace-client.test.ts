@@ -579,7 +579,7 @@ describe("ACP workspace client", () => {
     ).resolves.toMatchObject({
       workspace: { slashCommands: { status: "unavailable" } },
     })
-    await expect(client.context(SESSION_ID)).resolves.toBeUndefined()
+    expect(client.context(SESSION_ID)).toBeUndefined()
 
     emitUpdate({
       sessionUpdate: "available_commands_update",
@@ -597,11 +597,65 @@ describe("ACP workspace client", () => {
         },
       },
     })
-    await expect(client.context(SESSION_ID)).resolves.toEqual({
+    expect(client.context(SESSION_ID)).toEqual({
       usedTokens: 120,
       maxTokens: 1_000,
       source: "provider-usage",
     })
+  })
+
+  it("keeps the provider's own attribution and provenance on a usage reading", async () => {
+    const { client, emitUpdate } = createClient()
+    await client.attachSession(SESSION_ID)
+    const announced: ReturnType<typeof client.context>[] = []
+    client.subscribeContext(SESSION_ID, () =>
+      announced.push(client.context(SESSION_ID))
+    )
+
+    emitUpdate(
+      { sessionUpdate: "usage_update", used: 4_200, size: 200_000 },
+      {
+        source: "provider-usage-plus-estimate",
+        estimated: true,
+        breakdown: {
+          systemTokens: 900,
+          toolTokens: 1_100,
+          messageTokens: 2_200,
+        },
+      }
+    )
+
+    expect(client.context(SESSION_ID)).toEqual({
+      usedTokens: 4_200,
+      maxTokens: 200_000,
+      source: "provider-usage-plus-estimate",
+      estimated: true,
+      breakdown: { systemTokens: 900, toolTokens: 1_100, messageTokens: 2_200 },
+    })
+    // Every reading is announced, so the composer never shows a stale window.
+    expect(announced).toHaveLength(1)
+
+    // A reading this build cannot read the meta of still reports its counts.
+    emitUpdate(
+      { sessionUpdate: "usage_update", used: 5_000, size: 200_000 },
+      { source: "from-a-newer-proxy" }
+    )
+
+    expect(client.context(SESSION_ID)).toEqual({
+      usedTokens: 5_000,
+      maxTokens: 200_000,
+      source: "provider-usage",
+    })
+    expect(announced).toHaveLength(2)
+  })
+
+  it("ignores a usage reading that names no window", async () => {
+    const { client, emitUpdate } = createClient()
+    await client.attachSession(SESSION_ID)
+
+    emitUpdate({ sessionUpdate: "usage_update", used: 0, size: 0 })
+
+    expect(client.context(SESSION_ID)).toBeUndefined()
   })
 
   it("creates Sessions, reports focus, steers, and tracks catalog revisions", async () => {

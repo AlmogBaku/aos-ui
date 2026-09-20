@@ -111,17 +111,6 @@ export function executionMeta(execution: {
   }
 }
 
-export function usageUpdate(usage: {
-  usedTokens: number
-  maxTokens: number
-}): SessionUpdate {
-  return {
-    sessionUpdate: "usage_update",
-    used: usage.usedTokens,
-    size: usage.maxTokens,
-  }
-}
-
 /** `session/list` pages by offset; the cursor is that offset, opaquely. */
 export function encodeCursor(offset: number) {
   return Buffer.from(String(offset), "utf8").toString("base64url")
@@ -277,7 +266,12 @@ export function createSessions(context: AcpConnectionContext) {
     attach(client: AgentContext, scope: SessionScope) {
       const existing = attachments.get(scope.threadId)
       if (existing) return existing
-      const attachment = createSessionAttachment({ context, scope, client })
+      const attachment = createSessionAttachment({
+        context,
+        scope,
+        client,
+        readUsage: () => workspace.usage(scope),
+      })
       attachments.set(scope.threadId, attachment)
       return attachment
     },

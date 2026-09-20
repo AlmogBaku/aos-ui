@@ -71,7 +71,6 @@ export type ProjectorState = {
   /** The turn the running run opened, and the only one its state settles. */
   readonly activeAssistantId?: string
   readonly todos: readonly TodoItem[]
-  readonly usage?: { readonly used: number; readonly size: number }
   readonly title?: string
   readonly configOptions?: readonly SessionConfigOption[]
   readonly commands?: readonly AvailableCommand[]
@@ -393,16 +392,6 @@ function applyToolContent(
   )
 }
 
-function applyUsage(
-  state: ProjectorState,
-  update: UpdatePayload
-): ProjectorState {
-  const { used, size } = update
-  return typeof used === "number" && typeof size === "number"
-    ? { ...state, usage: { used, size } }
-    : state
-}
-
 function applyTitle(
   state: ProjectorState,
   update: UpdatePayload
@@ -436,8 +425,7 @@ export function applyUpdate(
       return applyState(state, update, meta)
     case "plan_update":
       return applyPlan(state, update, meta)
-    case "usage_update":
-      return applyUsage(state, update)
+    // Usage belongs to the composer's Session projection, not the transcript.
     case "session_info_update":
       return applyTitle(state, update)
     case "config_option_update": {

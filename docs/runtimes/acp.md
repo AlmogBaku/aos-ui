@@ -29,8 +29,16 @@ the cursor is beyond bounded replay; send `session/resume` again with
 | `tool_call_update`    | Tool lifecycle and argument deltas |
 | `state_update`        | Run state transitions              |
 | `plan_update`         | Session Todos in `_meta.aos.todos` |
-| `usage_update`        | Token and resource usage           |
+| `usage_update`        | Context window usage               |
 | `session_info_update` | Session metadata changes           |
+
+`usage_update` carries the used and total token counts in its own fields, and
+the provider's attribution and provenance in `_meta.aos` (`source`,
+`estimated`, `breakdown`). It is session-scoped rather than run-scoped: the
+proxy sends one on `session/new`, on `session/resume`, after every settled turn,
+and after a `session/set_config_option` that changes the model, because the
+window grows with the conversation and its size belongs to the model. A provider
+that cannot report usage sends none, and the last reading stands.
 
 ## Session lifecycle methods
 

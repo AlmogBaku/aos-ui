@@ -232,7 +232,22 @@ const script = {
     text: "Recovered after reconnect.",
   },
   reply: ["Streamed by AOS.", "Both chunks arrived."],
-  usage: { used: 1, size: 100 },
+  // 42k of a 200k window, attributed the way a provider reports it: the counts
+  // are ACP's own fields, the attribution is the AOS extension's meta.
+  usage: {
+    used: 42_000,
+    size: 200_000,
+    _meta: {
+      aos: {
+        source: "provider-usage",
+        breakdown: {
+          systemTokens: 8_000,
+          toolTokens: 12_000,
+          messageTokens: 22_000,
+        },
+      },
+    },
+  },
 }
 
 type AcpScript = typeof script
@@ -528,6 +543,13 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     page.getByText("Both chunks arrived.", { exact: true })
   ).toHaveCount(0)
   expect(await recorded(page, "session/prompt")).toHaveLength(1)
+
+  // The window the resume reported reaches the composer, attributed: a Session
+  // the operator returns to opens on the context it actually carries.
+  await page.getByRole("button", { name: "Context usage" }).focus()
+  await expect(page.getByText("42k / 200k")).toBeVisible()
+  for (const shown of ["System", "8k", "Tools", "12k", "Messages", "22k"])
+    await expect(page.getByText(shown, { exact: true })).toBeVisible()
 
   // Stop: the scripted turn stays running until the cancel notification.
   await input.fill(PENDING_PROMPT)

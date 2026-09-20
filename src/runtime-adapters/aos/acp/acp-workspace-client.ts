@@ -243,9 +243,9 @@ export function createAcpWorkspaceClient({
     async models(threadId: string) {
       return composer.models(threadId)
     },
-    async context(threadId: string) {
-      return composer.context(threadId)
-    },
+    /** The newest usage the provider pushed, read synchronously. */
+    context: composer.context,
+    subscribeContext: composer.subscribeContext,
     selectModel: composer.selectModel,
     selectEffort: composer.selectEffort,
     /** One provider write per half; the response settles what the Session runs. */

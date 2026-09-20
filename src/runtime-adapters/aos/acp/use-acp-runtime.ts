@@ -67,7 +67,6 @@ type PromptMeta = z.infer<typeof AosPromptMetaSchema>
 export type AcpRuntimeExtras = {
   readonly execution: ProjectorExecution
   readonly todos: readonly TodoItem[]
-  readonly usage?: { readonly used: number; readonly size: number }
   readonly configOptions?: readonly SessionConfigOption[]
   readonly commands?: readonly AvailableCommand[]
 }
@@ -542,7 +541,6 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       extras: acpExtras.provide({
         execution: state.execution,
         todos: state.todos,
-        ...(state.usage === undefined ? {} : { usage: state.usage }),
         ...(state.configOptions === undefined
           ? {}
           : { configOptions: state.configOptions }),

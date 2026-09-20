@@ -39,7 +39,6 @@ import {
   sessionInfoMeta,
   sessionInfoOf,
   sessionInfoUpdate,
-  usageUpdate,
   decodeCursor,
   encodeCursor,
 } from "./agent-sessions"
@@ -364,7 +363,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const attachment = sessions.attach(client, scope)
     afterResponse(attachment, async () => {
       await attachment.update(commandsUpdate(capabilities))
-      await attachment.update(usageUpdate(await workspace.usage(scope)))
+      await attachment.reportUsage()
     })
     return {
       sessionId: publicSessionId,
@@ -425,6 +424,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const execution = coordinator.snapshot(scope)
     afterResponse(attachment, async () => {
       await attachment.reportExecution()
+      // A resumed Session carries the window every earlier turn already grew;
+      // only a report here keeps its composer from opening on an empty gauge.
+      await attachment.reportUsage()
       if (coordinator.state(scope) === "waiting-for-input")
         await attachment.reissuePending()
     })
@@ -502,9 +504,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const write = translators.configWriteOf(params.configId, params.value)
     if (!write) throw invalidRequest()
     await workspace.updateModel(scope, write)
-    return {
-      configOptions: translators.configOptionsOf(await workspace.models(scope)),
-    }
+    const configOptions = translators.configOptionsOf(
+      await workspace.models(scope)
+    )
+    // The window's size belongs to the model, so a switch restates the usage
+    // the browser is holding against the model the Session has just left.
+    const attachment = sessions.attached(params.sessionId)
+    if (attachment) afterResponse(attachment, () => attachment.reportUsage())
+    return { configOptions }
   })
 
   app.onRequest(methods.agent.session.close, ({ params }) => {
