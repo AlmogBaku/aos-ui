@@ -482,6 +482,29 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   completeAgentCreation(creatorThreadId: string, agent: AgentSummary) {
+    this.#addCreatedAgent(creatorThreadId, agent)
+    this.#publishCatalog()
+    this.#publishAgentReceipt(creatorThreadId, agent.id, "agent-ready")
+  }
+
+  /** A created Agent the provider cannot activate without an operator. */
+  failAgentSetup(creatorThreadId: string, agentId: string, name = agentId) {
+    this.#addCreatedAgent(creatorThreadId, {
+      kind: "ready",
+      id: agentId,
+      name,
+      visibility: "hidden",
+    })
+    this.#hiddenAgents.add(agentId)
+    this.#publishCatalog()
+    this.#publishAgentReceipt(
+      creatorThreadId,
+      agentId,
+      "agent-activation-failed"
+    )
+  }
+
+  #addCreatedAgent(creatorThreadId: string, agent: AgentSummary) {
     const creatorSession = this.#sessions.find(
       ({ threadId }) => threadId === creatorThreadId
     )
@@ -493,7 +516,21 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     )
       throw new Error("Agent already exists")
     this.#agents.push(structuredClone(agent))
-    this.#publishCatalog()
+  }
+
+  /** The creator tool's own receipt, as the browser store reports it. */
+  #publishAgentReceipt(
+    creatorThreadId: string,
+    agentId: string,
+    type: "agent-ready" | "agent-activation-failed"
+  ) {
+    this.#publishActivity({
+      id: `fixture:creator:${encodeURIComponent(creatorThreadId)}:${encodeURIComponent(agentId)}:${type}`,
+      agentId,
+      threadId: creatorThreadId,
+      occurredAt: this.#clock().toISOString(),
+      type,
+    })
   }
 
   #projectSessions(requested: ReadonlySet<string>) {

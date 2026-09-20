@@ -514,6 +514,170 @@ describe("ACP workspace client", () => {
     ])
   })
 
+  it("reports the creator tool's receipt as an Agent creation event", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+
+    // Live runs title the call first and carry no title once it settles.
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-1",
+      title: "aos_create_agent",
+      status: "in_progress",
+    })
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-1",
+      status: "completed",
+      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
+    })
+
+    expect(events).toEqual([
+      {
+        id: `${SESSION_ID}:call-1`,
+        type: "agent-ready",
+        agentId: "agent-new",
+        threadId: SESSION_ID,
+        occurredAt: UPDATED_AT,
+      },
+    ])
+  })
+
+  it("reports a replayed receipt and an OpenCode tool name once", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+
+    // History replay carries the title, the status, and the output together.
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-2",
+      title: "create_agent",
+      status: "completed",
+      rawOutput: '{"ok":true,"status":"ready","agentId":"agent-new"}',
+    })
+
+    expect(events).toEqual([
+      {
+        id: `${SESSION_ID}:call-2`,
+        type: "agent-ready",
+        agentId: "agent-new",
+        threadId: SESSION_ID,
+        occurredAt: UPDATED_AT,
+      },
+    ])
+  })
+
+  it("reports a created Agent that still needs operator setup as a failure", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-3",
+      title: "aos_create_agent",
+      status: "completed",
+      rawOutput: {
+        ok: false,
+        status: "setup-needed",
+        agentId: "agent-hidden",
+        error: "credentials missing",
+      },
+    })
+
+    expect(events).toEqual([
+      {
+        id: `${SESSION_ID}:call-3`,
+        type: "agent-activation-failed",
+        agentId: "agent-hidden",
+        threadId: SESSION_ID,
+        occurredAt: UPDATED_AT,
+      },
+    ])
+  })
+
+  it("reports nothing for another tool, an unsettled call, or output it cannot read", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+    const receipt = { ok: true, status: "ready", agentId: "agent-new" }
+
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "other-tool",
+      title: "read_file",
+      status: "completed",
+      rawOutput: receipt,
+    })
+    // A settled call the workspace never saw titled stays anonymous.
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "untitled",
+      status: "completed",
+      rawOutput: receipt,
+    })
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "running",
+      title: "aos_create_agent",
+      status: "in_progress",
+      rawOutput: receipt,
+    })
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "failed-call",
+      title: "aos_create_agent",
+      status: "failed",
+      rawOutput: receipt,
+    })
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "malformed",
+      title: "aos_create_agent",
+      status: "completed",
+      rawOutput: { ok: true, status: "ready" },
+    })
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "not-json",
+      title: "aos_create_agent",
+      status: "completed",
+      rawOutput: "created the Agent",
+    })
+
+    expect(events).toEqual([])
+  })
+
+  it("forgets a settled creator call instead of reporting it twice", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+    const settled = {
+      sessionUpdate: "tool_call_update" as const,
+      toolCallId: "call-4",
+      status: "completed" as const,
+      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
+    }
+
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-4",
+      title: "aos_create_agent",
+      status: "in_progress",
+    })
+    emitUpdate(settled)
+    emitUpdate(settled)
+
+    expect(events).toHaveLength(1)
+  })
+
   it("projects models and writes one config option per half", async () => {
     const { client, argsOf, calls } = createClient()
     await client.attachSession(SESSION_ID)

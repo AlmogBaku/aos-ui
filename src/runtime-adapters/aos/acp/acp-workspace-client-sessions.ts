@@ -3,7 +3,7 @@ import {
   StateUpdate,
   type SessionInfo,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type { z } from "zod"
+import { z } from "zod"
 
 import {
   AOS_METHODS,
@@ -96,6 +96,41 @@ function activityEventOf(
   return { ...base, type, lifecycleId: notification.lifecycleId }
 }
 
+/** The creator's own tool, named identically over Hermes and OpenCode. */
+const AGENT_CREATION_TOOLS = new Set(["aos_create_agent", "create_agent"])
+
+const AgentCreationReceiptSchema = z.discriminatedUnion("status", [
+  z.object({
+    ok: z.literal(true),
+    status: z.literal("ready"),
+    agentId: z.string().min(1).max(128),
+  }),
+  z.object({
+    ok: z.literal(false),
+    status: z.literal("setup-needed"),
+    agentId: z.string().min(1).max(128),
+    error: z.string().optional(),
+  }),
+])
+
+/** The proxy usually parses tool output; a provider may still send raw text. */
+function agentCreationReceiptOf(rawOutput: unknown) {
+  let value = rawOutput
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return undefined
+    }
+  }
+  const parsed = AgentCreationReceiptSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
+}
+
+function toolCallKey(threadId: string, toolCallId: string) {
+  return `${threadId}\u0000${toolCallId}`
+}
+
 function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
   return (
     left !== undefined &&
@@ -117,6 +152,9 @@ export function createAcpSessionStore({
   const subscriptions = new Set<MetadataSubscription>()
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
+  // A settled tool update carries no title, so the creator's tool is only
+  // recognizable from the title its first update reported.
+  const toolTitles = new Map<string, string>()
   const invalidationListeners = new Map<string, Set<() => void>>()
 
   function rowsFor(threadIds: Iterable<string>) {
@@ -178,6 +216,43 @@ export function createAcpSessionStore({
       listener(next.map((todo) => ({ ...todo })))
   }
 
+  function emitActivity(event: WorkspaceActivityEvent) {
+    for (const listener of activityListeners) listener(event)
+  }
+
+  /**
+   * Agent creation is observable only as the creator tool's own result, which
+   * the workspace reads as one content-free receipt per settled call.
+   */
+  function acceptToolCall(
+    threadId: string,
+    update: {
+      toolCallId: string
+      title?: string | null
+      status?: string | null
+      rawOutput?: unknown
+    }
+  ) {
+    const key = toolCallKey(threadId, update.toolCallId)
+    if (typeof update.title === "string") toolTitles.set(key, update.title)
+    const status = update.status
+    if (status !== "completed" && status !== "failed" && status !== "cancelled")
+      return
+    const title = toolTitles.get(key)
+    toolTitles.delete(key)
+    if (status !== "completed" || !title || !AGENT_CREATION_TOOLS.has(title))
+      return
+    const receipt = agentCreationReceiptOf(update.rawOutput)
+    if (!receipt) return
+    emitActivity({
+      id: `${threadId}:${update.toolCallId}`,
+      type: receipt.ok ? "agent-ready" : "agent-activation-failed",
+      agentId: receipt.agentId,
+      threadId,
+      occurredAt: new Date(now()).toISOString(),
+    })
+  }
+
   /** An update whose `_meta.aos` does not parse carries nothing to publish. */
   function acceptUpdate(
     threadId: string,
@@ -192,6 +267,8 @@ export function createAcpSessionStore({
       if (info.success) put(threadId, info.data, update.updatedAt)
       return
     }
+    if (SessionUpdate.isToolCallUpdate(update))
+      return acceptToolCall(threadId, update)
     if (!SessionUpdate.isPlanUpdate(update)) return
     const plan = AosPlanMetaSchema.safeParse(meta)
     if (plan.success) setTodos(threadId, plan.data.todos)
@@ -216,7 +293,7 @@ export function createAcpSessionStore({
       if (notification.type === "unread-changed")
         return patch(notification.sessionId, { unread: notification.unread })
       const event = activityEventOf(notification)
-      if (event) for (const listener of activityListeners) listener(event)
+      if (event) emitActivity(event)
     }
   )
 
