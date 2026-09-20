@@ -451,6 +451,7 @@ function WorkspaceContent({
   const [conversationObscured, setConversationObscured] = useState(false)
   const {
     agentCreator,
+    creatorNotice,
     displayAgents,
     shellOpenSessions,
     sessionView,
@@ -548,6 +549,7 @@ function WorkspaceContent({
         activeThreadId={visibleThreadId}
         environmentLabel={environmentLabel}
         agentBuilderAvailable={Boolean(agentCreator)}
+        creatorNotice={creatorNotice}
         onSelectAgent={selectAgent}
         onOpenSession={openSession}
         onCloseSession={closeSession}

@@ -20,6 +20,7 @@ import type {
   HarnessRuntime,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
+  WorkspaceActivityEvent,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import {
@@ -1054,6 +1055,81 @@ function BuilderSignalFixture({
   )
 }
 
+type CreatorReceiptHandle = {
+  workspace: FixtureWorkspace
+  emitActivity: (event: WorkspaceActivityEvent) => void
+  refreshCalls: () => number
+}
+
+function CreatorReceiptFixture({
+  capture,
+  hideFor = 0,
+  hiddenAgentId = "agent-sora",
+}: {
+  capture: (handle: CreatorReceiptHandle) => void
+  hideFor?: number
+  hiddenAgentId?: string
+}) {
+  const [threadId, setThreadId] = useState<string | undefined>(
+    "thread-aster-market"
+  )
+  const fixture = useFixtureRuntimeBundle({
+    threadId,
+    onThreadIdChange: setThreadId,
+  })
+  const [state] = useState(() => ({
+    refreshCalls: 0,
+    listeners: new Set<(event: WorkspaceActivityEvent) => void>(),
+  }))
+  const bundle = useMemo<WorkspaceFixtureRuntime>(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: workspaceFacade(fixture.workspace, {
+        refreshAgents: async () => {
+          state.refreshCalls += 1
+          const agents = await fixture.workspace.listAgents()
+          return state.refreshCalls <= hideFor
+            ? agents.filter(({ id }) => id !== hiddenAgentId)
+            : agents
+        },
+        subscribeActivity: (listener, onError) => {
+          state.listeners.add(listener)
+          const unsubscribe = fixture.workspace.subscribeActivity(
+            listener,
+            onError
+          )
+          return () => {
+            state.listeners.delete(listener)
+            unsubscribe()
+          }
+        },
+      }),
+    }),
+    [fixture.assistantRuntime, fixture.workspace, hiddenAgentId, hideFor, state]
+  )
+  useEffect(
+    () =>
+      capture({
+        workspace: fixture.workspace,
+        emitActivity: (event) => {
+          for (const listener of state.listeners) listener(event)
+        },
+        refreshCalls: () => state.refreshCalls,
+      }),
+    [capture, fixture.workspace, state]
+  )
+
+  return (
+    <AosUiWorkspace
+      locale="en"
+      dictionary={en}
+      runtime={asHarnessRuntime(bundle)}
+      now={FIXTURE_NOW}
+      readNow={fixtureClock}
+    />
+  )
+}
+
 function BuilderLifecycleFixture({
   captureWorkspace,
 }: {
@@ -1800,19 +1876,27 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-current", "true")
   })
 
-  it("keeps the interview selected when a usable Agent is discovered, without creating its first Session", async () => {
+  it("replaces a resolved draft with the created Agent and creates it no Session", async () => {
     const user = userEvent.setup()
     let workspace: FixtureWorkspace | undefined
-    const captureWorkspace = (value: FixtureWorkspace) => {
-      workspace = value
-    }
-    render(<BuilderLifecycleFixture captureWorkspace={captureWorkspace} />)
+    render(
+      <BuilderLifecycleFixture
+        captureWorkspace={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await screen.findByRole("button", { name: /^Aster,/ })
+    const createSession = vi.spyOn(workspace!, "createSession")
     await user.click(await screen.findByRole("button", { name: "New Agent" }))
-    await screen.findByText("Let's create a new Agent.")
+    const interview = await screen.findByRole("button", {
+      name: /^New Agent, draft/,
+    })
+    expect(interview).toHaveAttribute("aria-current", "true")
     const creatorSession = workspace!
       .listAllSessionMetadata()
       .find(({ agentId }) => agentId === "agent-builder")!
-    const path = window.location.pathname
+
     await act(async () =>
       workspace!.completeAgentCreation(creatorSession.threadId, {
         kind: "ready",
@@ -1820,17 +1904,238 @@ describe("AosUiApp fixture composition", () => {
         name: "Sora",
       })
     )
-    expect(await screen.findByRole("button", { name: "Sora" })).toBeVisible()
-    expect(window.location.pathname).toBe(path)
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Sora/ })).toHaveAttribute(
+        "aria-current",
+        "true"
+      )
+    )
+    expect(
+      screen.queryByRole("button", { name: /^New Agent, draft/ })
+    ).toBeNull()
+    expect(createSession).toHaveBeenCalledTimes(1)
     expect(
       workspace!
         .listAllSessionMetadata()
         .filter(({ agentId }) => agentId === "agent-sora")
     ).toHaveLength(0)
+    expect(screen.getByRole("tablist", { name: "Sessions" })).toBeVisible()
     expect(
-      (await workspace!.getSessionMetadata([creatorSession.threadId]))[0]
-        .agentId
-    ).toBe("agent-builder")
+      screen.getByRole("button", { name: en.actions.hideAgentDetails })
+    ).toBeVisible()
+  })
+
+  it("never steals selection from the Agent in the foreground", async () => {
+    const user = userEvent.setup()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <BuilderLifecycleFixture
+        captureWorkspace={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = workspace!
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+    await user.click(screen.getByRole("button", { name: /^Aster,/ }))
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Aster,/ })).toHaveAttribute(
+        "aria-current",
+        "true"
+      )
+    )
+
+    await act(async () =>
+      workspace!.completeAgentCreation(creatorSession.threadId, {
+        kind: "ready",
+        id: "agent-sora",
+        name: "Sora",
+      })
+    )
+
+    expect(
+      await screen.findByRole("button", { name: /^Sora/ })
+    ).not.toHaveAttribute("aria-current", "true")
+    expect(screen.getByRole("button", { name: /^Aster,/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    )
+    expect(
+      screen.queryByRole("button", { name: /^New Agent, draft/ })
+    ).toBeNull()
+  })
+
+  it("waits for the catalog to list the created Agent before resolving the draft", async () => {
+    const user = userEvent.setup()
+    let handle: CreatorReceiptHandle | undefined
+    render(
+      <CreatorReceiptFixture
+        hideFor={1}
+        capture={(value) => {
+          handle = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = handle!.workspace
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+
+    await act(async () =>
+      handle!.workspace.completeAgentCreation(creatorSession.threadId, {
+        kind: "ready",
+        id: "agent-sora",
+        name: "Sora",
+      })
+    )
+
+    expect(
+      await screen.findByRole("button", { name: /^Sora/ })
+    ).toHaveAttribute("aria-current", "true")
+    expect(
+      screen.queryByRole("button", { name: /^New Agent, draft/ })
+    ).toBeNull()
+    expect(screen.queryByText(en.creator.createdPending)).toBeNull()
+  })
+
+  it("keeps the draft and reports the created Agent as pending when the catalog never lists it", async () => {
+    const user = userEvent.setup()
+    let handle: CreatorReceiptHandle | undefined
+    render(
+      <CreatorReceiptFixture
+        hideFor={Number.MAX_SAFE_INTEGER}
+        capture={(value) => {
+          handle = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = handle!.workspace
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+
+    await act(async () =>
+      handle!.workspace.completeAgentCreation(creatorSession.threadId, {
+        kind: "ready",
+        id: "agent-sora",
+        name: "Sora",
+      })
+    )
+
+    expect(await screen.findByText(en.creator.createdPending)).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: /^New Agent, draft/ })
+    ).toHaveAttribute("aria-current", "true")
+    expect(screen.queryByRole("button", { name: "Sora" })).toBeNull()
+  })
+
+  it("retires the draft and explains an Agent that still needs operator setup", async () => {
+    const user = userEvent.setup()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <BuilderLifecycleFixture
+        captureWorkspace={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = workspace!
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+
+    await act(async () =>
+      workspace!.failAgentSetup(creatorSession.threadId, "agent-sora", "Sora")
+    )
+
+    expect(await screen.findByText(en.creator.createdHidden)).toBeVisible()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^New Agent, draft/ })
+      ).toBeNull()
+    )
+    expect(screen.queryByRole("button", { name: "Sora" })).toBeNull()
+  })
+
+  it("ignores a creation receipt from a Session the creator does not own", async () => {
+    let handle: CreatorReceiptHandle | undefined
+    render(
+      <CreatorReceiptFixture
+        capture={(value) => {
+          handle = value
+        }}
+      />
+    )
+    await screen.findByRole("button", { name: /^Aster,/ })
+    const before = handle!.refreshCalls()
+
+    await act(async () =>
+      handle!.emitActivity({
+        id: "receipt-1",
+        type: "agent-ready",
+        agentId: "agent-sora",
+        threadId: "thread-aster-market",
+        occurredAt: FIXTURE_NOW.toISOString(),
+      })
+    )
+
+    expect(handle!.refreshCalls()).toBe(before)
+    expect(screen.queryByText(en.creator.createdPending)).toBeNull()
+    expect(screen.getByRole("button", { name: /^Aster,/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    )
+  })
+
+  it("shows no draft after a reload of an interview that already created its Agent", async () => {
+    const user = userEvent.setup()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <BuilderLifecycleFixture
+        captureWorkspace={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = workspace!
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+    await act(async () =>
+      workspace!.completeAgentCreation(creatorSession.threadId, {
+        kind: "ready",
+        id: "agent-sora",
+        name: "Sora",
+      })
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^New Agent, draft/ })
+      ).toBeNull()
+    )
+
+    cleanup()
+    window.history.replaceState({}, "", "/")
+    render(
+      <CreatorFixtureAosUiApp
+        locale="en"
+        workspace={workspace}
+        initialThreadId={creatorSession.threadId}
+      />
+    )
+
+    await screen.findByRole("button", { name: /^Sora/ })
+    expect(
+      screen.queryByRole("button", { name: /^New Agent, draft/ })
+    ).toBeNull()
   })
 
   it("refreshes the Agent catalog only after provider-signaled Builder completion", async () => {
@@ -1851,7 +2156,7 @@ describe("AosUiApp fixture composition", () => {
     await act(async () => completeBuilder())
 
     expect(
-      await screen.findByRole("button", { name: "Sora" })
+      await screen.findByRole("button", { name: /^Sora/ })
     ).toBeInTheDocument()
   })
 

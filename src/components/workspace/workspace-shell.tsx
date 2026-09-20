@@ -37,6 +37,7 @@ import {
 } from "react"
 
 import { Button } from "@/components/ui/button"
+import { SystemNotice } from "@/components/ui/system-notice"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { cn } from "@/lib/utils"
@@ -122,6 +123,8 @@ export type WorkspaceShellProps = {
   activeThreadId: string | null
   environmentLabel?: string
   agentBuilderAvailable?: boolean
+  /** What AOS owes the operator about an Agent the creator just made. */
+  creatorNotice?: string
   onSelectAgent: (agentId: string) => WorkspaceActionResult
   onOpenSession: (threadId: string) => WorkspaceActionResult
   onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
@@ -1083,6 +1086,7 @@ export function WorkspaceShell({
   activeThreadId,
   environmentLabel,
   agentBuilderAvailable = true,
+  creatorNotice,
   onSelectAgent,
   onOpenSession,
   onCloseSession,
@@ -1503,6 +1507,11 @@ export function WorkspaceShell({
                     : toggleDesktopInspector
                 }
               />
+            </div>
+          ) : null}
+          {creatorNotice ? (
+            <div className="px-4 pt-3">
+              <SystemNotice tone="info" title={creatorNotice} locale={locale} />
             </div>
           ) : null}
           <main

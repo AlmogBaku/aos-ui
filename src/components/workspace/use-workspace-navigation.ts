@@ -2,6 +2,7 @@ import { useWorkspaceCatalog } from "./use-workspace-catalog"
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import type {
   HarnessRuntime,
   SessionMetadata,
   TodoItem,
+  WorkspaceActivityEvent,
 } from "@/runtime-adapters/contracts"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import type { Locale } from "@/lib/i18n/config"
@@ -48,11 +50,14 @@ import {
   nextDraftExpiry,
   projectDraftAgents,
   readResolvedDrafts,
+  writeResolvedDrafts,
 } from "@/runtime-adapters/draft-agents"
 
 const emptySessions: SessionMetadata[] = []
 const emptyTodos: TodoItem[] = []
 const MAX_TIMEOUT_MS = 2_147_483_647
+/** A created Agent can reach the native catalog a moment after its receipt. */
+const CREATED_AGENT_CATALOG_RETRY_MS = 1_000
 
 function readBrowserPathname() {
   return window.location.pathname
@@ -65,6 +70,21 @@ function readStoredResolvedDrafts(): ReadonlySet<string> {
   } catch {
     return new Set()
   }
+}
+
+function storeResolvedDraft(threadId: string) {
+  if (typeof window === "undefined") return
+  try {
+    const stored = readResolvedDrafts(window.localStorage)
+    stored.add(threadId)
+    writeResolvedDrafts(window.localStorage, stored)
+  } catch {
+    // Without storage a reload rebuilds the draft; the roster still wins.
+  }
+}
+
+function wait(delayMs: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs))
 }
 
 function useThreadListState(runtime: AssistantRuntime) {
@@ -318,6 +338,61 @@ export function useWorkspaceNavigation({
   useEffect(() => {
     setCreatorNotice(undefined)
   }, [pathname])
+
+  const refreshAgentCatalog = useCallback(async () => {
+    const next = await workspace.refreshAgents()
+    setAgents(next)
+    return next
+  }, [setAgents, workspace])
+
+  /**
+   * A creation receipt names an Agent the provider owns. The catalog decides
+   * when the draft is done: until the created Agent is listed, the interview
+   * stays exactly where the operator left it.
+   */
+  const acceptCreationReceipt = useEffectEvent(
+    async (event: WorkspaceActivityEvent) => {
+      const owner = publishedSessions.find(
+        ({ threadId }) => threadId === event.threadId
+      )?.agentId
+      if (!agentCreator || owner !== agentCreator.id) return
+      let catalog = await refreshAgentCatalog()
+      if (!catalog.some(({ id }) => id === event.agentId)) {
+        await wait(CREATED_AGENT_CATALOG_RETRY_MS)
+        catalog = await refreshAgentCatalog()
+      }
+      if (!catalog.some(({ id }) => id === event.agentId)) {
+        setCreatorNotice(dictionary.creator.createdPending)
+        return
+      }
+      setResolvedDrafts((current) =>
+        current.has(event.threadId)
+          ? current
+          : new Set(current).add(event.threadId)
+      )
+      storeResolvedDraft(event.threadId)
+      if (event.type === "agent-activation-failed") {
+        setCreatorNotice(dictionary.creator.createdHidden)
+        return
+      }
+      if (selectedAgentId !== draftAgentId(event.threadId)) return
+      // The created Agent owns no Session yet, and creation never invents one.
+      lastSelected.current.set(event.agentId, null)
+      setPreferredAgentId(event.agentId)
+      updateRoute({ agentId: event.agentId, sessionId: null }, "replace")
+    }
+  )
+
+  useEffect(() => {
+    if (!workspace.subscribeActivity) return
+    return workspace.subscribeActivity((event) => {
+      if (
+        event.type === "agent-ready" ||
+        event.type === "agent-activation-failed"
+      )
+        void acceptCreationReceipt(event)
+    })
+  }, [workspace])
 
   const selectRuntimeThread = useCallback(
     async (threadId: string) => {
