@@ -32,9 +32,12 @@ export function createActivitySoundPort(
   const note = () => {
     gestured = true
   }
+  const detach: (() => void)[] = []
   try {
-    window.addEventListener("pointerdown", note, { once: true, passive: true })
-    window.addEventListener("keydown", note, { once: true, passive: true })
+    for (const type of ["pointerdown", "keydown"] as const) {
+      window.addEventListener(type, note, { once: true, passive: true })
+      detach.push(() => window.removeEventListener(type, note))
+    }
   } catch {
     /* Without a window the cue simply never plays. */
   }
@@ -64,7 +67,14 @@ export function createActivitySoundPort(
         /* A blocked or detached element never breaks the workspace. */
       }
     },
+    /** A stopped cue also stops waiting for the gesture that would arm it. */
     stop() {
+      for (const remove of detach.splice(0)) {
+        try {
+          remove()
+        } catch {}
+      }
+      gestured = false
       try {
         element?.pause()
       } catch {}

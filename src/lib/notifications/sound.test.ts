@@ -30,6 +30,18 @@ describe("the urgent sound cue", () => {
     expect(audio.pause).toHaveBeenCalledTimes(1)
   })
 
+  it("stops listening for the gesture that would arm it", () => {
+    const audio = fakeAudio()
+    const sound = createActivitySoundPort(audio)
+
+    sound.stop()
+    window.dispatchEvent(new Event("pointerdown"))
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }))
+    sound.play()
+
+    expect(audio.play).not.toHaveBeenCalled()
+  })
+
   it("swallows a refused playback and a failing element", () => {
     const audio = {
       currentTime: 0,
