@@ -8,6 +8,7 @@ import {
   type PreviewServer,
   type ViteDevServer,
 } from "vite"
+import { VitePWA } from "vite-plugin-pwa"
 
 import {
   resolveRuntimeConfiguration,
@@ -143,6 +144,56 @@ export default defineConfig(({ mode }) => {
       react(),
       runtimeConfigurationPlugin(environment),
       e2eReadinessPlugin(environment),
+      // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest
+      // injected, no offline shell, and no registration script in the HTML.
+      VitePWA({
+        strategies: "injectManifest",
+        srcDir: "src/sw",
+        filename: "sw.ts",
+        injectManifest: { injectionPoint: undefined, rollupFormat: "iife" },
+        injectRegister: false,
+        manifest: {
+          id: "/",
+          name: "AOS",
+          short_name: "AOS",
+          // Same sentence as the `description` meta tag in `index.html`.
+          description:
+            "A multilingual workspace for provider-owned AI agents and sessions.",
+          start_url: "/",
+          scope: "/",
+          display: "standalone",
+          dir: "auto",
+          lang: "en",
+          background_color: "#fcfcfd",
+          theme_color: "#232326",
+          icons: [
+            {
+              src: "/icons/pwa-64x64.png",
+              sizes: "64x64",
+              type: "image/png",
+              purpose: "any",
+            },
+            {
+              src: "/icons/pwa-192x192.png",
+              sizes: "192x192",
+              type: "image/png",
+              purpose: "any",
+            },
+            {
+              src: "/icons/pwa-512x512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "any",
+            },
+            {
+              src: "/icons/maskable-icon-512x512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "maskable",
+            },
+          ],
+        },
+      }),
     ],
     resolve: {
       alias: {
