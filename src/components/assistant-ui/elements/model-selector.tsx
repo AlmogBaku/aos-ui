@@ -385,6 +385,13 @@ export function ModelSelectorContent({
       {showSearch ? (
         <ComboboxInput
           aria-label={labels.search}
+          // The popup opens with this field focused, and a focused text input
+          // always matches `:focus-visible`, so the registry's 3px ring and
+          // violet border are permanent chrome rather than a state signal:
+          // together they outweigh the roster they serve. This is the same ring
+          // the trigger and the retry button above already use, and it leaves
+          // the field's resting border alone.
+          className="has-[[data-slot=input-group-control]:focus-visible]:border-input/30 has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/40"
           placeholder={labels.searchPlaceholder}
           showTrigger={false}
         />
@@ -395,7 +402,12 @@ export function ModelSelectorContent({
           against the effort divider. `scroll-fade-y` is the registry's own
           scroll-driven answer: it fades only the edge that still has rows
           behind it, and maps position rather than time. */}
-      <ComboboxList className="scroll-fade-y">
+      {/* The registry's fade is deeper than a row is tall, and the list opens
+          scrolled to the selected model, which lands it flush against an edge
+          and ghosts the one row the operator came for. Scroll padding as deep
+          as the fade keeps every row the list scrolls to, on open and on arrow
+          keys alike, clear of it. */}
+      <ComboboxList className="scroll-fade-y scroll-py-10">
         <ComboboxCollection>
           {(group: ModelOptionGroup) => (
             <ComboboxGroup
@@ -412,7 +424,9 @@ export function ModelSelectorContent({
               <ComboboxCollection>
                 {(model: ModelOption) => (
                   <ComboboxItem
-                    className="rounded-lg py-1.5 data-selected:font-medium [@media(pointer:coarse)]:min-h-11"
+                    // `ps-2` puts a row's name on the same inset as the group
+                    // heading above it, so the roster reads as one left edge.
+                    className="rounded-lg py-1 ps-2 data-selected:font-medium [@media(pointer:coarse)]:min-h-11"
                     key={model.id}
                     value={model}
                   >
