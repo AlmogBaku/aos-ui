@@ -125,28 +125,45 @@ function planTodos(event: ActivityEvent) {
   return parsed.success ? parsed.data : undefined
 }
 
+type Step = { state: TranslateState; outbound: AcpOutbound[] }
+
 function customOutbound(
   state: TranslateState,
   context: TranslateContext,
   event: RunEventOf<typeof RunEventKind.CUSTOM>
-): AcpOutbound[] {
+): Step {
   if (event.name === "aos.artifact") {
     const artifact = AosArtifactDescriptorSchema.safeParse(event.value)
-    if (!artifact.success) return []
-    return [
-      {
-        kind: "artifact",
-        runId: context.runId,
-        ...(state.messageId ? { messageId: state.messageId } : {}),
-        artifact: artifact.data,
-      },
-    ]
+    if (!artifact.success) return { state, outbound: [] }
+    return {
+      state,
+      outbound: [
+        {
+          kind: "artifact",
+          runId: context.runId,
+          ...(state.messageId ? { messageId: state.messageId } : {}),
+          artifact: artifact.data,
+        },
+      ],
+    }
   }
-  if (event.name !== "aos.steer.accepted") return []
+  if (event.name !== "aos.steer.accepted") return { state, outbound: [] }
+  // The replayed history already carried this correction as the user turn
+  // Hermes persisted the moment it accepted the redirect, so announcing it
+  // again would show the same words twice. Acceptances arrive in the order
+  // history recorded them, so counting them down is enough.
+  if (state.replayedCorrections > 0)
+    return {
+      state: { ...state, replayedCorrections: state.replayedCorrections - 1 },
+      outbound: [],
+    }
   const accepted = SteerAcceptedSchema.safeParse(event.value)
-  return accepted.success
-    ? [{ kind: "steer-accepted", runId: context.runId, ...accepted.data }]
-    : []
+  return {
+    state,
+    outbound: accepted.success
+      ? [{ kind: "steer-accepted", runId: context.runId, ...accepted.data }]
+      : [],
+  }
 }
 
 function finishedOutbound(
@@ -200,8 +217,6 @@ function errorOutbound(
     ),
   ]
 }
-
-type Step = { state: TranslateState; outbound: AcpOutbound[] }
 
 function toolStarted(
   state: TranslateState,
@@ -325,7 +340,7 @@ export const translateRunEvent = ((state, event: RunEvent, context) => {
       return { state, outbound: plan }
     }
     case RunEventKind.CUSTOM:
-      return { state, outbound: customOutbound(state, context, event) }
+      return customOutbound(state, context, event)
     case RunEventKind.RUN_FINISHED:
       return {
         state: initialTranslateState,

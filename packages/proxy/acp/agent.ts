@@ -220,13 +220,17 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   async function attachPositioned(
     attachment: SessionAttachment,
     scope: SessionScope,
-    meta: { runId?: string; after?: number }
+    meta: { runId?: string; after?: number },
+    replayedCorrections = 0
   ) {
     const positioned =
       meta.runId === undefined ||
       meta.runId === coordinator.snapshot(scope).runId
     try {
-      await attachment.attach(positioned ? meta.after : undefined)
+      await attachment.attach(
+        positioned ? meta.after : undefined,
+        replayedCorrections
+      )
       return positioned ? {} : { resync: true }
     } catch {
       return { resync: true }
@@ -266,17 +270,21 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (coordinator.state(scope) === "waiting-for-input")
       await workspace.discover(scope)
     const attachment = sessions.attach(client, scope)
-    if (params.replayFrom?.type === "start")
+    // Counted on the authoritative page, before the guest projection rebuilds
+    // its messages: that projection keeps no user-turn metadata.
+    let corrections = 0
+    if (params.replayFrom?.type === "start") {
+      const history = SessionHistoryResponseSchema.parse(
+        await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+      )
+      corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(
-        policy.project.history(
-          SessionHistoryResponseSchema.parse(
-            await workspace.history(scope, HISTORY_REPLAY_LIMIT)
-          )
-        ),
+        policy.project.history(history),
         lane
       ))
         await attachment.send(outbound)
-    const resync = await attachPositioned(attachment, scope, meta)
+    }
+    const resync = await attachPositioned(attachment, scope, meta, corrections)
     const execution = coordinator.snapshot(scope)
     afterResponse(attachment, async () => {
       await attachment.reportExecution()
@@ -417,15 +425,18 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
       await workspace.discover(scope)
     const attachment = sessions.attach(client, scope)
-    if (params.replayFrom?.type === "start")
-      for (const outbound of translators.translateHistory(
-        await workspace.history(scope, HISTORY_REPLAY_LIMIT),
-        lane
-      ))
+    // A correction the provider persisted the moment it accepted the steer is
+    // already in this page, so the journal's acknowledgement of it is dropped.
+    let corrections = 0
+    if (params.replayFrom?.type === "start") {
+      const history = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+      corrections = translators.persistedCorrections(history)
+      for (const outbound of translators.translateHistory(history, lane))
         await attachment.send(outbound)
+    }
     // A cursor for another run cannot position this one, and a cursor beyond
     // bounded replay cannot be served: both need a full reload.
-    const resync = await attachPositioned(attachment, scope, meta)
+    const resync = await attachPositioned(attachment, scope, meta, corrections)
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is
     // scheduled: `afterResponse` fires on the next task, so a read awaited

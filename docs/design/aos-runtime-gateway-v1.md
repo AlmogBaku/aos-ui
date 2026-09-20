@@ -227,7 +227,12 @@ REST remains only for bytes: attachment staging, artifact download, audio transc
 
 The `_aos/session/steer` request carries `{ sessionId, requestId, text }`.
 `requestId` provides mutation idempotency and `text` is non-empty UTF-8.
-`steered` or provider-accepted `queued` arrives as `_aos/steer_accepted`.
+`steered` or provider-accepted `queued` arrives as `_aos/steer_accepted`, which
+the browser projects as a user turn appended in arrival order. A provider that
+persists the correction the moment it accepts it makes that turn part of
+authoritative history, so a from-start resume announces each persisted
+correction exactly once: the history row wins and the journal's acknowledgement
+of it is dropped, in acceptance order.
 
 Steering is optional and capability-gated. It accepts non-empty text only,
 requires the browser's expected active `runId`, and deduplicates a bounded set

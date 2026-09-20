@@ -3,12 +3,17 @@ import type {
   SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionMessage } from "../../../protocol"
+import type { SessionHistoryResponse, SessionMessage } from "../../../protocol"
 import {
   AOS_META_KEY,
   AosArtifactDescriptorSchema,
 } from "../../../protocol/acp"
-import type { AcpOutbound, Lane, TranslateHistory } from "../types"
+import type {
+  AcpOutbound,
+  Lane,
+  PersistedCorrections,
+  TranslateHistory,
+} from "../types"
 import { planUpdate } from "./updates"
 
 type MessagePart = SessionMessage["content"][number]
@@ -162,3 +167,21 @@ export const translateHistory = ((history, lane) => {
   }
   return outbound
 }) satisfies TranslateHistory
+
+/** A user turn the provider persisted as a mid-turn correction. */
+function isCorrection(message: SessionHistoryResponse["messages"][number]) {
+  return message.role === "user" && message.metadata?.custom.correction === true
+}
+
+/**
+ * How many of the live run's steer acknowledgements this history already carried
+ * as user turns. Only the corrections after the running turn's prompt count: the
+ * provider cannot persist another prompt while a turn runs, so every flagged
+ * user turn beyond the last plain one belongs to the run the journal replays.
+ */
+export const persistedCorrections = ((history) => {
+  const users = history.messages.filter((message) => message.role === "user")
+  // No plain prompt in the page leaves every flagged turn to count.
+  const prompt = users.findLastIndex((message) => !isCorrection(message))
+  return users.length - prompt - 1
+}) satisfies PersistedCorrections

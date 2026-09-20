@@ -23,7 +23,6 @@ import { createPortal } from "react-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createComposerHistorySelector,
-  SteerAcceptedDataUI,
   Thread,
   THREAD_VIEWPORT_SCROLL_BEHAVIOR,
   type ThreadComponents,
@@ -44,6 +43,7 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 
 const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
 const matchMediaDescriptor = Object.getOwnPropertyDescriptor(
@@ -74,12 +74,6 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(window, "matchMedia")
   }
-})
-
-describe("active-turn steering data UI", () => {
-  it("registers the replayable steering acknowledgement event", () => {
-    expect(SteerAcceptedDataUI.unstable_data.name).toBe("aos.steer.accepted")
-  })
 })
 
 describe("composer history performance", () => {
@@ -2193,6 +2187,64 @@ describe("Thread accessibility", () => {
     expect(removeButton).toBeEnabled()
     expect(screen.getByText("keep on failure")).toBeVisible()
     expect(screen.getAllByText("Could not steer").length).toBeGreaterThan(0)
+  })
+
+  it("clears a queued row once its correction lands as a user turn", async () => {
+    const user = userEvent.setup()
+    let runtime: AssistantRuntime | undefined
+    const run = vi.fn(async () => {
+      await new Promise(() => undefined)
+      return { content: [] }
+    })
+    let steered: string | undefined
+    const steer = vi.fn(async ({ requestId }: { requestId: string }) => {
+      steered = requestId
+      await new Promise(() => undefined)
+      return { status: "steered" as const }
+    })
+    render(
+      <LocalThread
+        model={{ run }}
+        enableMessageQueue
+        initialMessages={[]}
+        composerFeatures={{ steer }}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "running")
+    await user.keyboard("{Control>}{Enter}{/Control}")
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await user.type(input, "correct now")
+    await user.keyboard("{Control>}{Enter}{/Control}")
+    await user.click(
+      await screen.findByRole("button", { name: "Steer queued message" })
+    )
+    await waitFor(() => expect(steered).toBeTypeOf("string"))
+
+    act(() => {
+      runtime?.thread.reset([
+        {
+          id: "u1",
+          role: "user",
+          content: [{ type: "text", text: "running" }],
+        },
+        {
+          id: steerMessageId(steered!),
+          role: "user",
+          content: [{ type: "text", text: "correct now" }],
+        },
+      ])
+    })
+
+    await waitFor(() =>
+      expect(runtime?.thread.composer.getState().queue).toHaveLength(0)
+    )
+    expect(
+      screen.queryByRole("region", { name: "Queued messages" })
+    ).not.toBeInTheDocument()
   })
 
   it("turns an uncertain queued steer into a non-sending receipt", async () => {

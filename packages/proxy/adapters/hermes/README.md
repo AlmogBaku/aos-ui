@@ -64,6 +64,10 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   output but cannot replace reconciliation.
 - `session.redirect` implements active-turn steering. Both `redirected` and
   `queued` are accepted results and must not be replayed.
+- Hermes persists an accepted redirect immediately, as a plain user row whose
+  `api_content` carries the interrupted-response scaffold. A from-start resume
+  therefore drops the journal acknowledgements that history already carried,
+  counted in acceptance order, so the correction is announced once.
 - A redirect can close one assistant generation and begin another without a
   second logical run or `RUN_STARTED`.
 - `session.interrupt` requests Stop; the coordinator remains `stopping` until a

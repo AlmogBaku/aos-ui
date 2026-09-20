@@ -15,6 +15,7 @@ import {
   initialTranslateState,
   type AcpOutbound,
   type TranslateContext,
+  type TranslateState,
 } from "../types"
 import { translateRunEvent } from "./run-events"
 
@@ -25,8 +26,12 @@ const context: TranslateContext = {
   stopping: false,
 }
 
-function translate(events: RunEvent[], overrides?: Partial<TranslateContext>) {
-  let state = initialTranslateState
+function translate(
+  events: RunEvent[],
+  overrides?: Partial<TranslateContext>,
+  initial: TranslateState = initialTranslateState
+) {
+  let state = initial
   const outbound: AcpOutbound[] = []
   for (const event of events) {
     const step = translateRunEvent(state, event, { ...context, ...overrides })
@@ -587,6 +592,34 @@ describe("translateRunEvent extensions", () => {
         { type: RunEventKind.CUSTOM, name: "aos.steer.accepted", value },
       ]).outbound
     ).toEqual([{ kind: "steer-accepted", runId: "run-1", ...value }])
+  })
+
+  it("drops the acceptances the replayed history already carried", () => {
+    const accepted = (requestId: string, text: string): RunEvent => ({
+      type: RunEventKind.CUSTOM,
+      name: "aos.steer.accepted",
+      value: { requestId, text, delivery: "steered" },
+    })
+
+    const replay = translate(
+      [accepted("s1", "first"), accepted("s2", "second")],
+      undefined,
+      { ...initialTranslateState, replayedCorrections: 2 }
+    )
+
+    expect(replay.outbound).toEqual([])
+    expect(replay.state.replayedCorrections).toBe(0)
+    expect(
+      translate([accepted("s3", "third")], undefined, replay.state).outbound
+    ).toEqual([
+      {
+        kind: "steer-accepted",
+        runId: "run-1",
+        requestId: "s3",
+        text: "third",
+        delivery: "steered",
+      },
+    ])
   })
 
   it("drops a steer acceptance with an unknown delivery", () => {

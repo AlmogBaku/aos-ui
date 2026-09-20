@@ -53,7 +53,6 @@ import type { ComposerFeatureViewModel } from "@/components/assistant-ui/compose
 import {
   isUncertainDelivery,
   MessageQueue,
-  STEER_ACCEPTED_DATA_NAME,
   type UnconfirmedDelivery,
 } from "@/components/assistant-ui/elements/message-queue"
 import { useThreadReadingPosition } from "./thread-reading-position"
@@ -88,7 +87,6 @@ import {
   useAui,
   useAuiEvent,
   useAuiState,
-  makeAssistantDataUI,
   unstable_useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
 import {
@@ -225,7 +223,6 @@ export type ThreadLabels = {
   steeringQueuedMessage?: string | undefined
   steeringFailed?: string | undefined
   deliveryUnconfirmed?: string | undefined
-  steeredCorrection?: string | undefined
   previous: string
   next: string
   conversationHeading?: string | undefined
@@ -296,7 +293,6 @@ const DEFAULT_LABELS: ThreadLabels = {
   steeringQueuedMessage: "Steering queued message",
   steeringFailed: "Could not steer",
   deliveryUnconfirmed: "Delivery unconfirmed",
-  steeredCorrection: "Steering correction",
   previous: "Previous",
   next: "Next",
   conversationHeading: "Conversation",
@@ -346,38 +342,6 @@ const MessageRewindContext = createContext<
 const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
   {}
 )
-
-function SteeredCorrectionPart({ data }: { data: unknown }) {
-  const labels = useContext(ThreadLabelsContext)
-  if (!data || typeof data !== "object") return null
-  const value = data as Record<string, unknown>
-  if (
-    typeof value.requestId !== "string" ||
-    typeof value.text !== "string" ||
-    (value.delivery !== "steered" && value.delivery !== "queued")
-  )
-    return null
-  return (
-    <div
-      data-slot="aui_steered-correction"
-      className="my-3 flex justify-end"
-      role="status"
-      aria-label={labels.steeredCorrection}
-    >
-      <div
-        className="max-w-[30rem] rounded-xl bg-muted px-4 py-2 leading-6 wrap-break-word text-foreground"
-        dir="auto"
-      >
-        {value.text}
-      </div>
-    </div>
-  )
-}
-
-export const SteerAcceptedDataUI = makeAssistantDataUI<unknown>({
-  name: STEER_ACCEPTED_DATA_NAME,
-  render: SteeredCorrectionPart,
-})
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -449,7 +413,6 @@ export const Thread: FC<ThreadProps> = ({
         <MessageRewindContext.Provider value={messageRewind}>
           <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
             <ThreadComponentsContext.Provider value={components}>
-              <SteerAcceptedDataUI />
               <ThreadRoot
                 isEmpty={isEmpty}
                 autoFocus={autoFocus}
