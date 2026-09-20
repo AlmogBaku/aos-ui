@@ -5,13 +5,29 @@ After=network-online.target docker.service
 Requires=docker.service
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 WorkingDirectory=@AOS_CHECKOUT@
 EnvironmentFile=/etc/aos-ui/aos-ui.env
-ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml up --remove-orphans
-ExecStop=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ -f /etc/aos-ui/compose.yaml down
-Restart=always
-RestartSec=5
+# Add a third -f for a host overlay if needed:
+# ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
+#   -f @AOS_CHECKOUT@/compose.yaml \
+#   -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
+#   -f /etc/aos-ui/compose.override.yaml \
+#   up --detach --build --remove-orphans --wait
+ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
+  -f @AOS_CHECKOUT@/compose.yaml \
+  -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
+  up --detach --build --remove-orphans --wait
+ExecStop=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
+  -f @AOS_CHECKOUT@/compose.yaml \
+  -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
+  down
+ExecReload=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
+  -f @AOS_CHECKOUT@/compose.yaml \
+  -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
+  up --detach --build --remove-orphans --wait
+TimeoutStartSec=10min
 TimeoutStopSec=90
 
 [Install]

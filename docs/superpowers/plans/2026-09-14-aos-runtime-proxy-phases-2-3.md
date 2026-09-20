@@ -1,7 +1,6 @@
 # AOS Runtime Proxy Phases 2 and 3
 
-> Status: approved and executing. D0 is complete; OpenCode and OpenClaw
-> foundations are in progress in parallel.
+> Status (2026-09-20): complete; OpenClaw and OpenCode adapters shipped.
 
 ## Goal
 

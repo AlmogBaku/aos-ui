@@ -22,7 +22,9 @@ chmod 600 /absolute/private/path/guest-invite-signing-key
 
 The guest listener must have its own origin and port. It uses the same selected
 runtime instance as the trusted operator listener; do not configure a second
-provider token or runtime.
+provider token or runtime. Up to three signing keys may be configured for
+rotation (`guest.invitations.keys`); the proxy accepts tokens signed by any
+of them.
 
 ## Prepare the invited Agent
 
@@ -40,9 +42,13 @@ Likewise, invitation scope restricts the guest to one Agent and conversation,
 but it does not sandbox the Agent itself.
 
 Slash-command suggestions are hidden in the guest composer by default. Set
-`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them. This is
-only a presentation flag: it does not add an authorization boundary or change
-how submitted text is handled.
+`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them. This
+flag is forwarded only by `compose.hermes.yaml`; other overlays do not pass it.
+It is only a presentation flag: it does not add an authorization boundary or
+change how submitted text is handled.
+
+The `limits.guestActiveExecutions` proxy config field caps concurrent guest
+runs. It must not exceed `limits.activeExecutions`.
 
 ## Create an invitation
 
@@ -60,7 +66,9 @@ AOS_RUNTIME_PROXY_CONFIG=/absolute/path/proxy-config.json \
 ```
 
 The packaged native integration skill instead sends one POST to the trusted
-operator proxy's `/api/aos/v1/guest-invitations` endpoint. Set
+operator proxy's `/api/aos/v1/guest-invitations` endpoint. That endpoint
+requires the `Origin` header to match the operator `publicOrigin`; a missing
+or mismatched origin returns 403. An unknown Agent ID returns 404. Set
 `AOS_RUNTIME_PROXY_URL` to the configured operator origin in the Hermes
 environment; native and containerized installs need only network access to
 that listener, not the signing key. The endpoint accepts the same invitation
@@ -74,7 +82,8 @@ runtime should receive once when the invited Session is created.
 The command prints a URL whose fragment contains the invitation. The fragment
 stays in the guest URL so refresh can authenticate again; URL fragments are not
 sent in HTTP requests. The browser authenticates by sending the token as the
-`_meta.aos.token` of an `auth/login` ACP request on the guest connection.
+`_meta.aos.token` of an `auth/login` ACP request with method `aos-invite` on
+the guest connection.
 
 > [!WARNING]
 > The JWT is signed, not encrypted. Its holder can read the Agent ID,

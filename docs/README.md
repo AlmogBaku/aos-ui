@@ -32,3 +32,11 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 Internal product and visual authorities are intentionally separate from this operator set. Contributors and automation Agents should follow [`AGENTS.md`](../AGENTS.md).
 Runtime adapter contributors should start with the
 [development documentation](development/README.md).
+
+## Internal authorities
+
+- [ACP browser-wire contract](runtimes/acp.md) — ACP v2 message schema, extension negotiation, and `_aos/*` notifications.
+- [Visual design lock](design/agent-workspace-design-lock.md) — binding visual direction for workspace UI.
+- [Runtime gateway architecture](design/aos-runtime-gateway-architecture.md) — normative server-side gateway design.
+
+`docs/development/` contains retrospectives and transport audits. `docs/research/` and `docs/superpowers/plans/` are dated historical records; treat them as background only.

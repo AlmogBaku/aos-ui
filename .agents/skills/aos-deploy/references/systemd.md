@@ -5,14 +5,38 @@ are starting points, not host-independent commands.
 
 ## Private operator UI
 
-Copy `deploy/systemd/aos-ui.service.template` to `/etc/systemd/system/aos-ui.service`, replacing `@AOS_CHECKOUT@`. Copy the selected Compose definition to `/etc/aos-ui/compose.yaml` and create `/etc/aos-ui/aos-ui.env` with values needed by that Compose file. Bind the published web port to loopback or an explicitly trusted private interface. Do not put a public DNS host or guest proxy route in this service.
+Copy `deploy/systemd/aos-ui.service.template` to `/etc/systemd/system/aos-ui.service`,
+replacing `@AOS_CHECKOUT@` with the absolute checkout path and `@AOS_RUNTIME@` with
+the selected runtime name (e.g. `hermes`, `openclaw`, `opencode`). Optionally add a
+third `-f` for a host overlay. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` in
+`/etc/aos-ui/aos-ui.env` to match the host user the containers should run as; the
+runtime overlays use these to set `user:` and volume ownership.
+Bind the published web port to loopback or an explicitly trusted private interface.
+Do not put a public DNS host or guest proxy route in this service.
+
+Check for an existing host runbook (an untracked operator-specific guide) before
+planning any changes to services or configuration.
 
 Validate before enabling:
 
 ```bash
 systemd-analyze verify /etc/systemd/system/aos-ui.service
-docker compose --project-directory /absolute/path/to/aos-ui -f /etc/aos-ui/compose.yaml config --quiet
+docker compose --project-directory /absolute/path/to/aos-ui \
+  -f /absolute/path/to/aos-ui/compose.yaml \
+  -f /absolute/path/to/aos-ui/compose.<runtime>.yaml \
+  config --quiet
 ```
+
+Inspect both system and user units — review and dev proxies often run in user
+scope:
+
+```bash
+systemctl list-units 'aos*'
+systemctl --user list-units 'aos*'
+```
+
+Use `readyz` (`/api/aos/v1/readyz`) to confirm the proxy is ready, not only
+`healthz`.
 
 ## Gateway configuration and secrets
 
@@ -22,35 +46,36 @@ host copy outside the checkout, and point `AOS_UI_PROXY_CONFIG_FILE` at that
 absolute path from `/etc/aos-ui/aos-ui.env`. The same configuration defines the
 distinct operator and optional guest listeners and selects one runtime.
 
-Set the Compose secret-file variables for the Hermes token, reconnect cursor
-key, and optional guest invitation key. Create and protect those files with the
-host's documented secret-management workflow. If encrypted credentials are
-unavailable, use root-owned mode-0600 files mounted as Compose secrets; do not
-put secret values in a world-readable unit, `.env`, shell profile, proxy JSON,
-or browser runtime JSON.
+Set the Compose secret-file variables for the Hermes token and optional guest
+invitation signing key (`compose.hermes.yaml` secrets block). Create and protect
+those files with the host's documented secret-management workflow. If encrypted
+credentials are unavailable, use root-owned mode-0600 files mounted as Compose
+secrets; do not put secret values in a world-readable unit, `.env`, shell
+profile, proxy JSON, or browser runtime JSON.
 
-The operator listener remains loopback-only. The public reverse proxy points
-only at the address published with `AOS_UI_GUEST_BIND_ADDRESS` and
+Published ports are commonly overridden in a host overlay; the operator listener
+remains loopback-only regardless. The public reverse proxy points only at the
+address published with `AOS_UI_GUEST_BIND_ADDRESS` and
 `AOS_UI_GUEST_PUBLISHED_PORT`; it never points at the operator listener or the
-Hermes native port.
+native runtime port.
 
-## Proxy and optional Cloudflare Tunnel
+## Reverse proxy and optional Cloudflare Tunnel
 
-Copy `aos-guest-nginx.conf.template` into the selected proxy, substitute the
-guest hostname and guest port, configure its normal TLS certificate, then
-validate the generated configuration with that proxy's native test command.
-It must be a separate guest virtual host, so an unmatched route cannot fall
-through to a private AOS or Hermes host.
+Route the guest hostname to the guest listener only. The Bun proxy already
+blocks reserved paths — requests to `/auth` and `/hermes` on the guest surface
+return 404 (`packages/proxy/cli/serve.ts:23`). Configure a separate guest
+virtual host so an unmatched route cannot fall through to a private AOS or
+native runtime host.
 
 If the operator explicitly selected Cloudflare Tunnel, its single ingress
-hostname may point to the loopback guest listener. Route `/api/guest/*` and the
-guest UI to that listener; do not add `/hermes`, `/auth`, the operator listener,
-or the native runtime as tunnel ingress services. DNS/tunnel credentials are
-operator-managed external state and require confirmation before changing.
+hostname may point to the loopback guest listener. Do not add `/hermes`,
+`/auth`, the operator listener, or the native runtime as tunnel ingress
+services. DNS/tunnel credentials are operator-managed external state and require
+confirmation before changing.
 
 Verify unauthenticated `GET /api/guest/v1/runtime` returns `401` through the
 guest host. Confirm the operator host cannot resolve guest routes, the guest
-host cannot resolve `/api/aos/v1`, and neither host proxies native Hermes
+host cannot resolve `/api/aos/v1`, and neither host proxies native runtime
 routes.
 
 ## Hermes plugin upgrades
