@@ -1500,6 +1500,11 @@ export function WorkspaceShell({
               />
             </div>
           ) : null}
+          {/* The ask persists until answered, so it sits above the conversation
+              instead of over the composer. */}
+          {!navigationHidden && !modalDrawerOpen ? (
+            <ActivityAsk dictionary={dictionary} settings={browserSettings} />
+          ) : null}
           <main
             className={styles.conversation}
             data-keyboard-region="conversation"
@@ -1692,15 +1697,11 @@ export function WorkspaceShell({
         </FocusDrawer>
 
         {!navigationHidden && !modalDrawerOpen ? (
-          activity?.notice ? (
-            <ActivityNotice
-              notice={activity.notice}
-              dictionary={dictionary}
-              onDismiss={() => activity.dismissNotice()}
-            />
-          ) : (
-            <ActivityAsk dictionary={dictionary} settings={browserSettings} />
-          )
+          <ActivityNotice
+            notice={activity?.notice ?? null}
+            dictionary={dictionary}
+            onDismiss={() => activity?.dismissNotice()}
+          />
         ) : null}
         {!navigationHidden ? (
           <FocusDrawer

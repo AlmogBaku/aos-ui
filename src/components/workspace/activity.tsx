@@ -277,7 +277,7 @@ export function ActivityNotice({
   )
 }
 
-/** The one-time offer to turn OS alerts on, shown beside the conversation. */
+/** The one-time offer to turn OS alerts on, banner-style above the conversation. */
 export function ActivityAsk({
   dictionary,
   settings,
@@ -293,12 +293,14 @@ export function ActivityAsk({
   const installFirst = settings.iosInstallHint && !("Notification" in window)
   return (
     <section className={styles.ask} aria-labelledby={headingId}>
-      <h2 id={headingId} className={styles.askTitle}>
-        {copy.askTitle}
-      </h2>
-      {settings.push === "available" ? (
-        <p className={styles.explanation}>{copy.askClosed}</p>
-      ) : null}
+      <div className={styles.askText}>
+        <h2 id={headingId} className={styles.askTitle}>
+          {copy.askTitle}
+        </h2>
+        {settings.push === "available" ? (
+          <p className={styles.explanation}>{copy.askClosed}</p>
+        ) : null}
+      </div>
       {installFirst ? (
         <p className={styles.explanation}>{copy.pushIosHint}</p>
       ) : (

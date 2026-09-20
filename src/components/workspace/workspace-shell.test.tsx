@@ -1099,14 +1099,7 @@ describe("WorkspaceShell", () => {
     await waitFor(() => expect(onActionError).toHaveBeenCalledWith(error))
   })
 
-  it("offers the notification ask beside the conversation, behind an arriving notice", () => {
-    const ask = renderShell({ browserSettings: askSettings })
-
-    expect(
-      screen.getByRole("region", { name: en.activity.askTitle })
-    ).toBeVisible()
-    ask.unmount()
-
+  it("offers the notification ask above the conversation, alongside any notice", () => {
     renderShell({
       browserSettings: askSettings,
       activity: {
@@ -1121,11 +1114,20 @@ describe("WorkspaceShell", () => {
       },
     })
 
+    const ask = screen.getByRole("region", { name: en.activity.askTitle })
+    expect(ask).toBeVisible()
+    // The ask is part of the conversation column, ahead of the thread itself.
+    const conversation = screen.getByRole("main", {
+      name: en.workspace.conversation,
+    })
+    expect(
+      ask.compareDocumentPosition(conversation) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(screen.getByText("Assistant UI conversation")).toBeVisible()
+    // A transient notice no longer competes with it for one slot.
     expect(screen.getByRole("alert")).toHaveTextContent(
       en.activity.urgentNotice
     )
-    expect(
-      screen.queryByRole("region", { name: en.activity.askTitle })
-    ).toBeNull()
   })
 })
