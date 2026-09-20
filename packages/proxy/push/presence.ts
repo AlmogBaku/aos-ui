@@ -24,7 +24,10 @@ export interface PresenceRegistry {
   clear(principalId: string, connectionId: string): void
   present(principalId: string): boolean
   exposed(principalId: string, sessionId: string): boolean
-  /** Unix ms of the last report that held presence; absent if none ever did. */
+  /**
+   * Unix ms of the moment presence last held for this principal: the last report
+   * that held it, or the moment it stopped holding. Absent if it never held.
+   */
   lastPresentAt(principalId: string): number | undefined
 }
 
@@ -42,6 +45,13 @@ type Principal = { connections: Map<string, Entry>; lastPresentAt?: number }
 
 const holdsPresence = (entry: Entry) => entry.foreground && !entry.idle
 
+const isFresh = (entry: Entry, at: number) =>
+  at - entry.reportedAt <= STALE_AFTER_MS
+
+/** True when this connection was holding presence right up to `at`. */
+const wasPresent = (entry: Entry | undefined, at: number) =>
+  entry !== undefined && holdsPresence(entry) && isFresh(entry, at)
+
 export function createPresenceRegistry({
   now = Date.now,
 }: { now?: () => number } = {}): PresenceRegistry {
@@ -51,7 +61,7 @@ export function createPresenceRegistry({
   const some = (principalId: string, matches: (entry: Entry) => boolean) => {
     const at = now()
     for (const entry of principals.get(principalId)?.connections.values() ?? [])
-      if (at - entry.reportedAt <= STALE_AFTER_MS && matches(entry)) return true
+      if (isFresh(entry, at) && matches(entry)) return true
     return false
   }
 
@@ -62,13 +72,23 @@ export function createPresenceRegistry({
       }
       principals.set(principalId, principal)
       const reportedAt = now()
+      const previous = principal.connections.get(connectionId)
       const entry: Entry = { ...report, reportedAt }
       principal.connections.set(connectionId, entry)
-      if (holdsPresence(entry)) principal.lastPresentAt = reportedAt
+      // Presence lapses the moment it stops holding, not one heartbeat earlier:
+      // a connection that goes to the background or idle has been present until
+      // exactly now, and a grace window is measured from here.
+      if (holdsPresence(entry) || wasPresent(previous, reportedAt))
+        principal.lastPresentAt = reportedAt
     },
 
     clear(principalId, connectionId) {
-      principals.get(principalId)?.connections.delete(connectionId)
+      const principal = principals.get(principalId)
+      const removed = principal?.connections.get(connectionId)
+      if (!principal || !removed) return
+      principal.connections.delete(connectionId)
+      const at = now()
+      if (wasPresent(removed, at)) principal.lastPresentAt = at
     },
 
     present(principalId) {

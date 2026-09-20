@@ -260,6 +260,8 @@ describe("push dispatcher", () => {
       foreground: true,
       idle: false,
     })
+    // The grace runs from the close, not from the last heartbeat before it.
+    const closedAt = START + 30_000
     test.clock.advance(30_000)
     test.presence.clear(OPERATOR, CONNECTION)
 
@@ -272,7 +274,7 @@ describe("push dispatcher", () => {
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
     expect(test.send.mock.calls[0]![1]).toMatchObject({
-      occurredAt: new Date(START + PRESENCE_GRACE_MS).toISOString(),
+      occurredAt: new Date(closedAt + PRESENCE_GRACE_MS).toISOString(),
     })
   })
 

@@ -68,7 +68,7 @@ describe("workspace presence registry", () => {
     expect(presence.exposed(OPERATOR, SESSION)).toBe(false)
   })
 
-  it("remembers when presence last held, after it stops holding", () => {
+  it("remembers when presence last held, while it holds", () => {
     const { time, presence } = registry()
     expect(presence.lastPresentAt(OPERATOR)).toBeUndefined()
 
@@ -76,16 +76,52 @@ describe("workspace presence registry", () => {
     expect(presence.lastPresentAt(OPERATOR)).toBe(START)
 
     time.advance(PRESENCE_HEARTBEAT_MS)
-    presence.set(OPERATOR, "connection-1", { ...active, idle: true })
-    expect(presence.present(OPERATOR)).toBe(false)
-    expect(presence.lastPresentAt(OPERATOR)).toBe(START)
-
-    time.advance(PRESENCE_HEARTBEAT_MS)
     presence.set(OPERATOR, "connection-1", active)
-    presence.clear(OPERATOR, "connection-1")
+
+    expect(presence.lastPresentAt(OPERATOR)).toBe(START + PRESENCE_HEARTBEAT_MS)
+  })
+
+  it("lapses presence the moment a connection stops holding it", () => {
+    const { time, presence } = registry()
+    presence.set(OPERATOR, "connection-1", active)
+
+    // A heartbeat later the operator hides the tab: they were present until now.
+    time.advance(PRESENCE_HEARTBEAT_MS)
+    presence.set(OPERATOR, "connection-1", { ...active, foreground: false })
+
+    expect(presence.present(OPERATOR)).toBe(false)
+    expect(presence.lastPresentAt(OPERATOR)).toBe(START + PRESENCE_HEARTBEAT_MS)
+
+    // Going idle in the foreground lapses it the same way.
+    time.advance(PRESENCE_HEARTBEAT_MS)
+    presence.set(OPERATOR, "connection-2", active)
+    time.advance(PRESENCE_HEARTBEAT_MS)
+    presence.set(OPERATOR, "connection-2", { ...active, idle: true })
+
     expect(presence.lastPresentAt(OPERATOR)).toBe(
-      START + 2 * PRESENCE_HEARTBEAT_MS
+      START + 3 * PRESENCE_HEARTBEAT_MS
     )
+  })
+
+  it("lapses presence the moment a present connection closes", () => {
+    const { time, presence } = registry()
+    presence.set(OPERATOR, "connection-1", active)
+
+    time.advance(30_000)
+    presence.clear(OPERATOR, "connection-1")
+
+    expect(presence.present(OPERATOR)).toBe(false)
+    expect(presence.lastPresentAt(OPERATOR)).toBe(START + 30_000)
+  })
+
+  it("leaves the lapse alone when the connection was already stale", () => {
+    const { time, presence } = registry()
+    presence.set(OPERATOR, "connection-1", active)
+
+    time.advance(10 * PRESENCE_HEARTBEAT_MS)
+    presence.clear(OPERATOR, "connection-1")
+
+    expect(presence.lastPresentAt(OPERATOR)).toBe(START)
   })
 
   it("forgets one closed connection and keeps the principal's others", () => {
