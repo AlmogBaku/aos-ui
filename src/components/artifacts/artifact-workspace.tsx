@@ -406,14 +406,15 @@ export type ArtifactCardProps = {
 }
 
 export function ArtifactCard(props: ArtifactCardProps) {
-  // Audio and video are first-class inline outcomes in the conversation. The
-  // compact Artifacts roster stays a list of rows that open the viewer.
+  // Audio, video, and images are first-class inline outcomes in the
+  // conversation. The compact Artifacts roster stays a list of rows that open
+  // the viewer.
   const mediaKind = props.compact
     ? null
     : artifactMediaKind(props.artifact.mimeType, props.artifact.filename)
 
   return mediaKind ? (
-    <ArtifactMediaPlayer
+    <ArtifactInlineMedia
       artifact={props.artifact}
       kind={mediaKind}
       occurrenceKey={props.occurrenceKey}
@@ -567,7 +568,12 @@ function ArtifactDownloadAction({
  * byte loader, bounds, and abort behavior as the Artifact viewer. Sizing mirrors
  * a sent media attachment so both conversation surfaces read the same.
  */
-function ArtifactMediaPlayer({
+/**
+ * A published audio, video, or image outcome shown in the message itself. An
+ * image is bounded, never at its original size; the viewer holds the full
+ * picture, and nothing about audio or video opens it.
+ */
+function ArtifactInlineMedia({
   artifact,
   kind,
   occurrenceKey,
@@ -576,14 +582,13 @@ function ArtifactMediaPlayer({
   kind: ArtifactMediaKind
   occurrenceKey?: string
 }) {
-  const { labels, locale, occurrences } = useArtifactWorkspace()
+  const { labels, locale, occurrences, openArtifact } = useArtifactWorkspace()
   // The provider keeps one descriptor identity per publication while the
-  // conversation streams, so playing bytes are not reloaded on every render.
+  // conversation streams, so the bytes are not reloaded on every render.
   const published =
     occurrences.find(({ key }) => key === occurrenceKey)?.artifact ?? artifact
   const { state } = useArtifactPreviewController(published)
-  const mediaLabel = `${kind === "audio" ? labels.audio : labels.video}: ${published.filename}`
-  const playable = state.status === "ready" ? state.url : undefined
+  const url = state.status === "ready" ? state.url : undefined
 
   if (state.status === "error") {
     return (
@@ -607,7 +612,7 @@ function ArtifactMediaPlayer({
 
   return (
     <div className="grid w-fit max-w-full gap-2">
-      {playable === undefined ? (
+      {url === undefined ? (
         <p
           className="flex items-center gap-2 text-sm text-muted-foreground"
           role="status"
@@ -618,21 +623,36 @@ function ArtifactMediaPlayer({
           />
           {labels.loading}
         </p>
+      ) : kind === "image" ? (
+        <button
+          type="button"
+          aria-label={`${labels.open}: ${published.filename}`}
+          className="block max-w-sm cursor-zoom-in rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={(event) =>
+            openArtifact(published, event.currentTarget, occurrenceKey)
+          }
+        >
+          <img
+            src={url}
+            alt={published.filename}
+            className="block h-auto max-h-64 w-auto max-w-full rounded-lg border border-border object-contain"
+          />
+        </button>
       ) : kind === "audio" ? (
         <audio
-          aria-label={mediaLabel}
+          aria-label={`${labels.audio}: ${published.filename}`}
           className="block w-full max-w-[30rem]"
           controls
           preload="metadata"
-          src={playable}
+          src={url}
         />
       ) : (
         <video
-          aria-label={mediaLabel}
+          aria-label={`${labels.video}: ${published.filename}`}
           className="block h-auto max-h-96 w-full max-w-[30rem] rounded-lg bg-black object-contain"
           controls
           preload="metadata"
-          src={playable}
+          src={url}
         />
       )}
       <ArtifactDownloadAction artifact={published} />

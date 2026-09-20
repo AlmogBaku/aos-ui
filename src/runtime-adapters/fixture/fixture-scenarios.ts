@@ -16,6 +16,7 @@ export const fixtureScenarioNames = [
   "map",
   "stats",
   "artifact",
+  "image",
   "mermaid",
   "mermaid-incomplete",
   "mermaid-malformed",
@@ -257,6 +258,19 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
             ],
           }
         ),
+      ],
+    }
+  }
+
+  if (input.includes("image")) {
+    return {
+      name: "image",
+      parts: [
+        {
+          type: "data",
+          name: "aos.artifact",
+          data: FIXTURE_ARTIFACT_CATALOG.examples.image,
+        } as AssistantPart,
       ],
     }
   }

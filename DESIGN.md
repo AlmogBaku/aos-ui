@@ -278,11 +278,13 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   lightweight, while deferred Markdown retains a localized raw-text fallback.
 - **Safety:** charts, maps, Mermaid, tool results, and generated content retain
   textual alternatives. Never execute generated browser code or arbitrary HTML.
-- **Published artifacts:** audio and video are first-class inline outcomes. They
-  play in the message as native, downloadable players sized like a sent media
-  attachment, and nothing about them opens the Artifact viewer. Every other
-  artifact stays a compact card that opens the viewer, and the Artifacts roster
-  stays a list of openable rows. A failure states what happened in place, and a
+- **Published artifacts:** audio, video, and images are first-class inline
+  outcomes. Audio and video play in the message as native, downloadable players
+  sized like a sent media attachment, and nothing about them opens the Artifact
+  viewer. An image shows in the message as a bounded preview, never at its
+  original size; the preview opens the viewer, which holds the full picture.
+  Every other artifact stays a compact card that opens the viewer, and the
+  Artifacts roster stays a list of openable rows. A failure states what happened in place, and a
   provider that no longer holds the bytes says so and drops the retry and
   download it cannot honor.
 

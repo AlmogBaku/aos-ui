@@ -857,6 +857,12 @@ describe("artifact workspace", () => {
     mimeType: "video/mp4",
     source: { type: "provider", reference: "walkthrough" },
   }
+  const imageArtifact = {
+    id: "diagram",
+    filename: "diagram.png",
+    mimeType: "image/png",
+    source: { type: "provider", reference: "diagram" },
+  }
 
   /** One published artifact on the conversation surface that carries it. */
   const renderPublishedArtifact = ({
@@ -931,6 +937,27 @@ describe("artifact workspace", () => {
     expect(
       screen.queryByRole("region", { name: "Output preview" })
     ).not.toBeInTheDocument()
+  })
+
+  it("shows a published image inline as a bounded preview that opens the viewer", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+    renderPublishedArtifact({
+      artifact: imageArtifact,
+      resolve: async () => new Blob(["PNG"], { type: "image/png" }),
+    })
+
+    const preview = await screen.findByRole("img", { name: "diagram.png" })
+    expect(preview).toHaveAttribute("src", "blob:image-artifact")
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible()
+    expect(
+      screen.queryByRole("region", { name: "Output preview" })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Open: diagram.png" }))
+    expect(
+      await screen.findByRole("region", { name: "Output preview" })
+    ).toBeVisible()
   })
 
   it("names an inline player in the selected locale", async () => {
