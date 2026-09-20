@@ -162,7 +162,6 @@ export default defineConfig(({ mode }) => {
           start_url: "/",
           scope: "/",
           display: "standalone",
-          dir: "auto",
           lang: "en",
           background_color: "#fcfcfd",
           theme_color: "#232326",
