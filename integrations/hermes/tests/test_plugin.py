@@ -3,6 +3,7 @@ import sys
 import types
 from pathlib import Path
 
+from aos_hermes.creator import Creator, ValidationError
 from aos_hermes.plugin import register
 
 
@@ -145,63 +146,127 @@ def test_artifact_tool_returns_a_rejection_without_native_call_context(tmp_path,
     }
 
 
-def test_creator_tool_requires_explicit_native_creator_metadata(tmp_path, monkeypatch):
-    _artifact(tmp_path, monkeypatch)
-    home = _native_home(tmp_path, monkeypatch, """
+CREATOR_METADATA = """
 name: creator
 ui_meta:
   aos:
     role: creator
   hermes-bots:
     hidden: true
-""")
-    original = (home / "profile.yaml").read_bytes()
-    monkeypatch.setenv("AOS_HERMES_PLUGIN_SOURCE", "file:///srv/aos#integrations/hermes")
-    monkeypatch.setenv("AOS_HERMES_PLUGIN_REF", "a" * 40)
+"""
+
+
+def _creator_tool(tmp_path, monkeypatch, *, configured=True):
+    _artifact(tmp_path, monkeypatch)
+    home = _native_home(tmp_path, monkeypatch, CREATOR_METADATA)
+    if configured:
+        monkeypatch.setenv("AOS_HERMES_PLUGIN_SOURCE", "file:///srv/aos#integrations/hermes")
+        monkeypatch.setenv("AOS_HERMES_PLUGIN_REF", "a" * 40)
+    else:
+        monkeypatch.delenv("AOS_HERMES_PLUGIN_SOURCE", raising=False)
+        monkeypatch.delenv("AOS_HERMES_PLUGIN_REF", raising=False)
     context = FakeContext()
     register(context)
     assert "aos_create_agent" in {tool["name"] for tool in context.tools}
     tool = next(tool for tool in context.tools if tool["name"] == "aos_create_agent")
-    result = json.loads(tool["handler"]({
+    return home, tool
+
+
+def _create_agent(tool, **overrides):
+    return json.loads(tool["handler"]({
         "profileName": "new-agent",
         "description": "New agent",
         "instructions": "Do work",
         "allowedCapabilities": ["structured-presentations"],
         "confirmed": True,
+        **overrides,
     }))
-    assert result["ok"] is False
-    assert result["status"] == "failed"
-    assert "atomic public profile create" in result["error"]
+
+
+def _raising(error):
+    def create(*_args, **_kwargs):
+        raise error
+    return create
+
+
+def test_creator_tool_requires_explicit_native_creator_metadata(tmp_path, monkeypatch):
+    home, tool = _creator_tool(tmp_path, monkeypatch)
+    original = (home / "profile.yaml").read_bytes()
+
+    assert _create_agent(tool, confirmed=False) == {
+        "ok": False,
+        "status": "failed",
+        "error": "Explicit confirmation is required",
+    }
     assert (home / "profile.yaml").read_bytes() == original
     assert list(home.iterdir()) == [home / "profile.yaml"]
 
 
-def test_creator_profile_still_loads_when_creation_source_needs_setup(tmp_path, monkeypatch):
-    _artifact(tmp_path, monkeypatch)
-    _native_home(tmp_path, monkeypatch, """
-name: creator
-ui_meta:
-  aos:
-    role: creator
-  hermes-bots:
-    hidden: true
-""")
-    monkeypatch.delenv("AOS_HERMES_PLUGIN_SOURCE", raising=False)
-    monkeypatch.delenv("AOS_HERMES_PLUGIN_REF", raising=False)
-    context = FakeContext()
-    register(context)
-    tool = next(tool for tool in context.tools if tool["name"] == "aos_create_agent")
-    result = json.loads(tool["handler"]({
-        "profileName": "new-agent",
-        "description": "New agent",
-        "instructions": "Do work",
-        "allowedCapabilities": ["structured-presentations"],
-        "confirmed": True,
-    }))
-    assert result == {
+def test_creator_reports_a_ready_profile(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        Creator, "create",
+        lambda *_args, **_kwargs: {"status": "ready", "agentId": "new-agent"},
+    )
+
+    assert _create_agent(tool) == {"ok": True, "status": "ready", "agentId": "new-agent"}
+
+
+def test_creator_reports_setup_needed_without_ok(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch)
+    monkeypatch.setattr(Creator, "create", lambda *_args, **_kwargs: {
+        "status": "setup-needed", "agentId": "new-agent", "error": "Plugin install failed",
+    })
+
+    assert _create_agent(tool) == {
         "ok": False,
         "status": "setup-needed",
-        "error": "Creator setup requires an immutable Hermes plugin source and full commit ref",
+        "agentId": "new-agent",
+        "error": "Plugin install failed",
+    }
+
+
+def test_creator_validation_text_reaches_the_caller(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch)
+    monkeypatch.setattr(Creator, "create", _raising(ValidationError("Profile already exists")))
+
+    assert _create_agent(tool) == {
+        "ok": False,
+        "status": "failed",
+        "error": "Profile already exists",
+    }
+
+
+def test_unexpected_creator_failure_reports_a_path_free_error(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch)
+    monkeypatch.setattr(Creator, "create", _raising(PermissionError("/home/x/.hermes/profiles")))
+
+    result = _create_agent(tool)
+
+    assert result == {"ok": False, "status": "failed", "error": "Profile creation failed"}
+    assert "/" not in json.dumps(result)
+
+
+def test_plain_value_error_is_never_shown_to_the_caller(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch)
+    monkeypatch.setattr(Creator, "create", _raising(ValueError("/home/x is invalid")))
+
+    result = _create_agent(tool)
+
+    assert result == {"ok": False, "status": "failed", "error": "Profile creation failed"}
+    assert "/" not in json.dumps(result)
+
+
+def test_creator_profile_still_loads_when_creation_source_needs_setup(tmp_path, monkeypatch):
+    _home, tool = _creator_tool(tmp_path, monkeypatch, configured=False)
+
+    assert _create_agent(tool) == {
+        "ok": False,
+        "status": "setup-needed",
+        "error": (
+            "Creator setup requires AOS_HERMES_PLUGIN_SOURCE "
+            "and a full-commit AOS_HERMES_PLUGIN_REF"
+        ),
     }
 
 

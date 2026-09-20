@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .creator import Creator, CreatorConfig
+from .creator import CreationError, Creator, CreatorConfig, ValidationError
 from .artifact import ArtifactPublisher
 from .environment import profile_env
 from .presentation import PresentationError, PresentationTools
 from .start_session import SessionStarter, StartSessionConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _artifact() -> dict[str, Any]:
@@ -54,8 +57,8 @@ START_SCHEMA = {
 CREATOR_SCHEMA = {
     "name": "aos_create_agent",
     "description": (
-        "Validate a confirmed Hermes Agent proposal. Automated creation is unavailable "
-        "at the supported native revision until Hermes provides atomic no-overwrite profile creation."
+        "Create a confirmed Hermes Agent profile. The profile stays hidden until its package "
+        "and toolsets are enabled; an incomplete setup is reported for an operator to finish."
     ),
     "parameters": {
         "type": "object", "properties": {
@@ -220,21 +223,35 @@ def register(ctx: Any) -> None:
             return json.dumps({
                 "ok": False,
                 "status": "setup-needed",
-                "error": "Creator setup requires an immutable Hermes plugin source and full commit ref",
+                "error": (
+                    "Creator setup requires AOS_HERMES_PLUGIN_SOURCE "
+                    "and a full-commit AOS_HERMES_PLUGIN_REF"
+                ),
             }, separators=(",", ":"))
         try:
-            return json.dumps({"ok": True, **creator.create(
+            result = creator.create(
                 str(args.get("profileName") or ""),
                 str(args.get("description") or ""),
                 str(args.get("instructions") or ""),
                 list(args.get("allowedCapabilities") or []),
-            )}, separators=(",", ":"), ensure_ascii=False)
-        except (ValueError, RuntimeError) as exc:
+            )
+        except (ValidationError, CreationError) as exc:
             return json.dumps({
                 "ok": False,
                 "status": "failed",
                 "error": str(exc),
             }, separators=(",", ":"))
+        except Exception:
+            logger.exception("Hermes Agent creation failed")
+            return json.dumps({
+                "ok": False,
+                "status": "failed",
+                "error": "Profile creation failed",
+            }, separators=(",", ":"))
+        return json.dumps(
+            {"ok": result.get("status") == "ready", **result},
+            separators=(",", ":"), ensure_ascii=False,
+        )
 
     ctx.register_tool(
         name=CREATOR_SCHEMA["name"], toolset="aos",
