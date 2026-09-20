@@ -1,5 +1,7 @@
+import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows } from "../core/session-rows"
+import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
@@ -14,6 +16,8 @@ export type OperatorAcpServiceOptions = {
   attachmentStages: ServerAttachmentStages
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
+  /** Shared with push delivery; absent means nothing observes presence. */
+  presence?: PresenceRegistry
   now?: () => number
 }
 
@@ -26,6 +30,7 @@ export function createOperatorAcpService({
   runtimeInstance,
   attachmentStages,
   logger,
+  presence,
   now = Date.now,
 }: OperatorAcpServiceOptions) {
   const lane = "operator" as const
@@ -33,6 +38,7 @@ export function createOperatorAcpService({
   return createAcpService({
     publicOrigin,
     lane,
+    principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
     connection: (connectionId, principalId): AcpConnectionContext => ({
       connectionId,
@@ -43,6 +49,7 @@ export function createOperatorAcpService({
       translators,
       attachmentStages,
       logger,
+      presence,
       readState: createReadState({
         runtimeInstance,
         sessionRows,

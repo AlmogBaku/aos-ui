@@ -39,9 +39,16 @@ import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
+import type {
+  AcpConnectionContext,
+  AcpOutbound,
+  GuestPolicy,
+  Translators,
+} from "./types"
 
 const AGENT = "researcher"
+const PRINCIPAL = "operator"
+const CONNECTION = "connection-1"
 const SESSION = "session-1"
 const CREATED = "session-created"
 const NOW = "2026-01-01T00:00:00.000Z"
@@ -410,8 +417,23 @@ const ModelPatchSchema = z.object({
   effortId: z.string().optional(),
 })
 
+/** A redeemed-invitation lane with nothing granted, for the guest guards. */
+const GUEST_POLICY: GuestPolicy = {
+  authenticate: async () => undefined,
+  grant: () => undefined,
+  project: {
+    access: (base) => base,
+    history: (value) => value,
+    capabilities: (value) => value,
+    permissionReply: (_request, reply) => reply,
+  },
+  expire: () => () => undefined,
+}
+
 type HarnessOptions = {
   rows?: Session[]
+  /** Runs the connection on the guest lane instead of the operator lane. */
+  guest?: boolean
   total?: number
   activity?: AosActivityNotification[]
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
@@ -547,6 +569,13 @@ async function harness(options: HarnessOptions = {}) {
     markRead: vi.fn(async () => undefined),
     close: vi.fn(),
   }
+  const presence = {
+    set: vi.fn(),
+    clear: vi.fn(),
+    present: vi.fn(() => false),
+    exposed: vi.fn(() => false),
+    lastPresentAt: vi.fn(() => undefined),
+  }
   const activityListeners = new Set<(event: AosActivityNotification) => void>()
   const activityFeed = {
     snapshot: () => options.activity ?? [],
@@ -559,16 +588,18 @@ async function harness(options: HarnessOptions = {}) {
 
   const logger = { info: vi.fn(), error: vi.fn() }
   const context: AcpConnectionContext = {
-    connectionId: "connection-1",
-    principalId: "operator",
-    lane: "operator",
+    connectionId: CONNECTION,
+    principalId: PRINCIPAL,
+    lane: options.guest ? "guest" : "operator",
     runtimeInstance,
     sessionRows: createSessionRows(),
     readState,
     activityFeed,
     translators,
     attachmentStages: new AttachmentStageRegistry(),
+    presence,
     logger,
+    ...(options.guest ? { guest: GUEST_POLICY } : {}),
   }
 
   const recorder = createRecorder()
@@ -623,6 +654,7 @@ async function harness(options: HarnessOptions = {}) {
     updateModel,
     listAllSessions,
     readState,
+    presence,
     rows,
     logger,
     /** Every structured line the connection wrote, whatever its level. */
@@ -1320,6 +1352,108 @@ describe("AOS ACP agent", () => {
     )
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: null })
     await vi.waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
+    test.close()
+  })
+
+  it("records the presence an exposed Session implies", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: SESSION,
+        foreground: true,
+        idle: false,
+      })
+    )
+    test.close()
+  })
+
+  it("records a reported background or idle workspace as reported", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: SESSION,
+      foreground: false,
+      idle: true,
+    })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: SESSION,
+        foreground: false,
+        idle: true,
+      })
+    )
+    test.close()
+  })
+
+  it("records a foreground workspace showing no Session, and still blurs", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: null,
+      foreground: true,
+    })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: null,
+        foreground: true,
+        idle: false,
+      })
+    )
+    expect(test.readState.blur).toHaveBeenCalled()
+    test.close()
+  })
+
+  it("acknowledges an exposure once, however often its heartbeat repeats it", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await vi.waitFor(() =>
+      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
+    )
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: SESSION,
+      foreground: true,
+      idle: false,
+    })
+
+    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
+    expect(test.readState.focus).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("forgets this connection's presence when it closes", async () => {
+    const test = await harness()
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalled())
+
+    test.close()
+
+    await vi.waitFor(() =>
+      expect(test.presence.clear).toHaveBeenCalledWith(PRINCIPAL, CONNECTION)
+    )
+  })
+
+  it("keeps a guest's exposure out of presence and read state", async () => {
+    const test = await harness({ guest: true })
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    // One round trip after the notification proves the lane has handled it.
+    await expect(
+      test.agent.request(methods.agent.session.close, { sessionId: SESSION })
+    ).rejects.toThrow()
+
+    expect(test.presence.set).not.toHaveBeenCalled()
+    expect(test.readState.focus).not.toHaveBeenCalled()
     test.close()
   })
 

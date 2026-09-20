@@ -30,6 +30,7 @@ import {
 import type { SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import { buildNewTurnInput } from "../core/turn-input"
+import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
   commandsUpdate,
@@ -153,6 +154,19 @@ function afterResponse(
 /** One authorized guest request: its connection policy and redeemed grant. */
 type GuestRequest = { policy: GuestPolicy; grant: GuestGrant }
 
+/** True when a focus report repeats the exposure the connection last sent. */
+function sameExposure(
+  previous: PresenceReport | undefined,
+  next: PresenceReport
+) {
+  return (
+    previous !== undefined &&
+    previous.sessionId === next.sessionId &&
+    previous.foreground === next.foreground &&
+    previous.idle === next.idle
+  )
+}
+
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { lane, translators } = context
   const { runtime, sessions: coordinator } = context.runtimeInstance
@@ -160,6 +174,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { workspace } = sessions
 
   const app = agent({ name: "aos-proxy" })
+
+  /**
+   * The exposure this connection last acknowledged. A foreground browser
+   * re-sends its focus report every heartbeat, and re-acknowledging an
+   * unchanged one would write the watermark for a Session nobody just opened.
+   */
+  let exposure: PresenceReport | undefined
 
   /** One structured, redacted line per connection-level ACP event. */
   const log = (event: string, fields?: Record<string, unknown>) => {
@@ -589,10 +610,22 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     ({ params }) => {
       // Read state belongs to the operator; a guest's exposure moves nothing.
       if (context.guest) return
-      if (params.sessionId === null) return context.readState.blur()
+      const report: PresenceReport = {
+        sessionId: params.sessionId,
+        foreground: params.foreground ?? params.sessionId !== null,
+        idle: params.idle ?? false,
+      }
+      context.presence?.set(context.principalId, context.connectionId, report)
+      if (params.sessionId === null) {
+        exposure = undefined
+        return context.readState.blur()
+      }
+      // A heartbeat re-sends an exposure this connection already acknowledged.
+      if (sameExposure(exposure, report)) return
       const agentId = sessions.owner(params.sessionId)
-      if (agentId !== undefined)
-        context.readState.focus(agentId, params.sessionId)
+      if (agentId === undefined) return
+      exposure = report
+      context.readState.focus(agentId, params.sessionId)
     }
   )
 
@@ -654,6 +687,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     log("acp.connection.closed")
     for (const stop of stops) stop?.()
     sessions.close()
+    context.presence?.clear(context.principalId, context.connectionId)
     context.readState.close()
     context.activityFeed.close()
   })

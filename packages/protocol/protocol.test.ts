@@ -25,7 +25,7 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   VisibilityUpdateRequestSchema,
 } from "./index"
-import { AosArtifactDescriptorSchema } from "./acp"
+import { AosArtifactDescriptorSchema, AosFocusNotificationSchema } from "./acp"
 
 describe("AOS v1 normalized protocol", () => {
   it("preserves provider-specific approval choices and question cancellation", () => {
@@ -664,6 +664,24 @@ describe("AOS v1 normalized protocol", () => {
           },
         ],
       })
+    ).toThrow()
+  })
+
+  it("reads a focus report with or without the presence flags", () => {
+    expect(
+      AosFocusNotificationSchema.parse({ sessionId: "session-1" })
+    ).toEqual({ sessionId: "session-1" })
+    expect(AosFocusNotificationSchema.parse({ sessionId: null })).toEqual({
+      sessionId: null,
+    })
+    const reported = {
+      sessionId: "session-1",
+      foreground: false,
+      idle: true,
+    }
+    expect(AosFocusNotificationSchema.parse(reported)).toEqual(reported)
+    expect(() =>
+      AosFocusNotificationSchema.parse({ sessionId: null, visible: true })
     ).toThrow()
   })
 

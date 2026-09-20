@@ -31,6 +31,7 @@ import type {
 } from "../core/runtime"
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import type { SessionRows } from "../core/session-rows"
+import type { PresenceRegistry } from "../push/presence"
 
 export type Lane = "operator" | "guest"
 
@@ -63,6 +64,12 @@ export type AcpConnectionContext = {
   attachmentStages: ServerAttachmentStages
   /** Present only on the guest lane; absent means an operator connection. */
   guest?: GuestPolicy
+  /**
+   * Where this connection reports the workspace it shows, shared across the
+   * principal's connections. Absent means nothing observes presence, which is
+   * every guest connection and any deployment without push.
+   */
+  presence?: PresenceRegistry
   logger?: AcpLogger
 }
 
