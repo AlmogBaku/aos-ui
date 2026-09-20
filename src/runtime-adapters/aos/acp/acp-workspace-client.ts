@@ -229,7 +229,10 @@ export function createAcpWorkspaceClient({
       store.setUnread(threadId, false)
       await connection.updateSession({ sessionId: threadId, unread: false })
     },
-    reportFocus: (threadId: string | null) => connection.focus(threadId),
+    reportFocus: (
+      threadId: string | null,
+      presence: { foreground: boolean; idle: boolean }
+    ) => connection.focus(threadId, presence),
     sessionStatus: store.status,
     subscribeSessionStatus: store.subscribeStatus,
     subscribeSessionInvalidation: store.subscribeInvalidation,

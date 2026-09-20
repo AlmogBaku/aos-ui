@@ -244,7 +244,7 @@ function createFakeConnection() {
       record("steer", request)
       return { status: "steered" }
     },
-    focus: (sessionId) => record("focus", sessionId),
+    focus: (sessionId, presence) => record("focus", sessionId, presence),
     async listAgents() {
       record("listAgents")
       return { revision: "revision-1", agents: [catalogEntry()] }
@@ -668,8 +668,11 @@ describe("ACP workspace client", () => {
       { agentId: AGENT_ID, title: "Weekly report" },
     ])
 
-    client.reportFocus(SESSION_ID)
-    expect(argsOf("focus")).toEqual([SESSION_ID])
+    client.reportFocus(SESSION_ID, { foreground: true, idle: false })
+    expect(argsOf("focus")).toEqual([
+      SESSION_ID,
+      { foreground: true, idle: false },
+    ])
 
     await expect(
       client.steerRun(SESSION_ID, { requestId: "request-1", text: "stop" })

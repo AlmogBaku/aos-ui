@@ -150,8 +150,15 @@ export type WorkspaceAdapter = {
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
   markSessionRead?: (threadId: string) => Promise<void>
-  /** The Session that is visible, focused, and unobscured, or none. */
-  reportFocus?: (threadId: string | null) => void
+  /**
+   * The Session that is visible, focused, and unobscured, or none, with this
+   * connection's presence: a foreground connection nobody is using is idle, and
+   * the provider decides from that whether a device still needs a push.
+   */
+  reportFocus?: (
+    threadId: string | null,
+    presence: { foreground: boolean; idle: boolean }
+  ) => void
 }
 
 export type RuntimeQuestionOption = {

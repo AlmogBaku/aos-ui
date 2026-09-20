@@ -564,7 +564,7 @@ describe("ACP connection", () => {
     await connection.initialized
 
     connection.cancel(SESSION_ID)
-    connection.focus(null)
+    connection.focus(null, { foreground: true, idle: false })
 
     await vi.waitFor(() => {
       expect(proxy.paramsOf(methods.agent.session.cancel)).toEqual({
@@ -572,6 +572,8 @@ describe("ACP connection", () => {
       })
       expect(proxy.paramsOf(AOS_METHODS.session.focus)).toEqual({
         sessionId: null,
+        foreground: true,
+        idle: false,
       })
     })
     connection.close()
@@ -718,6 +720,7 @@ describe("ACP connection", () => {
       replayFromStart: false,
       agentId: AGENT_ID,
     })
+    connection.focus(SESSION_ID, { foreground: true, idle: true })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 4, runId: "run-1" }
@@ -740,6 +743,21 @@ describe("ACP connection", () => {
     expect(proxy.callsOf(methods.agent.session.resume)[2]).toMatchObject({
       replayFrom: { type: "start" },
     })
+    // The proxy forgot this connection's presence when the transport dropped, so
+    // the report arrives again before the replay it would otherwise contradict.
+    const reports = proxy.calls.flatMap((call, index) =>
+      call.method === AOS_METHODS.session.focus ? [{ ...call, index }] : []
+    )
+    expect(reports).toHaveLength(2)
+    expect(reports[1]?.params).toEqual({
+      sessionId: SESSION_ID,
+      foreground: true,
+      idle: true,
+    })
+    const replays = proxy.calls.flatMap((call, index) =>
+      call.method === methods.agent.session.resume ? [index] : []
+    )
+    expect(reports[1]!.index).toBeLessThan(replays[1]!)
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
     expect(sockets).toHaveLength(2)
     connection.close()

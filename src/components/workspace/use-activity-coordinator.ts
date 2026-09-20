@@ -32,6 +32,11 @@ import type {
   PushOpenTarget,
   PushSubscriptionManager,
 } from "@/lib/notifications/push-subscription"
+import {
+  createHeartbeat,
+  createIdleTracker,
+  type IdleTracker,
+} from "@/lib/notifications/presence"
 import type { Locale } from "@/lib/i18n/config"
 import type { BrowserSettingsView } from "./activity"
 import { useInstallPrompt } from "./use-install-prompt"
@@ -112,7 +117,10 @@ export function useActivityCoordinator(
   >(async () => undefined)
   const [records, setRecords] = useState<ActivityRecord[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
-  const exposedThreadId = useRef<string | null | undefined>(undefined)
+  const reported = useRef<
+    { threadId: string | null; foreground: boolean; idle: boolean } | undefined
+  >(undefined)
+  const idleRef = useRef<IdleTracker | null>(null)
   const [error, setError] = useState(false)
   const [unavailableIds, setUnavailableIds] = useState<ReadonlySet<string>>(
     new Set()
@@ -124,18 +132,32 @@ export function useActivityCoordinator(
     pageVisible: document.visibilityState === "visible",
     pageFocused: document.hasFocus(),
   })
-  // The proxy owns read state, so the browser only reports what is exposed.
-  const reportExposure = useEffectEvent(() => {
+  /**
+   * The proxy owns read state, so the browser only reports what is exposed, and
+   * it decides which devices still need a push from the presence reported with
+   * it. A repeat carries the same values, which is what keeps presence fresh.
+   */
+  const reportPresence = useEffectEvent((repeat = false) => {
     const state = context()
     const exposed = isSelectionExposed(state)
       ? (state.selection?.threadId ?? null)
       : null
-    if (exposedThreadId.current === exposed) return
-    exposedThreadId.current = exposed
-    current.current.workspace.reportFocus?.(exposed)
+    const foreground = state.pageVisible && state.pageFocused
+    // Only a foreground connection can be attended, so a hidden one is not idle.
+    const idle = foreground && (idleRef.current?.idle() ?? false)
+    const last = reported.current
+    if (
+      !repeat &&
+      last?.threadId === exposed &&
+      last.foreground === foreground &&
+      last.idle === idle
+    )
+      return
+    reported.current = { threadId: exposed, foreground, idle }
+    current.current.workspace.reportFocus?.(exposed, { foreground, idle })
   })
   const refresh = useEffectEvent(() => {
-    reportExposure()
+    reportPresence()
     const store = storeRef.current
     if (!store) return
     const state = context()
@@ -335,14 +357,28 @@ export function useActivityCoordinator(
     window.addEventListener("focus", onFocus)
     window.addEventListener("blur", refresh)
     document.addEventListener("visibilitychange", refresh)
+    // An attended tab holds this device's pushes back, so going idle and staying
+    // present are both reports the proxy has to hear.
+    const idleTracker = createIdleTracker({ target: window })
+    idleRef.current = idleTracker
+    const stopWatchingIdle = idleTracker.onChange(() => reportPresence())
+    const heartbeat = createHeartbeat({
+      active: () =>
+        document.visibilityState === "visible" && document.hasFocus(),
+      tick: () => reportPresence(true),
+    })
     return () => {
       active = false
-      exposedThreadId.current = undefined
+      reported.current = undefined
       try {
-        workspace.reportFocus?.(null)
+        workspace.reportFocus?.(null, { foreground: false, idle: false })
       } catch {
         /* A provider that cannot accept the report keeps the workspace usable. */
       }
+      heartbeat.stop()
+      stopWatchingIdle()
+      idleTracker.stop()
+      if (idleRef.current === idleTracker) idleRef.current = null
       browser?.stop()
       sound?.stop()
       stopPushListening?.()

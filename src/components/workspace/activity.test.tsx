@@ -27,6 +27,7 @@ import {
   type BrowserSettingsView,
 } from "./activity"
 import { defaultBrowserPreferences } from "@/lib/notifications/policy"
+import { PRESENCE_HEARTBEAT_MS, PRESENCE_IDLE_MS } from "@aos/protocol/push"
 
 /** Everything the operator's notification surfaces read, with nothing on. */
 function browserSettings(
@@ -293,11 +294,16 @@ describe("Activity coordinator", () => {
       await waitFor(() => expect(result.current.items).toHaveLength(1))
       expect(result.current.items[0]!.read).toBe(false)
       expect(result.current.notice).toBeNull()
-      expect(provider.reportFocus.mock.calls).toEqual([[null]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        [null, { foreground: false, idle: false }],
+      ])
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
       focus.mockReturnValue(true)
       act(() => window.dispatchEvent(new Event("focus")))
-      expect(provider.reportFocus.mock.calls).toEqual([[null], ["one"]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        [null, { foreground: false, idle: false }],
+        ["one", { foreground: true, idle: false }],
+      ])
     }
   )
 
@@ -308,10 +314,72 @@ describe("Activity coordinator", () => {
       initialProps: props,
     })
     await waitFor(() =>
-      expect(provider.reportFocus.mock.calls).toEqual([["one"]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        ["one", { foreground: true, idle: false }],
+      ])
     )
     rerender({ ...props, conversationExposed: false })
-    expect(provider.reportFocus.mock.calls).toEqual([["one"], [null]])
+    expect(provider.reportFocus.mock.calls).toEqual([
+      ["one", { foreground: true, idle: false }],
+      [null, { foreground: true, idle: false }],
+    ])
+  })
+
+  it("reports this tab idle after three unattended minutes, and present again on input", async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = source()
+      renderHook(useActivityCoordinator, {
+        initialProps: options(provider.workspace),
+      })
+      await vi.waitFor(() =>
+        expect(provider.reportFocus).toHaveBeenCalledTimes(1)
+      )
+
+      await act(async () => vi.advanceTimersByTime(PRESENCE_IDLE_MS))
+      expect(provider.reportFocus).toHaveBeenLastCalledWith("one", {
+        foreground: true,
+        idle: true,
+      })
+
+      await act(async () =>
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }))
+      )
+      expect(provider.reportFocus).toHaveBeenLastCalledWith("one", {
+        foreground: true,
+        idle: false,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("repeats an unchanged report on the presence heartbeat, and only while foreground", async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = source()
+      renderHook(useActivityCoordinator, {
+        initialProps: options(provider.workspace),
+      })
+      await vi.waitFor(() =>
+        expect(provider.reportFocus).toHaveBeenCalledTimes(1)
+      )
+
+      await act(async () => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS))
+      expect(provider.reportFocus.mock.calls).toEqual([
+        ["one", { foreground: true, idle: false }],
+        ["one", { foreground: true, idle: false }],
+      ])
+
+      vi.mocked(document.hasFocus).mockReturnValue(false)
+      await act(async () => window.dispatchEvent(new Event("blur")))
+      provider.reportFocus.mockClear()
+      // A background tab has nothing to keep fresh; the proxy expires it.
+      await act(async () => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS * 3))
+      expect(provider.reportFocus).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it("isolates subscription errors and accepts later valid events", async () => {
     const provider = source()
