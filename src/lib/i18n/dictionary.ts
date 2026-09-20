@@ -64,6 +64,12 @@ export type Dictionary = {
     completion: string
     failure: string
     input: string
+    /** OS notification bodies for coalesced pushes; `{count}` is substituted. */
+    inputRequestedMany: string
+    runFailedMany: string
+    runFinishedMany: string
+    /** Body when a push payload cannot be read; carries nothing else. */
+    pushGeneric: string
   }
   workspace: {
     agents: string

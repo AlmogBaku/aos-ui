@@ -68,6 +68,10 @@ export const he = {
     completion: "סיום תורים",
     failure: "כשלים",
     input: "בקשות לתשובה",
+    inputRequestedMany: "{count} סוכנים ממתינים לתשובה שלכם",
+    runFailedMany: "{count} תורות נכשלו",
+    runFinishedMany: "{count} תורות הסתיימו",
+    pushGeneric: "יש פעילות חדשה ב-AOS",
   },
   workspace: {
     agents: "סוכנים",

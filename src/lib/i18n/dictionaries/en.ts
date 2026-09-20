@@ -73,6 +73,10 @@ export const en = {
     completion: "Turn completions",
     failure: "Failures",
     input: "Input requests",
+    inputRequestedMany: "{count} Agents need input",
+    runFailedMany: "{count} turns failed",
+    runFinishedMany: "{count} turns finished",
+    pushGeneric: "AOS has new activity",
   },
   workspace: {
     agents: "Agents",
