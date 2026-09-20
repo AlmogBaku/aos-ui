@@ -42,17 +42,34 @@ describe("UnreadDot", () => {
 })
 
 describe("RowIndicators", () => {
-  it("shows execution status and unread state together", () => {
+  it.each<[RowStatus, string]>([
+    ["waiting-for-input", "Waiting for input"],
+    ["attention", "Needs attention"],
+    ["failed", "Failed"],
+  ])("lets a %s Session outrank its unread dot", (status, label) => {
     render(
       <RowIndicators
-        status="waiting-for-input"
-        statusLabel="Waiting for input"
+        status={status}
+        statusLabel={label}
         unread
         unreadLabel="Unread"
       />
     )
-    expect(screen.getByTitle("Waiting for input")).toBeVisible()
+    expect(screen.getByTitle(label)).toBeVisible()
+    expect(screen.queryByTitle("Unread")).toBeNull()
+  })
+
+  it("lets unread outrank a run that is still in progress", () => {
+    render(
+      <RowIndicators
+        status="running"
+        statusLabel="Running"
+        unread
+        unreadLabel="Unread"
+      />
+    )
     expect(screen.getByTitle("Unread")).toBeVisible()
+    expect(screen.queryByTitle("Running")).toBeNull()
   })
 
   it("shows the unread dot alone for an idle Session", () => {

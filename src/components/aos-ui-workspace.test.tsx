@@ -1340,7 +1340,7 @@ describe("AosUiApp fixture composition", () => {
         name: "Selected plan",
       })
     ).toBeVisible()
-    const todos = screen.getByRole("region", { name: "Session todos." })
+    const todos = screen.getByRole("region", { name: "Session todos" })
     expect(within(todos).getAllByRole("listitem")).toHaveLength(2)
     expect(todos).not.toContainElement(
       screen.getByRole("heading", { name: "Selected plan" })
@@ -1360,7 +1360,7 @@ describe("AosUiApp fixture composition", () => {
       ).toHaveAttribute("aria-selected", "true")
     )
 
-    expect(screen.queryByRole("region", { name: "Session todos." })).toBeNull()
+    expect(screen.queryByRole("region", { name: "Session todos" })).toBeNull()
   })
 
   it("localizes Session-scoped Todo copy in Hebrew", async () => {
@@ -1509,7 +1509,7 @@ describe("AosUiApp fixture composition", () => {
     ).toBeVisible()
     expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
     expect(screen.queryByText("Start your first session")).toBeNull()
-    expect(document.querySelector('[data-slot="todo-dock"]')).toBeNull()
+    expect(screen.queryByRole("region", { name: "Session todos" })).toBeNull()
   })
 
   it("exposes tab-bar and inspector creation actions with no Sessions", async () => {
@@ -1677,10 +1677,6 @@ describe("AosUiApp fixture composition", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Agent catalog signal failed"
     )
-    expect(screen.getByRole("alert")).toHaveAttribute(
-      "data-slot",
-      "error-toast"
-    )
   })
 
   it("surfaces new-Session failures from the empty state", async () => {
@@ -1716,7 +1712,7 @@ describe("AosUiApp fixture composition", () => {
     }
     render(<StaleTodoFixture captureStaleEmission={captureStaleEmission} />)
 
-    await user.click(await screen.findByText("Session todos."))
+    await user.click(await screen.findByText("Session todos"))
     expect(await screen.findByText("Old Agent task")).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Mica" }))

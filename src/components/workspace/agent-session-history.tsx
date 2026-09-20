@@ -189,7 +189,7 @@ function SessionSection({
                 <div className={styles.actionSlot}>
                   <Button
                     variant="ghost"
-                    className={styles.iconButton}
+                    size="icon"
                     aria-label={`${copy.sessionActions}: ${session.title}`}
                     aria-haspopup="menu"
                     aria-expanded={actionThreadId === session.threadId}
@@ -275,9 +275,7 @@ export function AgentSessionHistory({
         role="group"
         aria-label={copy.sessionActions}
       >
-        <label
-          className={cn(styles.searchField, "min-h-11 gap-2.5 px-3 text-sm")}
-        >
+        <label className={cn(styles.searchField, "h-8 gap-2 px-2.5 text-sm")}>
           <Search aria-hidden="true" />
           <span className={styles.srOnly}>{copy.searchSessions}</span>
           <input

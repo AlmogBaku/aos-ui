@@ -148,7 +148,7 @@ describe("AgentSessionHistory", () => {
       name: "Open Session: Shared research, Status: Waiting for input, Selected, Unread",
     })
     expect(within(row).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(row).getByTitle("Unread")).toBeVisible()
+    expect(within(row).queryByTitle("Unread")).toBeNull()
   })
 
   it("searches both sections and offers a clear action for an empty result", () => {

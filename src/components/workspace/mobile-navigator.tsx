@@ -568,11 +568,6 @@ function SessionsView({
         ) : null}
       </div>
 
-      <Button className={styles.createButton} onClick={onCreateSession}>
-        <Plus data-icon="inline-start" />
-        {copy.newSession}
-      </Button>
-
       <AgentSessionHistory
         navigation={{
           agentId: agent.id,
@@ -586,6 +581,7 @@ function SessionsView({
         query={query}
         onQueryChange={onQueryChange}
         onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+        onCreateSession={() => onCreateSession()}
         onRemoveOpenSession={
           onRemoveOpenSession
             ? (_agentId, threadId) => onRemoveOpenSession(threadId)

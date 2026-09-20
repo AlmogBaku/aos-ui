@@ -879,31 +879,34 @@ function InspectorPanel({
   const statusLabel = agentStatusLabel(agent.status, dictionary)
 
   return (
-    <div className={cn(styles.inspectorPanel, "p-4")}>
-      <div className={cn(styles.inspectorIdentity, "gap-3")}>
+    <div className={styles.inspectorPanel}>
+      <div className={styles.inspectorHeader}>
         <AgentGlyph
           agent={agent}
-          className="!size-10 !rounded-xl [&_svg]:!size-5"
+          className="!size-7 !rounded-lg [&_svg]:!size-3.5"
         />
-        <div className={styles.agentText}>
-          <bdi className={cn(styles.inspectorName, "text-lg leading-7")}>
-            {agent.name}
-          </bdi>
-          <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground">
-            <StatusDot status={agent.status} label={statusLabel} />
-            <span>{statusLabel}</span>
-          </div>
-        </div>
+        <bdi className={cn(styles.inspectorName, "truncate text-sm leading-5")}>
+          {agent.name}
+        </bdi>
+        <span className={cn(styles.inspectorStatus, "text-xs leading-4")}>
+          <StatusDot status={agent.status} label={statusLabel} />
+          <span>{statusLabel}</span>
+        </span>
       </div>
 
       {agent.description ? (
-        <bdi className="mt-2 block text-xs leading-4 text-muted-foreground">
+        <bdi
+          className={cn(
+            styles.inspectorDescription,
+            "line-clamp-2 text-xs leading-4"
+          )}
+        >
           {agent.description}
         </bdi>
       ) : null}
 
       {navigation ? (
-        <div className={cn(styles.recentSessions, "mt-4 gap-2 pt-4")}>
+        <div className={styles.recentSessions}>
           <AgentSessionHistory
             navigation={navigation}
             activeThreadId={activeThreadId}

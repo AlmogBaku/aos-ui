@@ -49,7 +49,7 @@
   min-block-size: 2.75rem;
   align-items: center;
   gap: 0.625rem;
-  margin: 0.75rem;
+  margin: 0.5rem;
   padding-inline: 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -159,6 +159,19 @@ nav.list {
   white-space: nowrap;
 }
 
+/* Chromium lacks text-align: match-parent; align bdi text with the UI. */
+[dir="rtl"] .rowTitle,
+[dir="rtl"] .rowDescription,
+[dir="rtl"] .agentIdentity bdi {
+  text-align: right;
+}
+
+[dir="ltr"] .rowTitle,
+[dir="ltr"] .rowDescription,
+[dir="ltr"] .agentIdentity bdi {
+  text-align: left;
+}
+
 .rowTitle {
   font-weight: 550;
 }
@@ -189,12 +202,7 @@ nav.list {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1rem 0.5rem;
-}
-
-.createButton {
-  min-block-size: 2.75rem;
-  margin: 0.5rem 0.75rem 0;
+  padding: 0.5rem 0.75rem 0.25rem;
 }
 
 .empty {

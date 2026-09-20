@@ -32,14 +32,18 @@ Any intentional visual departure must be called out before it is introduced.
 
 ## Intentional departures introduced 2026-09
 
-- **Attention color shifted from teal to blue (`--info`):** waiting-for-input state
-  uses `--info` (blue) rather than teal to distinguish it from the unread signal.
-- **Unread dot uses `--success` (green):** a separate green dot marks Sessions with
-  content the user has not yet seen, independent of execution state.
-- **Running indicator uses a breathing teal dot:** an active model turn uses a
-  breathing animation on a teal dot, not a violet one.
-- **Status and read state appear as two independent dots:** both dots may coexist
-  on a row; neither hides the other.
+- **Attention color is orange (`--warning`):** waiting-for-input and attention
+  states use the semantic `--warning` token. Blue (`--info`) was tried on
+  2026-09 and replaced on 2026-09-20 because it read as informational rather
+  than as a request for the operator.
+- **Unread dot uses `--success` (green):** a green dot marks Sessions with
+  content the user has not yet seen.
+- **Running indicator uses a breathing blue dot (`--info`):** an active model
+  turn breathes in blue, not violet. Teal was replaced on 2026-09-20.
+- **One dot per row, by priority (2026-09-20):** waiting for input, attention,
+  and failed outrank unread; unread outranks a running turn. The earlier
+  two-dot rendering was withdrawn because two dots on one row read as a bug.
+  The row's accessible name still states every state.
 - **Row Activity count pills removed:** navigation rows no longer carry violet
   count pills. The bell in the Agents heading shows the sole derived unread count.
 - **Drawer browsing marks nothing read:** the Activity drawer is browse-only;
