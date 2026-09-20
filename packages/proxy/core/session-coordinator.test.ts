@@ -252,7 +252,8 @@ async function oldestReplayableCursor(
     probe.close()
     const event = head.value?.event
     return (
-      event?.type === RunEventKind.RUN_ERROR && event.code === "AOS_RESET_REQUIRED"
+      event?.type === RunEventKind.RUN_ERROR &&
+      event.code === "AOS_RESET_REQUIRED"
     )
   }
   let low = 1
@@ -1603,6 +1604,162 @@ describe("SessionCoordinator", () => {
       "Connection lost"
     )
     expect(sessions.state(scope)).toBe("uncertain")
+  })
+
+  it("reports a Session idle when its run terminates after every browser detached", async () => {
+    const source = new EventSource()
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    const live = await sessions.start(scope, input("run-1"), access("one"))
+    source.emit(runStarted("run-1"))
+    await reader(live)()
+    live.close()
+
+    source.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    source.finish()
+
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+  })
+
+  it("leaves a Session idle when Stop answers after the run already finished", async () => {
+    const source = new EventSource()
+    let answerStop = () => {}
+    source.stop.mockImplementationOnce(
+      () =>
+        new Promise<"stopping">((resolve) => {
+          answerStop = () => resolve("stopping")
+        })
+    )
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+    const stopping = sessions.stop(scope, "operator")
+
+    source.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    source.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    answerStop()
+
+    await expect(stopping).resolves.toBe("stopping")
+    expect(sessions.state(scope)).toBe("idle")
+  })
+
+  it("leaves a Session idle when an undispatched Stop answers after the run finished", async () => {
+    const source = new EventSource()
+    const failure = new Error("Provider unavailable")
+    let refuseStop = () => {}
+    source.stop.mockImplementationOnce(
+      () =>
+        new Promise<"stopping">((_resolve, reject) => {
+          refuseStop = () =>
+            reject(new ServerRunStopNotDispatchedError(failure))
+        })
+    )
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+    const stopping = sessions.stop(scope, "operator")
+
+    source.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    source.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    refuseStop()
+
+    await expect(stopping).rejects.toBe(failure)
+    expect(sessions.state(scope)).toBe("idle")
+  })
+
+  it("does not reopen a Session whose stream died when Stop answers afterwards", async () => {
+    const source = new EventSource()
+    let answerStop = () => {}
+    source.stop.mockImplementationOnce(
+      () =>
+        new Promise<"stopping">((resolve) => {
+          answerStop = () => resolve("stopping")
+        })
+    )
+    const sessions = coordinator({
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+    const stopping = sessions.stop(scope, "operator")
+
+    // The stream ends without a terminal event and without settling.
+    source.close()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    answerStop()
+
+    await expect(stopping).resolves.toBe("stopping")
+    expect(sessions.state(scope)).toBe("uncertain")
+  })
+
+  it("keeps a resumed turn running when a Stop issued against the previous segment answers late", async () => {
+    const interrupted = new EventSource()
+    const resumed = new EventSource()
+    let answerStop = () => {}
+    interrupted.stop.mockImplementationOnce(
+      () =>
+        new Promise<"stopping">((resolve) => {
+          answerStop = () => resolve("stopping")
+        })
+    )
+    const sessions = coordinator({
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(interrupted)
+        .mockResolvedValueOnce(resumed),
+      recover: vi.fn(async () => resumed),
+    })
+    await sessions.start(scope, input("run-1"), access("operator"))
+    const stopping = sessions.stop(scope, "operator")
+
+    interrupted.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [
+          {
+            id: "question-1",
+            reason: "input-required",
+            responseSchema: { type: "object" },
+          },
+        ],
+      },
+    })
+    interrupted.finish()
+    await vi.waitFor(() =>
+      expect(sessions.state(scope)).toBe("waiting-for-input")
+    )
+    await sessions.start(scope, input("run-2", true), access("operator"))
+    answerStop()
+
+    await expect(stopping).resolves.toBe("stopping")
+    // The answered Stop belongs to run-1; run-2 is a live turn of its own.
+    expect(sessions.state(scope)).toBe("running")
   })
 
   it("steers the matching active run once and publishes a replayable acknowledgement", async () => {

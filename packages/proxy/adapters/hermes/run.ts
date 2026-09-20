@@ -210,6 +210,9 @@ export class HermesRunEngine {
     }
     if (active.terminal) return this.#handle(active)
     if (interactionResume) {
+      // The answer resumes a native turn whose completion frame already passed,
+      // so settlement may end this run on Hermes' own idle edge.
+      active.resumedInteraction = true
       let results: readonly { status: string }[]
       try {
         results = await this.#native.respondInteractions(

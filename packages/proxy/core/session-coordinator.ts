@@ -345,7 +345,6 @@ function isResume(
   return Array.isArray(input.resume) && input.resume.length > 0
 }
 
-
 function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
   const received = input.resume.map(({ interruptId }) => interruptId)
   return (
@@ -375,7 +374,6 @@ function settledNow(settled: Promise<void>) {
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0)),
   ])
 }
-
 
 export class SessionCoordinator {
   readonly #executions = new Map<string, Execution>()
@@ -723,6 +721,22 @@ export class SessionCoordinator {
     }
   }
 
+  /**
+   * Whether a control answer still speaks for the execution it was issued
+   * against. The run stream is the one place a run ends, so an answer that
+   * arrives after the stream reported the outcome — `idle` or `uncertain`, the
+   * two states nothing more arrives for — or after the next turn replaced the
+   * segment, is reported to its caller without reopening a Session that is
+   * already over.
+   */
+  #answerApplies(execution: Execution, segment: Segment) {
+    return (
+      execution.segment === segment &&
+      execution.state !== "idle" &&
+      execution.state !== "uncertain"
+    )
+  }
+
   async stop(
     scope: Pick<SessionScope, "agentId" | "sessionId">,
     controllerId: string
@@ -732,18 +746,23 @@ export class SessionCoordinator {
     return this.#withControl(execution, async () => {
       if (!execution.controllers.has(controllerId))
         throw new ServerRunControlError()
+      const stopped = execution.segment
       try {
-        const status = await execution.segment.handle.stop()
-        execution.state = status === "idle" ? "idle" : "stopping"
-        // Stopping a wait ends it without an answer.
-        if (status === "idle") this.#resolveAttention(execution)
+        const status = await stopped.handle.stop()
+        if (this.#answerApplies(execution, stopped)) {
+          execution.state = status === "idle" ? "idle" : "stopping"
+          // Stopping a wait ends it without an answer.
+          if (status === "idle") this.#resolveAttention(execution)
+        }
         return status
       } catch (error) {
         if (error instanceof ServerRunStopNotDispatchedError) {
-          execution.state = "running"
+          if (this.#answerApplies(execution, stopped))
+            execution.state = "running"
           throw error.failure
         }
-        execution.state = "uncertain"
+        if (this.#answerApplies(execution, stopped))
+          execution.state = "uncertain"
         throw error
       }
     })

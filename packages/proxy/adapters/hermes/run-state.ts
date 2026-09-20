@@ -75,6 +75,11 @@ export type ActiveRun = {
   terminal: boolean
   /** Hermes accepted this turn but has not started it yet (queue, steer). */
   awaitingStart: boolean
+  /**
+   * This run answered a pending interaction, so it continues a native turn
+   * whose completion frame already passed: Hermes idling is the only end it has.
+   */
+  resumedInteraction: boolean
   /** Live frames waiting behind the one in-flight `session.events.since`. */
   catchUp?: BufferedNativeEvents
   /** A settlement edge a catch-up deferred; re-decided once the page drained. */
@@ -154,6 +159,7 @@ export function createActiveRun(
     detached: false,
     terminal: false,
     awaitingStart: false,
+    resumedInteraction: false,
     ...runSettlement(),
   }
 }

@@ -52,6 +52,16 @@ export function turnOutcome(status: unknown): TurnOutcome {
       : "complete"
 }
 
+/**
+ * Whether this run has projected any assistant output. Every projection path
+ * binds a message id first — `message.start`, a tool call, streamed text — and
+ * sealing a generation moves that id into `sealedMessageIds`, so the two
+ * together are the run's own record that Hermes ran something for it.
+ */
+function outputObserved(active: ActiveRun) {
+  return active.messageId !== undefined || active.sealedMessageIds.size > 0
+}
+
 function settlingWatcher(active: ActiveRun): SettlingWatcher {
   const { promise, resolve } = deferred()
   const watcher: SettlingWatcher = {
@@ -134,6 +144,18 @@ export function settleFrom(
   // Hermes' own idle frame ends it.
   else if (edge === "idle" && active.redirect.chain)
     host.finish(active, undefined, true)
+  // An answered interaction resumes a turn Hermes already completed once, so it
+  // has no completion frame left either: what this run published since the
+  // answer is the outcome.
+  else if (active.resumedInteraction) {
+    if (outputObserved(active)) host.finish(active, undefined, true)
+    // Hermes was idle while it held the question, so an idle frame from that
+    // wait is no evidence the answer resumed nothing: one bounded re-read
+    // decides, and a turn that started by then ends on its own frames.
+    else if (edge === "idle")
+      recheckSettlement(host, active, QUEUED_START_GRACE_MS)
+    else failTurn(host, active, { failureReason: "resumed-turn-not-started" })
+  }
   // Otherwise this is a mid-turn heartbeat: a bounded status read is too weak
   // to end a turn that is still open.
 }

@@ -142,6 +142,22 @@ async function collect(handle: { events: AsyncIterable<unknown> }) {
   return events
 }
 
+/**
+ * Whether the run settled within `ms`, without waiting on a stream that an
+ * unsettled run never ends.
+ */
+async function settledWithin(handle: { settled: Promise<void> }, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const answer = await Promise.race([
+    handle.settled.then(() => "settled" as const),
+    new Promise<"open">((resolve) => {
+      timer = setTimeout(() => resolve("open"), ms)
+    }),
+  ])
+  clearTimeout(timer)
+  return answer
+}
+
 describe("HermesRunEngine", () => {
   it("keeps one AOS run while redirecting into a distinct assistant generation", async () => {
     const attachment = observation()
@@ -912,6 +928,147 @@ describe("HermesRunEngine", () => {
         outcome: { type: "success" },
       },
     ])
+  })
+
+  /**
+   * A Session that asked one native question, then the run that answers it. The
+   * resumed run attaches past the first turn's frames, so a test publishes
+   * whatever Hermes does next through the returned `publish`.
+   */
+  async function resumedRun(
+    overrides: Partial<HermesRunNative> = {},
+    options: { log?: HermesLog } = {}
+  ) {
+    const attachment = observation()
+    const interrupt = interrupts()
+    let watermark = 0
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        onInterrupt: interrupt.onInterrupt,
+        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
+        submit: async () => {
+          interrupt.raise({
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "question-1",
+                reason: "question",
+                message: "Which screenshot?",
+              },
+            ],
+          })
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+        respondInteractions: async () => [{ status: "resolved" as const }],
+        ...overrides,
+      }),
+      options
+    )
+    await collect(await engine.start(scope, input()))
+    watermark = 1
+    const handle = await engine.start(
+      scope,
+      input({
+        runId: "run-2",
+        messages: [],
+        resume: [
+          {
+            interruptId: "question-1",
+            status: "resolved",
+            payload: { answers: [["the first one"]] },
+          },
+        ],
+      })
+    )
+    return {
+      handle,
+      publish: (frame: unknown) => attachment.publish("live-secret", frame),
+    }
+  }
+
+  it("ends a resumed interaction on Hermes' idle frame when its generation never completes", async () => {
+    const { handle, publish } = await resumedRun()
+    const turn = nativeTurn("live-secret", 2)
+
+    // Hermes ran the answered tool and streamed the answer, then went idle
+    // without a `message.complete` for the generation the answer resumed.
+    publish(turn.toolStart("vision-1", "vision_analyze", { path: "shot.png" }))
+    publish(turn.toolComplete("vision-1", "vision_analyze", "a bar chart"))
+    publish(turn.delta("It is a bar chart."))
+    publish(turn.idle())
+
+    await expect(settledWithin(handle, 250)).resolves.toBe("settled")
+    const events = await collect(handle)
+    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+    expect(ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)).toEqual([
+      {
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "run-2:assistant",
+        delta: "It is a bar chart.",
+      },
+    ])
+    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
+      {
+        type: RunEventKind.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-2",
+        outcome: { type: "success" },
+      },
+    ])
+  })
+
+  it("keeps a resumed interaction open when Hermes idles before the answer resumes its turn", async () => {
+    const { handle, publish } = await resumedRun()
+    const turn = nativeTurn("live-secret", 2)
+
+    // The idle frame belongs to the wait the answer just ended, so the turn
+    // Hermes then runs is still this run's.
+    publish(turn.idle())
+    publish(turn.messageStart("continued"))
+    publish(turn.delta("The first one is a bar chart."))
+    publish(turn.complete("continued", "The first one is a bar chart."))
+    publish(turn.idle())
+
+    await expect(settledWithin(handle, 250)).resolves.toBe("settled")
+    const events = await collect(handle)
+    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
+      {
+        type: RunEventKind.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "run-2",
+        outcome: { type: "success" },
+      },
+    ])
+  })
+
+  it("reports a resumed interaction Hermes never ran as a failed run", async () => {
+    const warn = vi.fn()
+    const { handle, publish } = await resumedRun({}, { log: { warn } })
+
+    // Nothing was published since the answer, and Hermes still reports itself
+    // idle when the bounded re-read asks: no assistant turn ever ran.
+    publish(nativeTurn("live-secret", 2).idle())
+
+    // The verdict waits for the bounded re-read, not for the next Send.
+    await expect(settledWithin(handle, 2_000)).resolves.toBe("settled")
+    const events = await collect(handle)
+    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
+    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+      {
+        type: RunEventKind.RUN_ERROR,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "Hermes could not complete this run.",
+      },
+    ])
+    expect(warn).toHaveBeenCalledWith(
+      "hermes.run.failed",
+      expect.objectContaining({ failureReason: "resumed-turn-not-started" })
+    )
   })
 
   it("rejects non-standard top-level run fields instead of accepting provider payloads", async () => {
