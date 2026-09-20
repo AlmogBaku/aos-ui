@@ -18,7 +18,7 @@ const models: SessionModelsResponse = {
 }
 
 describe("configOptionsOf", () => {
-  it("offers the model catalog as one selector", () => {
+  it("offers the model catalog as one selector grouped by provider", () => {
     expect(configOptionsOf(models)[0]).toEqual({
       type: "select",
       configId: "model",
@@ -26,8 +26,38 @@ describe("configOptionsOf", () => {
       category: "model",
       currentValue: "sonnet",
       options: [
-        { value: "sonnet", name: "Sonnet" },
-        { value: "haiku", name: "Haiku" },
+        {
+          groupId: "Anthropic",
+          name: "Anthropic",
+          options: [
+            { value: "sonnet", name: "Sonnet" },
+            { value: "haiku", name: "Haiku" },
+          ],
+        },
+      ],
+    })
+  })
+
+  it("keeps providers in first-seen order and their models in catalog order", () => {
+    const interleaved: SessionModelsResponse = {
+      selectedId: "sonnet",
+      options: [
+        { id: "sonnet", label: "Sonnet", group: "Anthropic" },
+        { id: "gpt", label: "GPT", group: "OpenAI" },
+        { id: "haiku", label: "Haiku", group: "Anthropic" },
+      ],
+    }
+
+    expect(configOptionsOf(interleaved)[0]).toMatchObject({
+      options: [
+        {
+          groupId: "Anthropic",
+          options: [
+            { value: "sonnet", name: "Sonnet" },
+            { value: "haiku", name: "Haiku" },
+          ],
+        },
+        { groupId: "OpenAI", options: [{ value: "gpt", name: "GPT" }] },
       ],
     })
   })

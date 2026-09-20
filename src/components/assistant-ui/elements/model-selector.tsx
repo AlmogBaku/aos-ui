@@ -398,30 +398,24 @@ export function ModelSelectorContent({
       <ComboboxList className="scroll-fade-y">
         <ComboboxCollection>
           {(group: ModelOptionGroup) => (
-            <ComboboxGroup items={group.items} key={group.value}>
+            <ComboboxGroup
+              // A heading takes more room above than below, so each provider
+              // reads as introducing the rows under it; the first one sits
+              // against the popup's own edge and needs no such gap.
+              className="pt-2 first:pt-0"
+              items={group.items}
+              key={group.value}
+            >
               {group.value ? (
-                // A group heading takes more room above than below, so each
-                // provider reads as introducing the rows under it.
-                <ComboboxLabel className="pt-3 pb-1 font-medium">
-                  {group.value}
-                </ComboboxLabel>
+                <ComboboxLabel className="pb-1">{group.value}</ComboboxLabel>
               ) : null}
               <ComboboxCollection>
                 {(model: ModelOption) => (
                   <ComboboxItem
-                    className="rounded-lg py-1.5 ps-1.5 data-selected:font-medium [@media(pointer:coarse)]:min-h-11"
+                    className="rounded-lg py-1.5 data-selected:font-medium [@media(pointer:coarse)]:min-h-11"
                     key={model.id}
                     value={model}
                   >
-                    {/* A monogram of the provider-reported text, which gives
-                        rows the rhythm of a provider logo without teaching a
-                        provider-neutral component about specific providers. */}
-                    <span
-                      aria-hidden
-                      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground uppercase"
-                    >
-                      {(model.group ?? model.name).trim().slice(0, 1)}
-                    </span>
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate">{model.name}</span>
                       {model.description ? (
