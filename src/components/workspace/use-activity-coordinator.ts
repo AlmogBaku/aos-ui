@@ -101,6 +101,12 @@ export function useActivityCoordinator(
   const [pushStatus, setPushStatus] =
     useState<BrowserSettingsView["push"]>("not-configured")
   const install = useInstallPrompt()
+  // The ask has to know it can only point at the Home Screen, and the
+  // coordinator outlives the renders that carry the hint.
+  const installFirstRef = useRef(install.iosInstallHint)
+  useEffect(() => {
+    installFirstRef.current = install.iosInstallHint
+  })
   const validateOwnerRef = useRef<
     (threadId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
@@ -207,6 +213,7 @@ export function useActivityCoordinator(
           open: (id) => openRef.current(id),
           // A subscribed device leaves the OS alerts to push.
           ...(push ? { push } : {}),
+          installFirst: () => installFirstRef.current,
           onChange: () =>
             queueMicrotask(() => {
               if (!active) return

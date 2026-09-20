@@ -39,6 +39,8 @@ export type BrowserActivityOptions = {
     active(): boolean
     subscribeFromGesture?(): Promise<BrowserPermission>
   }
+  /** True where notifications need the app installed before they exist at all. */
+  installFirst?: () => boolean
 }
 const messageSchema = z
   .object({
@@ -119,7 +121,8 @@ export class BrowserActivityCoordinator {
       ask: shouldOfferAsk(
         this.#permission,
         this.#preferences,
-        this.#firstRunSeen
+        this.#firstRunSeen,
+        this.#installFirst()
       ),
       pushActive: this.#pushActive(),
     }
@@ -214,6 +217,13 @@ export class BrowserActivityCoordinator {
   #pushActive() {
     try {
       return this.#options.push?.active() ?? false
+    } catch {
+      return false
+    }
+  }
+  #installFirst() {
+    try {
+      return this.#options.installFirst?.() ?? false
     } catch {
       return false
     }

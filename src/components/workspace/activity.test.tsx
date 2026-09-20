@@ -587,11 +587,15 @@ describe("the one-time ask", () => {
   it("asks an uninstalled iPhone to install AOS, and stays dismissible", async () => {
     const user = userEvent.setup()
     const onDeclineAsk = vi.fn()
+    // Such a tab exposes no Notification API at all, which is what turns the
+    // ask into an install hint rather than a permission request.
+    Reflect.deleteProperty(window, "Notification")
     render(
       <ActivityAsk
         dictionary={en}
         settings={browserSettings({
           ask: true,
+          push: "available",
           iosInstallHint: true,
           onDeclineAsk,
         })}
@@ -599,6 +603,7 @@ describe("the one-time ask", () => {
     )
 
     expect(screen.getByText(en.activity.pushIosHint)).toBeVisible()
+    expect(screen.queryByText(en.activity.askClosed)).toBeNull()
     // There is nothing to turn on yet, but the ask must still be answerable.
     expect(
       screen.queryByRole("button", { name: en.activity.askAccept })

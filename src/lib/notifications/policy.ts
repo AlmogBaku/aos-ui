@@ -97,14 +97,20 @@ export function shouldChime(
   )
 }
 
-/** The ask waits for a run the operator watched, and is offered exactly once. */
+/**
+ * The ask waits for a run the operator watched, and is offered exactly once.
+ * An uninstalled iOS tab has no notification API to ask at all, so the ask is
+ * what tells it to install AOS first.
+ */
 export function shouldOfferAsk(
   permission: BrowserPermission,
   preferences: BrowserPreferences,
-  firstRunSeen: boolean
+  firstRunSeen: boolean,
+  installFirst = false
 ) {
   return (
-    permission === "default" &&
+    (permission === "default" ||
+      (permission === "unsupported" && installFirst)) &&
     preferences.enabled &&
     preferences.prompt === "pending" &&
     firstRunSeen

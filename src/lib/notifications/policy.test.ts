@@ -246,23 +246,31 @@ describe("activity visibility and delivery", () => {
 })
 
 describe("the one-time ask", () => {
-  it.each<[BrowserPermission, Partial<BrowserPreferences>, boolean, boolean]>([
-    ["default", {}, true, true],
-    ["granted", {}, true, false],
-    ["denied", {}, true, false],
-    ["unsupported", {}, true, false],
-    ["default", { prompt: "declined" }, true, false],
-    ["default", { prompt: "accepted" }, true, false],
-    ["default", { enabled: false }, true, false],
-    ["default", {}, false, false],
+  it.each<
+    [BrowserPermission, Partial<BrowserPreferences>, boolean, boolean, boolean]
+  >([
+    ["default", {}, true, false, true],
+    ["granted", {}, true, false, false],
+    ["denied", {}, true, false, false],
+    ["unsupported", {}, true, false, false],
+    ["default", { prompt: "declined" }, true, false, false],
+    ["default", { prompt: "accepted" }, true, false, false],
+    ["default", { enabled: false }, true, false, false],
+    ["default", {}, false, false, false],
+    // An uninstalled iOS tab exposes no notification API to ask through.
+    ["unsupported", {}, true, true, true],
+    ["unsupported", { prompt: "declined" }, true, true, false],
+    ["unsupported", {}, false, true, false],
+    ["denied", {}, true, true, false],
   ])(
-    "offers the ask for %s permission with %j after a seen run=%s: %s",
-    (permission, overrides, firstRunSeen, offered) => {
+    "offers the ask for %s permission with %j after a seen run=%s, install first=%s: %s",
+    (permission, overrides, firstRunSeen, installFirst, offered) => {
       expect(
         shouldOfferAsk(
           permission,
           { ...defaultBrowserPreferences, ...overrides },
-          firstRunSeen
+          firstRunSeen,
+          installFirst
         )
       ).toBe(offered)
     }

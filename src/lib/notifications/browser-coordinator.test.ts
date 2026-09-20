@@ -20,7 +20,8 @@ const event = {
 }
 function setup(
   permission: BrowserPermission = "granted",
-  push?: BrowserActivityOptions["push"]
+  push?: BrowserActivityOptions["push"],
+  installFirst?: BrowserActivityOptions["installFirst"]
 ) {
   // The provider reports the Session unread, which is what makes an alert due.
   const sessions: SessionMetadata[] = [
@@ -69,6 +70,7 @@ function setup(
     context: () => localContext,
     copy: () => copy,
     push,
+    installFirst,
     port: {
       getPermission: () => permission,
       requestPermission: request,
@@ -459,6 +461,26 @@ describe("the one-time ask", () => {
     second.receive({ snapshot, preferencesChanged: true })
     expect(second.coordinator.settings().preferences.prompt).toBe("declined")
     expect(second.coordinator.settings().ask).toBe(false)
+  })
+
+  it("offers itself to a device whose notifications need an install first", () => {
+    // An uninstalled iOS tab has no notification API, which the port reports as
+    // unsupported; the ask is the only thing that can tell the operator why.
+    const h = setup("unsupported", undefined, () => true)
+    watchRun(h)
+
+    expect(h.coordinator.settings().ask).toBe(true)
+
+    h.coordinator.declineAsk()
+    expect(h.coordinator.settings().ask).toBe(false)
+    expect(h.coordinator.settings().preferences.prompt).toBe("declined")
+    expect(h.request).not.toHaveBeenCalled()
+  })
+
+  it("stays hidden on an unsupported browser that could not install either", () => {
+    const h = setup("unsupported")
+    watchRun(h)
+    expect(h.coordinator.settings().ask).toBe(false)
   })
 
   it("publishes a sound choice like any other preference", () => {
