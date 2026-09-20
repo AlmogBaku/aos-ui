@@ -96,7 +96,8 @@ function isIdentifier(value: unknown): value is string {
   )
 }
 
-function readMessage(value: unknown): PushMessage | undefined {
+/** Exported so `logic.parity.test.ts` can hold it against the schema. */
+export function readMessage(value: unknown): PushMessage | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const {
     v,
