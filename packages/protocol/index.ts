@@ -763,6 +763,7 @@ export const ErrorResponseSchema = z.strictObject({
       "revision_conflict",
       "run_conflict",
       "run_capacity_exceeded",
+      "registration_limit_exceeded",
       "runtime_authentication_required",
       "temporarily_unavailable",
       "connection_interrupted",

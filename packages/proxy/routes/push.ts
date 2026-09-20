@@ -53,7 +53,7 @@ export function registerPushRoutes(
       await push.registrations.put(resolvePrincipal(context.req.raw), body.data)
     } catch (cause) {
       if (cause instanceof PushRegistrationLimitError)
-        return errorResponse("run_capacity_exceeded", 409)
+        return errorResponse("registration_limit_exceeded", 409)
       throw cause
     }
     return new Response(null, { status: 204 })
