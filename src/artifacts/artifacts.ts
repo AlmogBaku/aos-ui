@@ -105,7 +105,9 @@ export function extractArtifactOccurrences(
   const occurrences: ArtifactOccurrence[] = []
 
   for (const message of messages) {
-    if (message.role !== "assistant") continue
+    // An artifact travels on an Agent's answer or on the operator's own
+    // attachment, so both roles publish; no other role does.
+    if (message.role !== "assistant" && message.role !== "user") continue
 
     message.content.forEach((part, partIndex) => {
       if (

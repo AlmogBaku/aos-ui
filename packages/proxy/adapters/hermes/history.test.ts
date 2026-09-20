@@ -181,6 +181,69 @@ describe("server-side Hermes history projection", () => {
     expect(serialized).not.toContain(".hermes/attachments")
   })
 
+  it("restores an attached image as an artifact part, never as a marker", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "attached-image-row",
+        role: "user",
+        content:
+          "do u see it?\n@image:/home/alice/.hermes/images/upload_20260920_024035_1.png",
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        content: [
+          { type: "text", text: "do u see it?" },
+          {
+            type: "data",
+            name: "aos.artifact",
+            data: {
+              id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
+              filename: "upload_20260920_024035_1.png",
+              mimeType: "image/png",
+              source: { type: "provider" },
+            },
+          },
+        ],
+      },
+    ])
+    const serialized = JSON.stringify(messages)
+    expect(serialized).not.toContain("@image:")
+    expect(serialized).not.toContain("/home/")
+  })
+
+  it("shows an inlined image once rather than beside its own directive", () => {
+    const messages = projectHermesHistory([
+      {
+        id: "inline-image-row",
+        role: "user",
+        content: JSON.stringify([
+          {
+            type: "text",
+            text: "do u see it?\n@image:/home/alice/.hermes/images/upload_1.png",
+          },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,YQ==" },
+          },
+        ]),
+      },
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        content: [
+          { type: "text", text: "do u see it?" },
+          { type: "image", image: "data:image/png;base64,YQ==" },
+        ],
+      },
+    ])
+    const serialized = JSON.stringify(messages)
+    expect(serialized).not.toContain("@image:")
+    expect(serialized).not.toContain("aos.artifact")
+  })
+
   it("omits native bookkeeping rows with a display kind", () => {
     const messages = projectHermesHistory([
       {

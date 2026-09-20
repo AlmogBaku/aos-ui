@@ -3,6 +3,8 @@ import {
   containsPrivateValue,
   isRecord,
   parseJson,
+  parseJsonOrValue,
+  rowText,
   trimmedText,
   utf8BytesWithin,
 } from "./native"
@@ -30,6 +32,16 @@ const AUDIO_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   webm: "audio/webm",
 }
 
+/** The image types Hermes itself accepts for an attachment upload. */
+const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  bmp: "image/bmp",
+  gif: "image/gif",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+}
+
 const MEDIA_LINE =
   /^\s*MEDIA:\s*(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|(\S+))\s*$/u
 const MEDIA_DIRECTIVE_PREFIX = /^\s*MEDIA:/u
@@ -46,7 +58,15 @@ function mediaReference(line: string) {
   return MEDIA_LINE.exec(line)?.slice(1).find(Boolean)
 }
 
-function safeAudioReference(reference: string) {
+/**
+ * The public filename and media type of a native reference, or `undefined` when
+ * the reference is unusable or names a type the given map does not cover. One
+ * rule for every media kind: the native path itself never becomes public.
+ */
+function safeMediaReference(
+  reference: string,
+  mimeByExtension: Readonly<Record<string, string>>
+) {
   if (
     reference !== reference.trim() ||
     !reference ||
@@ -66,7 +86,7 @@ function safeAudioReference(reference: string) {
   )
     return undefined
   const extension = filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
-  const mimeType = extension ? AUDIO_MIME_BY_EXTENSION[extension] : undefined
+  const mimeType = extension ? mimeByExtension[extension] : undefined
   return mimeType ? { filename, mimeType } : undefined
 }
 
@@ -91,14 +111,31 @@ function taggedReferences(result: Record<string, unknown>) {
   )
 }
 
-function artifactId(toolCallId: string, reference: string) {
+function artifactId(scope: string, reference: string) {
   const digest = createHash("sha256")
-    .update(toolCallId)
+    .update(scope)
     .update("\0")
     .update(reference)
     .digest("hex")
     .slice(0, 32)
   return `hermes-media-${digest}`
+}
+
+/**
+ * One opaque artifact over a native reference. The public `source.reference` is
+ * the artifact id, never the path, so a content read resolves the path back from
+ * authoritative history instead of trusting the browser for it.
+ */
+function mediaArtifact(
+  scope: string,
+  reference: string,
+  media: { filename: string; mimeType: string }
+): HermesMediaArtifact {
+  const id = artifactId(scope, reference)
+  return {
+    reference,
+    descriptor: { id, ...media, source: { type: "provider", reference: id } },
+  }
 }
 
 /**
@@ -120,19 +157,50 @@ export function projectHermesMediaArtifacts(
   for (const reference of emitted) {
     if (!tagged.has(reference) || seen.has(reference)) continue
     seen.add(reference)
-    const audio = safeAudioReference(reference)
+    const audio = safeMediaReference(reference, AUDIO_MIME_BY_EXTENSION)
     if (!audio) continue
-    const id = artifactId(toolCallId, reference)
-    artifacts.push({
-      reference,
-      descriptor: {
-        id,
-        ...audio,
-        source: { type: "provider", reference: id },
-      },
-    })
+    artifacts.push(mediaArtifact(toolCallId, reference, audio))
   }
   return artifacts
+}
+
+// ---------------------------------------------------------------------------
+// Attached images on a durable user row
+// ---------------------------------------------------------------------------
+
+/**
+ * Hermes persists an uploaded image as an `@image:<path>` directive line on the
+ * user row it was sent with (`tui_gateway/session_history.py`). The line is
+ * native authority for bytes the provider still holds, and never text an
+ * operator should read: it names a gateway-local path.
+ */
+const IMAGE_DIRECTIVE_LINE =
+  /^\s*@image:(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|(\S+))\s*$/u
+
+/** The scope every attached-image id is derived under; no tool call owns one. */
+const ATTACHED_IMAGE_SCOPE = "hermes:attached-image"
+
+/**
+ * Split a durable user row's text into the prose the operator wrote and the
+ * images it attached. Every directive line leaves the text whether or not its
+ * reference is usable, so a marker never reaches the browser as prose.
+ */
+export function projectHermesAttachedImages(text: string) {
+  const prose: string[] = []
+  const artifacts: HermesMediaArtifact[] = []
+  const seen = new Set<string>()
+  for (const line of text.split(/\r?\n/u)) {
+    const reference = IMAGE_DIRECTIVE_LINE.exec(line)?.slice(1).find(Boolean)
+    if (reference === undefined) {
+      prose.push(line)
+      continue
+    }
+    const image = safeMediaReference(reference, IMAGE_MIME_BY_EXTENSION)
+    if (!image || seen.has(reference)) continue
+    seen.add(reference)
+    artifacts.push(mediaArtifact(ATTACHED_IMAGE_SCOPE, reference, image))
+  }
+  return { text: prose.join("\n").trim(), artifacts }
 }
 
 /** Incrementally removes Hermes delivery directives without exposing paths. */
@@ -303,6 +371,18 @@ export function publishedArtifact(
               filename: media.descriptor.filename,
             }
     }
+    // The directive the operator's own turn persisted is authority for the image
+    // it attached: only a reference this Session's transcript still carries can
+    // be read back.
+    if (row.role === "user" && !trimmedText(row.display_kind))
+      for (const image of projectHermesAttachedImages(
+        rowText(row, parseJsonOrValue(row.content))
+      ).artifacts)
+        if (image.descriptor.id === artifactId)
+          return {
+            reference: image.reference,
+            filename: image.descriptor.filename,
+          }
     const value = parsedRecord(row.content ?? row.result)
     if (!value || value.ok !== true || value.type !== "aos.artifact") continue
     const artifact = isRecord(value.artifact) ? value.artifact : undefined

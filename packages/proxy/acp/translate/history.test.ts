@@ -141,6 +141,40 @@ describe("translateHistory", () => {
     })
   })
 
+  it("replays an attached image on the user turn that carried it", () => {
+    const attached = {
+      id: "att-1",
+      filename: "upload_20260920_024035_1.png",
+      mimeType: "image/png",
+      source: { type: "provider" as const, reference: "att-1" },
+    }
+    const outbound = translateHistory(
+      {
+        ...history,
+        messages: [
+          {
+            id: "u9",
+            role: "user",
+            content: [
+              { type: "text", text: "do u see it?" },
+              { type: "data", name: "aos.artifact", data: attached },
+            ],
+            createdAt: "2026-09-19T09:00:03.000Z",
+          },
+        ],
+      },
+      "operator"
+    )
+
+    expect(kinds(outbound)).toEqual(["user_message", "artifact"])
+    expect(outbound[1]).toEqual({
+      kind: "artifact",
+      runId: "history",
+      messageId: "u9",
+      artifact: attached,
+    })
+  })
+
   it("replays reasoning and prose on one assistant message", () => {
     const [, thought, prose] = updatesOf(translateHistory(history, "operator"))
 

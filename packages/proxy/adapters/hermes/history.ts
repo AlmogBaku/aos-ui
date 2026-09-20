@@ -1,11 +1,15 @@
 import type { SessionMessage } from "../../../protocol"
 import {
   isRecord as isNativeRecord,
+  rowText,
   timestamp,
   trimmedText,
   utf8BytesWithin,
 } from "./native"
-import { projectHermesMediaText } from "./media-artifacts"
+import {
+  projectHermesAttachedImages,
+  projectHermesMediaText,
+} from "./media-artifacts"
 import {
   canonicalToolName,
   projectHermesToolCall,
@@ -97,7 +101,7 @@ function attachmentMime(context: string, reference: string) {
   return mime && SAFE_MIME.test(mime) ? mime : undefined
 }
 
-function projectHermesUserContent(text: string, messageId: string) {
+function projectHermesFileReferences(text: string, messageId: string) {
   const marker = text.match(HERMES_CONTEXT_MARKER)
   if (!marker || marker.index === undefined) return { text }
   const context = text.slice(marker.index)
@@ -125,6 +129,24 @@ function projectHermesUserContent(text: string, messageId: string) {
     ]
   })
   return { text: lines.join("\n").trim(), attachments }
+}
+
+/**
+ * What a durable user row shows: the prose the operator wrote, the files they
+ * referenced, and the images they attached. Hermes persists both kinds as
+ * directive text, so neither survives as prose — an attached image becomes the
+ * same opaque artifact part a published one travels as.
+ */
+function projectHermesUserContent(text: string, messageId: string) {
+  const attached = projectHermesAttachedImages(text)
+  return {
+    ...projectHermesFileReferences(attached.text, messageId),
+    artifacts: attached.artifacts.map(({ descriptor }) => ({
+      type: "data" as const,
+      name: "aos.artifact",
+      data: descriptor,
+    })),
+  }
 }
 
 /** Converts provider-native durable rows into the strict public history shape. */
@@ -195,28 +217,11 @@ export function projectHermesHistory(
       ? messages.length - 1
       : messages.length
     const rawContent = parseRowJson(value.content)
-    // Hermes only attaches a display projection while rendering a persisted
-    // compaction carrier. Ignore it on ordinary rows so provider-only fields
-    // cannot replace a Session's durable transcript content.
-    const displayContent =
-      value._compressed_summary === true ? value.display_content : undefined
-    const text = String(
-      displayContent ??
-        value.text ??
-        (Array.isArray(rawContent)
-          ? rawContent
-              .filter((part) => isRecord(part) && part.type === "text")
-              .flatMap((part) =>
-                isRecord(part) &&
-                part.type === "text" &&
-                typeof part.text === "string"
-                  ? [part.text]
-                  : []
-              )
-              .join("\n")
-          : rawContent) ??
-        ""
-    )
+    // `rowText` only reads Hermes' display projection on a persisted compaction
+    // carrier, so provider-only fields cannot replace a Session's durable
+    // transcript content. The artifact reader derives a row's text the same way,
+    // so an attachment it resolves is the one the operator was shown.
+    const text = rowText(value, rawContent)
     const userContent =
       role === "user" ? projectHermesUserContent(text, id) : undefined
     const visibleText =
@@ -230,13 +235,22 @@ export function projectHermesHistory(
         : undefined
     if (reasoning) content.push({ type: "reasoning", text: reasoning })
     if (visibleText) content.push({ type: "text", text: visibleText })
-    if (role === "user" && Array.isArray(rawContent)) {
-      for (const part of rawContent) {
-        if (!isRecord(part) || part.type !== "image_url") continue
-        const image = imageSource(part.image_url)
-        if (image) content.push({ type: "image", image })
-      }
-    }
+    const inlineImages =
+      role === "user" && Array.isArray(rawContent)
+        ? rawContent.flatMap((part) => {
+            const image =
+              isRecord(part) && part.type === "image_url"
+                ? imageSource(part.image_url)
+                : undefined
+            return image ? [{ type: "image" as const, image }] : []
+          })
+        : []
+    for (const image of inlineImages) content.push(image)
+    // A row that inlines its image already shows those bytes; the directive it
+    // also persisted would only repeat them.
+    if (inlineImages.length === 0)
+      for (const artifact of userContent?.artifacts ?? [])
+        content.push(artifact)
     if (role === "assistant" && Array.isArray(value.tool_calls)) {
       for (const rawCall of value.tool_calls) {
         if (!isRecord(rawCall)) continue

@@ -13,7 +13,6 @@ import { planUpdate } from "./updates"
 
 type MessagePart = SessionMessage["content"][number]
 type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
-type DataPart = Extract<MessagePart, { type: "data" }>
 
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
 
@@ -40,8 +39,14 @@ function contentBlocks(parts: readonly MessagePart[]): ContentBlock[] {
   })
 }
 
-/** A stored artifact replays as the `_aos/artifact` notification it arrived as. */
-function artifactOutbound(messageId: string, part: DataPart): AcpOutbound[] {
+/**
+ * A stored artifact replays as the `_aos/artifact` notification it arrived as.
+ * Any other part replays nothing here, so both roles share one projection: an
+ * image the operator attached is their turn's artifact exactly as a published one
+ * is the agent's.
+ */
+function artifactOutbound(messageId: string, part: MessagePart): AcpOutbound[] {
+  if (part.type !== "data" || part.name !== ARTIFACT_PART_NAME) return []
   const artifact = AosArtifactDescriptorSchema.safeParse(part.data)
   return artifact.success
     ? [
@@ -122,9 +127,8 @@ function agentOutbound(message: SessionMessage, lane: Lane): AcpOutbound[] {
   // outcome, so it replays on both lanes; the guest history projection already
   // dropped the parts a guest may not see.
   for (const part of message.content) {
-    if (part.type === "data" && part.name === ARTIFACT_PART_NAME)
-      outbound.push(...artifactOutbound(message.id, part))
-    else if (lane !== "guest" && part.type === "tool-call")
+    outbound.push(...artifactOutbound(message.id, part))
+    if (lane !== "guest" && part.type === "tool-call")
       outbound.push({
         kind: "update",
         update: toolCallUpdate(message.id, part),
@@ -141,7 +145,7 @@ export const translateHistory = ((history, lane) => {
         kind: "update",
         update: planUpdate(message.content.todos, { sequence: 0 }),
       })
-    else if (message.role === "user")
+    else if (message.role === "user") {
       outbound.push({
         kind: "update",
         update: {
@@ -150,7 +154,11 @@ export const translateHistory = ((history, lane) => {
           content: contentBlocks(message.content),
         },
       })
-    else outbound.push(...agentOutbound(message, lane))
+      // The turn exists before anything lands on it, so the attachment it
+      // carried follows the message it belongs to.
+      for (const part of message.content)
+        outbound.push(...artifactOutbound(message.id, part))
+    } else outbound.push(...agentOutbound(message, lane))
   }
   return outbound
 }) satisfies TranslateHistory

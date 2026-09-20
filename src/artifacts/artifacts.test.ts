@@ -120,7 +120,7 @@ describe("parseArtifactDescriptor", () => {
 })
 
 describe("extractArtifactOccurrences", () => {
-  it("extracts only canonical artifact data from assistant messages", () => {
+  it("extracts only canonical artifact data, from either participant", () => {
     const artifact = {
       id: "report",
       filename: "report.txt",
@@ -149,12 +149,23 @@ describe("extractArtifactOccurrences", () => {
           role: "user",
           content: [{ type: "data", name: "aos.artifact", data: artifact }],
         },
+        {
+          id: "system-message",
+          role: "system",
+          content: [{ type: "data", name: "aos.artifact", data: artifact }],
+        },
       ])
     ).toEqual([
       {
         key: "assistant-message:4",
         messageId: "assistant-message",
         partIndex: 4,
+        artifact,
+      },
+      {
+        key: "user-message:0",
+        messageId: "user-message",
+        partIndex: 0,
         artifact,
       },
     ])

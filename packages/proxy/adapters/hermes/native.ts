@@ -337,6 +337,31 @@ export function timestamp(value: unknown, fallbackMs = 0): string {
 }
 
 // ---------------------------------------------------------------------------
+// Durable row text
+// ---------------------------------------------------------------------------
+
+/**
+ * The text a durable transcript row carries, given its already-parsed
+ * `content`. One derivation, so the text the history projection shows the
+ * operator and the text the artifact reader trusts as authority cannot
+ * disagree.
+ */
+export function rowText(row: Record<string, unknown>, content: unknown) {
+  const display =
+    row._compressed_summary === true ? row.display_content : undefined
+  const parts = Array.isArray(content)
+    ? content.flatMap((part) =>
+        isRecord(part) && part.type === "text" && typeof part.text === "string"
+          ? [part.text]
+          : []
+      )
+    : undefined
+  return String(
+    display ?? row.text ?? (parts ? parts.join("\n") : content) ?? ""
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Durable Session identity
 // ---------------------------------------------------------------------------
 

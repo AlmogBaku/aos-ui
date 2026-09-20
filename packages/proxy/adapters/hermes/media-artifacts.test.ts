@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest"
 import {
   HermesMediaTextFilter,
   projectHermesArtifactReceipt,
+  projectHermesAttachedImages,
   projectHermesMediaArtifacts,
   projectHermesMediaText,
   publishedArtifact,
 } from "./media-artifacts"
 
 const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
+const imagePath = "/home/alice/.hermes/images/upload_20260920_024035_1.png"
 
 describe("Hermes native media projection", () => {
   it("projects only explicitly delivered TTS audio as an opaque artifact", () => {
@@ -255,5 +257,79 @@ describe("Hermes published artifact receipts", () => {
       reference: audioPath,
       filename: "quick-brief.mp3",
     })
+  })
+})
+
+describe("Hermes attached image directives", () => {
+  it("projects an attached image as an opaque artifact, never as prose", () => {
+    const projected = projectHermesAttachedImages(
+      `do u see it?\n@image:${imagePath}`
+    )
+
+    expect(projected.text).toBe("do u see it?")
+    expect(projected.artifacts).toHaveLength(1)
+    expect(projected.artifacts[0]).toMatchObject({
+      reference: imagePath,
+      descriptor: {
+        filename: "upload_20260920_024035_1.png",
+        mimeType: "image/png",
+      },
+    })
+    expect(projected.artifacts[0]?.descriptor.id).toMatch(
+      /^hermes-media-[a-f0-9]{32}$/u
+    )
+    expect(projected.artifacts[0]?.descriptor.source).toEqual({
+      type: "provider",
+      reference: projected.artifacts[0]?.descriptor.id,
+    })
+    expect(JSON.stringify(projected.artifacts[0]?.descriptor)).not.toContain(
+      "/home/"
+    )
+  })
+
+  it("keeps a directive out of the prose even when it grants no artifact", () => {
+    const projected = projectHermesAttachedImages(
+      "check this\n@image:/home/alice/.hermes/images/notes.txt"
+    )
+
+    expect(projected.text).toBe("check this")
+    expect(projected.artifacts).toEqual([])
+  })
+
+  it("grants one artifact per attached reference", () => {
+    const projected = projectHermesAttachedImages(
+      `two refs\n@image:${imagePath}\n@image:${imagePath}`
+    )
+
+    expect(projected.artifacts).toHaveLength(1)
+  })
+
+  it("resolves an attached image through its opaque artifact id", () => {
+    const rows = [
+      {
+        role: "user",
+        text: `do u see it?\n@image:${imagePath}`,
+      },
+    ]
+    const [image] = projectHermesAttachedImages(String(rows[0]!.text)).artifacts
+
+    expect(publishedArtifact(rows, image!.descriptor.id)).toEqual({
+      reference: imagePath,
+      filename: "upload_20260920_024035_1.png",
+    })
+    expect(
+      publishedArtifact(rows, "hermes-media-" + "0".repeat(32))
+    ).toBeUndefined()
+  })
+
+  it("refuses an attached image no durable user row carries", () => {
+    const [image] = projectHermesAttachedImages(`@image:${imagePath}`).artifacts
+
+    expect(
+      publishedArtifact(
+        [{ role: "assistant", text: `@image:${imagePath}` }],
+        image!.descriptor.id
+      )
+    ).toBeUndefined()
   })
 })
