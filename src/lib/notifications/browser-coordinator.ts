@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { categoryOf } from "@aos/protocol/push"
 import type { ActivityRecord } from "./activity"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"
@@ -10,6 +11,7 @@ import {
   type BrowserPreferences,
 } from "./policy"
 import { deserializeActivity, serializeActivity } from "./serialization"
+import { notificationTag } from "./tag"
 
 export interface ActivityBrowserPlatform {
   read(): string | null
@@ -159,7 +161,7 @@ export class BrowserActivityCoordinator {
           this.#preferences = previous.preferences
       } catch {}
       const snapshot = serializeActivity({
-        version: 2,
+        version: 3,
         preferences: this.#preferences,
       })
       try {
@@ -275,28 +277,15 @@ export class BrowserActivityCoordinator {
         ).browserNotification
       )
         return false
-      const category =
-        record.type === "attention-requested"
-          ? "input"
-          : record.type === "run-failed" ||
-              record.type === "agent-activation-failed"
-            ? "failure"
-            : "completion"
-      // Only a hash of opaque identity appears on the OS surface.
-      let hash = 2166136261
-      for (const char of JSON.stringify([
-        record.agentId,
-        record.threadId,
-        record.id,
-      ]))
-        hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+      const category = categoryOf(record.type)
+      if (!category) return false
       const notification = port.show(
         {
           title: "AOS",
           body: this.#options.copy()[category],
           icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
-          tag: `aos-ui-${(hash >>> 0).toString(16)}`,
+          tag: notificationTag(record.agentId, record.threadId, record.id),
           renotify: false,
         },
         () => {

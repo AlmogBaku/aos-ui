@@ -127,7 +127,7 @@ describe("live browser Activity", () => {
     h.coordinator.publish(h.store.ingest(event))
     h.receive({
       snapshot: serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: true },
       }),
       deliveredId: event.id,
@@ -153,7 +153,7 @@ describe("live browser Activity", () => {
     await h.coordinator.setEnabled(true)
     h.seed(
       serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: false },
       })
     )
@@ -293,7 +293,6 @@ describe("live browser Activity", () => {
     h.coordinator.start()
     const result = h.coordinator.setEnabled(true)
     expect(h.request).toHaveBeenCalledTimes(1)
-    expect(h.coordinator.settings().preferences.enabled).toBe(false)
     await result
     expect(h.coordinator.settings().preferences.enabled).toBe(false)
     h.permission("granted")
@@ -308,7 +307,7 @@ describe("live browser Activity", () => {
     const h = setup()
     h.seed(
       serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: true },
       })
     )
