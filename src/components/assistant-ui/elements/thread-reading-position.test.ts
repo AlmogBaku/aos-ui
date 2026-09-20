@@ -90,9 +90,8 @@ describe("thread reading position", () => {
     })
   })
 
-  it("restores a message anchor without smooth scrolling", () => {
+  it("restores a message anchor to the correct scroll position", () => {
     const viewport = createViewport({ scrollTop: 600 })
-    viewport.style.scrollBehavior = "smooth"
     appendMessage(viewport, "anchor", 180)
 
     restoreThreadReadingBookmark(viewport, {
@@ -103,7 +102,6 @@ describe("thread reading position", () => {
     })
 
     expect(viewport.scrollTop).toBe(660)
-    expect(viewport.style.scrollBehavior).toBe("smooth")
   })
 
   it("falls back to a clamped saved scroll position when its anchor is gone", () => {

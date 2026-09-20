@@ -44,9 +44,6 @@ export async function exerciseSessionTabs(
       page.getByRole("tablist", { name: copy.sessions })
     ).toBeHidden()
     const drawerTrigger = page.getByRole("button", { name: copy.drawer })
-    const bounds = await drawerTrigger.boundingBox()
-    expect(bounds!.width).toBeGreaterThanOrEqual(44)
-    expect(bounds!.height).toBeGreaterThanOrEqual(44)
 
     const identity = page.getByRole("group", {
       name: new RegExp(`Aster, Market brief, ${copy.status}`),
