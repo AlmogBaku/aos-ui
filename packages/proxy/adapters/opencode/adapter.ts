@@ -60,6 +60,8 @@ export type OpenCodeAdapterClient = Readonly<{
     | "list"
     | "get"
     | "create"
+    | "update"
+    | "delete"
     | "switchModel"
     | "messages"
     | "context"
@@ -126,19 +128,16 @@ function unavailableRuntimeInfo(): RuntimeInfo {
       },
       sessionTitle: {
         status: "unavailable",
-        reason: "native-session-title-unavailable",
+        reason: "temporarily-unavailable",
       },
       sessionArchival: {
         status: "unavailable",
-        reason: "native-session-title-unavailable",
+        reason: "temporarily-unavailable",
       },
-      sessionPin: {
-        status: "unavailable",
-        reason: "native-session-pin-unavailable",
-      },
+      sessionPin: { status: "unavailable", reason: "temporarily-unavailable" },
       sessionDeletion: {
         status: "unavailable",
-        reason: "native-session-delete-unavailable",
+        reason: "temporarily-unavailable",
       },
       sessionRun: { status: "unavailable", reason: "temporarily-unavailable" },
       sessionStop: { status: "unavailable", reason: "temporarily-unavailable" },
@@ -182,22 +181,10 @@ function readyRuntimeInfo(): RuntimeInfo {
       },
       sessionDetail: { status: "available" },
       sessionCreation: { status: "available" },
-      sessionTitle: {
-        status: "unavailable",
-        reason: "native-session-title-unavailable",
-      },
-      sessionArchival: {
-        status: "unavailable",
-        reason: "native-session-title-unavailable",
-      },
-      sessionPin: {
-        status: "unavailable",
-        reason: "native-session-pin-unavailable",
-      },
-      sessionDeletion: {
-        status: "unavailable",
-        reason: "native-session-delete-unavailable",
-      },
+      sessionTitle: { status: "available" },
+      sessionArchival: { status: "available" },
+      sessionPin: { status: "available" },
+      sessionDeletion: { status: "available" },
       sessionRun: { status: "available" },
       sessionStop: { status: "available" },
       sessionSteer: {
@@ -393,16 +380,15 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     method: "PATCH" | "DELETE",
     body?: unknown
   ) {
-    await this.getSession(agentId, sessionId)
-    void [method, body]
-    throw new OpenCodeWorkspaceUnavailableError()
+    await (method === "DELETE"
+      ? this.#workspace.deleteSession(agentId, sessionId)
+      : this.#workspace.patchSession(agentId, sessionId, body))
   }
 
   async workspaceCapabilities(agentId: string, publicSessionId: string) {
     await this.getSession(agentId, publicSessionId)
-    const { agentVisibility, sessionTitle, sessionDeletion, ...workspace } =
-      this.#workspace.capabilities()
-    void [agentVisibility, sessionTitle, sessionDeletion]
+    const { agentVisibility, ...workspace } = this.#workspace.capabilities()
+    void agentVisibility
     return SessionWorkspaceCapabilitiesResponseSchema.parse({
       workspace,
       ...openCodeCapabilities(),

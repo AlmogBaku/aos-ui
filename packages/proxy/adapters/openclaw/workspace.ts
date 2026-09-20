@@ -4,18 +4,24 @@ import type {
   Session,
   SessionCatalogResponse,
 } from "../../../protocol"
-import { SessionCreateResponseSchema } from "../../../protocol"
+import {
+  SessionCreateResponseSchema,
+  SessionPatchRequestSchema,
+} from "../../../protocol"
 
 import {
   openClawAgentsParams,
   openClawCreateSessionParams,
+  openClawDeleteSessionParams,
   openClawInvitedSessionsParams,
+  openClawPatchSessionParams,
   openClawSessionsParams,
   parseOpenClawAgents,
   parseOpenClawCreatedSession,
   parseOpenClawSessions,
   type OpenClawAgent,
   type OpenClawSession,
+  type OpenClawSessionPatch,
 } from "./native-schemas"
 
 const INVITATION_REFERENCE = /^[A-Za-z0-9_-]{1,128}$/u
@@ -95,7 +101,23 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
     archived: row.archived ?? false,
     updatedAt: updatedAt(row),
     status: sessionStatus(row),
+    // Absent pin state stays absent: it never overwrites a known value.
+    ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
   }
+}
+
+/**
+ * Maps one normalized Session intent to its proven native equivalent. `unread`
+ * and every rejected body stay unavailable rather than emulated.
+ */
+function nativeSessionPatch(body: unknown): OpenClawSessionPatch {
+  const intent = SessionPatchRequestSchema.safeParse(body)
+  if (!intent.success) throw new OpenClawWorkspaceUnavailableError()
+  const { title, archived, pinned } = intent.data
+  if (title !== undefined) return { label: title }
+  if (archived !== undefined) return { archived }
+  if (pinned !== undefined) return { pinned }
+  throw new OpenClawWorkspaceUnavailableError()
 }
 
 export function invitedOpenClawSessionKey(agentId: string, ref: string) {
@@ -122,6 +144,12 @@ export type OpenClawWorkspace = Readonly<{
   ): Promise<SessionCatalogResponse>
   getSession(agentId: string, sessionKey: string): Promise<Session>
   createSession(agentId: string): Promise<unknown>
+  patchSession(
+    agentId: string,
+    sessionKey: string,
+    body: unknown
+  ): Promise<void>
+  deleteSession(agentId: string, sessionKey: string): Promise<void>
   resolveSessionId(agentId: string, publicSessionId: string): string | undefined
   resolveInvitedSession(
     agentId: string,
@@ -273,6 +301,24 @@ export function createOpenClawWorkspace(input: {
       return SessionCreateResponseSchema.parse({
         session: { id: created.key, agentId },
       })
+    },
+    async patchSession(agentId, sessionKey, body) {
+      await getSession(agentId, sessionKey)
+      await input.client.request(
+        "sessions.patch",
+        openClawPatchSessionParams(
+          agentId,
+          sessionKey,
+          nativeSessionPatch(body)
+        )
+      )
+    },
+    async deleteSession(agentId, sessionKey) {
+      await getSession(agentId, sessionKey)
+      await input.client.request(
+        "sessions.delete",
+        openClawDeleteSessionParams(agentId, sessionKey)
+      )
     },
     resolveSessionId(_agentId, publicSessionId) {
       return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined

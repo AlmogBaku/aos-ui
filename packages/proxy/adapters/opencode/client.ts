@@ -96,6 +96,21 @@ export type OpenCodeClient = Readonly<{
       }>,
       signal?: AbortSignal
     ): Promise<unknown>
+    /**
+     * The pinned SDK exposes Session updates only on the pre-v2 route, and it
+     * types `time.archived` as a bare number with no unarchive route. Callers
+     * own what an empty `time` object means to the native server.
+     */
+    update(
+      sessionId: string,
+      input: Readonly<{
+        title?: string
+        time?: Readonly<{ archived?: number }>
+        metadata?: Readonly<Record<string, unknown>>
+      }>,
+      signal?: AbortSignal
+    ): Promise<void>
+    delete(sessionId: string, signal?: AbortSignal): Promise<void>
     switchModel(
       sessionId: string,
       model: ModelRef,
@@ -418,6 +433,31 @@ class Facade implements OpenCodeClient {
             { signal: requestSignal }
           ),
         providerEnvelope,
+        signal
+      ),
+    update: (sessionId, input, signal) =>
+      this.#voidMutation(
+        (requestSignal) =>
+          this.#sdk.session.update(
+            {
+              sessionID: identifier(sessionId, "session"),
+              ...(input.title === undefined ? {} : { title: input.title }),
+              ...(input.time === undefined ? {} : { time: { ...input.time } }),
+              ...(input.metadata === undefined
+                ? {}
+                : { metadata: { ...input.metadata } }),
+            },
+            { signal: requestSignal }
+          ),
+        signal
+      ),
+    delete: (sessionId, signal) =>
+      this.#voidMutation(
+        (requestSignal) =>
+          this.#sdk.session.delete(
+            { sessionID: identifier(sessionId, "session") },
+            { signal: requestSignal }
+          ),
         signal
       ),
     switchModel: (sessionId, model, signal) =>

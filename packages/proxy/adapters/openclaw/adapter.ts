@@ -204,13 +204,16 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   async mutateSession(
-    _agentId: string,
-    _runtimeSessionId: string,
-    _method: "PATCH" | "DELETE",
-    _body?: unknown
+    agentId: string,
+    runtimeSessionId: string,
+    method: "PATCH" | "DELETE",
+    body?: unknown
   ): Promise<void> {
-    void [_agentId, _runtimeSessionId, _method, _body]
-    throw new OpenClawAdapterUnavailableError()
+    await this.#start()
+    // The native patch owns each flag's side effects; AOS sends one at a time.
+    await (method === "DELETE"
+      ? this.#workspace.deleteSession(agentId, runtimeSessionId)
+      : this.#workspace.patchSession(agentId, runtimeSessionId, body))
   }
 
   async workspaceCapabilities(
@@ -371,10 +374,10 @@ export class OpenClawServerAdapter implements ServerRuntime {
           : unavailable("temporarily-unavailable"),
         sessionDetail: operation,
         sessionCreation: operation,
-        sessionTitle: unavailable("native-session-title-unavailable"),
-        sessionArchival: unavailable("native-session-archive-unavailable"),
-        sessionPin: unavailable("native-session-pin-unavailable"),
-        sessionDeletion: unavailable("native-session-delete-unavailable"),
+        sessionTitle: operation,
+        sessionArchival: operation,
+        sessionPin: operation,
+        sessionDeletion: operation,
         sessionRun: operation,
         sessionStop: operation,
         sessionSteer: unavailable("native-active-turn-steering-unavailable"),
