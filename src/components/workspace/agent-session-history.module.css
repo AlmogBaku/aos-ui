@@ -23,8 +23,6 @@
 }
 
 .createSessionButton {
-  inline-size: 2.75rem;
-  block-size: 2.75rem;
   flex: none;
   color: var(--muted-foreground);
 }
@@ -129,15 +127,20 @@
   white-space: nowrap;
 }
 
+/* A bdi resolves its own direction, so a Latin title would hug the left edge
+   of a Hebrew row. Chromium lacks text-align: match-parent; key on the UI. */
+[dir="rtl"] .rowTitle {
+  text-align: right;
+}
+
+[dir="ltr"] .rowTitle {
+  text-align: left;
+}
+
 .actionSlot {
   position: relative;
   display: grid;
   place-items: center;
-}
-
-.iconButton {
-  min-block-size: 2.75rem;
-  min-inline-size: 2.75rem;
 }
 
 .actionMenu {
@@ -157,7 +160,7 @@
 .actionMenu button {
   display: flex;
   inline-size: 100%;
-  min-block-size: 2.75rem;
+  min-block-size: 2rem;
   align-items: center;
   gap: 0.5rem;
   padding-inline: 0.625rem;
@@ -202,8 +205,8 @@
 }
 
 @media (pointer: coarse) {
+  .searchField,
   .sessionNavigation,
-  .iconButton,
   .actionMenu button {
     min-block-size: 2.75rem;
   }

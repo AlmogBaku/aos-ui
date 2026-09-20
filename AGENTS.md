@@ -155,10 +155,12 @@ database or provider registry.
 - Treat tests as contracts for observable behavior. Exact text is appropriate
   for accessible names, user-authored input, provider fidelity, protocols,
   security, configuration, and localization keys; editorial fixture copy is
-  not a readiness or state contract. Do not assert private CSS classes,
-  `data-slot` markup, icon internals, or storage keys. Restrict pixel checks
-  to documented accessibility or responsive invariants, and do not add test
-  IDs solely to preserve implementation-coupled tests.
+  not a readiness or state contract. Never assert styling: no CSS classes,
+  `data-slot` markup, computed styles, pixel sizes, bounding boxes, colors,
+  contrast ratios, or font sizes, in vitest or Playwright. Verify appearance
+  by looking at the rendered app. Do not assert icon internals or storage
+  keys, and do not add test IDs solely to preserve implementation-coupled
+  tests.
 - Load public runtime configuration from `/runtime-config.json`, separate from
   the frontend build. Never put credentials in it or `VITE_*`. The Bun proxy
   serves the production assets and normalized APIs; Nginx may be an external

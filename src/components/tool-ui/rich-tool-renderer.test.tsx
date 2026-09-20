@@ -1237,8 +1237,6 @@ describe("informational renderers", () => {
       />
     )
 
-    const activity = screen.getByText("Data analyst").closest("section")
-    expect(activity).toHaveAttribute("data-slot", "tool-activity")
     expect(screen.getByText("Validated three segments.")).toBeVisible()
     expect(screen.queryByText("Transcript")).toBeNull()
     expect(screen.queryByText("Transcript unavailable.")).toBeNull()
@@ -1260,8 +1258,6 @@ describe("informational renderers", () => {
         />
       )
 
-      const activity = screen.getByText("Child agent").closest("section")
-      expect(activity).toHaveAttribute("data-slot", "tool-activity")
       expect(screen.getByText(statusLabel)).toBeInTheDocument()
       expect(screen.getByText(transcriptLabel)).toBeInTheDocument()
       expect(screen.queryByRole("button")).toBeNull()

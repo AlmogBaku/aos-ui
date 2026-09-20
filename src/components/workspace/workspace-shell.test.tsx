@@ -460,8 +460,8 @@ describe("WorkspaceShell", () => {
     const agentButton = screen.getByRole("button", {
       name: "Aster, Status: Running, Selected Agent, Unread",
     })
-    expect(within(agentButton).getByTitle("Running")).toBeVisible()
     expect(within(agentButton).getByTitle("Unread")).toBeVisible()
+    expect(within(agentButton).queryByTitle("Running")).toBeNull()
 
     const tab = screen.getByRole("tab", { name: "Market brief, Unread" })
     expect(within(tab).getByTitle("Unread")).toBeVisible()
@@ -470,7 +470,7 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByText(/unread/i)).toBeNull()
   })
 
-  it("keeps attention and unread indicators together on one navigation row", () => {
+  it("lets a Session that needs the operator outrank its unread dot", () => {
     const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
     const sessions = [...openSessions.slice(0, 2), scan]
     renderShell({
@@ -496,7 +496,7 @@ describe("WorkspaceShell", () => {
       name: "Aster, Status: Needs attention, Selected Agent, Unread",
     })
     expect(within(agentButton).getByTitle("Needs attention")).toBeVisible()
-    expect(within(agentButton).getByTitle("Unread")).toBeVisible()
+    expect(within(agentButton).queryByTitle("Unread")).toBeNull()
 
     const inspector = screen.getByRole("complementary", {
       name: "Agent details",
@@ -505,11 +505,11 @@ describe("WorkspaceShell", () => {
       name: "Open session: Competitive scan, Status: Waiting for input, Unread",
     })
     expect(within(sessionButton).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(sessionButton).getByTitle("Unread")).toBeVisible()
+    expect(within(sessionButton).queryByTitle("Unread")).toBeNull()
 
     const tab = screen.getByRole("tab", { name: "Competitive scan, Unread" })
     expect(within(tab).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(tab).getByTitle("Unread")).toBeVisible()
+    expect(within(tab).queryByTitle("Unread")).toBeNull()
   })
 
   it("localizes the unread indicator in Hebrew", () => {

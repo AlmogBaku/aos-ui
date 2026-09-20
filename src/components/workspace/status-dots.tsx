@@ -37,7 +37,19 @@ export function UnreadDot({ label }: { label: string }) {
   return <span className={styles.unreadDot} title={label} aria-hidden="true" />
 }
 
-/** Execution status and provider unread state can be true at the same time. */
+function needsOperator(status: RowStatus | undefined) {
+  return (
+    status === "waiting-for-input" ||
+    status === "attention" ||
+    status === "failed"
+  )
+}
+
+/**
+ * A row shows one dot. A state that needs the operator (waiting for input,
+ * attention, failed) outranks unread; unread outranks a run that is merely in
+ * progress. The row's accessible name still states every state in full.
+ */
 export function RowIndicators({
   status,
   statusLabel,
@@ -54,8 +66,11 @@ export function RowIndicators({
 
   return (
     <span className={styles.indicators}>
-      <StatusDot status={status} label={statusLabel} />
-      {unread ? <UnreadDot label={unreadLabel} /> : null}
+      {unread && !needsOperator(status) ? (
+        <UnreadDot label={unreadLabel} />
+      ) : (
+        <StatusDot status={status} label={statusLabel} />
+      )}
     </span>
   )
 }
