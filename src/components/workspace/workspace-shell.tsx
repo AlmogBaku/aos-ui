@@ -16,6 +16,7 @@ import {
   Plus,
   Settings2,
   Sparkles,
+  Trash2,
   X,
   type LucideIcon,
 } from "lucide-react"
@@ -36,6 +37,15 @@ import {
   type ReactNode,
 } from "react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { SystemNotice } from "@/components/ui/system-notice"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
@@ -125,6 +135,9 @@ export type WorkspaceShellProps = {
   agentBuilderAvailable?: boolean
   /** What AOS owes the operator about an Agent the creator just made. */
   creatorNotice?: string
+  /** The selected Agent is an unfinished interview, not a provider Agent. */
+  selectedAgentIsDraft?: boolean
+  onDiscardDraft?: () => WorkspaceActionResult
   onSelectAgent: (agentId: string) => WorkspaceActionResult
   onOpenSession: (threadId: string) => WorkspaceActionResult
   onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
@@ -349,6 +362,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     openSessions: dictionary.mobileNavigation.openSessions,
     history: dictionary.mobileNavigation.history,
     newAgent: dictionary.actions.newAgent,
+    draftLabel: dictionary.creator.draftLabel,
     newSession: dictionary.actions.newSession,
     manageAgents: dictionary.workspace.manageAgents,
     preferences: dictionary.mobileNavigation.preferences,
@@ -1087,6 +1101,8 @@ export function WorkspaceShell({
   environmentLabel,
   agentBuilderAvailable = true,
   creatorNotice,
+  selectedAgentIsDraft = false,
+  onDiscardDraft,
   onSelectAgent,
   onOpenSession,
   onCloseSession,
@@ -1119,6 +1135,7 @@ export function WorkspaceShell({
     { view: "closed" }
   )
   const [activityOpen, setActivityOpen] = useState(false)
+  const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
     subscribeToInspectorPreference,
@@ -1129,9 +1146,11 @@ export function WorkspaceShell({
     boolean | null
   >(null)
   const desktopInspectorOpen = volatileInspectorOpen ?? storedInspectorOpen
-  const effectiveInspectorOpen = navigationHidden
-    ? artifactViewerOpen
-    : desktopInspectorOpen || artifactViewerOpen
+  // A draft owns one interview Session and no Agent details worth inspecting.
+  const inspectorAvailable = !navigationHidden && !selectedAgentIsDraft
+  const effectiveInspectorOpen = inspectorAvailable
+    ? desktopInspectorOpen || artifactViewerOpen
+    : artifactViewerOpen
   const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null)
   const mobileNavigatorOpen = mobileNavigator.view !== "closed"
   const artifactDrawerOpen = artifactViewerOpen && !desktopLayout
@@ -1186,7 +1205,10 @@ export function WorkspaceShell({
       ),
     [agentCreatorId, agents]
   )
-  const activeTabId = activeThreadId ? getTabId(activeThreadId) : undefined
+  const activeTabId =
+    activeThreadId && !selectedAgentIsDraft
+      ? getTabId(activeThreadId)
+      : undefined
   const activeSession = [...openSessions, ...olderSessions].find(
     ({ threadId }) => threadId === activeThreadId
   )
@@ -1414,7 +1436,13 @@ export function WorkspaceShell({
               aria-label={dictionary.actions.openAgents}
               aria-expanded={mobileNavigatorOpen}
               onClick={() => {
-                dispatchMobileNavigator({ type: "OPEN", selectedAgentId })
+                dispatchMobileNavigator({
+                  type: "OPEN",
+                  // A draft has no Session list to browse.
+                  selectedAgentId: selectedAgentIsDraft
+                    ? null
+                    : selectedAgentId,
+                })
               }}
             >
               <Menu />
@@ -1487,7 +1515,19 @@ export function WorkspaceShell({
         >
           {navigationHidden ? skipLink : null}
           {conversationHeader}
-          {!navigationHidden ? (
+          {!navigationHidden && selectedAgentIsDraft ? (
+            <div className="flex min-h-10 items-center justify-end border-b border-border px-2">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setDiscardDraftOpen(true)}
+              >
+                <Trash2 data-icon="inline-start" />
+                {dictionary.actions.discardDraft}
+              </Button>
+            </div>
+          ) : null}
+          {!navigationHidden && !selectedAgentIsDraft ? (
             <div data-keyboard-region="sessions" className="contents">
               <SessionTabs
                 locale={locale}
@@ -1531,7 +1571,7 @@ export function WorkspaceShell({
           </main>
         </div>
 
-        {!navigationHidden || artifactViewerOpen ? (
+        {inspectorAvailable || artifactViewerOpen ? (
           <aside
             ref={artifactPanelRef}
             id="workspace-agent-inspector"
@@ -1587,7 +1627,7 @@ export function WorkspaceShell({
             selectedAgentId={selectedAgentId}
             activeThreadId={activeThreadId}
             agentBuilderAvailable={agentBuilderAvailable}
-            canCreateSession={Boolean(selectedAgentId)}
+            canCreateSession={Boolean(selectedAgentId) && !selectedAgentIsDraft}
             onSelectAgent={onSelectAgent}
             onOpenSession={onOpenSession}
             onCreateSession={onCreateSession}
@@ -1704,6 +1744,28 @@ export function WorkspaceShell({
         >
           {artifactViewer}
         </FocusDrawer>
+
+        <AlertDialog open={discardDraftOpen} onOpenChange={setDiscardDraftOpen}>
+          <AlertDialogContent dir={getLocaleDirection(locale)}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {dictionary.creator.discardConfirm}
+              </AlertDialogTitle>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{dictionary.actions.cancel}</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  setDiscardDraftOpen(false)
+                  if (onDiscardDraft) runAction(onDiscardDraft, onActionError)
+                }}
+              >
+                {dictionary.actions.discardDraft}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {!navigationHidden && !modalDrawerOpen ? (
           <ActivityNotice

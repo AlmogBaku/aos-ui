@@ -587,6 +587,117 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
   })
 
+  describe("a selected draft Agent", () => {
+    const interview: WorkspaceSession = {
+      threadId: "thread-interview",
+      title: "New Agent",
+      status: "idle",
+      updatedAt: "2026-09-03T11:30:00.000Z",
+    }
+
+    const renderDraftShell = (
+      overrides: Partial<React.ComponentProps<typeof WorkspaceShell>> = {}
+    ) =>
+      renderShell({
+        agents: [
+          ...agents,
+          { id: "draft:thread-interview", name: "New Agent" },
+        ],
+        selectedAgentId: "draft:thread-interview",
+        selectedAgentIsDraft: true,
+        activeThreadId: "thread-interview",
+        openSessions: [interview],
+        olderSessions: [],
+        navigationCatalog: new Map([
+          [
+            "draft:thread-interview",
+            {
+              agentId: "draft:thread-interview",
+              openSessions: [interview],
+              historySessions: [],
+              lastSelectedThreadId: "thread-interview",
+            },
+          ],
+        ]),
+        ...overrides,
+      })
+
+    it("offers only Discard draft where Session tabs and details would be", () => {
+      renderDraftShell()
+
+      expect(screen.queryByRole("tablist")).toBeNull()
+      expect(
+        screen.queryByRole("button", { name: en.actions.newSession })
+      ).toBeNull()
+      expect(
+        screen.queryByRole("button", { name: en.actions.hideAgentDetails })
+      ).toBeNull()
+      expect(
+        screen.queryByRole("button", { name: en.actions.showAgentDetails })
+      ).toBeNull()
+      expect(
+        screen.queryByRole("complementary", { name: en.workspace.agentDetails })
+      ).toBeNull()
+      expect(
+        screen.getByRole("button", { name: en.actions.discardDraft })
+      ).toBeVisible()
+      expect(
+        screen.getByRole("button", { name: /^New Agent, draft/ })
+      ).toHaveAttribute("aria-current", "true")
+    })
+
+    it("discards the interview only after the operator confirms", async () => {
+      const user = userEvent.setup()
+      const onDiscardDraft = vi.fn()
+      renderDraftShell({ onDiscardDraft })
+
+      await user.click(
+        screen.getByRole("button", { name: en.actions.discardDraft })
+      )
+      const dialog = await screen.findByRole("alertdialog")
+      expect(within(dialog).getByText(en.creator.discardConfirm)).toBeVisible()
+      await user.click(
+        within(dialog).getByRole("button", { name: en.actions.cancel })
+      )
+      expect(onDiscardDraft).not.toHaveBeenCalled()
+
+      await user.click(
+        screen.getByRole("button", { name: en.actions.discardDraft })
+      )
+      await user.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: en.actions.discardDraft,
+        })
+      )
+
+      expect(onDiscardDraft).toHaveBeenCalledTimes(1)
+    })
+
+    it("localizes the draft controls in Hebrew", async () => {
+      const user = userEvent.setup()
+      renderDraftShell({
+        locale: "he",
+        dictionary: he,
+        // The hook names a draft in the operator's own locale.
+        agents: [...agents, { id: "draft:thread-interview", name: "סוכן חדש" }],
+      })
+
+      expect(
+        screen.getByRole("button", { name: /^סוכן חדש, טיוטה/ })
+      ).toBeVisible()
+
+      await user.click(
+        screen.getByRole("button", { name: he.actions.discardDraft })
+      )
+
+      expect(
+        within(await screen.findByRole("alertdialog")).getByText(
+          he.creator.discardConfirm
+        )
+      ).toBeVisible()
+    })
+  })
+
   it("keeps new-session actions available with no provider Sessions", () => {
     const onCreateSession = vi.fn()
     renderShell({

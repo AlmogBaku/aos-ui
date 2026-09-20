@@ -114,6 +114,7 @@ export const en = {
     switchToEnglish: "Switch to English",
     switchToHebrew: "Switch to Hebrew",
     discardDraft: "Discard draft",
+    cancel: "Cancel",
   },
   appearance: {
     label: "Appearance",

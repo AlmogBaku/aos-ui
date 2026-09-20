@@ -282,7 +282,10 @@ function CreatorFixtureAosUiApp({
   locale: "en" | "he"
   workspace?: FixtureWorkspace
   initialThreadId?: string
-  capture?: (bundle: WorkspaceFixtureRuntime) => void
+  capture?: (bundle: {
+    workspace: FixtureWorkspace
+    assistantRuntime: WorkspaceFixtureRuntime["assistantRuntime"]
+  }) => void
 }) {
   const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
   const bundle = useFixtureRuntimeBundle({
@@ -1874,6 +1877,54 @@ describe("AosUiApp fixture composition", () => {
     expect(
       await screen.findByRole("button", { name: /^New Agent, draft/ })
     ).toHaveAttribute("aria-current", "true")
+  })
+
+  it("discards a draft by deleting its interview Session", async () => {
+    const user = userEvent.setup()
+    let bundle:
+      | {
+          workspace: FixtureWorkspace
+          assistantRuntime: WorkspaceFixtureRuntime["assistantRuntime"]
+        }
+      | undefined
+    render(
+      <CreatorFixtureAosUiApp
+        locale="en"
+        capture={(value) => {
+          bundle = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const interview = bundle!.workspace
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+
+    await user.click(
+      screen.getByRole("button", { name: en.actions.discardDraft })
+    )
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: en.actions.discardDraft,
+      })
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^New Agent, draft/ })
+      ).toBeNull()
+    )
+    const threads = bundle!.assistantRuntime.threads.getState()
+    expect(
+      threads.threadIds.map((id) => threads.threadItems[id]?.remoteId)
+    ).not.toContain(interview.threadId)
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Aster,/ })).toHaveAttribute(
+        "aria-current",
+        "true"
+      )
+    )
   })
 
   it("replaces a resolved draft with the created Agent and creates it no Session", async () => {

@@ -30,6 +30,7 @@ import {
   type AgentSessionHistoryCopy,
 } from "./agent-session-history"
 import { RowIndicators, UnreadDot } from "./status-dots"
+import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 
 export type MobileNavigatorState =
   | { view: "closed" }
@@ -80,6 +81,7 @@ export type MobileNavigatorCopy = AgentSessionHistoryCopy & {
   close: string
   searchAgents: string
   newAgent: string
+  draftLabel: string
   manageAgents: string
   preferences: string
   agentDetails: string
@@ -292,6 +294,15 @@ export function MobileNavigator({
       ?.focus()
   }, [state])
 
+  /** A draft owns one interview Session, so its row selects that Session. */
+  const draftThreadOf = (agentId: string) => {
+    if (!isDraftAgentId(agentId)) return undefined
+    const entry = sessionsByAgentId.find((item) => item.agentId === agentId)
+    return (
+      entry?.openSessions[0]?.threadId ?? entry?.historySessions[0]?.threadId
+    )
+  }
+
   const normalizedAgentQuery = normalizeSearch(agentQuery, locale)
   const visibleAgents = useMemo(
     () =>
@@ -350,6 +361,7 @@ export function MobileNavigator({
               visibleAgents.map((agent) => {
                 const label = [
                   agent.name,
+                  isDraftAgentId(agent.id) ? copy.draftLabel : null,
                   agent.status && agent.status !== "idle"
                     ? statusLabel(agent.status, copy)
                     : null,
@@ -367,12 +379,18 @@ export function MobileNavigator({
                     aria-current={
                       agent.id === selectedAgentId ? "true" : undefined
                     }
-                    onClick={() =>
+                    onClick={() => {
+                      const draftThreadId = draftThreadOf(agent.id)
+                      if (draftThreadId) {
+                        onStateChange({ type: "DISMISS" })
+                        onOpenSession(agent.id, draftThreadId)
+                        return
+                      }
                       onStateChange({
                         type: "BROWSE_AGENT",
                         agentId: agent.id,
                       })
-                    }
+                    }}
                   >
                     <span className={styles.agentIcon}>
                       {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" />}

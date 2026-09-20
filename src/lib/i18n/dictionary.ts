@@ -105,6 +105,7 @@ export type Dictionary = {
     switchToEnglish: string
     switchToHebrew: string
     discardDraft: string
+    cancel: string
   }
   appearance: {
     label: string

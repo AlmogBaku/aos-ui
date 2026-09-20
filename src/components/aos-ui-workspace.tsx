@@ -452,6 +452,8 @@ function WorkspaceContent({
   const {
     agentCreator,
     creatorNotice,
+    selectedAgentIsDraft,
+    discardDraft,
     displayAgents,
     shellOpenSessions,
     sessionView,
@@ -550,6 +552,8 @@ function WorkspaceContent({
         environmentLabel={environmentLabel}
         agentBuilderAvailable={Boolean(agentCreator)}
         creatorNotice={creatorNotice}
+        selectedAgentIsDraft={selectedAgentIsDraft}
+        onDiscardDraft={discardDraft}
         onSelectAgent={selectAgent}
         onOpenSession={openSession}
         onCloseSession={closeSession}

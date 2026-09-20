@@ -58,6 +58,7 @@ const copy: MobileNavigatorCopy = {
   openSessions: "Open sessions",
   history: "History",
   newAgent: "New Agent",
+  draftLabel: "draft",
   newSession: "New Session",
   manageAgents: "Manage Agents",
   preferences: "Preferences",
@@ -176,6 +177,33 @@ describe("MobileNavigator", () => {
       agentId: "agent-b",
     })
     expect(props.onOpenSession).not.toHaveBeenCalled()
+  })
+
+  it("selects a draft's only interview Session instead of browsing it", () => {
+    const props = defaultProps()
+    props.agents = [...agents, { id: "draft:interview-1", name: "New Agent" }]
+    props.sessionsByAgentId = [
+      ...props.sessionsByAgentId,
+      {
+        agentId: "draft:interview-1",
+        openSessions: [session("interview-1", "New Agent")],
+        historySessions: [],
+        lastSelectedThreadId: "interview-1",
+      },
+    ]
+    render(<MobileNavigator {...props} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /^New Agent, draft/ }))
+
+    expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })
+    expect(props.onOpenSession).toHaveBeenCalledWith(
+      "draft:interview-1",
+      "interview-1"
+    )
+    expect(props.onStateChange).not.toHaveBeenCalledWith({
+      type: "BROWSE_AGENT",
+      agentId: "draft:interview-1",
+    })
   })
 
   it("shows aggregate unread state and filters Agents by name or description", () => {

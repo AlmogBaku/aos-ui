@@ -109,6 +109,7 @@ export const he = {
     switchToEnglish: "מעבר לאנגלית",
     switchToHebrew: "מעבר לעברית",
     discardDraft: "בטל טיוטה",
+    cancel: "ביטול",
   },
   appearance: {
     label: "מראה",
