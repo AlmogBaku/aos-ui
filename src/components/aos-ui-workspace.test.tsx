@@ -1064,6 +1064,37 @@ type CreatorReceiptHandle = {
   refreshCalls: () => number
 }
 
+type CreatorReceiptState = {
+  refreshCalls: number
+  listeners: Set<(event: WorkspaceActivityEvent) => void>
+}
+
+/** Hides the created Agent from the first `hideFor` catalog refreshes. */
+function receiptWorkspace(
+  workspace: FixtureWorkspace,
+  state: CreatorReceiptState,
+  hideFor: number,
+  hiddenAgentId: string
+) {
+  return workspaceFacade(workspace, {
+    refreshAgents: async () => {
+      state.refreshCalls += 1
+      const agents = await workspace.listAgents()
+      return state.refreshCalls <= hideFor
+        ? agents.filter(({ id }) => id !== hiddenAgentId)
+        : agents
+    },
+    subscribeActivity: (listener, onError) => {
+      state.listeners.add(listener)
+      const unsubscribe = workspace.subscribeActivity(listener, onError)
+      return () => {
+        state.listeners.delete(listener)
+        unsubscribe()
+      }
+    },
+  })
+}
+
 function CreatorReceiptFixture({
   capture,
   hideFor = 0,
@@ -1080,33 +1111,19 @@ function CreatorReceiptFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const [state] = useState(() => ({
+  const [state] = useState<CreatorReceiptState>(() => ({
     refreshCalls: 0,
-    listeners: new Set<(event: WorkspaceActivityEvent) => void>(),
+    listeners: new Set(),
   }))
   const bundle = useMemo<WorkspaceFixtureRuntime>(
     () => ({
       assistantRuntime: fixture.assistantRuntime,
-      workspace: workspaceFacade(fixture.workspace, {
-        refreshAgents: async () => {
-          state.refreshCalls += 1
-          const agents = await fixture.workspace.listAgents()
-          return state.refreshCalls <= hideFor
-            ? agents.filter(({ id }) => id !== hiddenAgentId)
-            : agents
-        },
-        subscribeActivity: (listener, onError) => {
-          state.listeners.add(listener)
-          const unsubscribe = fixture.workspace.subscribeActivity(
-            listener,
-            onError
-          )
-          return () => {
-            state.listeners.delete(listener)
-            unsubscribe()
-          }
-        },
-      }),
+      workspace: receiptWorkspace(
+        fixture.workspace,
+        state,
+        hideFor,
+        hiddenAgentId
+      ),
     }),
     [fixture.assistantRuntime, fixture.workspace, hiddenAgentId, hideFor, state]
   )
