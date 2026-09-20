@@ -828,7 +828,7 @@ describe("Hermes server adapter", () => {
     expect(second.total).toBe(120)
   })
 
-  it("keeps the creator available to New Agent without cataloging creator Sessions", async () => {
+  it("catalogs creator-owned Sessions while keeping the creator unselectable", async () => {
     const request = vi.fn(async () => ({
       profiles: [
         { name: "researcher", ui_meta: {}, ui_meta_revisions: {} },
@@ -839,18 +839,21 @@ describe("Hermes server adapter", () => {
         },
       ],
     }))
-    const http = vi.fn(async (path: string) => ({
-      sessions: [
-        {
-          id: "research-session",
-          profile: new URL(path, "http://native.test").searchParams.get(
-            "profile"
-          ),
-          last_active: 10,
-        },
-      ],
-      total: 1,
-    }))
+    const http = vi.fn(async (path: string) => {
+      const profileName = new URL(path, "http://native.test").searchParams.get(
+        "profile"
+      )
+      return {
+        sessions: [
+          {
+            id: `${profileName}-session`,
+            profile: profileName,
+            last_active: profileName === "researcher" ? 20 : 10,
+          },
+        ],
+        total: 1,
+      }
+    })
     const adapter = new HermesServerAdapter({ request, http })
 
     const agents = await adapter.listAgents()
@@ -862,11 +865,15 @@ describe("Hermes server adapter", () => {
       summary: { role: "creator" },
       selectable: false,
     })
-    expect(catalog.sessions.map(({ agentId }) => agentId)).toEqual([
-      "researcher",
+    expect(
+      catalog.sessions.map(({ id, agentId }) => ({ id, agentId }))
+    ).toEqual([
+      { id: "researcher-session", agentId: "researcher" },
+      { id: "aos-creator-session", agentId: "aos-creator" },
     ])
     expect(http.mock.calls.map(([path]) => path)).toEqual([
       "/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban",
+      "/api/sessions?profile=aos-creator&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban",
     ])
   })
 
