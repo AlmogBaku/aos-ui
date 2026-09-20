@@ -45,6 +45,30 @@ describe("proxy static serving", () => {
     expect(await route?.text()).toBe("<html>shell</html>")
   })
 
+  it("serves the installable shell's manifest and icons as themselves", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aos-static-"))
+    directories.push(root)
+    await writeFile(join(root, "manifest.webmanifest"), '{"name":"AOS"}')
+    await mkdir(join(root, "icons"))
+    await writeFile(join(root, "icons", "aos-192.png"), "png")
+    const fetch = createStaticHandler({
+      root,
+      runtimeConfig: join(root, "runtime-config.json"),
+    })
+
+    const manifest = await fetch(
+      new Request("https://aos.example.test/manifest.webmanifest")
+    )
+    expect(manifest?.headers.get("content-type")).toBe(
+      "application/manifest+json; charset=UTF-8"
+    )
+
+    const icon = await fetch(
+      new Request("https://aos.example.test/icons/aos-192.png")
+    )
+    expect(icon?.headers.get("content-type")).toBe("image/png")
+  })
+
   it("leaves normalized APIs to Hono and rejects traversal", async () => {
     const root = await mkdtemp(join(tmpdir(), "aos-static-"))
     directories.push(root)

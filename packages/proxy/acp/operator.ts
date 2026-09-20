@@ -1,6 +1,6 @@
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { createSessionRows } from "../core/session-rows"
+import { createSessionRows, type SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
@@ -18,6 +18,11 @@ export type OperatorAcpServiceOptions = {
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
+  /**
+   * The row cache this lane maintains. Push delivery reads the same one to gate
+   * a notification on read state; absent means this lane owns the only cache.
+   */
+  sessionRows?: SessionRows
   now?: () => number
 }
 
@@ -32,10 +37,10 @@ export function createOperatorAcpService({
   logger,
   presence,
   now = Date.now,
+  sessionRows = createSessionRows({ now }),
 }: OperatorAcpServiceOptions) {
   const lane = "operator" as const
-  const sessionRows = createSessionRows({ now })
-  return createAcpService({
+  const service = createAcpService({
     publicOrigin,
     lane,
     principalId: OPERATOR_PRINCIPAL,
@@ -61,4 +66,7 @@ export function createOperatorAcpService({
       activityFeed: createActivityFeed({ runtimeInstance, sessionRows, now }),
     }),
   })
+  // The cache is part of the lane's surface: push delivery gates on the rows
+  // this lane keeps current, and there is only ever one of them.
+  return { ...service, sessionRows }
 }

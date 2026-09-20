@@ -3,16 +3,19 @@ import { Hono } from "hono"
 
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
+import { OPERATOR_PRINCIPAL } from "./core/principal"
 import {
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerAttachmentStages,
   type ServerRuntime,
 } from "./core/runtime"
+import type { PushRegistrations } from "./push/registrations"
 import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
 import { errorResponse, type ErrorCode } from "./routes/http"
+import { registerPushRoutes } from "./routes/push"
 import { registerRuntimeRoute } from "./routes/runtime"
 
 type Logger = {
@@ -32,6 +35,22 @@ export type ProxyAppOptions = {
   }
   /** Shared with the ACP socket so prompts can reference REST-staged batches. */
   attachmentStages?: ServerAttachmentStages
+  /** Absent means this deployment configured no Web Push. */
+  push?: {
+    /** Derived from the private key; the browser subscribes with it. */
+    publicKey: string
+    registrations: PushRegistrations
+  }
+}
+
+/**
+ * Which principal a trusted operator request belongs to. The operator surface is
+ * single-tenant, so every request is the one operator principal: this is the one
+ * seam a deployment with several operators would resolve an identity at.
+ */
+function resolvePrincipal(request: Request) {
+  void request
+  return OPERATOR_PRINCIPAL
 }
 
 /**
@@ -128,6 +147,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     requireRuntime,
     requireScopedSession
   )
+  registerPushRoutes(app, options, resolvePrincipal)
   if (options.guestInvitations)
     registerInvitationRoutes(app, {
       publicOrigin: options.publicOrigin,

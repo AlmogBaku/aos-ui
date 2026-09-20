@@ -11,6 +11,30 @@ import {
 import type { StaticHandler } from "../static"
 import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
 
+/**
+ * Paths the guest surface never serves: the operator sign-in and runtime
+ * proxies, and the installable shell — a guest has no workspace to install and
+ * no service worker to register.
+ */
+const GUEST_RESERVED_PATHS = [
+  "/auth",
+  "/hermes",
+  "/sw.js",
+  "/manifest.webmanifest",
+]
+
+/**
+ * The path the static handler will resolve, which is what a reservation has to
+ * be compared against. A path that cannot be decoded is treated as reserved.
+ */
+function decodedPath(pathname: string) {
+  try {
+    return decodeURIComponent(pathname)
+  } catch {
+    return undefined
+  }
+}
+
 function listenerApp(
   api: {
     fetch(request: Request, server?: unknown): Response | Promise<Response>
@@ -20,7 +44,6 @@ function listenerApp(
   runtimeConfig?: unknown,
   guestSurface = false
 ) {
-  const guestReservedPaths = ["/auth", "/hermes"]
   const secureGuestResponse = (response: Response) => {
     if (!guestSurface) return response
     const headers = new Headers(response.headers)
@@ -41,14 +64,17 @@ function listenerApp(
     async fetch(request: Request, server?: unknown) {
       const pathname = new URL(request.url).pathname
       if (pathname.startsWith(apiPrefix)) return api.fetch(request, server)
-      if (
-        guestSurface &&
-        guestReservedPaths.some(
-          (reserved) =>
-            pathname === reserved || pathname.startsWith(`${reserved}/`)
+      if (guestSurface) {
+        const requested = decodedPath(pathname)
+        if (
+          requested === undefined ||
+          GUEST_RESERVED_PATHS.some(
+            (reserved) =>
+              requested === reserved || requested.startsWith(`${reserved}/`)
+          )
         )
-      )
-        return secureGuestResponse(new Response(null, { status: 404 }))
+          return secureGuestResponse(new Response(null, { status: 404 }))
+      }
       if (runtimeConfig && pathname === "/runtime-config.json")
         return secureGuestResponse(
           new Response(JSON.stringify(runtimeConfig), {
@@ -85,9 +111,11 @@ export async function serveProxy(
   let runtimeClosed: Promise<void> | undefined
   /** One runtime is shared by every listener, so every shutdown path closes it once. */
   const closeRuntime = () =>
-    (runtimeClosed ??= Promise.resolve().then(() =>
-      configured.runtimeInstance.close()
-    ))
+    (runtimeClosed ??= Promise.resolve().then(() => {
+      // Push delivery observes the runtime, so it stops before the runtime does.
+      configured.push?.dispatcher.close()
+      return configured.runtimeInstance.close()
+    }))
   let shutdownAnnounced = false
   const announceShutdown = () => {
     if (shutdownAnnounced) return

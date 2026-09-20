@@ -73,6 +73,36 @@ async function configuration(withGuest = false) {
   }
 }
 
+/** A state directory beside a VAPID private key, as a deployment configures it. */
+async function pushConfiguration(stateDir?: string) {
+  const privateKeyFile = await secretFile(
+    "vapid-private-key",
+    Buffer.alloc(32, 9).toString("base64url")
+  )
+  return {
+    stateDir: stateDir ?? join(privateKeyFile, ".."),
+    vapid: {
+      subject: "mailto:ops@example.test",
+      privateKeyFile,
+    },
+  }
+}
+
+/** A runtime whose coordinator only records who observes it. */
+function observableRuntime() {
+  const observe = vi.fn(() => vi.fn())
+  const runtimeInstance = {
+    id: "test-runtime",
+    runtime: {
+      runtimeInfo: async () => ({ status: "ready" }),
+      publicError: () => undefined,
+    },
+    sessions: { observe },
+    close: vi.fn(async () => undefined),
+  } as unknown as RuntimeInstance
+  return { observe, runtimeInstance }
+}
+
 function profile() {
   return {
     name: "researcher",
@@ -279,6 +309,69 @@ describe("configured proxy composition", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "not_found" },
     })
+  })
+
+  it("wires push delivery to the runtime and the operator lane's own rows", async () => {
+    const { observe, runtimeInstance } = observableRuntime()
+    const input = {
+      ...(await configuration()),
+      push: await pushConfiguration(),
+    }
+
+    const configured = await createConfiguredProxy(input, {
+      runtimeFactory: async () => runtimeInstance,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    // One cache: the ACP lane keeps it current and the read-state gate reads it.
+    expect(configured.acpService.sessionRows).toBe(configured.sessionRows)
+    expect(observe).toHaveBeenCalledOnce()
+    expect(configured.push?.registrations.list("operator")).toEqual([])
+
+    const response = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/push"
+    )
+    expect(response.status).toBe(200)
+    const info = (await response.json()) as { publicKey: string }
+    expect(info).toEqual({
+      status: "available",
+      publicKey: expect.stringMatching(/^[A-Za-z0-9_-]{87}$/u),
+    })
+    expect(JSON.stringify(info)).not.toContain(
+      Buffer.alloc(32, 9).toString("base64url")
+    )
+  })
+
+  it("serves no push capability when a deployment configures none", async () => {
+    const { runtimeInstance, observe } = observableRuntime()
+
+    const configured = await createConfiguredProxy(await configuration(), {
+      runtimeFactory: async () => runtimeInstance,
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+
+    expect(configured.push).toBeUndefined()
+    expect(observe).not.toHaveBeenCalled()
+    await expect(
+      (
+        await configured.app.request("https://aos.example.test/api/aos/v1/push")
+      ).json()
+    ).resolves.toEqual({ status: "not-configured" })
+  })
+
+  it("refuses to start when the push state directory is not there", async () => {
+    const { runtimeInstance } = observableRuntime()
+    const input = {
+      ...(await configuration()),
+      push: await pushConfiguration("/var/lib/aos-ui/missing-push-state"),
+    }
+
+    await expect(
+      createConfiguredProxy(input, {
+        runtimeFactory: async () => runtimeInstance,
+        logger: { info: vi.fn(), error: vi.fn() },
+      })
+    ).rejects.toThrow("Push state directory")
   })
 
   it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {
