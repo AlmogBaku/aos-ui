@@ -478,6 +478,18 @@ function publicAnswer(value: unknown) {
  * that carries a credential or a private location is dropped rather than
  * rewritten, so a cancelled and a redacted clarification read alike.
  */
+/**
+ * Hermes records a multi-select answer as a list and a single one as text; an
+ * older gateway encoded the list as JSON text. Anything else recorded nothing.
+ */
+function recordedAnswers(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value
+  if (typeof value !== "string") return undefined
+  if (!value) return []
+  const decoded = parseJson(value)
+  return Array.isArray(decoded) ? decoded : [value]
+}
+
 function projectQuestionResponses(
   value: unknown
 ): HermesPublicJsonRecord | undefined {
@@ -486,12 +498,9 @@ function projectQuestionResponses(
   const responses = parsed.responses.flatMap((candidate) => {
     if (!isRecord(candidate)) return []
     const question = trimmedText(candidate.question)
-    const rawResponse = candidate.user_response
-    if (!question || typeof rawResponse !== "string") return []
-    const decoded = rawResponse ? parseJson(rawResponse) : []
-    const answers = (Array.isArray(decoded) ? decoded : [rawResponse]).flatMap(
-      (answer) => publicAnswer(answer) ?? []
-    )
+    const chosen = recordedAnswers(candidate.user_response)
+    if (!question || !chosen) return []
+    const answers = chosen.flatMap((answer) => publicAnswer(answer) ?? [])
     return [{ question, answers }]
   })
   if (!responses.length) return undefined

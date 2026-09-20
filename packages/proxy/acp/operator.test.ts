@@ -647,9 +647,14 @@ function runFinished(runId: string, threadId: string): RunEvent {
 
 /**
  * The clarification Hermes raises: one question interrupt whose prefixed answer
- * schemas are a single choice, a multi-select, and a free-text question.
+ * schemas are a single choice, a multi-select, and a free-text question. An
+ * adapter that knows which tool call is asking names it.
  */
-function runQuestioned(runId: string, threadId: string): RunEvent {
+function runQuestioned(
+  runId: string,
+  threadId: string,
+  toolCallId?: string
+): RunEvent {
   return {
     type: RunEventKind.RUN_FINISHED,
     threadId,
@@ -661,6 +666,7 @@ function runQuestioned(runId: string, threadId: string): RunEvent {
           id: CLARIFY,
           reason: "question",
           message: "3 questions require answers",
+          ...(toolCallId === undefined ? {} : { toolCallId }),
           responseSchema: {
             type: "object",
             properties: {
@@ -999,6 +1005,41 @@ describe("operator ACP lane", () => {
         },
       },
     ])
+    test.close()
+  })
+
+  it("records the answers on the tool call that asked them", async () => {
+    const test = await harness({
+      elicitation: async () => ({
+        action: "accept",
+        content: { q0: "production", q1: ["api", "web"], q2: "the queue" },
+      }),
+    })
+    const { source } = await runningTurn(test, "Clarify it")
+
+    source.emit(runStarted("run-1", CREATED))
+    source.emit(runQuestioned("run-1", CREATED, "call-9"))
+    source.finish()
+
+    const recorded = await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("tool_call_update")
+    )
+    expect(recorded.params).toMatchObject({
+      sessionId: CREATED,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-9",
+        status: "completed",
+        rawOutput: {
+          status: "answered",
+          responses: [
+            { question: "Which environment?", answers: ["production"] },
+            { question: "Which services?", answers: ["api", "web"] },
+            { question: "Anything else to watch?", answers: ["the queue"] },
+          ],
+        },
+      },
+    })
     test.close()
   })
 

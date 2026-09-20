@@ -896,6 +896,98 @@ describe("QuestionFlow renderer", () => {
     expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
   })
+  /** The three questions one batched clarify call put to the operator. */
+  const batched = {
+    question: "3 questions",
+    questions: [
+      {
+        question: "What should we prioritize this week?",
+        options: ["Pipeline / revenue", "Content / operator brand"],
+      },
+      {
+        question: "Which areas do you want included?",
+        options: ["Pipeline", "Content"],
+        multiple: true,
+      },
+      {
+        question: "What is the one outcome that would make this week a win?",
+        allowFreeform: true,
+      },
+    ],
+    allowFreeform: true,
+  }
+
+  /** What the provider recorded when it settled two of those three. */
+  const twoOfThree = {
+    status: "answered",
+    responses: [
+      {
+        question: "What should we prioritize this week?",
+        answers: ["Content / operator brand"],
+      },
+      {
+        question: "What is the one outcome that would make this week a win?",
+        answers: [],
+      },
+    ],
+  }
+
+  /** The read-only record those questions leave, under one provider result. */
+  const renderQuestionRecord = (result: RichToolPart["result"]) =>
+    renderTool(
+      <OutOfBandThread interactions={outOfBandInteractions()}>
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "question",
+            args: batched,
+            result,
+            status: { type: "complete" },
+          })}
+        />
+      </OutOfBandThread>
+    )
+
+  /** The one record row an asked question reads on, its answer included. */
+  const askedRow = (question: string) => {
+    const row = screen.getByText(question).closest("li")
+    if (!row) throw new Error(`No record row for "${question}"`)
+    return row
+  }
+
+  it("keeps a multi-select answer with the question it answers", async () => {
+    await renderQuestionRecord({
+      status: "answered",
+      responses: [
+        {
+          question: "Which areas do you want included?",
+          answers: ["Pipeline", "Content"],
+        },
+      ],
+    })
+
+    expect(askedRow("Which areas do you want included?")).toHaveTextContent(
+      "Response: Pipeline, Content"
+    )
+    expect(
+      askedRow("What should we prioritize this week?")
+    ).not.toHaveTextContent("Response:")
+  })
+
+  it("leaves a question the provider recorded nothing for without a response", async () => {
+    await renderQuestionRecord(twoOfThree)
+
+    expect(askedRow("Which areas do you want included?")).not.toHaveTextContent(
+      "Response:"
+    )
+  })
+
+  it("reads a question the operator answered with nothing as discarded", async () => {
+    await renderQuestionRecord(twoOfThree)
+
+    expect(
+      askedRow("What is the one outcome that would make this week a win?")
+    ).toHaveTextContent("Response: Discarded")
+  })
 })
 
 describe("provider permission renderer", () => {

@@ -9,6 +9,7 @@ import {
 import type { PendingRequest } from "../../core/events"
 import type { AcpOutbound, Lane } from "../types"
 import {
+  answeredQuestionOutbound,
   pendingRequestToOutbound,
   replyFromElicitation,
   replyFromPermission,
@@ -362,4 +363,62 @@ describe("replyFromElicitation", () => {
       })
     }
   )
+})
+
+describe("answeredQuestionOutbound", () => {
+  /** The same clarification, raised by a provider that names its tool call. */
+  const asking: PendingRequest = { ...questions, toolCallId: "call-7" }
+
+  it("records every value the operator chose against the question it answers", () => {
+    expect(
+      answeredQuestionOutbound(asking, {
+        action: "accept",
+        content: { q0: "production", q1: ["logs", "metrics"] },
+      })
+    ).toEqual({
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-7",
+        status: "completed",
+        rawOutput: {
+          status: "answered",
+          responses: [
+            { question: "Which environment?", answers: ["production"] },
+            {
+              question: "Anything else to watch?",
+              answers: ["logs", "metrics"],
+            },
+          ],
+        },
+      },
+    })
+  })
+
+  it("records a declined question as an answer nobody gave", () => {
+    expect(answeredQuestionOutbound(asking, { action: "decline" })).toEqual({
+      kind: "update",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-7",
+        status: "completed",
+        rawOutput: {
+          status: "cancelled",
+          responses: [
+            { question: "Which environment?", answers: [] },
+            { question: "Anything else to watch?", answers: [] },
+          ],
+        },
+      },
+    })
+  })
+
+  it("leaves no record when the interrupt names no tool call", () => {
+    expect(
+      answeredQuestionOutbound(questions, {
+        action: "accept",
+        content: { q0: "production" },
+      })
+    ).toBeUndefined()
+  })
 })

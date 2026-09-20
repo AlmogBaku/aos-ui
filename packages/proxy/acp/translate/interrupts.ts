@@ -1,5 +1,6 @@
 import type {
   CreateElicitationRequest,
+  CreateElicitationResponse,
   ElicitationPropertySchema,
   ElicitationSchema,
   PermissionOption,
@@ -18,6 +19,7 @@ import type {
   ReplyFromElicitation,
   ReplyFromPermission,
 } from "../types"
+import { update } from "./updates"
 
 /** All three adapters say `approval`; the browser also accepted `confirmation`. */
 const APPROVAL_REASONS = new Set(["approval", "confirmation"])
@@ -243,3 +245,37 @@ export const replyFromElicitation = ((request, response) => {
   )
   return { interruptId: request.id, status: "resolved", payload: { answers } }
 }) satisfies ReplyFromElicitation
+
+/**
+ * The record an answered question leaves on the tool call that asked it, in the
+ * `{ status, responses }` shape an answered call already carries in history: the
+ * provider settles the call only in its own history, so without this the live
+ * card keeps asking a question the operator has answered. One projection of an
+ * answered question reaches the browser, which never re-derives the answer it
+ * just sent. The update names no message, so the browser attaches it to the turn
+ * that owns the call. An interrupt that names no tool call leaves no record.
+ */
+export function answeredQuestionOutbound(
+  request: PendingRequest,
+  response: CreateElicitationResponse
+): AcpOutbound | undefined {
+  const toolCallId = request.toolCallId
+  if (toolCallId === undefined) return undefined
+  const content =
+    response.action === "accept" ? record(response.content) : undefined
+  const responses = questionsOf(request).map((question, index) => ({
+    question: question.prompt,
+    answers: content ? answerValues(content[`q${index}`]) : [],
+  }))
+  return update({
+    sessionUpdate: "tool_call_update",
+    toolCallId,
+    status: "completed",
+    rawOutput: {
+      status: responses.some(({ answers }) => answers.length)
+        ? "answered"
+        : "cancelled",
+      responses,
+    },
+  })
+}

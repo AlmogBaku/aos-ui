@@ -343,6 +343,32 @@ describe("projectHermesToolOutcome", () => {
     })
   })
 
+  it("keeps every chosen value of a multi-select answer Hermes records as a list", () => {
+    expect(
+      projectHermesToolOutcome("call-6b", "question", {
+        responses: [
+          {
+            question: "Which areas do you want included?",
+            user_response: ["Content", "Pipeline"],
+          },
+          {
+            question: "What would make this week a win?",
+            user_response: "",
+          },
+        ],
+      }).result
+    ).toEqual({
+      status: "answered",
+      responses: [
+        {
+          question: "Which areas do you want included?",
+          answers: ["Content", "Pipeline"],
+        },
+        { question: "What would make this week a win?", answers: [] },
+      ],
+    })
+  })
+
   it("suppresses artifacts and media on a failed tool", () => {
     const outcome = projectHermesToolOutcome(
       "call-8",

@@ -379,6 +379,62 @@ describe("applyUpdate tool calls", () => {
     })
   })
 
+  it("settles a call on the turn that holds it when the update names no message", () => {
+    const answered = fold(
+      [
+        agentChunk("a2", "Thanks"),
+        toolCall(
+          { status: "completed", rawOutput: { status: "answered" } },
+          undefined
+        ),
+      ],
+      started
+    )
+    expect(toThreadMessages(answered)).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          { type: "text", text: "Working" },
+          {
+            toolCallId: "t1",
+            toolName: "grep",
+            result: { status: "answered" },
+          },
+        ],
+      },
+      { id: "a2", content: [{ type: "text", text: "Thanks" }] },
+    ])
+  })
+
+  it("settles a call a later segment re-announces on the turn that holds it", () => {
+    const resumed = fold(
+      [
+        toolCall(
+          { title: "grep", status: "in_progress" },
+          { ...RUN_META, messageId: "a2" }
+        ),
+        toolCall(
+          { status: "completed", rawOutput: { status: "answered" } },
+          { ...RUN_META, messageId: "run-2" }
+        ),
+      ],
+      started
+    )
+    expect(toThreadMessages(resumed)).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          { type: "text", text: "Working" },
+          {
+            toolCallId: "t1",
+            toolName: "grep",
+            result: { status: "answered" },
+          },
+        ],
+      },
+    ])
+  })
+
   it("drops a call with no turn to hang it off", () => {
     expect(fold([toolCall({ title: "grep" }, undefined)])).toBe(
       initialProjectorState

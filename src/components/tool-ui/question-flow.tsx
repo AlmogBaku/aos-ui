@@ -65,14 +65,14 @@ function QuestionRecord({ part, payload }: QuestionToolProps) {
   const state = readQuestionState(part, { interactive: true })
   if (beingAsked && state.phase === "pending") return null
 
-  const recorded = readRecordedAnswers(part)
   const asked = readAskedQuestions(payload)
+  const recorded = readRecordedAnswers(part, asked)
 
   return (
     <ToolChrome title={payload.args.question} state={state}>
       <ul className="flex flex-col gap-3 text-sm">
         {asked.map((question, index) => {
-          const answers = recorded?.[index]
+          const answers = recorded[index]
           return (
             <li
               key={`${part.toolCallId}-asked-${index}`}
@@ -334,14 +334,31 @@ function readAskedQuestions(payload: QuestionPayload): AskedQuestion[] {
   return [{ options: normalizeOptions(payload.args.options) }]
 }
 
-/** Answers the provider recorded, positioned like the questions it asked. */
+/**
+ * The answer recorded for each asked question, paired with the question it
+ * answers rather than with the position it arrived in: a provider records only
+ * the questions it settled, so reading by position moves one question's answer
+ * onto another. A question the provider recorded nothing for gets none, which
+ * is what keeps a skipped question apart from a discarded one. A lone question
+ * is the chrome title itself, so the single record answers it.
+ */
 function readRecordedAnswers(
-  part: RichToolPart
-): readonly (readonly string[])[] | undefined {
+  part: RichToolPart,
+  asked: readonly AskedQuestion[]
+): readonly (readonly string[] | undefined)[] {
   const responses = readResponses(part.result)
-  if (responses) return responses.map((response) => response.answers)
+  if (responses)
+    return asked.map(
+      ({ text }, index) =>
+        (text === undefined
+          ? responses[index]
+          : responses.find(
+              (response) => response.question.trim() === text.trim()
+            )
+        )?.answers
+    )
   const answer = readAnswer(part.result, part.approval)
-  return answer ? [[answer]] : undefined
+  return asked.map((_, index) => (answer && index === 0 ? [answer] : undefined))
 }
 
 function readAnswer(

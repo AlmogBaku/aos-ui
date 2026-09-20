@@ -19,6 +19,7 @@ import type {
 } from "../core/runtime"
 import type { CoordinatedRunSubscription } from "../core/session-coordinator"
 import { redactForLog } from "../redaction"
+import { answeredQuestionOutbound } from "./translate/interrupts"
 import {
   initialTranslateState,
   type AcpConnectionContext,
@@ -403,6 +404,11 @@ class SessionAttachment {
     )
     const request = this.#interrupt(outbound.interruptId)
     const { replyFromElicitation } = this.#context.translators
+    // The answered question reaches the transcript before the run resumes, so
+    // the call that asked it stops reading as unanswered while the next segment
+    // streams.
+    const record = answeredQuestionOutbound(request, response)
+    if (record) await this.send(record)
     await this.#settle(request, replyFromElicitation(request, response))
   }
 

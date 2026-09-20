@@ -189,7 +189,14 @@ function emptyInterruptHostId(state: ProjectorState): string | undefined {
   return host?.parts.length === 0 ? id : undefined
 }
 
-/** The owning message comes from `_meta.aos`; without it, the latest turn. */
+/**
+ * A tool call belongs to the turn that already holds it: a provider settles a
+ * call it opened in an earlier run segment — the answered question is the one
+ * that waits longest — and the update naming that turn is the one thing it can
+ * no longer name. Its id is enough, so the owner is resolved first, and nothing
+ * arrives twice under two titles. `_meta.aos` places a call this transcript has
+ * not seen yet; without it, the latest turn.
+ */
 function applyToolCall(
   state: ProjectorState,
   patch: ToolCallPatch | undefined,
@@ -197,9 +204,9 @@ function applyToolCall(
 ): ProjectorState {
   if (!patch) return state
   const aos = AosToolCallMetaSchema.safeParse(meta)
-  const messageId = aos.success
-    ? aos.data.messageId
-    : latestAssistantId(state.messages)
+  const messageId =
+    toolCallOwner(state.messages, patch.toolCallId)?.id ??
+    (aos.success ? aos.data.messageId : latestAssistantId(state.messages))
   if (messageId === undefined) return state
   const args = aos.success
     ? { argsText: aos.data.argsText, argsTextDelta: aos.data.argsTextDelta }
