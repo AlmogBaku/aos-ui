@@ -178,14 +178,21 @@ async function closeSameTag(registration: NotificationSurface, tag: string) {
   }
 }
 
-/** Replaces the category's predecessor with exactly one notification. */
+/** Attempts exactly one notification, replacing the category's predecessor. */
 export async function handlePush(
   registration: NotificationSurface,
   payload: string | undefined
 ): Promise<void> {
   const options = optionsOf(readPayload(payload))
   await closeSameTag(registration, options.tag)
-  await registration.showNotification(TITLE, options)
+  try {
+    await registration.showNotification(TITLE, options)
+  } catch {
+    // Permission can be revoked between subscribing and this push, and the
+    // display then throws. Nothing here can answer that: the worker has no
+    // surface left and no open client to tell. The app reconciles on its next
+    // focus by unsubscribing and deleting the server registration.
+  }
 }
 
 /** The tab the operator is looking at, else one that is at least on screen. */

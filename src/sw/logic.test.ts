@@ -131,6 +131,20 @@ describe("push notifications", () => {
     expect(registration.shown[0]!.options.tag).toBe("input")
   })
 
+  it("ends quietly when a revoked permission refuses the display", async () => {
+    const showNotification = vi.fn(async () => {
+      throw new Error("No notification permission has been granted")
+    })
+
+    await expect(
+      handlePush(
+        { ...createRegistration(), showNotification },
+        JSON.stringify(singlePush())
+      )
+    ).resolves.toBeUndefined()
+    expect(showNotification).toHaveBeenCalledOnce()
+  })
+
   it("counts Sessions without naming them once more than one waits", async () => {
     const { shown } = await pushed({
       v: 1,
