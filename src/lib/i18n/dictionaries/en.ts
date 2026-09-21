@@ -235,6 +235,9 @@ export const en = {
   creator: {
     kickoff: "Let's create a new Agent.",
     draftLabel: "draft",
+    discardTitle: "Discard this draft?",
+    discardDescription:
+      "Its interview Session is deleted. This cannot be undone.",
     createdPending: "Agent created. It will appear in the roster shortly.",
     createdHidden:
       "Agent created but hidden until an operator finishes its setup. Find it under Manage Agents.",

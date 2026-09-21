@@ -218,6 +218,8 @@ export type Dictionary = {
   creator: {
     kickoff: string
     draftLabel: string
+    discardTitle: string
+    discardDescription: string
     createdPending: string
     createdHidden: string
   }

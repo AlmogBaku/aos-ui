@@ -2134,6 +2134,11 @@ describe("AosUiApp fixture composition", () => {
     await user.click(
       await screen.findByRole("menuitem", { name: en.actions.discardDraft })
     )
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: en.actions.discardDraft,
+      })
+    )
 
     await waitFor(() =>
       expect(

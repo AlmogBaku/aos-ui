@@ -736,6 +736,25 @@ describe("WorkspaceShell", () => {
       await user.click(
         screen.getByRole("menuitem", { name: en.actions.discardDraft })
       )
+      // Discarding a draft that owns a Session destroys it, so it asks first.
+      const cancelled = await screen.findByRole("alertdialog")
+      await user.click(
+        within(cancelled).getByRole("button", { name: en.actions.cancel })
+      )
+      expect(onDiscardDraft).not.toHaveBeenCalled()
+
+      fireEvent.contextMenu(agentRow(/^New Agent, draft/), {
+        clientX: 16,
+        clientY: 24,
+      })
+      await user.click(
+        await screen.findByRole("menuitem", { name: en.actions.discardDraft })
+      )
+      await user.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: en.actions.discardDraft,
+        })
+      )
       expect(onDiscardDraft).toHaveBeenCalledExactlyOnceWith(
         "draft:thread-interview"
       )

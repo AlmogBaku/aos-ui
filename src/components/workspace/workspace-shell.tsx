@@ -79,7 +79,10 @@ import {
   SessionThreadListTrigger,
 } from "./session-thread-list-item"
 import { RowIndicators, StatusDot } from "./status-dots"
-import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
+import {
+  draftThreadId,
+  isDraftAgentId,
+} from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -501,6 +504,10 @@ function AgentsPanel({
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
+  const [discardTarget, setDiscardTarget] = useState<{
+    agentId: string
+    name: string
+  } | null>(null)
   return (
     <div className={styles.agentsPanel}>
       <div className={cn(styles.brand, styles.desktopBrand)}>
@@ -568,8 +575,13 @@ function AgentsPanel({
               }
               onDiscardDraft={
                 onDiscardDraft &&
-                ((agentId) =>
-                  runAction(() => onDiscardDraft(agentId), onActionError))
+                ((agentId) => {
+                  // A pending interview destroys nothing, so it needs no
+                  // question; one that owns a Session does.
+                  if (draftThreadId(agentId))
+                    setDiscardTarget({ agentId, name: agent.name })
+                  else runAction(() => onDiscardDraft(agentId), onActionError)
+                })
               }
             >
               <button
@@ -613,6 +625,27 @@ function AgentsPanel({
           )
         })}
       </nav>
+      {onDiscardDraft && discardTarget ? (
+        <SessionDeleteDialog
+          open
+          locale={locale}
+          copy={{
+            title: dictionary.creator.discardTitle,
+            description: dictionary.creator.discardDescription,
+            confirm: dictionary.actions.discardDraft,
+            cancel: dictionary.actions.cancel,
+          }}
+          sessionTitle={discardTarget.name}
+          onOpenChange={(open) => {
+            if (!open) setDiscardTarget(null)
+          }}
+          onConfirm={() => {
+            const { agentId } = discardTarget
+            setDiscardTarget(null)
+            runAction(() => onDiscardDraft(agentId), onActionError)
+          }}
+        />
+      ) : null}
 
       <Button
         className={styles.manageButton}

@@ -10,6 +10,9 @@ import {
 } from "react"
 import { useLocation, useNavigate } from "react-router"
 import type { AssistantRuntime } from "@assistant-ui/react"
+import {
+  AgentVisibilityUpdateError,
+} from "@/runtime-adapters/contracts"
 import type {
   HarnessRuntime,
   SessionActionCapabilities,
@@ -1351,7 +1354,19 @@ export function useWorkspaceNavigation({
   async function hideAgent(agentId: string) {
     if (!workspace.updateAgentVisibility)
       throw new Error("Agent visibility is unavailable from this provider")
-    await workspace.updateAgentVisibility(agentId, "hidden")
+    try {
+      await workspace.updateAgentVisibility(agentId, "hidden")
+    } catch (reason) {
+      // The rail owes the same words for a refused hide that Manage Agents
+      // gives, rather than whichever sentence the provider happened to send.
+      if (reason instanceof AgentVisibilityUpdateError)
+        throw new Error(
+          reason.code === "provider-active"
+            ? dictionary.agentManagement.providerActive
+            : dictionary.agentManagement.pendingReload
+        )
+      throw reason
+    }
     await refreshAfterVisibilityChange()
   }
 

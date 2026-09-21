@@ -224,6 +224,8 @@ export const he = {
   creator: {
     kickoff: "בוא ניצור סוכן חדש.",
     draftLabel: "טיוטה",
+    discardTitle: "למחוק את הטיוטה?",
+    discardDescription: "שיחת הראיון תימחק. לא ניתן לבטל את הפעולה.",
     createdPending: "הסוכן נוצר. הוא יופיע ברשימה בקרוב.",
     createdHidden:
       "הסוכן נוצר אך מוסתר עד שמפעיל ישלים את ההגדרה. ניתן למצוא אותו בניהול סוכנים.",
