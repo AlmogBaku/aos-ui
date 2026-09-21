@@ -1,5 +1,7 @@
 # Minimal Hermes Dashboard Client Extraction
 
+> Historical, completed 2026-09.
+
 ## Goal
 
 Extract the Hermes dashboard HTTP calls already used by the server adapter into

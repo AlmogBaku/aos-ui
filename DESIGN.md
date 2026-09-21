@@ -112,11 +112,10 @@ semantic state roles that remain meaningful in both light and dark themes.
   tonal hierarchy; `foreground` and `border` keep content and boundaries
   readable without heavy lines.
 - **Semantic state:** `success` represents completed or healthy work and the
-  unread signal on navigation rows, and `destructive` represents failure,
-  cancellation, or destructive
-  intent. `warning` represents work waiting on the operator. A navigation row
-  shows one dot: a state that needs the operator outranks unread, and unread
-  outranks a run in progress.
+  unread signal on navigation rows; `destructive` represents failure,
+  cancellation, and confirmed destructive intent; `warning` represents work
+  waiting on the operator. A navigation row shows one dot: waiting for input
+  and failure outrank unread; unread outranks a run in progress.
 - **Five-series data vocabulary:** `chart-1` through `chart-5` are the sole
   chart-series roles. Chart and rich-tool code uses these semantic roles rather
   than introducing local color literals.
@@ -131,11 +130,15 @@ retain at least 4.5:1 contrast in both themes.
 
 ## Typography
 
-**Display Font:** Geist, through `--app-font-sans`.
-**Body Font:** Geist for English, with Noto Sans Hebrew selected by the Hebrew
-locale before the English fallback.
-**Label/Mono Font:** Geist Mono is available for code-like material; it is not
-the default interface voice.
+**Sans Font:** Inter (`--font-geist: Inter, ui-sans-serif, system-ui, sans-serif`)
+through `--app-font-sans`. In Hebrew, `--font-hebrew: Arial, ui-sans-serif, system-ui, sans-serif`
+is selected first (`html[lang="he"] { --app-font-sans: var(--font-hebrew) ... }`).
+Neither Geist nor Noto Sans Hebrew is loaded; both names are legacy references
+only.
+**Mono Font:** `--font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace`
+is available for code-like material; it is not the default interface voice.
+**Wordmark Font:** `--font-aos-wordmark: "Michroma"` — the only imported webfont
+(`@fontsource/michroma/400.css`).
 
 **Character:** The interface uses one compact sans-serif system with moderate
 weights, short headings, and durable body text. Labels support scanning; they
@@ -160,26 +163,37 @@ it.
 
 ## Layout
 
-The workspace is a rounded inset shell with a spacious three-pane desktop
-composition and conversation in the center. Sessions are real tabs with an
-active underline; supporting panels hold agent identity, status, description,
-and sessions rather than dashboard cards or extra navigation.
+At desktop capacity (≥ 64rem container width) the workspace is a rounded inset
+shell with a spacious three-pane composition and conversation in the center.
+The inset shell's border (`1px solid var(--border)`), radius (`1.375rem`), and
+ambient shadow only apply inside `@container workspace (min-width: 64rem)`.
+Sessions are real tabs with an active underline; supporting panels hold agent
+identity, status, description, and sessions rather than dashboard cards or
+extra navigation.
+
+At narrow capacity (below 64rem) the workspace is edge-to-edge, viewport-
+filling, with compact system-style chrome. Mobile has its own two-level drawer
+(Agent roster → Sessions) that opens from the logical-start edge; the tab strip
+is hidden. Pointer and hover media queries govern the _reveal behavior_ of
+hover-only controls (for example `.tabClose`), and are the documented exception
+to the container-query rule because they are not expressible as container
+queries.
 
 Logical properties (`inline`, `block`, `start`, and `end`) are required for
 layout direction. English LTR and Hebrew RTL share the same hierarchy, keyboard
 flow, focus behavior, and comfortable density; message content retains its own
 automatic direction where needed.
 
-The shell is an inline-size container. At 64rem, 80rem, and 90rem of available
-container width it progressively opens the established three-pane composition;
-below that capacity, existing focus-managed drawers preserve reachability.
-This is intentional reflow for narrower capacity and text zoom, not a separate
-mobile information architecture. At coarse pointers, buttons, button roles,
-and tabs have at least 2.75rem inline and block target dimensions.
+The shell is an inline-size container (`container: workspace / inline-size`).
+At 64rem, 80rem, and 90rem of available container width it progressively opens
+the established three-pane composition. At coarse pointers, buttons, button
+roles, and tabs have at least 2.75rem inline and block target dimensions.
 
 **The Capacity-Not-Viewport Rule.** Workspace layout responds to usable inline
 space, including enlarged text. Do not add viewport-only pane breakpoints that
 can hide controls or create page-level horizontal overflow at 200% text scale.
+Pointer and hover media queries that govern reveal-only behavior are the stated
+exception.
 
 ## Elevation & Depth
 
@@ -203,6 +217,17 @@ with offset is the universal keyboard focus treatment.
 **The Focus-Is-Geometry Rule.** Focus remains visible in light and dark themes
 and must not be replaced by color-only hover feedback, a shadow, or an
 animation.
+
+## Density
+
+Controls follow a four-band height scale: 28 px (compact inline), 32 px
+(default control), 36 px (comfortable action), 40 px (prominent button or
+avatar). The radius scale (`--radius-sm`, `--radius-md`, `--radius-lg` and
+wider steps) is defined relative to the single `--radius` base in
+`src/app/globals.css`. Theme and locale toggle buttons are 1.75 rem square at
+fine-pointer sizes; the global coarse-pointer rule lifts every button target to
+2.75 rem. The inspector and session-tab header share the same block height band
+so their borders meet as a single line.
 
 ## Components
 
@@ -250,8 +275,11 @@ standard component cannot express and record that reason.
   badges.
 - **Agents:** retain a persistent distinctive icon plus a separate status
   indicator; status must not be conveyed by icon color alone.
-- **Narrow capacity:** use the established drawers and preserve focus
-  restoration rather than creating parallel mobile navigation.
+- **Narrow capacity:** below 64rem the tab strip is hidden and a two-level
+  logical-start drawer (Agent roster → Sessions for the selected Agent)
+  provides Session navigation. Choosing a Session dismisses the drawer
+  immediately; merely browsing does not mark anything read. Preserve focus
+  restoration on drawer close.
 
 #### Session status dots
 
@@ -284,14 +312,15 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   textual alternatives. Never execute generated browser code or arbitrary HTML.
 - **Published artifacts:** audio, video, and images are first-class inline
   outcomes with no download control of their own. Audio and video play in the
-  message as native players sized like a sent media attachment, whose own
-  controls carry the download, and nothing about them opens the Artifact
-  viewer. An image shows in the message as a bounded preview, never at its
-  original size; the preview opens the viewer, which holds the full picture and
-  the download. Every other artifact stays a compact card that opens the
-  viewer, and the Artifacts roster stays a list of openable rows. A failure states what happened in place, and a
-  provider that no longer holds the bytes says so and drops the retry and
-  download it cannot honor.
+  message as native players inside a `w-full max-w-[30rem]` container, whose
+  own controls carry the download, and nothing about them opens the Artifact
+  viewer. An image shows in the message as a bounded preview (max height
+  `max-h-64`), never at its original size; the preview opens the viewer, which
+  holds the full picture and the download. Video is likewise bounded
+  (`max-h-96`). Every other artifact stays a compact card that opens the
+  viewer, and the Artifacts roster stays a list of openable rows. A failure
+  states what happened in place, and a provider that no longer holds the bytes
+  says so and drops the retry and download it cannot honor.
 
 ### Conversation and Execution
 
@@ -310,6 +339,14 @@ assistant's answer.
   signals remain consistent across tools. Summary rows communicate what
   happened; details remain available without turning the trace into a stack of
   cards.
+- **Out-of-band questions:** when the runtime exposes `interactions`
+  (`src/components/runtime-interactions/question-composer.tsx`), questions
+  surface as a single answer form beside the composer rather than as an
+  answerable card in the transcript. The transcript keeps a read-only record
+  (`src/components/tool-ui/question-flow.tsx`). An "Other (type your answer)"
+  free-text row is always offered when options exist and freeform is allowed;
+  the send button is disabled until at least one option or a non-empty free-text
+  answer is present.
 - **System notices:** anything AOS or a provider says about a failure or an
   unavailable output renders in the System Notice panel with the AOS source
   label, never as message prose. The operator cannot then mistake it for the
