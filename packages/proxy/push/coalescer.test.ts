@@ -42,9 +42,13 @@ function harness(
   return { clock, coalescer, emitted }
 }
 
-const session = (sessionId: string): CoalescedSession => ({
+const session = (
+  sessionId: string,
+  occurredAtMs = START
+): CoalescedSession => ({
   agentId: "researcher",
   sessionId,
+  occurredAtMs,
 })
 
 describe("push coalescer", () => {
@@ -70,6 +74,17 @@ describe("push coalescer", () => {
       session("session-1"),
       session("session-2"),
     ])
+  })
+
+  it("answers for the earliest event it collapsed for each Session", () => {
+    const { clock, coalescer, emitted } = harness()
+
+    coalescer.add(OPERATOR, "input", session("session-1", START + 500))
+    coalescer.add(OPERATOR, "input", session("session-1", START + 100))
+    coalescer.add(OPERATOR, "input", session("session-1", START + 900))
+    clock.advance(COALESCE_WINDOW_MS.input)
+
+    expect(emitted[0]!.sessions).toEqual([session("session-1", START + 100)])
   })
 
   it("never extends an open window, however late the last event is", () => {

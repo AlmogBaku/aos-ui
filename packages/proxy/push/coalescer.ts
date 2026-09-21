@@ -1,7 +1,16 @@
 import type { PushCategory } from "../../protocol/push"
 
 /** One Session an event arrived for, by the identity a browser knows it by. */
-export type CoalescedSession = { agentId: string; sessionId: string }
+export type CoalescedSession = {
+  agentId: string
+  sessionId: string
+  /**
+   * Unix ms of the earliest event this window collapsed for this Session. The
+   * gate answers "has the operator seen this?", so it needs the moment the
+   * oldest thing it would be told about happened.
+   */
+  occurredAtMs: number
+}
 
 /** What the workspace looked like when a window tried to close. */
 export type PresenceVerdict =
@@ -76,9 +85,8 @@ export function createPushCoalescer({
     const key = windowKey(principalId, category)
     const window = windows.get(key)
     if (!window || closed) return
-    const sessions = filter(principalId, category, [
-      ...window.sessions.values(),
-    ])
+    const candidates = [...window.sessions.values()]
+    const sessions = filter(principalId, category, candidates)
     if (sessions.length === 0) {
       windows.delete(key)
       return
@@ -108,6 +116,9 @@ export function createPushCoalescer({
       const key = windowKey(principalId, category)
       const open = windows.get(key)
       if (open) {
+        // The window answers for the oldest event it holds per Session.
+        const previous = open.sessions.get(sessionKey(session))
+        if (previous && previous.occurredAtMs <= session.occurredAtMs) return
         open.sessions.set(sessionKey(session), session)
         return
       }

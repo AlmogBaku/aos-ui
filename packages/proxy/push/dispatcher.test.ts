@@ -32,15 +32,28 @@ function device(
   }
 }
 
+function row(overrides: Partial<SessionRow> = {}): SessionRow {
+  return {
+    id: SESSION,
+    agentId: AGENT,
+    title: "Notes",
+    archived: false,
+    updatedAt: new Date(START).toISOString(),
+    status: "idle",
+    ...overrides,
+  }
+}
+
 function occurred(
   type: ExecutionEvent["type"],
-  sessionId = SESSION
+  sessionId = SESSION,
+  occurredAtMs = START
 ): ExecutionEvent {
   const base = {
     agentId: AGENT,
     sessionId,
     runId: "run-1",
-    occurredAt: new Date(START).toISOString(),
+    occurredAt: new Date(occurredAtMs).toISOString(),
   }
   if (type === "attention-requested")
     return { ...base, type, request: { id: "request-1", reason: "approval" } }
@@ -212,22 +225,29 @@ describe("push dispatcher", () => {
     expect(test.clock.pending()).toBe(0)
   })
 
-  it("leaves out a Session the workspace has already read", () => {
+  it("notifies about an event that happened after the operator read the Session", async () => {
+    // The closed-app case: the operator read the Session, then closed the tab,
+    // and the turn finished afterwards. Nothing will ever report the row unread
+    // again, so only the time the read settled can answer for this event.
+    const test = harness({ rows: [row({ unread: false, readAt: START })] })
+
+    test.publish(occurred("run-finished", SESSION, START + 1_000))
+    test.clock.advance(COALESCE_WINDOW_MS.completion)
+
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+    expect(test.send.mock.calls[0]![1]).toMatchObject({
+      category: "completion",
+      count: 1,
+      sessionId: SESSION,
+    })
+  })
+
+  it("leaves out a Session the operator read after the event", () => {
     const test = harness({
-      rows: [
-        {
-          id: SESSION,
-          agentId: AGENT,
-          title: "Notes",
-          archived: false,
-          updatedAt: new Date(START).toISOString(),
-          status: "idle",
-          unread: false,
-        },
-      ],
+      rows: [row({ unread: false, readAt: START + 2_000 })],
     })
 
-    test.publish(occurred("attention-requested"))
+    test.publish(occurred("attention-requested", SESSION, START + 1_000))
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     expect(test.send).not.toHaveBeenCalled()

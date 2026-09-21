@@ -67,20 +67,23 @@ export function createPushDispatcher({
   schedule = defaultSchedule,
 }: PushDispatcherOptions): PushDispatcher {
   /**
-   * A Session the workspace has already shown as read owes nothing, and neither
-   * does one on screen right now. A row the proxy has never seen counts as
-   * unread: silence is not an acknowledgement.
+   * Whether the operator has already seen *this event*. A Session read after the
+   * event happened owes nothing, and neither does one on screen right now. Read
+   * state is compared by time, not as a boolean: the cache learns "read" while
+   * the operator is looking, and only a browser that is still connected can ever
+   * report it unread again — so a boolean would silence every event that arrives
+   * once the workspace is closed, which is exactly when a push is owed.
    */
   const filter = (
     principalId: string,
     _category: PushCategory,
     sessions: CoalescedSession[]
   ) =>
-    sessions.filter(
-      ({ agentId, sessionId }) =>
-        sessionRows.get(agentId, sessionId)?.unread !== false &&
-        !presence.exposed(principalId, sessionId)
-    )
+    sessions.filter(({ agentId, sessionId, occurredAtMs }) => {
+      const readAt = sessionRows.get(agentId, sessionId)?.readAt
+      if (readAt !== undefined && readAt >= occurredAtMs) return false
+      return !presence.exposed(principalId, sessionId)
+    })
 
   /** Presence, or the grace an operator who has just left still holds. */
   const verdict = (principalId: string): PresenceVerdict => {
@@ -179,9 +182,12 @@ export function createPushDispatcher({
   const unobserve = runtimeInstance.sessions.observe((event) => {
     const category = categoryOf(event.type)
     if (!category) return
+    // A timestamp the provider left unreadable must not silence a notification.
+    const occurredAtMs = Date.parse(event.occurredAt)
     coalescer.add(principalOf(event.agentId), category, {
       agentId: event.agentId,
       sessionId: event.sessionId,
+      occurredAtMs: Number.isNaN(occurredAtMs) ? now() : occurredAtMs,
     })
   })
 
