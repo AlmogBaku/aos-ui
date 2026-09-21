@@ -127,6 +127,6 @@ AOS supports English LTR and Hebrew RTL. Language, appearance, keyboard settings
 
 ## Optional workflows
 
-- [Configure Hermes voice](chat-voice.md)
+- [Configure voice](chat-voice.md)
 - [Create a restricted guest invitation](invite-chat.md)
 - [Troubleshoot AOS](troubleshooting.md)

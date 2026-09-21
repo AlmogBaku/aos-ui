@@ -183,6 +183,50 @@ questions can raise input notifications for the operator at the coalescing rate
 (nothing is dropped; revoke the invitation to stop); a small DNS
 check-to-connect window remains.
 
+## Voice provider key files
+
+Voice provider key files are optional. When `proxy-config.json` includes a
+`voice` block with `apiKeyFile` entries, mount those files into the container.
+There is no dedicated voice Compose overlay; use a user-owned
+`compose.override.yaml` alongside the runtime overlay:
+
+```yaml
+# compose.override.yaml — not tracked; adjust paths and IDs for your setup
+secrets:
+  voice-stt-api-key:
+    file: ${AOS_UI_VOICE_STT_API_KEY_FILE}
+  voice-tts-api-key:
+    file: ${AOS_UI_VOICE_TTS_API_KEY_FILE}
+
+services:
+  web:
+    secrets:
+      - source: voice-stt-api-key
+        target: /run/secrets/voice-stt-api-key
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
+        mode: 0400
+      - source: voice-tts-api-key
+        target: /run/secrets/voice-tts-api-key
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
+        mode: 0400
+```
+
+Set the two path variables before starting:
+
+```bash
+AOS_UI_VOICE_STT_API_KEY_FILE=/absolute/private/path/voice-stt-api-key
+AOS_UI_VOICE_TTS_API_KEY_FILE=/absolute/private/path/voice-tts-api-key
+```
+
+Reference the mounted paths in `proxy-config.json` as the `apiKeyFile` values
+for each voice direction (e.g. `/run/secrets/voice-stt-api-key`). The mounted
+files must be owner-only and follow the same rules as `runtime.tokenFile`. The
+key value itself never goes in `.env`, the Compose environment, or the proxy
+JSON — the variables above carry file paths only, unlike OpenCode's env-borne
+`AOS_UI_OPENAI_COMPATIBLE_API_KEY`, which is a different credential.
+
 ## Use hot reload in containers
 
 `compose.dev.yaml` swaps the production Bun server command for a Vite dev server. It only works correctly in fixture mode or when `AOS_UI_PROXY_TARGET` points at a separately running proxy (the container does not start the proxy). For fixture mode with source hot-reload:

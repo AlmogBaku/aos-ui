@@ -53,6 +53,7 @@ the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
 | `publicOrigin`    | Exact browser origin accepted for state-changing operator requests. Must be `https:` unless the host is `127.0.0.1`, `[::1]`, or `localhost`. |
 | `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below.                                                 |
 | `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                                                   |
+| `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
@@ -111,6 +112,78 @@ This flag is forwarded only by `compose.hermes.yaml`; other runtime overlays
 do not pass it. This flag changes presentation only. A guest submission is
 still routed by the runtime according to the invitation's existing message
 permissions.
+
+### Voice providers {#voice-providers}
+
+Add a `voice` block to route transcription (`POST {baseUrl}/audio/transcriptions`)
+and/or read-aloud synthesis (`POST {baseUrl}/audio/speech`) through an
+OpenAI-compatible speech provider. Omitting the block leaves only the runtime's
+native speech interfaces active. The block must contain at least one of
+`transcription` or `speech`; the example proxy configs intentionally omit it.
+
+```jsonc
+"voice": {
+  "transcription": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://stt.example.test/v1",
+    "apiKeyFile": "/run/secrets/voice-stt-key",
+    "model": "whisper-1",
+    "mode": "fallback",
+    "language": "he",
+    "timeoutMs": 60000
+  },
+  "speech": {
+    "provider": "openai-compatible",
+    "baseUrl": "https://tts.example.test/v1",
+    "apiKeyFile": "/run/secrets/voice-tts-key",
+    "model": "tts-1",
+    "voice": "alloy",
+    "format": "mp3",
+    "mode": "override",
+    "timeoutMs": 60000
+  }
+}
+```
+
+Each direction (`transcription`, `speech`) accepts:
+
+| Field        | Default    | Meaning                                                                                                                                                                                                                             |
+| ------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`   | required   | Must be `"openai-compatible"`.                                                                                                                                                                                                      |
+| `baseUrl`    | required   | Base URL including the API version segment (e.g. `/v1`). Must be `https:` or a loopback host when `apiKeyFile` is set. Upstream redirects are refused.                                                                              |
+| `apiKeyFile` | —          | Optional absolute path to an owner-only secret file carrying the API key. Same ownership rules as `runtime.tokenFile`. The key is never inline, never an environment value, and is unrelated to `AOS_UI_OPENAI_COMPATIBLE_API_KEY`. |
+| `model`      | required   | Model identifier forwarded to the provider.                                                                                                                                                                                         |
+| `mode`       | `fallback` | `"fallback"` or `"override"` (see below).                                                                                                                                                                                           |
+| `timeoutMs`  | `60000`    | Per-request timeout in milliseconds (1 000–300 000).                                                                                                                                                                                |
+
+`transcription` additionally accepts:
+
+| Field      | Default | Meaning                                                  |
+| ---------- | ------- | -------------------------------------------------------- |
+| `language` | —       | Optional BCP-47-like language hint (e.g. `he`, `en-US`). |
+
+`speech` additionally accepts:
+
+| Field    | Default | Meaning                                        |
+| -------- | ------- | ---------------------------------------------- |
+| `voice`  | —       | Voice identifier forwarded to the provider.    |
+| `format` | `mp3`   | Audio format: `mp3`, `opus`, `wav`, or `flac`. |
+
+#### Mode semantics
+
+`"fallback"` uses the proxy provider only where the runtime cannot serve speech:
+at the capability level when the runtime reports speech unavailable (OpenClaw,
+OpenCode), and at request time when the runtime's native call fails. On Hermes,
+which advertises speech availability per transport, fallback is request-time
+only: the native call is attempted first, and the proxy provider is used only
+if that call fails.
+
+`"override"` always uses the proxy provider, regardless of runtime capability.
+
+Provider failures surface as `503 temporarily_unavailable`. An unsupported audio
+type or oversized request surfaces as `400 invalid_request`. The proxy never logs
+audio content or transcript text; it logs one redacted `voice.fallback` event
+per direction naming the direction and the runtime's public error code.
 
 ### Web Push (optional)
 

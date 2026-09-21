@@ -103,7 +103,7 @@ the guest connection.
   invited Session resolves.
 - Streaming, Stop, questions, cancellation, reload, and reconnect use the same
   normalized ACP v2 path as operator conversations.
-- Voice transcription and speech are Agent-scoped and do not create a Session.
+- Voice transcription and speech are Agent-scoped and do not create a Session. Guest audio and read-aloud text may reach the operator-configured proxy speech provider under the same permissions as operator requests. Guest audio is budgeted per conversation at 2 concurrent in-flight operations and 60 audio operations per 10 minutes, shared across all tabs and devices on the same invitation link.
 - Expiry detaches the guest only; it does not stop provider work.
 - Invalid or expired links ask the guest to request a new invitation.
 

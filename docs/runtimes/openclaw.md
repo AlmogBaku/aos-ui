@@ -49,7 +49,7 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
-- Session creation is available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, artifacts, read state, transcription, and speech are unavailable because the pinned Gateway leaves do not prove matching native operations.
+- Session creation is available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, artifacts, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
 - The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, and `operator.questions`.

@@ -103,7 +103,7 @@ Denied or unsupported permission does not disable Activity. Multiple tabs elect 
 
 ## Microphone or read-aloud is unavailable
 
-Voice requires Hermes plus the relevant native STT/TTS configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Chat voice](chat-voice.md) for mode-specific checks and safety limits.
+Voice requires either the relevant native runtime STT/TTS configuration or a proxy `voice` block in the private proxy configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Use voice](chat-voice.md) for mode-specific checks, proxy provider setup, and safety limits.
 
 ## A published Artifact cannot load
 

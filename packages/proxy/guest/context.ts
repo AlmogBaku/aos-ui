@@ -8,6 +8,7 @@ import { createGuestRequestAuthorizer } from "../auth/guest-request"
 import type { GuestPublicErrorCode } from "../auth/guest-projection"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
+import { createGuestAudioBudget } from "./audio-budget"
 
 export const guestSecurityHeaders = {
   "cache-control": "no-store",
@@ -39,6 +40,11 @@ export function createGuestAttachmentStages() {
   return new AttachmentStageRegistry(256, 300_000, 67_108_864, 4)
 }
 
+/** The guest lane's speech allowance: an operator pays for every operation. */
+const AUDIO_WINDOW_MS = 600_000
+const AUDIO_MAX_IN_FLIGHT = 2
+const AUDIO_MAX_OPS_PER_WINDOW = 60
+
 export type GuestRoutes = ReturnType<typeof createGuestRoutes>
 
 export function emptyError(status: number) {
@@ -59,6 +65,14 @@ export function createGuestRoutes(options: GuestAppOptions) {
   return {
     options,
     attachmentStages: options.attachmentStages ?? createGuestAttachmentStages(),
+    // One budget per guest app, so both audio directions spend the same
+    // allowance for a conversation.
+    audioBudget: createGuestAudioBudget({
+      now,
+      windowMs: AUDIO_WINDOW_MS,
+      maxInFlight: AUDIO_MAX_IN_FLIGHT,
+      maxOps: AUDIO_MAX_OPS_PER_WINDOW,
+    }),
     authenticate: (request: Request) => authorizer.authenticate(request),
     authorize: (
       identity: VerifiedGuestIdentity,
