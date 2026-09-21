@@ -49,7 +49,7 @@ export type AcpServiceOptions = {
   principalId: string
 }
 
-/** Hosts one ACP v2 lane over WebSocket beside the invalidation socket. */
+/** Hosts one ACP v2 lane over WebSocket as the single normalized connection. */
 export function createAcpService(options: AcpServiceOptions) {
   const { principalId } = options
 

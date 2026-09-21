@@ -134,10 +134,16 @@ export type TranslateContext = {
 export type TranslateState = {
   messageId: string | undefined
   toolArgsText: Readonly<Record<string, string>>
+  /**
+   * Acknowledgements a from-start replay drops because authoritative history
+   * already carried those corrections.
+   */
+  replayedCorrections: number
 }
 export const initialTranslateState: TranslateState = {
   messageId: undefined,
   toolArgsText: {},
+  replayedCorrections: 0,
 }
 
 /**
@@ -221,6 +227,12 @@ export type TranslateHistory = (
   lane: Lane
 ) => AcpOutbound[]
 
+/**
+ * `translate/history.ts` → `persistedCorrections`. How many of the run journal's
+ * steer acknowledgements the replayed history already carried as user turns.
+ */
+export type PersistedCorrections = (history: SessionHistoryResponse) => number
+
 /** `translate/interrupts.ts` → `pendingRequestToOutbound` */
 export type PendingRequestToOutbound = (
   request: PendingRequest,
@@ -254,6 +266,7 @@ export type ConfigWriteOf = (
 export type Translators = {
   translateRunEvent: TranslateRunEvent
   translateHistory: TranslateHistory
+  persistedCorrections: PersistedCorrections
   pendingRequestToOutbound: PendingRequestToOutbound
   replyFromPermission: ReplyFromPermission
   replyFromElicitation: ReplyFromElicitation

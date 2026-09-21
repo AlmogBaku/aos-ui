@@ -12,9 +12,11 @@ surface only when the operator has chosen its domain, proxy, and TLS boundary.
 ## Inspect before planning
 
 Read `README.md`, `docs/deployment.md`, `docs/invite-chat.md`, and the
-selected runtime guide. Inspect the existing services, listeners, proxy
-configuration, runtime health, and Git state without changing them. Do not
-stop or replace an existing service until its owner and replacement are clear.
+selected runtime guide. Check whether an untracked host runbook exists before
+planning any service or configuration changes. Inspect the existing services,
+listeners, proxy configuration, runtime health, and Git state without changing
+them. Do not stop or replace an existing service until its owner and replacement
+are clear.
 
 Collect only unresolved choices: runtime, private operator address, optional
 guest hostname, reverse proxy/TLS provider, paths for build and configuration,
@@ -32,7 +34,7 @@ guest host. Require a direct confirmation immediately before writes, service
 reloads/restarts, DNS changes, tunnel creation, or stopping duplicate
 processes. Treat each later material change as a new confirmation point.
 
-Use the provider-neutral templates under `deploy/systemd/` and the versioned
+Use the provider-neutral template under `deploy/systemd/` and the versioned
 proxy configuration described in `docs/configuration.md`; adapt them to the
 selected host. Do not install Cloudflare, create a tunnel, alter DNS, or assume
 Tailscale unless the operator explicitly selected it. For Cloudflare, route the
@@ -45,7 +47,8 @@ Put browser-safe runtime configuration in `/runtime-config.json` only. Keep
 gateway signing keys and native tokens in an operator-managed secret facility,
 not Git, shell startup files, or browser variables. The service manager must
 receive its environment; editing a runtime `.env` alone does not update an
-already-managed systemd service.
+already-managed systemd service. Set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`
+on Linux so container volumes are owned by the correct host user.
 
 Giving Hermes read access to the private proxy configuration and its referenced
 invitation signing-key file lets shell-capable agents mint bearer invitations.

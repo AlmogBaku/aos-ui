@@ -539,9 +539,11 @@
   pointer-events: auto;
 }
 
-@media (min-width: 64rem) and (pointer: fine) and (hover: hover) {
-  .tabClose {
-    display: inline-flex;
+@media (pointer: fine) and (hover: hover) {
+  @container workspace (min-width: 64rem) {
+    .tabClose {
+      display: inline-flex;
+    }
   }
 }
 

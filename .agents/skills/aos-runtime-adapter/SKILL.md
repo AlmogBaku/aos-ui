@@ -1,44 +1,62 @@
 ---
 name: aos-runtime-adapter
-description: Add, audit, or debug a server-side AOS runtime adapter while preserving the proxy-owned run vocabulary and native harness semantics.
+description: Add, audit, or debug how the AOS proxy adapts a native harness onto the ACP v2 browser wire: native client → ServerRuntime/ServerRunEngine → SessionCoordinator → ACP translation → browser.
 ---
 
 # Work on an AOS runtime adapter
 
-Read `AGENTS.md`,
-`docs/development/runtime-adapter-authoring.md`, and the selected runtime's
-guide and research before proposing changes. Treat
-`docs/design/aos-runtime-gateway-architecture.md` and
-`docs/design/aos-runtime-gateway-v1.md` as normative.
+Read `AGENTS.md`, `docs/development/runtime-adapter-authoring.md`, and the
+selected runtime's guide before proposing changes. Treat the gateway
+architecture doc as normative. Consult `packages/proxy/adapters/hermes/README.md`
+and `TURN-LIFECYCLE.md` for a worked example.
 
-## Establish the native contract
+## Pipeline and file ownership
 
-Inspect the maintained native SDK, client, protocol source, and behavior tests.
-Write a concise capability and lifecycle matrix covering durable and live
-identities, authoritative reads, streaming, controls, interactions, recovery,
-retention, and unsupported operations. Finish this step only when every
-operation in scope has a cited native behavior or an explicit unavailable
-result.
+| Layer | Files |
+| --- | --- |
+| Native transport, identity, retention, validation, conversion | `packages/proxy/adapters/<kind>/`: `adapter.ts`, `factory.ts`, `capabilities.ts`, `client.ts` / `dashboard-client.ts`, `content.ts`, `history.ts`, `interactions.ts`, `run.ts`, `workspace.ts`, `native-schemas.ts`; Hermes also has `run-attach.ts`, `run-failures.ts`, `run-frames.ts`, `run-native.ts`, `run-settlement.ts`, `run-state.ts`, `slash-commands.ts`, `attachment-registry.ts`, `media-artifacts.ts`, `vendor/` |
+| Seam | `packages/proxy/core/runtime.ts` (`ServerRuntime`, `ServerRunEngine`, `ServerRunHandle` with `stop`/`steer?`/`recoveryPosition`, `SessionScope`); vocabulary `core/events.ts`; coordination `core/session-coordinator.ts`; rows `core/session-rows.ts`; stages `core/attachment-stages.ts` |
+| ACP adapter | `packages/proxy/acp/agent.ts` (method handlers, `GUEST_METHODS`, connect-time hydration), `agent-sessions.ts` (per-connection ownership, list cursor), `session-attachment.ts` (`reportExecution`/`reportUsage`/`reissuePending`, `_aos/*` emission), `translate/run-events.ts`, `translate/history.ts`, `translate/interrupts.ts`, `translate/updates.ts` (pure reducers from run vocabulary to ACP), `config-options.ts`, `read-state.ts`, `activity-feed.ts`, `service.ts`/`socket.ts`, `validation.ts`, `types.ts` |
+| Contract | `packages/protocol/acp.ts` (`_meta.aos` schemas, `AOS_METHODS`, error codes); browser consumer `src/runtime-adapters/aos/acp/*` |
+
+## ACP surface coverage
+
+| ACP surface | Run-vocabulary / seam input | Adapter obligation |
+| --- | --- | --- |
+| `session/update` text / reasoning / tool chunks | `RunEvent` kinds (`TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`) | Emit the correct kinds from `run.ts` |
+| `plan_update` `_meta.aos.todos` | `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` carrying Todos | Populate the activity payload |
+| `usage_update` | `SessionContextResponse` (`session-attachment.ts:85-91, 245, 305-323`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
+| `session/request_permission` / `elicitation/create` | `PendingRequest` (`translate/interrupts.ts`, incl. `_allow_session`, multi-select `items.enum`) | Emit `PendingRequest` from `interactions.ts` |
+| `_aos/artifact` | `CUSTOM` event `aos.artifact` with `AosArtifactDescriptor` (`translate/run-events.ts:133`) | Emit from `run.ts` on trusted tool receipt |
+| `_aos/steer_accepted` | `steer` handle + `CUSTOM` event `aos.steer.accepted` (`core/session-coordinator.ts:809-817`) | Implement `handle.steer` |
+| `session_info_update` `{status, archived, unread}` | Catalog rows (`SessionRows`) | Implement `getSession` / `listSessions` |
+| `_aos/catalog_invalidated` | `subscribeCatalogChanges` callback | Implement `subscribeCatalogChanges` on `ServerRuntime` |
+| `_aos/session/update` intents | `sessionTitle` / `sessionArchival` / `sessionDeletion` capabilities | Route to `mutateSession(agentId, runtimeSessionId, "PATCH" \| "DELETE", body?)` (`core/runtime.ts:226-231`; called from `acp/agent-sessions.ts:184`) gated by those capabilities |
+| Read state | `sessionReadState` capability + `unread` field on session row | Write `{ unread: false }` via `mutateSession(agentId, runtimeSessionId, "PATCH", { unread: false })` (`acp/read-state.ts:83-88`) |
+| `session/set_config_option` | `models` / `thoughtLevel` capabilities | Implement `updateModel(agentId, publicSessionId, patch: SessionModelUpdateRequest)` (`core/runtime.ts:242-246`); response carries the settled model state |
+
+Note: `_aos/session_invalidated` is defined in the protocol but is not emitted
+by the proxy.
+
+## Register a new adapter
+
+One new runtime kind = one `RuntimeConfig` variant added to
+`packages/proxy/config.ts:107-143` + one adapter package + one `case` in
+`packages/proxy/adapters/create-runtime.ts:12-21`.
+`packages/proxy/architecture.test.ts:55-69` fails until all three exist and the
+selector file is the only file with the `case`.
 
 ## Preserve ownership
 
-Map native behavior onto `packages/proxy/core/runtime.ts` and the existing
-`SessionCoordinator`. Keep connection topology, live identities, attachment,
-retention, payload validation, and native recovery inside the adapter. Keep
-admission, normalized run state, control serialization, subscriber fanout, and
-run segment identity in the coordinator.
+Keep connection topology, live identities, attachment, retention, payload
+validation, and native recovery inside the adapter. Keep admission, normalized
+run state, control serialization, subscriber fanout, and run segment identity
+in the coordinator. Emit the proxy-owned run vocabulary (`core/events.ts`); use
+a `CUSTOM` event only for behavior the vocabulary cannot express.
 
-Emit the proxy-owned run vocabulary for messages, reasoning, tools, activity,
-lifecycle, and interrupts, as defined in `packages/proxy/core/events.ts` (the
-ACP layer delivers them to the browser). Use an AOS extension only for a demonstrated
-behavior the vocabulary does not express. Require evidence from the current
-adapter and another native runtime before generalizing provider mechanics into
-shared core or protocol.
+## Attachments and Artifacts
 
-## Separate attachment and media planes
-
-Treat these as different public concepts even when the provider represents
-both with filesystem paths:
+Treat attachment and media planes as different public concepts:
 
 | Native input | Public projection | Read authority |
 | --- | --- | --- |
@@ -48,20 +66,17 @@ both with filesystem paths:
 
 Parse attachment envelopes server-side. Preserve authorship and safe filename,
 MIME, size, and opaque identity; remove native paths, injected context,
-filesystem warnings, and private retrieval URLs from history and live output.
+filesystem warnings, and private retrieval URLs.
 
-Treat provider media markers as delivery syntax, never as authority. For
-Hermes text-to-speech, grant an Artifact only when a successful
-`text_to_speech` result lists the same supported audio reference in
-`file_path` or `file_paths` **and** its `media_tag`. Keep the reference in a
-private Agent-and-Session-scoped mapping and expose a deterministic opaque
-Artifact ID. Redact paths from the public tool result. Buffer fragmented
-`MEDIA:` lines across deltas, preserve surrounding prose, suppress a trusted
-delivery marker, and never grant authority to an unmatched marker. When the
-assistant message has no delivered media, replace an unmatched marker with a
-path-free unavailable fallback. When that message already has a trusted media
-Artifact, suppress additional unmatched markers as redundant. Durable history
-and live streaming must derive the same Artifact without rerunning the tool.
+An Artifact reaches the browser as `_aos/artifact` and is fetched over
+`GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`
+(`packages/proxy/routes/content.ts:87`). Keep the reference in a private
+Agent-and-Session-scoped mapping; expose a deterministic opaque Artifact ID.
+For Hermes text-to-speech, grant an Artifact only when a successful
+`text_to_speech` result lists the same supported audio reference in `file_path`
+or `file_paths` **and** its `media_tag`. Redact paths from the public tool
+result. Buffer fragmented `MEDIA:` lines across deltas; suppress a trusted
+delivery marker and never grant authority to an unmatched one.
 
 ## Choose the work path
 
@@ -69,22 +84,31 @@ and live streaming must derive the same Artifact without rerunning the tool.
   focused provider-neutral behavior test.
 - **Audit:** compare every in-scope capability and lifecycle transition with
   native sources, then report concrete mismatches and protecting tests.
-- **Debug:** trace one failing operation across native input, adapter
-  conversion, coordinator, normalized stream, and browser materialization.
-  Test the first boundary where actual state diverges from expected state.
+- **Debug:** trace one failing operation across native input → adapter
+  conversion (`run.ts`/`history.ts`) → coordinator journal (`observe`/`snapshot`)
+  → ACP outbound (`translate/*`, `session-attachment.ts`) → browser projection
+  (`src/runtime-adapters/aos/acp/session-projector.ts`). Test the first
+  boundary where actual state diverges from expected state.
 
 For mutations, identify admission, acknowledgement, and uncertainty before
 coding. Reconnect reconciles authoritative state and never resends an uncertain
-mutation. Browser queueing, active steering, provider queueing, commands,
-rewind, and interrupt resume remain distinct operations.
+mutation.
 
 ## Complete the work
 
 Run the focused adapter tests and the affected provider-neutral conformance and
-browser tests. Confirm capability fidelity, stable ownership, proxy-vocabulary event
-ordering, cross-Session isolation, reconnect without prompt replay, and native
-data non-disclosure. For attachments or delivered media, cover split stream
-markers, history restoration, exact receipt correlation, opaque retrieval,
-untrusted and mismatched paths both with and without a delivered Artifact,
-failed receipts, and missing bytes. Report native evidence, changed mappings,
-verification, and any capability left unavailable.
+browser tests. Test suites by boundary: `adapters/<kind>/*.test.ts`,
+`core/session-coordinator.test.ts`, `acp/translate/*.test.ts`,
+`acp/agent.test.ts`, `src/runtime-adapters/aos/acp/*.test.ts`, and the
+in-process ACP lane gate `e2e/support/provider-mock.ts` +
+`e2e/aos.runtime.spec.ts`.
+
+Confirm: capability fidelity across both lanes (guest projection in
+`packages/proxy/guest/acp.ts` and `packages/proxy/auth/guest-runtime-projection.ts`),
+`_meta.aos.sequence` monotonic on replay, reconnect via `session/resume`
+`after`/`resync` without prompt replay, and the `vendor/` + `UPSTREAM.md` +
+snapshot-test rule for vendored native clients. For attachments or delivered
+media, cover split stream markers, history restoration, exact receipt
+correlation, opaque retrieval, untrusted and mismatched paths both with and
+without a delivered Artifact, failed receipts, and missing bytes. Report native
+evidence, changed mappings, verification, and any capability left unavailable.

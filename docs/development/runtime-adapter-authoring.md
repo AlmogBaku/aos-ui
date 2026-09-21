@@ -2,9 +2,9 @@
 
 Use this guide when adding, auditing, or debugging a server-side runtime
 adapter. The [gateway architecture](../design/aos-runtime-gateway-architecture.md)
-and [V1 design](../design/aos-runtime-gateway-v1.md) remain normative. This
-guide explains the obligations that are difficult to infer from TypeScript
-interfaces alone.
+is the normative authority. The [V1 design](../design/aos-runtime-gateway-v1.md)
+is a dated completion record, not normative. This guide explains the obligations
+that are difficult to infer from TypeScript interfaces alone.
 
 ## Start from the native runtime
 
@@ -74,8 +74,11 @@ They share coordinator semantics, not a generic socket manager.
 Adapters emit the proxy-owned run vocabulary (`RunEvent`, `RunEventKind`,
 `PendingRequest`, `RequestReply`, `TurnInput`, `ExecutionEvent` from
 `packages/proxy/core/events.ts`); the ACP layer in `packages/proxy/acp/`
-translates them for the browser. Treat the
-vocabulary as an event grammar, not a bag of JSON:
+translates them for the browser. The `RunEventKind` names
+(`RUN_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `ACTIVITY_SNAPSHOT`,
+`ACTIVITY_DELTA`, `CUSTOM`, …) are the proxy-owned vocabulary inherited from
+the retired AG-UI wire; the browser never sees them. Treat the vocabulary as
+an event grammar, not a bag of JSON:
 
 - final assistant prose is text message content, never reasoning content;
 - reasoning starts and ends independently of final text;
@@ -83,9 +86,10 @@ vocabulary as an event grammar, not a bag of JSON:
 - run completion carries success, interruption, or cancellation only after the
   segment is complete;
 - provider progress uses structured activity when it is meaningful to the UI;
-- Session Todos use a PLAN activity event; the ACP layer projects them as
-  `plan_update` with `_meta.aos.todos`;
-- restored PLAN activity is presentation state and is never forwarded as
+- Session Todos use an `ACTIVITY_SNAPSHOT` or `ACTIVITY_DELTA` event
+  (`RunEventKind`, `packages/proxy/core/events.ts:30-31`); the ACP layer
+  projects them as `plan_update` with `_meta.aos.todos`;
+- restored Todo activity is presentation state and is never forwarded as
   native prompt history.
 
 Validate native events before conversion. Reject malformed, oversized,
@@ -139,7 +143,17 @@ normalized conflict rather than guessing.
 ## Preserve interrupts
 
 Questions and approvals use normalized interruption. The ACP layer delivers
-them as `session/request_permission` or `elicitation/create` to the browser:
+them as `session/request_permission` or `elicitation/create` to the browser.
+The `_meta.aos` extensions on these requests are defined in
+`packages/protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
+(`AOS_PERMISSION_KIND_SESSION`, `acp.ts:60`) represents Hermes' "allow for this
+session" scope; the translation lives in
+`packages/proxy/acp/translate/interrupts.ts:33`. Elicitation questions arrive in
+`_meta.aos.questions`; a multi-select question must declare `items.enum` in the
+ACP property schema (`interrupts.ts:164-179`) so the SDK accepts the elicitation,
+while the response schema does not constrain values to the enum.
+
+Steps for the adapter:
 
 1. Validate the complete native interaction batch.
 2. Finish the current segment with an interrupt outcome.
@@ -185,8 +199,8 @@ invalidations are not capability changes. A local draft has no Session-scoped
 capabilities.
 
 Derive `running`, `stopping`, `waiting-for-input`, and terminal state from the
-coordinator and ACP lifecycle state. Use PLAN activity for Todos (the ACP layer translates them to `plan_update`) and structured
-activity for progress. Do not create polling endpoints for state already
+coordinator and ACP lifecycle state. Use `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA` events for Todos (the ACP layer
+translates them to `plan_update`) and structured activity for progress. Do not create polling endpoints for state already
 carried by the normalized run or history.
 
 Parse provider-injected attachment and context envelopes server-side. Return
@@ -258,9 +272,10 @@ template. Its package map is in
 
 Implement the optional `subscribeCatalogChanges(listener)` method on
 `ServerRuntime` when the native provider broadcasts catalog-change signals.
-Hermes uses its native `sessions.changed` WebSocket event. The ACP layer calls
-this method to wake the activity feed on connect; adapters that omit it simply
-receive no wake.
+The method returns a `Promise<() => void>` (the unsubscribe function;
+`packages/proxy/core/runtime.ts:258`). Hermes uses its native
+`sessions.changed` WebSocket event. The ACP layer calls this method to wake
+the activity feed on connect; adapters that omit it simply receive no wake.
 
 ### Session read state and `unread`
 
@@ -269,3 +284,44 @@ read state (for example, Hermes `last_read_at` NULL means read). Omit `unread`
 when the payload is absent or ambiguous; absent never overwrites a known value in
 the browser. Declare the read-state capability unavailable rather than emulating
 it with a synthetic value.
+
+### Usage reporting
+
+The proxy emits one `usage_update` on `session/new`, on `session/resume`, after
+every settled turn, and after a `session/set_config_option` that changes the
+model (`packages/proxy/acp/session-attachment.ts:228-242`). Implement
+`workspaceCapabilities` to return a `SessionContextResponse`, or declare usage
+unavailable; a provider that cannot answer at all leaves the last reading
+standing without emitting an empty gauge.
+
+### Artifact descriptors
+
+An adapter may publish an `_aos/artifact` notification carrying an
+`AosArtifactDescriptorSchema` payload (`packages/protocol/acp.ts:352-378`).
+The `source` discriminant is one of `inline` (with `encoding` and `data`),
+`url`, or `provider` (with an opaque `reference`). Only the `id`, `filename`,
+and `source` fields are required.
+
+### Registration and adapter file layout
+
+Register a new adapter as a `kind` literal in the `RuntimeSchema` discriminated
+union (`packages/proxy/config.ts:109`) and add a corresponding branch in
+`packages/proxy/adapters/create-runtime.ts`. The conventional per-adapter
+module layout (as used by OpenCode and OpenClaw) is:
+
+| Module           | Responsibility                                           |
+| ---------------- | -------------------------------------------------------- |
+| `adapter.ts`     | Composes all modules into `ServerRuntime`                |
+| `factory.ts`     | Entry point; builds and returns a `RuntimeInstance`      |
+| `capabilities.ts`| Maps native capabilities to normalized form              |
+| `client.ts`      | Validated HTTP or RPC client for native API calls        |
+| `content.ts`     | Normalizes native content types and attachment envelopes |
+| `history.ts`     | Converts authoritative native history rows               |
+| `interactions.ts`| Answers native clarify/approval interactions             |
+| `run.ts`         | Converts native execution frames to proxy-owned events   |
+| `workspace.ts`   | Agent/Session catalog and metadata                       |
+| `native-schemas.ts` | Validated Zod schemas for native payloads             |
+
+The Hermes adapter predates this layout and uses different module names for
+some of these roles; see
+[`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md).

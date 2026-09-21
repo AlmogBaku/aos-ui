@@ -13,7 +13,11 @@ import type { ComposerFeatureViewModel } from "@/components/assistant-ui/compose
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import { Button } from "@/components/ui/button"
 
-export const STEER_ACCEPTED_DATA_NAME = "aos.steer.accepted"
+/**
+ * The id the projector gives an accepted correction's user turn; the queue row
+ * watches for it.
+ */
+export const steerMessageId = (requestId: string) => `steer:${requestId}`
 
 export type MessageQueueLabels = {
   readonly region: string
@@ -64,15 +68,8 @@ function QueueRow({
   const text = queueItemText(parts)
   const running = useAuiState((state) => state.thread.isRunning)
   const acknowledged = useAuiState((state) =>
-    state.thread.messages.some((message) =>
-      message.content.some(
-        (part) =>
-          part.type === "data" &&
-          part.name === STEER_ACCEPTED_DATA_NAME &&
-          part.data !== null &&
-          typeof part.data === "object" &&
-          (part.data as { requestId?: unknown }).requestId === requestId
-      )
+    state.thread.messages.some(
+      (message) => message.id === steerMessageId(requestId)
     )
   )
   const acknowledgedRef = useRef(false)

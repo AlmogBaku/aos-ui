@@ -147,6 +147,41 @@ describe("guest AG-UI projection", () => {
     })
   })
 
+  it("keeps no correction flag on a projected user turn", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "prompt",
+            role: "user",
+            content: [{ type: "text", text: "Summarize the notes" }],
+            createdAt: "2026-09-15T00:00:00.000Z",
+          },
+          {
+            id: "correction",
+            role: "user",
+            content: [{ type: "text", text: "Use the tables" }],
+            createdAt: "2026-09-15T00:00:01.000Z",
+            metadata: { custom: { correction: true } },
+          },
+        ],
+        total: 2,
+        limit: 200,
+        offset: 0,
+        nextOffset: 2,
+      },
+      authorization,
+      "ref"
+    )
+
+    // The projection rebuilds every message, so a resume must count the
+    // corrections it owes the journal on the authoritative page instead.
+    expect(projected.messages).toHaveLength(2)
+    for (const message of projected.messages)
+      expect(message).not.toHaveProperty("metadata")
+  })
+
   it("keeps a restored failed turn failed for a guest", () => {
     const projected = projectGuestHistory(
       {

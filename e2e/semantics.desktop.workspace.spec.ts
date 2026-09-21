@@ -37,6 +37,14 @@ for (const locale of ["en", "he"] as const) {
     await openWorkspace(page, locale)
     await sendPrompt(page, "Ask me a question", locale)
 
+    // Answer in the composer so QuestionRecord becomes visible in the transcript
+    const composerLabel = locale === "he" ? "שאלות" : "Questions"
+    const sendLabel = locale === "he" ? "שליחת תשובה" : "Send answer"
+    const questionComposer = page.getByRole("region", { name: composerLabel })
+    await questionComposer.getByRole("option", { name: "Executive team" }).click()
+    await questionComposer.getByRole("button", { name: sendLabel }).click()
+    await expect(questionComposer).not.toBeVisible()
+
     const questionChrome = page
       .getByRole("heading", {
         name: "Which audience should the brief prioritize?",

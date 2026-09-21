@@ -143,8 +143,12 @@ class SessionAttachment {
     this.#readUsage = options.readUsage
   }
 
-  /** Subscribes to the Session's live run, if one is still in flight. */
-  async attach(after?: number) {
+  /**
+   * Subscribes to the Session's live run, if one is still in flight.
+   * `replayedCorrections` names the steer acknowledgements this subscription
+   * must drop because the history it follows already carried them.
+   */
+  async attach(after?: number, replayedCorrections = 0) {
     if (this.#detached || this.#subscription) return
     const { state, runId } = this.#coordinator.snapshot(this.#scope)
     if (state === "idle" || runId === undefined) return
@@ -157,7 +161,8 @@ class SessionAttachment {
           ...(after === undefined ? {} : { after }),
         },
         this.#access(runId)
-      )
+      ),
+      replayedCorrections
     )
   }
 
@@ -169,7 +174,8 @@ class SessionAttachment {
         input,
         this.#access(input.runId),
         ...(stage ? [stage] : [])
-      )
+      ),
+      0
     )
   }
 
@@ -387,9 +393,12 @@ class SessionAttachment {
     return guest ? guest.project.access(base, this.#scope, runId) : base
   }
 
-  #consume(subscription: CoordinatedRunSubscription) {
+  #consume(
+    subscription: CoordinatedRunSubscription,
+    replayedCorrections: number
+  ) {
     this.#subscription = subscription
-    this.#state = initialTranslateState
+    this.#state = { ...initialTranslateState, replayedCorrections }
     this.#stopRequested = false
     void this.#pump(subscription)
   }
@@ -549,7 +558,8 @@ class SessionAttachment {
           resume,
         },
         this.#access(runId)
-      )
+      ),
+      0
     )
   }
 }

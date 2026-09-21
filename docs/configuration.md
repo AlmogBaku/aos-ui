@@ -13,21 +13,25 @@ and model identifiers never belong in this public file.
 }
 ```
 
-Unknown fields are rejected. Optional `artifactHtmlAssetOrigins` is an array of
-at most 16 credential-free HTTPS origins; omit it to block external HTML
-preview assets.
+Unknown fields are rejected.
+
+### Artifact HTML assets {#artifact-html-assets}
+
+Optional `artifactHtmlAssetOrigins` is an array of at most 16
+credential-free HTTPS origins allowed as external asset sources inside
+published HTML Artifacts. Omit it to block external HTML preview assets.
 
 ## Local development
 
 Vite derives the same public shape when no configuration file is supplied.
 
-| Variable                                 | Default                 | Use                                  |
-| ---------------------------------------- | ----------------------- | ------------------------------------ |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Public runtime JSON file.            |
-| `AOS_UI_RUNTIME_MODE`                    | `aos`                   | `aos` or explicit `fixture`.         |
-| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100` | Local normalized proxy target.       |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection. |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.   |
+| Variable                                 | Default                 | Use                                                                                                                          |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Public runtime JSON file. Also read by the Bun proxy and static server at startup; required in every non-fixture deployment. |
+| `AOS_UI_RUNTIME_MODE`                    | `aos`                   | `aos` or explicit `fixture`.                                                                                                 |
+| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100` | Local normalized proxy target.                                                                                               |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection.                                                                                         |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.                                                                                           |
 
 The AOS proxy privately selects and authenticates exactly one Hermes, OpenClaw,
 or OpenCode runtime. Hermes is the primary and first-supported harness. There
@@ -41,16 +45,16 @@ the selected provider: [`Hermes`](../deploy/proxy-config.hermes.example.json),
 [`OpenClaw`](../deploy/proxy-config.openclaw.example.json), or
 [`OpenCode`](../deploy/proxy-config.opencode.example.json).
 
-| Field             | Meaning                                                                                       |
-| ----------------- | --------------------------------------------------------------------------------------------- |
-| `version`         | Configuration format; V1 accepts only `1`.                                                    |
-| `deploymentId`    | Stable identifier bound into guest invitations.                                               |
-| `listen`          | Trusted operator host and port. Wildcard binds require `exposure: "private-container"`.       |
-| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests.                           |
-| `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below. |
-| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                   |
-| `guest`           | Optional distinct guest listener/origin and invitation signing keys.                          |
-| `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.       |
+| Field             | Meaning                                                                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`         | Configuration format; V1 accepts only `1`.                                                                                                    |
+| `deploymentId`    | Stable identifier bound into guest invitations.                                                                                               |
+| `listen`          | Trusted operator listener. `host` must be `127.0.0.1`, `::1`, `0.0.0.0`, or `::`. Wildcard binds require `exposure: "private-container"`.     |
+| `publicOrigin`    | Exact browser origin accepted for state-changing operator requests. Must be `https:` unless the host is `127.0.0.1`, `[::1]`, or `localhost`. |
+| `runtime`         | One selected runtime: a stable ID plus the provider-specific private connection fields below.                                                 |
+| `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                                                   |
+| `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
+| `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
 rejected. Operator and guest listeners use the exact same runtime instance,
@@ -59,9 +63,21 @@ runtime or credential.
 
 | `runtime.kind` | Required private fields                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------- |
-| `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs`                                          |
+| `hermes`       | `baseUrl`, absolute owner-only `tokenFile`, and `sessionIdleMs` (1 000–86 400 000 ms)                    |
 | `openclaw`     | WebSocket `baseUrl`, absolute owner-only `deviceIdentityFile`, and absolute owner-only `deviceTokenFile` |
 | `opencode`     | `baseUrl`, absolute `directory`, `username`, and absolute owner-only `passwordFile`                      |
+
+`runtime.sessionIdleMs` (Hermes only) controls how long the proxy keeps a Session attachment warm after
+the last subscriber disconnects before closing only that Session. The shared
+Hermes socket remains open.
+
+When `guest` is configured, its `invitations` block accepts:
+
+| Field              | Default  | Meaning                                                       |
+| ------------------ | -------- | ------------------------------------------------------------- |
+| `keys`             | required | Array of up to 3 `{id, secretFile}` objects for key rotation. |
+| `ttlSeconds`       | `259200` | Invitation lifetime in seconds (60–2 592 000).                |
+| `clockSkewSeconds` | `0`      | Accepted clock skew when validating tokens (0–60 s).          |
 
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private
@@ -70,11 +86,14 @@ its listener and public origin must differ from the operator lane; guest access
 requires a scoped, expiring JWT.
 
 Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
-`runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable), every
-and every `guest.invitations.keys[].secretFile` must be absolute paths to regular, non-symlinked, owner-only files. Secret
-values never belong directly in the JSON, Compose environment, `VITE_*`, public
-runtime configuration, or browser bundle. Unknown and legacy OIDC,
-operator-cookie, Hermes browser-broker, and guest-Hermes fields are rejected.
+`runtime.deviceIdentityFile`/`runtime.deviceTokenFile` as applicable) and every
+`guest.invitations.keys[].secretFile` must be absolute paths to regular,
+non-symlinked, owner-only files with no group or other read bits, and between 1
+and 8192 bytes. Guest invitation signing-key files must contain exactly 43
+characters of base64url encoding a 32-byte value. Secret values never belong
+directly in the JSON, Compose environment, `VITE_*`, public runtime
+configuration, or browser bundle. Unknown and legacy OIDC, operator-cookie,
+Hermes browser-broker, and guest-Hermes fields are rejected.
 
 For Compose runtime overlays, `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` select
 the non-root proxy identity and the declared secret ownership. On Linux, use
@@ -88,8 +107,10 @@ operator API, and—when configured—the separate guest surface. See
 Runtime slash-command suggestions are enabled on the operator surface. The
 guest surface hides them by default; set
 `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them there.
-This flag changes presentation only. A guest submission is still routed by the
-runtime according to the invitation's existing message permissions.
+This flag is forwarded only by `compose.hermes.yaml`; other runtime overlays
+do not pass it. This flag changes presentation only. A guest submission is
+still routed by the runtime according to the invitation's existing message
+permissions.
 
 ### Web Push (optional)
 

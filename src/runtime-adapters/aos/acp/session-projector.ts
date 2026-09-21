@@ -19,7 +19,7 @@ import {
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
-import { STEER_ACCEPTED_DATA_NAME } from "@/components/assistant-ui/elements/message-queue"
+import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
 import {
@@ -42,10 +42,11 @@ import {
 } from "./projector-messages"
 
 /**
- * Folds one Session's ACP `session/update` stream and the two data-part
- * extension notifications into the state the Assistant UI store reads. Pure and
- * React-free: a replay starts from `initialProjectorState` and applies the same
- * reducer the live stream does.
+ * Folds one Session's ACP `session/update` stream and its extension
+ * notifications into the state the Assistant UI store reads: `_aos/artifact`
+ * lands as a message data part, `_aos/steer_accepted` as an ordinary user turn.
+ * Pure and React-free: a replay starts from `initialProjectorState` and applies
+ * the same reducer the live stream does.
  */
 
 /**
@@ -70,6 +71,13 @@ export type ProjectorState = {
   readonly execution: ProjectorExecution
   /** The turn the running run opened, and the only one its state settles. */
   readonly activeAssistantId?: string
+  /**
+   * Turns a correction closed, mapped to the turn that carries what the
+   * provider writes next. A provider may keep addressing the turn the operator
+   * interrupted; arrival order is what the transcript shows, so that content
+   * belongs below the correction rather than inside the answer above it.
+   */
+  readonly supersededAssistants?: ReadonlyMap<string, string>
   readonly todos: readonly TodoItem[]
   readonly title?: string
   readonly configOptions?: readonly SessionConfigOption[]
@@ -153,12 +161,9 @@ function onMessage(
     : next
 }
 
-function withLastAssistant(
-  state: ProjectorState,
-  patch: (message: ProjectedMessage) => ProjectedMessage
-): ProjectorState {
-  const id = latestAssistantId(state.messages)
-  return id === undefined ? state : onMessage(state, id, "assistant", patch)
+/** The turn that carries what a superseded turn's id addresses from now on. */
+function addressed(state: ProjectorState, messageId: string) {
+  return state.supersededAssistants?.get(messageId) ?? messageId
 }
 
 /** The turn the run opened, while it is still part of the projection. */
@@ -203,9 +208,10 @@ function applyToolCall(
 ): ProjectorState {
   if (!patch) return state
   const aos = AosToolCallMetaSchema.safeParse(meta)
-  const messageId =
+  const named =
     toolCallOwner(state.messages, patch.toolCallId)?.id ??
     (aos.success ? aos.data.messageId : latestAssistantId(state.messages))
+  const messageId = named === undefined ? undefined : addressed(state, named)
   if (messageId === undefined) return state
   const args = aos.success
     ? { argsText: aos.data.argsText, argsTextDelta: aos.data.argsTextDelta }
@@ -253,11 +259,13 @@ function applyIdle(
       : { type: "complete", reason: "stop" }
   const id = activeAssistantId(state)
   // A run that wrote no turn settles the Session alone: the history before it
-  // keeps the status it was projected with.
+  // keeps the status it was projected with. Only the run a correction
+  // interrupted can address the turn it superseded, so that mapping ends here.
   const settled: ProjectorState = {
     ...state,
     execution,
     activeAssistantId: undefined,
+    supersededAssistants: undefined,
   }
   return id === undefined
     ? settled
@@ -336,8 +344,9 @@ function applyWhole(
   update: UpdatePayload,
   meta: unknown
 ): ProjectorState {
-  const messageId = text(update.messageId)
-  if (messageId === undefined) return state
+  const named = text(update.messageId)
+  if (named === undefined) return state
+  const messageId = addressed(state, named)
   const status = kind === "agent_message" ? replayedStatus(meta) : undefined
   return onMessage(state, messageId, roleOf(kind), (message) => {
     const replaced = replaceBlocks(
@@ -354,10 +363,10 @@ function applyChunk(
   kind: string,
   update: UpdatePayload
 ): ProjectorState {
-  const messageId = text(update.messageId)
+  const named = text(update.messageId)
   const block = update.content
-  if (messageId === undefined || !isContentBlock(block)) return state
-  return onMessage(state, messageId, roleOf(kind), (message) =>
+  if (named === undefined || !isContentBlock(block)) return state
+  return onMessage(state, addressed(state, named), roleOf(kind), (message) =>
     appendBlock(message, sourceOf(kind), block)
   )
 }
@@ -456,7 +465,43 @@ function carriesArtifact(message: ProjectedMessage, id: string) {
   )
 }
 
-/** `_aos/artifact` and `_aos/steer_accepted` land as message data parts. */
+/**
+ * A mid-turn correction reads as what it is: an ordinary user turn at the tail,
+ * in arrival order. Appending it seals the streaming turn, so the output the
+ * redirected run writes next opens a fresh assistant turn below the correction.
+ * The id is derived from the request, so a replay grants one correction once.
+ */
+function applyCorrection(
+  state: ProjectorState,
+  params: unknown
+): ProjectorState {
+  const parsed = AosSteerAcceptedNotificationSchema.safeParse(params)
+  if (!parsed.success) return state
+  const id = steerMessageId(parsed.data.requestId)
+  if (state.messages.some((message) => message.id === id)) return state
+  // The turn the correction interrupts has written all it will here: the run's
+  // idle settles only the turn it opens next, so this one settles now, and
+  // whatever the provider still addresses to it lands in the turn below.
+  const supersededId = activeAssistantId(state)
+  const sealed =
+    supersededId === undefined
+      ? state
+      : {
+          ...onMessage(state, supersededId, "assistant", (message) =>
+            withStatus(message, { type: "complete", reason: "stop" })
+          ),
+          supersededAssistants: new Map([
+            ...(state.supersededAssistants ?? []),
+            [supersededId, `${supersededId}:after:${parsed.data.requestId}`],
+          ]),
+        }
+  const messages = withMessage(sealed.messages, id, "user", (message) =>
+    appendBlock(message, "message", { type: "text", text: parsed.data.text })
+  )
+  return { ...withMessages(sealed, messages), activeAssistantId: undefined }
+}
+
+/** The extension notifications the projection folds beside `session/update`. */
 export function applyNotification(
   state: ProjectorState,
   method: string,
@@ -466,8 +511,9 @@ export function applyNotification(
     const parsed = AosArtifactNotificationSchema.safeParse(params)
     if (!parsed.success) return state
     const { artifact } = parsed.data
-    const messageId = parsed.data.messageId ?? latestAssistantId(state.messages)
-    if (messageId === undefined) return state
+    const named = parsed.data.messageId ?? latestAssistantId(state.messages)
+    if (named === undefined) return state
+    const messageId = addressed(state, named)
     return onMessage(state, messageId, "assistant", (message) =>
       carriesArtifact(message, artifact.id)
         ? message
@@ -475,11 +521,7 @@ export function applyNotification(
     )
   }
   if (method !== AOS_METHODS.notify.steerAccepted) return state
-  const parsed = AosSteerAcceptedNotificationSchema.safeParse(params)
-  if (!parsed.success) return state
-  return withLastAssistant(state, (message) =>
-    appendData(message, STEER_ACCEPTED_DATA_NAME, parsed.data)
-  )
+  return applyCorrection(state, params)
 }
 
 /**

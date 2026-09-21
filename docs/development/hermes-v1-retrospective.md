@@ -1,14 +1,18 @@
 # Hermes V1 retrospective
 
+> **Historical (2026-09-15).** "AG-UI" below refers to the retired browser
+> wire; the proxy-owned run vocabulary in `packages/proxy/core/events.ts` kept
+> its event names. The browser now speaks ACP v2 (`docs/runtimes/acp.md`).
+
 Hermes V1 moved provider execution out of the browser and established the
-server-side runtime seam used by the normalized AOS and AG-UI clients. The most
-important result was not the Hermes HTTP client or WebSocket itself. It was the
-separation between provider mechanics, logical execution, AG-UI segments, and
+server-side runtime seam used by the normalized AOS proxy. The most important
+result was not the Hermes HTTP client or WebSocket itself. It was the separation
+between provider mechanics, logical execution, run-vocabulary segments, and
 browser presentation.
 
 This retrospective records causal lessons. The normative decisions remain in
-the [gateway architecture](../design/aos-runtime-gateway-architecture.md) and
-[V1 design](../design/aos-runtime-gateway-v1.md).
+the [gateway architecture](../design/aos-runtime-gateway-architecture.md). The
+[V1 design](../design/aos-runtime-gateway-v1.md) is a dated completion record.
 
 ## What worked
 

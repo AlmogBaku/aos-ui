@@ -1,783 +1,507 @@
 # AOS runtime gateway architecture
 
-This document defines the target architecture for the AOS runtime gateway. It
-is normative: implementations may change internally, but they must preserve the
-interfaces, ownership rules, isolation, and observable behavior described here.
+This document describes the shipped proxy server. Every H2 is tagged
+`Status: Implemented` or `Status: Target (not implemented)`. All target
+content is collected in [§19 Target](#19-target-not-implemented).
 
-## Purpose
+**Related references** (this doc links, not restates):
 
-AOS presents one workspace across multiple independently operated agent
-harnesses. The gateway authenticates users, authorizes every operation, keeps
-native credentials and protocols server-side, and translates each harness into
-one normalized browser protocol.
+- Full `_aos/*` wire table → [`docs/runtimes/acp.md`](../runtimes/acp.md)
+- Adapter obligations and five lifetimes → [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md)
+- Operator-facing summary → [`docs/architecture.md`](../architecture.md)
+- Hermes lifecycle → [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md)
+  and [`TURN-LIFECYCLE.md`](../../packages/proxy/adapters/hermes/TURN-LIFECYCLE.md)
 
-The architecture supports:
+---
 
-- multiple isolated tenants;
-- multiple runtime definitions per tenant, including multiple definitions of
-  the same harness kind;
-- multiple authenticated users and scoped guests;
-- concurrent Sessions and runs across runtime definitions;
-- gateway-owned OIDC, SAML, trusted-assertion, and service authentication;
-- shared or principal-specific native identities;
-- browser and gateway reconnect without prompt duplication;
-- provider-specific connection lifecycles behind one runtime adapter seam.
+## 1. Scope and legend {#1-scope-and-legend}
 
-The gateway is not an agent harness or conversation database. Native runtimes
-remain authoritative for Agents, Sessions, messages, executions, tools,
-interactions, and durable history.
+**Status: Implemented**
 
-## System shape
+The AOS proxy is a Bun HTTP + WebSocket server that sits between the browser
+and one configured native AI runtime. It normalizes the native API behind:
 
-```text
-React + assistant-ui
+- one ACP v2 WebSocket per connection (operator and guest lanes)
+- REST byte and discovery routes
+
+The proxy holds no workspace database. The native runtime owns all durable
+state. The browser works only with the normalized surface.
+
+**Legend used in this document:**
+
+| Term | Meaning |
+|---|---|
+| ACP | Agent Client Protocol v2 (`@agentclientprotocol/sdk/experimental/v2`) |
+| Session | One conversation, identified by a public `threadId` the browser supplies |
+| Run segment | One continuous provider execution between starts and stops |
+| Coordinator | `SessionCoordinator` — the process-local run admission and journal |
+| Attachment | Per-connection view of one Session on the coordinator |
+| Lane | `operator` or `guest` — the ACP connection kind |
+
+---
+
+## 2. System shape {#2-system-shape}
+
+**Status: Implemented**
+
+One deployment = one runtime.
+
+```
+browser (operator or guest)
         |
-        | normalized AOS REST (bytes/discovery) + ACP v2 WebSocket
+        | ACP v2 WebSocket  /api/aos/v1/acp  or  /api/guest/v1/acp
+        | REST bytes+discovery  /api/aos/v1/*  or  /api/guest/v1/*
         v
-+---------------------------------------------------------------+
-| AOS gateway                                                   |
-|                                                               |
-| Identity -> authorization -> authorized request context       |
-|                              |                                |
-|                        workspace module                       |
-|                              |                                |
-|                       runtime directory                       |
-|                  +-----------+-----------+                    |
-|                  |           |           |                    |
-|               Hermes      OpenClaw    OpenCode                |
-|               adapter      adapter      adapter                |
-|                  |           |           |                    |
-|             native clients and provider-specific transports   |
-+---------------------------------------------------------------+
+Bun HTTP server  (server.ts:startProxyServer → bunServe)
+        |
+        | Hono app + ACP socket mount  (cli/serve.ts:117-163)
+        v
+AcpConnectionContext  (acp/types.ts:53-67)
+        |
+        | per-connection Session registry  (acp/agent-sessions.ts)
+        v
+SessionCoordinator  (core/session-coordinator.ts:378)
+        |
+        | ServerRunEngine
+        v
+ServerRuntime / ServerRunEngine  (core/runtime.ts:67-100, 192-280)
+        |
+        | one adapter  (adapters/create-runtime.ts:12-21)
+        v
+Hermes | OpenClaw | OpenCode  (native transport)
 ```
 
-The browser uses one provider-neutral remote runtime. It never imports a native
-SDK, understands a native payload, receives a native credential, or connects to
-a harness endpoint.
+`createConfiguredProxy` (`composition.ts:26-36`) loads secrets once and
+constructs one `RuntimeInstance` shared by every listener.
 
-The gateway is a modular TypeScript application. Its modules may run in one
-process or be distributed without changing the browser protocol or runtime
-adapter interface.
+---
 
-## Domain model
+## 3. Trust boundaries {#3-trust-boundaries}
 
-The following terms are canonical.
+**Status: Implemented**
 
-### Tenant
+Every REST response carries security headers (`app.ts:50-56`):
 
-A Tenant is the top-level security and configuration isolation scope. Runtime
-definitions, memberships, signing keys, policies, and upstream credentials
-belong to exactly one Tenant.
-
-Resources and live connections are never shared across Tenants, even when two
-Tenants configure the same upstream URL or secret.
-
-### Workspace
-
-A Workspace is the user-facing projection of one Tenant. It combines the
-authorized runtime definitions and their normalized Agent catalogs without
-merging their native identities or persistence.
-
-### Principal
-
-A Principal is an authenticated human, service, or guest. Authentication proves
-the Principal's identity; it does not itself grant access to a Tenant or
-resource.
-
-### Membership and grant
-
-A Membership associates a Principal with a Tenant and its roles. A Grant is the
-effective, request-time authorization scope derived from Membership, policy, or
-an invitation. A Grant identifies allowed runtime definitions, Agents,
-Sessions, operations, fields, and expiry.
-
-### Runtime definition
-
-A Runtime definition is one configured harness deployment within a Tenant. It
-has a stable `runtimeId`, harness kind, display metadata, endpoint, credential
-policy, and runtime-specific configuration.
-
-Two definitions remain distinct even when they use the same harness kind,
-endpoint, or credential. The gateway never silently merges configured runtime
-definitions.
-
-### Upstream identity
-
-An Upstream identity is the exact native authentication identity selected for a
-Runtime definition. It may be a gateway-owned service token, a cookie jar, a
-device identity, or another native credential set.
-
-A shared service credential creates one Upstream identity for authorized users
-of that Tenant and Runtime definition. Principal-specific native authentication
-creates a different Upstream identity for each authenticated Principal.
-
-### Runtime instance
-
-A Runtime instance is the live server adapter and native client associated with
-one Runtime definition and Upstream identity. Its full identity is:
-
-```text
-tenantId / runtimeId / upstreamIdentityId
+```
+cache-control: no-store
+content-security-policy: default-src 'none'; frame-ancestors 'none'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
 ```
 
-The Runtime instance owns native connections, subscriptions, replay state, and
-disposal. Browser connections do not own it.
-
-### Resource references
+The guest listener adds its own CSP to static and runtime-config responses
+(`cli/serve.ts:27-33`).
 
-AOS scopes native identities structurally:
+Origin is checked at every write surface: the ACP upgrade
+(`acp/service.ts:55`), REST upload routes (`routes/content.ts:59`), and the
+invitation endpoint (`routes/invitations.ts:19-21`).
 
-```ts
-type AgentRef = {
-  runtimeId: string
-  agentId: string
-}
+All log values pass through `redactForLog` (`redaction.ts`), which replaces
+credential-bearing field values with `"[REDACTED]"`, strips query strings and
+credentials from URLs, and reports every `Error` as `"Upstream request failed"`.
+Secret files are absolute paths read once at startup (`secrets.ts:6-23`); the
+secret bytes never appear in config, logs, or responses.
 
-type SessionRef = AgentRef & {
-  sessionId: string
-}
+---
 
-type RunRef = SessionRef & {
-  runId: string
-}
-```
-
-`agentId` and `sessionId` retain stable native identities whenever the provider
-supplies them. AOS does not encode provider names or runtime IDs into native
-IDs. Tenant identity comes from the authorized request context rather than
-untrusted resource parameters.
+## 4. Listeners and lanes {#4-listeners-and-lanes}
 
-## Trust model
+**Status: Implemented**
 
-The browser, public request headers, native payloads, reconnect cursors, and
-resource identifiers are untrusted input.
+### 4.1 Operator lane
 
-The gateway owns:
+No application login. Network access grants full operator context; `principalId`
+defaults to `"operator"` (`acp/service.ts:50`). Routes: static assets,
+`/runtime-config.json`, `/api/aos/v1/*`, `/api/aos/v1/acp` (WebSocket,
+`cli/serve.ts:118`).
 
-- user authentication and AOS session issuance;
-- Tenant and Principal resolution;
-- authorization and invitation verification;
-- runtime selection and configuration;
-- upstream URLs, secrets, cookie jars, and device identities;
-- native authentication and connection lifecycle;
-- Agent and Session ownership validation;
-- protocol validation, limits, redaction, and safe error translation;
-- run admission, idempotency, and reconnect authorization.
+### 4.2 Guest lane
 
-Native runtimes own:
+Physically separate listener and origin (validated different from operator,
+`config.ts:166-184`). JWT: type `aos-guest-invitation+jwt`, HS256, issuer
+`aos-invite`, audience `aos-guest` (`auth/guest-invitation.ts:6-9`). Claims
+include `deploymentId`, `runtimeId`, `agentId`, `ref`, optional `firstTurn`,
+expiry. Default TTL 259 200 s (`config.ts:159`).
 
-- Agent definitions and native visibility metadata;
-- Session identity, persistence, messages, and history;
-- native execution, tools, questions, approvals, and artifacts;
-- native models, context accounting, Todos, and activity where supported.
+API prefix `/api/guest/v1`; ACP at `/api/guest/v1/acp`. Paths `/auth` and
+`/hermes` → 404; non-health `/api/*` → 404 (`cli/serve.ts:23,44-62`).
 
-The browser owns presentation, drafts, navigation, locale, accessibility,
-microphone capture, and audio playback. Browser state is never authoritative
-provider input.
+An unauthenticated guest's `initialize` omits runtime info (`acp/agent.ts:320`).
+`auth/login` redeems the token. Connection closes on expiry (`guest/acp.ts:191-200`).
 
-## Identity and authentication
+Guest extensions (`acp/agent.ts:101-112`): `steer:false`, `rewind:false`,
+`artifacts:true`, `agents:false`, `invalidation:false`, `activity:false`,
+`readState:false`, `focus:false`, `guestProjection:true`.
 
-The gateway exposes one identity module with adapters for established
-authentication protocols:
+Allowed methods for a redeemed guest (`acp/agent.ts:89-95`): `session/resume`,
+`session/prompt`, `session/cancel`, `session/close`, `_aos/session/focus`.
 
-```text
-OIDC -------------------+
-SAML -------------------+--> Principal --> AOS session
-trusted signed assertion+
-mTLS/service identity --+
-```
-
-Public browser authentication uses redirects or form posts appropriate to the
-configured protocol. After validation, the gateway issues a short-lived,
-signed, HttpOnly, Secure, SameSite cookie. Identity-provider tokens and
-assertions are discarded unless a protocol requires bounded server-side
-continuation state.
+### 4.3 Shared runtime instance
 
-A trusted identity proxy may authenticate users before the gateway. It sends a
-signed identity assertion over a private authenticated ingress after removing
-client-supplied identity headers. A shared signing key or private key is
-server-to-server material and is never shipped to browser code.
-
-User authentication and native runtime authentication are separate:
-
-- user authentication establishes a Principal;
-- authorization grants that Principal access to Tenant resources;
-- native authentication selects an Upstream identity for a Runtime definition.
-
-Gateway-owned service credentials are loaded from a secret manager or secret
-file reference. Principal-specific native cookies, tokens, or device material
-are encrypted at rest and keyed by Tenant, Runtime definition, and Principal.
+Both listeners share one `RuntimeInstance`. Per-connection `SessionRows` and
+`AttachmentStageRegistry` are lane-local (`cli/serve.ts:117-141`).
 
-## Authorization and guest access
+---
 
-Every request is evaluated from an authorized context:
+## 5. The single ACP socket {#5-the-single-acp-socket}
 
-```ts
-type AuthorizedContext = {
-  tenantId: string
-  principalId: string
-  grant: Grant
-}
-```
-
-The runtime adapter is selected only after authorization. Native resource
-existence is then verified through the selected adapter. A resource ID from the
-browser never proves ownership or access.
+**Status: Implemented**
 
-The effective capability for an operation is the intersection of:
-
-```text
-native capability x Tenant policy x Principal grant
-```
-
-Guests and operators use the same normalized protocol. A guest invitation is a
-signed, expiring grant bound to its Tenant, Runtime definition, Agent and/or
-Session scope, permitted operations, audience, and deployment. Guest output is
-projected through the grant before serialization.
-
-When an operator and guest use the same gateway-owned native service identity,
-they share the same Runtime instance and native connection. Isolation is
-enforced by authorization, event routing, reconnect binding, and outbound
-projection rather than by duplicating the native connection.
-
-Guest projections exclude all data outside the explicit grant, including
-privileged roles, hidden Agents, native metadata, provider paths, credentials,
-private tool payloads, approval internals, and native reconnect positions.
-
-## Runtime directory
-
-The runtime directory is the shared instance-routing module. It has two
-responsibilities:
-
-1. list the Runtime definitions visible to an authorized context;
-2. resolve one authorized Runtime instance from `tenantId`, `runtimeId`, and
-   the selected Upstream identity.
-
-It does not implement WebSockets, SSE, provider retries, Session attachment, or
-payload conversion. Those behaviors belong to the selected adapter.
-
-The directory maintains one Runtime instance for each exact instance identity:
-
-```text
-tenantId / runtimeId / upstreamIdentityId
-```
-
-Concurrent resolution of the same identity is single-flight. Instance creation
-either yields one ready adapter or one normalized failure. An instance may be
-unloaded only when it has no active runs, pending interactions, subscriptions,
-or adapter-specific retention requirement. Gateway shutdown disposes all
-instances gracefully.
+The browser opens one WebSocket per surface. The 101 response carries
+`Acp-Connection-Id` (`acp/service.ts:15`), a UUID the proxy mints per
+connection.
 
-## Runtime adapter seam
-
-`ServerRuntime` is the provider-neutral adapter interface. It exposes runtime
-operations directly in normalized protocol terms and reports operation-specific
-capabilities. It does not introduce a second canonical workspace model.
+**Handshake** (`initialize`): the response `_meta.aos` carries `version`,
+`lane`, and the `extensions` map (`protocol/acp.ts:100-120`; `acp/agent.ts:318-346`).
+Guests receive the `GUEST_EXTENSIONS` map and an `authMethods` list with the
+invite method.
 
-The interface covers:
+**Per-connection Session ownership**: the per-connection `Sessions` object
+(`acp/agent-sessions.ts:221-303`) maps public Session ids to owning Agent ids.
+Only Sessions listed, created, or resumed on this connection are addressable.
+`adopt` trusts a client-supplied `agentId` for `session/resume` until the
+provider read confirms it.
 
-- runtime status and capability values;
-- Agent catalog and visibility;
-- Session catalog, lifecycle, and history;
-- ACP v2 run stream, session lifecycle, and reconnect over WebSocket;
-- typed active-run controls, including Stop and optional steering;
-- questions, approvals, reactions, and feedback;
-- attachments, artifacts, and native audio operations;
-- models and context;
-- Session Todos as ACP `plan_update` notifications with `_meta.aos.todos`, restored through normalized history;
-- scoped invalidation subscriptions;
-- graceful disposal.
+**Upgrade rules**: the server checks the Origin header and refuses upgrades
+that do not match `publicOrigin`. A cap of `operatorEventPeers` is enforced per
+socket mount (`cli/serve.ts:123,139`).
 
-Each adapter owns its native implementation:
-
-- official or upstream-derived native client;
-- native authentication mechanics;
-- payload schemas and validation;
-- request and event correlation;
-- native connection topology;
-- Session attachment and release;
-- replay and authoritative reconciliation;
-- native-to-normalized conversion;
-- safe public error classification.
+For the full method table see [`docs/runtimes/acp.md`](../runtimes/acp.md).
 
-Capabilities are structured values containing choices, limits, scopes,
-concurrency rules, and unavailability reasons. They are not reduced to booleans.
+---
 
-ACP v2 over WebSocket is the browser run transport. The `packages/proxy/acp/` layer translates the proxy-owned run vocabulary to ACP; it is not implemented as another runtime adapter.
+## 6. Run vocabulary and ACP translation {#6-run-vocabulary-and-acp-translation}
 
-## Native connection topology
+**Status: Implemented**
 
-Connection lifecycle varies by harness and remains private to its adapter.
+The proxy owns a closed run vocabulary defined in `core/events.ts:14-33`
+(`RunEventKind`). Native adapters emit these event kinds; the ACP layer
+translates them to browser-facing ACP payloads. Neither end depends on the
+other's wire format.
 
-| Runtime  | Native client and connection model                                                                                                                                            |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hermes   | Authenticated HTTP plus one multiplexed JSON-RPC WebSocket for each Runtime instance. The socket carries requests and events for many Sessions.                               |
-| OpenClaw | One official `GatewayClient` WebSocket for each Runtime instance. The socket multiplexes RPCs and events while Session subscriptions are acquired and released independently. |
-| Fixture  | Deterministic in-process behavior with the same runtime interface and no native transport.                                                                                    |
-| OpenCode | One official SDK client for each configured server and workspace scope. Active Session observation uses scoped, abortable SSE streams.                                        |
-
-No common socket pool or transport abstraction is imposed across adapters. The
-shared concern is Runtime-instance ownership and routing, not the shape of the
-native connection.
-
-### Hermes lifecycle
-
-A Hermes Runtime instance maintains one long-lived multiplexed WebSocket and
-uses HTTP for authoritative catalogs, history, and content operations. JSON-RPC
-responses correlate by request ID; events route by live `session_id` and
-per-Session sequence.
-
-Hermes durable stored Session IDs remain distinct from process-local live
-Session IDs. Live IDs never cross the normalized protocol. The adapter maps
-normalized Stop to native `session.interrupt` and optional active-turn steering
-to native `session.redirect`; no shared proxy module uses those native method
-names.
-
-A live Hermes Session is retained while it is running, stopping, waiting for a
-question or approval, reconciling, or within a bounded warm-idle grace period.
-Relevant authorized Session activity refreshes that grace without creating a
-permanent browser-owned lease. When no condition retains it, the adapter may
-call `session.close` to release the live Session without deleting durable
-history. A later `session.resume` reattaches it.
-
-The adapter obtains a fresh WebSocket ticket for every native reconnect,
-restores durable Session bindings, replays from native epoch and sequence where
-available, and then confirms state through authoritative reads.
-
-### OpenClaw lifecycle
-
-The OpenClaw adapter maintains one official Gateway client for each Runtime
-instance. Stable routing uses native Session keys; transcript generation IDs
-and run IDs retain their separate native meanings.
-
-Session subscriptions are reference-counted inside the adapter. Because native
-events are not replayed across a lost Gateway connection, reconnect resubscribes
-and reconciles authoritative history, in-flight run state, and active run IDs
-before incremental delivery resumes.
-
-### OpenCode lifecycle
-
-The OpenCode adapter uses the official SDK for normalized operations. Durable
-Session IDs are stable. Each observed Session owns an abortable SSE stream; the
-stream is released when no run, pending interaction, subscriber, or reconnect
-grace retains it.
-
-Reconnect reopens observation from the available provider position and
-reconciles Session history and status before accepting another turn.
-
-## Session retention
-
-Session retention has three independent lifetimes. Implementations must not
-couple them to a browser tab or force different providers through one generic
-connection lease.
-
-### Durable Session lifetime
-
-The native runtime owns durable Session persistence. Closing a browser,
-releasing native observation, disconnecting a gateway worker, or expiring an
-idle timer never deletes a durable Session or its history. A durable Session is
-deleted or archived only by an explicit authorized lifecycle operation and the
-provider's native retention policy.
-
-The gateway stores no duplicate conversation record. After process restart it
-discovers durable Sessions and reconstructs their normalized state from the
-authoritative runtime.
-
-### Logical run lifetime
-
-The shared run coordinator retains a normalized run while it is running,
-stopping, or waiting for a question or approval. Browser disconnection removes
-only that downstream consumer. It does not settle the run or discard its
-pending interaction. Terminal native state releases the run; reconnect finds
-the existing run or reconstructs it from the provider's authoritative state.
-
-This is the shared cross-runtime rule. It does not imply that every provider
-needs an AOS-owned live Session, idle timer, or native close operation.
-
-### Native attachment lifetime
-
-Each adapter implements only the native attachment behavior its provider
-requires. Any adapter-owned attachment is keyed by the full scope:
-
-```text
-tenantId / runtimeId / upstreamIdentityId / agentId / sessionId
-```
-
-- Hermes keeps one single-flight durable-to-live Session binding. Active runs,
-  Stop settlement, pending interactions, in-flight reconciliation, and a
-  bounded warm-idle grace retain that binding. When it is safely idle, the
-  adapter calls `session.close` without deleting durable history. A later
-  operation uses `session.resume` and authoritative reconciliation.
-- OpenClaw owns durable Session, run, idle/reset, and restart-recovery policy in
-  its Gateway. AOS does not duplicate that policy or close an OpenClaw Session
-  when a browser disconnects. The adapter reference-counts only the native
-  roster and selected-Session subscriptions needed by its consumers, then
-  resubscribes and reconciles after reconnect.
-- OpenCode owns its native Session lifetime. Its adapter starts and aborts
-  scoped event observation as required by active normalized consumers and
-  reconciles through the official SDK. It does not inherit Hermes close/resume
-  semantics.
-
-Attachment, resume, and subscription acquisition are single-flight where the
-native API requires them. Under resource pressure, an adapter may release only
-native resources that are not needed by active work or a pending interaction;
-otherwise it applies bounded admission or backpressure.
-
-### Runtime connection lifetime
-
-The Runtime instance owns its native connection independently of Session
-attachments. Hermes and OpenClaw multiplex attached Sessions over one
-long-lived connection for the exact Runtime instance identity; OpenCode owns
-its SDK client and creates scoped observation streams only where needed.
-
-Releasing one Session therefore does not close a shared runtime connection or
-affect another Session. A Runtime instance may be disposed only after it has no
-active runs, pending interactions, observers, reconnect grace, or other
-adapter-specific retention requirement.
-
-Retention state is process-local coordination, not durable workspace state. If
-a worker or native connection fails, the new owner rebuilds run observation
-and any provider-required attachments from authorized demand, pending native
-state, and authoritative reads. It never resends a prompt merely to recreate
-an attachment.
-
-## Workspace protocol
-
-The external protocol has two conceptual planes.
-
-### Workspace control plane
-
-Strict versioned REST operations expose:
-
-- authentication state;
-- visible Runtime definitions and status;
-- runtime-scoped Agent catalogs and visibility;
-- runtime- and Agent-scoped Session catalogs;
-- Session lifecycle and paginated history;
-- capabilities, models, and context;
-- reactions, attachments, artifacts, audio, and invitations.
-
-Session Todos travel as ACP `plan_update` notifications carrying `_meta.aos.todos`
-and are restored through normalized history; they are not a parallel polling
-contract. Session execution status derives from the coordinator and ACP lifecycle
-state.
-
-Representative resource paths are:
-
-```text
-/api/aos/v1/runtimes
-/api/aos/v1/runtimes/{runtimeId}/agents
-/api/aos/v1/runtimes/{runtimeId}/agents/{agentId}/sessions
-/api/aos/v1/runtimes/{runtimeId}/agents/{agentId}/sessions/{sessionId}/history
-```
-
-The Tenant is derived from the authorized context. Every supplied Runtime,
-Agent, and Session ID is validated within that Tenant and grant.
-
-Agent catalogs may be loaded concurrently across visible Runtime definitions so
-the workspace can display all authorized Agents. Session catalogs remain
-runtime- and Agent-scoped. History loads only for an opened Session. One
-unavailable runtime degrades independently without making other runtime
-definitions unavailable.
-
-REST is authoritative. Catalog and history responses have deterministic
-ordering, bounded pages, stable native identities, and explicit partial or
-unavailable states.
-
-### Session run plane
-
-ACP v2 native methods and events represent:
-
-- messages and multimodal input (`session/prompt`, `agent_message_chunk`, `agent_thought_chunk`);
-- run lifecycle and streaming (`session/resume`, `tool_call_update`, `state_update`);
-- session management (`session/new`, `session/list`, `session/cancel`, `session/close`, `session/delete`);
-- config options, usage, pending requests, and plans (`session/set_config_option`, `usage_update`, `session/request_permission`, `elicitation/create`, `plan_update`);
-- terminal outcomes and stop reasons.
-
-The gateway accepts exactly one authorized new user turn or one bound interrupt
-response for a run. Browser history, tools, state, and context are never treated
-as authoritative provider input.
-
-`_aos/*` extension methods and `_meta.aos` payloads defined in
-`packages/protocol/acp.ts` are permitted only for run-adjacent behavior absent
-from core ACP. Raw provider events are rejected.
-
-### Active-run control plane
-
-ACP defines the input that starts or resumes a run and the event stream it
-produces. Active-run control travels over the same ACP socket as `_aos`
-extension requests:
-
-- `session/cancel` stops the current native execution;
-- `_aos/session/steer` delivers a text correction to that same execution when
-  the capability is available.
-
-These controls use the same authorization, Session scope, active-run identity,
-and coordinator as the run stream. They do not create another run. The
-provider-neutral run handle exposes optional steering; only a concrete adapter
-translates it into a native operation. The proxy emits `_aos/steer_accepted`
-as a replayable notification without exposing raw provider events.
-
-### Invalidation plane
-
-One normalized AOS WebSocket multiplexes scoped invalidations and reconnect
-positions for a browser connection. Subscriptions identify structured Runtime,
-Agent, and Session scopes. The socket does not replace REST authority and does
-not expose provider events.
-
-An invalidation says that a scope may have changed. The browser repeats the
-corresponding normalized read. Reads subscribe before fetching, mark overlapping
-invalidations as dirty, reject stale generations, and repeat until a read
-completes cleanly.
-
-## Run coordination
-
-The gateway run coordinator owns protocol-level concurrency and downstream
-attachment. Its active-run identity is:
-
-```text
-tenantId / runtimeId / agentId / sessionId
-```
-
-One Session admits at most one new turn at a time unless the native capability
-explicitly supports a stronger concurrency model. Duplicate submissions with
-the same idempotency identity return the known run state. A different turn while
-the Session is active returns a normalized conflict.
-
-Each run records its initiating Principal. Observation and control are distinct
-permissions. Authorized collaborators may observe a run; Stop, steering, or
-interaction responses require the run-control grant. Tenant policy determines
-whether operators other than the initiator receive that grant.
-
-Steering requires an active running execution and an exact expected run ID. It
-is unavailable while the execution is stopping, uncertain, idle, or waiting
-for input. Request IDs are deduplicated per execution; identical retries return
-the recorded result and conflicting reuse fails. Steering and Stop serialize
-through the same control lane.
-
-Disconnecting a browser stream detaches only that downstream consumer. It does
-not stop the native run, release a pending question, or dispose the Runtime
-instance. The run coordinator retains terminal settlement independently of the
-browser connection.
-
-Stop remains `stopping` until a native terminal event or authoritative idle
-result proves settlement. A provider-queued steering result is already accepted
-and is never resubmitted. Lost control acknowledgement produces an uncertain
-state rather than a false result or automatic retry.
-
-## Questions and approvals
-
-Questions and approvals are normalized interrupts belonging to a run. The browser receives them as ACP `session/request_permission` or `elicitation/create` requests. Each interrupt has a stable request ID, response schema, scope, and authorized control policy.
-
-When an interrupt occurs:
-
-1. the adapter validates and emits the normalized interrupt;
-2. the native Session remains retained while waiting;
-3. normalized interrupt metadata is restored from authoritative history, with
-   adapter-private native discovery when reconciliation requires it;
-4. an authorized response resumes the same run;
-5. duplicate identical responses are idempotent;
-6. conflicting, expired, or uncertain responses produce distinct normalized
-   outcomes.
-
-An interrupted run is not represented as a completed conversation followed by
-a synthetic new turn. Provider-native question and approval semantics are
-preserved exactly.
-
-## Reconnect and reconciliation
-
-Browser reconnect is independent of the lifetime of any previous browser
-socket:
-
-```text
-authenticate and authorize
-  -> read authoritative Session history and restored interrupt metadata
-  -> locate or reconstruct the run
-  -> restore native attachment or subscription
-  -> replay from the provider position when supported
-  -> reconcile authoritative status and history
-  -> resume normalized delivery
-```
-
-Reconnect cursors are bounded, authenticated values bound to:
-
-- protocol version and key ID;
-- deployment and expiry;
-- Tenant and Runtime definition;
-- Principal or invitation grant revision;
-- Agent, Session, and run;
-- native epoch, sequence, or equivalent provider position.
-
-Cursors authorize resumption; they are not authoritative data. A cursor from a
-different scope is rejected.
-
-The gateway never automatically resends a prompt or interaction response after
-losing its acknowledgement. It returns `uncertain` and reconciles native state.
-Provider message IDs, run IDs, and event sequences are used to deduplicate
-replay. When replay is unavailable or truncated, authoritative history replaces
-incremental state.
-
-Pending questions and approvals are reconstructed from normalized history
-metadata, native Session state, or authoritative native replay. A browser
-reload therefore presents the same interrupt and can resume the same run
-without a public pending-interaction polling endpoint.
-
-## Errors and availability
-
-Adapters classify native failures into a small normalized error vocabulary.
-Every public error contains a stable code and safe human-readable description;
-it may also contain retryability and request correlation metadata. Native URLs,
-response bodies, credentials, filesystem paths, stack traces, and provider
-payloads are never serialized.
-
-The protocol distinguishes:
-
-- AOS authentication required;
-- native runtime authentication required;
-- forbidden scope;
-- unsupported or capability-unavailable operation;
-- malformed or oversized input;
-- resource not found within the authorized scope;
-- revision or run conflict;
-- provider temporarily unavailable;
-- connection interrupted;
-- uncertain mutation;
-- gateway failure.
-
-Runtime availability is independent. Failure of one Runtime instance does not
-invalidate unrelated instances in the same Workspace.
-
-## State and persistence
-
-The gateway persists only its own control plane:
-
-- Tenants and memberships;
-- Runtime definitions and policies;
-- references to secrets and encrypted principal-specific native credentials;
-- identity-provider configuration;
-- signing and encryption key metadata;
-- invitation policy and optional revocation state;
-- security audit records that contain no native secret or conversation body.
-
-Native providers remain the durable source for Agents, Sessions, messages,
-runs, tools, interactions, artifacts, and workspace history.
-
-Process-local state includes:
-
-- Runtime instances and native connections;
-- active-run admission and settlement;
-- Session observation and interaction retention;
-- downstream subscribers;
-- bounded replay buffers required by a native connection.
-
-The gateway does not maintain a generalized event store, conversation mirror,
-materialized workspace cache, or provider-independent Session database.
-
-## Scaling and ownership
-
-A single gateway process may host many Tenants and Runtime instances. When the
-gateway is replicated, each exact Runtime-instance identity has one active
-owner:
-
-```text
-tenantId / runtimeId / upstreamIdentityId -> gateway worker
-```
-
-Requests and downstream streams for that identity route to its owner. Ownership
-may use consistent routing or a small distributed assignment module; it must
-not allow two workers to issue conflicting turns on the same native Session.
-
-If an owner fails, another worker reconstructs the Runtime instance from the
-control plane and secret store, reconnects its native client, and reconciles
-provider state. Recovery does not depend on replaying an AOS-owned conversation
-log.
-
-Static Vite assets may be served by the gateway, a CDN, or a conventional
-reverse proxy. Static delivery is not part of runtime ownership. The public
-deployment should present one origin for browser assets and normalized AOS
-traffic. TLS termination and static caching may be delegated without granting
-the proxy authority to forge identity headers.
-
-## Module layout
-
-The target source structure keeps protocol, shared gateway behavior, adapters,
-and browser code separate:
-
-```text
-packages/
-  protocol/
-    acp/
-    workspace/
-
-  gateway/
-    identity/
-    authorization/
-    control-plane/
-    runtime-directory/
-    runs/
-    events/
-    routes/
-    errors/
-    adapters/
-      hermes/
-      opencode/
-      openclaw/
-      fixture/
-    composition.ts
-    cli.ts
-
-src/
-  runtime-adapters/
-    aos/
-```
-
-The browser `aos` module is the sole remote runtime client. Gateway routes
-depend on the runtime adapter interface and never import a concrete adapter.
-Concrete adapters may have private modules for native clients, codecs,
-authentication, mapping, and connection lifecycle.
-
-Shared code is extracted only for behavior demonstrated by multiple adapters.
-Transport mechanics remain adapter-private even when two providers both use a
-WebSocket.
-
-## Architectural invariants
-
-An implementation conforms to this architecture only when all of the following
-remain true:
-
-1. The browser communicates exclusively through normalized AOS REST (bytes/discovery)
-   and ACP v2 over WebSocket.
-2. Every resource and event is scoped by Tenant and Runtime definition before
-   Agent and Session identity.
-3. Native Agent and Session IDs are stable and are not rewritten for security
-   or URL formatting.
-4. Authentication occurs in the gateway; secrets and shared keys never enter
-   the browser bundle.
-5. Authorization precedes runtime resolution and native access.
-6. Cross-Tenant Runtime instances and native connections are never shared.
-7. Users and guests sharing one authorized native identity may share its
-   Runtime instance without sharing authorization scope.
-8. Each adapter owns its native client and connection lifecycle.
-9. Browser disconnect never implies native Stop or Session deletion.
-10. Pending questions and approvals remain reconnectable and resume the same
-    run.
-11. Active-turn control is an `_aos` extension over the ACP socket, never a
-    synthetic second run; provider-specific control methods remain adapter-private.
-12. Uncertain sends, steering, and interaction responses are never retried
-    automatically.
-13. REST and provider state remain authoritative after reconnect.
-14. Capabilities preserve native choices, limits, scopes, and reasons.
-15. Provider payloads, credentials, URLs, and private metadata never cross the
-    normalized protocol.
-16. The gateway does not become a second provider workspace or conversation
-    database.
-
-## Research basis
-
-The native connection and recovery models underlying this architecture are
-documented in:
-
-- [Multi-harness AOS gateway architecture](../research/multi-harness-gateway-architecture.md)
-- [OpenClaw and OpenCode runtime transport seams](../research/opencode-openclaw-runtime-transport-seams.md)
-- [OpenClaw and OpenCode server clients](../research/opencode-openclaw-server-clients.md)
-- [Hermes Desktop gateway connection architecture](../research/hermes-desktop-gateway-connection.md)
+Every `session/update` on a run segment carries `_meta.aos.sequence` and
+`_meta.aos.runId` (`protocol/acp.ts:251-264`), so the browser can position
+cursor-bearing reconnects.
+
+**Internal CUSTOM events** emitted by the coordinator publish under internal
+names the ACP translator maps to wire notifications:
+
+| Internal name | Wire notification |
+|---|---|
+| `aos.steer.accepted` | `_aos/steer_accepted` |
+| `aos.artifact` | `_aos/artifact` |
+
+Mapping source: `acp/translate/run-events.ts:133,145-148`.
+
+History replay runs through the same translators, so the browser receives
+identical shapes whether an event is live or replayed.
+
+---
+
+## 7. SessionCoordinator and adapter ownership split {#7-sessioncoordinator-and-adapter-ownership-split}
+
+**Status: Implemented**
+
+For adapter obligations and the five lifetimes see
+[`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md).
+
+**Coordinator key facts** (`core/session-coordinator.ts`):
+
+| Fact | Location |
+|---|---|
+| Scope key: `agentId + "\0" + sessionId` | `:218` |
+| Idempotent re-admission (duplicate `runId` replays from journal) | `:511-528` |
+| Conflict (different run on non-idle scope → `ServerRunConflictError`) | `:543-549` |
+| Single-flight (`#admissions` set blocks concurrent starts) | `:551-552,578-580` |
+| Per-lane capacity: `maxActiveExecutions` / `maxGuestActiveExecutions` | `:1193-1206`; limits `config.ts:95-105` |
+| Controllers set; `#withControl` serialises stop+steer | `:514,565,746,797` |
+| Steer dedup: 256 per execution, oldest evicted | `:216,821-824` |
+| Stop states: `running` → `stopping` → terminal | `:740-769` |
+
+**Adapter engine** (`core/runtime.ts:67-100`): `start`, `recover`, `discover?`
+(post-process-loss), `stop`/`steer?` on handle, and adapter-private
+`recoveryPosition` (`{epoch, lastSeen}`, `:56-63`). All three factories
+(`hermes/factory.ts:63-71`, `openclaw/factory.ts:191-198`,
+`opencode/factory.ts:54-61`) pass the same config limits.
+
+---
+
+## 8. Interrupts {#8-interrupts}
+
+**Status: Implemented**
+
+A run segment ends in either a success or an interrupt. An interrupt carries
+one or more `PendingRequest` items (`core/events.ts:65-75`). The coordinator
+retains the execution in `waiting-for-input`.
+
+Delivery: each pending request is sent as a server→client `requestPermission`
+or `elicitation.create` call with an `interruptId` in `_meta.aos`
+(`protocol/acp.ts:315-341`; `acp/session-attachment.ts:460-511`).
+
+Answering all interrupts starts a new run segment via `session/resume` with
+the `resume[]` reply array (`acp/session-attachment.ts:522-554`;
+`session-coordinator.ts:530-541`).
+
+A stale interrupt (the execution has moved on) returns JSON-RPC error
+`-32003 staleInterrupt` (`acp/validation.ts:58-59`).
+
+On reconnect, pending requests are re-issued via `reissuePending`
+(`acp/session-attachment.ts:249-256`).
+
+---
+
+## 9. REST byte planes {#9-rest-byte-planes}
+
+**Status: Implemented**
+
+All write REST routes require the correct `Origin` header. Default JSON body
+cap 16 KiB (`routes/http.ts:61`). Stage registry: 256 entries, 300 s TTL
+(`core/attachment-stages.ts:13-22`); full → HTTP 503 `run_capacity_exceeded`.
+
+| Route | Limit |
+|---|---|
+| `POST …/attachments/stage` | 35.5 MB (`routes/content.ts:62`) |
+| `GET …/artifacts/:id` | — |
+| `POST …/audio/transcribe` | 7.5 MB (`:109`) |
+| `POST …/audio/speak` | 40 KB (`:131`) |
+| `GET /api/aos/v1/runtime` | — |
+| `POST /api/aos/v1/guest-invitations` | 16 KiB JSON |
+| `GET /api/aos/v1/healthz`, `/readyz` | — |
+
+Guest mirrors the same routes under `/api/guest/v1/` with authorization and
+smaller staging limits (`guest/context.ts:37-40`).
+
+---
+
+## 10. Read state, focus, and activity {#10-read-state-focus-and-activity}
+
+**Status: Implemented**
+
+**Read state** (`acp/read-state.ts`): a `_aos/session/focus` notification from
+the browser arms a debounce timer (400 ms, `FOCUS_DEBOUNCE_MS`). When it fires
+the proxy writes a read watermark to the provider. A floor of 5 000 ms
+(`REACK_FLOOR_MS`) prevents redundant writes. The provider's `sessionReadState`
+capability is checked once and cached. Guest connections are inert: `focus`
+calls return without writing (`read-state.ts:62-81`).
+
+**`SessionRows`** (`core/session-rows.ts:12-30`): the proxy-local row cache.
+A write guard of 10 s (`READ_GUARD_MS`) prevents a list read that races the
+mark-read write from clearing an optimistic `unread: false`.
+
+**Activity feed** (`acp/activity-feed.ts:7-10`): per-connection buffer, max
+200 events, max age 30 days. Hydration reads one catalog page (100 entries,
+`HYDRATION_PAGE_SIZE`). Events are sent as `_aos/activity` notifications on
+connect and as live feed items thereafter.
+
+Guest activity is scoped to the invited Agent only (`guest/acp.ts:234-243`).
+
+---
+
+## 11. Invalidation and Session-change signals {#11-invalidation-and-session-change-signals}
+
+**Status: Implemented**
+
+| Notification | Trigger |
+|---|---|
+| `_aos/catalog_invalidated` | `subscribeCatalogChanges` fires (Hermes `sessions.changed`, `acp/agent.ts:648-650`; `adapter.ts:1070-1075`); also sent after `session/delete` |
+| `session_info_update` (`_meta.aos`) | `SessionRows` subscriber on a changed row (`acp/agent.ts:641-647`; `core/session-rows.ts:12-17`) |
+| `_aos/activity` | Activity feed push (execution events, unread changes) |
+
+`_aos/session_invalidated` is reserved in the protocol schema
+(`protocol/acp.ts:396-399`) but is never emitted by the proxy.
+
+---
+
+## 12. Reconnect and replay {#12-reconnect-and-replay}
+
+**Status: Implemented**
+
+**Browser**: exponential backoff 250 ms → 5 000 ms
+(`src/runtime-adapters/aos/acp/connection.ts:59-60`). Each Session re-attaches
+via `session/resume` with `_meta.aos.after` (last sequence) and `runId`
+(`protocol/acp.ts:168-174`). `resync: true` in the response → re-resume with
+`replayFrom:{type:"start"}` (`connection.ts:329-338`). Guest re-logins before
+resuming (`connection.ts:374-377`).
+
+**Proxy**: coordinator journal holds every event of a run segment, bounded by
+`maxReplayEvents`/`maxReplayBytes` (`hermes/factory.ts:63-71`). Adjacent text
+deltas merge on read to save replay size while keeping cursors exact
+(`session-coordinator.ts:73-77,141-145,310-320`). `resync` is set when the
+journal cannot answer the cursor (`acp/agent.ts:419-428`).
+
+The `discover` preamble reconstructs authoritative state before replay
+(`acp/agent.ts:411-418`). `reissuePending` re-delivers pending interrupts after
+reconnect (`acp/session-attachment.ts:249-256`). Adapter-private
+`{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
+
+**Accepted steering survives replay exactly once.** The browser projects
+`_aos/steer_accepted` as a user turn appended in arrival order. A provider that
+persists the correction the moment it accepts it makes that turn part of
+authoritative history, so a from-start resume announces each persisted
+correction exactly once: the history row wins and the journal's acknowledgement
+of it is dropped, in acceptance order.
+
+---
+
+## 13. Limits and backpressure {#13-limits-and-backpressure}
+
+**Status: Implemented**
+
+**ACP socket** (`acp/socket.ts:7-17`):
+
+| Limit | Value |
+|---|---|
+| Max inbound frame | 1 100 000 bytes (≈1.1 MB) |
+| Inbound rate window | 1 s, 64 frames, 256 KiB |
+| Outbound queue | 256 frames, 4 MiB |
+| Rate exceeded close code | 1008 |
+| Output overloaded close code | 1013 |
+
+**Per-lane execution caps** (`config.ts:95-105`): `activeExecutions` (global)
+and `guestActiveExecutions`. Both are validated: guest cap must not exceed
+global cap (`config.ts:166-172`).
+
+**REST caps**: stage 35.5 MB, transcribe 7.5 MB, speak 40 KB, default JSON
+16 KiB (`routes/http.ts:61`). Stage registry: 256 entries, 300 s TTL.
+
+**Subscriber fan-out** (`config.ts:95-105`): `subscriberEvents` and
+`subscriberBytes` bound the coordinator journal and per-subscriber replay.
+
+---
+
+## 14. Configuration and secrets {#14-configuration-and-secrets}
+
+**Status: Implemented**
+
+`ProxyConfig` (`config.ts`): `listen` (host union `{127.0.0.1,::1,0.0.0.0,::}`
++ port; wide hosts require `exposure: "private-container"`, `:72-82`);
+`publicOrigin` (HTTPS or loopback HTTP); `keys` (1–3 HS256 secret keys,
+`:84-93`); `limits` (`:95-105`); `runtime` (discriminated union `kind ∈
+{hermes,openclaw,opencode}`, `:107-143`); `guest.invitations.ttlSeconds`
+(default 259 200 s, `:159`); `guest` must use a separate origin and listener
+(`:166-184`); `shutdownGraceMs`.
+
+Parse errors are opaque (`config.ts:196-201`): the full config is rejected with
+`"Invalid proxy configuration"` so rejected input containing secrets is never
+logged.
+
+**Secret files** (`secrets.ts:6-23`): absolute paths, regular non-symlink
+files, permissions `0o600` or tighter, max 8 KiB, read once at startup.
+
+**Shutdown** (`server.ts:226-276`; `cli/serve.ts:86-90`): SIGINT/SIGTERM drains
+in-flight requests within `shutdownGraceMs`; both listeners share the grace.
+
+---
+
+## 15. Adapter kinds and selection {#15-adapter-kinds-and-selection}
+
+**Status: Implemented**
+
+`adapters/create-runtime.ts` is the sole selector. No other production module
+branches on `kind` (enforced by `packages/proxy/architecture.test.ts:55-69`).
+The fixture adapter is browser-only and has no server-side counterpart.
+
+| Kind | Native client | Credential files | Steering |
+|---|---|---|---|
+| `hermes` | Vendored JSON-RPC WebSocket + HTTP (`adapters/hermes/README.md`) | `tokenFile` | Available (`adapter.ts:719-725`) |
+| `openclaw` | `@openclaw/gateway-client` `GatewayClient` (`adapters/openclaw/client.ts:1-8`) | `deviceIdentityFile`, `deviceTokenFile` | Unavailable (`adapter.ts:379`) |
+| `opencode` | `@opencode-ai/sdk/v2/client` (`adapters/opencode/client.ts:3`) | `passwordFile` | Native-steering-unproven (`adapter.ts:141-144`) |
+
+---
+
+## 16. Errors {#16-errors}
+
+**Status: Implemented**
+
+**REST `ErrorCode` values** (`routes/http.ts:3-34`): `unauthenticated`,
+`forbidden`, `invalid_request`, `not_found`, `revision_conflict`,
+`run_conflict`, `run_capacity_exceeded`, `runtime_authentication_required`,
+`temporarily_unavailable`, `connection_interrupted`, `uncertain_mutation`,
+`internal_error`.
+
+**`ServerRuntimePublicError` codes** (`core/runtime.ts:179-189`): same names
+except `run_conflict` and `internal_error`; maps to JSON-RPC via
+`acp/validation.ts:60-92`.
+
+**JSON-RPC extension codes** (`protocol/acp.ts:69-79`): `-32001`
+authRequired, `-32002` runInProgress, `-32003` staleInterrupt, `-32004`
+notFound, `-32005` revisionConflict, `-32006` temporarilyUnavailable,
+`-32007` connectionInterrupted, `-32008` uncertainMutation, `-32602`
+invalidRequest.
+
+**Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
+`_aos_uncertain` (`protocol/acp.ts:53-57`).
+
+All errors pass through `redactForLog`. Native bodies, credentials, paths, and
+stack traces never cross either listener.
+
+---
+
+## 17. Tests that enforce the boundaries {#17-tests-that-enforce-the-boundaries}
+
+**Status: Implemented**
+
+| Test file | What it checks |
+|---|---|
+| `packages/proxy/architecture.test.ts:24-44` | Native types out of common proxy and browser modules |
+| `packages/proxy/architecture.test.ts:46-53` | AG-UI absent from the proxy |
+| `packages/proxy/architecture.test.ts:55-69` | Each runtime selected in exactly one module |
+| `test/architecture/runtime-import-boundaries.test.ts:19-116` | Provider packages do not import each other |
+| `test/architecture/startup-bundle.test.ts:7-37` | Browser bundle does not contain server code |
+| `packages/proxy/core/session-coordinator.test.ts` | Coordinator admission, capacity, conflict |
+| `packages/proxy/acp/*.test.ts` | ACP protocol, read state, activity feed, socket limits |
+
+---
+
+## 18. Invariants {#18-invariants}
+
+**Status: Implemented**
+
+| # | Invariant | Checked by |
+|---|---|---|
+| 1 | One runtime per deployment (`config.ts:151`) | `architecture.test.ts:55-69` |
+| 2 | Adapter boundary: `acp/`,`auth/`,`core/`,`guest/`,`routes/`, browser never import native packages | `architecture.test.ts:24-44`, `runtime-import-boundaries.test.ts` |
+| 3 | AG-UI absent from the proxy | `architecture.test.ts:46-53` |
+| 4 | `adapters/create-runtime.ts` is the only runtime-kind branch | `architecture.test.ts:55-69` |
+| 5 | No synthetic fallback; fixture is browser-only | runtime-mode validation at startup |
+| 6 | Guest lane fails closed; extensions `steer`,`agents`,`invalidation`,`activity`,`readState` = `false` | `acp/agent.test.ts` |
+| 7 | `guestActiveExecutions` ≤ `activeExecutions` | `config.ts:166-172` (`superRefine`) |
+| 8 | Run control requires registered `controllerId` | `session-coordinator.ts:746-748` |
+| 9 | Steer dedup: same `requestId`+fingerprint → same result; different fingerprint → conflict | `session-coordinator.ts:786-795,821-824` |
+
+---
+
+## 19. Target (not implemented) {#19-target-not-implemented}
+
+**Status: Target (not implemented)**
+
+The following capabilities are in the design direction but have no shipped
+implementation:
+
+- **Multi-runtime per deployment.** One config, multiple concurrent runtimes
+  with per-runtime namespacing.
+- **Multi-tenant operator authentication.** Per-user identity, sessions, and
+  OIDC/SAML login before reaching the ACP socket.
+- **Principal-specific upstream identities.** Per-user credentials forwarded
+  to the native runtime.
+- **Multi-worker run ownership.** Distributing coordinator state across
+  processes or machines.
+- **Operator authentication cookies.** Server-side cookie jars or trusted
+  identity assertions for the operator lane.
+
+Until these are implemented the proxy runs as a single-process, single-runtime,
+no-application-login server.
+
+---
+
+## 20. Research basis {#20-research-basis}
+
+**Status: Implemented**
+
+This document is derived from the production source at commit `c05309f`
+(2026-09-20). The ACP v2 migration landed in commits `046d3bf`, `64fe9dc`,
+`774d1b1`. The browser cutover landed in `92a24f2`; run vocabulary in
+`f042380`. Gateway architecture was designed in
+[`docs/design/aos-runtime-gateway-v1.md`](aos-runtime-gateway-v1.md) and the
+[AOS runtime gateway V1 retrospective](../development/hermes-v1-retrospective.md).

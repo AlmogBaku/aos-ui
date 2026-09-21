@@ -68,8 +68,10 @@ external reverse proxy is optional.
 ## Architecture and invariants
 
 - Assistant UI owns threads, messages, runs, branches, composer state, and
-  thread lifecycle. `WorkspaceAdapter` adds only Agent ownership, Session
-  metadata, creator identity, and provider capabilities. Session Todos arrive
+  thread lifecycle. `WorkspaceAdapter` adds Agent catalog access and visibility
+  mutation, Session metadata (including `unread` read state), creator identity,
+  Todos subscription, catalog/metadata/activity subscriptions, `markSessionRead`,
+  and `reportFocus`. Session Todos arrive
   as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation uses
   an ordinary creator-owned Session opened through `New Agent`; the hidden
   creator is excluded from normal roster and management surfaces. There are no
@@ -86,10 +88,14 @@ external reverse proxy is optional.
   `fixture` mode. The proxy selects one server adapter per deployment; Hermes
   is the primary V1 implementation. OpenClaw and OpenCode adapters keep their
   distinct native transports server-side. Monty is optional.
-- The app chooses no OpenCode model by default. Set
-  `AOS_UI_OPENCODE_PROVIDER_ID` and `AOS_UI_OPENCODE_MODEL_ID` together or
-  leave both empty. The three `AOS_UI_OPENAI_COMPATIBLE_*` values are likewise
-  all-or-none.
+- The three `AOS_UI_OPENAI_COMPATIBLE_*` values (`AOS_UI_OPENAI_COMPATIBLE_BASE_URL`,
+  `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`) are
+  all-or-none; setting any one without the others is an error.
+- Provider-owned read state: the browser reports the focused Session via
+  `_aos/session/focus`; the runtime decides when that Session becomes read and
+  delivers an `unread` update. One ACP WebSocket is opened per browser tab.
+  Usage is reported via ACP `usage_update`; model and effort are set via
+  `session/set_config_option`.
 - English LTR and Hebrew RTL are first-class. Update both locales, logical
   layout behavior, accessible labels, keyboard flow, and reduced-motion states
   whenever affected.
@@ -102,7 +108,9 @@ external reverse proxy is optional.
 
 ## Where changes belong
 
-- `src/app` owns Vite bootstrap, React Router navigation, and selected runtime composition.
+- `src/main.tsx` is the Vite entry point. `src/app` owns config load, locale
+  selection, and React Router navigation. `src/runtime-adapters/registry.tsx`
+  is the fixture/`aos` runtime switch.
 - `src/components/aos-ui-workspace.tsx` is the provider-neutral workspace UI;
   `src/components/workspace` owns navigation and catalog observation.
 - `src/runtime-adapters/aos` contains the provider-neutral remote browser
@@ -111,26 +119,39 @@ external reverse proxy is optional.
 - `packages/proxy/core` owns normalized execution coordination;
   `packages/proxy/adapters` owns native server clients, transports, identity,
   retention, recovery, validation, and conversion. Do not move a native
-  transport concern into the shared coordinator.
+  transport concern into the shared coordinator. `packages/proxy/acp` owns ACP
+  translation, read state, activity feed, and session attachment.
+  `packages/proxy/auth` and `packages/proxy/guest` own authorization lanes;
+  `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
+  server entry point.
 - `src/components/tool-ui` owns rich tool lifecycles and safe fallbacks.
 - `src/components/assistant-ui/elements` owns Thread/Message composition,
   execution timelines, ordinary tool-call presentation, reasoning disclosure,
   and conversation search. Do not recreate these flows in runtime adapters.
+- `src/components/artifacts` and `src/artifacts` own published Artifact
+  resolution, preview, and the sandboxed HTML frame.
+  `src/components/runtime-interactions` owns pending composer and question
+  flows. `src/components/keyboard` and `src/lib/keyboard` own keyboard actions
+  and the command palette. `src/lib/notifications` owns Activity and OS
+  notification delivery. `shared/invite-link` packages guest invite logic.
 - `src/lib/i18n` owns shared locale behavior. Some feature-local copy lives beside
   its component; search for both English and Hebrew variants before editing.
 - `shared/presentation` and `shared/agent-creator` define portable assets.
-  `integrations/hermes`, `integrations/openclaw`, and `integrations/opencode`
-  package native tools and the provider-supported creator behavior. Agent
-  worktrees, profiles, secrets, and state remain external. Never import native
-  implementations into browser code.
+  `integrations/hermes` and `integrations/opencode` package native tools and
+  creator behavior (OpenClaw omits `create_agent`). Agent worktrees, profiles,
+  secrets, and state remain external. Never import native implementations into
+  browser code.
+- Architecture boundary tests live in `test/architecture/` and
+  `packages/proxy/architecture.test.ts`; the ESLint rule is
+  `scripts/eslint-runtime-boundaries.mjs`.
 - `integrations/monty` is the runtime fork, named `monty`. Preserve its MIT
   license and the upstream commit attribution in `integrations/monty/UPSTREAM.md`.
 
 Treat generated and user-owned material carefully. Do not blindly regenerate
-customized shadcn/Assistant UI components. `.agents/skills` is tracked project
-tooling, and `.agents/skills/grilling` is also an intentional product dependency.
-Preserve unrelated working-tree changes and avoid overwriting existing
-`.opencode/agents` definitions.
+customized shadcn/Assistant UI components. Only `aos-deploy` and
+`aos-runtime-adapter` under `.agents/skills/` are tracked project tooling; do
+not touch user-local `.opencode/` or any other `.agents/skills/` content that
+is not tracked. Preserve unrelated working-tree changes.
 
 Assistant UI packages are version-pinned and unpatched. Compose exported APIs;
 keep queue, runtime-switching, ownership, and reconnect regressions passing.
@@ -164,7 +185,9 @@ database or provider registry.
 - Load public runtime configuration from `/runtime-config.json`, separate from
   the frontend build. Never put credentials in it or `VITE_*`. The Bun proxy
   serves the production assets and normalized APIs; Nginx may be an external
-  TLS/reverse proxy.
+  TLS/reverse proxy. Feature flags `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` and
+  `AOS_UI_COMPOSER_CONTEXT_ENABLED` gate composer model and context-window UI
+  at runtime (`shared/runtime-config.ts`).
 - Use `@/` imports for project modules and logical CSS properties for RTL-safe
   layout.
 
@@ -190,14 +213,36 @@ Additional checks by area:
   ```bash
   bunx vitest run test/containers/compose.test.ts
   docker compose -f compose.yaml config --quiet
-  AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
-    docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
-  docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
-  AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/key \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+    AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+    AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir \
+    AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
     docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+    AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
+    AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
+    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
+  AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
+    AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+    AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
+    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
   ```
 
-  Build affected images and smoke their health and streaming endpoints when runtime container
-  behavior changes.
+  `compose.dev.yaml` adds the Vite dev server for local development. Build
+  affected images and smoke their health and streaming endpoints when runtime
+  container behavior changes.
 
-- Live harness acceptance requires credentials and approved disposable external targets. Agent creation writes native definitions. Do not treat mocked or skipped journeys as live passes; never change existing user Agents/profiles for routine tests.
+- Live harness acceptance requires credentials and approved disposable external
+  targets. Agent creation is provider-gated: the Hermes creator currently fails
+  closed without writing (`integrations/hermes/aos_hermes/creator.py`); the
+  OpenCode launcher denies `create_agent` (`scripts/opencode-config.ts`);
+  OpenClaw omits it entirely (`integrations/openclaw/index.ts`). Do not treat
+  mocked or skipped journeys as live passes; never change existing user
+  Agents/profiles for routine tests.
