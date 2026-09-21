@@ -7,6 +7,7 @@ import {
   draftThreadId,
   isDraftAgentId,
   nextDraftExpiry,
+  PENDING_DRAFT_AGENT_ID,
   projectDraftAgents,
   readResolvedDrafts,
   writeResolvedDrafts,
@@ -46,13 +47,19 @@ describe("draft Agent identifiers", () => {
     expect(draftThreadId("aster")).toBeUndefined()
     expect(isDraftAgentId("aster")).toBe(false)
   })
+
+  it("names the pending draft without naming any thread", () => {
+    expect(isDraftAgentId(PENDING_DRAFT_AGENT_ID)).toBe(true)
+    expect(draftThreadId(PENDING_DRAFT_AGENT_ID)).toBeUndefined()
+  })
 })
 
 describe("projectDraftAgents", () => {
   const project = (
     sessions: SessionMetadata[],
     resolvedThreadIds: ReadonlySet<string> = new Set<string>(),
-    creatorAgent: AgentSummary | undefined = creator
+    creatorAgent: AgentSummary | undefined = creator,
+    pendingDraft = false
   ) =>
     projectDraftAgents({
       creator: creatorAgent,
@@ -61,6 +68,7 @@ describe("projectDraftAgents", () => {
       resolvedThreadIds,
       now,
       name: "New Agent",
+      pendingDraft,
     })
 
   it("keeps a creator Session a draft until it is exactly 48 hours old", () => {
@@ -133,6 +141,47 @@ describe("projectDraftAgents", () => {
       draftAgentId("second"),
       draftAgentId("first"),
     ])
+  })
+
+  it("adds the pending draft after the roster and the listed drafts", () => {
+    const sessions = [
+      session("work", "aster", 0),
+      session("interview", creator.id, 0),
+    ]
+
+    const projected = project(sessions, new Set<string>(), creator, true)
+
+    expect(projected.agents.map(({ id }) => id)).toEqual([
+      "aster",
+      "bram",
+      creator.id,
+      draftAgentId("interview"),
+      PENDING_DRAFT_AGENT_ID,
+    ])
+    expect(projected.agents.at(-1)).toEqual({
+      ...projected.agents.at(-2),
+      id: PENDING_DRAFT_AGENT_ID,
+    })
+    // The pending draft precedes its Session, so it invents none.
+    expect(projected.sessions.map(({ threadId }) => threadId)).toEqual([
+      "work",
+      "interview",
+    ])
+  })
+
+  it("omits the pending draft when the provider has no creator", () => {
+    const projected = projectDraftAgents({
+      creator: undefined,
+      agents: roster,
+      sessions: [],
+      resolvedThreadIds: new Set(),
+      now,
+      name: "New Agent",
+      pendingDraft: true,
+    })
+
+    expect(projected.agents).toEqual(roster)
+    expect(projected.sessions).toEqual([])
   })
 
   it("passes the catalog through unchanged without a creator", () => {

@@ -13,13 +13,20 @@ const RESOLVED_DRAFTS_KEY = "aos-ui.resolved-drafts"
 
 export const draftAgentId = (threadId: string) => `${DRAFT_PREFIX}${threadId}`
 
+/**
+ * The one interview that is still a local thread. A provider creates the
+ * creator Session on the first turn, so this row precedes any Session and
+ * therefore names no thread of its own.
+ */
+export const PENDING_DRAFT_AGENT_ID = `${DRAFT_PREFIX}new`
+
 export const draftThreadId = (agentId: string) =>
-  agentId.startsWith(DRAFT_PREFIX)
+  agentId.startsWith(DRAFT_PREFIX) && agentId !== PENDING_DRAFT_AGENT_ID
     ? agentId.slice(DRAFT_PREFIX.length)
     : undefined
 
 export const isDraftAgentId = (agentId: string) =>
-  draftThreadId(agentId) !== undefined
+  agentId === PENDING_DRAFT_AGENT_ID || draftThreadId(agentId) !== undefined
 
 function isEligible(
   session: SessionMetadata,
@@ -39,7 +46,17 @@ type ProjectDraftAgentsInput = {
   resolvedThreadIds: ReadonlySet<string>
   now: number
   name: string
+  /** True while the operator holds a creator interview that has no Session. */
+  pendingDraft?: boolean
 }
+
+const draftAgent = (id: string, name: string): AgentSummary => ({
+  kind: "ready",
+  id,
+  name,
+  icon: { kind: "symbol", symbol: "unassigned", tone: "slate" },
+  visibility: "visible",
+})
 
 /**
  * Presents every unresolved creator interview as its own temporary Agent that
@@ -52,6 +69,7 @@ export function projectDraftAgents({
   resolvedThreadIds,
   now,
   name,
+  pendingDraft = false,
 }: ProjectDraftAgentsInput): {
   agents: AgentSummary[]
   sessions: SessionMetadata[]
@@ -62,15 +80,11 @@ export function projectDraftAgents({
   const projected = sessions.map((session) => {
     if (!isEligible(session, creator.id, resolvedThreadIds, now)) return session
     const id = draftAgentId(session.threadId)
-    drafts.push({
-      kind: "ready",
-      id,
-      name,
-      icon: { kind: "symbol", symbol: "unassigned", tone: "slate" },
-      visibility: "visible",
-    })
+    drafts.push(draftAgent(id, name))
     return { ...session, agentId: id }
   })
+  // The pending interview is a row without a Session, never a Session itself.
+  if (pendingDraft) drafts.push(draftAgent(PENDING_DRAFT_AGENT_ID, name))
 
   return { agents: [...agents, ...drafts], sessions: projected }
 }

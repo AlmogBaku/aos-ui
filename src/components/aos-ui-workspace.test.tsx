@@ -338,6 +338,97 @@ function interviewWorkspace(interviewAgeMs: number) {
   })
 }
 
+/**
+ * Mirrors a provider that owns Session creation: the interview stays a local
+ * thread until its first turn persists it, gated so the pending draft the
+ * operator sees before any Session exists is observable.
+ */
+class PendingInterviewThreadListAdapter extends FixtureThreadListAdapter {
+  readonly #owners = new Map<string, string>()
+
+  constructor(
+    workspace: FixtureWorkspace,
+    private readonly firstTurn: Promise<void>
+  ) {
+    super(workspace)
+  }
+
+  record(localThreadId: string, agentId: string) {
+    this.#owners.set(localThreadId, agentId)
+  }
+
+  override async initialize(threadId: string) {
+    const owner = this.#owners.get(threadId)
+    if (!owner) return super.initialize(threadId)
+    await this.firstTurn
+    const { threadId: remoteId } = await this.workspace.createSession(owner)
+    return { remoteId, externalId: remoteId }
+  }
+}
+
+function PendingInterviewFixture({
+  firstTurn,
+  capture,
+}: {
+  firstTurn: Promise<void>
+  capture: (workspace: FixtureWorkspace) => void
+}) {
+  const [workspace] = useState(() =>
+    createFixtureWorkspace({
+      clock: () => FIXTURE_NOW,
+      agents: [{ kind: "ready", id: "agent-aster", name: "Aster" }],
+      sessions: [
+        {
+          threadId: "thread-aster-market",
+          agentId: "agent-aster",
+          updatedAt: FIXTURE_NOW.toISOString(),
+          status: "idle",
+        },
+      ],
+      todos: {},
+      sessionTitles: { "thread-aster-market": "Market brief" },
+    })
+  )
+  const [threadList] = useState(
+    () => new PendingInterviewThreadListAdapter(workspace, firstTurn)
+  )
+  const chatModel = useMemo(
+    () => createFixtureChatModel(workspace, { streamDelayMs: 0 }),
+    [workspace]
+  )
+  const assistantRuntime = useRemoteThreadListRuntime({
+    adapter: threadList,
+    runtimeHook: function usePendingInterviewThreadRuntime() {
+      return useLocalRuntime(chatModel)
+    },
+  })
+  const runtime = useMemo<HarnessRuntime>(
+    () => ({
+      assistantRuntime,
+      workspace,
+      activityCoverage: "workspace",
+      createSessionDraft: async (agentId) => {
+        await assistantRuntime.threads.switchToNewThread()
+        const draftId = assistantRuntime.threads.getState().mainThreadId
+        threadList.record(draftId, agentId)
+        return draftId
+      },
+    }),
+    [assistantRuntime, threadList, workspace]
+  )
+  useEffect(() => capture(workspace), [capture, workspace])
+
+  return (
+    <AosUiWorkspace
+      runtime={runtime}
+      locale="en"
+      dictionary={en}
+      now={FIXTURE_NOW}
+      readNow={fixtureClock}
+    />
+  )
+}
+
 describe("reversible local Session tabs", () => {
   it("keeps a provider-neutral local draft selected without creating a remote Session", async () => {
     const user = userEvent.setup()
@@ -1810,6 +1901,101 @@ describe("AosUiApp fixture composition", () => {
     expect(
       screen.getByRole("button", { name: "Select Agent: New Agent" })
     ).toBeVisible()
+  })
+
+  it("opens New Agent as a pending draft before its Session exists", async () => {
+    const user = userEvent.setup()
+    const firstTurn = deferred<void>()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <PendingInterviewFixture
+        firstTurn={firstTurn.promise}
+        capture={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await screen.findByRole("button", { name: /^Aster,/ })
+
+    await user.click(screen.getByRole("button", { name: "New Agent" }))
+
+    const draftRow = await screen.findByRole("button", {
+      name: /^New Agent, draft/,
+    })
+    expect(draftRow).toHaveAttribute("aria-current", "true")
+    expect(window.location.pathname).toBe("/draft%3Anew")
+    expect(await screen.findByText(en.creator.kickoff)).toBeVisible()
+    expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
+    expect(
+      screen.queryByRole("complementary", { name: en.workspace.agentDetails })
+    ).toBeNull()
+    expect(
+      workspace!.listAllSessionMetadata().map(({ agentId }) => agentId)
+    ).toEqual(["agent-aster"])
+
+    await user.click(draftRow)
+
+    expect(screen.getByText(en.creator.kickoff)).toBeVisible()
+    expect(window.location.pathname).toBe("/draft%3Anew")
+
+    await act(async () => firstTurn.resolve())
+
+    const interview = await waitFor(() => {
+      const created = workspace!
+        .listAllSessionMetadata()
+        .find(({ agentId }) => agentId === "agent-builder")
+      expect(created).toBeDefined()
+      return created!
+    })
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(
+        `/draft%3A${interview.threadId}/${interview.threadId}`
+      )
+    )
+    expect(
+      screen.getByRole("button", { name: /^New Agent, draft/ })
+    ).toHaveAttribute("aria-current", "true")
+  })
+
+  it("discards a pending draft without deleting any Session", async () => {
+    const user = userEvent.setup()
+    const firstTurn = deferred<void>()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <PendingInterviewFixture
+        firstTurn={firstTurn.promise}
+        capture={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await screen.findByRole("button", { name: /^Aster,/ })
+    await user.click(screen.getByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const before = workspace!.listAllSessionMetadata()
+
+    await user.click(
+      screen.getByRole("button", { name: en.actions.discardDraft })
+    )
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: en.actions.discardDraft,
+      })
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^New Agent, draft/ })
+      ).toBeNull()
+    )
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Aster,/ })).toHaveAttribute(
+        "aria-current",
+        "true"
+      )
+    )
+    expect(workspace!.listAllSessionMetadata()).toEqual(before)
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("uses the active locale for the interview draft and its prompt", async () => {

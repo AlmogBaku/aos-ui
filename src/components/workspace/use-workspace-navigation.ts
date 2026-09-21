@@ -48,6 +48,7 @@ import {
   draftThreadId,
   isDraftAgentId,
   nextDraftExpiry,
+  PENDING_DRAFT_AGENT_ID,
   projectDraftAgents,
   readResolvedDrafts,
   writeResolvedDrafts,
@@ -206,6 +207,15 @@ export function useWorkspaceNavigation({
             : "Multiple creator Agents are configured"
         )
       : null)
+  /**
+   * The pending draft is the creator's own local thread while the operator is
+   * on its row. An explicit creator route stays the creator's own Session.
+   */
+  const creatorDraftOpen = Boolean(
+    agentCreator &&
+    conversationDraft?.agentId === agentCreator.id &&
+    preferredAgentId === PENDING_DRAFT_AGENT_ID
+  )
   // Drafts are derived from the last published metadata rather than the current
   // query, so a selected draft survives a Session metadata refresh.
   const publishedSessions = sessionSnapshot.sessions
@@ -218,10 +228,12 @@ export function useWorkspaceNavigation({
         resolvedThreadIds: resolvedDrafts,
         now: eligibilityNow.getTime(),
         name: dictionary.actions.newAgent,
+        pendingDraft: creatorDraftOpen,
       }),
     [
       agentCreator,
       agents,
+      creatorDraftOpen,
       dictionary.actions.newAgent,
       eligibilityNow,
       publishedSessions,
@@ -238,6 +250,11 @@ export function useWorkspaceNavigation({
   const selectedAgentIsDraft = selectedAgentId
     ? isDraftAgentId(selectedAgentId)
     : false
+  // A draft row is only ever a projection of the creator, so the creator owns
+  // everything the provider must answer for while such a row is selected.
+  const selectedProviderAgentId = selectedAgentIsDraft
+    ? agentCreator?.id
+    : selectedAgentId
 
   const runtimeThreads = useMemo(() => {
     return threadState.threadIds.map((threadId) => {
@@ -288,7 +305,7 @@ export function useWorkspaceNavigation({
       ? activeThreadId
       : null
   const conversationThreadId = conversationDraft
-    ? conversationDraft.agentId === selectedAgentId &&
+    ? conversationDraft.agentId === selectedProviderAgentId &&
       conversationDraft.threadId !== null &&
       mainItemId === conversationDraft.threadId
       ? conversationDraft.threadId
@@ -408,13 +425,18 @@ export function useWorkspaceNavigation({
     })
   }, [workspace])
 
+  /** Forgets the open local draft, leaving provider-owned selection alone. */
+  const clearLocalDraft = useCallback(() => {
+    localDraftOperation.current = null
+    localDraftAgent.current = null
+    localDraftId.current = null
+    localDraftRemoteId.current = null
+    setConversationDraft(null)
+  }, [])
+
   const selectRuntimeThread = useCallback(
     async (threadId: string) => {
-      localDraftOperation.current = null
-      localDraftAgent.current = null
-      localDraftId.current = null
-      localDraftRemoteId.current = null
-      setConversationDraft(null)
+      clearLocalDraft()
       const operation = Symbol("selection")
       pendingSelection.current = operation
       desiredThread.current = threadId
@@ -429,7 +451,7 @@ export function useWorkspaceNavigation({
           pendingSelection.current = null
       }
     },
-    [runtime]
+    [clearLocalDraft, runtime]
   )
   const switchToNewThread = useCallback(
     async (agentId: string) => {
@@ -464,17 +486,11 @@ export function useWorkspaceNavigation({
         publishDraft(runtime.threads.getState().mainThreadId)
         return false
       } catch (error) {
-        if (localDraftOperation.current === operation) {
-          localDraftOperation.current = null
-          localDraftAgent.current = null
-          localDraftId.current = null
-          localDraftRemoteId.current = null
-          setConversationDraft(null)
-        }
+        if (localDraftOperation.current === operation) clearLocalDraft()
         throw error
       }
     },
-    [createSessionDraft, runtime]
+    [clearLocalDraft, createSessionDraft, runtime]
   )
 
   useEffect(() => {
@@ -484,14 +500,18 @@ export function useWorkspaceNavigation({
     if (localDraftRemoteId.current === activeThreadId) return
     localDraftRemoteId.current = activeThreadId
     localDraftOperation.current = null
-    setPreferredAgentId(agentId)
+    // A promoted interview becomes the draft row that owns its new Session;
+    // the creator itself is never a place the operator can be.
+    const rowAgentId =
+      agentId === agentCreator?.id ? draftAgentId(activeThreadId) : agentId
+    setPreferredAgentId(rowAgentId)
     setManuallyOpened((current) => ({
       ...current,
       [agentId]: [...new Set([...(current[agentId] ?? []), activeThreadId])],
     }))
     lastSelected.current.set(agentId, activeThreadId)
-    updateRoute({ agentId, sessionId: activeThreadId }, "replace")
-  }, [activeThreadId, mainItemId, updateRoute])
+    updateRoute({ agentId: rowAgentId, sessionId: activeThreadId }, "replace")
+  }, [activeThreadId, agentCreator?.id, mainItemId, updateRoute])
 
   useEffect(() => {
     if (
@@ -501,12 +521,8 @@ export function useWorkspaceNavigation({
       mainItemId !== localDraftId.current
     )
       return
-    localDraftOperation.current = null
-    localDraftAgent.current = null
-    localDraftId.current = null
-    localDraftRemoteId.current = null
-    setConversationDraft(null)
-  }, [activeThreadId, mainItemId, visibleThreadId])
+    clearLocalDraft()
+  }, [activeThreadId, clearLocalDraft, mainItemId, visibleThreadId])
 
   useEffect(() => {
     if (threadState.isLoading) return
@@ -578,10 +594,14 @@ export function useWorkspaceNavigation({
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
     const localDraftAgentId = localDraftAgent.current
     if (localDraftAgentId && !activeThreadId) {
-      if (selectedAgentId !== localDraftAgentId)
-        setPreferredAgentId(localDraftAgentId)
+      // A pending draft keeps its own row; others keep their own Agent.
+      const rowAgentId =
+        preferredAgentId === PENDING_DRAFT_AGENT_ID
+          ? PENDING_DRAFT_AGENT_ID
+          : localDraftAgentId
+      if (selectedAgentId !== rowAgentId) setPreferredAgentId(rowAgentId)
       lastSelected.current.set(localDraftAgentId, null)
-      const selection = { agentId: localDraftAgentId, sessionId: null }
+      const selection = { agentId: rowAgentId, sessionId: null }
       const canonicalPathname = buildWorkspacePathname(selection)
       if (pathname !== canonicalPathname) updateRoute(selection, "replace")
       else appliedPathname.current = canonicalPathname
@@ -729,6 +749,7 @@ export function useWorkspaceNavigation({
     }
   }, [
     activeThreadId,
+    preferredAgentId,
     navigableAgents,
     agentsLoading,
     dictionary.actions.newSession,
@@ -846,6 +867,9 @@ export function useWorkspaceNavigation({
   })
 
   async function selectAgent(agentId: string) {
+    // The pending draft owns no Session: reselecting it would replace the
+    // interview it is showing with a second empty one.
+    if (agentId === PENDING_DRAFT_AGENT_ID) return
     setPreferredAgentId(agentId)
     const manual = new Set([...(manuallyOpened[agentId] ?? [])])
     const dismissed = new Set(dismissedTabs[agentId] ?? [])
@@ -1036,6 +1060,24 @@ export function useWorkspaceNavigation({
     const creator = getAgentCreator(agents)
     if (!creator)
       throw new Error("Agent creation is unavailable from this provider")
+    // A provider that owns Session creation only lists the interview once its
+    // first turn persists it, so the interview opens as a creator-owned local
+    // draft and the operator sees it as the pending draft Agent.
+    setPreferredAgentId(PENDING_DRAFT_AGENT_ID)
+    desiredThread.current = null
+    updateRoute({ agentId: PENDING_DRAFT_AGENT_ID, sessionId: null }, "push")
+    if (await switchToNewThread(creator.id)) {
+      // Never submit the interview to whichever Session a newer navigation won.
+      if (!localDraftId.current || localDraftAgent.current !== creator.id)
+        throw new Error(
+          "Creator Session selection changed before the interview started"
+        )
+      runtime.thread.append({
+        role: "user",
+        content: [{ type: "text", text: dictionary.creator.kickoff }],
+      })
+      return
+    }
     const { threadId } = await workspace.createSession(creator.id, {
       title: dictionary.actions.newAgent,
     })
@@ -1077,13 +1119,15 @@ export function useWorkspaceNavigation({
     })
   }
 
-  /** Deleting the interview Session is the only way to retire a draft. */
+  /**
+   * Deleting the interview Session is the only way to retire a draft that has
+   * one; a pending draft has nothing to delete but its own local thread.
+   */
   async function discardDraft() {
-    const threadId = selectedAgentId
-      ? draftThreadId(selectedAgentId)
-      : undefined
-    if (!threadId) return
-    await runtime.threads.getItemById(threadId).delete()
+    if (!selectedAgentId || !isDraftAgentId(selectedAgentId)) return
+    const threadId = draftThreadId(selectedAgentId)
+    if (threadId) await runtime.threads.getItemById(threadId).delete()
+    else clearLocalDraft()
     if (defaultAgentId) await selectAgent(defaultAgentId)
   }
 
@@ -1096,11 +1140,7 @@ export function useWorkspaceNavigation({
         : (nextAgents.find(isRosterAgent)?.id ?? null)
     )
     if (!nextAgents.some(isRosterAgent)) {
-      localDraftOperation.current = null
-      localDraftAgent.current = null
-      localDraftId.current = null
-      localDraftRemoteId.current = null
-      setConversationDraft(null)
+      clearLocalDraft()
       desiredThread.current = null
       await runtime.threads.switchToNewThread()
     }
