@@ -1,3 +1,14 @@
+import {
+  MAX_RECORDING_BYTES,
+  MAX_SPEECH_BYTES,
+  MAX_SPEECH_TEXT_BYTES,
+  MAX_TRANSCRIPT_BYTES,
+  parseRecordingMime,
+  RECORDING_CODECS,
+  RECORDING_MIME_TYPES,
+  SPEECH_MIME_TYPES,
+} from "../../../protocol/audio"
+
 import { isRecord, utf8BytesWithin } from "./native"
 
 type NativeRecord = Record<string, unknown>
@@ -7,10 +18,6 @@ const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
-const MAX_RECORDING_BYTES = 5 * 1024 * 1024
-const MAX_SPEECH_BYTES = 20 * 1024 * 1024
-const MAX_SPEECH_TEXT_BYTES = 32_000
-const MAX_TRANSCRIPT_BYTES = 1_000_000
 const MAX_RPC_RESPONSE_BYTES = 64 * 1024
 const MAX_AUDIO_CONFIG_RESPONSE_BYTES = 64 * 1024
 const MAX_TRANSCRIPT_RESPONSE_BYTES = MAX_TRANSCRIPT_BYTES
@@ -26,31 +33,7 @@ const IMAGE_MIME = new Set([
   "image/webp",
   "image/bmp",
 ])
-const RECORDING_MIME_TYPES = new Set([
-  "audio/aac",
-  "audio/flac",
-  "audio/m4a",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/mpeg",
-  "audio/ogg",
-  "audio/wav",
-  "audio/wave",
-  "audio/webm",
-  "audio/x-m4a",
-  "audio/x-wav",
-  "video/webm",
-])
-const RECORDING_CODECS = new Set([
-  "aac",
-  "flac",
-  "mp3",
-  "mp4a.40.2",
-  "opus",
-  "pcm",
-  "vorbis",
-])
-const SPEECH_MIME = /^(?:audio\/(?:mpeg|ogg|wav|flac))$/u
+const SPEECH_MIME = new Set(SPEECH_MIME_TYPES)
 const FILE_REFERENCE = /^@file:(?:`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)$/u
 
 export type HermesContentSession = {
@@ -223,14 +206,9 @@ function validBase64(encoded: string) {
 function safeRecordingMime(value: unknown) {
   if (typeof value !== "string" || utf8BytesAtMost(value, 128) === undefined)
     return undefined
-  const separator = value.indexOf(";")
-  const type = separator < 0 ? value : value.slice(0, separator)
-  if (!RECORDING_MIME_TYPES.has(type)) return undefined
-  if (separator < 0) return type
-  const parameter = value.slice(separator + 1)
-  if (!parameter.startsWith("codecs=")) return undefined
-  const codec = parameter.slice("codecs=".length)
-  return RECORDING_CODECS.has(codec) ? `${type};codecs=${codec}` : undefined
+  const parsed = parseRecordingMime(value)
+  if (!parsed) return undefined
+  return parsed.codec ? `${parsed.type};codecs=${parsed.codec}` : parsed.type
 }
 
 function exactDetachResult(value: unknown) {
@@ -517,21 +495,7 @@ export function createHermesContentOperations(input: {
             ? {
                 status: "available" as const,
                 scope: "agent" as const,
-                acceptedMimeTypes: [
-                  "audio/aac",
-                  "audio/flac",
-                  "audio/m4a",
-                  "audio/mp3",
-                  "audio/mp4",
-                  "audio/mpeg",
-                  "audio/ogg",
-                  "audio/wav",
-                  "audio/wave",
-                  "audio/webm",
-                  "audio/x-m4a",
-                  "audio/x-wav",
-                  "video/webm",
-                ] as const,
+                acceptedMimeTypes: [...RECORDING_MIME_TYPES],
                 mimeParameter: "codecs" as const,
                 codecValues: [...RECORDING_CODECS],
                 maxRecordingBytes: MAX_RECORDING_BYTES,
@@ -546,12 +510,7 @@ export function createHermesContentOperations(input: {
             ? {
                 status: "available" as const,
                 scope: "agent" as const,
-                acceptedMimeTypes: [
-                  "audio/mpeg",
-                  "audio/ogg",
-                  "audio/wav",
-                  "audio/flac",
-                ] as const,
+                acceptedMimeTypes: [...SPEECH_MIME_TYPES],
                 maxTextBytes: MAX_SPEECH_TEXT_BYTES,
                 maxAudioBytes: MAX_SPEECH_BYTES,
               }
@@ -800,7 +759,7 @@ export function createHermesContentOperations(input: {
         result.ok !== true ||
         typeof result.data_url !== "string" ||
         typeof result.mime_type !== "string" ||
-        !SPEECH_MIME.test(result.mime_type)
+        !SPEECH_MIME.has(result.mime_type)
       )
         throw new HermesContentUnavailableError()
       const prefix = `data:${result.mime_type};base64,`

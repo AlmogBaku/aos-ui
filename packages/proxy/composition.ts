@@ -11,7 +11,7 @@ import {
   type GuestInvitationKey,
   type GuestInvitationService,
 } from "./auth/guest-invitation"
-import { parseProxyConfig, type ProxyConfig } from "./config"
+import { parseProxyConfig, type ProxyConfig, type VoiceConfig } from "./config"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import type { RuntimeInstance } from "./core/runtime"
 import { createSessionRows, type SessionRows } from "./core/session-rows"
@@ -23,12 +23,58 @@ import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
-import { readSecretKeyFile } from "./secrets"
+import { readSecretFile, readSecretKeyFile } from "./secrets"
+import {
+  createOpenAiCompatibleSynthesizer,
+  createOpenAiCompatibleTranscriber,
+} from "./voice/openai-compatible"
+import { withVoiceProviders, type VoiceProviders } from "./voice/runtime"
 
 export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
   logger: AcpLogger
   clock?: () => number
+  /** Reaches the configured speech providers; tests hand in a stub. */
+  fetch?: typeof fetch
+}
+
+/** One provider per configured direction, each key read once at startup. */
+async function createVoiceProviders(
+  voice: VoiceConfig,
+  fetchImpl: typeof fetch
+): Promise<VoiceProviders> {
+  const apiKey = (file: string | undefined) =>
+    file === undefined ? undefined : readSecretFile(file)
+  const [transcriptionKey, speechKey] = await Promise.all([
+    apiKey(voice.transcription?.apiKeyFile),
+    apiKey(voice.speech?.apiKeyFile),
+  ])
+  return {
+    ...(voice.transcription
+      ? {
+          transcription: {
+            mode: voice.transcription.mode,
+            provider: createOpenAiCompatibleTranscriber(
+              voice.transcription,
+              transcriptionKey,
+              fetchImpl
+            ),
+          },
+        }
+      : {}),
+    ...(voice.speech
+      ? {
+          speech: {
+            mode: voice.speech.mode,
+            provider: createOpenAiCompatibleSynthesizer(
+              voice.speech,
+              speechKey,
+              fetchImpl
+            ),
+          },
+        }
+      : {}),
+  }
 }
 
 /**
@@ -76,7 +122,7 @@ export async function createConfiguredProxy(
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
-  const [runtimeInstance, invitationKeys] = await Promise.all([
+  const [nativeInstance, invitationKeys, voiceProviders] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
       config.limits
@@ -91,7 +137,22 @@ export async function createConfiguredProxy(
           )
         )
       : Promise.resolve(undefined),
+    config.voice
+      ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch)
+      : Promise.resolve(undefined),
   ])
+  // Proxy speech sits in front of the adapter for every lane at once, so the
+  // wrapped runtime is the only one any listener or ACP service ever sees.
+  const runtimeInstance: RuntimeInstance = voiceProviders
+    ? {
+        ...nativeInstance,
+        runtime: withVoiceProviders(
+          nativeInstance.runtime,
+          voiceProviders,
+          dependencies.logger
+        ),
+      }
+    : nativeInstance
   const invitations =
     config.guest && invitationKeys
       ? createGuestInvitationService({
