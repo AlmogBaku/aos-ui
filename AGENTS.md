@@ -203,6 +203,11 @@ bun run lint
 bun run build
 ```
 
+Several worktrees sweeping at once oversubscribe a shared machine and starve any
+deployment running on it, so `vitest.config.ts` caps workers at half the cores.
+Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
+prefer `nice bun run test` for a full sweep beside a live deployment.
+
 Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
