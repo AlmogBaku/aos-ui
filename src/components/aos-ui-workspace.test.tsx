@@ -17,6 +17,7 @@ import {
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type {
+  ArtifactAdapter,
   HarnessRuntime,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
@@ -1751,15 +1752,17 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-selected", "true")
   })
 
+  // Nori owns one stale Session that is neither live nor pinned, so only the
+  // history fallback can put it in the tab strip.
   it("shows the fallback history Session as a tab for an Agent with only old history", async () => {
     const user = userEvent.setup()
     render(<FixtureAosUiApp locale="en" dictionary={en} />)
 
-    await user.click(await screen.findByRole("button", { name: "Vela" }))
+    await user.click(await screen.findByRole("button", { name: "Nori" }))
 
     await waitFor(() =>
       expect(
-        screen.getByRole("tab", { name: "Activation metrics" })
+        screen.getByRole("tab", { name: "Launch copy, Unread" })
       ).toHaveAttribute("aria-selected", "true")
     )
   })
@@ -1768,17 +1771,17 @@ describe("AosUiApp fixture composition", () => {
     const user = userEvent.setup()
     render(<FixtureAosUiApp locale="en" dictionary={en} />)
 
-    await user.click(await screen.findByRole("button", { name: "Vela" }))
-    await screen.findByRole("tab", { name: "Activation metrics" })
+    await user.click(await screen.findByRole("button", { name: "Nori" }))
+    await screen.findByRole("tab", { name: "Launch copy, Unread" })
 
     await user.click(
       screen.getByRole("button", {
-        name: "Close session: Activation metrics",
+        name: "Close session: Launch copy",
       })
     )
     await waitFor(() =>
       expect(
-        screen.queryByRole("tab", { name: "Activation metrics" })
+        screen.queryByRole("tab", { name: "Launch copy, Unread" })
       ).not.toBeInTheDocument()
     )
   })
@@ -2601,5 +2604,98 @@ describe("AosUiApp fixture composition", () => {
     expect(
       screen.getByRole("tab", { name: "Pricing analysis" })
     ).toBeInTheDocument()
+  })
+})
+
+function ScopedArtifactWorkspace({
+  bundle,
+  capture,
+}: {
+  bundle: WorkspaceFixtureRuntime
+  capture: (bundle: WorkspaceFixtureRuntime) => void
+}) {
+  useEffect(() => capture(bundle), [bundle, capture])
+  return (
+    <AosUiWorkspace
+      runtime={asHarnessRuntime(bundle)}
+      locale="en"
+      dictionary={en}
+      now={FIXTURE_NOW}
+    />
+  )
+}
+
+describe("artifact Session scope", () => {
+  it("never reads an artifact against a Session that does not own it", async () => {
+    // The provider authorizes an artifact read against the Session that
+    // published it, so a read carrying another Session's id is refused
+    // outright. Switching Sessions must not be able to pair one Session's id
+    // with the artifacts still on screen from the one before it.
+    const reads: { artifact: string; threadId: string }[] = []
+    const artifacts: ArtifactAdapter = {
+      resolve: ({ artifact, threadId }) => {
+        reads.push({ artifact: artifact.id, threadId })
+        return Promise.resolve(new Blob(["bytes"], { type: "image/png" }))
+      },
+    }
+    let bundle: WorkspaceFixtureRuntime | undefined
+    const capture = (value: WorkspaceFixtureRuntime) => {
+      bundle = value
+    }
+    render(
+      <ControlledWorkspaceFixture
+        initialThreadId="thread-aster-market"
+        messagesByThread={{
+          "thread-aster-market": [
+            { id: "market-user", role: "user", content: "Chart it" },
+            {
+              id: "market-assistant",
+              role: "assistant",
+              content: [
+                {
+                  type: "data",
+                  name: "aos.artifact",
+                  data: {
+                    id: "market-chart",
+                    filename: "market-chart.png",
+                    mimeType: "image/png",
+                    source: { type: "provider", reference: "market-chart" },
+                  },
+                },
+              ],
+            },
+          ],
+          "thread-aster-launch": [
+            { id: "launch-user", role: "user", content: "Status?" },
+            { id: "launch-assistant", role: "assistant", content: "On track." },
+          ],
+        }}
+      >
+        {(value) => (
+          <ScopedArtifactWorkspace
+            bundle={{ ...value, artifacts }}
+            capture={capture}
+          />
+        )}
+      </ControlledWorkspaceFixture>
+    )
+
+    await screen.findByRole("tab", { name: "Market brief" })
+    await waitFor(() => expect(reads.length).toBeGreaterThan(0))
+
+    // The switch a tab performs, driven through the runtime that owns it.
+    const threads = bundle!.assistantRuntime.threads
+    for (const threadId of ["thread-aster-launch", "thread-aster-market"]) {
+      await act(async () => {
+        await threads.switchToThread(threadId)
+      })
+      await waitFor(() =>
+        expect(threads.getState().mainThreadId).toBe(threadId)
+      )
+    }
+
+    expect(
+      reads.filter(({ threadId }) => threadId !== "thread-aster-market")
+    ).toEqual([])
   })
 })

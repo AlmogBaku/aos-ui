@@ -73,6 +73,8 @@ export const OpenCodeSessionSchema = z.object({
   title: z.string().min(1).max(4_096),
   time: NativeTimeSchema,
   model: OpenCodeModelRefSchema.optional(),
+  /** Native free-form Session metadata; AOS owns only its own namespaced keys. */
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
 export const OpenCodeSessionCatalogSchema = z.object({

@@ -1,0 +1,7 @@
+urgent.wav
+  Source: https://github.com/elementary/sound-theme
+  File:   elementary/stereo/dialog-information.oga
+  License: The Unlicense (public domain; no attribution required, noted here
+           for provenance)
+  Changes: decoded to mono 22.05 kHz 16-bit PCM and trimmed to 1.10 s, which
+           drops only the trailing silence, to keep the asset under 60 KB.

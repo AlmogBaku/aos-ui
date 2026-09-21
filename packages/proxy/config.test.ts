@@ -60,6 +60,17 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
   }
 }
 
+/** The push block the deployment examples ship, paths only. */
+function validPush() {
+  return {
+    stateDir: "/var/lib/aos-ui/push",
+    vapid: {
+      subject: "mailto:ops@example.com",
+      privateKeyFile: "/run/secrets/vapid-private-key",
+    },
+  }
+}
+
 describe("proxy configuration and secret boundary", () => {
   it("accepts the minimal server-token-only V1 configuration", () => {
     expect(parseProxyConfig(validConfig())).toEqual(validConfig())
@@ -220,6 +231,36 @@ describe("proxy configuration and secret boundary", () => {
         publicOrigin: "http://192.168.1.4:3000",
       })
     ).toThrow("Invalid proxy configuration")
+  })
+
+  it("accepts an optional push deployment, and a deployment without one", () => {
+    expect(
+      parseProxyConfig({ ...validConfig(), push: validPush() }).push
+    ).toEqual(validPush())
+    expect(parseProxyConfig(validConfig()).push).toBeUndefined()
+  })
+
+  it("rejects push state outside an absolute path, an insecure subject, and configured key material", () => {
+    for (const push of [
+      { ...validPush(), stateDir: "var/lib/aos-ui/push" },
+      {
+        ...validPush(),
+        vapid: { ...validPush().vapid, subject: "http://ops.example.test" },
+      },
+      {
+        ...validPush(),
+        vapid: { ...validPush().vapid, privateKeyFile: "vapid-private-key" },
+      },
+      {
+        ...validPush(),
+        vapid: { ...validPush().vapid, publicKey: "A".repeat(87) },
+      },
+      { ...validPush(), publicKey: "A".repeat(87) },
+      { ...validPush(), extra: true },
+    ])
+      expect(() => parseProxyConfig({ ...validConfig(), push })).toThrow(
+        "Invalid proxy configuration"
+      )
   })
 
   it("requires coherent execution limits", () => {

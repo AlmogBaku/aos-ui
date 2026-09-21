@@ -325,6 +325,29 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   states what happened in place, and a provider that no longer holds the bytes
   says so and drops the retry and download it cannot honor.
 
+### Notification ask and settings
+
+**Character:** calm, inline, and non-intrusive.
+
+- **Ask surface:** the permission ask appears as an inline card in the notice
+  slot of the conversation — never as a modal, a load-time interstitial, or an
+  automatic browser prompt. It appears once, after the first real operator
+  message, and only if permission has not already been granted or denied.
+- **Actions:** the card offers a primary **Turn on** button (violet primary
+  pair) and a ghost **Not now** button. Declining opts out durably; the card
+  does not reappear.
+- **Copy:** calm and operational — state what turns on without urgency. No
+  promotional framing.
+- **Settings:** every closed-app delivery state (push enabled, push not
+  configured, HTTPS required, permission denied, not asked yet) is legible in
+  the notification settings panel. Controls use native checkboxes; no custom
+  toggle replaces them.
+- **Motion:** the card fades in over 200 ms on entry; `prefers-reduced-motion`
+  suppresses the transition while the card remains visible.
+- **Sound:** the in-tab audio cue is a brand asset — the elementary OS sound
+  theme, released under the Unlicense, at `public/sounds/urgent.wav`. Sound is
+  never the only notification channel; all states are legible without it.
+
 ### Conversation and Execution
 
 The conversation is the product surface; execution history supports it. Keep

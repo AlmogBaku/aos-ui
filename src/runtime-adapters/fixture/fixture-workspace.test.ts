@@ -115,6 +115,66 @@ describe("FixtureWorkspace", () => {
     expect(published).toHaveLength(1)
   })
 
+  it("keeps the seeded pin and archival authoritative", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+
+    await expect(
+      workspace.getSessionMetadata([
+        "thread-vela-metrics",
+        "thread-vela-retrospective",
+      ])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        threadId: "thread-vela-metrics",
+        pinned: true,
+      }),
+      expect.objectContaining({
+        threadId: "thread-vela-retrospective",
+        archived: true,
+      }),
+    ])
+  })
+
+  it("round-trips the operator's pin and republishes the Session once", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const published: SessionMetadata[][] = []
+    workspace.subscribeSessionMetadata(["thread-aster-launch"], (metadata) =>
+      published.push(metadata)
+    )
+
+    await workspace.setSessionPinned("thread-aster-launch", true)
+    expect(published.at(-1)?.[0]).toMatchObject({ pinned: true })
+    await expect(
+      workspace.getSessionMetadata(["thread-aster-launch"])
+    ).resolves.toEqual([expect.objectContaining({ pinned: true })])
+
+    await workspace.setSessionPinned("thread-aster-launch", false)
+    expect(published.at(-1)?.[0]).toMatchObject({ pinned: false })
+    await workspace.setSessionPinned("thread-aster-launch", false)
+    expect(published).toHaveLength(2)
+
+    await expect(workspace.setSessionPinned("missing", true)).rejects.toThrow(
+      "Session not found"
+    )
+  })
+
+  it("performs every Session action the workspace offers", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+
+    expect(
+      getWorkspaceCapabilities(
+        workspace,
+        [],
+        await workspace.sessionActionCapabilities()
+      )
+    ).toMatchObject({
+      sessionRename: true,
+      sessionArchival: true,
+      sessionDeletion: true,
+      sessionPin: true,
+    })
+  })
+
   it("retains localized titles supplied by the locale-aware workspace", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
 

@@ -2,6 +2,7 @@ import type { AssistantRuntime, Toolkit } from "@assistant-ui/react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
+import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -84,8 +85,20 @@ export type SessionMetadata = {
   agentId: string
   updatedAt: string
   status: SessionStatus
+  /** Provider archival state; absent until a provider read reports it. */
+  archived?: boolean
   /** Provider read state; absent when the runtime does not track it. */
   unread?: boolean
+  /** Provider pin; absent when the runtime does not track it. */
+  pinned?: boolean
+}
+
+/** Which Session actions the selected runtime declares it performs. */
+export type SessionActionCapabilities = {
+  rename: boolean
+  archive: boolean
+  delete: boolean
+  pin: boolean
 }
 
 export type TodoStatus = "pending" | "active" | "completed" | "failed"
@@ -149,8 +162,19 @@ export type WorkspaceAdapter = {
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
   markSessionRead?: (threadId: string) => Promise<void>
-  /** The Session that is visible, focused, and unobscured, or none. */
-  reportFocus?: (threadId: string | null) => void
+  /** Provider-owned pin; rename, archival, and deletion travel with threads. */
+  setSessionPinned?: (threadId: string, pinned: boolean) => Promise<void>
+  /** What the runtime declares about the Session actions the UI may offer. */
+  sessionActionCapabilities?: () => Promise<SessionActionCapabilities>
+  /**
+   * The Session that is visible, focused, and unobscured, or none, with this
+   * connection's presence: a foreground connection nobody is using is idle, and
+   * the provider decides from that whether a device still needs a push.
+   */
+  reportFocus?: (
+    threadId: string | null,
+    presence: { foreground: boolean; idle: boolean }
+  ) => void
 }
 
 export type RuntimeQuestionOption = {
@@ -250,6 +274,8 @@ export type HarnessRuntime = {
   media?: VoiceMediaController
   assistantConfig?: { instructions?: string; toolkit?: Toolkit }
   activityCoverage: "workspace" | "active-session"
+  /** Present only where the provider can subscribe this device to Web Push. */
+  push?: PushSubscriptionManager
   environmentLabel?: string
 }
 
@@ -261,6 +287,10 @@ export type WorkspaceCapabilities = {
   agentCreation: boolean
   activityEvents: boolean
   sessionReadState: boolean
+  sessionRename: boolean
+  sessionArchival: boolean
+  sessionDeletion: boolean
+  sessionPin: boolean
 }
 
 export type WorkspaceProviderEvent<TPayload = unknown> = {

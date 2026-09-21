@@ -271,6 +271,9 @@ class SessionAttachment {
   }
 
   update(update: SessionUpdate) {
+    // Nothing to tell a client that has gone. A resolved promise rather than
+    // `undefined`, because callers chain on what this returns.
+    if (this.#detached) return Promise.resolve()
     const failure = runFailureOf(update)
     if (failure) this.#log("error", "acp.run.failed", failure)
     return this.#client.notify(methods.client.session.update, {
@@ -279,8 +282,17 @@ class SessionAttachment {
     })
   }
 
-  /** Reports a failure that has no request to answer. */
+  /**
+   * Reports a failure that has no request to answer.
+   *
+   * A detached attachment reports nothing. Its deferred work outlives the
+   * client by a task or two, so whatever it was carrying fails on a socket the
+   * browser already closed: that is the operator navigating away, not a fault
+   * this deployment has to answer for. Logging it as one buries the failures
+   * that are real.
+   */
   async report(cause: unknown) {
+    if (this.#detached) return
     const { runtime } = this.#context.runtimeInstance
     const failure = errorNotificationOf(runtime, cause)
     this.#log("error", "acp.error", {

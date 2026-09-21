@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   AgentCatalogResponseSchema,
   RuntimeInfoSchema,
@@ -164,6 +166,18 @@ function historyPagination(
  */
 const MAX_EXTRA_HISTORY_PAGE_FETCHES = 32
 
+/**
+ * One stored native flag, however the endpoint reporting it spells it: the
+ * Session list coerces its SQLite integers to booleans, while the Session
+ * detail read returns the raw `0`/`1`. Anything else is unknown, not false.
+ */
+function nativeFlag(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (value === 1) return true
+  if (value === 0) return false
+  return undefined
+}
+
 function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
 }
@@ -222,11 +236,20 @@ function nativeProfiles(payload: unknown): NativeRecord[] {
   return profiles
 }
 
+/**
+ * A catalog revision is an identifier, so it is bounded at 256 characters,
+ * while the profile list it describes is not bounded at all. Naming every
+ * profile inline crossed that bound at ten profiles and failed the whole
+ * catalog, which reads to the browser as a runtime that is unavailable. A
+ * digest stays bounded whatever the operator names their profiles, and still
+ * changes whenever any agent's own revision does.
+ */
 function catalogRevision(agents: readonly AgentCatalogEntry[]) {
-  return `profiles:${agents
+  const material = agents
     .map(({ summary, revision }) => `${summary.id}@${revision}`)
     .sort()
-    .join(",")}`
+    .join(",")
+  return `profiles:${createHash("sha256").update(material).digest("hex")}`
 }
 
 function sessionId(_profile: string, storedId: string) {
@@ -875,6 +898,10 @@ export class HermesServerAdapter implements ServerRuntime {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
+          sessionPin: {
+            status: "unavailable",
+            reason: "temporarily-unavailable",
+          },
           sessionDeletion: {
             status: "unavailable",
             reason: "temporarily-unavailable",
@@ -926,6 +953,7 @@ export class HermesServerAdapter implements ServerRuntime {
         sessionCreation: { status: "available" },
         sessionTitle: { status: "available" },
         sessionArchival: { status: "available" },
+        sessionPin: { status: "available" },
         sessionDeletion: { status: "available" },
         sessionRun: { status: "available" },
         sessionStop: { status: "available" },
@@ -1107,7 +1135,8 @@ export class HermesServerAdapter implements ServerRuntime {
         trimmedText(row.profile) !== profile ||
         seen.has(storedId) ||
         (row.is_active !== undefined && typeof row.is_active !== "boolean") ||
-        (row.unread !== undefined && typeof row.unread !== "boolean")
+        (row.unread !== undefined && typeof row.unread !== "boolean") ||
+        (row.pinned !== undefined && typeof row.pinned !== "boolean")
       )
         throw new HermesUnavailableError()
       seen.add(storedId)
@@ -1122,6 +1151,8 @@ export class HermesServerAdapter implements ServerRuntime {
         // Read state is derived per catalog row; an older Hermes omits it, and
         // absent must stay absent rather than collapse to "read".
         ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
+        // The pin is stored, and absent stays absent for the same reason.
+        ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
       }
     })
     const result = SessionCatalogResponseSchema.safeParse({
@@ -1368,14 +1399,18 @@ export class HermesServerAdapter implements ServerRuntime {
       throw new HermesUnavailableError()
     if (trimmedText(payload.profile) !== profile)
       throw new HermesSessionNotFoundError()
+    const pinned = nativeFlag(payload.pinned)
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
       agentId: profile,
       title: trimmedText(payload.title) ?? storedId,
-      archived: payload.archived === true,
+      // This read reports the stored flags as SQLite integers, so an archived
+      // Session arrives as `1`; an unreadable flag stays the archive default.
+      archived: nativeFlag(payload.archived) ?? false,
       updatedAt: timestamp(payload.last_active ?? payload.started_at),
       status:
         payload.is_active === true ? ("running" as const) : ("idle" as const),
+      ...(pinned === undefined ? {} : { pinned }),
       // `unread` is omitted: the Session detail read carries no derived
       // activity timestamp, so read state is unknowable here.
     })
@@ -1455,6 +1490,8 @@ export class HermesServerAdapter implements ServerRuntime {
   ) {
     await this.getSession(profile, storedId)
     if (!this.#dashboard) throw new HermesUnavailableError()
+    // The native patch owns every flag's side effects: pinning a Session also
+    // clears `hidden` and exempts the row from auto-archive.
     try {
       await (method === "PATCH"
         ? this.#dashboard.updateSession(profile, storedId, body)

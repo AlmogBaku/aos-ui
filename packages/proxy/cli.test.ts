@@ -176,6 +176,11 @@ describe("proxy executable", () => {
         "/auth/callback",
         "/hermes",
         "/hermes/api/profiles",
+        // A guest installs no workspace and registers no service worker, and an
+        // encoded path reaches the same file the static handler would decode.
+        "/sw.js",
+        "/sw%2Ejs",
+        "/manifest.webmanifest",
       ]) {
         const response = await guestApp.fetch(
           new Request(`https://guest.example.test${reservedPath}`)
@@ -183,6 +188,15 @@ describe("proxy executable", () => {
         expect(response?.status).toBe(404)
         expect(response?.headers.get("x-content-type-options")).toBe("nosniff")
       }
+      const operatorApp = start.mock.calls[0]![0].app!
+      for (const installable of ["/sw.js", "/manifest.webmanifest"])
+        expect(
+          (
+            await operatorApp.fetch(
+              new Request(`https://aos.example.test${installable}`)
+            )
+          )?.status
+        ).toBe(200)
 
       await lifecycle!.shutdown()
       await lifecycle!.shutdown()

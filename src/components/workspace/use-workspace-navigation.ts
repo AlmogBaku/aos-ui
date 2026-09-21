@@ -12,6 +12,7 @@ import { useLocation, useNavigate } from "react-router"
 import type { AssistantRuntime } from "@assistant-ui/react"
 import type {
   HarnessRuntime,
+  SessionActionCapabilities,
   SessionMetadata,
   TodoItem,
   WorkspaceActivityEvent,
@@ -59,6 +60,22 @@ const emptyTodos: TodoItem[] = []
 const MAX_TIMEOUT_MS = 2_147_483_647
 /** A created Agent can reach the native catalog a moment after its receipt. */
 const CREATED_AGENT_CATALOG_RETRY_MS = 1_000
+
+const noSessionActions: SessionActionCapabilities = {
+  rename: false,
+  archive: false,
+  delete: false,
+  pin: false,
+}
+
+/**
+ * Assistant UI refuses to archive or unarchive a thread whose local status
+ * already disagrees with the request. Reloading the list settles which side is
+ * stale, so that one error is worth a single retry.
+ */
+function isThreadStatusError(reason: unknown) {
+  return reason instanceof Error && reason.message.includes("has status")
+}
 
 function readBrowserPathname() {
   return window.location.pathname
@@ -160,8 +177,15 @@ export function useWorkspaceNavigation({
   const [dismissedTabs, setDismissedTabs] = useState<Record<string, string[]>>(
     {}
   )
+  // A pinned tab can still be closed, but only until its Session is next
+  // active. Remembering the `updatedAt` each dismissal saw is what dates it.
+  const pinnedDismissedAt = useRef(new Map<string, string>())
   const tabUndo = useSessionTabUndo()
   const [actionError, setActionError] = useState<Error | null>(null)
+  // null until the runtime has answered; every action stays hidden meanwhile.
+  const [sessionActions, setSessionActions] =
+    useState<SessionActionCapabilities | null>(null)
+  const reconciledArchival = useRef<string | null>(null)
   const [todoSnapshot, setTodoSnapshot] = useState<TodoSnapshot>({
     key: "",
     todos: [],
@@ -263,15 +287,22 @@ export function useWorkspaceNavigation({
     : selectedAgentId
 
   const runtimeThreads = useMemo(() => {
-    return threadState.threadIds.map((threadId) => {
+    // Archived threads carry Session metadata and titles too, so the archived
+    // list can name them.
+    const ids = [
+      ...new Set([...threadState.threadIds, ...threadState.archivedThreadIds]),
+    ]
+    return ids.map((threadId) => {
       const item = threadState.threadItems[threadId]
       return {
         threadId: item?.remoteId ?? item?.externalId ?? threadId,
         title: item?.title?.trim() || dictionary.actions.newSession,
+        status: item?.status,
       }
     })
   }, [
     dictionary.actions.newSession,
+    threadState.archivedThreadIds,
     threadState.threadIds,
     threadState.threadItems,
   ])
@@ -317,6 +348,38 @@ export function useWorkspaceNavigation({
       ? conversationDraft.threadId
       : null
     : visibleThreadId
+  // Automatic selection never lands on an archived Session, but the operator
+  // may still be reading the one on screen.
+  const listedSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          session.archived !== true || session.threadId === visibleThreadId
+      ),
+    [sessions, visibleThreadId]
+  )
+
+  /**
+   * Dismissals as the lists should read them now: a pinned Session's dismissal
+   * expires as soon as the Session moves on, so its tab comes back when it is
+   * next active. A dismissal nobody dated stays in force.
+   */
+  const liveDismissedTabs = useMemo(() => {
+    const byThread = new Map(
+      sessions.map((session) => [session.threadId, session] as const)
+    )
+    return Object.fromEntries(
+      Object.entries(dismissedTabs).map(([agentId, threadIds]) => [
+        agentId,
+        threadIds.filter((threadId) => {
+          const session = byThread.get(threadId)
+          if (session?.pinned !== true) return true
+          const dismissedAt = pinnedDismissedAt.current.get(threadId) ?? ""
+          return !(Date.parse(session.updatedAt) > Date.parse(dismissedAt))
+        }),
+      ])
+    )
+  }, [dismissedTabs, sessions])
 
   const updateRoute = useCallback(
     (selection: WorkspaceSelection, mode: "push" | "replace") => {
@@ -639,7 +702,7 @@ export function useWorkspaceNavigation({
         requested?.sessionId && !knownSession ? requested.sessionId : undefined
       const fallbackThreadId = resolveSessionSelection({
         agentId,
-        sessions,
+        sessions: listedSessions,
         activeSessions: [],
       })
       const threadId =
@@ -700,7 +763,7 @@ export function useWorkspaceNavigation({
       ? sessions.find(({ threadId }) => threadId === activeThreadId)
       : undefined
     const manual = new Set([...(manuallyOpened[selectedAgentId] ?? [])])
-    const dismissed = new Set(dismissedTabs[selectedAgentId] ?? [])
+    const dismissed = new Set(liveDismissedTabs[selectedAgentId] ?? [])
     const openSessions = buildAgentSessionView({
       agentId: selectedAgentId,
       sessions,
@@ -708,6 +771,7 @@ export function useWorkspaceNavigation({
       titles,
       now: eligibilityNow,
       untitledLabel: dictionary.actions.newSession,
+      visibleThreadId,
     }).openSessions.filter(({ threadId }) => !dismissed.has(threadId))
     if (
       selectedSession?.agentId === selectedAgentId &&
@@ -739,7 +803,7 @@ export function useWorkspaceNavigation({
         ? null
         : resolveSessionSelection({
             agentId: selectedAgentId,
-            sessions: sessions.filter(
+            sessions: listedSessions.filter(
               ({ threadId }) => !dismissed.has(threadId)
             ),
             activeSessions: openSessions,
@@ -762,9 +826,11 @@ export function useWorkspaceNavigation({
     agentsLoading,
     dictionary.actions.newSession,
     defaultAgentId,
-    dismissedTabs,
+    liveDismissedTabs,
+    listedSessions,
     manuallyOpened,
     eligibilityNow,
+    visibleThreadId,
     selectRuntimeThread,
     selectedAgentId,
     sessions,
@@ -825,6 +891,53 @@ export function useWorkspaceNavigation({
     }
   }, [todoSubscriptionKey, visibleThreadId, workspace])
 
+  // A runtime that declares nothing, or cannot answer, offers no Session
+  // actions; the workspace itself stays usable either way.
+  useEffect(() => {
+    const read = workspace.sessionActionCapabilities
+    if (!read) {
+      setSessionActions(noSessionActions)
+      return
+    }
+    let active = true
+    setSessionActions(null)
+    void read
+      .call(workspace)
+      .then((next) => {
+        if (active) setSessionActions(next)
+      })
+      .catch(() => {
+        if (active) setSessionActions(noSessionActions)
+      })
+    return () => {
+      active = false
+    }
+  }, [refreshKey, workspace])
+
+  // Archival can change outside this browser. When provider metadata and the
+  // thread list disagree, one reload settles which of them is stale.
+  useEffect(() => {
+    const disagreeing = runtimeThreads
+      .filter(({ threadId, status }) => {
+        if (status !== "regular" && status !== "archived") return false
+        const archived = sessions.find(
+          (session) => session.threadId === threadId
+        )?.archived
+        return archived !== undefined && archived !== (status === "archived")
+      })
+      .map(({ threadId }) => threadId)
+    if (disagreeing.length === 0) {
+      reconciledArchival.current = null
+      return
+    }
+    const key = disagreeing.join("\u001f")
+    if (reconciledArchival.current === key) return
+    reconciledArchival.current = key
+    void runtime.threads.reload().catch((reason: unknown) => {
+      setActionError(toError(reason))
+    })
+  }, [runtime, runtimeThreads, sessions])
+
   const todoQueryKey = `${visibleThreadId ?? ""}:${todoSubscriptionKey}`
   const todoSnapshotIsCurrent = todoSnapshot.key === todoQueryKey
   const todos = todoSnapshotIsCurrent ? todoSnapshot.todos : emptyTodos
@@ -838,7 +951,7 @@ export function useWorkspaceNavigation({
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null
   const selectedDismissedTabs = new Set(
-    selectedAgentId ? (dismissedTabs[selectedAgentId] ?? []) : []
+    selectedAgentId ? (liveDismissedTabs[selectedAgentId] ?? []) : []
   )
   const rawSessionView = selectedAgentId
     ? buildAgentSessionView({
@@ -850,8 +963,9 @@ export function useWorkspaceNavigation({
         titles,
         now: eligibilityNow,
         untitledLabel: dictionary.actions.newSession,
+        visibleThreadId,
       })
-    : { openSessions: [], allSessions: [] }
+    : { openSessions: [], allSessions: [], archivedSessions: [] }
   const sessionView = {
     ...rawSessionView,
     openSessions: rawSessionView.openSessions.filter(
@@ -866,7 +980,7 @@ export function useWorkspaceNavigation({
     agentIds: displayAgents.map(({ id }) => id),
     sessions,
     manuallyOpened,
-    dismissedTabs,
+    dismissedTabs: liveDismissedTabs,
     lastSelected: lastSelected.current,
     titles,
     now: eligibilityNow,
@@ -880,7 +994,7 @@ export function useWorkspaceNavigation({
     if (agentId === PENDING_DRAFT_AGENT_ID) return
     setPreferredAgentId(agentId)
     const manual = new Set([...(manuallyOpened[agentId] ?? [])])
-    const dismissed = new Set(dismissedTabs[agentId] ?? [])
+    const dismissed = new Set(liveDismissedTabs[agentId] ?? [])
     const rawView = buildAgentSessionView({
       agentId,
       sessions,
@@ -888,6 +1002,7 @@ export function useWorkspaceNavigation({
       titles,
       now: eligibilityNow,
       untitledLabel: dictionary.actions.newSession,
+      visibleThreadId,
     })
     const view = {
       ...rawView,
@@ -901,7 +1016,7 @@ export function useWorkspaceNavigation({
         ? null
         : resolveSessionSelection({
             agentId,
-            sessions: sessions.filter(
+            sessions: listedSessions.filter(
               (session) =>
                 session.agentId === agentId && !dismissed.has(session.threadId)
             ),
@@ -974,6 +1089,9 @@ export function useWorkspaceNavigation({
       previousLastSelectedThreadId,
       clearedLastSelected,
     })
+    if (closed.pinned === true) {
+      pinnedDismissedAt.current.set(threadId, closed.updatedAt)
+    }
     setDismissedTabs((current) => ({
       ...current,
       [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],
@@ -987,7 +1105,16 @@ export function useWorkspaceNavigation({
     if (clearedLastSelected) {
       lastSelected.current.delete(agentId)
     }
-    if (!selectionChanged) return
+    await leaveSession(threadId, agentId)
+  }
+
+  /**
+   * Moves selection off a Session the operator is leaving behind. Archival and
+   * deletion run this before mutating, because Assistant UI would otherwise
+   * strand the operator on an unrouted draft of its own choosing.
+   */
+  async function leaveSession(threadId: string, agentId: string) {
+    if (agentId !== selectedAgentId || threadId !== activeThreadId) return
     const next = neighborAfterClose(
       sessionView.openSessions.map((session) => session.threadId),
       threadId,
@@ -997,12 +1124,87 @@ export function useWorkspaceNavigation({
       lastSelected.current.set(agentId, next)
       updateRoute({ agentId, sessionId: next }, "replace")
       await selectRuntimeThread(next)
-    } else {
-      lastSelected.current.set(agentId, null)
-      desiredThread.current = null
-      updateRoute({ agentId, sessionId: null }, "replace")
-      await switchToNewThread(agentId)
+      return
     }
+    lastSelected.current.set(agentId, null)
+    desiredThread.current = null
+    updateRoute({ agentId, sessionId: null }, "replace")
+    await switchToNewThread(agentId)
+  }
+
+  function owningAgentId(threadId: string, verifiedAgentId?: string) {
+    const agentId =
+      sessions.find((session) => session.threadId === threadId)?.agentId ??
+      verifiedAgentId
+    if (!agentId) throw new Error(`Session not found: ${threadId}`)
+    return agentId
+  }
+
+  /**
+   * Keeps tab bookkeeping in step with a Session that left the strip. `dismiss`
+   * hides it while provider metadata catches up; `forget` drops every reference
+   * to one that is gone or restored, so a stale id never holds a tab open.
+   */
+  function forgetTab(
+    agentId: string,
+    threadId: string,
+    mode: "dismiss" | "forget"
+  ) {
+    setDismissedTabs((current) => {
+      const remaining = (current[agentId] ?? []).filter(
+        (candidate) => candidate !== threadId
+      )
+      return {
+        ...current,
+        [agentId]: mode === "dismiss" ? [...remaining, threadId] : remaining,
+      }
+    })
+    setManuallyOpened((current) => ({
+      ...current,
+      [agentId]: (current[agentId] ?? []).filter(
+        (candidate) => candidate !== threadId
+      ),
+    }))
+    if (lastSelected.current.get(agentId) === threadId) {
+      lastSelected.current.delete(agentId)
+    }
+  }
+
+  async function renameSession(threadId: string, title: string) {
+    await runtime.threads.getItemById(threadId).rename(title)
+  }
+
+  async function setSessionPinned(threadId: string, pinned: boolean) {
+    if (!workspace.setSessionPinned)
+      throw new Error("Pinning Sessions is unavailable from this provider")
+    await workspace.setSessionPinned(threadId, pinned)
+  }
+
+  async function archiveSession(threadId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(threadId, verifiedAgentId)
+    await leaveSession(threadId, agentId)
+    forgetTab(agentId, threadId, "dismiss")
+    await runtime.threads.getItemById(threadId).archive()
+  }
+
+  async function unarchiveSession(threadId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(threadId, verifiedAgentId)
+    try {
+      await runtime.threads.getItemById(threadId).unarchive()
+    } catch (reason) {
+      if (!isThreadStatusError(reason)) throw reason
+      await runtime.threads.reload()
+      await runtime.threads.getItemById(threadId).unarchive()
+    }
+    // Archiving dismissed the tab; restoring the Session lets it list again.
+    forgetTab(agentId, threadId, "forget")
+  }
+
+  async function deleteSession(threadId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(threadId, verifiedAgentId)
+    await leaveSession(threadId, agentId)
+    await runtime.threads.getItemById(threadId).delete()
+    forgetTab(agentId, threadId, "forget")
   }
 
   async function undoCloseSession() {
@@ -1199,11 +1401,17 @@ export function useWorkspaceNavigation({
     retryTodos,
     sessions,
     titles,
+    sessionActions,
     setPreferredAgentId,
     selectAgent,
     openSession,
     closeSession,
     undoCloseSession,
+    renameSession,
+    setSessionPinned,
+    archiveSession,
+    unarchiveSession,
+    deleteSession,
     createSession,
     openAgentBuilder,
     refreshAfterVisibilityChange,

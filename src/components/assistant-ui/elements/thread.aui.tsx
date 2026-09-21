@@ -47,7 +47,6 @@ import {
   type ComposerEnterEvent,
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
-import { copyTextToClipboard } from "@/lib/clipboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
@@ -55,7 +54,14 @@ import {
   MessageQueue,
   type UnconfirmedDelivery,
 } from "@/components/assistant-ui/elements/message-queue"
+import {
+  useMessageCopy,
+  useMessageEdit,
+  useMessageRetry,
+} from "./message-actions"
+import { MessageContextMenu } from "./message-context-menu"
 import { useThreadReadingPosition } from "./thread-reading-position"
+import { useTouchPrimaryInput } from "./touch-primary"
 import {
   VoiceComposerControl,
   VoiceComposerField,
@@ -110,46 +116,14 @@ import {
   useCallback,
   useRef,
   useState,
-  useSyncExternalStore,
   type ComponentType,
   type FC,
   type KeyboardEvent,
-  type MouseEvent,
   type PropsWithChildren,
   type ReactNode,
 } from "react"
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart
-
-const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
-
-function touchPrimarySnapshot(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(TOUCH_PRIMARY_QUERY).matches
-  )
-}
-
-function subscribeToTouchPrimary(change: () => void): () => void {
-  if (
-    typeof window === "undefined" ||
-    typeof window.matchMedia !== "function"
-  ) {
-    return () => undefined
-  }
-  const query = window.matchMedia(TOUCH_PRIMARY_QUERY)
-  query.addEventListener("change", change)
-  return () => query.removeEventListener("change", change)
-}
-
-function useTouchPrimaryInput(): boolean {
-  return useSyncExternalStore(
-    subscribeToTouchPrimary,
-    touchPrimarySnapshot,
-    () => false
-  )
-}
 
 /**
  * Optional component overrides for the thread. `AssistantMessage` and
@@ -175,20 +149,26 @@ export type ThreadComposerOverrideProps = {
   fallback: ReactNode
 }
 
+/**
+ * How a retry or an edit replays a turn: `false` when the provider cannot
+ * rewind at all, otherwise the run configuration that names the user turn to
+ * replay from.
+ */
+export type MessageRewind =
+  | false
+  | {
+      runConfig(sourceUserId: string): {
+        custom: Record<string, unknown>
+      }
+    }
+
 export type ThreadProps = {
   components?: ThreadComponents | undefined
   autoFocus?: boolean | undefined
   labels?: Partial<ThreadLabels> | undefined
   direction?: LocaleDirection | undefined
   composerFeatures?: ComposerFeatureViewModel | undefined
-  messageRewind?:
-    | false
-    | {
-        runConfig(sourceUserId: string): {
-          custom: Record<string, unknown>
-        }
-      }
-    | undefined
+  messageRewind?: MessageRewind | undefined
 }
 
 export type ThreadLabels = {
@@ -210,6 +190,7 @@ export type ThreadLabels = {
   more: string
   exportMarkdown: string
   edit: string
+  selectText: string
   pendingInteractionAction: string
   cancel: string
   update: string
@@ -279,6 +260,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   more: "More",
   exportMarkdown: "Export as Markdown",
   edit: "Edit",
+  selectText: "Select text",
   pendingInteractionAction:
     "Answer the pending question before changing this conversation",
   cancel: "Cancel",
@@ -330,15 +312,9 @@ const EMPTY_COMPONENTS: ThreadComponents = {}
 const ThreadComponentsContext =
   createContext<ThreadComponents>(EMPTY_COMPONENTS)
 const ThreadLabelsContext = createContext<ThreadLabels>(DEFAULT_LABELS)
-const MessageRewindContext = createContext<
-  | false
-  | {
-      runConfig(sourceUserId: string): {
-        custom: Record<string, unknown>
-      }
-    }
-  | undefined
->(undefined)
+/** Messages take no props, and a portalled surface has to set `dir` itself. */
+const ThreadDirectionContext = createContext<LocaleDirection>("ltr")
+const MessageRewindContext = createContext<MessageRewind | undefined>(undefined)
 const ThreadComposerFeaturesContext = createContext<ComposerFeatureViewModel>(
   {}
 )
@@ -409,19 +385,21 @@ export const Thread: FC<ThreadProps> = ({
 
   return (
     <ThreadLabelsContext.Provider value={localizedLabels}>
-      <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
-        <MessageRewindContext.Provider value={messageRewind}>
-          <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
-            <ThreadComponentsContext.Provider value={components}>
-              <ThreadRoot
-                isEmpty={isEmpty}
-                autoFocus={autoFocus}
-                direction={direction}
-              />
-            </ThreadComponentsContext.Provider>
-          </ThreadComposerFeaturesContext.Provider>
-        </MessageRewindContext.Provider>
-      </AttachmentLabelsContext.Provider>
+      <ThreadDirectionContext.Provider value={direction}>
+        <AttachmentLabelsContext.Provider value={localizedAttachmentLabels}>
+          <MessageRewindContext.Provider value={messageRewind}>
+            <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
+              <ThreadComponentsContext.Provider value={components}>
+                <ThreadRoot
+                  isEmpty={isEmpty}
+                  autoFocus={autoFocus}
+                  direction={direction}
+                />
+              </ThreadComponentsContext.Provider>
+            </ThreadComposerFeaturesContext.Provider>
+          </MessageRewindContext.Provider>
+        </AttachmentLabelsContext.Provider>
+      </ThreadDirectionContext.Provider>
     </ThreadLabelsContext.Provider>
   )
 }
@@ -1551,6 +1529,8 @@ const AssistantMessage: FC = () => {
       state.message.content.length === 0
   )
   const labels = useContext(ThreadLabelsContext)
+  const direction = useContext(ThreadDirectionContext)
+  const messageRewind = useContext(MessageRewindContext)
   const {
     AssistantIdentity,
     ToolFallback: ToolFallbackComponent = ToolFallback,
@@ -1563,161 +1543,139 @@ const AssistantMessage: FC = () => {
   if (completedWithoutContent) return null
 
   return (
-    <MessagePrimitive.Root
-      data-slot="aui_assistant-message-root"
-      data-role="assistant"
-      className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
+    <MessageContextMenu
+      role="assistant"
+      labels={labels}
+      messageRewind={messageRewind}
+      dir={direction}
     >
-      {AssistantIdentity ? <AssistantIdentity /> : null}
-      <div
-        data-slot="aui_assistant-message-content"
-        className="px-2 leading-7 wrap-break-word text-foreground"
-        dir="auto"
+      <MessagePrimitive.Root
+        data-slot="aui_assistant-message-root"
+        data-role="assistant"
+        className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
       >
+        {AssistantIdentity ? <AssistantIdentity /> : null}
         <div
-          className="contents"
-          data-searchable-message-text={reading ? "" : undefined}
+          data-slot="aui_assistant-message-content"
+          className="px-2 leading-7 wrap-break-word text-foreground"
+          dir="auto"
         >
-          <InlineReadAloud />
+          <div
+            className="contents"
+            data-searchable-message-text={reading ? "" : undefined}
+          >
+            <InlineReadAloud />
+          </div>
+          <MessagePrimitive.GroupedParts groupBy={ASSISTANT_MESSAGE_GROUPER}>
+            {({ part, children }) => {
+              switch (part.type) {
+                case "group-chainOfThought":
+                  return (
+                    <>
+                      <MessageToolExperience
+                        renderTool={ToolFallbackComponent}
+                        indices={part.indices}
+                      />
+                      {children}
+                    </>
+                  )
+                case "group-tool":
+                  return null
+                case "group-reasoning": {
+                  return null
+                }
+                case "text": {
+                  return reading ? (
+                    <></>
+                  ) : (
+                    <div className="contents" data-searchable-message-text>
+                      <MarkdownText />
+                    </div>
+                  )
+                }
+                case "reasoning":
+                  return null
+                case "tool-call":
+                  return (part.toolUI ?? isAosRichTool(part)) ? (
+                    <div className="-mx-2 py-2">
+                      {part.toolUI ?? <ToolFallbackComponent {...part} />}
+                    </div>
+                  ) : null
+                case "data":
+                  return <div className="-mx-2">{part.dataRendererUI}</div>
+                case "file":
+                  return (
+                    <div
+                      data-slot="aui_assistant-message-file"
+                      className="py-1"
+                    >
+                      <File {...part} />
+                    </div>
+                  )
+                case "image":
+                  return (
+                    <div
+                      data-slot="aui_assistant-message-image"
+                      className="py-1"
+                    >
+                      <MessageImage {...part} />
+                    </div>
+                  )
+                case "indicator":
+                  return (
+                    <span
+                      data-slot="aui_assistant-message-indicator"
+                      className="animate-pulse font-sans motion-reduce:animate-none"
+                      aria-hidden="true"
+                    >
+                      {"●"}
+                    </span>
+                  )
+                default:
+                  return null
+              }
+            }}
+          </MessagePrimitive.GroupedParts>
+          <MessagePrimitive.Parts>
+            {({ part }) => {
+              // MessagePrimitive.Parts falls back to its default renderer for
+              // null. Return false so non-source parts are not rendered twice.
+              if (part.type !== "source") return false
+              return (
+                <div data-slot="aui_assistant-message-source" className="py-1">
+                  <Source
+                    {...part}
+                    labels={{
+                      openSource: labels.openSource,
+                      documentSource: labels.documentSource,
+                    }}
+                  />
+                </div>
+              )
+            }}
+          </MessagePrimitive.Parts>
+          <MessageError />
         </div>
-        <MessagePrimitive.GroupedParts groupBy={ASSISTANT_MESSAGE_GROUPER}>
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-chainOfThought":
-                return (
-                  <>
-                    <MessageToolExperience
-                      renderTool={ToolFallbackComponent}
-                      indices={part.indices}
-                    />
-                    {children}
-                  </>
-                )
-              case "group-tool":
-                return null
-              case "group-reasoning": {
-                return null
-              }
-              case "text": {
-                return reading ? (
-                  <></>
-                ) : (
-                  <div className="contents" data-searchable-message-text>
-                    <MarkdownText />
-                  </div>
-                )
-              }
-              case "reasoning":
-                return null
-              case "tool-call":
-                return (part.toolUI ?? isAosRichTool(part)) ? (
-                  <div className="-mx-2 py-2">
-                    {part.toolUI ?? <ToolFallbackComponent {...part} />}
-                  </div>
-                ) : null
-              case "data":
-                return <div className="-mx-2">{part.dataRendererUI}</div>
-              case "file":
-                return (
-                  <div data-slot="aui_assistant-message-file" className="py-1">
-                    <File {...part} />
-                  </div>
-                )
-              case "image":
-                return (
-                  <div data-slot="aui_assistant-message-image" className="py-1">
-                    <MessageImage {...part} />
-                  </div>
-                )
-              case "indicator":
-                return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans motion-reduce:animate-none"
-                    aria-hidden="true"
-                  >
-                    {"●"}
-                  </span>
-                )
-              default:
-                return null
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            // MessagePrimitive.Parts falls back to its default renderer for
-            // null. Return false so non-source parts are not rendered twice.
-            if (part.type !== "source") return false
-            return (
-              <div data-slot="aui_assistant-message-source" className="py-1">
-                <Source
-                  {...part}
-                  labels={{
-                    openSource: labels.openSource,
-                    documentSource: labels.documentSource,
-                  }}
-                />
-              </div>
-            )
-          }}
-        </MessagePrimitive.Parts>
-        <MessageError />
-      </div>
 
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
-      >
-        <BranchPicker />
-        <AssistantActionBar />
-      </div>
-    </MessagePrimitive.Root>
+        <div
+          data-slot="aui_assistant-message-footer"
+          className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
+        >
+          <BranchPicker />
+          <AssistantActionBar />
+        </div>
+      </MessagePrimitive.Root>
+    </MessageContextMenu>
   )
 }
 
 const AssistantActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const messageRewind = useContext(MessageRewindContext)
-  const retrySourceId = useAuiState((state) => state.message.parentId)
   const hasPendingInteraction = usePendingInteractionGate()
-  const aui = useAui()
-  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  )
-  const voice = useVoiceContext()
   const reading = useVoiceMessageReading()
-  useEffect(
-    () => () => {
-      if (copyResetTimerRef.current !== undefined) {
-        clearTimeout(copyResetTimerRef.current)
-      }
-      aui.message.setIsCopied(false)
-    },
-    [aui]
-  )
-  const copyMessage = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault()
-      const text = aui.message.getCopyText()
-      if (!text) return
-
-      void copyTextToClipboard(text).then(
-        () => {
-          if (copyResetTimerRef.current !== undefined) {
-            clearTimeout(copyResetTimerRef.current)
-          }
-          aui.message.setIsCopied(true)
-          copyResetTimerRef.current = setTimeout(() => {
-            copyResetTimerRef.current = undefined
-            aui.message.setIsCopied(false)
-          }, 3000)
-        },
-        () => undefined
-      )
-    },
-    [aui]
-  )
+  const copy = useMessageCopy()
+  const retry = useMessageRetry(messageRewind)
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning={!reading}
@@ -1725,7 +1683,12 @@ const AssistantActionBar: FC = () => {
       className="aui-assistant-action-bar-root col-start-3 row-start-2 -ms-1 flex animate-in items-center gap-1 text-muted-foreground duration-200 fade-in motion-reduce:animate-none"
     >
       <ActionBarPrimitive.Copy
-        onClick={copyMessage}
+        onClick={(event) => {
+          // The shared action owns the clipboard, so the menu copies the same
+          // text through the same fallback.
+          event.preventDefault()
+          copy.copy()
+        }}
         render={<TooltipIconButton tooltip={labels.copy} />}
       >
         <AuiIf condition={(s) => s.message.isCopied}>
@@ -1737,17 +1700,10 @@ const AssistantActionBar: FC = () => {
       </ActionBarPrimitive.Copy>
       {messageRewind !== false ? (
         <ActionBarPrimitive.Reload
-          disabled={hasPendingInteraction}
+          disabled={retry.disabled}
           onClick={(event) => {
-            if (messageRewind) {
-              event.preventDefault()
-              if (retrySourceId)
-                void aui.message.reload({
-                  runConfig: messageRewind.runConfig(retrySourceId),
-                })
-            }
-            voice?.media.stopSpeech()
-            voice?.media.disarm()
+            event.preventDefault()
+            retry.retry()
           }}
           render={
             <TooltipIconButton
@@ -1816,32 +1772,42 @@ const USER_MESSAGE_PART_COMPONENTS = {
 }
 
 const UserMessage: FC = () => {
+  const labels = useContext(ThreadLabelsContext)
+  const direction = useContext(ThreadDirectionContext)
+  const messageRewind = useContext(MessageRewindContext)
   return (
-    <MessagePrimitive.Root
-      data-slot="aui_user-message-root"
-      className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
-      data-role="user"
+    <MessageContextMenu
+      role="user"
+      labels={labels}
+      messageRewind={messageRewind}
+      dir={direction}
     >
-      <UserMessageAttachments />
+      <MessagePrimitive.Root
+        data-slot="aui_user-message-root"
+        className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
+        data-role="user"
+      >
+        <UserMessageAttachments />
 
-      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div
-          data-searchable-message-text
-          className="aui-user-message-content peer max-w-[30rem] rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden"
-          dir="auto"
-        >
-          <MessagePrimitive.Parts components={USER_MESSAGE_PART_COMPONENTS} />
+        <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+          <div
+            data-searchable-message-text
+            className="aui-user-message-content peer max-w-[30rem] rounded-xl bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden"
+            dir="auto"
+          >
+            <MessagePrimitive.Parts components={USER_MESSAGE_PART_COMPONENTS} />
+          </div>
+          <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
+            <UserActionBar />
+          </div>
         </div>
-        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
-          <UserActionBar />
-        </div>
-      </div>
 
-      <BranchPicker
-        data-slot="aui_user-branch-picker"
-        className="col-span-full col-start-1 row-start-3 -me-1 justify-end"
-      />
-    </MessagePrimitive.Root>
+        <BranchPicker
+          data-slot="aui_user-branch-picker"
+          className="col-span-full col-start-1 row-start-3 -me-1 justify-end"
+        />
+      </MessagePrimitive.Root>
+    </MessageContextMenu>
   )
 }
 
@@ -1849,6 +1815,7 @@ const UserActionBar: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const messageRewind = useContext(MessageRewindContext)
   const hasPendingInteraction = usePendingInteractionGate()
+  const edit = useMessageEdit()
   if (messageRewind === false) return null
   return (
     <ActionBarPrimitive.Root
@@ -1857,7 +1824,11 @@ const UserActionBar: FC = () => {
       className="aui-user-action-bar-root flex flex-col items-end"
     >
       <ActionBarPrimitive.Edit
-        disabled={hasPendingInteraction}
+        disabled={edit.disabled}
+        onClick={(event) => {
+          event.preventDefault()
+          edit.edit()
+        }}
         render={
           <TooltipIconButton
             tooltip={

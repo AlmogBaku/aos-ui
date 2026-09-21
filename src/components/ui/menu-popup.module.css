@@ -1,0 +1,49 @@
+.positioner {
+  z-index: 50;
+}
+.popup {
+  min-inline-size: 10rem;
+  padding: 0.25rem;
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 20%);
+  outline: none;
+}
+.item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-block-size: 2.75rem;
+  padding-inline: 0.75rem;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  cursor: pointer;
+  outline: none;
+}
+.item[data-highlighted] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.itemDestructive,
+.itemDestructive[data-highlighted] {
+  color: var(--destructive);
+}
+.itemDestructive[data-highlighted] {
+  background: color-mix(in oklch, var(--destructive), transparent 88%);
+}
+.item[aria-disabled="true"],
+.itemDestructive[aria-disabled="true"] {
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.item svg {
+  inline-size: 1rem;
+  block-size: 1rem;
+}
+.separator {
+  block-size: 1px;
+  margin-block: 0.25rem;
+  margin-inline: 0.5rem;
+  background: var(--border);
+}

@@ -44,6 +44,21 @@ describe("createSessionRows", () => {
     expect(rows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 
+  it("publishes a changed pin and keeps a known one through a read that omits it", () => {
+    const rows = createSessionRows()
+    rows.rememberList([session()])
+
+    expect(rows.rememberList([session({ pinned: true })])).toEqual([
+      expect.objectContaining({ pinned: true }),
+    ])
+    expect(rows.rememberList([session({ pinned: true })])).toEqual([])
+    expect(rows.rememberList([session({ pinned: false })])).toEqual([
+      expect.objectContaining({ pinned: false }),
+    ])
+    // A read that omits the pin never clears the known value.
+    expect(rows.rememberDetail(session()).pinned).toBe(false)
+  })
+
   it("leaves unread absent while no read has reported it", () => {
     const rows = createSessionRows()
 
@@ -68,6 +83,47 @@ describe("createSessionRows", () => {
       expect.objectContaining({ unread: true }),
     ])
     expect(rows.get(AGENT, SESSION)?.unread).toBe(true)
+  })
+
+  it("records when we acknowledged a read, and only then", () => {
+    let clock = 1_000
+    const rows = createSessionRows({ now: () => clock })
+    rows.rememberList([session({ unread: true })])
+
+    expect(rows.get(AGENT, SESSION)?.readAt).toBeUndefined()
+
+    rows.markRead(AGENT, SESSION)
+    expect(rows.get(AGENT, SESSION)?.readAt).toBe(1_000)
+
+    // A page reporting the Session read says nothing about when it was read, so
+    // it leaves our own stamp where it is.
+    clock += 1_000
+    rows.rememberList([session({ unread: false })])
+    expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+    expect(rows.get(AGENT, SESSION)?.readAt).toBe(1_000)
+
+    // The provider re-lit the Session: nothing about it is read any more.
+    clock += READ_GUARD_MS + 1
+    rows.rememberList([session({ unread: true })])
+    expect(rows.get(AGENT, SESSION)?.readAt).toBeUndefined()
+
+    // A Session read somewhere else carries no read time we can stand behind.
+    clock += 1_000
+    rows.rememberList([session({ unread: false })])
+    expect(rows.get(AGENT, SESSION)?.readAt).toBeUndefined()
+  })
+
+  it("keeps its own mark-read stamp through a stale unread page", () => {
+    let clock = 1_000
+    const rows = createSessionRows({ now: () => clock })
+    rows.rememberList([session({ unread: true })])
+    rows.markRead(AGENT, SESSION)
+
+    clock += 1_000
+    rows.rememberList([session({ unread: true })])
+
+    expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+    expect(rows.get(AGENT, SESSION)?.readAt).toBe(1_000)
   })
 
   it("reports an unknown Session as unknown and forgets a known one", () => {

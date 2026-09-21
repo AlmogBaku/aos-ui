@@ -5,18 +5,30 @@ const preferencesSchema = z.object({
   completion: z.boolean(),
   failure: z.boolean(),
   input: z.boolean(),
+  sound: z.boolean(),
+  prompt: z.enum(["pending", "accepted", "declined"]),
 })
 /**
- * Version 2 keeps notification preferences only. Activity history is provider
+ * Version 3 keeps notification preferences only. Activity history is provider
  * state held in memory, so version 1 snapshots and their records are dropped.
  */
 const snapshotSchema = z.object({
-  version: z.literal(2),
+  version: z.literal(3),
   preferences: preferencesSchema,
 })
 const storedSnapshotSchema = snapshotSchema
   .extend({ preferences: preferencesSchema.strict() })
   .strict()
+/** Version 2 predates the sound and ask-state preferences. */
+const legacySnapshotSchema = z.strictObject({
+  version: z.literal(2),
+  preferences: z.strictObject({
+    enabled: z.boolean(),
+    completion: z.boolean(),
+    failure: z.boolean(),
+    input: z.boolean(),
+  }),
+})
 
 export type ActivitySnapshot = z.infer<typeof storedSnapshotSchema>
 
@@ -30,9 +42,30 @@ export function deserializeActivity(
   serialized: string
 ): ActivitySnapshot | null {
   try {
-    const parsed = storedSnapshotSchema.safeParse(JSON.parse(serialized))
-    return parsed.success ? parsed.data : null
+    const value: unknown = JSON.parse(serialized)
+    const parsed = storedSnapshotSchema.safeParse(value)
+    if (parsed.success) return parsed.data
+    const legacy = legacySnapshotSchema.safeParse(value)
+    return legacy.success ? upgradeFromVersion2(legacy.data) : null
   } catch {
     return null
+  }
+}
+
+/**
+ * Version 2 wrote its default-off on every publish, so only an explicit opt-in
+ * counts as an answered ask; every other device joins the default-on rollout.
+ */
+function upgradeFromVersion2({
+  preferences,
+}: z.infer<typeof legacySnapshotSchema>): ActivitySnapshot {
+  return {
+    version: 3,
+    preferences: {
+      ...preferences,
+      enabled: true,
+      sound: true,
+      prompt: preferences.enabled ? "accepted" : "pending",
+    },
   }
 }

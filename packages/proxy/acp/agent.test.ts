@@ -39,9 +39,16 @@ import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
+import type {
+  AcpConnectionContext,
+  AcpOutbound,
+  GuestPolicy,
+  Translators,
+} from "./types"
 
 const AGENT = "researcher"
+const PRINCIPAL = "operator"
+const CONNECTION = "connection-1"
 const SESSION = "session-1"
 const CREATED = "session-created"
 const NOW = "2026-01-01T00:00:00.000Z"
@@ -94,6 +101,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionCreation: AVAILABLE,
     sessionTitle: AVAILABLE,
     sessionArchival: AVAILABLE,
+    sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
     sessionRun: AVAILABLE,
     sessionStop: AVAILABLE,
@@ -405,6 +413,7 @@ const PatchSchema = z.object({
   title: z.string().optional(),
   archived: z.boolean().optional(),
   unread: z.boolean().optional(),
+  pinned: z.boolean().optional(),
 })
 
 const ModelPatchSchema = z.object({
@@ -412,8 +421,23 @@ const ModelPatchSchema = z.object({
   effortId: z.string().optional(),
 })
 
+/** A redeemed-invitation lane with nothing granted, for the guest guards. */
+const GUEST_POLICY: GuestPolicy = {
+  authenticate: async () => undefined,
+  grant: () => undefined,
+  project: {
+    access: (base) => base,
+    history: (value) => value,
+    capabilities: (value) => value,
+    permissionReply: (_request, reply) => reply,
+  },
+  expire: () => () => undefined,
+}
+
 type HarnessOptions = {
   rows?: Session[]
+  /** Runs the connection on the guest lane instead of the operator lane. */
+  guest?: boolean
   total?: number
   activity?: AosActivityNotification[]
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
@@ -549,6 +573,13 @@ async function harness(options: HarnessOptions = {}) {
     markRead: vi.fn(async () => undefined),
     close: vi.fn(),
   }
+  const presence = {
+    set: vi.fn(),
+    clear: vi.fn(),
+    present: vi.fn(() => false),
+    exposed: vi.fn(() => false),
+    lastPresentAt: vi.fn(() => undefined),
+  }
   const activityListeners = new Set<(event: AosActivityNotification) => void>()
   const activityFeed = {
     snapshot: () => options.activity ?? [],
@@ -561,16 +592,18 @@ async function harness(options: HarnessOptions = {}) {
 
   const logger = { info: vi.fn(), error: vi.fn() }
   const context: AcpConnectionContext = {
-    connectionId: "connection-1",
-    principalId: "operator",
-    lane: "operator",
+    connectionId: CONNECTION,
+    principalId: PRINCIPAL,
+    lane: options.guest ? "guest" : "operator",
     runtimeInstance,
     sessionRows: createSessionRows(),
     readState,
     activityFeed,
     translators,
     attachmentStages: new AttachmentStageRegistry(),
+    presence,
     logger,
+    ...(options.guest ? { guest: GUEST_POLICY } : {}),
   }
 
   const recorder = createRecorder()
@@ -625,6 +658,7 @@ async function harness(options: HarnessOptions = {}) {
     updateModel,
     listAllSessions,
     readState,
+    presence,
     rows,
     logger,
     /** Every structured line the connection wrote, whatever its level. */
@@ -653,6 +687,11 @@ function runStarted(runId: string, threadId = SESSION): RunEvent {
 
 function updates(recorder: ReturnType<typeof createRecorder>) {
   return recorder.of(methods.client.session.update).map((entry) => entry.params)
+}
+
+/** Every catalog relist this connection has asked the client for. */
+function relists(recorder: ReturnType<typeof createRecorder>) {
+  return recorder.of(AOS_METHODS.notify.catalogInvalidated)
 }
 
 /** Every context reading this connection has pushed, newest last. */
@@ -1263,6 +1302,55 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("pins a Session and asks the acting client to relist", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      pinned: true,
+    })
+
+    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      pinned: true,
+    })
+    expect(updates(test.recorder)).toMatchObject([
+      {
+        sessionId: SESSION,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { [AOS_META_KEY]: { agentId: AGENT, pinned: true } },
+        },
+      },
+    ])
+    expect(relists(test.recorder)).toHaveLength(1)
+    test.close()
+  })
+
+  it("asks for a relist after archiving a Session but not after renaming one", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      archived: true,
+    })
+
+    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      archived: true,
+    })
+    expect(relists(test.recorder)).toHaveLength(1)
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      title: "Renamed",
+    })
+
+    // A title leaves the catalog's membership and order alone.
+    expect(relists(test.recorder)).toHaveLength(1)
+    test.close()
+  })
+
   it("marks a Session read through the connection's read state", async () => {
     const test = await harness()
     await test.list()
@@ -1322,6 +1410,108 @@ describe("AOS ACP agent", () => {
     )
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: null })
     await vi.waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
+    test.close()
+  })
+
+  it("records the presence an exposed Session implies", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: SESSION,
+        foreground: true,
+        idle: false,
+      })
+    )
+    test.close()
+  })
+
+  it("records a reported background or idle workspace as reported", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: SESSION,
+      foreground: false,
+      idle: true,
+    })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: SESSION,
+        foreground: false,
+        idle: true,
+      })
+    )
+    test.close()
+  })
+
+  it("records a foreground workspace showing no Session, and still blurs", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: null,
+      foreground: true,
+    })
+
+    await vi.waitFor(() =>
+      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+        sessionId: null,
+        foreground: true,
+        idle: false,
+      })
+    )
+    expect(test.readState.blur).toHaveBeenCalled()
+    test.close()
+  })
+
+  it("acknowledges an exposure once, however often its heartbeat repeats it", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await vi.waitFor(() =>
+      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
+    )
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.notify(AOS_METHODS.session.focus, {
+      sessionId: SESSION,
+      foreground: true,
+      idle: false,
+    })
+
+    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
+    expect(test.readState.focus).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("forgets this connection's presence when it closes", async () => {
+    const test = await harness()
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalled())
+
+    test.close()
+
+    await vi.waitFor(() =>
+      expect(test.presence.clear).toHaveBeenCalledWith(PRINCIPAL, CONNECTION)
+    )
+  })
+
+  it("keeps a guest's exposure out of presence and read state", async () => {
+    const test = await harness({ guest: true })
+
+    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    // One round trip after the notification proves the lane has handled it.
+    await expect(
+      test.agent.request(methods.agent.session.close, { sessionId: SESSION })
+    ).rejects.toThrow()
+
+    expect(test.presence.set).not.toHaveBeenCalled()
+    expect(test.readState.focus).not.toHaveBeenCalled()
     test.close()
   })
 
@@ -1418,6 +1608,45 @@ describe("AOS ACP agent", () => {
     })
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
+  })
+
+  it("reports nothing for a browser that left with a request outstanding", async () => {
+    // A server→client request the operator never answered rejects when the tab
+    // carrying it closes. That is the operator moving on, not a failure this
+    // deployment has to answer for, and reporting it as one buries the failures
+    // that are real.
+    const answer = Promise.withResolvers<RequestPermissionResponse>()
+    const test = await harness({ permission: () => answer.promise })
+    await test.create()
+    await test.agent.request(methods.agent.session.prompt, {
+      sessionId: CREATED,
+      prompt: [{ type: "text", text: "Delete it" }],
+      _meta: { [AOS_META_KEY]: {} },
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const source = test.sources[0]
+    source?.emit(runStarted("run-1", CREATED))
+    source?.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: CREATED,
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-1", reason: "permission-required" }],
+      },
+    })
+    source?.finish()
+    await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission
+    )
+
+    test.close()
+    // Long enough for the abandoned request to reject and settle its handlers.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(test.logged()).not.toContainEqual(
+      expect.objectContaining({ event: "acp.error" })
+    )
   })
 
   it("logs the connection, the Stop it received, and the reply it settled", async () => {

@@ -2,6 +2,7 @@ import {
   AgentCatalogResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
+  SessionPatchRequestSchema,
   SessionSchema,
   type AgentCatalogResponse,
   type Session,
@@ -40,8 +41,21 @@ type OpenCodeWorkspaceClient = {
     }): Promise<unknown>
     get(sessionId: string, signal?: AbortSignal): Promise<unknown>
     create(input?: { agent?: string }, signal?: AbortSignal): Promise<unknown>
+    update(
+      sessionId: string,
+      input: {
+        title?: string
+        time?: { archived?: number }
+        metadata?: Record<string, unknown>
+      },
+      signal?: AbortSignal
+    ): Promise<void>
+    delete(sessionId: string, signal?: AbortSignal): Promise<void>
   }
 }
+
+/** AOS owns this one native metadata key; OpenCode has no native pin flag. */
+export const OPENCODE_PIN_METADATA_KEY = "aos.pinned"
 
 export type OpenCodeWorkspaceOperations = ReturnType<
   typeof createOpenCodeWorkspaceOperations
@@ -83,6 +97,10 @@ function projectSession(
     archived: value.time.archived !== undefined,
     updatedAt: timestamp(value.time.updated ?? value.time.created),
     status: "idle",
+    // Only a metadata-bearing row proves the pin state; absence stays absent.
+    ...(value.metadata
+      ? { pinned: value.metadata[OPENCODE_PIN_METADATA_KEY] === true }
+      : {}),
   })
   if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
   return parsed.data
@@ -131,6 +149,45 @@ export function createOpenCodeWorkspaceOperations(input: {
       )
   }
 
+  /** One authoritative read that both projects and proves exact ownership. */
+  async function readSession(agentId: string, sessionId: string) {
+    const parsed = parseOpenCodeSession(
+      await input.client.sessions.get(sessionId)
+    )
+    if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
+    return {
+      native: parsed.data,
+      session: projectSession(parsed.data, agentId),
+    }
+  }
+
+  async function patchSession(
+    agentId: string,
+    sessionId: string,
+    body: unknown
+  ) {
+    const { native } = await readSession(agentId, sessionId)
+    const intent = SessionPatchRequestSchema.safeParse(body)
+    if (!intent.success) throw new OpenCodeWorkspaceUnavailableError()
+    const { title, archived, pinned } = intent.data
+    if (title !== undefined)
+      return input.client.sessions.update(sessionId, { title })
+    if (archived !== undefined)
+      // An empty native `time` is the only unarchive the pinned SDK can
+      // express: it types `time.archived` as a bare number and offers no
+      // unarchive route. Unverified until a live OpenCode acceptance run.
+      return input.client.sessions.update(sessionId, {
+        time: archived ? { archived: Date.now() } : {},
+      })
+    if (pinned !== undefined)
+      // Merge, never replace: foreign native metadata keys must survive.
+      return input.client.sessions.update(sessionId, {
+        metadata: { ...native.metadata, [OPENCODE_PIN_METADATA_KEY]: pinned },
+      })
+    // `unread` has no native read state to write, so it stays unavailable.
+    throw new OpenCodeWorkspaceUnavailableError()
+  }
+
   type InviteResolution = { sessionId: string; created: false } | undefined
   const invitedResolutions = new Map<string, Promise<InviteResolution>>()
 
@@ -149,9 +206,9 @@ export function createOpenCodeWorkspaceOperations(input: {
     if (matches.length === 1)
       return { sessionId: matches[0]!.id, created: false }
     if (!create) return undefined
-    // OpenCode v2 creates only an unmarked Session and exposes neither a
-    // title-bearing create nor an update endpoint. AOS cannot safely turn
-    // that into the reserved invitation title, so creation is unavailable.
+    // OpenCode v2 creates only an unmarked Session, and the reserved invitation
+    // title would need a second, non-atomic rename that can leave an untitled
+    // Session behind. Invited creation therefore stays unavailable.
     throw new OpenCodeWorkspaceUnavailableError()
   }
 
@@ -178,14 +235,6 @@ export function createOpenCodeWorkspaceOperations(input: {
       agentVisibility: {
         status: "unavailable" as const,
         reason: "native-agent-catalog-read-only",
-      },
-      sessionTitle: {
-        status: "unavailable" as const,
-        reason: "native-session-title-unavailable",
-      },
-      sessionDeletion: {
-        status: "unavailable" as const,
-        reason: "native-session-delete-unavailable",
       },
     }),
 
@@ -263,11 +312,14 @@ export function createOpenCodeWorkspaceOperations(input: {
     },
 
     async getSession(agentId: string, sessionId: string) {
-      const parsed = parseOpenCodeSession(
-        await input.client.sessions.get(sessionId)
-      )
-      if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
-      return projectSession(parsed.data, agentId)
+      return (await readSession(agentId, sessionId)).session
+    },
+
+    patchSession,
+
+    async deleteSession(agentId: string, sessionId: string) {
+      await readSession(agentId, sessionId)
+      await input.client.sessions.delete(sessionId)
     },
 
     async createSession(agentId: string) {

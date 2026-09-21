@@ -1,0 +1,22 @@
+# Add this overlay when proxy-config.json includes a "push" block.
+# It mounts the push state directory and the VAPID private key used by
+# the Web Push implementation; the two required variables follow the
+# same operator-owned pattern as the other secret mounts.
+services:
+  web:
+    volumes:
+      # Bind-mount rather than a named volume: a named volume is initially
+      # root-owned, but the proxy runs as the host UID.
+      - type: bind
+        source: ${AOS_UI_PUSH_STATE_DIR:?set AOS_UI_PUSH_STATE_DIR to an operator-owned directory}
+        target: /var/lib/aos-ui/push
+    secrets:
+      - source: vapid-private-key
+        target: vapid-private-key
+        uid: "${AOS_UI_HOST_UID:-1000}"
+        gid: "${AOS_UI_HOST_GID:-1000}"
+        mode: 0400
+
+secrets:
+  vapid-private-key:
+    file: ${AOS_UI_VAPID_PRIVATE_KEY_FILE:?set AOS_UI_VAPID_PRIVATE_KEY_FILE to the VAPID private key file}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { createOpenCodeWorkspaceOperations } from "./workspace"
 
@@ -213,5 +213,65 @@ describe("OpenCode workspace operations", () => {
       },
       todos: { status: "unavailable", reason: "native-todo-read-unavailable" },
     })
+  })
+
+  it("projects the native pin state only from Session metadata", async () => {
+    const operations = createOpenCodeWorkspaceOperations({
+      client: {
+        catalog: { agents: async () => ({ data: [] }) },
+        sessions: {
+          list: async () => ({
+            data: [
+              session({ id: "pinned", metadata: { "aos.pinned": true } }),
+              session({ id: "unpinned", metadata: { "native.label": "keep" } }),
+              session({ id: "untracked" }),
+            ],
+            cursor: {},
+          }),
+          get: async () => session(),
+          create: async () => session(),
+          update: async () => {},
+          delete: async () => {},
+        },
+      },
+    })
+
+    const page = await operations.listSessions("research", 50, 0)
+
+    expect(page.sessions.find((row) => row.id === "pinned")).toMatchObject({
+      pinned: true,
+    })
+    expect(page.sessions.find((row) => row.id === "unpinned")).toMatchObject({
+      pinned: false,
+    })
+    expect(
+      page.sessions.find((row) => row.id === "untracked")
+    ).not.toHaveProperty("pinned")
+  })
+
+  it("verifies exact Session ownership before any native mutation", async () => {
+    const update = vi.fn(async () => {})
+    const remove = vi.fn(async () => {})
+    const operations = createOpenCodeWorkspaceOperations({
+      client: {
+        catalog: { agents: async () => ({ data: [] }) },
+        sessions: {
+          list: async () => ({ data: [], cursor: {} }),
+          get: async () => session({ agent: "other" }),
+          create: async () => session(),
+          update,
+          delete: remove,
+        },
+      },
+    })
+
+    await expect(
+      operations.patchSession("research", "session-1", { title: "Renamed" })
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
+    await expect(
+      operations.deleteSession("research", "session-1")
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
+    expect(update).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
   })
 })

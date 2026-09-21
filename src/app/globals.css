@@ -12,6 +12,8 @@
 @custom-variant dark (&:is(.dark *));
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+/* Touch is the only pointer: the twin of `useTouchPrimaryInput`. */
+@custom-variant touch-primary (@media (pointer: coarse) and (not (any-pointer: fine)));
 
 ::highlight(aos-conversation-search-match) {
   background-color: color-mix(in oklab, var(--primary) 24%, transparent);

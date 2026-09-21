@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
-import { BrowserActivityCoordinator } from "./browser-coordinator"
+import {
+  BrowserActivityCoordinator,
+  type BrowserActivityOptions,
+} from "./browser-coordinator"
 import { ActivityStore } from "./store"
 import { defaultBrowserPreferences, type BrowserPermission } from "./policy"
 import type { BrowserNotificationPayload } from "./browser-port"
 import type { SessionMetadata } from "@/runtime-adapters/contracts"
-import { serializeActivity } from "./serialization"
+import { deserializeActivity, serializeActivity } from "./serialization"
 
 const now = Date.parse("2026-09-05T12:00:00Z")
 const context = { selection: null, pageVisible: false, pageFocused: false }
@@ -15,7 +18,11 @@ const event = {
   type: "agent-ready" as const,
   occurredAt: new Date(now).toISOString(),
 }
-function setup(permission: BrowserPermission = "granted") {
+function setup(
+  permission: BrowserPermission = "granted",
+  push?: BrowserActivityOptions["push"],
+  installFirst?: BrowserActivityOptions["installFirst"]
+) {
   // The provider reports the Session unread, which is what makes an alert due.
   const sessions: SessionMetadata[] = [
     {
@@ -52,6 +59,7 @@ function setup(permission: BrowserPermission = "granted") {
     ...context,
     selection: null as null | { agentId: string; threadId: string },
   }
+  let permissionChanged: (() => void) | undefined
   const copy = {
     completion: "A turn finished",
     failure: "A turn failed",
@@ -62,10 +70,18 @@ function setup(permission: BrowserPermission = "granted") {
     now: () => now,
     context: () => localContext,
     copy: () => copy,
+    push,
+    installFirst,
     port: {
       getPermission: () => permission,
       requestPermission: request,
       show,
+      onPermissionChange: (listener) => {
+        permissionChanged = listener
+        return () => {
+          permissionChanged = undefined
+        }
+      },
     },
     platform: {
       read: () => persisted,
@@ -116,6 +132,12 @@ function setup(permission: BrowserPermission = "granted") {
     permission: (value: BrowserPermission) => {
       permission = value
     },
+    /** What the browser's own notification settings do behind the page's back. */
+    changePermission: (value: BrowserPermission) => {
+      permission = value
+      permissionChanged?.()
+    },
+    watchingPermission: () => permissionChanged !== undefined,
   }
 }
 describe("live browser Activity", () => {
@@ -127,7 +149,7 @@ describe("live browser Activity", () => {
     h.coordinator.publish(h.store.ingest(event))
     h.receive({
       snapshot: serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: true },
       }),
       deliveredId: event.id,
@@ -153,7 +175,7 @@ describe("live browser Activity", () => {
     await h.coordinator.setEnabled(true)
     h.seed(
       serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: false },
       })
     )
@@ -293,7 +315,6 @@ describe("live browser Activity", () => {
     h.coordinator.start()
     const result = h.coordinator.setEnabled(true)
     expect(h.request).toHaveBeenCalledTimes(1)
-    expect(h.coordinator.settings().preferences.enabled).toBe(false)
     await result
     expect(h.coordinator.settings().preferences.enabled).toBe(false)
     h.permission("granted")
@@ -308,7 +329,7 @@ describe("live browser Activity", () => {
     const h = setup()
     h.seed(
       serializeActivity({
-        version: 2,
+        version: 3,
         preferences: { ...defaultBrowserPreferences, enabled: true },
       })
     )
@@ -357,5 +378,201 @@ describe("live browser Activity", () => {
     h.leader(true)
     h.receive({ snapshot: h.persisted(), preferencesChanged: false })
     expect(h.shown).toEqual([])
+  })
+})
+
+describe("the one-time ask", () => {
+  /** A watched run in the exposed Session is what earns the ask. */
+  const watchRun = (h: ReturnType<typeof setup>) => {
+    h.localContext.pageVisible = true
+    h.localContext.pageFocused = true
+    h.localContext.selection = { agentId: "a", threadId: "t" }
+    h.coordinator.start()
+    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+  }
+
+  it("waits for a run the operator watched in this tab", () => {
+    const h = setup("default")
+    h.localContext.pageVisible = true
+    h.localContext.pageFocused = true
+    h.coordinator.start()
+    expect(h.coordinator.settings().ask).toBe(false)
+    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+    expect(h.coordinator.settings().ask).toBe(false)
+    h.localContext.selection = { agentId: "a", threadId: "t" }
+    h.coordinator.noteRunStarted({ agentId: "a", threadId: "other" })
+    expect(h.coordinator.settings().ask).toBe(false)
+    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+    expect(h.coordinator.settings().ask).toBe(true)
+  })
+
+  it.each([
+    ["granted", true, "accepted"],
+    ["denied", false, "pending"],
+  ] as const)(
+    "records a %s permission answer",
+    async (answer, enabled, prompt) => {
+      const h = setup("default")
+      watchRun(h)
+      h.request.mockResolvedValueOnce(answer)
+      await h.coordinator.acceptAsk()
+      expect(h.coordinator.settings().status).toBe(answer)
+      expect(h.coordinator.settings().preferences).toMatchObject({
+        enabled,
+        prompt,
+      })
+      expect(h.coordinator.settings().ask).toBe(false)
+    }
+  )
+
+  it("subscribes to push from the gesture itself, without a second request", async () => {
+    const subscribeFromGesture = vi.fn(
+      async () => "granted" as BrowserPermission
+    )
+    const h = setup("default", { active: () => false, subscribeFromGesture })
+    watchRun(h)
+    const accepted = h.coordinator.acceptAsk()
+    expect(subscribeFromGesture).toHaveBeenCalledTimes(1)
+    expect(h.request).not.toHaveBeenCalled()
+    await accepted
+    expect(h.coordinator.settings().preferences).toMatchObject({
+      enabled: true,
+      prompt: "accepted",
+    })
+  })
+
+  it("requests permission itself when subscribing found no registration", async () => {
+    const h = setup("default", {
+      active: () => false,
+      subscribeFromGesture: async () => "default",
+    })
+    watchRun(h)
+    h.request.mockResolvedValueOnce("granted")
+    await h.coordinator.acceptAsk()
+    expect(h.request).toHaveBeenCalledTimes(1)
+    expect(h.coordinator.settings().preferences).toMatchObject({
+      enabled: true,
+      prompt: "accepted",
+    })
+  })
+
+  it("declines for every tab, including the ones that already asked", () => {
+    const first = setup("default")
+    const second = setup("default")
+    for (const h of [first, second]) {
+      watchRun(h)
+      expect(h.coordinator.settings().ask).toBe(true)
+    }
+    first.coordinator.declineAsk()
+    const snapshot = first.persisted()!
+    expect(deserializeActivity(snapshot)?.preferences).toMatchObject({
+      prompt: "declined",
+      enabled: false,
+    })
+    expect(first.coordinator.settings().ask).toBe(false)
+    second.seed(snapshot)
+    second.receive({ snapshot, preferencesChanged: true })
+    expect(second.coordinator.settings().preferences.prompt).toBe("declined")
+    expect(second.coordinator.settings().ask).toBe(false)
+  })
+
+  it("returns when the browser resets a permission this device had accepted", () => {
+    const h = setup("granted")
+    // The operator accepted once, which is all the stored state remembers.
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "accepted" },
+      })
+    )
+    watchRun(h)
+    expect(h.coordinator.settings().ask).toBe(false)
+
+    h.changePermission("default")
+
+    expect(h.coordinator.settings().status).toBe("default")
+    expect(h.coordinator.settings().ask).toBe(true)
+    h.coordinator.stop()
+    expect(h.watchingPermission()).toBe(false)
+  })
+
+  it("stays declined when the browser resets the permission", () => {
+    const h = setup("granted")
+    // A decline is the operator's own answer, even with alerts switched on since.
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "declined" },
+      })
+    )
+    watchRun(h)
+
+    h.changePermission("default")
+
+    expect(h.coordinator.settings().ask).toBe(false)
+  })
+
+  it("offers nothing once the browser blocks notifications outright", () => {
+    const h = setup("granted")
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "accepted" },
+      })
+    )
+    watchRun(h)
+
+    h.changePermission("denied")
+
+    expect(h.coordinator.settings().status).toBe("denied")
+    expect(h.coordinator.settings().ask).toBe(false)
+  })
+
+  it("offers itself to a device whose notifications need an install first", () => {
+    // An uninstalled iOS tab has no notification API, which the port reports as
+    // unsupported; the ask is the only thing that can tell the operator why.
+    const h = setup("unsupported", undefined, () => true)
+    watchRun(h)
+
+    expect(h.coordinator.settings().ask).toBe(true)
+
+    h.coordinator.declineAsk()
+    expect(h.coordinator.settings().ask).toBe(false)
+    expect(h.coordinator.settings().preferences.prompt).toBe("declined")
+    expect(h.request).not.toHaveBeenCalled()
+  })
+
+  it("stays hidden on an unsupported browser that could not install either", () => {
+    const h = setup("unsupported")
+    watchRun(h)
+    expect(h.coordinator.settings().ask).toBe(false)
+  })
+
+  it("publishes a sound choice like any other preference", () => {
+    const h = setup()
+    h.coordinator.start()
+    h.coordinator.setSound(false)
+    expect(h.coordinator.settings().preferences.sound).toBe(false)
+    expect(deserializeActivity(h.persisted()!)?.preferences.sound).toBe(false)
+  })
+})
+
+describe("a push-subscribed device", () => {
+  it("leaves its OS alerts to push", async () => {
+    const h = setup("granted", { active: () => true })
+    h.coordinator.start()
+    await h.coordinator.setEnabled(true)
+    expect(h.coordinator.settings().pushActive).toBe(true)
+    h.coordinator.publish(h.store.ingest(event))
+    expect(h.show).not.toHaveBeenCalled()
+  })
+
+  it("keeps raising them itself while no subscription exists", async () => {
+    const h = setup("granted", { active: () => false })
+    h.coordinator.start()
+    await h.coordinator.setEnabled(true)
+    expect(h.coordinator.settings().pushActive).toBe(false)
+    h.coordinator.publish(h.store.ingest(event))
+    expect(h.show).toHaveBeenCalledTimes(1)
   })
 })

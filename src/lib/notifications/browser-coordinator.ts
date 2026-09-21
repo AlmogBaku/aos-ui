@@ -1,15 +1,19 @@
 import { z } from "zod"
+import { categoryOf } from "@aos/protocol/push"
 import type { ActivityRecord } from "./activity"
 import type { ActivityStore } from "./store"
 import type { BrowserNotificationPort } from "./browser-port"
 import {
   defaultBrowserPreferences,
   getActivityPolicy,
+  isSelectionExposed,
+  shouldOfferAsk,
   type ActivityContext,
   type BrowserPermission,
   type BrowserPreferences,
 } from "./policy"
 import { deserializeActivity, serializeActivity } from "./serialization"
+import { notificationTag } from "./tag"
 
 export interface ActivityBrowserPlatform {
   read(): string | null
@@ -30,6 +34,13 @@ export type BrowserActivityOptions = {
   now(): number
   open(id: string): Promise<boolean>
   onChange(): void
+  /** Present once this device can receive Web Push, which then owns OS alerts. */
+  push?: {
+    active(): boolean
+    subscribeFromGesture?(): Promise<BrowserPermission>
+  }
+  /** True where notifications need the app installed before they exist at all. */
+  installFirst?: () => boolean
 }
 const messageSchema = z
   .object({
@@ -47,6 +58,7 @@ export class BrowserActivityCoordinator {
   #preferences: BrowserPreferences = { ...defaultBrowserPreferences }
   #permission: BrowserPermission = "unsupported"
   #active = false
+  #firstRunSeen = false
   #generation = 0
   #cleanup: (() => void)[] = []
   #notifications = new Set<{ close(): void }>()
@@ -66,6 +78,17 @@ export class BrowserActivityCoordinator {
       /* Storage may be blocked; preferences fall back to the defaults. */
     }
     this.recheckPermission()
+    try {
+      // A permission revoked or reset from the browser's own settings has to be
+      // noticed here, not at the next focus: until it is, this device holds a
+      // subscription the proxy would keep pushing into nothing.
+      const stop = this.#options.port.onPermissionChange?.(() => {
+        if (this.#active) this.recheckPermission()
+      })
+      if (stop) this.#cleanup.push(stop)
+    } catch {
+      /* Without the capability the recheck stays focus-driven. */
+    }
     try {
       this.#cleanup.push(
         this.#options.platform.startLeadership(() => {
@@ -103,7 +126,30 @@ export class BrowserActivityCoordinator {
     this.#settling = false
   }
   settings() {
-    return { status: this.#permission, preferences: { ...this.#preferences } }
+    return {
+      status: this.#permission,
+      preferences: { ...this.#preferences },
+      ask: shouldOfferAsk(
+        this.#permission,
+        this.#preferences,
+        this.#firstRunSeen,
+        this.#installFirst()
+      ),
+      pushActive: this.#pushActive(),
+    }
+  }
+  /** The ask waits for a run the operator watched in this tab. */
+  noteRunStarted(event: { agentId: string; threadId: string }) {
+    if (!this.#active || this.#firstRunSeen) return
+    const context = this.#options.context()
+    if (
+      !isSelectionExposed(context) ||
+      context.selection?.agentId !== event.agentId ||
+      context.selection?.threadId !== event.threadId
+    )
+      return
+    this.#firstRunSeen = true
+    this.#options.onChange()
   }
   recheckPermission() {
     try {
@@ -137,9 +183,65 @@ export class BrowserActivityCoordinator {
     if (this.#active && generation === this.#generation)
       this.publish(undefined, true)
   }
+  /** Call directly from the click event, before any await/effect scheduling. */
+  async acceptAsk() {
+    const generation = ++this.#generation
+    const { port, push } = this.#options
+    // Safari raises its permission prompt from the subscribe call itself.
+    const subscribed = push?.subscribeFromGesture?.()
+    const requested = subscribed ?? port.requestPermission()
+    try {
+      const answer = await requested
+      if (!this.#active || generation !== this.#generation) return
+      // Subscribing answers "default" while no registration is ready yet, and
+      // the OS prompt then still belongs to this gesture.
+      const permission =
+        subscribed && answer === "default"
+          ? await port.requestPermission()
+          : answer
+      if (!this.#active || generation !== this.#generation) return
+      this.#permission = permission
+      // A refusal is the browser's answer, so the ask itself stays unanswered.
+      this.#preferences.enabled = permission === "granted"
+      if (permission === "granted") this.#preferences.prompt = "accepted"
+    } catch {
+      this.#preferences.enabled = false
+      this.recheckPermission()
+    }
+    if (this.#active && generation === this.#generation)
+      this.publish(undefined, true)
+  }
+  declineAsk() {
+    this.#generation++
+    this.#preferences.prompt = "declined"
+    this.#preferences.enabled = false
+    this.publish(undefined, true)
+  }
   setCategory(category: "completion" | "failure" | "input", enabled: boolean) {
     this.#preferences[category] = enabled
     this.publish(undefined, true)
+  }
+  setSound(enabled: boolean) {
+    this.#preferences.sound = enabled
+    this.publish(undefined, true)
+  }
+  #pushActive() {
+    try {
+      return this.#options.push?.active() ?? false
+    } catch {
+      return false
+    }
+  }
+  #installFirst() {
+    try {
+      return this.#options.installFirst?.() ?? false
+    } catch {
+      return false
+    }
+  }
+  /** Every policy decision accounts for what push already covers here. */
+  #context(): ActivityContext {
+    return { ...this.#options.context(), pushActive: this.#pushActive() }
   }
   publish(arrival?: ActivityRecord | null, preferencesChanged = false) {
     if (!this.#active) return
@@ -159,7 +261,7 @@ export class BrowserActivityCoordinator {
           this.#preferences = previous.preferences
       } catch {}
       const snapshot = serializeActivity({
-        version: 2,
+        version: 3,
         preferences: this.#preferences,
       })
       try {
@@ -210,7 +312,7 @@ export class BrowserActivityCoordinator {
       if (
         getActivityPolicy(
           record,
-          this.#options.context(),
+          this.#context(),
           this.#preferences,
           this.#permission
         ).browserNotification
@@ -229,7 +331,7 @@ export class BrowserActivityCoordinator {
         !record ||
         !getActivityPolicy(
           record,
-          this.#options.context(),
+          this.#context(),
           this.#preferences,
           this.#permission
         ).browserNotification
@@ -269,34 +371,21 @@ export class BrowserActivityCoordinator {
       if (
         !getActivityPolicy(
           record,
-          this.#options.context(),
+          this.#context(),
           this.#preferences,
           this.#permission
         ).browserNotification
       )
         return false
-      const category =
-        record.type === "attention-requested"
-          ? "input"
-          : record.type === "run-failed" ||
-              record.type === "agent-activation-failed"
-            ? "failure"
-            : "completion"
-      // Only a hash of opaque identity appears on the OS surface.
-      let hash = 2166136261
-      for (const char of JSON.stringify([
-        record.agentId,
-        record.threadId,
-        record.id,
-      ]))
-        hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+      const category = categoryOf(record.type)
+      if (!category) return false
       const notification = port.show(
         {
           title: "AOS",
           body: this.#options.copy()[category],
           icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
-          tag: `aos-ui-${(hash >>> 0).toString(16)}`,
+          tag: notificationTag(record.agentId, record.threadId, record.id),
           renotify: false,
         },
         () => {

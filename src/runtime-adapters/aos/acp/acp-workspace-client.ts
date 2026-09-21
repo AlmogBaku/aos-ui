@@ -1,10 +1,15 @@
 import { AOS_METHODS, type AosSessionInfoMeta } from "@aos/protocol/acp"
 import type {
+  RuntimeInfo,
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "@aos/protocol"
 
-import type { AgentVisibility, SessionCreationOptions } from "../../contracts"
+import type {
+  AgentVisibility,
+  SessionActionCapabilities,
+  SessionCreationOptions,
+} from "../../contracts"
 import type { AosRemoteClient } from "../aos-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
@@ -22,6 +27,11 @@ import type { AcpConnection } from "./types"
  * a list, so an invalidation has to re-read one rather than patch a guess in.
  */
 const CATALOG_RELIST_DEBOUNCE_MS = 300
+
+/** One runtime-declared operation, as the UI asks about it. */
+function offers(capability: RuntimeInfo["capabilities"]["sessionTitle"]) {
+  return capability.status === "available"
+}
 
 /** What the workspace still reads over REST, delegated to the AOS client. */
 type AcpRestClient = Pick<
@@ -56,6 +66,7 @@ export function createAcpWorkspaceClient({
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
+  let sessionActions: Promise<SessionActionCapabilities> | undefined
 
   function remember(
     threadId: string,
@@ -229,7 +240,40 @@ export function createAcpWorkspaceClient({
       store.setUnread(threadId, false)
       await connection.updateSession({ sessionId: threadId, unread: false })
     },
-    reportFocus: (threadId: string | null) => connection.focus(threadId),
+    /** The row leads the write, so a refused pin has to be taken back. */
+    async setSessionPinned(threadId: string, pinned: boolean) {
+      const [previous] = store.rowsFor([threadId])
+      store.setPinned(threadId, pinned)
+      try {
+        await connection.updateSession({ sessionId: threadId, pinned })
+      } catch (reason) {
+        store.setPinned(threadId, previous?.pinned)
+        throw reason
+      }
+    },
+    /**
+     * The runtime's own report, read once. A failed read is not an answer, so
+     * it is not remembered.
+     */
+    sessionActionCapabilities() {
+      sessionActions ??= rest
+        .runtimeInfo()
+        .then(({ capabilities }) => ({
+          rename: offers(capabilities.sessionTitle),
+          archive: offers(capabilities.sessionArchival),
+          delete: offers(capabilities.sessionDeletion),
+          pin: offers(capabilities.sessionPin),
+        }))
+        .catch((reason: unknown) => {
+          sessionActions = undefined
+          throw reason
+        })
+      return sessionActions
+    },
+    reportFocus: (
+      threadId: string | null,
+      presence: { foreground: boolean; idle: boolean }
+    ) => connection.focus(threadId, presence),
     sessionStatus: store.status,
     subscribeSessionStatus: store.subscribeStatus,
     subscribeSessionInvalidation: store.subscribeInvalidation,

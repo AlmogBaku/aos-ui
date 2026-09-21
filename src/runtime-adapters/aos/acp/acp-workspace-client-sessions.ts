@@ -137,7 +137,9 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
     left.agentId === right.agentId &&
     left.updatedAt === right.updatedAt &&
     left.status === right.status &&
-    left.unread === right.unread
+    left.archived === right.archived &&
+    left.unread === right.unread &&
+    left.pinned === right.pinned
   )
 }
 
@@ -188,7 +190,10 @@ export function createAcpSessionStore({
     publish(threadId)
   }
 
-  /** `unread` is absent when unknowable on this read and never overwrites. */
+  /**
+   * `unread` and `pinned` are absent when unknowable on this read and never
+   * overwrite; `archived` is on every provider read of a Session.
+   */
   function put(
     threadId: string,
     info: AosSessionInfoMeta,
@@ -196,13 +201,16 @@ export function createAcpSessionStore({
   ) {
     const previous = rows.get(threadId)
     const unread = info.unread ?? previous?.unread
+    const pinned = info.pinned ?? previous?.pinned
     write(threadId, {
       threadId,
       agentId: info.agentId,
       updatedAt:
         updatedAt ?? previous?.updatedAt ?? new Date(now()).toISOString(),
       status: info.status,
+      archived: info.archived,
       ...(unread === undefined ? {} : { unread }),
+      ...(pinned === undefined ? {} : { pinned }),
     })
   }
 
@@ -319,6 +327,9 @@ export function createAcpSessionStore({
     /** The proxy's read state, or the operator's own optimistic ack. */
     setUnread: (threadId: string, unread: boolean) =>
       patch(threadId, { unread }),
+    /** The operator's own optimistic pin; `undefined` restores a refused one. */
+    setPinned: (threadId: string, pinned: boolean | undefined) =>
+      patch(threadId, { pinned }),
     setStatus: (threadId: string, status: SessionStatus) =>
       patch(threadId, { status }),
     knows: (threadId: string) => rows.has(threadId),

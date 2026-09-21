@@ -357,4 +357,71 @@ describe("OpenClaw workspace reads", () => {
       new OpenClawWorkspaceOwnershipError()
     )
   })
+
+  it("[CL1-WORKSPACE-011] projects native pin state only when a Session row proves it", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "analyst",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "analyst", name: "Analyst", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: [
+          {
+            key: "agent:analyst:pinned",
+            agentId: "analyst",
+            label: "Pinned",
+            pinned: true,
+            updatedAt: 2,
+          },
+          {
+            key: "agent:analyst:untracked",
+            agentId: "analyst",
+            label: "Untracked",
+            updatedAt: 1,
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const page = await workspace.listSessions("analyst", 50, 0)
+
+    expect(page.sessions[0]).toMatchObject({
+      id: "agent:analyst:pinned",
+      pinned: true,
+    })
+    expect(page.sessions[1]).not.toHaveProperty("pinned")
+  })
+
+  it("[CL1-WORKSPACE-012] verifies exact Session ownership before any native mutation", async () => {
+    const native = gateway({
+      "agents.list": {
+        defaultId: "analyst",
+        mainKey: "main",
+        scope: "global",
+        agents: [{ id: "analyst", name: "Analyst", kind: "agent" }],
+      },
+      "sessions.list": {
+        sessions: [{ key: "agent:other:main", agentId: "other" }],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(
+      workspace.patchSession("analyst", "agent:other:main", {
+        archived: true,
+      })
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+    await expect(
+      workspace.deleteSession("analyst", "agent:other:main")
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+    expect(
+      native.requests.some(
+        (request) =>
+          request.method !== "agents.list" && request.method !== "sessions.list"
+      )
+    ).toBe(false)
+  })
 })

@@ -13,6 +13,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   PenLine,
+  Pin,
   Plus,
   Settings2,
   Sparkles,
@@ -51,12 +52,21 @@ import { SystemNotice } from "@/components/ui/system-notice"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { cn } from "@/lib/utils"
+import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
 import { WorkspacePreferences } from "./workspace-preferences"
 import styles from "./workspace-shell.module.css"
-import { SessionActions } from "./session-actions"
+import {
+  SessionRowContextMenu,
+  SessionRowMenuButton,
+  sessionRowMenuCopy,
+  type SessionRowMenuHandlers,
+} from "./session-row-menu"
+import { SessionRenameDialog } from "./session-rename-dialog"
+import { SessionDeleteDialog } from "./session-delete-dialog"
 import { neighborAfterClose } from "./session-tab-undo"
 import {
+  ActivityAsk,
   ActivityBell,
   ActivityNotice,
   ActivityPanel,
@@ -113,6 +123,10 @@ export type WorkspaceSession = {
   status: WorkspaceSessionStatus
   updatedAt: string
   unread?: boolean
+  /** Provider archival state; absent until a provider read reports it. */
+  archived?: boolean
+  /** Provider pin; absent when the runtime does not track it. */
+  pinned?: boolean
   canClose?: boolean
 }
 
@@ -142,6 +156,16 @@ export type WorkspaceShellProps = {
   onOpenSession: (threadId: string) => WorkspaceActionResult
   onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
   onCreateSession: (agentId: string) => WorkspaceActionResult
+  onRenameSession?: (threadId: string, title: string) => WorkspaceActionResult
+  onSetSessionPinned?: (
+    threadId: string,
+    pinned: boolean
+  ) => WorkspaceActionResult
+  onArchiveSession?: (threadId: string) => WorkspaceActionResult
+  onUnarchiveSession?: (threadId: string) => WorkspaceActionResult
+  onDeleteSession?: (threadId: string) => WorkspaceActionResult
+  /** Runtime-declared Session actions, or `null` until the runtime answers. */
+  sessionActions?: SessionActionCapabilities | null
   onOpenAgentBuilder: () => WorkspaceActionResult
   onManageAgents?: () => void
   onConversationObscuredChange?: (obscured: boolean) => void
@@ -304,6 +328,24 @@ function getTabId(threadId: string) {
   return `workspace-tab-${encodeURIComponent(threadId)}`
 }
 
+/** The rename and delete dialogs are hosted once and shared by every surface. */
+type SessionDialog = {
+  kind: "rename" | "delete"
+  threadId: string
+  title: string
+}
+
+/** Returns focus to the control that opened a Session dialog. */
+function sessionDialogOpener(threadId: string) {
+  return (
+    [...document.querySelectorAll<HTMLElement>("[data-session-menu]")].find(
+      (element) => element.dataset.sessionMenu === threadId
+    ) ??
+    document.getElementById(getTabId(threadId)) ??
+    null
+  )
+}
+
 function reportActionError(
   error: unknown,
   onActionError: WorkspaceShellProps["onActionError"]
@@ -376,6 +418,11 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     removeOpenSession: dictionary.mobileNavigation.removeOpenSession,
     selected: dictionary.mobileNavigation.selected,
     lastSelected: dictionary.mobileNavigation.lastSelected,
+    archivedSessions: dictionary.mobileNavigation.archived,
+    noArchivedSessions: dictionary.mobileNavigation.noArchivedSessions,
+    pinned: dictionary.status.pinned,
+    archived: dictionary.status.archived,
+    sessionMenu: sessionRowMenuCopy(dictionary),
     statusLabel: dictionary.status.label,
     status: {
       active: dictionary.status.active,
@@ -583,9 +630,11 @@ type SessionTabsProps = Pick<
   | "onCreateSession"
   | "onActionError"
   | "threadListRuntime"
+  | "sessionActions"
 > & {
   inspectorOpen: boolean
   onToggleInspector: () => void
+  sessionMenu: SessionRowMenuHandlers
 }
 
 function SessionTabs({
@@ -599,6 +648,8 @@ function SessionTabs({
   onCreateSession,
   onActionError,
   threadListRuntime,
+  sessionActions,
+  sessionMenu,
   inspectorOpen,
   onToggleInspector,
 }: SessionTabsProps) {
@@ -686,6 +737,8 @@ function SessionTabs({
     moveToTab(nextIndex, event)
   }
 
+  const menuCopy = sessionRowMenuCopy(dictionary)
+
   return (
     <div className={styles.tabBar}>
       <div
@@ -709,65 +762,92 @@ function SessionTabs({
           >
             {openSessions.map((session, index) => {
               const isActive = session.threadId === activeThreadId
+              // Tabs name their state in the same order the rows do.
+              const stateLabels = [
+                session.unread ? dictionary.status.unread : null,
+                session.pinned ? dictionary.status.pinned : null,
+              ].filter(Boolean)
 
               return (
-                <SessionThreadListItem
-                  runtime={threadListRuntime}
-                  threadId={session.threadId}
-                  onSwitch={() => onOpenSession(session.threadId)}
-                  onActionError={onActionError}
+                <SessionRowContextMenu
                   key={session.threadId}
-                  className={styles.threadItemContents}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                      event.preventDefault()
-                    }
+                  session={session}
+                  copy={menuCopy}
+                  locale={locale}
+                  availability={sessionActions}
+                  handlers={{
+                    ...sessionMenu,
+                    onCloseTab: session.canClose
+                      ? () => closeTab(session.threadId)
+                      : undefined,
                   }}
                 >
-                  <SessionThreadListTrigger
-                    className={styles.tab}
-                    data-active={isActive ? "true" : undefined}
-                    data-closable={session.canClose ? "true" : undefined}
-                    ref={(element) => {
-                      if (element)
-                        tabRefs.current.set(session.threadId, element)
-                      else tabRefs.current.delete(session.threadId)
+                  <SessionThreadListItem
+                    runtime={threadListRuntime}
+                    threadId={session.threadId}
+                    onSwitch={() => onOpenSession(session.threadId)}
+                    onActionError={onActionError}
+                    className={styles.threadItemContents}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "ArrowUp" ||
+                        event.key === "ArrowDown"
+                      ) {
+                        event.preventDefault()
+                      }
                     }}
-                    id={getTabId(session.threadId)}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    title={session.title}
-                    aria-label={
-                      session.unread
-                        ? `${session.title}, ${dictionary.status.unread}`
-                        : undefined
-                    }
-                    aria-controls="workspace-conversation-panel"
-                    tabIndex={
-                      isActive || (activeIndex === -1 && index === 0) ? 0 : -1
-                    }
-                    onKeyDown={(event) => handleTabKeyDown(event, index)}
-                    onMouseEnter={() => setHoveredThreadId(session.threadId)}
-                    onFocus={() => setFocusedThreadId(session.threadId)}
-                    onBlur={() => setFocusedThreadId(null)}
                   >
-                    <span className={styles.tabLabel}>
-                      <RowIndicators
-                        status={session.status}
-                        statusLabel={sessionStatusLabel(
-                          session.status,
-                          dictionary
-                        )}
-                        unread={session.unread}
-                        unreadLabel={dictionary.status.unread}
-                      />
-                      <bdi>
-                        <SessionThreadListTitle fallback={session.title} />
-                      </bdi>
-                    </span>
-                  </SessionThreadListTrigger>
-                </SessionThreadListItem>
+                    <SessionThreadListTrigger
+                      className={styles.tab}
+                      data-active={isActive ? "true" : undefined}
+                      data-closable={session.canClose ? "true" : undefined}
+                      ref={(element) => {
+                        if (element)
+                          tabRefs.current.set(session.threadId, element)
+                        else tabRefs.current.delete(session.threadId)
+                      }}
+                      id={getTabId(session.threadId)}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      title={session.title}
+                      aria-label={
+                        stateLabels.length > 0
+                          ? [session.title, ...stateLabels].join(", ")
+                          : undefined
+                      }
+                      aria-controls="workspace-conversation-panel"
+                      tabIndex={
+                        isActive || (activeIndex === -1 && index === 0) ? 0 : -1
+                      }
+                      onKeyDown={(event) => handleTabKeyDown(event, index)}
+                      onMouseEnter={() => setHoveredThreadId(session.threadId)}
+                      onFocus={() => setFocusedThreadId(session.threadId)}
+                      onBlur={() => setFocusedThreadId(null)}
+                    >
+                      <span className={styles.tabLabel}>
+                        <RowIndicators
+                          status={session.status}
+                          statusLabel={sessionStatusLabel(
+                            session.status,
+                            dictionary
+                          )}
+                          unread={session.unread}
+                          unreadLabel={dictionary.status.unread}
+                        />
+                        {session.pinned ? (
+                          <Pin
+                            className="size-3 shrink-0 text-muted-foreground"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        <bdi>
+                          <SessionThreadListTitle fallback={session.title} />
+                        </bdi>
+                      </span>
+                    </SessionThreadListTrigger>
+                  </SessionThreadListItem>
+                </SessionRowContextMenu>
               )
             })}
           </ThreadListPrimitive.Root>
@@ -818,12 +898,19 @@ function SessionTabs({
             <Plus />
           </Button>
         ) : null}
-        {activeSession?.canClose ? (
-          <SessionActions
-            locale={locale}
+        {activeSession ? (
+          <SessionRowMenuButton
             session={activeSession}
-            dictionary={dictionary}
-            onClose={() => closeTab(activeSession.threadId)}
+            copy={menuCopy}
+            locale={locale}
+            availability={sessionActions}
+            handlers={{
+              ...sessionMenu,
+              onCloseTab: activeSession.canClose
+                ? () => closeTab(activeSession.threadId)
+                : undefined,
+            }}
+            className={styles.sessionAction}
           />
         ) : null}
       </div>
@@ -868,10 +955,12 @@ type InspectorPanelProps = Pick<
   | "onCreateSession"
   | "onActionError"
   | "threadListRuntime"
+  | "sessionActions"
 > & {
   agent: WorkspaceAgent | null
   navigation: AgentSessionNavigation | null
   artifactOutputs?: ReactNode
+  sessionMenu: SessionRowMenuHandlers
 }
 
 function InspectorPanel({
@@ -882,6 +971,8 @@ function InspectorPanel({
   onCreateSession,
   onActionError,
   threadListRuntime,
+  sessionActions,
+  sessionMenu,
   agent,
   navigation,
   artifactOutputs,
@@ -936,6 +1027,8 @@ function InspectorPanel({
             onQueryChange={setQuery}
             onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
             onCreateSession={onCreateSession}
+            availability={sessionActions}
+            sessionMenu={sessionMenu}
             threadListRuntime={threadListRuntime}
             onActionError={onActionError}
           />
@@ -1107,6 +1200,12 @@ export function WorkspaceShell({
   onOpenSession,
   onCloseSession,
   onCreateSession,
+  onRenameSession,
+  onSetSessionPinned,
+  onArchiveSession,
+  onUnarchiveSession,
+  onDeleteSession,
+  sessionActions,
   onOpenAgentBuilder,
   onManageAgents,
   onConversationObscuredChange,
@@ -1136,6 +1235,7 @@ export function WorkspaceShell({
   )
   const [activityOpen, setActivityOpen] = useState(false)
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
+  const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
     subscribeToInspectorPreference,
@@ -1186,6 +1286,7 @@ export function WorkspaceShell({
       historySessions: olderSessions.filter(
         (session) => !openIds.has(session.threadId)
       ),
+      archivedSessions: [],
       lastSelectedThreadId: activeThreadId,
     }
   }, [
@@ -1357,6 +1458,52 @@ export function WorkspaceShell({
     [artifactWidthBounds, commitArtifactWidth, effectiveArtifactWidth, locale]
   )
 
+  const sessionMenu = useMemo<SessionRowMenuHandlers>(
+    () => ({
+      onRename: onRenameSession
+        ? (session) =>
+            setSessionDialog({
+              kind: "rename",
+              threadId: session.threadId,
+              title: session.title,
+            })
+        : undefined,
+      onTogglePin: onSetSessionPinned
+        ? (session) =>
+            runAction(
+              () => onSetSessionPinned(session.threadId, !session.pinned),
+              onActionError
+            )
+        : undefined,
+      onToggleArchive:
+        onArchiveSession && onUnarchiveSession
+          ? (session) =>
+              runAction(
+                () =>
+                  session.archived
+                    ? onUnarchiveSession(session.threadId)
+                    : onArchiveSession(session.threadId),
+                onActionError
+              )
+          : undefined,
+      onDelete: onDeleteSession
+        ? (session) =>
+            setSessionDialog({
+              kind: "delete",
+              threadId: session.threadId,
+              title: session.title,
+            })
+        : undefined,
+    }),
+    [
+      onActionError,
+      onArchiveSession,
+      onDeleteSession,
+      onRenameSession,
+      onSetSessionPinned,
+      onUnarchiveSession,
+    ]
+  )
   const agentsPanelProps: AgentsPanelProps = {
     agents: rosterAgents,
     locale,
@@ -1381,6 +1528,8 @@ export function WorkspaceShell({
     onOpenSession,
     onCreateSession,
     onActionError,
+    sessionActions,
+    sessionMenu,
     agent: selectedAgent,
     artifactOutputs,
   }
@@ -1540,6 +1689,8 @@ export function WorkspaceShell({
                 onCreateSession={onCreateSession}
                 onActionError={onActionError}
                 threadListRuntime={threadListRuntime}
+                sessionActions={sessionActions}
+                sessionMenu={sessionMenu}
                 inspectorOpen={effectiveInspectorOpen}
                 onToggleInspector={
                   artifactViewerOpen && onCloseArtifactViewer
@@ -1553,6 +1704,11 @@ export function WorkspaceShell({
             <div className="px-4 pt-3">
               <SystemNotice tone="info" title={creatorNotice} locale={locale} />
             </div>
+          ) : null}
+          {/* The ask persists until answered, so it sits above the conversation
+              instead of over the composer. */}
+          {!navigationHidden && !modalDrawerOpen ? (
+            <ActivityAsk dictionary={dictionary} settings={browserSettings} />
           ) : null}
           <main
             className={styles.conversation}
@@ -1692,6 +1848,8 @@ export function WorkspaceShell({
               )}
               locale={locale}
               copy={mobileNavigatorCopy(dictionary)}
+              availability={sessionActions}
+              sessionMenu={sessionMenu}
               onActionError={onActionError}
               onStateChange={dispatchMobileNavigator}
               onOpenSession={(_agentId, threadId) =>
@@ -1766,6 +1924,58 @@ export function WorkspaceShell({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {sessionDialog?.kind === "rename" && onRenameSession ? (
+          <SessionRenameDialog
+            key={sessionDialog.threadId}
+            open
+            locale={locale}
+            copy={{
+              title: dictionary.actions.renameSessionTitle,
+              label: dictionary.actions.sessionTitleLabel,
+              save: dictionary.actions.save,
+              cancel: dictionary.actions.cancel,
+            }}
+            sessionTitle={sessionDialog.title}
+            finalFocus={() => sessionDialogOpener(sessionDialog.threadId)}
+            onOpenChange={(open) => {
+              if (!open) setSessionDialog(null)
+            }}
+            onSave={(title) => {
+              setSessionDialog(null)
+              runAction(
+                () => onRenameSession(sessionDialog.threadId, title),
+                onActionError
+              )
+            }}
+          />
+        ) : null}
+
+        {sessionDialog?.kind === "delete" && onDeleteSession ? (
+          <SessionDeleteDialog
+            key={sessionDialog.threadId}
+            open
+            locale={locale}
+            copy={{
+              title: dictionary.actions.deleteSessionTitle,
+              description: dictionary.actions.deleteSessionDescription,
+              confirm: dictionary.actions.deleteSessionConfirm,
+              cancel: dictionary.actions.cancel,
+            }}
+            sessionTitle={sessionDialog.title}
+            finalFocus={() => sessionDialogOpener(sessionDialog.threadId)}
+            onOpenChange={(open) => {
+              if (!open) setSessionDialog(null)
+            }}
+            onConfirm={() => {
+              setSessionDialog(null)
+              runAction(
+                () => onDeleteSession(sessionDialog.threadId),
+                onActionError
+              )
+            }}
+          />
+        ) : null}
 
         {!navigationHidden && !modalDrawerOpen ? (
           <ActivityNotice

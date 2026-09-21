@@ -8,6 +8,8 @@ runtime gateway. Operator setup and product usage remain in the
 
 - [Author a runtime adapter](runtime-adapter-authoring.md) — map a native harness
   to the proxy-owned run vocabulary; the ACP layer handles browser delivery.
+- [Regenerate PWA icons](pwa-icons.md) — rasterize the adaptive logo with its
+  light palette substituted; the generated PNGs are committed.
 - [Hermes V1 retrospective](hermes-v1-retrospective.md) — understand the
   implementation choices and the mistakes that exposed the adapter contract.
 - [Gateway architecture](../design/aos-runtime-gateway-architecture.md) — the

@@ -89,14 +89,37 @@ Each Session navigation row shows at most one status dot at a time. A state that
 - **Blue (waiting):** the Session is waiting for your input. Clears when you respond or the run finishes.
 - **Green (unread):** the Session has content you have not yet seen. Clears when you view the Session in a focused window. Browsing the Activity drawer does not mark anything read.
 
-The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from other Sessions add unread markers and an in-app notice. A hidden tab or an unfocused browser window can show a generic operating-system notification after you enable notifications in Activity settings and grant browser permission.
+The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from other Sessions add unread markers and an in-app notice.
 
-Activity history lives in the proxy's in-memory feed; it does not survive a proxy restart by design.
+### Notification preferences and the one-time ask
 
-> [!IMPORTANT]
-> Browser notifications require at least one loaded AOS tab. There is no service worker, Web Push service, email delivery, or closed-app delivery.
+Notification preferences are on by default. The first time the browser receives a message from the operator, an inline card appears in the conversation offering to enable OS notifications. Tap **Turn on** to grant permission; tap **Not now** to opt out durably. You can revisit both choices in Activity settings at any time.
 
-Notification text contains no Agent name, Session name, conversation content, tool content, question, permission, or error details. Multiple tabs synchronize read state and elect one delivery tab. Browser and operating-system policies may delay or suppress delivery; Activity remains the place to check.
+There is no modal or load-time permission prompt. The ask appears only once in a conversation, only after real operator traffic, and only if permission has not already been granted or denied.
+
+### Categories and sound
+
+Notifications are grouped into three categories: **input requests** (questions and permissions), **failures**, and **completions**. A short in-tab audio cue plays for input requests and failures — not completions — and only when the event is in a Session other than the one currently on screen. OS notifications use the OS default sound and follow OS Do Not Disturb; the in-tab cue is page audio and does not. Sound is never the only channel; all states remain visible in Activity.
+
+### Burst coalescing
+
+Rapid events are coalesced per category into one notification: a 3-second window for input requests, 5 seconds for failures, 20 seconds for completions. The resulting notification carries a count ("3 Agents need input") rather than repeating for each event. Tapping it opens the owning Session when there is exactly one; otherwise it opens the workspace.
+
+### OS notifications without an open tab (Web Push)
+
+When the proxy is configured for Web Push, a device that has notifications turned on receives OS notifications even with no AOS tab open, via a service worker. When at least one tab is open and active on that device, the tab handles delivery and no OS alert is raised.
+
+Cross-device suppression: push is not sent while you are present on any device — defined as a foreground AOS tab that has been active within the last three minutes, with a 60-second heartbeat. After you stop being present, a backgrounded or idle tab holds notifications for 60 seconds; a closed workspace holds them for about 2 seconds, long enough for a reload to reconnect. A Session on screen never alerts.
+
+If the deployment does not configure Web Push, or if the origin is not HTTPS, notifications require at least one open AOS tab. Activity settings reflect the current state.
+
+**Platform notes.** On iPhone and iPad, Web Push works only in installed web apps: tap **Share → Add to Home Screen** first. Safari on macOS shows the app icon and does not collapse multiple notifications. Firefox ESR is supported via the classic service worker API. On Chromium browsers an **Install AOS** button appears; other browsers show an installation hint.
+
+### Privacy
+
+Notification payloads and OS text contain no Agent name, Session name, conversation content, tool content, question, permission, or error details — only a category, a count, opaque identifiers, a timestamp, and locale. Multiple tabs elect one delivery tab so no peer repeats an alert. Guest sessions receive no notifications.
+
+Activity history lives in the proxy's in-memory feed; it does not survive a proxy restart by design. Browser and operating-system policies may delay or suppress delivery; Activity remains the place to check.
 
 ## Change language and appearance
 

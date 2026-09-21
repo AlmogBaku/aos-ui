@@ -5,6 +5,7 @@ import { request } from "node:http"
 import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext } from "./acp/types"
+import { OPERATOR_PRINCIPAL } from "./core/principal"
 import { startProxyServer } from "./server"
 
 const ORIGIN = "https://aos.example.test"
@@ -52,6 +53,7 @@ function acpProxy() {
         service: createAcpService({
           publicOrigin: ORIGIN,
           lane: "operator",
+          principalId: OPERATOR_PRINCIPAL,
           agent: initializeOnlyAgent,
           connection: connectionContext,
         }),

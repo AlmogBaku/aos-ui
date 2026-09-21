@@ -173,6 +173,9 @@ export function createAcpConnection(
   let recovering = false
   // The guest lane's principal, replayed whenever a new transport redeems it.
   let invitation: string | undefined
+  // The last presence report, replayed whenever a new transport recovers.
+  let lastFocus:
+    { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
   let settleInitialized: ((meta: AosInitializeMeta) => void) | undefined
   let failInitialized: ((error: Error) => void) | undefined
   const initialized = new Promise<AosInitializeMeta>((resolve, reject) => {
@@ -327,6 +330,12 @@ export function createAcpConnection(
 
   /** The proxy replays every attached Session from the sequence last seen. */
   async function resumeAttached() {
+    // A closed connection loses its presence, so the new one carries the last
+    // report again before any replay can make this tab look attended.
+    if (lastFocus) {
+      const agent = await withAgent()
+      await agent.notify(AOS_METHODS.session.focus, lastFocus)
+    }
     for (const sessionId of [...updateListeners.keys()]) {
       const resumed = await resumeSession(sessionId, {
         replayFromStart: false,
@@ -503,10 +512,14 @@ export function createAcpConnection(
       )
     },
 
-    focus(sessionId) {
-      notifyAgent((agent) =>
-        agent.notify(AOS_METHODS.session.focus, { sessionId })
-      )
+    focus(sessionId, presence) {
+      const report = {
+        sessionId,
+        foreground: presence.foreground,
+        idle: presence.idle,
+      }
+      lastFocus = report
+      notifyAgent((agent) => agent.notify(AOS_METHODS.session.focus, report))
     },
 
     async listAgents() {

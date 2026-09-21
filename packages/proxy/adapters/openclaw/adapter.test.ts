@@ -12,6 +12,7 @@ import {
   OpenClawClientRequestError,
   type OpenClawGatewayClient,
 } from "./client"
+import { OpenClawWorkspaceUnavailableError } from "./workspace"
 
 const sessionKey = "agent:research:main"
 
@@ -56,6 +57,9 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
       }
     if (method === "sessions.create")
       return { ok: true, key: sessionKey, sessionId: "main" }
+    if (method === "sessions.patch") return { ok: true, key: sessionKey }
+    if (method === "sessions.delete")
+      return { ok: true, key: sessionKey, deleted: true, archived: [] }
     if (method === "chat.history")
       return {
         messages: [
@@ -153,6 +157,53 @@ describe("OpenClaw ServerRuntime assembly", () => {
     })
   })
 
+  it("renames, archives, pins, and deletes through the exact native Session RPCs", async () => {
+    const gateway = client()
+    const adapter = new OpenClawServerAdapter({
+      client: gateway,
+      runs: engine(),
+      subscribeSession: async () => () => undefined,
+    })
+
+    await adapter.mutateSession("research", sessionKey, "PATCH", {
+      title: "Renamed",
+    })
+    expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
+      agentId: "research",
+      key: sessionKey,
+      label: "Renamed",
+    })
+    for (const archived of [true, false]) {
+      await adapter.mutateSession("research", sessionKey, "PATCH", { archived })
+      expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
+        agentId: "research",
+        key: sessionKey,
+        archived,
+      })
+    }
+    for (const pinned of [true, false]) {
+      await adapter.mutateSession("research", sessionKey, "PATCH", { pinned })
+      expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
+        agentId: "research",
+        key: sessionKey,
+        pinned,
+      })
+    }
+    await adapter.mutateSession("research", sessionKey, "DELETE")
+    expect(gateway.request).toHaveBeenCalledWith("sessions.delete", {
+      agentId: "research",
+      key: sessionKey,
+    })
+    await expect(adapter.runtimeInfo()).resolves.toMatchObject({
+      capabilities: {
+        sessionTitle: { status: "available" },
+        sessionArchival: { status: "available" },
+        sessionPin: { status: "available" },
+        sessionDeletion: { status: "available" },
+      },
+    })
+  })
+
   it("fails closed for unproven mutations and maps only bounded provider outcomes", async () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
@@ -161,12 +212,18 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: async () => () => undefined,
     })
 
-    await expect(
-      adapter.mutateSession("research", sessionKey, "DELETE")
-    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
-    await expect(
-      adapter.mutateSession("research", sessionKey, "PATCH", { unread: false })
-    ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+    for (const body of [
+      { unread: false },
+      { title: "One", archived: true },
+      [],
+    ])
+      await expect(
+        adapter.mutateSession("research", sessionKey, "PATCH", body)
+      ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    expect(gateway.request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.anything()
+    )
     await expect(adapter.runtimeInfo()).resolves.toMatchObject({
       capabilities: {
         sessionReadState: {

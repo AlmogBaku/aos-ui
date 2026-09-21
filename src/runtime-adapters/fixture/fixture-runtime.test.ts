@@ -196,8 +196,38 @@ describe("fixture Assistant UI thread adapter", () => {
           remoteId: "thread-mica-quarterly",
           custom: expect.objectContaining({ agentId: "agent-mica" }),
         }),
+        expect.objectContaining({
+          remoteId: "thread-vela-retrospective",
+          status: "archived",
+        }),
       ])
     )
+  })
+
+  it("keeps archival and deletion in the provider's Session metadata", async () => {
+    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
+    const adapter = createFixtureThreadListAdapter(workspace)
+
+    await adapter.archive("thread-aster-launch")
+    expect(
+      (await adapter.list()).threads.find(
+        ({ remoteId }) => remoteId === "thread-aster-launch"
+      )?.status
+    ).toBe("archived")
+    await expect(
+      workspace.getSessionMetadata(["thread-aster-launch"])
+    ).resolves.toEqual([expect.objectContaining({ archived: true })])
+
+    await adapter.unarchive("thread-aster-launch")
+    expect((await adapter.fetch("thread-aster-launch")).status).toBe("regular")
+
+    await adapter.delete("thread-aster-launch")
+    expect(
+      (await adapter.list()).threads.map(({ remoteId }) => remoteId)
+    ).not.toContain("thread-aster-launch")
+    await expect(
+      workspace.getSessionMetadata(["thread-aster-launch"])
+    ).resolves.toEqual([])
   })
 
   it("keeps a plan in both the launch Session and the market showcase", async () => {

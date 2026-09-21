@@ -205,10 +205,19 @@ bun run lint
 bun run build
 ```
 
+Several worktrees sweeping at once oversubscribe a shared machine and starve any
+deployment running on it, so `vitest.config.ts` caps workers at half the cores.
+Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
+prefer `nice bun run test` for a full sweep beside a live deployment.
+
 Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
+- OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
+  installs the package's own lockfile because the plugin SDK is a peer this checkout
+  does not carry, so the root test and typecheck gates skip that entry and its
+  contract test. The integration's other tests run at the root.
 - Monty wrapper or lock changes: `bun run monty:test`.
 - Compose or Docker changes:
 
@@ -219,6 +228,12 @@ Additional checks by area:
     AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
     AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+    AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+    AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+    AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir \
+    AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+    docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
   AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
     AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
     AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \

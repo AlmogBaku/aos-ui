@@ -69,6 +69,32 @@ const WebSocketUrlSchema = z
     }
   })
 
+/** VAPID `sub`: the contact a push service can reach an operator at. */
+const VapidSubjectSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine((value) => {
+    try {
+      return ["mailto:", "https:"].includes(new URL(value).protocol)
+    } catch {
+      return false
+    }
+  })
+
+/**
+ * Optional Web Push deployment: where subscriptions are kept, and the VAPID
+ * identity they are signed with. The public key is derived from the private one
+ * on startup rather than configured, so the two halves cannot disagree.
+ */
+const PushSchema = z.strictObject({
+  stateDir: AbsoluteDirectorySchema,
+  vapid: z.strictObject({
+    subject: VapidSubjectSchema,
+    privateKeyFile: AbsoluteSecretFileSchema,
+  }),
+})
+
 const ListenerSchema = z.union([
   z.strictObject({
     host: z.enum(["127.0.0.1", "::1"]),
@@ -161,6 +187,7 @@ const ProxyConfigSchema = z
         }),
       })
       .optional(),
+    push: PushSchema.optional(),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {

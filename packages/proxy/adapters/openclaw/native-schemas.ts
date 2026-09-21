@@ -5,7 +5,9 @@ import {
   ModelsListParamsSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
+  SessionsPatchParamsSchema,
 } from "@openclaw/gateway-protocol"
 import { Value } from "typebox/value"
 
@@ -37,6 +39,7 @@ export type OpenClawSession = Readonly<{
   label?: string
   displayName?: string
   archived?: boolean
+  pinned?: boolean
   updatedAt?: number
   lastInteractionAt?: number
   hasActiveRun?: boolean
@@ -158,6 +161,31 @@ export function openClawCreateSessionParams(agentId: string) {
   return official(SessionsCreateParamsSchema, { agentId })
 }
 
+/** Exactly one proven native Session flag; the gateway owns its side effects. */
+export type OpenClawSessionPatch =
+  | Readonly<{ label: string }>
+  | Readonly<{ archived: boolean }>
+  | Readonly<{ pinned: boolean }>
+
+export function openClawPatchSessionParams(
+  agentId: string,
+  sessionKey: string,
+  patch: OpenClawSessionPatch
+) {
+  return official(SessionsPatchParamsSchema, {
+    agentId,
+    key: sessionKey,
+    ...patch,
+  })
+}
+
+export function openClawDeleteSessionParams(
+  agentId: string,
+  sessionKey: string
+) {
+  return official(SessionsDeleteParamsSchema, { agentId, key: sessionKey })
+}
+
 export function openClawInvitedSessionsParams(
   agentId: string,
   sessionKey: string
@@ -232,6 +260,8 @@ export function parseOpenClawSessions(
       throw new OpenClawNativePayloadError()
     if (value.archived !== undefined && typeof value.archived !== "boolean")
       throw new OpenClawNativePayloadError()
+    if (value.pinned !== undefined && typeof value.pinned !== "boolean")
+      throw new OpenClawNativePayloadError()
     if (
       value.hasActiveRun !== undefined &&
       typeof value.hasActiveRun !== "boolean"
@@ -249,6 +279,7 @@ export function parseOpenClawSessions(
       ...(typeof value.archived === "boolean"
         ? { archived: value.archived }
         : {}),
+      ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
       ...(number(value.updatedAt) !== undefined
         ? { updatedAt: number(value.updatedAt) }
         : {}),

@@ -147,6 +147,49 @@
   outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
+.install {
+  justify-self: start;
+}
+/* An infobar in the conversation column: it persists until answered, so it
+   never overlays the composer. */
+.ask {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-block: 0.625rem;
+  padding-inline: 1rem;
+  border-block-end: 1px solid var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  font-size: 0.875rem;
+  animation: ask-arrive 200ms ease-out;
+}
+/* Below this basis the buttons wrap under the heading. */
+.askText {
+  display: grid;
+  gap: 0.125rem;
+  flex: 1 1 16rem;
+}
+.askTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.askActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+@keyframes ask-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 .notice {
   position: absolute;
   z-index: 10;
@@ -177,7 +220,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .notice {
+  .notice,
+  .ask {
     animation: none;
   }
 }

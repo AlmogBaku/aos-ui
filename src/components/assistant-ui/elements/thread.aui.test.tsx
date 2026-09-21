@@ -2743,3 +2743,177 @@ describe("failed turn presentation", () => {
     ).not.toBeInTheDocument()
   })
 })
+
+/** A right click lands wherever the reader pressed, inside the message. */
+async function openMessageMenu(text: string) {
+  fireEvent.contextMenu(await screen.findByText(text), {
+    clientX: 24,
+    clientY: 48,
+  })
+  return screen.findByRole("menu")
+}
+
+describe("message context menu", () => {
+  it("offers the assistant turn's own actions on a right click", async () => {
+    render(<LocalThread />)
+
+    const menu = await openMessageMenu("The reference is ready.")
+
+    expect(within(menu).getByRole("menuitem", { name: "Copy" })).toBeVisible()
+    expect(
+      within(menu).getByRole("menuitem", { name: "Refresh" })
+    ).toBeVisible()
+    expect(
+      within(menu).getByRole("menuitem", { name: "Export as Markdown" })
+    ).toBeVisible()
+    expect(within(menu).queryByRole("menuitem", { name: "Edit" })).toBeNull()
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Select text" })
+    ).toBeNull()
+  })
+
+  it("offers the user turn's own actions on a right click", async () => {
+    render(<LocalThread />)
+
+    const menu = await openMessageMenu("Review this image")
+
+    expect(within(menu).getByRole("menuitem", { name: "Copy" })).toBeVisible()
+    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeVisible()
+    expect(within(menu).queryByRole("menuitem", { name: "Refresh" })).toBeNull()
+  })
+
+  it("drops retry and edit where the provider cannot rewind", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread messageRewind={false} />)
+
+    const assistant = await openMessageMenu("The reference is ready.")
+    expect(
+      within(assistant).getByRole("menuitem", { name: "Copy" })
+    ).toBeVisible()
+    expect(
+      within(assistant).queryByRole("menuitem", { name: "Refresh" })
+    ).toBeNull()
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+
+    const userTurn = await openMessageMenu("Review this image")
+    expect(
+      within(userTurn).getByRole("menuitem", { name: "Copy" })
+    ).toBeVisible()
+    expect(
+      within(userTurn).queryByRole("menuitem", { name: "Edit" })
+    ).toBeNull()
+  })
+
+  it("carries the source user turn in the retry run config", async () => {
+    const user = userEvent.setup()
+    const runConfig = vi.fn((sourceUserId: string) => ({
+      custom: { "aos.rewindSourceId": sourceUserId },
+    }))
+    const run = vi.fn(async () => ({ content: [] }))
+
+    render(<LocalThread messageRewind={{ runConfig }} model={{ run }} />)
+    const menu = await openMessageMenu("The reference is ready.")
+    await user.click(within(menu).getByRole("menuitem", { name: "Refresh" }))
+
+    expect(runConfig).toHaveBeenCalledExactlyOnceWith("message-user")
+    await waitFor(() =>
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runConfig: { custom: { "aos.rewindSourceId": "message-user" } },
+        })
+      )
+    )
+  })
+
+  it("opens the edit composer from the menu", async () => {
+    const user = userEvent.setup()
+    render(<LocalThread />)
+
+    const menu = await openMessageMenu("Review this image")
+    await user.click(within(menu).getByRole("menuitem", { name: "Edit" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Update" })
+    ).toBeInTheDocument()
+  })
+
+  it("names the pending question on the action it holds back", async () => {
+    const pending: RuntimeQuestionRequest = {
+      kind: "question",
+      requestId: "question-1",
+      sessionId: "pending",
+      questions: [
+        {
+          header: "Choice",
+          prompt: "Choose one",
+          options: [{ label: "Proceed" }],
+        },
+      ],
+    }
+    const interactions: RuntimeInteractionAdapter = {
+      respond: vi.fn(async () => undefined),
+      reject: vi.fn(async () => undefined),
+      getPending: () => pending,
+      subscribe: () => () => undefined,
+    }
+
+    render(
+      <PendingInteractionProvider interactions={interactions}>
+        <LocalThread />
+      </PendingInteractionProvider>
+    )
+    const menu = await openMessageMenu("The reference is ready.")
+
+    // Base UI keeps a disabled item focusable, so the state is the ARIA state.
+    expect(
+      within(menu).getByRole("menuitem", {
+        name: "Refresh, Answer the pending question before changing this conversation",
+      })
+    ).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("leaves a selected passage to the browser's own menu", async () => {
+    render(<LocalThread />)
+    const answer = await screen.findByText("The reference is ready.")
+    const selection = window.getSelection()
+    if (!selection) throw new Error("Expected a document selection")
+    const range = document.createRange()
+    range.selectNodeContents(answer)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    // An uncancelled event is the browser's own menu still arriving.
+    expect(fireEvent.contextMenu(answer, { clientX: 24, clientY: 48 })).toBe(
+      true
+    )
+    expect(screen.queryByRole("menu")).toBeNull()
+
+    selection.removeAllRanges()
+    expect(fireEvent.contextMenu(answer, { clientX: 24, clientY: 48 })).toBe(
+      false
+    )
+    expect(await screen.findByRole("menu")).toBeInTheDocument()
+  })
+
+  it("hands the press back to the browser after Select text", async () => {
+    setTouchPrimary(true)
+    const user = userEvent.setup()
+    render(<LocalThread />)
+
+    const menu = await openMessageMenu("The reference is ready.")
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Select text" })
+    )
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+
+    expect(
+      fireEvent.contextMenu(screen.getByText("The reference is ready."), {
+        clientX: 24,
+        clientY: 48,
+      })
+    ).toBe(true)
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+})

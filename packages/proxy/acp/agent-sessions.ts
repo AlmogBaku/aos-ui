@@ -54,6 +54,7 @@ export function sessionInfoMeta(
     status,
     archived: row.archived,
     ...(row.unread === undefined ? {} : { unread: row.unread }),
+    ...(row.pinned === undefined ? {} : { pinned: row.pinned }),
   }
 }
 

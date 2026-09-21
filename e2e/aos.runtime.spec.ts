@@ -40,6 +40,7 @@ const runtime = {
     sessionCreation: { status: "available" },
     sessionTitle: { status: "available" },
     sessionArchival: { status: "available" },
+    sessionPin: { status: "available" },
     sessionDeletion: { status: "available" },
     sessionRun: { status: "available" },
     sessionStop: { status: "available" },
@@ -500,12 +501,18 @@ async function serveAcp(page: Page, overrides: Partial<AcpScript> = {}) {
   await page.route("**/runtime-config.json", (route) =>
     route.fulfill({ json: { mode: "aos" } })
   )
-  // The runtime read is the only REST route this journey still needs.
-  await page.route("**/api/aos/v1/**", (route) =>
-    new URL(route.request().url()).pathname.endsWith("/runtime")
-      ? route.fulfill({ json: runtime })
-      : route.fulfill({ status: 404, json: { error: { code: "not_found" } } })
-  )
+  // The runtime read and the push status probe are the only REST routes this
+  // journey needs; the real proxy answers the probe even without push set up.
+  await page.route("**/api/aos/v1/**", (route) => {
+    const { pathname } = new URL(route.request().url())
+    if (pathname.endsWith("/runtime")) return route.fulfill({ json: runtime })
+    if (pathname.endsWith("/push"))
+      return route.fulfill({ json: { status: "not-configured" } })
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found" } },
+    })
+  })
 }
 
 function recorded(page: Page, method: string) {
@@ -576,12 +583,13 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(input).toBeVisible()
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible()
 
-  // The exposed Session is reported to the proxy, which owns read state.
+  // The exposed Session is reported to the proxy, which owns read state, along
+  // with this connection's presence for push delivery.
   await expect
     .poll(() => recorded(page, "_aos/session/focus"))
     .toContainEqual({
       method: "_aos/session/focus",
-      params: { sessionId: SESSION_ID },
+      params: { sessionId: SESSION_ID, foreground: true, idle: false },
     })
 
   // A dropped transport re-initializes and resumes from the last sequence seen.

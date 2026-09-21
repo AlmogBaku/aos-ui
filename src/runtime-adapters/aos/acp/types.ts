@@ -119,7 +119,11 @@ export interface AcpConnection {
   steer(
     request: z.infer<typeof AosSteerRequestSchema>
   ): Promise<z.infer<typeof AosSteerResponseSchema>>
-  focus(sessionId: string | null): void
+  /** The exposed Session plus this connection's presence, re-sent on reconnect. */
+  focus(
+    sessionId: string | null,
+    presence: { foreground: boolean; idle: boolean }
+  ): void
   listAgents(): Promise<z.infer<typeof AgentCatalogResponseSchema>>
   setVisibility(
     request: z.infer<typeof AosSetVisibilityRequestSchema>

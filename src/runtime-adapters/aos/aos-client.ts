@@ -12,6 +12,11 @@ import {
   SessionTranscriptionResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "@aos/protocol"
+import {
+  PushInfoSchema,
+  PushUnregistrationSchema,
+  type PushRegistration,
+} from "@aos/protocol/push"
 
 import type { AosStagedAttachment } from "./aos-attachment-adapter"
 
@@ -122,6 +127,23 @@ export class AosRemoteClient {
     return this.#read("/runtime", RuntimeInfoSchema, { signal })
   }
 
+  /** What this deployment offers for alerts while no tab is open. */
+  pushInfo(signal?: AbortSignal) {
+    return this.#read("/push", PushInfoSchema, { signal })
+  }
+
+  /** Registering the same endpoint again is how a preference change travels. */
+  async putPushSubscription(registration: PushRegistration) {
+    await this.#write("/push/subscriptions", "PUT", registration)
+  }
+
+  async deletePushSubscription(endpoint: string) {
+    const request = PushUnregistrationSchema.safeParse({ endpoint })
+    if (!request.success || !endpoint.trim())
+      throw new AosClientError("proxy-failure", "Invalid push subscription")
+    await this.#write("/push/subscriptions", "DELETE", request.data)
+  }
+
   /** REST authorizes byte routes per Agent, so every Session names its owner. */
   adoptSessionOwnership(threadId: string, agentId: string) {
     if (!threadId || !agentId)
@@ -224,6 +246,31 @@ export class AosRemoteClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request.data),
     })
+  }
+
+  /** A route that answers with no content; only its failure kind matters. */
+  async #write(path: string, method: string, body: unknown) {
+    let response: Response
+    try {
+      const headers = new Headers({ "content-type": "application/json" })
+      if (this.#authorization) headers.set("authorization", this.#authorization)
+      response = await this.#fetch(`${this.#basePath}${path}`, {
+        method,
+        credentials: "same-origin",
+        headers,
+        body: JSON.stringify(body),
+      })
+    } catch {
+      throw new AosClientError("connection-interrupted")
+    }
+    if (!response.ok) {
+      const error = await normalizedError(response)
+      throw new AosClientError(
+        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        error?.description,
+        error?.code
+      )
+    }
   }
 
   #sessionPath(threadId: string, suffix: string) {

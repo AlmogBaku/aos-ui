@@ -51,6 +51,22 @@ describe("activeSessionsForAgent", () => {
     ).toEqual(["waiting-old", "running-old", "idle-old"])
   })
 
+  it("keeps a pinned Session open however old it is", () => {
+    const sessions: SessionMetadata[] = [
+      {
+        ...session("pinned-old", "aster", "2026-08-01T12:00:00.000Z"),
+        pinned: true,
+      },
+      session("idle-old", "aster", "2026-08-02T12:00:00.000Z"),
+    ]
+
+    expect(
+      activeSessionsForAgent(sessions, "aster", now, new Set()).map(
+        ({ threadId }) => threadId
+      )
+    ).toEqual(["pinned-old"])
+  })
+
   it("filters by authoritative Agent ownership, deduplicates, and orders newest first", () => {
     const sessions = [
       session("same", "aster", "2026-09-03T08:00:00.000Z"),

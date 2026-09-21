@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   OpenClawNativePayloadError,
+  openClawDeleteSessionParams,
   openClawHistoryParams,
   openClawModelsParams,
+  openClawPatchSessionParams,
   openClawSessionsParams,
   parseOpenClawHistory,
   parseOpenClawSessions,
@@ -64,6 +66,45 @@ describe("OpenClaw native workspace schemas", () => {
     for (let index = 0; index < 40; index++) deep = { deep }
     expect(() =>
       parseOpenClawHistory({ messages: [{ id: "one", content: deep }] }, 1)
+    ).toThrow(OpenClawNativePayloadError)
+  })
+
+  it("[CL1-SCHEMA-005] emits one official Session mutation flag and rejects an unofficial pin state", () => {
+    expect(
+      openClawPatchSessionParams("researcher", "agent:researcher:main", {
+        label: "Renamed",
+      })
+    ).toEqual({
+      agentId: "researcher",
+      key: "agent:researcher:main",
+      label: "Renamed",
+    })
+    expect(
+      openClawPatchSessionParams("researcher", "agent:researcher:main", {
+        pinned: true,
+      })
+    ).toEqual({
+      agentId: "researcher",
+      key: "agent:researcher:main",
+      pinned: true,
+    })
+    expect(
+      openClawDeleteSessionParams("researcher", "agent:researcher:main")
+    ).toEqual({ agentId: "researcher", key: "agent:researcher:main" })
+    expect(() =>
+      openClawPatchSessionParams("researcher", "", { archived: true })
+    ).toThrow(OpenClawNativePayloadError)
+    expect(
+      parseOpenClawSessions(
+        { sessions: [{ key: "agent:a:one", pinned: true }] },
+        1
+      )
+    ).toEqual([{ key: "agent:a:one", pinned: true }])
+    expect(() =>
+      parseOpenClawSessions(
+        { sessions: [{ key: "agent:a:one", pinned: "yes" }] },
+        1
+      )
     ).toThrow(OpenClawNativePayloadError)
   })
 })

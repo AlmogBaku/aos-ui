@@ -80,7 +80,7 @@ export const AOS_JSONRPC_ERRORS = {
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
 
-const IdentifierSchema = z
+export const IdentifierSchema = z
   .string()
   .min(1)
   .max(256)
@@ -141,15 +141,16 @@ export const AosSessionListMetaSchema = z.strictObject({
 
 /**
  * `SessionInfo._meta.aos` on `session/list` entries and
- * `session_info_update._meta.aos`. `unread` is absent when the runtime does not
- * track read state or this read cannot know it; absent never overwrites a
- * known value.
+ * `session_info_update._meta.aos`. `unread` and `pinned` are absent when the
+ * runtime does not track that state or this read cannot know it; absent never
+ * overwrites a known value.
  */
 export const AosSessionInfoMetaSchema = z.strictObject({
   agentId: IdentifierSchema,
   status: SessionStatusSchema,
   archived: z.boolean(),
   unread: z.boolean().optional(),
+  pinned: z.boolean().optional(),
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 
@@ -209,13 +210,14 @@ export const AosSessionUpdateRequestSchema = z
     title: z.string().min(1).max(4096).optional(),
     archived: z.boolean().optional(),
     unread: z.boolean().optional(),
+    pinned: z.boolean().optional(),
   })
   .refine(
     (value) =>
-      [value.title, value.archived, value.unread].filter(
+      [value.title, value.archived, value.unread, value.pinned].filter(
         (intent) => intent !== undefined
       ).length === 1,
-    "Exactly one of title, archived, unread"
+    "Exactly one of title, archived, unread, pinned"
   )
 export type AosSessionUpdateRequest = z.infer<
   typeof AosSessionUpdateRequestSchema
@@ -229,9 +231,16 @@ export const AosSteerRequestSchema = z.strictObject({
 })
 export const AosSteerResponseSchema = RunSteerResponseSchema
 
-/** `_aos/session/focus` notification: the exposed Session, or none. */
+/**
+ * `_aos/session/focus` notification: the exposed Session, or none, plus the
+ * workspace presence the browser re-sends every `PRESENCE_HEARTBEAT_MS`. An
+ * absent `foreground` means an exposed Session is in the foreground, and an
+ * absent `idle` means the operator is still interacting.
+ */
 export const AosFocusNotificationSchema = z.strictObject({
   sessionId: IdentifierSchema.nullable(),
+  foreground: z.boolean().optional(),
+  idle: z.boolean().optional(),
 })
 
 // ---------------------------------------------------------------------------

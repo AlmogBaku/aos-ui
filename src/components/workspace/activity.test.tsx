@@ -19,11 +19,38 @@ import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { useActivityCoordinator } from "./use-activity-coordinator"
 import {
+  ActivityAsk,
   ActivityPanel,
   ActivityBell,
   ActivityNotice,
   ActivitySettings,
+  type BrowserSettingsView,
 } from "./activity"
+import { defaultBrowserPreferences } from "@/lib/notifications/policy"
+import { PRESENCE_HEARTBEAT_MS, PRESENCE_IDLE_MS } from "@aos/protocol/push"
+
+/** Everything the operator's notification surfaces read, with nothing on. */
+function browserSettings(
+  overrides: Partial<BrowserSettingsView> = {}
+): BrowserSettingsView {
+  return {
+    status: "granted",
+    coverage: "workspace",
+    preferences: { ...defaultBrowserPreferences },
+    ask: false,
+    pushActive: false,
+    push: "not-configured",
+    installable: false,
+    iosInstallHint: false,
+    onEnabledChange: vi.fn(),
+    onCategoryChange: vi.fn(),
+    onSoundChange: vi.fn(),
+    onAcceptAsk: vi.fn(),
+    onDeclineAsk: vi.fn(),
+    onInstall: vi.fn(),
+    ...overrides,
+  }
+}
 
 const now = new Date("2026-09-05T12:00:00Z")
 // "one" is the exposed selection the provider already read; "two" is unread.
@@ -102,6 +129,7 @@ function options(
       ["two", "Second"],
     ]),
     selection: { agentId: "a", threadId: "one" },
+    locale: "en",
     readNow: () => now,
     onOpenTarget: vi.fn(async () => {}),
   }
@@ -266,11 +294,16 @@ describe("Activity coordinator", () => {
       await waitFor(() => expect(result.current.items).toHaveLength(1))
       expect(result.current.items[0]!.read).toBe(false)
       expect(result.current.notice).toBeNull()
-      expect(provider.reportFocus.mock.calls).toEqual([[null]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        [null, { foreground: false, idle: false }],
+      ])
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
       focus.mockReturnValue(true)
       act(() => window.dispatchEvent(new Event("focus")))
-      expect(provider.reportFocus.mock.calls).toEqual([[null], ["one"]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        [null, { foreground: false, idle: false }],
+        ["one", { foreground: true, idle: false }],
+      ])
     }
   )
 
@@ -281,10 +314,72 @@ describe("Activity coordinator", () => {
       initialProps: props,
     })
     await waitFor(() =>
-      expect(provider.reportFocus.mock.calls).toEqual([["one"]])
+      expect(provider.reportFocus.mock.calls).toEqual([
+        ["one", { foreground: true, idle: false }],
+      ])
     )
     rerender({ ...props, conversationExposed: false })
-    expect(provider.reportFocus.mock.calls).toEqual([["one"], [null]])
+    expect(provider.reportFocus.mock.calls).toEqual([
+      ["one", { foreground: true, idle: false }],
+      [null, { foreground: true, idle: false }],
+    ])
+  })
+
+  it("reports this tab idle after three unattended minutes, and present again on input", async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = source()
+      renderHook(useActivityCoordinator, {
+        initialProps: options(provider.workspace),
+      })
+      await vi.waitFor(() =>
+        expect(provider.reportFocus).toHaveBeenCalledTimes(1)
+      )
+
+      await act(async () => vi.advanceTimersByTime(PRESENCE_IDLE_MS))
+      expect(provider.reportFocus).toHaveBeenLastCalledWith("one", {
+        foreground: true,
+        idle: true,
+      })
+
+      await act(async () =>
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }))
+      )
+      expect(provider.reportFocus).toHaveBeenLastCalledWith("one", {
+        foreground: true,
+        idle: false,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("repeats an unchanged report on the presence heartbeat, and only while foreground", async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = source()
+      renderHook(useActivityCoordinator, {
+        initialProps: options(provider.workspace),
+      })
+      await vi.waitFor(() =>
+        expect(provider.reportFocus).toHaveBeenCalledTimes(1)
+      )
+
+      await act(async () => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS))
+      expect(provider.reportFocus.mock.calls).toEqual([
+        ["one", { foreground: true, idle: false }],
+        ["one", { foreground: true, idle: false }],
+      ])
+
+      vi.mocked(document.hasFocus).mockReturnValue(false)
+      await act(async () => window.dispatchEvent(new Event("blur")))
+      provider.reportFocus.mockClear()
+      // A background tab has nothing to keep fresh; the proxy expires it.
+      await act(async () => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS * 3))
+      expect(provider.reportFocus).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it("isolates subscription errors and accepts later valid events", async () => {
     const provider = source()
@@ -436,30 +531,190 @@ describe("Activity presentation", () => {
     const user = userEvent.setup()
     const onEnabledChange = vi.fn()
     const onCategoryChange = vi.fn()
+    const onSoundChange = vi.fn()
     render(
       <ActivitySettings
         dictionary={en}
-        settings={{
+        settings={browserSettings({
           status: "default",
           coverage: "active-session",
-          preferences: {
-            enabled: false,
-            completion: true,
-            failure: true,
-            input: true,
-          },
+          preferences: { ...defaultBrowserPreferences, enabled: false },
           onEnabledChange,
           onCategoryChange,
-        }}
+          onSoundChange,
+        })}
       />
     )
     expect(onEnabledChange).not.toHaveBeenCalled()
     expect(screen.getByText(/active Session only/)).toBeVisible()
     await user.click(
-      screen.getByRole("checkbox", { name: "Browser notifications" })
+      screen.getByRole("checkbox", { name: en.activity.browserNotifications })
     )
     expect(onEnabledChange).toHaveBeenCalledWith(true)
     await user.click(screen.getByRole("checkbox", { name: "Turn completions" }))
     expect(onCategoryChange).toHaveBeenCalledWith("completion", false)
+    await user.click(screen.getByRole("checkbox", { name: en.activity.sound }))
+    expect(onSoundChange).toHaveBeenCalledWith(false)
+  })
+
+  it.each<[string, Partial<BrowserSettingsView>, string]>([
+    ["subscribed", { push: "available", pushActive: true }, en.activity.pushOn],
+    // A deployment that offers push is not the same as a device that has it.
+    [
+      "offered but not subscribed",
+      { push: "available", pushActive: false },
+      en.activity.pushNotYet,
+    ],
+    [
+      "blocked by the browser",
+      { push: "available", pushActive: true, status: "denied" },
+      en.activity.pushBlocked,
+    ],
+    ["insecure", { push: "insecure-context" }, en.activity.pushInsecure],
+    ["unconfigured", { push: "not-configured" }, en.activity.pushNotConfigured],
+    ["unsupported", { push: "unsupported" }, en.activity.pushUnsupported],
+    [
+      "waiting for an install",
+      { push: "available", pushActive: true, iosInstallHint: true },
+      en.activity.pushIosHint,
+    ],
+  ])(
+    "reports this device's closed-tab delivery as %s",
+    (_label, overrides, explanation) => {
+      render(
+        <ActivitySettings
+          dictionary={en}
+          settings={browserSettings(overrides)}
+        />
+      )
+      const status = screen.getByRole("status")
+      expect(status).toHaveTextContent(en.activity.whenClosed)
+      expect(status).toHaveTextContent(explanation)
+    }
+  )
+
+  it("never promises closed-tab delivery a blocked browser cannot make", () => {
+    render(
+      <ActivitySettings
+        dictionary={en}
+        settings={browserSettings({
+          push: "available",
+          pushActive: true,
+          status: "denied",
+        })}
+      />
+    )
+    expect(screen.getByRole("status")).not.toHaveTextContent(en.activity.pushOn)
+  })
+
+  it("offers installation only where the browser volunteered a prompt", async () => {
+    const onInstall = vi.fn()
+    const installable = render(
+      <ActivitySettings
+        dictionary={en}
+        settings={browserSettings({ installable: true, onInstall })}
+      />
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: en.activity.install })
+    )
+    expect(onInstall).toHaveBeenCalledOnce()
+    installable.unmount()
+    render(<ActivitySettings dictionary={en} settings={browserSettings()} />)
+    expect(
+      screen.queryByRole("button", { name: en.activity.install })
+    ).toBeNull()
+  })
+})
+
+describe("the one-time ask", () => {
+  it("stays hidden until the ask is due", () => {
+    render(<ActivityAsk dictionary={en} settings={browserSettings()} />)
+    expect(
+      screen.queryByRole("region", { name: en.activity.askTitle })
+    ).toBeNull()
+  })
+
+  it("keeps both answers in Tab order and reports the operator's choice", async () => {
+    const user = userEvent.setup()
+    const onAcceptAsk = vi.fn()
+    const onDeclineAsk = vi.fn()
+    render(
+      <ActivityAsk
+        dictionary={en}
+        settings={browserSettings({ ask: true, onAcceptAsk, onDeclineAsk })}
+      />
+    )
+    expect(
+      screen.getByRole("region", { name: en.activity.askTitle })
+    ).toBeVisible()
+    // Closed-tab delivery is only promised where push can actually deliver.
+    expect(screen.queryByText(en.activity.askClosed)).toBeNull()
+    await user.tab()
+    expect(
+      screen.getByRole("button", { name: en.activity.askAccept })
+    ).toHaveFocus()
+    await user.tab()
+    expect(
+      screen.getByRole("button", { name: en.activity.askDecline })
+    ).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(onDeclineAsk).toHaveBeenCalledOnce()
+    await user.click(
+      screen.getByRole("button", { name: en.activity.askAccept })
+    )
+    expect(onAcceptAsk).toHaveBeenCalledOnce()
+  })
+
+  it("promises closed-tab delivery where push is available", () => {
+    render(
+      <ActivityAsk
+        dictionary={en}
+        settings={browserSettings({ ask: true, push: "available" })}
+      />
+    )
+    expect(screen.getByText(en.activity.askClosed)).toBeVisible()
+  })
+
+  it("asks an uninstalled iPhone to install AOS, and stays dismissible", async () => {
+    const user = userEvent.setup()
+    const onDeclineAsk = vi.fn()
+    // Such a tab exposes no Notification API at all, which is what turns the
+    // ask into an install hint rather than a permission request.
+    Reflect.deleteProperty(window, "Notification")
+    render(
+      <ActivityAsk
+        dictionary={en}
+        settings={browserSettings({
+          ask: true,
+          push: "available",
+          iosInstallHint: true,
+          onDeclineAsk,
+        })}
+      />
+    )
+
+    expect(screen.getByText(en.activity.pushIosHint)).toBeVisible()
+    expect(screen.queryByText(en.activity.askClosed)).toBeNull()
+    // There is nothing to turn on yet, but the ask must still be answerable.
+    expect(
+      screen.queryByRole("button", { name: en.activity.askAccept })
+    ).toBeNull()
+    await user.click(
+      screen.getByRole("button", { name: en.activity.askDecline })
+    )
+    expect(onDeclineAsk).toHaveBeenCalledOnce()
+  })
+
+  it("labels the ask in Hebrew as well", () => {
+    render(
+      <ActivityAsk dictionary={he} settings={browserSettings({ ask: true })} />
+    )
+    expect(
+      screen.getByRole("region", { name: he.activity.askTitle })
+    ).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: he.activity.askAccept })
+    ).toBeVisible()
   })
 })

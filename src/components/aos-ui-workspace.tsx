@@ -137,11 +137,23 @@ function readSystemClock() {
   return new Date()
 }
 
+/**
+ * The Session an artifact read is authorized against: the thread the replayed
+ * messages belong to, read from the same snapshot those messages came from.
+ * The workspace's own selection is tracked separately and settles on its own
+ * schedule, so pairing it with this message list would let a Session switch ask
+ * one Session for another's artifact, which the provider rightly refuses.
+ */
+function selectArtifactThreadId(state: AssistantState) {
+  const { mainThreadId, threadItems } = state.threads
+  const item = threadItems.find(({ id }) => id === mainThreadId)
+  return item?.remoteId ?? item?.externalId ?? mainThreadId
+}
+
 function ArtifactWorkspaceBridge({
   bundle,
   locale,
   agentId,
-  threadId,
   artifactHtmlAssetOrigins,
   artifactMessageProjector,
   children,
@@ -150,7 +162,6 @@ function ArtifactWorkspaceBridge({
   bundle: HarnessRuntime
   locale: Locale
   agentId: string
-  threadId: string
   artifactHtmlAssetOrigins: readonly string[]
   artifactMessageProjector?: (
     messages: readonly ArtifactMessage[]
@@ -162,13 +173,16 @@ function ArtifactWorkspaceBridge({
       stabilize(state.thread.messages as readonly ArtifactMessage[])
   }, [artifactMessageProjector])
   const artifactMessages = useAuiState(selectArtifactMessages)
+  // Both selectors read one store, so a render cannot hold a thread id from
+  // after a switch beside the messages from before it.
+  const artifactThreadId = useAuiState(selectArtifactThreadId)
 
   return (
     <ArtifactWorkspaceProvider
       locale={locale}
       adapter={bundle.artifacts?.resolver}
       agentId={agentId}
-      threadId={threadId}
+      threadId={artifactThreadId}
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
@@ -443,10 +457,6 @@ function WorkspaceContent({
     () => ({ ...threadComponents, Composer: composer }),
     [composer]
   )
-  const capabilities = useMemo(
-    () => getWorkspaceCapabilities(workspace),
-    [workspace]
-  )
   const [managementOpen, setManagementOpen] = useState(false)
   const [conversationObscured, setConversationObscured] = useState(false)
   const {
@@ -474,16 +484,31 @@ function WorkspaceContent({
     retryTodos,
     sessions,
     titles,
+    sessionActions,
     setPreferredAgentId,
     selectAgent,
     openSession,
     closeSession,
     undoCloseSession,
+    renameSession,
+    setSessionPinned,
+    archiveSession,
+    unarchiveSession,
+    deleteSession,
     createSession,
     openAgentBuilder,
     refreshAfterVisibilityChange,
     retryWorkspace,
   } = useWorkspaceNavigation({ bundle, locale, dictionary, now, readNow })
+  const capabilities = useMemo(
+    () =>
+      getWorkspaceCapabilities(
+        workspace,
+        displayAgents,
+        sessionActions ?? undefined
+      ),
+    [displayAgents, sessionActions, workspace]
+  )
   const workspaceError = agentError ?? sessionError ?? actionError
   const threadChrome = useMemo<WorkspaceThreadChrome>(
     () => ({
@@ -501,12 +526,14 @@ function WorkspaceContent({
     workspace,
     browser: {
       port: browserNotificationPort,
+      push: bundle.push,
       copy: {
         completion: dictionary.activity.runFinished,
         failure: dictionary.activity.runFailed,
         input: dictionary.activity.inputRequested,
       },
     },
+    locale,
     agents: displayAgents,
     sessions,
     titles,
@@ -528,7 +555,6 @@ function WorkspaceContent({
         bundle={bundle}
         locale={locale}
         agentId={selectedAgentId ?? ""}
-        threadId={visibleThreadId ?? ""}
         artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
         artifactMessageProjector={artifactMessageProjector}
         activity={activity}
@@ -563,6 +589,12 @@ function WorkspaceContent({
             : null
         }
         onCreateSession={createSession}
+        onRenameSession={renameSession}
+        onSetSessionPinned={setSessionPinned}
+        onArchiveSession={archiveSession}
+        onUnarchiveSession={unarchiveSession}
+        onDeleteSession={deleteSession}
+        sessionActions={sessionActions}
         onOpenAgentBuilder={openAgentBuilder}
         onManageAgents={() => setManagementOpen(true)}
         onConversationObscuredChange={setConversationObscured}

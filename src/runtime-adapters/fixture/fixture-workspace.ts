@@ -73,6 +73,7 @@ export const fixtureSessionTitles = new Map<string, string>([
   ["thread-lumen-roadmap", "Roadmap review"],
   ["thread-vela-metrics", "Activation metrics"],
   ["thread-nori-copy", "Launch copy"],
+  ["thread-vela-retrospective", "Campaign retrospective"],
 ])
 
 export const fixtureSessions: SessionMetadata[] = [
@@ -124,6 +125,7 @@ export const fixtureSessions: SessionMetadata[] = [
     agentId: "agent-vela",
     updatedAt: "2026-08-28T12:00:00.000Z",
     status: "idle",
+    pinned: true,
   },
   {
     threadId: "thread-nori-copy",
@@ -131,6 +133,13 @@ export const fixtureSessions: SessionMetadata[] = [
     updatedAt: "2026-08-27T12:00:00.000Z",
     status: "failed",
     unread: true,
+  },
+  {
+    threadId: "thread-vela-retrospective",
+    agentId: "agent-vela",
+    updatedAt: "2026-08-20T12:00:00.000Z",
+    status: "idle",
+    archived: true,
   },
 ]
 
@@ -326,8 +335,33 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     const session = this.#sessions.find((item) => item.threadId === threadId)
     if (!session || session.unread === false) return
     session.unread = false
-    for (const entry of this.#sessionMetadataListeners)
-      entry.listener(this.#projectSessions(entry.threadIds))
+    this.#publishSessions()
+  }
+
+  async setSessionPinned(threadId: string, pinned: boolean) {
+    const session = this.#requireSession(threadId)
+    if (session.pinned === pinned) return
+    session.pinned = pinned
+    this.#publishSessions()
+  }
+
+  setSessionArchived(threadId: string, archived: boolean) {
+    const session = this.#requireSession(threadId)
+    if (session.archived === archived) return
+    session.archived = archived
+    this.#publishSessions()
+  }
+
+  /** Assistant UI drops the deleted thread itself, so nothing republishes. */
+  deleteSession(threadId: string) {
+    const session = this.#requireSession(threadId)
+    this.#sessions.splice(this.#sessions.indexOf(session), 1)
+    this.#sessionTitles.delete(threadId)
+  }
+
+  /** The preview performs every Session action the workspace offers. */
+  async sessionActionCapabilities() {
+    return { rename: true, archive: true, delete: true, pin: true }
   }
 
   /** Native runtimes debounce exposure; the preview has no read-state clock. */
@@ -367,9 +401,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   setSessionTitle(threadId: string, title: string) {
-    if (!this.#sessions.some((session) => session.threadId === threadId)) {
-      throw new Error(`Session not found: ${threadId}`)
-    }
+    this.#requireSession(threadId)
     this.#sessionTitles.set(threadId, title)
   }
 
@@ -537,6 +569,18 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     return structuredClone(
       this.#sessions.filter(({ threadId }) => requested.has(threadId))
     )
+  }
+
+  /** Every Session write names a Session the provider already has. */
+  #requireSession(threadId: string) {
+    const session = this.#sessions.find((item) => item.threadId === threadId)
+    if (!session) throw new Error(`Session not found: ${threadId}`)
+    return session
+  }
+
+  #publishSessions() {
+    for (const entry of this.#sessionMetadataListeners)
+      entry.listener(this.#projectSessions(entry.threadIds))
   }
 
   #publishCatalog() {

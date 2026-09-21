@@ -50,6 +50,38 @@ describe("browser adapters", () => {
     const port = createBrowserNotificationPort()
     expect(port.getPermission()).toBe("unsupported")
   })
+  it("watches the browser's own notification permission while it can", async () => {
+    const status = new EventTarget()
+    const query = vi.fn(async () => status)
+    Object.defineProperty(navigator, "permissions", {
+      configurable: true,
+      value: { query },
+    })
+    try {
+      const port = createBrowserNotificationPort()
+      const changed = vi.fn()
+
+      const stop = port.onPermissionChange!(changed)
+      await vi.waitFor(() => expect(query).toHaveBeenCalledOnce())
+      expect(query).toHaveBeenCalledWith({ name: "notifications" })
+      status.dispatchEvent(new Event("change"))
+      expect(changed).toHaveBeenCalledOnce()
+
+      stop()
+      status.dispatchEvent(new Event("change"))
+      expect(changed).toHaveBeenCalledOnce()
+    } finally {
+      Reflect.deleteProperty(navigator, "permissions")
+    }
+  })
+  it("leaves a browser without the Permissions API on its focus recheck", () => {
+    Reflect.deleteProperty(navigator, "permissions")
+    const port = createBrowserNotificationPort()
+    const changed = vi.fn()
+
+    expect(() => port.onPermissionChange!(changed)()).not.toThrow()
+    expect(changed).not.toHaveBeenCalled()
+  })
   it("forwards only allowed notification options and catches callback errors", () => {
     const instances: {
       title: string

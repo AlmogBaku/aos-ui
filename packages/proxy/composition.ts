@@ -11,10 +11,18 @@ import {
   type GuestInvitationKey,
   type GuestInvitationService,
 } from "./auth/guest-invitation"
-import { parseProxyConfig } from "./config"
+import { parseProxyConfig, type ProxyConfig } from "./config"
+import { OPERATOR_PRINCIPAL } from "./core/principal"
+import type { RuntimeInstance } from "./core/runtime"
+import { createSessionRows, type SessionRows } from "./core/session-rows"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
 import { createGuestAttachmentStages } from "./guest/context"
+import { createPushDispatcher } from "./push/dispatcher"
+import { createPresenceRegistry } from "./push/presence"
+import { openPushRegistrations } from "./push/registrations"
+import { createPushSender } from "./push/sender"
+import { deriveVapidPublicKey } from "./push/vapid"
 import { readSecretKeyFile } from "./secrets"
 
 export type ConfiguredProxyDependencies = {
@@ -23,12 +31,51 @@ export type ConfiguredProxyDependencies = {
   clock?: () => number
 }
 
+/**
+ * Everything one push-enabled deployment needs: the public key derived from the
+ * configured private one, the stored devices, the presence the ACP lane reports
+ * into, and the dispatcher that observes the runtime. A state directory the
+ * proxy cannot write fails startup here rather than at the first notification.
+ */
+async function createPushLane(
+  push: NonNullable<ProxyConfig["push"]>,
+  runtimeInstance: RuntimeInstance,
+  sessionRows: SessionRows,
+  dependencies: ConfiguredProxyDependencies,
+  clock: { now?: () => number }
+) {
+  const privateKey = await readSecretKeyFile(push.vapid.privateKeyFile)
+  const registrations = await openPushRegistrations({
+    stateDir: push.stateDir,
+    logger: dependencies.logger,
+  })
+  const publicKey = deriveVapidPublicKey(privateKey)
+  const presence = createPresenceRegistry(clock)
+  const dispatcher = createPushDispatcher({
+    runtimeInstance,
+    sessionRows,
+    registrations,
+    presence,
+    sender: createPushSender({
+      vapid: { subject: push.vapid.subject, publicKey, privateKey },
+    }),
+    // One operator owns every Agent on this surface.
+    principalOf: () => OPERATOR_PRINCIPAL,
+    logger: dependencies.logger,
+    ...clock,
+  })
+  return { publicKey, registrations, presence, dispatcher }
+}
+
 /** Loads secrets once and constructs one runtime shared by every listener. */
 export async function createConfiguredProxy(
   input: unknown,
   dependencies: ConfiguredProxyDependencies
 ) {
   const config = parseProxyConfig(input)
+  /** One injected clock, in the shape every constructed service takes it. */
+  const clock =
+    dependencies.clock === undefined ? {} : { now: dependencies.clock }
   const [runtimeInstance, invitationKeys] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
@@ -55,15 +102,11 @@ export async function createConfiguredProxy(
           keys: invitationKeys,
           ttlSeconds: config.guest.invitations.ttlSeconds,
           clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
-          ...(dependencies.clock === undefined
-            ? {}
-            : { now: dependencies.clock }),
+          ...clock,
         })
       : undefined
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
   const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
-    const clock =
-      dependencies.clock === undefined ? {} : { now: dependencies.clock }
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
@@ -90,17 +133,41 @@ export async function createConfiguredProxy(
       ? guestLane(config.guest.publicOrigin, invitations)
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
+  /**
+   * One row cache for the operator surface: the ACP lane keeps it current and
+   * push delivery reads the same rows to gate a notification on read state.
+   */
+  const sessionRows = createSessionRows(clock)
+  const push = config.push
+    ? await createPushLane(
+        config.push,
+        runtimeInstance,
+        sessionRows,
+        dependencies,
+        clock
+      )
+    : undefined
   const acpService = createOperatorAcpService({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
+    sessionRows,
     logger: dependencies.logger,
-    ...(dependencies.clock === undefined ? {} : { now: dependencies.clock }),
+    ...(push ? { presence: push.presence } : {}),
+    ...clock,
   })
   const app = createProxyApp({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
+    ...(push
+      ? {
+          push: {
+            publicKey: push.publicKey,
+            registrations: push.registrations,
+          },
+        }
+      : {}),
     ...(config.guest && invitations
       ? {
           guestInvitations: {
@@ -123,5 +190,13 @@ export async function createConfiguredProxy(
     ...(dependencies.clock === undefined ? {} : { clock: dependencies.clock }),
   })
 
-  return { app, config, runtimeInstance, acpService, guest }
+  return {
+    app,
+    config,
+    runtimeInstance,
+    acpService,
+    sessionRows,
+    guest,
+    ...(push ? { push } : {}),
+  }
 }

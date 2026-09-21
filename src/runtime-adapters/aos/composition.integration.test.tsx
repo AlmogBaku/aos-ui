@@ -88,6 +88,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionCreation: AVAILABLE,
     sessionTitle: AVAILABLE,
     sessionArchival: AVAILABLE,
+    sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
     sessionRun: AVAILABLE,
     sessionStop: AVAILABLE,

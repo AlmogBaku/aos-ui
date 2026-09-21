@@ -6,6 +6,7 @@ export type AgentSessionNavigation = {
   agentId: string
   openSessions: readonly WorkspaceSession[]
   historySessions: readonly WorkspaceSession[]
+  archivedSessions: readonly WorkspaceSession[]
   lastSelectedThreadId: string | null
 }
 
@@ -51,9 +52,15 @@ export function buildWorkspaceNavigationCatalog({
         titles,
         now,
         untitledLabel,
+        visibleThreadId,
       })
+      // Closing a pinned tab drops the tab, not the row: a pinned Session is
+      // never in History, so this row is what keeps it reachable.
       const openSessions = view.openSessions
-        .filter((session) => !dismissed.has(session.threadId))
+        .filter(
+          (session) =>
+            session.pinned === true || !dismissed.has(session.threadId)
+        )
         .map((session) => ({ ...session, canClose: true }))
       const openIds = new Set(openSessions.map((session) => session.threadId))
       return [
@@ -64,6 +71,7 @@ export function buildWorkspaceNavigationCatalog({
           historySessions: view.allSessions.filter(
             (session) => !openIds.has(session.threadId)
           ),
+          archivedSessions: view.archivedSessions,
           lastSelectedThreadId: lastSelected.get(agentId) ?? null,
         },
       ]
