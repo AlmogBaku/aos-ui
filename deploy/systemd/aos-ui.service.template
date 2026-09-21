@@ -9,12 +9,9 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=@AOS_CHECKOUT@
 EnvironmentFile=/etc/aos-ui/aos-ui.env
-# Add a third -f for a host overlay if needed:
-# ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
-#   -f @AOS_CHECKOUT@/compose.yaml \
-#   -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
-#   -f /etc/aos-ui/compose.override.yaml \
-#   up --detach --build --remove-orphans --wait
+# To enable Web Push (closed-app delivery), run deploy/setup-push.sh first,
+# then add -f @AOS_CHECKOUT@/compose.push.yaml after the runtime overlay in
+# all three Exec lines below.
 ExecStart=/usr/bin/docker compose --project-directory @AOS_CHECKOUT@ \
   -f @AOS_CHECKOUT@/compose.yaml \
   -f @AOS_CHECKOUT@/compose.@AOS_RUNTIME@.yaml \
