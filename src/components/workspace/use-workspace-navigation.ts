@@ -211,11 +211,17 @@ export function useWorkspaceNavigation({
    * The pending draft is the creator's own local thread while the operator is
    * on its row. An explicit creator route stays the creator's own Session.
    */
-  const creatorDraftOpen = Boolean(
+  // While the operator holds a creator interview, the preference already names
+  // the row it wants: the sentinel until the interview has a Session, then that
+  // Session's draft id. Projecting exactly that id keeps the row present across
+  // promotion, so selection never falls back while Session metadata catches up.
+  const pendingDraftAgentId =
     agentCreator &&
     conversationDraft?.agentId === agentCreator.id &&
-    preferredAgentId === PENDING_DRAFT_AGENT_ID
-  )
+    preferredAgentId !== null &&
+    isDraftAgentId(preferredAgentId)
+      ? preferredAgentId
+      : undefined
   // Drafts are derived from the last published metadata rather than the current
   // query, so a selected draft survives a Session metadata refresh.
   const publishedSessions = sessionSnapshot.sessions
@@ -228,12 +234,12 @@ export function useWorkspaceNavigation({
         resolvedThreadIds: resolvedDrafts,
         now: eligibilityNow.getTime(),
         name: dictionary.actions.newAgent,
-        pendingDraft: creatorDraftOpen,
+        pendingDraftAgentId,
       }),
     [
       agentCreator,
       agents,
-      creatorDraftOpen,
+      pendingDraftAgentId,
       dictionary.actions.newAgent,
       eligibilityNow,
       publishedSessions,

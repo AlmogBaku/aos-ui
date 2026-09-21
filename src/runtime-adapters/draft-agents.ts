@@ -46,8 +46,12 @@ type ProjectDraftAgentsInput = {
   resolvedThreadIds: ReadonlySet<string>
   now: number
   name: string
-  /** True while the operator holds a creator interview that has no Session. */
-  pendingDraft?: boolean
+  /**
+   * Row id for a creator interview the provider has not listed yet: the
+   * sentinel while the thread is local, then its Session id once it has one,
+   * so the row never disappears between those two facts.
+   */
+  pendingDraftAgentId?: string
 }
 
 const draftAgent = (id: string, name: string): AgentSummary => ({
@@ -69,7 +73,7 @@ export function projectDraftAgents({
   resolvedThreadIds,
   now,
   name,
-  pendingDraft = false,
+  pendingDraftAgentId,
 }: ProjectDraftAgentsInput): {
   agents: AgentSummary[]
   sessions: SessionMetadata[]
@@ -83,8 +87,13 @@ export function projectDraftAgents({
     drafts.push(draftAgent(id, name))
     return { ...session, agentId: id }
   })
-  // The pending interview is a row without a Session, never a Session itself.
-  if (pendingDraft) drafts.push(draftAgent(PENDING_DRAFT_AGENT_ID, name))
+  // The pending interview is a row without a Session, never a Session itself,
+  // and never a second row once its Session is listed.
+  if (
+    pendingDraftAgentId &&
+    !drafts.some(({ id }) => id === pendingDraftAgentId)
+  )
+    drafts.push(draftAgent(pendingDraftAgentId, name))
 
   return { agents: [...agents, ...drafts], sessions: projected }
 }

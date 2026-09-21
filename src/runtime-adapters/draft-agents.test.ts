@@ -59,7 +59,7 @@ describe("projectDraftAgents", () => {
     sessions: SessionMetadata[],
     resolvedThreadIds: ReadonlySet<string> = new Set<string>(),
     creatorAgent: AgentSummary | undefined = creator,
-    pendingDraft = false
+    pendingDraftAgentId: string | undefined = undefined
   ) =>
     projectDraftAgents({
       creator: creatorAgent,
@@ -68,7 +68,7 @@ describe("projectDraftAgents", () => {
       resolvedThreadIds,
       now,
       name: "New Agent",
-      pendingDraft,
+      pendingDraftAgentId,
     })
 
   it("keeps a creator Session a draft until it is exactly 48 hours old", () => {
@@ -149,7 +149,12 @@ describe("projectDraftAgents", () => {
       session("interview", creator.id, 0),
     ]
 
-    const projected = project(sessions, new Set<string>(), creator, true)
+    const projected = project(
+      sessions,
+      new Set<string>(),
+      creator,
+      PENDING_DRAFT_AGENT_ID
+    )
 
     expect(projected.agents.map(({ id }) => id)).toEqual([
       "aster",
@@ -177,10 +182,45 @@ describe("projectDraftAgents", () => {
       resolvedThreadIds: new Set(),
       now,
       name: "New Agent",
-      pendingDraft: true,
+      pendingDraftAgentId: PENDING_DRAFT_AGENT_ID,
     })
 
     expect(projected.agents).toEqual(roster)
+    expect(projected.sessions).toEqual([])
+  })
+
+  it("keeps one row when the pending interview names its own listed Session", () => {
+    const sessions = [session("interview", creator.id, 0)]
+
+    const projected = project(
+      sessions,
+      new Set<string>(),
+      creator,
+      draftAgentId("interview")
+    )
+
+    expect(projected.agents.map(({ id }) => id)).toEqual([
+      "aster",
+      "bram",
+      creator.id,
+      draftAgentId("interview"),
+    ])
+  })
+
+  it("carries a promoted interview that metadata has not listed yet", () => {
+    const projected = project(
+      [],
+      new Set<string>(),
+      creator,
+      draftAgentId("interview")
+    )
+
+    expect(projected.agents.map(({ id }) => id)).toEqual([
+      "aster",
+      "bram",
+      creator.id,
+      draftAgentId("interview"),
+    ])
     expect(projected.sessions).toEqual([])
   })
 
