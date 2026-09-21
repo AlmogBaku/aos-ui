@@ -68,14 +68,26 @@ export function createPushDispatcher({
   now = Date.now,
   schedule = defaultSchedule,
 }: PushDispatcherOptions): PushDispatcher {
-  /** One counts-only line for a window that had candidates and sent nothing. */
+  /**
+   * One line for a window that had candidates and sent nothing: a count, the
+   * reason, and for a read decision the two moments it turned on. Timestamps
+   * identify nothing, and they are the only way to tell a read that really came
+   * after the event from a stamp that merely looks newer than one.
+   */
   const suppressed = (
     category: PushCategory,
     reason: SuppressionReason,
-    sessions: number
+    sessions: number,
+    decision?: { readAtMs: number; occurredAtMs: number }
   ) => {
     logger?.info(
-      redactForLog({ event: "push.suppressed", category, reason, sessions })
+      redactForLog({
+        event: "push.suppressed",
+        category,
+        reason,
+        sessions,
+        ...decision,
+      })
     )
   }
 
@@ -92,22 +104,28 @@ export function createPushDispatcher({
     category: PushCategory,
     sessions: CoalescedSession[]
   ) => {
-    const exposed: CoalescedSession[] = []
+    /** The read decision worth reporting: the one that held back the oldest event. */
+    let read: { readAtMs: number; occurredAtMs: number } | undefined
+    let exposed = false
     const kept = sessions.filter(({ agentId, sessionId, occurredAtMs }) => {
-      const readAt = sessionRows.get(agentId, sessionId)?.readAt
-      if (readAt !== undefined && readAt >= occurredAtMs) return false
-      if (!presence.exposed(principalId, sessionId)) return true
-      exposed.push({ agentId, sessionId, occurredAtMs })
-      return false
+      const readAtMs = sessionRows.get(agentId, sessionId)?.readAt
+      if (readAtMs !== undefined && readAtMs >= occurredAtMs) {
+        if (!read || occurredAtMs < read.occurredAtMs)
+          read = { readAtMs, occurredAtMs }
+        return false
+      }
+      if (presence.exposed(principalId, sessionId)) {
+        exposed = true
+        return false
+      }
+      return true
     })
-    if (kept.length === 0 && sessions.length > 0)
+    if (kept.length === 0 && sessions.length > 0) {
       // A Session on screen is the stronger reason to stay quiet, so it is the
       // one reported when a window was emptied by both.
-      suppressed(
-        category,
-        exposed.length > 0 ? "exposed" : "read",
-        sessions.length
-      )
+      if (exposed) suppressed(category, "exposed", sessions.length)
+      else suppressed(category, "read", sessions.length, read)
+    }
     return kept
   }
 

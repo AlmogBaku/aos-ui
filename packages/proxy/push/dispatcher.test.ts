@@ -254,7 +254,7 @@ describe("push dispatcher", () => {
     })
   })
 
-  it("leaves out a Session the operator read after the event", () => {
+  it("leaves out a Session the operator read after the event, and says which read", () => {
     const test = harness({
       rows: [row({ unread: false, readAt: START + 2_000 })],
     })
@@ -270,8 +270,41 @@ describe("push dispatcher", () => {
         category: "input",
         reason: "read",
         sessions: 1,
+        readAtMs: START + 2_000,
+        occurredAtMs: START + 1_000,
       },
     ])
+  })
+
+  it("reports the read decision that held back the oldest event", () => {
+    const test = harness({
+      rows: [
+        row({ unread: false, readAt: START + 2_000 }),
+        row({ id: "session-2", unread: false, readAt: START + 1_500 }),
+      ],
+    })
+
+    test.publish(occurred("attention-requested", SESSION, START + 1_000))
+    test.publish(occurred("attention-requested", "session-2", START + 500))
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+
+    expect(test.send).not.toHaveBeenCalled()
+    expect(lines(test.logger)).toEqual([
+      {
+        event: "push.suppressed",
+        category: "input",
+        reason: "read",
+        sessions: 2,
+        readAtMs: START + 1_500,
+        occurredAtMs: START + 500,
+      },
+    ])
+    const line = JSON.stringify(lines(test.logger))
+    expect(line).not.toContain(SESSION)
+    expect(line).not.toContain("session-2")
+    expect(line).not.toContain(AGENT)
+    expect(line).not.toContain("push.example")
+    expect(line).not.toContain("p256dh")
   })
 
   it("leaves out a Session that is on screen, even behind an idle reader", async () => {
