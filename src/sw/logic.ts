@@ -51,6 +51,9 @@ type ClickedNotification = ClosableNotification & { data: unknown }
 type WindowClientSurface = {
   focus(): Promise<unknown>
   postMessage(message: unknown): void
+  /** Optional so a browser reporting neither still yields a usable tab. */
+  focused?: boolean
+  visibilityState?: string
 }
 
 type ClientsSurface = {
@@ -65,6 +68,11 @@ const TITLE = en.productName
 const ICON = "/icons/pwa-192x192.png"
 /** Tag of the notification an unreadable payload owes. */
 const GENERIC_TAG = "aos"
+/** Where a click lands when it names no Session, and the last resort. */
+const WORKSPACE_ROOT = buildWorkspacePathname({
+  agentId: null,
+  sessionId: null,
+})
 
 const bodyKeys = {
   input: { one: "inputRequested", many: "inputRequestedMany" },
@@ -180,27 +188,76 @@ export async function handlePush(
   await registration.showNotification(TITLE, options)
 }
 
-/** Focuses an open tab when there is one, else opens the deep link. */
-export async function handleNotificationClick(
+/** The tab the operator is looking at, else one that is at least on screen. */
+function bestTab(
+  tabs: readonly WindowClientSurface[]
+): WindowClientSurface | undefined {
+  return (
+    tabs.find((tab) => tab.focused === true) ??
+    tabs.find((tab) => tab.visibilityState === "visible") ??
+    tabs[0]
+  )
+}
+
+/**
+ * Hands the Session to an open tab, which validates provider ownership before
+ * selecting it, and answers whether that tab took the click. Chrome can return
+ * a tab that is already closing, so a refused focus is an answer of no rather
+ * than the end of the click.
+ */
+async function askOpenTab(
   clients: ClientsSurface,
-  notification: ClickedNotification
-): Promise<void> {
-  notification.close()
-  const message = readMessage(notification.data)
-  const [client] = await clients.matchAll({
-    type: "window",
-    includeUncontrolled: true,
-  })
-  if (client) {
-    await client.focus()
-    client.postMessage({
+  message: PushMessage | undefined
+): Promise<boolean> {
+  try {
+    const tab = bestTab(
+      await clients.matchAll({ type: "window", includeUncontrolled: true })
+    )
+    if (!tab) return false
+    await tab.focus()
+    tab.postMessage({
       type: OPEN_MESSAGE_TYPE,
       ...(message?.agentId ? { agentId: message.agentId } : {}),
       ...(message?.sessionId ? { sessionId: message.sessionId } : {}),
     })
-    return
+    return true
+  } catch {
+    return false
   }
-  await clients.openWindow(
+}
+
+/** Opens the deep link, falling back to the workspace root it already is. */
+async function openWindow(clients: ClientsSurface, target: string) {
+  const attempts =
+    target === WORKSPACE_ROOT ? [target] : [target, WORKSPACE_ROOT]
+  for (const url of attempts) {
+    try {
+      await clients.openWindow(url)
+      return
+    } catch {
+      // A root that will not open leaves nothing further to try.
+    }
+  }
+}
+
+/**
+ * Hands the click to an open tab when one takes it, and otherwise opens a
+ * window. A click the operator makes must always end with a visible window, so
+ * no step here is allowed to reject its way out of the handler.
+ */
+export async function handleNotificationClick(
+  clients: ClientsSurface,
+  notification: ClickedNotification
+): Promise<void> {
+  try {
+    notification.close()
+  } catch {
+    // A notification that will not dismiss still owes the operator a window.
+  }
+  const message = readMessage(notification.data)
+  if (await askOpenTab(clients, message)) return
+  await openWindow(
+    clients,
     buildWorkspacePathname({
       agentId: message?.agentId ?? null,
       sessionId: message?.sessionId ?? null,
