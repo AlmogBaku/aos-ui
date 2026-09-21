@@ -566,37 +566,6 @@
   color: var(--muted-foreground);
 }
 
-.sessionMenuPositioner {
-  z-index: 50;
-}
-.sessionMenu {
-  min-inline-size: 10rem;
-  padding: 0.25rem;
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 20%);
-  outline: none;
-}
-.sessionMenuItem {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-block-size: 2.75rem;
-  padding-inline: 0.75rem;
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
-  cursor: pointer;
-  outline: none;
-}
-.sessionMenuItem[data-highlighted] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-.sessionMenuItem svg {
-  inline-size: 1rem;
-  block-size: 1rem;
-}
 .tabUndo {
   position: absolute;
   z-index: 10;

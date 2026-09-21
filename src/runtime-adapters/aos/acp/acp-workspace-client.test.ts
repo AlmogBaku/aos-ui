@@ -30,6 +30,7 @@ type AcpCapabilities = z.infer<
 >["capabilities"]
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
+const available = { status: "available" } as const
 
 function capabilities(): AcpCapabilities {
   return {
@@ -87,7 +88,9 @@ function capabilities(): AcpCapabilities {
   }
 }
 
-function runtimeInfo(): RuntimeInfo {
+function runtimeInfo(
+  capabilities: Partial<RuntimeInfo["capabilities"]> = {}
+): RuntimeInfo {
   return {
     runtime: { id: "hermes", name: "Hermes" },
     status: "ready",
@@ -100,11 +103,13 @@ function runtimeInfo(): RuntimeInfo {
       sessionCreation: unavailable,
       sessionTitle: unavailable,
       sessionArchival: unavailable,
+      sessionPin: unavailable,
       sessionDeletion: unavailable,
       sessionRun: unavailable,
       sessionStop: unavailable,
       sessionSteer: unavailable,
       sessionReadState: unavailable,
+      ...capabilities,
     },
   }
 }
@@ -186,6 +191,7 @@ function createFakeConnection() {
   let model = "sonnet"
   let effort = "low"
   let listed = listEntry()
+  let updateFailure: Error | undefined
 
   const connection: AcpConnection = {
     status: "ready",
@@ -239,6 +245,7 @@ function createFakeConnection() {
     },
     async updateSession(request) {
       record("updateSession", request)
+      if (updateFailure) throw updateFailure
     },
     async steer(request) {
       record("steer", request)
@@ -279,6 +286,10 @@ function createFakeConnection() {
     /** What the next `session/list` page reports for the Session. */
     setListed: (entry: SessionInfo) => {
       listed = entry
+    },
+    /** What every later `_aos/session/update` write rejects with. */
+    failUpdates: (reason: Error) => {
+      updateFailure = reason
     },
     argsOf: (method: string) =>
       calls.find((call) => call.method === method)?.args,
@@ -346,6 +357,7 @@ describe("ACP workspace client", () => {
         agentId: AGENT_ID,
         updatedAt: UPDATED_AT,
         status: "idle",
+        archived: false,
         unread: true,
       },
     ])
@@ -430,6 +442,94 @@ describe("ACP workspace client", () => {
       unread: true,
     })
     expect(published.at(-1)?.[0]?.unread).toBe(true)
+  })
+
+  it("pins a Session optimistically before the provider write", async () => {
+    const { client, argsOf } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      published.push(metadata)
+    )
+    await settle()
+
+    const pinning = client.setSessionPinned(SESSION_ID, true)
+    expect(published.at(-1)?.[0]?.pinned).toBe(true)
+    await pinning
+    expect(argsOf("updateSession")).toEqual([
+      { sessionId: SESSION_ID, pinned: true },
+    ])
+  })
+
+  it("takes the pin back when the provider refuses the write", async () => {
+    const { client, failUpdates } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      published.push(metadata)
+    )
+    await settle()
+    failUpdates(new Error("Upstream request failed"))
+
+    await expect(client.setSessionPinned(SESSION_ID, true)).rejects.toThrow(
+      "Upstream request failed"
+    )
+    // The list never reported a pin, so the row owes one back.
+    expect(published.at(-1)?.[0]?.pinned).toBeUndefined()
+  })
+
+  it("publishes a row whose pin or archival the provider changed", async () => {
+    const { client, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      published.push(metadata)
+    )
+    await settle()
+    await client.attachSession(SESSION_ID)
+    const before = published.length
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update", title: "Renamed" },
+      { agentId: AGENT_ID, status: "running", archived: false, pinned: true }
+    )
+    emitUpdate(
+      { sessionUpdate: "session_info_update", title: "Renamed" },
+      { agentId: AGENT_ID, status: "running", archived: true, pinned: true }
+    )
+
+    // Nothing but the pin, then nothing but the archival, changed.
+    expect(published).toHaveLength(before + 2)
+    expect(published.at(-1)?.[0]).toMatchObject({
+      archived: true,
+      pinned: true,
+    })
+  })
+
+  it("reads the runtime's Session actions once and retries a failed read", async () => {
+    const { client, rest } = createClient()
+    rest.runtimeInfo.mockRejectedValueOnce(new Error("Upstream request failed"))
+
+    await expect(client.sessionActionCapabilities()).rejects.toThrow(
+      "Upstream request failed"
+    )
+
+    rest.runtimeInfo.mockResolvedValue(
+      runtimeInfo({
+        sessionTitle: available,
+        sessionArchival: available,
+        sessionDeletion: available,
+      })
+    )
+    await expect(client.sessionActionCapabilities()).resolves.toEqual({
+      rename: true,
+      archive: true,
+      delete: true,
+      pin: false,
+    })
+    await client.sessionActionCapabilities()
+
+    expect(rest.runtimeInfo).toHaveBeenCalledTimes(2)
   })
 
   it("derives Session status from the run stream", async () => {
@@ -739,6 +839,7 @@ describe("ACP workspace client", () => {
           agentId: AGENT_ID,
           updatedAt: UPDATED_AT,
           status: "idle",
+          archived: false,
           unread: true,
         },
       ])

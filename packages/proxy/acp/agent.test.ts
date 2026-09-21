@@ -101,6 +101,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionCreation: AVAILABLE,
     sessionTitle: AVAILABLE,
     sessionArchival: AVAILABLE,
+    sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
     sessionRun: AVAILABLE,
     sessionStop: AVAILABLE,
@@ -412,6 +413,7 @@ const PatchSchema = z.object({
   title: z.string().optional(),
   archived: z.boolean().optional(),
   unread: z.boolean().optional(),
+  pinned: z.boolean().optional(),
 })
 
 const ModelPatchSchema = z.object({
@@ -685,6 +687,11 @@ function runStarted(runId: string, threadId = SESSION): RunEvent {
 
 function updates(recorder: ReturnType<typeof createRecorder>) {
   return recorder.of(methods.client.session.update).map((entry) => entry.params)
+}
+
+/** Every catalog relist this connection has asked the client for. */
+function relists(recorder: ReturnType<typeof createRecorder>) {
+  return recorder.of(AOS_METHODS.notify.catalogInvalidated)
 }
 
 /** Every context reading this connection has pushed, newest last. */
@@ -1292,6 +1299,55 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    test.close()
+  })
+
+  it("pins a Session and asks the acting client to relist", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      pinned: true,
+    })
+
+    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      pinned: true,
+    })
+    expect(updates(test.recorder)).toMatchObject([
+      {
+        sessionId: SESSION,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { [AOS_META_KEY]: { agentId: AGENT, pinned: true } },
+        },
+      },
+    ])
+    expect(relists(test.recorder)).toHaveLength(1)
+    test.close()
+  })
+
+  it("asks for a relist after archiving a Session but not after renaming one", async () => {
+    const test = await harness()
+    await test.list()
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      archived: true,
+    })
+
+    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      archived: true,
+    })
+    expect(relists(test.recorder)).toHaveLength(1)
+
+    await test.agent.request(AOS_METHODS.session.update, {
+      sessionId: SESSION,
+      title: "Renamed",
+    })
+
+    // A title leaves the catalog's membership and order alone.
+    expect(relists(test.recorder)).toHaveLength(1)
     test.close()
   })
 

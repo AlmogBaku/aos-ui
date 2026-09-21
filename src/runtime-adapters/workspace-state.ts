@@ -1,15 +1,18 @@
 import type {
   PlanArtifact,
   AgentSummary,
+  SessionActionCapabilities,
   TodoItem,
   WorkspaceAdapter,
   WorkspaceCapabilities,
   WorkspaceProviderEvent,
 } from "./contracts"
 
+/** Session actions are runtime-declared, so an unread runtime offers none. */
 export function getWorkspaceCapabilities(
   workspace: WorkspaceAdapter,
-  agents: readonly AgentSummary[] = []
+  agents: readonly AgentSummary[] = [],
+  sessionActions?: SessionActionCapabilities
 ): WorkspaceCapabilities {
   return {
     agentCatalog: typeof workspace.listAgentCatalog === "function",
@@ -21,6 +24,10 @@ export function getWorkspaceCapabilities(
       agents.filter((agent) => agent.role === "creator").length === 1,
     activityEvents: typeof workspace.subscribeActivity === "function",
     sessionReadState: typeof workspace.markSessionRead === "function",
+    sessionRename: sessionActions?.rename ?? false,
+    sessionArchival: sessionActions?.archive ?? false,
+    sessionDeletion: sessionActions?.delete ?? false,
+    sessionPin: sessionActions?.pin ?? false,
   }
 }
 

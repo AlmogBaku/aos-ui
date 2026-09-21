@@ -1,5 +1,9 @@
 "use client"
 
+import {
+  useActionBarSpeak,
+  useActionBarStopSpeaking,
+} from "@assistant-ui/core/react"
 import { ActionBarPrimitive, useAui, useAuiState } from "@assistant-ui/react"
 import { useEffect, useRef } from "react"
 import { SquareIcon, Volume2Icon } from "lucide-react"
@@ -164,7 +168,21 @@ export function InlineReadAloud() {
   )
 }
 
-export function VoiceMessageActions() {
+export type VoiceMessageAction = {
+  kind: "speak" | "stop"
+  label: string
+  /** Why speech cannot start, named on the disabled control. */
+  reason?: string | undefined
+  disabled: boolean
+  run: () => void
+}
+
+/**
+ * The one read-aloud action this message offers, or nothing when the runtime
+ * has no speech at all. Audio AOS owns itself stops through the media
+ * controller; audio the runtime owns stops through the runtime.
+ */
+export function useVoiceMessageAction(): VoiceMessageAction | null {
   const aui = useAui()
   const media = useVoiceContext()?.media
   const labels = useVoiceLabels()
@@ -174,14 +192,20 @@ export function VoiceMessageActions() {
   const runtimeReading = useAuiState((s) => Boolean(s.message.speech))
   const reading = useVoiceMessageReading()
   const messageId = useAuiState((s) => s.message.id)
-  const action = useRef<HTMLButtonElement>(null)
-  const restoreFocus = useRef(false)
-  useEffect(() => {
-    if (!restoreFocus.current) return
-    action.current?.focus({ preventScroll: true })
-    restoreFocus.current = false
-  }, [reading])
+  const { stopSpeaking } = useActionBarStopSpeaking()
+  const { speak, disabled: cannotSpeak } = useActionBarSpeak()
   if (!media || !hasCapability) return null
+  if (reading)
+    return {
+      kind: "stop",
+      label: labels.stopSpeaking,
+      disabled: false,
+      run: () => {
+        media.disarm()
+        if (runtimeReading) stopSpeaking()
+        else media.stopSpeech()
+      },
+    }
   const reason =
     availability === "loading"
       ? labels.loading
@@ -192,66 +216,69 @@ export function VoiceMessageActions() {
           : captureActive
             ? labels.recording
             : undefined
-  if (reading && !runtimeReading)
+  return {
+    kind: "speak",
+    label: labels.readAloud,
+    reason,
+    disabled: Boolean(reason) || cannotSpeak,
+    run: () => {
+      if (
+        media.captureActive ||
+        !canAttemptSpeech(media.getSnapshot().availability.speech)
+      )
+        return
+      media.disarm()
+      const messages = aui.thread.getState().messages
+      media.preparePlaybackOwner(
+        messageId,
+        messages.findIndex((message) => message.id === messageId)
+      )
+      void speak()
+    },
+  }
+}
+
+export function VoiceMessageActions() {
+  const action = useVoiceMessageAction()
+  const reading = useVoiceMessageReading()
+  const control = useRef<HTMLButtonElement>(null)
+  const restoreFocus = useRef(false)
+  useEffect(() => {
+    if (!restoreFocus.current) return
+    control.current?.focus({ preventScroll: true })
+    restoreFocus.current = false
+  }, [reading])
+  if (!action) return null
+  const run = () => {
+    restoreFocus.current = true
+    action.run()
+  }
+  if (action.kind === "stop")
     return (
       <TooltipIconButton
-        ref={action}
-        tooltip={labels.stopSpeaking}
-        aria-label={labels.stopSpeaking}
+        ref={control}
+        tooltip={action.label}
+        aria-label={action.label}
         className="size-11 @min-[64rem]/workspace:size-6"
-        onClick={() => {
-          media.disarm()
-          media.stopSpeech()
-          restoreFocus.current = true
-        }}
+        onClick={run}
       >
         <SquareIcon />
       </TooltipIconButton>
     )
-  if (reading)
-    return (
-      <ActionBarPrimitive.StopSpeaking
-        onClick={() => {
-          media.disarm()
-          restoreFocus.current = true
-        }}
-        render={
-          <TooltipIconButton
-            ref={action}
-            tooltip={labels.stopSpeaking}
-            aria-label={labels.stopSpeaking}
-            className="size-11 @min-[64rem]/workspace:size-6"
-          />
-        }
-      >
-        <SquareIcon />
-      </ActionBarPrimitive.StopSpeaking>
-    )
   return (
     <ActionBarPrimitive.Speak
-      disabled={Boolean(reason)}
+      disabled={action.disabled}
       onClick={(event) => {
-        if (
-          media.captureActive ||
-          !canAttemptSpeech(media.getSnapshot().availability.speech)
-        ) {
-          event.preventDefault()
-          return
-        }
-        media.disarm()
-        const messages = aui.thread.getState().messages
-        media.preparePlaybackOwner(
-          messageId,
-          messages.findIndex((message) => message.id === messageId)
-        )
-        restoreFocus.current = true
+        // The action owns the whole attempt, including its own guards.
+        event.preventDefault()
+        run()
       }}
       render={
         <TooltipIconButton
-          ref={action}
-          tooltip={reason ?? labels.readAloud}
-          aria-label={labels.readAloud}
-          aria-description={reason}
+          ref={control}
+          tooltip={action.reason ?? action.label}
+          aria-label={action.label}
+          aria-description={action.reason}
           className="size-11 @min-[64rem]/workspace:size-6"
         />
       }

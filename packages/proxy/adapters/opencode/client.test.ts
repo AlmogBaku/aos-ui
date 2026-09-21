@@ -10,6 +10,7 @@ import {
 } from "./client"
 
 type NativeRequest = {
+  method: string
   url: URL
   authorization: string | null
   directory: string | null
@@ -32,6 +33,7 @@ async function nativeServer(
     const chunks: Uint8Array[] = []
     for await (const chunk of request) chunks.push(chunk)
     const result = await handler({
+      method: request.method ?? "",
       url,
       authorization: request.headers.authorization ?? null,
       directory:
@@ -136,6 +138,56 @@ describe("OpenCodeClient", () => {
       await subject.close()
       await server.close()
     }
+  })
+
+  it("renames, archives, pins, and deletes through the pre-v2 native Session routes", async () => {
+    const seen: Array<{ method: string; pathname: string; body: string }> = []
+    const server = await nativeServer((request) => {
+      seen.push({
+        method: request.method,
+        pathname: request.url.pathname,
+        body: request.body,
+      })
+      if (request.method === "DELETE") return Response.json(true)
+      return Response.json({
+        id: "session-1",
+        title: "Renamed",
+        time: { created: 1_000 },
+      })
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.sessions.update("session-1", {
+          title: "Renamed",
+          time: { archived: 1_700 },
+          metadata: { "aos.pinned": true },
+        })
+      ).resolves.toBeUndefined()
+      await expect(
+        subject.sessions.delete("session-1")
+      ).resolves.toBeUndefined()
+      await expect(subject.sessions.delete("")).rejects.toBeInstanceOf(
+        OpenCodeClientError
+      )
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+
+    expect(seen).toEqual([
+      {
+        method: "PATCH",
+        pathname: "/session/session-1",
+        body: JSON.stringify({
+          title: "Renamed",
+          time: { archived: 1_700 },
+          metadata: { "aos.pinned": true },
+        }),
+      },
+      { method: "DELETE", pathname: "/session/session-1", body: "" },
+    ])
   })
 
   it("returns a bounded public error instead of an upstream error body", async () => {

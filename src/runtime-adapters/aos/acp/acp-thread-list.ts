@@ -9,7 +9,8 @@ import type { AcpConnection } from "./types"
  * Assistant UI's remote thread list over one ACP connection. ACP owns the
  * Session catalog; `_meta.aos` carries the owning Agent and the archived flag.
  * History belongs to the Session projector, so this adapter exposes no
- * `historyFor`.
+ * `historyFor`. Assistant UI has no pin, so that write travels on the workspace
+ * channel instead of here.
  */
 
 type RemoteThreadMetadata = Awaited<

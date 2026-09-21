@@ -898,3 +898,81 @@ describe("real Assistant UI voice composer", () => {
     ).toBeVisible()
   })
 })
+
+/** A long press on touch, a right click with a pointer: the same menu. */
+async function openMessageMenu(message: HTMLElement) {
+  fireEvent.contextMenu(message, { clientX: 12, clientY: 24 })
+  return screen.findByRole("menu")
+}
+
+describe("read aloud from the message context menu", () => {
+  it("offers Read aloud, then Stop reading while the answer plays", async () => {
+    const OriginalURL = URL
+    vi.stubGlobal(
+      "URL",
+      class extends OriginalURL {
+        static createObjectURL() {
+          return "blob:audio"
+        }
+        static revokeObjectURL = vi.fn()
+      }
+    )
+    const h = setup({
+      initialMessages: [
+        {
+          id: "answer",
+          role: "assistant",
+          content: [{ type: "text", text: "Read this answer" }],
+        },
+      ],
+    })
+    const answer = screen
+      .getByText("Read this answer")
+      .closest<HTMLElement>('[data-role="assistant"]')!
+
+    const menu = await openMessageMenu(answer)
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Read aloud" }))
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
+
+    const playing = await openMessageMenu(answer)
+    expect(
+      within(playing).getByRole("menuitem", { name: "Stop reading" })
+    ).toBeVisible()
+    expect(
+      within(playing).queryByRole("menuitem", { name: "Read aloud" })
+    ).toBeNull()
+  })
+
+  it("offers no read-aloud item to a runtime without speech", async () => {
+    function Unsupported() {
+      const runtime = useLocalRuntime(
+        { run: async () => ({ content: [] }) },
+        {
+          initialMessages: [
+            { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+          ],
+        }
+      )
+      return (
+        <AssistantRuntimeProvider runtime={runtime}>
+          <Thread autoFocus={false} />
+        </AssistantRuntimeProvider>
+      )
+    }
+    render(<Unsupported />)
+    const answer = screen
+      .getByText("Hello")
+      .closest<HTMLElement>('[data-role="assistant"]')!
+
+    const menu = await openMessageMenu(answer)
+
+    expect(within(menu).getByRole("menuitem", { name: "Copy" })).toBeVisible()
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Read aloud" })
+    ).toBeNull()
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Stop reading" })
+    ).toBeNull()
+  })
+})

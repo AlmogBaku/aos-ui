@@ -132,6 +132,46 @@ describe("buildAgentSessionView", () => {
     ])
   })
 
+  it("opens pinned Sessions whatever their age and keeps them out of history", () => {
+    const pinned: SessionMetadata[] = [
+      ...sessions,
+      {
+        threadId: "pinned-stale",
+        agentId: "aster",
+        updatedAt: "2026-08-20T09:00:00.000Z",
+        status: "idle",
+        pinned: true,
+      },
+      {
+        threadId: "pinned-staler",
+        agentId: "aster",
+        updatedAt: "2026-08-10T09:00:00.000Z",
+        status: "idle",
+        pinned: true,
+      },
+    ]
+
+    const result = buildAgentSessionView({
+      agentId: "aster",
+      sessions: pinned,
+      manuallyOpenedThreadIds: new Set(["boundary"]),
+      titles: new Map(),
+      now,
+    })
+
+    // Pinned rows lead; recency still orders within either group.
+    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+      "pinned-stale",
+      "pinned-staler",
+      "recent",
+      "boundary",
+    ])
+    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+      "recent",
+      "boundary",
+    ])
+  })
+
   it("uses a readable fallback without changing provider metadata", () => {
     const result = buildAgentSessionView({
       agentId: "aster",
@@ -144,5 +184,71 @@ describe("buildAgentSessionView", () => {
 
     expect(result.openSessions[0]?.title).toBe("New session")
     expect(sessions[0]).not.toHaveProperty("title")
+  })
+
+  const archived: SessionMetadata[] = [
+    ...sessions,
+    {
+      threadId: "archived-new",
+      agentId: "aster",
+      updatedAt: "2026-09-03T11:45:00.000Z",
+      status: "idle",
+      archived: true,
+    },
+    {
+      threadId: "archived-old",
+      agentId: "aster",
+      updatedAt: "2026-09-01T09:00:00.000Z",
+      status: "idle",
+      archived: true,
+    },
+  ]
+
+  it("moves archived Sessions out of the open and history lists", () => {
+    const result = buildAgentSessionView({
+      agentId: "aster",
+      sessions: archived,
+      manuallyOpenedThreadIds: new Set(["archived-old"]),
+      titles: new Map([["archived-new", "Campaign retrospective"]]),
+      now,
+    })
+
+    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+      "recent",
+    ])
+    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+      "recent",
+      "boundary",
+    ])
+    expect(result.archivedSessions.map(({ threadId }) => threadId)).toEqual([
+      "archived-new",
+      "archived-old",
+    ])
+    expect(result.archivedSessions[0]?.title).toBe("Campaign retrospective")
+  })
+
+  it("keeps the archived Session on screen listed until selection moves", () => {
+    const result = buildAgentSessionView({
+      agentId: "aster",
+      sessions: archived,
+      manuallyOpenedThreadIds: new Set(),
+      titles: new Map(),
+      now,
+      visibleThreadId: "archived-new",
+    })
+
+    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+      "archived-new",
+      "recent",
+    ])
+    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+      "archived-new",
+      "recent",
+      "boundary",
+    ])
+    expect(result.archivedSessions.map(({ threadId }) => threadId)).toEqual([
+      "archived-new",
+      "archived-old",
+    ])
   })
 })

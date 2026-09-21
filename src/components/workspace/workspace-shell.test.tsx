@@ -88,6 +88,22 @@ const openSessions: WorkspaceSession[] = [
   },
 ]
 
+const allSessionActions = {
+  rename: true,
+  archive: true,
+  delete: true,
+  pin: true,
+}
+
+/** The inspector lists the same Sessions, so scope tab queries to the tab bar. */
+function tabSessionMenu(title: string) {
+  const tabBarActions = document.querySelector("[data-session-actions]")
+  expect(tabBarActions).not.toBeNull()
+  return within(tabBarActions as HTMLElement).getByRole("button", {
+    name: `Session actions: ${title}`,
+  })
+}
+
 const olderSessions: WorkspaceSession[] = [
   {
     threadId: "thread-pricing",
@@ -113,6 +129,7 @@ function renderShell(
           agentId: "agent-aster",
           openSessions,
           historySessions: olderSessions,
+          archivedSessions: [],
           lastSelectedThreadId: "thread-market",
         },
       ],
@@ -130,6 +147,7 @@ function renderShell(
             },
           ],
           historySessions: [],
+          archivedSessions: [],
           lastSelectedThreadId: "thread-mica-draft",
         },
       ],
@@ -470,6 +488,24 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByText(/unread/i)).toBeNull()
   })
 
+  it("names a pinned tab, and names both states when it is unread too", () => {
+    renderShell({
+      openSessions: [
+        { ...openSessions[0]!, pinned: true, unread: true },
+        { ...openSessions[1]!, pinned: true },
+        ...openSessions.slice(2),
+      ],
+    })
+
+    expect(
+      screen.getByRole("tab", { name: "Market brief, Unread, Pinned" })
+    ).toBeVisible()
+    expect(
+      screen.getByRole("tab", { name: "Launch review, Pinned" })
+    ).toBeVisible()
+    expect(screen.getByRole("tab", { name: "Competitive scan" })).toBeVisible()
+  })
+
   it("lets a Session that needs the operator outrank its unread dot", () => {
     const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
     const sessions = [...openSessions.slice(0, 2), scan]
@@ -486,6 +522,7 @@ describe("WorkspaceShell", () => {
             agentId: "agent-aster",
             openSessions: sessions,
             historySessions: olderSessions,
+            archivedSessions: [],
             lastSelectedThreadId: "thread-market",
           },
         ],
@@ -619,6 +656,7 @@ describe("WorkspaceShell", () => {
             agentId: "agent-aster",
             openSessions: [],
             historySessions: [],
+            archivedSessions: [],
             lastSelectedThreadId: null,
           },
         ],
@@ -693,6 +731,91 @@ describe("WorkspaceShell", () => {
     expect(onCloseSession).toHaveBeenCalledExactlyOnceWith(
       "thread-market",
       "agent-aster"
+    )
+  })
+
+  it("offers every declared Session action on the active tab, closing last before Delete", async () => {
+    const user = userEvent.setup()
+    renderShell({
+      openSessions: openSessions.map((session) => ({
+        ...session,
+        canClose: true,
+      })),
+      sessionActions: allSessionActions,
+      onRenameSession: vi.fn(),
+      onSetSessionPinned: vi.fn(),
+      onArchiveSession: vi.fn(),
+      onUnarchiveSession: vi.fn(),
+      onDeleteSession: vi.fn(),
+    })
+
+    await user.click(tabSessionMenu("Market brief"))
+    const items = await screen.findAllByRole("menuitem")
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Rename",
+      "Pin",
+      "Archive",
+      "Close tab",
+      "Delete",
+    ])
+  })
+
+  it("renames the active Session through the shared dialog", async () => {
+    const user = userEvent.setup()
+    const onRenameSession = vi.fn()
+    renderShell({ sessionActions: allSessionActions, onRenameSession })
+
+    await user.click(tabSessionMenu("Market brief"))
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
+
+    const dialog = await screen.findByRole("dialog", { name: "Rename Session" })
+    const input = within(dialog).getByRole("textbox", { name: "Session title" })
+    expect(input).toHaveValue("Market brief")
+    await user.clear(input)
+    await user.type(input, "Market brief II{Enter}")
+    expect(onRenameSession).toHaveBeenCalledExactlyOnceWith(
+      "thread-market",
+      "Market brief II"
+    )
+  })
+
+  it("deletes a Session only from the destructive confirmation", async () => {
+    const user = userEvent.setup()
+    const onDeleteSession = vi.fn()
+    renderShell({ sessionActions: allSessionActions, onDeleteSession })
+
+    async function openDelete() {
+      await user.click(tabSessionMenu("Market brief"))
+      await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
+      return screen.findByRole("alertdialog", {
+        name: "Delete this Session?",
+      })
+    }
+
+    const cancelled = await openDelete()
+    await user.click(within(cancelled).getByRole("button", { name: "Cancel" }))
+    expect(onDeleteSession).not.toHaveBeenCalled()
+
+    const confirmed = await openDelete()
+    await user.click(
+      within(confirmed).getByRole("button", { name: "Delete Session" })
+    )
+    expect(onDeleteSession).toHaveBeenCalledExactlyOnceWith("thread-market")
+  })
+
+  it("opens the same tab menu from a right click on any tab", async () => {
+    const user = userEvent.setup()
+    const onSetSessionPinned = vi.fn()
+    renderShell({ sessionActions: allSessionActions, onSetSessionPinned })
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Launch review" }), {
+      clientX: 24,
+      clientY: 12,
+    })
+    await user.click(await screen.findByRole("menuitem", { name: "Pin" }))
+    expect(onSetSessionPinned).toHaveBeenCalledExactlyOnceWith(
+      "thread-launch",
+      true
     )
   })
 
@@ -940,6 +1063,7 @@ describe("WorkspaceShell", () => {
             agentId: "agent-aster",
             openSessions,
             historySessions: statusHistory,
+            archivedSessions: [],
             lastSelectedThreadId: "thread-market",
           },
         ],

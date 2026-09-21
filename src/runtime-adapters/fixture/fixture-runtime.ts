@@ -347,8 +347,6 @@ class FixtureHistoryAdapter implements ThreadHistoryAdapter {
 
 export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
   unstable_useAdapters?: () => RuntimeAdapters
-  readonly #deleted = new Set<string>()
-  readonly #archived = new Set<string>()
   readonly #history: FixtureHistoryStore
 
   constructor(
@@ -372,13 +370,10 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     return {
       threads: this.workspace
         .listAllSessionMetadata()
-        .filter(({ threadId }) => !this.#deleted.has(threadId))
-        .map(({ threadId, agentId, updatedAt, status }) => ({
+        .map(({ threadId, agentId, updatedAt, status, archived }) => ({
           remoteId: threadId,
           externalId: threadId,
-          status: this.#archived.has(threadId)
-            ? ("archived" as const)
-            : ("regular" as const),
+          status: archived ? ("archived" as const) : ("regular" as const),
           title: this.workspace.getSessionTitle(threadId),
           lastMessageAt: new Date(updatedAt),
           custom: { agentId, status },
@@ -394,17 +389,17 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
 
   async archive(remoteId: string) {
     await this.assertSession(remoteId)
-    this.#archived.add(remoteId)
+    this.workspace.setSessionArchived(remoteId, true)
   }
 
   async unarchive(remoteId: string) {
     await this.assertSession(remoteId)
-    this.#archived.delete(remoteId)
+    this.workspace.setSessionArchived(remoteId, false)
   }
 
   async delete(remoteId: string) {
     await this.assertSession(remoteId)
-    this.#deleted.add(remoteId)
+    this.workspace.deleteSession(remoteId)
   }
 
   async initialize(threadId: string) {
@@ -425,9 +420,7 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     return {
       remoteId: session.threadId,
       externalId: session.threadId,
-      status: this.#archived.has(threadId)
-        ? ("archived" as const)
-        : ("regular" as const),
+      status: session.archived ? ("archived" as const) : ("regular" as const),
       title: this.workspace.getSessionTitle(threadId),
       lastMessageAt: new Date(session.updatedAt),
       custom: { agentId: session.agentId, status: session.status },
@@ -435,9 +428,6 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
   }
 
   private async assertSession(threadId: string) {
-    if (this.#deleted.has(threadId)) {
-      throw new Error(`Fixture Session not found: ${threadId}`)
-    }
     const [session] = await this.workspace.getSessionMetadata([threadId])
     if (!session) throw new Error(`Fixture Session not found: ${threadId}`)
     return session

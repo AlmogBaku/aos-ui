@@ -4,13 +4,19 @@ import {
   ThreadListPrimitive,
   type ThreadListRuntime,
 } from "@assistant-ui/react"
-import { Ellipsis, Plus, Search, X } from "lucide-react"
-import { useState } from "react"
+import { ChevronDown, Pin, Plus, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 import { cn } from "@/lib/utils"
+import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
+import {
+  SessionRowContextMenu,
+  SessionRowMenuButton,
+  type SessionRowMenuCopy,
+  type SessionRowMenuHandlers,
+} from "./session-row-menu"
 import {
   SessionThreadListItem,
   SessionThreadListTitle,
@@ -43,6 +49,13 @@ export type AgentSessionHistoryCopy = {
     failed: string
   }
   unread: string
+  /** Heading of the collapsed disclosure holding archived Sessions. */
+  archivedSessions: string
+  noArchivedSessions: string
+  /** Row state appended to an accessible name. */
+  pinned: string
+  archived: string
+  sessionMenu: SessionRowMenuCopy
 }
 
 export type AgentSessionHistoryProps = {
@@ -58,6 +71,9 @@ export type AgentSessionHistoryProps = {
     agentId: string,
     threadId: string
   ) => void | Promise<unknown>
+  /** Runtime-declared Session actions, or `null` until the runtime answers. */
+  availability?: SessionActionCapabilities | null
+  sessionMenu?: SessionRowMenuHandlers
   threadListRuntime?: ThreadListRuntime
   onActionError?: (error: unknown) => void
 }
@@ -88,151 +104,211 @@ function runAction(
   }
 }
 
-function SessionSection({
-  heading,
-  sessions,
-  navigation,
-  activeThreadId,
-  locale,
-  copy,
-  removable,
-  actionThreadId,
-  onActionThreadChange,
-  onOpenSession,
-  onRemoveOpenSession,
-  threadListRuntime,
-  onActionError,
-}: {
-  heading: string
-  sessions: readonly WorkspaceSession[]
+type SessionRowProps = {
+  session: WorkspaceSession
   navigation: AgentSessionNavigation
   activeThreadId: string | null
   locale: Locale
   copy: AgentSessionHistoryCopy
-  removable: boolean
-  actionThreadId: string | null
-  onActionThreadChange: (threadId: string | null) => void
+  dateFormatter: Intl.DateTimeFormat
+  /** Archived rows list their Session without switching to it. */
+  openable: boolean
+  availability?: SessionActionCapabilities | null
+  handlers: SessionRowMenuHandlers
   onOpenSession: AgentSessionHistoryProps["onOpenSession"]
-  onRemoveOpenSession?: AgentSessionHistoryProps["onRemoveOpenSession"]
   threadListRuntime?: ThreadListRuntime
   onActionError?: (error: unknown) => void
+}
+
+function SessionRow({
+  session,
+  navigation,
+  activeThreadId,
+  locale,
+  copy,
+  dateFormatter,
+  openable,
+  availability,
+  handlers,
+  onOpenSession,
+  threadListRuntime,
+  onActionError,
+}: SessionRowProps) {
+  const parsedDate = new Date(session.updatedAt)
+  const isActive = session.threadId === activeThreadId
+  const isLastSelected = session.threadId === navigation.lastSelectedThreadId
+  const label = [
+    `${copy.openSession}: ${session.title}`,
+    session.status !== "idle"
+      ? `${copy.statusLabel}: ${sessionStatusLabel(session.status, copy)}`
+      : null,
+    isActive ? copy.selected : null,
+    !isActive && isLastSelected ? copy.lastSelected : null,
+    session.unread ? copy.unread : null,
+    session.pinned ? copy.pinned : null,
+    session.archived ? copy.archived : null,
+  ]
+    .filter(Boolean)
+    .join(", ")
+
+  const rowText = (
+    <span className={cn(styles.rowText, "gap-0.5")}>
+      <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
+        <RowIndicators
+          status={session.status}
+          statusLabel={sessionStatusLabel(session.status, copy)}
+          unread={session.unread}
+          unreadLabel={copy.unread}
+        />
+        {session.pinned ? (
+          <Pin className={styles.pinGlyph} aria-hidden="true" />
+        ) : null}
+        <bdi className={cn(styles.rowTitle, "text-sm")}>
+          {openable ? (
+            <SessionThreadListTitle fallback={session.title} />
+          ) : (
+            session.title
+          )}
+        </bdi>
+      </span>
+      {Number.isFinite(parsedDate.getTime()) ? (
+        <time className="text-xs" dateTime={session.updatedAt}>
+          {dateFormatter.format(parsedDate)}
+        </time>
+      ) : null}
+    </span>
+  )
+
+  const menuButton = (
+    <div className={styles.actionSlot}>
+      <SessionRowMenuButton
+        session={session}
+        copy={copy.sessionMenu}
+        locale={locale}
+        availability={availability}
+        handlers={handlers}
+        size="icon"
+      />
+    </div>
+  )
+
+  return (
+    <SessionRowContextMenu
+      session={session}
+      copy={copy.sessionMenu}
+      locale={locale}
+      availability={availability}
+      handlers={handlers}
+    >
+      {openable ? (
+        <SessionThreadListItem
+          runtime={threadListRuntime}
+          threadId={session.threadId}
+          onSwitch={() => onOpenSession(navigation.agentId, session.threadId)}
+          onActionError={onActionError}
+          className={styles.sessionRow}
+          data-session-id={session.threadId}
+        >
+          <SessionThreadListTrigger
+            type="button"
+            className={cn(styles.sessionNavigation, "min-h-12 gap-2 p-2 pe-1")}
+            aria-label={label}
+            aria-current={isActive ? "true" : undefined}
+          >
+            {rowText}
+          </SessionThreadListTrigger>
+          {menuButton}
+        </SessionThreadListItem>
+      ) : (
+        <div className={styles.sessionRow} data-session-id={session.threadId}>
+          <span className={cn(styles.sessionStatic, "min-h-12 gap-2 p-2 pe-1")}>
+            {rowText}
+          </span>
+          {menuButton}
+        </div>
+      )}
+    </SessionRowContextMenu>
+  )
+}
+
+type SessionSectionProps = Omit<SessionRowProps, "session" | "dateFormatter">
+
+function SessionSection({
+  heading,
+  sessions,
+  ...row
+}: SessionSectionProps & {
+  heading: string
+  sessions: readonly WorkspaceSession[]
 }) {
-  const dateFormatter = new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
+  const dateFormatter = sessionDateFormatter(row.locale)
 
   return (
     <section className={cn(styles.section, "mt-2")} aria-label={heading}>
       <h3 className="px-2 pt-1 pb-1.5 text-sm">{heading}</h3>
       <div className={styles.list}>
-        {sessions.map((session) => {
-          const parsedDate = new Date(session.updatedAt)
-          const isActive = session.threadId === activeThreadId
-          const isLastSelected =
-            session.threadId === navigation.lastSelectedThreadId
-          const label = [
-            `${copy.openSession}: ${session.title}`,
-            session.status !== "idle"
-              ? `${copy.statusLabel}: ${sessionStatusLabel(session.status, copy)}`
-              : null,
-            isActive ? copy.selected : null,
-            !isActive && isLastSelected ? copy.lastSelected : null,
-            session.unread ? copy.unread : null,
-          ]
-            .filter(Boolean)
-            .join(", ")
-
-          return (
-            <SessionThreadListItem
-              runtime={threadListRuntime}
-              threadId={session.threadId}
-              onSwitch={() =>
-                onOpenSession(navigation.agentId, session.threadId)
-              }
-              onActionError={onActionError}
-              className={styles.sessionRow}
-              data-session-id={session.threadId}
-              key={session.threadId}
-            >
-              <SessionThreadListTrigger
-                type="button"
-                className={cn(
-                  styles.sessionNavigation,
-                  "min-h-12 gap-2 p-2 pe-1"
-                )}
-                aria-label={label}
-                aria-current={isActive ? "true" : undefined}
-              >
-                <span className={cn(styles.rowText, "gap-0.5")}>
-                  <span className={cn(styles.sessionTitleLine, "gap-1.5")}>
-                    <RowIndicators
-                      status={session.status}
-                      statusLabel={sessionStatusLabel(session.status, copy)}
-                      unread={session.unread}
-                      unreadLabel={copy.unread}
-                    />
-                    <bdi className={cn(styles.rowTitle, "text-sm")}>
-                      <SessionThreadListTitle fallback={session.title} />
-                    </bdi>
-                  </span>
-                  {Number.isFinite(parsedDate.getTime()) ? (
-                    <time className="text-xs" dateTime={session.updatedAt}>
-                      {dateFormatter.format(parsedDate)}
-                    </time>
-                  ) : null}
-                </span>
-              </SessionThreadListTrigger>
-              {removable && onRemoveOpenSession ? (
-                <div className={styles.actionSlot}>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`${copy.sessionActions}: ${session.title}`}
-                    aria-haspopup="menu"
-                    aria-expanded={actionThreadId === session.threadId}
-                    onClick={() =>
-                      onActionThreadChange(
-                        actionThreadId === session.threadId
-                          ? null
-                          : session.threadId
-                      )
-                    }
-                  >
-                    <Ellipsis />
-                  </Button>
-                  {actionThreadId === session.threadId ? (
-                    <div className={styles.actionMenu} role="menu">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          onActionThreadChange(null)
-                          runAction(
-                            () =>
-                              onRemoveOpenSession(
-                                navigation.agentId,
-                                session.threadId
-                              ),
-                            onActionError
-                          )
-                        }}
-                      >
-                        <X aria-hidden="true" />
-                        {copy.removeOpenSession}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </SessionThreadListItem>
-          )
-        })}
+        {sessions.map((session) => (
+          <SessionRow
+            {...row}
+            key={session.threadId}
+            session={session}
+            dateFormatter={dateFormatter}
+          />
+        ))}
       </div>
     </section>
   )
+}
+
+/**
+ * Archived Sessions stay out of the way behind a stateless disclosure: the
+ * section only appears for an Agent that has them, and the search box narrows
+ * it like every other section.
+ */
+function ArchivedSection({
+  sessions,
+  ...row
+}: SessionSectionProps & { sessions: readonly WorkspaceSession[] }) {
+  const dateFormatter = sessionDateFormatter(row.locale)
+
+  return (
+    <section
+      className={cn(styles.section, "mt-2")}
+      aria-label={row.copy.archivedSessions}
+    >
+      <details className={styles.archived}>
+        <summary className={cn(styles.archivedSummary, "min-h-11 gap-1.5 p-2")}>
+          <ChevronDown className={styles.archivedChevron} aria-hidden="true" />
+          <h3 className="text-sm">{row.copy.archivedSessions}</h3>
+        </summary>
+        <div className={styles.list}>
+          {sessions.length ? (
+            sessions.map((session) => (
+              <SessionRow
+                {...row}
+                key={session.threadId}
+                session={session}
+                dateFormatter={dateFormatter}
+              />
+            ))
+          ) : (
+            <p className={cn(styles.archivedEmpty, "text-sm")}>
+              {row.copy.noArchivedSessions}
+            </p>
+          )}
+        </div>
+      </details>
+    </section>
+  )
+}
+
+function sessionDateFormatter(locale: Locale) {
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
 }
 
 export function AgentSessionHistory({
@@ -245,6 +321,8 @@ export function AgentSessionHistory({
   onOpenSession,
   onCreateSession,
   onRemoveOpenSession,
+  availability,
+  sessionMenu,
   threadListRuntime,
   onActionError,
 }: AgentSessionHistoryProps) {
@@ -255,18 +333,39 @@ export function AgentSessionHistory({
   const filter = (session: WorkspaceSession) =>
     !normalizedQuery ||
     normalizeSearch(session.title, locale).includes(normalizedQuery)
-  const visibleOpen = navigation.openSessions.filter(filter)
-  const visibleHistory = navigation.historySessions.filter(
-    (session) => !openIds.has(session.threadId) && filter(session)
+  const historySessions = navigation.historySessions.filter(
+    (session) => !openIds.has(session.threadId)
   )
+  const visibleOpen = navigation.openSessions.filter(filter)
+  const visibleHistory = historySessions.filter(filter)
+  const visibleArchived = navigation.archivedSessions.filter(filter)
   const hasSessions =
     navigation.openSessions.length +
-      navigation.historySessions.filter(
-        (session) => !openIds.has(session.threadId)
-      ).length >
+      historySessions.length +
+      navigation.archivedSessions.length >
     0
-  const hasResults = visibleOpen.length + visibleHistory.length > 0
-  const [actionThreadId, setActionThreadId] = useState<string | null>(null)
+  const hasResults =
+    visibleOpen.length + visibleHistory.length + visibleArchived.length > 0
+  const sharedRow = {
+    navigation,
+    activeThreadId,
+    locale,
+    copy,
+    availability,
+    onOpenSession,
+    threadListRuntime,
+    onActionError,
+  }
+  const openHandlers: SessionRowMenuHandlers = {
+    ...sessionMenu,
+    onRemoveOpenSession: onRemoveOpenSession
+      ? (session) =>
+          runAction(
+            () => onRemoveOpenSession(navigation.agentId, session.threadId),
+            onActionError
+          )
+      : undefined,
+  }
 
   return (
     <div className={styles.history}>
@@ -308,35 +407,20 @@ export function AgentSessionHistory({
       <ThreadListPrimitive.Root className={styles.sessionScroller}>
         {visibleOpen.length ? (
           <SessionSection
+            {...sharedRow}
             heading={copy.openSessions}
             sessions={visibleOpen}
-            navigation={navigation}
-            activeThreadId={activeThreadId}
-            locale={locale}
-            copy={copy}
-            removable
-            actionThreadId={actionThreadId}
-            onActionThreadChange={setActionThreadId}
-            onOpenSession={onOpenSession}
-            onRemoveOpenSession={onRemoveOpenSession}
-            threadListRuntime={threadListRuntime}
-            onActionError={onActionError}
+            openable
+            handlers={openHandlers}
           />
         ) : null}
         {visibleHistory.length ? (
           <SessionSection
+            {...sharedRow}
             heading={copy.history}
             sessions={visibleHistory}
-            navigation={navigation}
-            activeThreadId={activeThreadId}
-            locale={locale}
-            copy={copy}
-            removable={false}
-            actionThreadId={actionThreadId}
-            onActionThreadChange={setActionThreadId}
-            onOpenSession={onOpenSession}
-            threadListRuntime={threadListRuntime}
-            onActionError={onActionError}
+            openable
+            handlers={sessionMenu ?? {}}
           />
         ) : null}
         {!hasResults ? (
@@ -348,6 +432,14 @@ export function AgentSessionHistory({
               </Button>
             ) : null}
           </div>
+        ) : null}
+        {navigation.archivedSessions.length ? (
+          <ArchivedSection
+            {...sharedRow}
+            sessions={visibleArchived}
+            openable={false}
+            handlers={sessionMenu ?? {}}
+          />
         ) : null}
       </ThreadListPrimitive.Root>
     </div>

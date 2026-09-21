@@ -85,8 +85,20 @@ export type SessionMetadata = {
   agentId: string
   updatedAt: string
   status: SessionStatus
+  /** Provider archival state; absent until a provider read reports it. */
+  archived?: boolean
   /** Provider read state; absent when the runtime does not track it. */
   unread?: boolean
+  /** Provider pin; absent when the runtime does not track it. */
+  pinned?: boolean
+}
+
+/** Which Session actions the selected runtime declares it performs. */
+export type SessionActionCapabilities = {
+  rename: boolean
+  archive: boolean
+  delete: boolean
+  pin: boolean
 }
 
 export type TodoStatus = "pending" | "active" | "completed" | "failed"
@@ -150,6 +162,10 @@ export type WorkspaceAdapter = {
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
   markSessionRead?: (threadId: string) => Promise<void>
+  /** Provider-owned pin; rename, archival, and deletion travel with threads. */
+  setSessionPinned?: (threadId: string, pinned: boolean) => Promise<void>
+  /** What the runtime declares about the Session actions the UI may offer. */
+  sessionActionCapabilities?: () => Promise<SessionActionCapabilities>
   /**
    * The Session that is visible, focused, and unobscured, or none, with this
    * connection's presence: a foreground connection nobody is using is idle, and
@@ -271,6 +287,10 @@ export type WorkspaceCapabilities = {
   agentCreation: boolean
   activityEvents: boolean
   sessionReadState: boolean
+  sessionRename: boolean
+  sessionArchival: boolean
+  sessionDeletion: boolean
+  sessionPin: boolean
 }
 
 export type WorkspaceProviderEvent<TPayload = unknown> = {

@@ -63,6 +63,8 @@ type BuildAgentSessionViewOptions = {
   titles: ReadonlyMap<string, string>
   now: Date
   untitledLabel?: string
+  /** The Session on screen stays listed even once the provider archives it. */
+  visibleThreadId?: string | null
 }
 
 function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
@@ -83,6 +85,16 @@ function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
   )
 }
 
+/** Pinned rows lead the open list; recency still orders within either group. */
+export function pinnedFirst<Session extends { pinned?: boolean }>(
+  sessions: readonly Session[]
+) {
+  return [
+    ...sessions.filter((session) => session.pinned === true),
+    ...sessions.filter((session) => session.pinned !== true),
+  ]
+}
+
 export function buildAgentSessionView({
   agentId,
   sessions,
@@ -90,22 +102,33 @@ export function buildAgentSessionView({
   titles,
   now,
   untitledLabel = "Untitled session",
+  visibleThreadId = null,
 }: BuildAgentSessionViewOptions) {
   const toView = (session: SessionMetadata): WorkspaceSessionView => ({
     ...session,
     title: titles.get(session.threadId)?.trim() || untitledLabel,
   })
-  const allSessions = newestUniqueSessions(
-    sessions.filter((session) => session.agentId === agentId)
+  // Archived Sessions leave the open and history lists for their own list.
+  const listed = sessions.filter(
+    (session) =>
+      session.archived !== true || session.threadId === visibleThreadId
   )
 
   return {
-    openSessions: activeSessionsForAgent(
-      [...sessions],
-      agentId,
-      now,
-      manuallyOpenedThreadIds
+    openSessions: pinnedFirst(
+      activeSessionsForAgent(listed, agentId, now, manuallyOpenedThreadIds)
     ).map(toView),
-    allSessions: allSessions.map(toView),
+    // A pinned Session is always open, so history never repeats it — not even
+    // while its tab is dismissed.
+    allSessions: newestUniqueSessions(
+      listed.filter(
+        (session) => session.agentId === agentId && session.pinned !== true
+      )
+    ).map(toView),
+    archivedSessions: newestUniqueSessions(
+      sessions.filter(
+        (session) => session.agentId === agentId && session.archived === true
+      )
+    ).map(toView),
   }
 }

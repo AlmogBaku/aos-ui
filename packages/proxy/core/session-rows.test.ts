@@ -44,6 +44,21 @@ describe("createSessionRows", () => {
     expect(rows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 
+  it("publishes a changed pin and keeps a known one through a read that omits it", () => {
+    const rows = createSessionRows()
+    rows.rememberList([session()])
+
+    expect(rows.rememberList([session({ pinned: true })])).toEqual([
+      expect.objectContaining({ pinned: true }),
+    ])
+    expect(rows.rememberList([session({ pinned: true })])).toEqual([])
+    expect(rows.rememberList([session({ pinned: false })])).toEqual([
+      expect.objectContaining({ pinned: false }),
+    ])
+    // A read that omits the pin never clears the known value.
+    expect(rows.rememberDetail(session()).pinned).toBe(false)
+  })
+
   it("leaves unread absent while no read has reported it", () => {
     const rows = createSessionRows()
 

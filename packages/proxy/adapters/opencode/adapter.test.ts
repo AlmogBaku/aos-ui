@@ -75,6 +75,8 @@ function client(): OpenCodeAdapterClient {
         title: "New session",
         time: { created: 1_000 },
       }),
+      update: vi.fn(async () => {}),
+      delete: vi.fn(async () => {}),
       messages: vi.fn(async (_sessionId, options) => {
         if (options?.cursor === "second")
           return { data: [message("message-2", 2_000)], cursor: {} }
@@ -159,6 +161,67 @@ describe("OpenCode server adapter", () => {
     })
   })
 
+  it("renames, archives, pins, and deletes an owned Session through the native routes", async () => {
+    const native = client()
+    native.sessions.get = async () => ({
+      id: "session-1",
+      agent: "research",
+      title: "Research notes",
+      time: { created: 1_000, updated: 2_000 },
+      metadata: { "native.label": "keep me" },
+    })
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      runs: runEngine,
+    })
+
+    await adapter.mutateSession("research", "session-1", "PATCH", {
+      title: "Renamed",
+    })
+    expect(native.sessions.update).toHaveBeenNthCalledWith(1, "session-1", {
+      title: "Renamed",
+    })
+    await adapter.mutateSession("research", "session-1", "PATCH", {
+      archived: true,
+    })
+    expect(native.sessions.update).toHaveBeenNthCalledWith(2, "session-1", {
+      time: { archived: expect.any(Number) },
+    })
+    await adapter.mutateSession("research", "session-1", "PATCH", {
+      archived: false,
+    })
+    expect(native.sessions.update).toHaveBeenNthCalledWith(3, "session-1", {
+      time: {},
+    })
+    await adapter.mutateSession("research", "session-1", "PATCH", {
+      pinned: true,
+    })
+    // A pin write merges into native metadata instead of replacing it.
+    expect(native.sessions.update).toHaveBeenNthCalledWith(4, "session-1", {
+      metadata: { "native.label": "keep me", "aos.pinned": true },
+    })
+    await adapter.mutateSession("research", "session-1", "PATCH", {
+      pinned: false,
+    })
+    expect(native.sessions.update).toHaveBeenNthCalledWith(5, "session-1", {
+      metadata: { "native.label": "keep me", "aos.pinned": false },
+    })
+    await adapter.mutateSession("research", "session-1", "DELETE")
+    expect(native.sessions.delete).toHaveBeenCalledWith("session-1")
+    await expect(
+      adapter.getSession("research", "session-1")
+    ).resolves.toMatchObject({ pinned: false })
+    await expect(adapter.runtimeInfo()).resolves.toMatchObject({
+      status: "ready",
+      capabilities: {
+        sessionTitle: { status: "available" },
+        sessionArchival: { status: "available" },
+        sessionPin: { status: "available" },
+        sessionDeletion: { status: "available" },
+      },
+    })
+  })
+
   it("keeps unsupported native lifecycle operations unavailable and maps safe provider errors", async () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
@@ -166,16 +229,15 @@ describe("OpenCode server adapter", () => {
       runs: runEngine,
     })
 
-    await expect(
-      adapter.mutateSession("research", "session-1", "DELETE")
-    ).rejects.toMatchObject({
-      name: "OpenCodeWorkspaceUnavailableError",
-    })
-    await expect(
-      adapter.mutateSession("research", "session-1", "PATCH", { unread: false })
-    ).rejects.toMatchObject({
-      name: "OpenCodeWorkspaceUnavailableError",
-    })
+    for (const body of [
+      { unread: false },
+      { title: "One", archived: true },
+      [],
+    ])
+      await expect(
+        adapter.mutateSession("research", "session-1", "PATCH", body)
+      ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    expect(native.sessions.update).not.toHaveBeenCalled()
     await expect(
       adapter.artifact("research", "session-1", "artifact-1")
     ).rejects.toMatchObject({
@@ -193,10 +255,6 @@ describe("OpenCode server adapter", () => {
           status: "unavailable",
           reason: "native-agent-catalog-read-only",
         },
-        sessionTitle: {
-          status: "unavailable",
-          reason: "native-session-title-unavailable",
-        },
         sessionSteer: {
           status: "unavailable",
           reason: "native-steering-unproven",
@@ -204,6 +262,39 @@ describe("OpenCode server adapter", () => {
         sessionReadState: {
           status: "unavailable",
           reason: "native-session-read-state-unavailable",
+        },
+      },
+    })
+  })
+
+  it("reports every Session lifecycle operation as temporarily unavailable when the catalog cannot be read", async () => {
+    const native = client()
+    native.catalog.agents = async () => {
+      throw new Error("native catalog is unreachable")
+    }
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      runs: runEngine,
+    })
+
+    await expect(adapter.runtimeInfo()).resolves.toMatchObject({
+      status: "unavailable",
+      capabilities: {
+        sessionTitle: {
+          status: "unavailable",
+          reason: "temporarily-unavailable",
+        },
+        sessionArchival: {
+          status: "unavailable",
+          reason: "temporarily-unavailable",
+        },
+        sessionPin: {
+          status: "unavailable",
+          reason: "temporarily-unavailable",
+        },
+        sessionDeletion: {
+          status: "unavailable",
+          reason: "temporarily-unavailable",
         },
       },
     })

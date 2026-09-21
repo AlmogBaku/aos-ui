@@ -97,9 +97,21 @@
   background: var(--muted);
 }
 
-.sessionNavigation:focus-visible,
-.actionMenu button:focus-visible {
+.sessionNavigation:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+/**
+ * Archived rows list a Session without offering to switch to it, and read as
+ * set aside: the muted role keeps title and time above 4.5:1 in both themes.
+ */
+.sessionStatic {
+  display: flex;
+  min-inline-size: 0;
+  flex: 1;
+  align-items: center;
+  color: var(--muted-foreground);
+  text-align: start;
 }
 
 .rowText {
@@ -137,47 +149,83 @@
   text-align: left;
 }
 
+.pinGlyph {
+  flex: none;
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
 .actionSlot {
   position: relative;
   display: grid;
   place-items: center;
 }
 
-.actionMenu {
-  position: absolute;
-  z-index: 2;
-  inset-block-start: calc(100% - 0.25rem);
-  inset-inline-end: 0;
-  min-inline-size: 13rem;
-  padding: 0.25rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 14%);
+/*
+ * A permanent overflow control on every row is noise where hover exists, so
+ * reveal it on hover, on focus anywhere in the row, and while its own menu is
+ * open. It stays in the accessibility tree and keeps its layout space, and a
+ * coarse pointer has no hover to reveal it with, so there it stays visible.
+ */
+@media (pointer: fine) and (hover: hover) {
+  .actionSlot {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .sessionRow:hover .actionSlot,
+  .sessionRow:focus-within .actionSlot,
+  .sessionRow:has([aria-expanded="true"]) .actionSlot {
+    opacity: 1;
+  }
 }
 
-.actionMenu button {
+@media (prefers-reduced-motion: reduce) {
+  .actionSlot {
+    transition: none;
+  }
+}
+
+.archivedSummary {
   display: flex;
-  inline-size: 100%;
-  min-block-size: 2rem;
   align-items: center;
-  gap: 0.5rem;
-  padding-inline: 0.625rem;
-  border: 0;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  list-style: none;
+}
+
+.archivedSummary::-webkit-details-marker {
+  display: none;
+}
+
+.archivedSummary:focus-visible {
   border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 2px var(--ring);
   outline: 0;
-  background: transparent;
-  color: inherit;
-  text-align: start;
 }
 
-.actionMenu button:hover {
-  background: var(--muted);
-}
-
-.actionMenu svg {
+.archivedChevron {
+  flex: none;
   inline-size: 1rem;
+  block-size: 1rem;
+  transition: transform 150ms ease;
+}
+
+.archived[open] .archivedChevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archivedChevron {
+    transition: none;
+  }
+}
+
+.archivedEmpty {
+  margin: 0;
+  padding: 0.5rem 0.5rem 0.75rem;
+  color: var(--muted-foreground);
 }
 
 .empty {
@@ -207,7 +255,8 @@
 @media (pointer: coarse) {
   .searchField,
   .sessionNavigation,
-  .actionMenu button {
+  .sessionStatic,
+  .archivedSummary {
     min-block-size: 2.75rem;
   }
 }

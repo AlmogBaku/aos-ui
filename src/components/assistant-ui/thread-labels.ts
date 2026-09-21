@@ -21,6 +21,7 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     more: "More actions",
     exportMarkdown: "Export as Markdown",
     edit: "Edit message",
+    selectText: "Select text",
     pendingInteractionAction:
       "Answer the pending question before changing this conversation",
     cancel: "Cancel",
@@ -105,6 +106,7 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     more: "פעולות נוספות",
     exportMarkdown: "ייצוא כ-Markdown",
     edit: "עריכת ההודעה",
+    selectText: "בחירת טקסט",
     pendingInteractionAction: "יש לענות על השאלה הממתינה לפני שינוי השיחה",
     cancel: "ביטול",
     update: "עדכון",

@@ -90,7 +90,8 @@ export async function exerciseSessionTabs(
     await drawer
       .getByRole("button", { name: `${copy.actions}: Market brief` })
       .click()
-    await drawer.getByRole("menuitem", { name: copy.removeOpenSession }).click()
+    // The row menu is portaled out of the drawer.
+    await page.getByRole("menuitem", { name: copy.removeOpenSession }).click()
     await expect(drawer).toHaveCount(0)
     await expect(
       page.getByRole("status").filter({ hasText: copy.closed })
@@ -163,7 +164,9 @@ export async function exerciseSessionTabs(
   await expect(
     actions.getByRole("button", { name: copy.newSession })
   ).toBeVisible()
-  await page
+  // The inspector row for the same Session offers its own menu button, so the
+  // tab strip's own overflow trigger has to be addressed inside the tab bar.
+  await actions
     .getByRole("button", { name: `${copy.actions}: Market brief` })
     .click()
   await expect(page.getByRole("menuitem", { name: copy.close })).toBeVisible()
@@ -181,7 +184,7 @@ export async function exerciseSessionTabs(
     "true"
   )
   await expect(page.getByRole("tab", { name: "Market brief" })).toBeFocused()
-  await page
+  await actions
     .getByRole("button", { name: `${copy.actions}: Market brief` })
     .click()
   await page.getByRole("menuitem", { name: copy.close }).click()
