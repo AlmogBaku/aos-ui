@@ -329,8 +329,9 @@ function closedAppState(
   settings?: BrowserSettingsView
 ) {
   if (settings?.iosInstallHint) return copy.pushIosHint
-  // A blocked site is shown no notification at all, pushed or not.
-  if (settings?.status === "denied") return copy.permissionDenied
+  // A blocked site is shown no notification at all, pushed or not. The master
+  // status line above already says how to unblock, so this one only states it.
+  if (settings?.status === "denied") return copy.pushBlocked
   switch (settings?.push ?? "not-configured") {
     case "insecure-context":
       return copy.pushInsecure

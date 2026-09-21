@@ -65,6 +65,7 @@ export type Dictionary = {
     whenClosed: string
     pushOn: string
     pushNotYet: string
+    pushBlocked: string
     pushInsecure: string
     pushNotConfigured: string
     pushUnsupported: string

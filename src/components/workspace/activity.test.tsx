@@ -568,7 +568,7 @@ describe("Activity presentation", () => {
     [
       "blocked by the browser",
       { push: "available", pushActive: true, status: "denied" },
-      en.activity.permissionDenied,
+      en.activity.pushBlocked,
     ],
     ["insecure", { push: "insecure-context" }, en.activity.pushInsecure],
     ["unconfigured", { push: "not-configured" }, en.activity.pushNotConfigured],

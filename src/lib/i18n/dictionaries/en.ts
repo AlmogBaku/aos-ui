@@ -81,6 +81,7 @@ export const en = {
     whenClosed: "Also when AOS is closed",
     pushOn: "On for this device.",
     pushNotYet: "Not on for this device yet.",
+    pushBlocked: "Off while notifications are blocked.",
     pushInsecure: "Needs an HTTPS address to work while AOS is closed.",
     pushNotConfigured:
       "Not set up on this deployment; alerts need an open AOS tab.",
