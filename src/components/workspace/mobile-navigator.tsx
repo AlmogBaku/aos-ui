@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { pinnedFirst } from "@/lib/workspace-view-model"
 import { cn } from "@/lib/utils"
 import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 import type { WorkspaceAgent, WorkspaceSession } from "./workspace-shell"
@@ -159,6 +160,20 @@ function orderSessions(
   })
 }
 
+/**
+ * Holding a row's place protects the reader from provider churn, but a pin is
+ * the reader's own command, so it takes effect where they can see it: pinned
+ * rows lead the open list here exactly as they do everywhere else.
+ */
+function stableOpenOrder(
+  previous: readonly string[],
+  current: readonly WorkspaceSession[]
+) {
+  return pinnedFirst(
+    orderSessions(reconcileIds(previous, current), current)
+  ).map(({ threadId }) => threadId)
+}
+
 function useStableSessionSections(
   state: MobileNavigatorState,
   catalog: MobileAgentSessionCatalog | undefined
@@ -177,7 +192,7 @@ function useStableSessionSections(
         agentId: next.state.agentId,
         openIds: enteringAgent
           ? next.catalog.openSessions.map(({ threadId }) => threadId)
-          : reconcileIds(previous.openIds, next.catalog.openSessions),
+          : stableOpenOrder(previous.openIds, next.catalog.openSessions),
         historyIds: enteringAgent
           ? next.catalog.historySessions.map(({ threadId }) => threadId)
           : reconcileIds(previous.historyIds, next.catalog.historySessions),

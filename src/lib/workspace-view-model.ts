@@ -86,7 +86,7 @@ function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
 }
 
 /** Pinned rows lead the open list; recency still orders within either group. */
-function pinnedFirst<Session extends { pinned?: boolean }>(
+export function pinnedFirst<Session extends { pinned?: boolean }>(
   sessions: readonly Session[]
 ) {
   return [

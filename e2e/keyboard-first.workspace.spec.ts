@@ -127,6 +127,29 @@ test("Shift+F10 opens the Session menu on the focused tab and Escape closes it",
   await expect(tab).toBeFocused()
 })
 
+test("Shift+F10 opens the menu on the focused message action and Escape closes it", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  // The last assistant turn keeps its action bar without a hover, so its Copy
+  // button is the keyboard's way into that message's own menu.
+  const copyAction = page.getByRole("button", { name: "Copy", exact: true })
+  await copyAction.focus()
+  await page.keyboard.press("Shift+F10")
+
+  const menu = page.getByRole("menu")
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeVisible()
+  await expect(
+    menu.getByRole("menuitem", { name: "Retry response" })
+  ).toBeVisible()
+
+  await page.keyboard.press("Escape")
+  await expect(menu).toHaveCount(0)
+  await expect(copyAction).toBeFocused()
+})
+
 test("desktop Shift+Enter inserts a newline while Enter sends the draft", async ({
   page,
 }) => {

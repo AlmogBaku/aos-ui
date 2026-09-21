@@ -1,6 +1,7 @@
 import type { Locator } from "@playwright/test"
 
 import { expect, type Page } from "./test"
+import { longPress } from "./support/long-press"
 
 type SessionActionsCopy = {
   sessions: string
@@ -121,29 +122,6 @@ async function renameThroughDialog(
   await page.keyboard.type(nextTitle)
   await page.keyboard.press("Enter")
   await expect(dialog).toHaveCount(0)
-}
-
-/**
- * Chromium never promotes a synthetic tap to a long press, so the press is
- * dispatched through CDP. A recognized long press hands the touch to the
- * context menu and the page receives `touchcancel`; a synthetic `touchEnd`
- * would instead deliver the tap the platform suppresses.
- */
-async function longPress(page: Page, target: Locator) {
-  await target.scrollIntoViewIfNeeded()
-  const box = await target.boundingBox()
-  expect(box).not.toBeNull()
-  const session = await page.context().newCDPSession(page)
-  await session.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }],
-  })
-  await expect(page.getByRole("menu")).toBeVisible()
-  await session.send("Input.dispatchTouchEvent", {
-    type: "touchCancel",
-    touchPoints: [],
-  })
-  await session.detach()
 }
 
 async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {

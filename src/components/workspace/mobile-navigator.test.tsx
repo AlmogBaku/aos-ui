@@ -336,6 +336,40 @@ describe("MobileNavigator", () => {
     ])
   })
 
+  it("leads the open list with a Session pinned while the drawer is open", () => {
+    const props = defaultProps()
+    props.state = { view: "sessions", agentId: "agent-a" }
+    const view = render(<MobileNavigator {...props} />)
+
+    // The provider answers a pin by moving the row out of history and into the
+    // open list, where the pin has to lead however late the row arrives.
+    const updated = defaultProps()
+    updated.state = props.state
+    updated.sessionsByAgentId = [
+      {
+        agentId: "agent-a",
+        openSessions: [
+          { ...session("a-old", "Earlier findings"), pinned: true },
+          session("a-1", "Current investigation", "running"),
+          session("a-2", "Secondary investigation"),
+        ],
+        historySessions: [],
+        archivedSessions: [],
+        lastSelectedThreadId: "a-1",
+      },
+    ]
+    view.rerender(<MobileNavigator {...updated} />)
+
+    const names = within(screen.getByLabelText("Open sessions"))
+      .getAllByRole("button", { name: /^Open Session:/i })
+      .map((button) => button.getAttribute("aria-label"))
+    expect(names).toEqual([
+      expect.stringContaining("Earlier findings, Pinned"),
+      expect.stringContaining("Current investigation"),
+      expect.stringContaining("Secondary investigation"),
+    ])
+  })
+
   it("filters Sessions, clears an empty search, and creates for the browsed Agent", () => {
     const props = defaultProps()
     props.state = { view: "sessions", agentId: "agent-a" }

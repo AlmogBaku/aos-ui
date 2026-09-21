@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./test"
 import { exerciseAgentManagement } from "./agent-management"
+import { exerciseMessageActions } from "./message-actions"
 import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
 
@@ -11,6 +12,11 @@ for (const locale of ["en", "he"] as const) {
     page,
   }) => {
     await exerciseSessionActions(page, false, locale)
+  })
+  test(`desktop message menu copies, edits, and defers to the browser in ${locale}`, async ({
+    page,
+  }) => {
+    await exerciseMessageActions(page, false, locale)
   })
   test(`Manage Agents supports visibility controls in ${locale}`, async ({
     page,
