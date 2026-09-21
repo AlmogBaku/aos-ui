@@ -14,7 +14,7 @@ export type SystemNoticeTone = "error" | "warning" | "info"
  */
 const TONES = {
   error: { Icon: CircleAlert, accent: "border-s-destructive text-destructive" },
-  warning: { Icon: TriangleAlert, accent: "border-s-info text-info" },
+  warning: { Icon: TriangleAlert, accent: "border-s-warning text-warning" },
   info: {
     Icon: Info,
     accent: "border-s-muted-foreground text-muted-foreground",

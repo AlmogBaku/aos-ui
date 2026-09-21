@@ -18,7 +18,7 @@ These rules prevent a late event, reconnect, or navigation change from placing w
 
 ## Browser state
 
-The browser owns presentation state: language, appearance, keyboard preferences, open tabs, per-visit selection restoration, and content-free Activity read/delivery records. It does not become the durable source for provider conversations.
+The browser owns presentation state: language, appearance, keyboard preferences, open tabs, per-visit selection restoration, notification preferences, and a content-free Activity snapshot. Session read state is provider-owned: the browser reports the focused Session via `_aos/session/focus` and the runtime decides when it becomes read. The browser does not become the durable source for provider conversations.
 
 Assistant UI manages the frontend projection of threads, messages, runs, branches, the composer, and message queues. Runtime adapters translate native records and lifecycle operations without leaking provider-specific types across the shared boundary.
 
@@ -30,11 +30,15 @@ implement the same normalized server boundary without adding provider branches
 to the browser. Each native adapter keeps its own transport, credentials,
 recovery positions, and provider payloads private.
 
-The browser communicates with the proxy through normalized AOS REST for bytes and
-discovery, and through the ACP v2 WebSocket at `/api/aos/v1/acp` for run
-streams, session lifecycle, agent catalog, and active-run controls. Fixture mode
-remains explicit synthetic data for evaluation and tests; invalid real-runtime
-configuration renders an unavailable screen rather than falling back to fixtures.
+Each browser tab opens one ACP v2 WebSocket at `/api/aos/v1/acp`. That single
+socket carries run streams, session lifecycle, agent catalog, active-run
+controls, `_aos/*` notifications (focus, activity, artifact, invalidation),
+`usage_update`, and `session/set_config_option`. The `initialize` response
+negotiates optional extensions including `activity`, `readState`, and `focus`.
+`packages/proxy/acp` is the server-side translation point. Normalized AOS REST
+handles bytes and discovery. Fixture mode remains explicit synthetic data for
+evaluation and tests; invalid real-runtime configuration renders an unavailable
+screen rather than falling back to fixtures.
 
 Assistant UI owns queued messages. While a run is busy, an ordinary Send adds
 one FIFO follow-up; a supported text-only steering action delivers an
@@ -48,7 +52,7 @@ Browser code never imports native filesystem writers or provider implementations
 
 Rich tools are rendered from validated data and always retain an inspectable textual fallback. AOS does not execute arbitrary generated code in the main page.
 
-An Agent may explicitly publish an Artifact. AOS provides read-only resolution, preview, and download; it does not provide file editing, storage, or version history. Published HTML runs in an opaque-origin sandbox with a fixed content-security policy. An operator allowlist may permit public HTTPS assets, so the preview is isolation rather than a complete network-egress boundary.
+An Agent may explicitly publish an Artifact. AOS provides read-only resolution, preview, and download; it does not provide file editing, storage, or version history. Published image, audio, and video Artifacts render inline in the conversation. Published HTML runs in an opaque-origin sandbox with a fixed content-security policy. An operator allowlist may permit public HTTPS assets, so the preview is isolation rather than a complete network-egress boundary.
 
 ## Network and authentication boundary
 
@@ -60,19 +64,21 @@ operator-managed authenticated ingress. Nginx is optional TLS/reverse-proxy
 infrastructure, not part of the runtime boundary.
 
 The optional guest listener uses a distinct port and scoped, expiring JWTs.
-Operator and guest lanes share the same configured Hermes adapter, transport,
+Operator and guest lanes share the same configured runtime adapter, transport,
 and Session coordinator. Authorization and outbound projection remain
 lane-specific, so a guest token grants only its declared runtime, Agent,
-Session, and operations. There is no second guest Hermes credential.
+Session, and operations. Guests may stop runs they started (`session/cancel` is
+in `GUEST_METHODS`). There is no second guest Hermes credential.
 
-Hermes authentication uses one server token read from a private file. Reconnect
-cursor keys and optional guest invitation keys are also file-backed secrets.
-None appear in the browser-readable `/runtime-config.json`, browser bundle,
-URLs, logs, or normalized provider responses.
+Hermes authentication uses one server token read from a private file. Optional
+guest invitation signing keys are also file-backed secrets. None appear in the
+browser-readable `/runtime-config.json`, browser bundle, URLs, logs, or
+normalized provider responses.
 
-One multiplexed Hermes WebSocket is retained for the configured runtime. The
+One multiplexed native WebSocket is retained for the configured runtime. The
 Session coordinator retains an attachment while work is running, stopping,
 waiting for a question or approval, reconciling, or actively observed. A
-terminal unobserved Session stays warm for five minutes, after which the proxy
-closes only that native Session attachment; the shared socket remains open.
-Disconnecting or reloading a browser never stops native work.
+terminal unobserved Session stays warm for `runtime.sessionIdleMs` (default
+300 000 ms), after which the proxy closes only that native Session attachment;
+the shared socket remains open. Disconnecting or reloading a browser never
+stops native work.

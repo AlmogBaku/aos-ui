@@ -270,18 +270,15 @@ test("F6 reaches the remounted composer after a question resolves", async ({
   await page.keyboard.type("Ask me a question")
   await page.getByRole("button", { name: "Send message" }).click()
 
-  const question = page.locator('[data-slot="tool-chrome"]').filter({
-    has: page.getByRole("heading", {
-      name: "Which audience should the brief prioritize?",
-      exact: true,
-    }),
-  })
-  await expect(question).toHaveAttribute("data-state", "pending")
+  const questionComposer = page.getByRole("region", { name: "Questions" })
+  await expect(questionComposer).toBeVisible()
 
-  const option = question.getByRole("option", { name: "Product team" })
+  const option = questionComposer.getByRole("option", { name: "Product team" })
   await option.focus()
   await page.keyboard.press("Space")
-  await expect(question).toHaveAttribute("data-state", "answered")
+  await questionComposer.getByRole("button", { name: "Send answer" }).click()
+
+  await expect(questionComposer).not.toBeVisible()
   await expect(input).toBeVisible()
 
   await page.getByRole("button", { name: "Open Agents" }).focus()

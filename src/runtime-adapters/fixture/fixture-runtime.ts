@@ -19,7 +19,9 @@ import {
 } from "@assistant-ui/react"
 import { useMemo, useState } from "react"
 
+import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
 import { buildFixtureScenario } from "./fixture-scenarios"
+import { createFixtureInteractions } from "./fixture-interactions"
 import {
   FIXTURE_NOW,
   createFixtureWorkspace,
@@ -522,7 +524,13 @@ function waitForChunk(delayMs: number, signal: AbortSignal) {
 
 export function createFixtureChatModel(
   workspace: FixtureWorkspace,
-  { streamDelayMs = 22 }: { streamDelayMs?: number } = {}
+  {
+    streamDelayMs = 22,
+    onQuestion,
+  }: {
+    streamDelayMs?: number
+    onQuestion?: (threadId: string, request: RuntimeQuestionRequest) => void
+  } = {}
 ): ChatModelAdapter {
   return {
     async *run(options): AsyncGenerator<ChatModelRunResult, void> {
@@ -583,6 +591,22 @@ export function createFixtureChatModel(
             options.unstable_assistantMessageId
           )
           workspace.publishAttention(threadId, kind, requestId)
+          if (kind === "question" && scenario.questionTemplate) {
+            const { header, options: opts, allowFreeform } = scenario.questionTemplate
+            onQuestion?.(threadId, {
+              kind: "question",
+              requestId,
+              sessionId: threadId,
+              questions: [
+                {
+                  header,
+                  prompt: "",
+                  options: opts.map((label) => ({ label })),
+                  custom: allowFreeform,
+                },
+              ],
+            })
+          }
           scenarioParts = scenario.parts.map((part) =>
             part.type !== "tool-call"
               ? part
@@ -685,9 +709,14 @@ export function useFixtureRuntimeBundle({
     [testOnly?.messagesForThread, workspace]
   )
   const artifacts = useMemo(() => createFixtureArtifactAdapter(), [])
+  const interactions = useMemo(() => createFixtureInteractions(), [])
   const chatModel = useMemo(
-    () => createFixtureChatModel(workspace, { streamDelayMs }),
-    [streamDelayMs, workspace]
+    () =>
+      createFixtureChatModel(workspace, {
+        streamDelayMs,
+        onQuestion: (threadId, request) => interactions.register(request),
+      }),
+    [streamDelayMs, workspace, interactions]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadListAdapter,
@@ -706,7 +735,7 @@ export function useFixtureRuntimeBundle({
   })
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, artifacts }),
-    [artifacts, assistantRuntime, workspace]
+    () => ({ assistantRuntime, workspace, artifacts, interactions }),
+    [artifacts, assistantRuntime, workspace, interactions]
   )
 }

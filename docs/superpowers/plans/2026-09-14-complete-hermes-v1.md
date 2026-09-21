@@ -3,9 +3,11 @@
 **Status (2026-09-15): complete.**
 
 This is the maintained resume point for Hermes V1 and runtime-neutral guest
-conversations. The architecture authority remains
-[AOS runtime gateway V1](../../design/aos-runtime-gateway-v1.md). Do not restore
-deleted donor, authentication, WebSocket, or Go gateway paths.
+conversations. The normative architecture authority is
+[AOS runtime gateway architecture](../../design/aos-runtime-gateway-architecture.md);
+[AOS runtime gateway V1](../../design/aos-runtime-gateway-v1.md) is a dated
+completion record. Do not restore deleted donor, authentication, WebSocket, or
+Go gateway paths.
 
 ## Frozen V1 shape
 
@@ -18,6 +20,8 @@ deleted donor, authentication, WebSocket, or Go gateway paths.
 - The browser is provider-neutral and uses standard AG-UI SSE for run input,
   interrupts, replay, and reconnect. Normalized AOS REST carries workspace
   operations plus Stop and optional active-turn steering.
+  _(Superseded 2026-09-19 by the ACP v2 wire (`92a24f2`, `f042380`, `046d3bf`);
+  see `docs/runtimes/acp.md`.)_
 - One operator invalidation WebSocket is page-scoped. Guest pages have no
   invalidation WebSocket and reconcile on reload/focus.
 - Browser disconnect never stops Hermes. Terminal Sessions stay warm for five

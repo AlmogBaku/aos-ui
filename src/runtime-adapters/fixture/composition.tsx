@@ -94,6 +94,7 @@ function FixtureRuntimeProvider({
       resolver: bundle.artifacts,
       htmlAssetOrigins: config.artifactHtmlAssetOrigins,
     },
+    interactions: bundle.interactions,
   })
 }
 

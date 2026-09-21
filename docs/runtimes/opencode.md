@@ -53,17 +53,53 @@ The example proxy configuration uses `http://opencode:4096` and `/workspace`, wh
 
 ## Native model configuration and optional tools
 
-OpenCode owns provider/model configuration and credentials. AOS reads the native model catalog and can select a model for an attached Session, but does not choose a default model. The optional AOS native integration supplies presentation tools, guarded creator support, Session handoff, and the `aos-invite-link` skill; it remains optional to the proxy attachment. Build and load it for local native-tool development with:
+OpenCode owns provider/model configuration and credentials. AOS reads the
+native model catalog and can select a model for an attached Session, but does
+not choose a default model. Reasoning-effort selection is unavailable because
+OpenCode reports no reasoning ladder.
 
-Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
-configured operator proxy origin. The skill prefers the operator invitation
-endpoint over the local CLI, so it needs network access but no signing key.
+The optional AOS native integration supplies presentation tools, guarded
+creator support, Session handoff, and the `aos-invite-link` skill; it remains
+optional to the proxy attachment. Build and load it for local native-tool
+development with:
 
 ```bash
 bun run integrations:build
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   bun run opencode:serve
 ```
+
+`bun run opencode:serve` writes the creator Agent definition and
+`.opencode/skills/aos-invite-link/SKILL.md` into the worktree and refuses to
+start if they would conflict with existing content or if the target port is
+already occupied.
+
+The launcher accepts these environment variables:
+
+| Variable                            | Default     | Meaning                                       |
+| ----------------------------------- | ----------- | --------------------------------------------- |
+| `AOS_UI_OPENCODE_HOST`              | `127.0.0.1` | Bind address for the OpenCode server.         |
+| `AOS_UI_OPENCODE_PORT`              | `4096`      | Port for the OpenCode server.                 |
+| `AOS_UI_OPENCODE_CORS_ORIGINS`      | unset       | Comma-separated allowed CORS origins.         |
+| `AOS_UI_OPENCODE_PLUGIN_PATH`       | built path  | Absolute path to the compiled plugin JS.      |
+| `AOS_UI_OPENCODE_PASSWORD_FILE`     | unset       | Owner-only file containing the server password. |
+| `AOS_UI_OPENCODE_WORKTREE`          | required    | Absolute path to the OpenCode working tree.   |
+| `AOS_UI_OPENAI_COMPATIBLE_BASE_URL` | unset       | OpenAI-compatible provider base URL.          |
+| `AOS_UI_OPENAI_COMPATIBLE_API_KEY`  | unset       | OpenAI-compatible API key.                    |
+| `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` | unset       | OpenAI-compatible model identifier.           |
+| `AOS_UI_OPENCODE_MONTY_COMMAND_JSON`| unset       | JSON array launching an MCP Monty server.     |
+| `AOS_UI_OPENCODE_MONTY_URL`         | unset       | HTTP(S) URL of an MCP Monty server.           |
+
+The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none. The two
+Monty variables are mutually exclusive.
+
+The integration sets `create_agent: "deny"` in the OpenCode permission config
+when the plugin is loaded. This prevents the Agent from spawning new OpenCode
+Agents during a run; Session creation (`start_session`) remains allowed.
+
+Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
+configured operator proxy origin. The skill prefers the operator invitation
+endpoint over the local CLI, so it needs network access but no signing key.
 
 ## Capability limits
 
@@ -76,7 +112,7 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
 
 ```bash
 bun run integrations:build
-bunx vitest run test/opencode src/runtime-adapters/opencode integrations/opencode
+bunx vitest run test/opencode packages/proxy/adapters/opencode integrations/opencode
 ```
 
 Native live acceptance has not been run. It requires approved disposable Agents and real model credentials; mocked tests do not prove a live OpenCode journey.
