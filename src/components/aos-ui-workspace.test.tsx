@@ -1459,15 +1459,17 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-selected", "true")
   })
 
+  // Nori owns one stale Session that is neither live nor pinned, so only the
+  // history fallback can put it in the tab strip.
   it("shows the fallback history Session as a tab for an Agent with only old history", async () => {
     const user = userEvent.setup()
     render(<FixtureAosUiApp locale="en" dictionary={en} />)
 
-    await user.click(await screen.findByRole("button", { name: "Vela" }))
+    await user.click(await screen.findByRole("button", { name: "Nori" }))
 
     await waitFor(() =>
       expect(
-        screen.getByRole("tab", { name: "Activation metrics" })
+        screen.getByRole("tab", { name: "Launch copy, Unread" })
       ).toHaveAttribute("aria-selected", "true")
     )
   })
@@ -1476,17 +1478,17 @@ describe("AosUiApp fixture composition", () => {
     const user = userEvent.setup()
     render(<FixtureAosUiApp locale="en" dictionary={en} />)
 
-    await user.click(await screen.findByRole("button", { name: "Vela" }))
-    await screen.findByRole("tab", { name: "Activation metrics" })
+    await user.click(await screen.findByRole("button", { name: "Nori" }))
+    await screen.findByRole("tab", { name: "Launch copy, Unread" })
 
     await user.click(
       screen.getByRole("button", {
-        name: "Close session: Activation metrics",
+        name: "Close session: Launch copy",
       })
     )
     await waitFor(() =>
       expect(
-        screen.queryByRole("tab", { name: "Activation metrics" })
+        screen.queryByRole("tab", { name: "Launch copy, Unread" })
       ).not.toBeInTheDocument()
     )
   })
