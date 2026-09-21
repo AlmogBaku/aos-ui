@@ -81,6 +81,12 @@ half-configured Agent never appears in the roster. Hermes at or after
 `a0500081` publishes a profile with one atomic rename, so a concurrent creator
 can no longer observe or adopt a half-written profile directory.
 
+A newly provisioned creator cannot talk to a model until you give it
+credentials. `hermes profile create` copies the model block but not the
+credential pool, so the profile's first turn fails with an internal error until
+you sign that profile in. Authenticate it the way you authenticate any Hermes
+profile, and never copy another profile's tokens into it.
+
 A `setup-needed` result means the profile exists and is still hidden: one of the
 package or toolset steps failed or timed out. A `setup-needed` result with
 `"error": "Profile creation failed"` specifically means the profile was created

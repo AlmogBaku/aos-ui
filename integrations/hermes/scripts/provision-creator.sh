@@ -215,5 +215,8 @@ fi
 echo ""
 echo "Done. Next steps:"
 echo "  hermes profile list"
+echo "  Give '$NAME' credentials for its model: a new profile inherits the model"
+echo "  block but not the credentials, so its first turn fails until you sign it"
+echo "  in (for example: hermes -p $NAME auth login)."
 echo "  Restart Hermes (or reload its config) to pick up the '$NAME' profile."
 echo "  The AOS proxy will show 'New Agent' once it lists the '$NAME' profile."
