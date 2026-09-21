@@ -1062,10 +1062,13 @@ type CreatorReceiptHandle = {
   workspace: FixtureWorkspace
   emitActivity: (event: WorkspaceActivityEvent) => void
   refreshCalls: () => number
+  /** Makes the next catalog refresh fail the way a transport failure does. */
+  failNextRefresh: () => void
 }
 
 type CreatorReceiptState = {
   refreshCalls: number
+  failNextRefresh: boolean
   listeners: Set<(event: WorkspaceActivityEvent) => void>
 }
 
@@ -1079,6 +1082,10 @@ function receiptWorkspace(
   return workspaceFacade(workspace, {
     refreshAgents: async () => {
       state.refreshCalls += 1
+      if (state.failNextRefresh) {
+        state.failNextRefresh = false
+        throw new Error("Agent catalog refresh failed")
+      }
       const agents = await workspace.listAgents()
       return state.refreshCalls <= hideFor
         ? agents.filter(({ id }) => id !== hiddenAgentId)
@@ -1113,6 +1120,7 @@ function CreatorReceiptFixture({
   })
   const [state] = useState<CreatorReceiptState>(() => ({
     refreshCalls: 0,
+    failNextRefresh: false,
     listeners: new Set(),
   }))
   const bundle = useMemo<WorkspaceFixtureRuntime>(
@@ -1135,6 +1143,9 @@ function CreatorReceiptFixture({
           for (const listener of state.listeners) listener(event)
         },
         refreshCalls: () => state.refreshCalls,
+        failNextRefresh: () => {
+          state.failNextRefresh = true
+        },
       }),
     [capture, fixture.workspace, state]
   )
@@ -1794,6 +1805,11 @@ describe("AosUiApp fixture composition", () => {
       `/draft%3A${interview.threadId}/${interview.threadId}`
     )
     expect(screen.queryByRole("button", { name: /^Agent Creator/ })).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: /^Commands \(/ }))
+    expect(
+      screen.getByRole("button", { name: "Select Agent: New Agent" })
+    ).toBeVisible()
   })
 
   it("uses the active locale for the interview draft and its prompt", async () => {
@@ -2103,6 +2119,41 @@ describe("AosUiApp fixture composition", () => {
     expect(screen.queryByRole("button", { name: "Sora" })).toBeNull()
   })
 
+  it("reports a failed catalog refresh and keeps the draft it cannot resolve", async () => {
+    const user = userEvent.setup()
+    let handle: CreatorReceiptHandle | undefined
+    render(
+      <CreatorReceiptFixture
+        capture={(value) => {
+          handle = value
+        }}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "New Agent" }))
+    await screen.findByRole("button", { name: /^New Agent, draft/ })
+    const creatorSession = handle!.workspace
+      .listAllSessionMetadata()
+      .find(({ agentId }) => agentId === "agent-builder")!
+    handle!.failNextRefresh()
+
+    await act(async () =>
+      handle!.emitActivity({
+        id: "receipt-2",
+        type: "agent-ready",
+        agentId: "agent-sora",
+        threadId: creatorSession.threadId,
+        occurredAt: FIXTURE_NOW.toISOString(),
+      })
+    )
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Agent catalog refresh failed"
+    )
+    expect(
+      screen.getByRole("button", { name: /^New Agent, draft/ })
+    ).toHaveAttribute("aria-current", "true")
+  })
+
   it("retires the draft and explains an Agent that still needs operator setup", async () => {
     const user = userEvent.setup()
     let workspace: FixtureWorkspace | undefined
@@ -2130,6 +2181,9 @@ describe("AosUiApp fixture composition", () => {
       ).toBeNull()
     )
     expect(screen.queryByRole("button", { name: "Sora" })).toBeNull()
+    await waitFor(() =>
+      expect(window.location.pathname).not.toContain("draft%3A")
+    )
   })
 
   it("ignores a creation receipt from a Session the creator does not own", async () => {

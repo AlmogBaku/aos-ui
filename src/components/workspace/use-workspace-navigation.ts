@@ -152,6 +152,7 @@ export function useWorkspaceNavigation({
   const [creatorNotice, setCreatorNotice] = useState<string | undefined>(
     undefined
   )
+  const noticeOutlivesRoute = useRef(false)
   const [manuallyOpened, setManuallyOpened] = useState<
     Record<string, string[]>
   >({})
@@ -335,8 +336,11 @@ export function useWorkspaceNavigation({
     sessions,
   ])
 
+  // A notice belongs to the place it was raised, except when retiring a draft
+  // moves the route itself: that explanation outlives its own navigation.
   useEffect(() => {
-    setCreatorNotice(undefined)
+    if (noticeOutlivesRoute.current) noticeOutlivesRoute.current = false
+    else setCreatorNotice(undefined)
   }, [pathname])
 
   const refreshAgentCatalog = useCallback(async () => {
@@ -373,6 +377,14 @@ export function useWorkspaceNavigation({
       storeResolvedDraft(event.threadId)
       if (event.type === "agent-activation-failed") {
         setCreatorNotice(dictionary.creator.createdHidden)
+        // A retired draft keeps neither the selection nor the route it owned.
+        if (
+          selectedAgentId === draftAgentId(event.threadId) &&
+          defaultAgentId
+        ) {
+          noticeOutlivesRoute.current = true
+          await selectAgent(defaultAgentId)
+        }
         return
       }
       if (selectedAgentId !== draftAgentId(event.threadId)) return
@@ -390,7 +402,9 @@ export function useWorkspaceNavigation({
         event.type === "agent-ready" ||
         event.type === "agent-activation-failed"
       )
-        void acceptCreationReceipt(event)
+        void acceptCreationReceipt(event).catch((reason: unknown) =>
+          setActionError(toError(reason))
+        )
     })
   }, [workspace])
 

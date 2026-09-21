@@ -153,8 +153,9 @@ export function createAcpSessionStore({
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
   // A settled tool update carries no title, so the creator's tool is only
-  // recognizable from the title its first update reported.
-  const toolTitles = new Map<string, string>()
+  // recognizable from the title its first update reported. Remembering that
+  // one tool keeps calls the workspace never sees settle from accumulating.
+  const creatorCalls = new Set<string>()
   const invalidationListeners = new Map<string, Set<() => void>>()
 
   function rowsFor(threadIds: Iterable<string>) {
@@ -234,14 +235,16 @@ export function createAcpSessionStore({
     }
   ) {
     const key = toolCallKey(threadId, update.toolCallId)
-    if (typeof update.title === "string") toolTitles.set(key, update.title)
+    if (typeof update.title === "string") {
+      if (AGENT_CREATION_TOOLS.has(update.title)) creatorCalls.add(key)
+      else creatorCalls.delete(key)
+    }
     const status = update.status
     if (status !== "completed" && status !== "failed" && status !== "cancelled")
       return
-    const title = toolTitles.get(key)
-    toolTitles.delete(key)
-    if (status !== "completed" || !title || !AGENT_CREATION_TOOLS.has(title))
-      return
+    // Any settled status releases the call; only a completed one reports.
+    const creatorCall = creatorCalls.delete(key)
+    if (!creatorCall || status !== "completed") return
     const receipt = agentCreationReceiptOf(update.rawOutput)
     if (!receipt) return
     emitActivity({
