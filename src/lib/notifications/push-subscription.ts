@@ -67,6 +67,9 @@ export type PushSubscriptionManager = {
   stop(): void
 }
 
+/** How long a browser that refused to subscribe is left alone. */
+const SUBSCRIBE_RETRY_MS = 60_000
+
 const openMessageSchema = z.object({
   type: z.string().max(64),
   agentId: z.string().min(1).max(512).optional(),
@@ -82,9 +85,11 @@ function errorName(error: unknown) {
 export function createPushSubscriptionManager({
   client,
   platform,
+  now = () => Date.now(),
 }: {
   client: PushClient
   platform: PushPlatform
+  now?: () => number
 }): PushSubscriptionManager {
   let info: PushInfo | undefined
   let described: Promise<void> | undefined
@@ -93,6 +98,8 @@ export function createPushSubscriptionManager({
   /** Endpoint and body the proxy accepted; holding them is what makes push active. */
   let heldEndpoint: string | undefined
   let heldBody: string | undefined
+  /** When subscribing last failed, so a sync per arrival cannot become a storm. */
+  let refusedAt: number | undefined
   const listeners = new Set<PushListeners>()
   let bridge: (() => void) | undefined
 
@@ -119,6 +126,29 @@ export function createPushSubscriptionManager({
   }
   const retire = async (endpoint: string | undefined) => {
     if (endpoint) await client.deletePushSubscription(endpoint)
+  }
+  /**
+   * Permission can be granted without the ask ever appearing — re-allowed from
+   * the padlock, cleared site data, another profile that allowed AOS before — so
+   * an enabled device with nothing subscribed subscribes here. A gesture is only
+   * needed to raise the prompt, which this path never does.
+   */
+  const subscribeHere = async () => {
+    const key = info?.status === "available" ? info.publicKey : undefined
+    if (!key) return undefined
+    if (refusedAt !== undefined && now() - refusedAt < SUBSCRIBE_RETRY_MS)
+      return undefined
+    try {
+      // One attempt per sync; a browser that refuses is left alone for a while.
+      const next = await platform.subscribe(key)
+      if (!next) throw new Error("No push registration is ready")
+      refusedAt = undefined
+      subscription = next
+      return next
+    } catch {
+      refusedAt = now()
+      return undefined
+    }
   }
 
   return {
@@ -177,16 +207,21 @@ export function createPushSubscriptionManager({
           changed()
           return
         }
-        if (!current) {
-          // Nothing is subscribed here, so nothing may be held for this device.
+        let live: PushSubscriptionLike | undefined = current ?? undefined
+        if (!live) {
+          // Whatever the proxy held belonged to a subscription this browser no
+          // longer has, so it is retired before a fresh one replaces it.
           const stale = heldEndpoint
           release()
           await retire(stale)
-          changed()
-          return
+          live = await subscribeHere()
+          if (!live) {
+            changed()
+            return
+          }
         }
         const registration = PushRegistrationSchema.safeParse({
-          subscription: current.toJSON(),
+          subscription: live.toJSON(),
           locale,
           categories: {
             input: preferences.input,
@@ -199,12 +234,12 @@ export function createPushSubscriptionManager({
         // The browser may replace an endpoint at any time; the old one is then
         // a subscription the proxy would keep pushing to.
         const rotated =
-          heldEndpoint && heldEndpoint !== current.endpoint
+          heldEndpoint && heldEndpoint !== live.endpoint
             ? heldEndpoint
             : undefined
-        if (body !== heldBody || heldEndpoint !== current.endpoint) {
+        if (body !== heldBody || heldEndpoint !== live.endpoint) {
           await client.putPushSubscription(registration.data)
-          heldEndpoint = current.endpoint
+          heldEndpoint = live.endpoint
           heldBody = body
         }
         await retire(rotated)

@@ -78,12 +78,17 @@ function setup(
       }
     },
   }
+  let clock = 0
   const manager = createPushSubscriptionManager({
     client: { pushInfo, putPushSubscription, deletePushSubscription },
     platform,
+    now: () => clock,
   })
   return {
     manager,
+    advance: (ms: number) => {
+      clock += ms
+    },
     pushInfo,
     putPushSubscription,
     deletePushSubscription,
@@ -282,6 +287,110 @@ describe("keeping the proxy's copy of this device correct", () => {
 
     await expect(h.manager.sync(sync())).resolves.toBeUndefined()
     expect(h.manager.active()).toBe(false)
+  })
+
+  it("subscribes this device itself when the browser has already granted", async () => {
+    // The live regression: an operator arrives with permission granted, so the
+    // ask never appears and nothing else would ever register this device.
+    const h = setup()
+    await h.manager.prepare("granted")
+
+    await h.manager.sync(sync())
+
+    expect(h.subscribed).toEqual([PUBLIC_KEY])
+    expect(h.putPushSubscription).toHaveBeenCalledOnce()
+    expect(h.putPushSubscription.mock.calls[0]?.[0]).toMatchObject({
+      subscription: registration("https://push.example/fresh"),
+      locale: "en",
+    })
+    expect(h.manager.active()).toBe(true)
+  })
+
+  it("replaces a subscription the browser has since dropped", async () => {
+    const h = setup({
+      subscription: fakeSubscription("https://push.example/a"),
+    })
+    await h.manager.prepare("granted")
+    await h.manager.sync(sync())
+    h.replace(null)
+
+    await h.manager.sync(sync())
+
+    expect(h.deletePushSubscription).toHaveBeenCalledWith(
+      "https://push.example/a"
+    )
+    expect(h.subscribed).toEqual([PUBLIC_KEY])
+    expect(h.putPushSubscription.mock.calls.at(-1)?.[0]).toMatchObject({
+      subscription: registration("https://push.example/fresh"),
+    })
+    expect(h.manager.active()).toBe(true)
+  })
+
+  it("registers nothing when the browser refuses to subscribe", async () => {
+    const h = setup()
+    h.subscribe.mockImplementation(() =>
+      Promise.reject(new Error("subscription refused"))
+    )
+    const onChange = vi.fn()
+    h.manager.listen({ onChange })
+    await h.manager.prepare("granted")
+    onChange.mockClear()
+
+    await expect(h.manager.sync(sync())).resolves.toBeUndefined()
+
+    expect(h.putPushSubscription).not.toHaveBeenCalled()
+    expect(h.manager.active()).toBe(false)
+    expect(onChange).toHaveBeenCalled()
+  })
+
+  it("leaves a refusing browser alone until the retry window passes", async () => {
+    const h = setup()
+    h.subscribe.mockImplementation(() =>
+      Promise.reject(new Error("subscription refused"))
+    )
+    await h.manager.prepare("granted")
+
+    await h.manager.sync(sync())
+    await h.manager.sync(sync())
+    expect(h.subscribe).toHaveBeenCalledOnce()
+
+    h.advance(60_000)
+    await h.manager.sync(sync())
+    expect(h.subscribe).toHaveBeenCalledTimes(2)
+  })
+
+  it("subscribes and registers once across repeated syncs", async () => {
+    const h = setup()
+    await h.manager.prepare("granted")
+
+    await h.manager.sync(sync())
+    await h.manager.sync(sync())
+
+    expect(h.subscribe).toHaveBeenCalledOnce()
+    expect(h.putPushSubscription).toHaveBeenCalledOnce()
+  })
+
+  it.each(["default", "denied"] as const)(
+    "never subscribes on %s permission",
+    async (permission) => {
+      const h = setup()
+      await h.manager.prepare(permission)
+
+      await h.manager.sync(sync({ permission }))
+
+      expect(h.subscribe).not.toHaveBeenCalled()
+      expect(h.putPushSubscription).not.toHaveBeenCalled()
+    }
+  )
+
+  it("never subscribes while the operator keeps alerts switched off", async () => {
+    const h = setup()
+    await h.manager.prepare("granted")
+
+    await h.manager.sync(sync({ enabled: false }))
+
+    expect(h.subscribe).not.toHaveBeenCalled()
+    expect(h.putPushSubscription).not.toHaveBeenCalled()
   })
 
   it("does nothing at all where the deployment offers no push", async () => {
