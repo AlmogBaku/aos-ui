@@ -30,6 +30,30 @@ export function createBrowserNotificationPort(): BrowserNotificationPort {
         },
       }
     },
+    onPermissionChange: (listener) => {
+      let status: PermissionStatus | undefined
+      let stopped = false
+      try {
+        // A permission changed from the browser's own chrome never touches this
+        // page, so nothing else would notice until the next focus.
+        void navigator.permissions
+          ?.query({ name: "notifications" as PermissionName })
+          .then((result) => {
+            if (stopped) return
+            status = result
+            result.addEventListener("change", listener)
+          })
+          .catch(() => {})
+      } catch {
+        /* Without the Permissions API the recheck stays focus-driven. */
+      }
+      return () => {
+        stopped = true
+        try {
+          status?.removeEventListener("change", listener)
+        } catch {}
+      }
+    },
   }
 }
 const snapshotKey = "aos-ui.activity.v1"

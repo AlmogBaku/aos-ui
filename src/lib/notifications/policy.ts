@@ -98,9 +98,13 @@ export function shouldChime(
 }
 
 /**
- * The ask waits for a run the operator watched, and is offered exactly once.
+ * The ask waits for a run the operator watched, and is offered once per answer.
  * An uninstalled iOS tab has no notification API to ask at all, so the ask is
  * what tells it to install AOS first.
+ *
+ * A stored accept is evidence only while the browser still corroborates it: a
+ * permission the browser reset leaves notifications silently broken, and the ask
+ * is the only way back. A decline is the operator's own answer and stays.
  */
 export function shouldOfferAsk(
   permission: BrowserPermission,
@@ -112,7 +116,7 @@ export function shouldOfferAsk(
     (permission === "default" ||
       (permission === "unsupported" && installFirst)) &&
     preferences.enabled &&
-    preferences.prompt === "pending" &&
+    preferences.prompt !== "declined" &&
     firstRunSeen
   )
 }

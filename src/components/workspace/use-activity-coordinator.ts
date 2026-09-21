@@ -282,7 +282,11 @@ export function useActivityCoordinator(
     const stopPushListening = push?.listen({
       onChange: () =>
         queueMicrotask(() => {
-          if (active) setPushStatus(push.status())
+          if (!active) return
+          setPushStatus(push.status())
+          // Whether this device still holds a subscription is part of what the
+          // settings panel promises, so it cannot wait for the next arrival.
+          if (browser) setBrowserState(browser.settings())
         }),
       onOpen: (target) => void openPushed(target),
     })

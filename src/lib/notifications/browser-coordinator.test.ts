@@ -59,6 +59,7 @@ function setup(
     ...context,
     selection: null as null | { agentId: string; threadId: string },
   }
+  let permissionChanged: (() => void) | undefined
   const copy = {
     completion: "A turn finished",
     failure: "A turn failed",
@@ -75,6 +76,12 @@ function setup(
       getPermission: () => permission,
       requestPermission: request,
       show,
+      onPermissionChange: (listener) => {
+        permissionChanged = listener
+        return () => {
+          permissionChanged = undefined
+        }
+      },
     },
     platform: {
       read: () => persisted,
@@ -125,6 +132,12 @@ function setup(
     permission: (value: BrowserPermission) => {
       permission = value
     },
+    /** What the browser's own notification settings do behind the page's back. */
+    changePermission: (value: BrowserPermission) => {
+      permission = value
+      permissionChanged?.()
+    },
+    watchingPermission: () => permissionChanged !== undefined,
   }
 }
 describe("live browser Activity", () => {
@@ -461,6 +474,58 @@ describe("the one-time ask", () => {
     second.receive({ snapshot, preferencesChanged: true })
     expect(second.coordinator.settings().preferences.prompt).toBe("declined")
     expect(second.coordinator.settings().ask).toBe(false)
+  })
+
+  it("returns when the browser resets a permission this device had accepted", () => {
+    const h = setup("granted")
+    // The operator accepted once, which is all the stored state remembers.
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "accepted" },
+      })
+    )
+    watchRun(h)
+    expect(h.coordinator.settings().ask).toBe(false)
+
+    h.changePermission("default")
+
+    expect(h.coordinator.settings().status).toBe("default")
+    expect(h.coordinator.settings().ask).toBe(true)
+    h.coordinator.stop()
+    expect(h.watchingPermission()).toBe(false)
+  })
+
+  it("stays declined when the browser resets the permission", () => {
+    const h = setup("granted")
+    // A decline is the operator's own answer, even with alerts switched on since.
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "declined" },
+      })
+    )
+    watchRun(h)
+
+    h.changePermission("default")
+
+    expect(h.coordinator.settings().ask).toBe(false)
+  })
+
+  it("offers nothing once the browser blocks notifications outright", () => {
+    const h = setup("granted")
+    h.seed(
+      serializeActivity({
+        version: 3,
+        preferences: { ...defaultBrowserPreferences, prompt: "accepted" },
+      })
+    )
+    watchRun(h)
+
+    h.changePermission("denied")
+
+    expect(h.coordinator.settings().status).toBe("denied")
+    expect(h.coordinator.settings().ask).toBe(false)
   })
 
   it("offers itself to a device whose notifications need an install first", () => {

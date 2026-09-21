@@ -79,6 +79,17 @@ export class BrowserActivityCoordinator {
     }
     this.recheckPermission()
     try {
+      // A permission revoked or reset from the browser's own settings has to be
+      // noticed here, not at the next focus: until it is, this device holds a
+      // subscription the proxy would keep pushing into nothing.
+      const stop = this.#options.port.onPermissionChange?.(() => {
+        if (this.#active) this.recheckPermission()
+      })
+      if (stop) this.#cleanup.push(stop)
+    } catch {
+      /* Without the capability the recheck stays focus-driven. */
+    }
+    try {
       this.#cleanup.push(
         this.#options.platform.startLeadership(() => {
           this.#scheduleDelivery()

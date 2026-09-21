@@ -254,7 +254,11 @@ describe("the one-time ask", () => {
     ["denied", {}, true, false, false],
     ["unsupported", {}, true, false, false],
     ["default", { prompt: "declined" }, true, false, false],
-    ["default", { prompt: "accepted" }, true, false, false],
+    // The browser reset a permission this device believed it had granted, so the
+    // stored accept is stale and the ask is the only way back.
+    ["default", { prompt: "accepted" }, true, false, true],
+    ["granted", { prompt: "accepted" }, true, false, false],
+    ["denied", { prompt: "accepted" }, true, false, false],
     ["default", { enabled: false }, true, false, false],
     ["default", {}, false, false, false],
     // An uninstalled iOS tab exposes no notification API to ask through.
