@@ -1554,6 +1554,45 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("reports nothing for a browser that left with a request outstanding", async () => {
+    // A server→client request the operator never answered rejects when the tab
+    // carrying it closes. That is the operator moving on, not a failure this
+    // deployment has to answer for, and reporting it as one buries the failures
+    // that are real.
+    const answer = Promise.withResolvers<RequestPermissionResponse>()
+    const test = await harness({ permission: () => answer.promise })
+    await test.create()
+    await test.agent.request(methods.agent.session.prompt, {
+      sessionId: CREATED,
+      prompt: [{ type: "text", text: "Delete it" }],
+      _meta: { [AOS_META_KEY]: {} },
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const source = test.sources[0]
+    source?.emit(runStarted("run-1", CREATED))
+    source?.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: CREATED,
+      runId: "run-1",
+      outcome: {
+        type: "interrupt",
+        interrupts: [{ id: "approval-1", reason: "permission-required" }],
+      },
+    })
+    source?.finish()
+    await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission
+    )
+
+    test.close()
+    // Long enough for the abandoned request to reject and settle its handlers.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(test.logged()).not.toContainEqual(
+      expect.objectContaining({ event: "acp.error" })
+    )
+  })
+
   it("logs the connection, the Stop it received, and the reply it settled", async () => {
     const test = await harness()
     await test.create()

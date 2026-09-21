@@ -47,5 +47,11 @@ export default defineConfig({
     // one: a passing test never waits for it.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // One worker per core is the default, and several agent worktrees sweeping
+    // at once oversubscribe the machine several times over — which starves the
+    // operator's own deployment on the same host, not just the suite. Half the
+    // cores keeps a concurrent sweep survivable; a machine running one sweep
+    // alone can raise it.
+    maxWorkers: Number(process.env.AOS_UI_TEST_WORKERS) || "50%",
   },
 })
