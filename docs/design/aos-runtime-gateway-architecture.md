@@ -335,6 +335,13 @@ The `discover` preamble reconstructs authoritative state before replay
 reconnect (`acp/session-attachment.ts:249-256`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
+**Accepted steering survives replay exactly once.** The browser projects
+`_aos/steer_accepted` as a user turn appended in arrival order. A provider that
+persists the correction the moment it accepts it makes that turn part of
+authoritative history, so a from-start resume announces each persisted
+correction exactly once: the history row wins and the journal's acknowledgement
+of it is dropped, in acceptance order.
+
 ---
 
 ## 13. Limits and backpressure {#13-limits-and-backpressure}
