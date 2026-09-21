@@ -19,7 +19,8 @@ INLINE_SECRET_ERROR = "Creator model configuration must reference credentials th
 
 class FakeProfileApi:
     def __init__(self, *, inline_secret=False, exists=False, verified=True,
-                 create_error=None, config_yaml=None):
+                 create_error=None, config_yaml=None, reserved=frozenset()):
+        self.reserved = frozenset(reserved)
         self.inline_secret = inline_secret
         self.exists = exists
         self.verified = verified
@@ -34,6 +35,10 @@ class FakeProfileApi:
                 "platform_toolsets": {"api_server": list(TOOLSETS), "cli": list(TOOLSETS)},
             } if config_yaml is None else config_yaml,
         }
+
+    def reserved_names(self):
+        self.calls.append("reserved_names")
+        return self.reserved
 
     def model_seed(self):
         self.calls.append("model_seed")
@@ -182,12 +187,13 @@ def test_existing_name_rejected_before_create():
 
 
 def test_reserved_name_rejected_before_create():
-    api, runner = FakeProfileApi(), FakeRunner()
+    api = FakeProfileApi(reserved=frozenset({"tmp"}))
+    runner = FakeRunner()
 
     with pytest.raises(ValidationError, match="Profile name is reserved"):
-        _create(_creator(api, runner), name="root")
+        _create(_creator(api, runner), name="tmp")
 
-    assert api.calls == [] and runner.calls == []
+    assert api.calls == ["reserved_names"] and runner.calls == []
 
 
 def test_create_race_reports_constant_error():

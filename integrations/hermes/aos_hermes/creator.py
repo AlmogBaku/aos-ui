@@ -16,9 +16,6 @@ CAPABILITY_TOOLSETS = {
     "session-handoff": "aos-session-handoff",
 }
 
-# Names Hermes itself or an operator shell may already mean.
-RESERVED_NAMES = frozenset({"hermes", "default", "test", "tmp", "root", "sudo"})
-
 HIDDEN_UI_META = {"aos": {"role": "agent"}, "hermes-bots": {"hidden": True}}
 INLINE_SECRET_ERROR = (
     "Creator model configuration must reference credentials through environment variables"
@@ -39,6 +36,7 @@ class CreationError(RuntimeError):
 class ProfileApi(Protocol):
     """The native profile surface the creator writes through."""
 
+    def reserved_names(self) -> frozenset[str]: ...
     def model_seed(self) -> dict[str, Any]: ...
     def has_inline_secret(self, seed: dict[str, Any]) -> bool: ...
     def profile_exists(self, name: str) -> bool: ...
@@ -52,6 +50,14 @@ class ProfileApi(Protocol):
 
 class NativeProfileApi:
     """Binds lazily to the host Hermes process; importable without it."""
+
+    def reserved_names(self) -> frozenset[str]:
+        """Whatever this Hermes reserves; duplicating the list would drift."""
+        try:
+            from hermes_cli.profiles import _RESERVED_NAMES
+        except ImportError:
+            return frozenset()
+        return frozenset(_RESERVED_NAMES)
 
     def model_seed(self) -> dict[str, Any]:
         from hermes_cli.config import read_user_config_raw
@@ -133,8 +139,6 @@ def _validated(profile_name: str, description: str, instructions: str,
     capabilities = list(dict.fromkeys(allowed_capabilities))
     if not capabilities or any(value not in CAPABILITY_TOOLSETS for value in capabilities):
         raise ValidationError("Allowed capabilities must be an explicit supported non-empty list")
-    if profile_name in RESERVED_NAMES:
-        raise ValidationError("Profile name is reserved")
     return profile_name, description, instructions, capabilities
 
 
@@ -178,6 +182,8 @@ class Creator:
             profile_name, description, instructions, allowed_capabilities,
         )
         api = self.profile_api
+        if canon in self._native(api.reserved_names):
+            raise ValidationError("Profile name is reserved")
         seed = self._native(api.model_seed)
         if self._native(api.has_inline_secret, seed):
             raise ValidationError(INLINE_SECRET_ERROR)
