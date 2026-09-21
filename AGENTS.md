@@ -140,7 +140,10 @@ external reverse proxy is optional.
   translation, read state, activity feed, and session attachment.
   `packages/proxy/auth` and `packages/proxy/guest` own authorization lanes;
   `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
-  server entry point.
+  server entry point. `packages/proxy/voice` owns proxy speech providers (the
+  OpenAI-compatible client and the `ServerRuntime` voice wrapper);
+  `packages/proxy/guest` owns the guest audio budget;
+  `packages/protocol/audio.ts` holds the shared audio limits.
 - `src/components/ui/menu-popup.tsx` is the one popup shell for every menu.
   Session rows use it through `src/components/workspace/session-row-menu.tsx`
   and messages through

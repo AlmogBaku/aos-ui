@@ -36,14 +36,17 @@ const HttpUrlSchema = z
     }
   })
 
+export function isHttpsOrLoopback(url: URL): boolean {
+  return (
+    url.protocol === "https:" ||
+    (url.protocol === "http:" &&
+      ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname))
+  )
+}
+
 const PublicOriginSchema = HttpUrlSchema.refine((value) => {
   const url = new URL(value)
-  return (
-    value === url.origin &&
-    (url.protocol === "https:" ||
-      (url.protocol === "http:" &&
-        ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)))
-  )
+  return value === url.origin && isHttpsOrLoopback(url)
 })
 
 const WebSocketUrlSchema = z
@@ -168,6 +171,71 @@ const RuntimeSchema = z.discriminatedUnion("kind", [
   }),
 ])
 
+/** Fields every speech direction shares, whichever provider kind serves it. */
+const VoiceProviderFields = {
+  provider: z.literal("openai-compatible"),
+  baseUrl: HttpUrlSchema,
+  apiKeyFile: AbsoluteSecretFileSchema.optional(),
+  model: z.string().min(1).max(256),
+  mode: z.enum(["fallback", "override"]).default("fallback"),
+  timeoutMs: z.number().int().min(1_000).max(300_000).default(60_000),
+}
+
+const VoiceTranscriptionVariantSchema = z.strictObject({
+  ...VoiceProviderFields,
+  language: z
+    .string()
+    .regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/u)
+    .optional(),
+})
+
+const VoiceTranscriptionSchema = z.discriminatedUnion("provider", [
+  VoiceTranscriptionVariantSchema,
+])
+
+const VoiceSpeechVariantSchema = z.strictObject({
+  ...VoiceProviderFields,
+  voice: z.string().min(1).max(128),
+  format: z.enum(["mp3", "opus", "wav", "flac"]).default("mp3"),
+})
+
+const VoiceSpeechSchema = z.discriminatedUnion("provider", [
+  VoiceSpeechVariantSchema,
+])
+
+const VoiceSchema = z
+  .strictObject({
+    transcription: VoiceTranscriptionSchema.optional(),
+    speech: VoiceSpeechSchema.optional(),
+  })
+  .superRefine((voice, context) => {
+    if (voice.transcription === undefined && voice.speech === undefined)
+      context.addIssue({
+        code: "custom",
+        message: "At least one of transcription or speech must be present",
+      })
+    if (
+      voice.transcription?.apiKeyFile !== undefined &&
+      !isHttpsOrLoopback(new URL(voice.transcription.baseUrl))
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["transcription", "baseUrl"],
+        message:
+          "baseUrl must be HTTPS or loopback when apiKeyFile is configured",
+      })
+    if (
+      voice.speech?.apiKeyFile !== undefined &&
+      !isHttpsOrLoopback(new URL(voice.speech.baseUrl))
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["speech", "baseUrl"],
+        message:
+          "baseUrl must be HTTPS or loopback when apiKeyFile is configured",
+      })
+  })
+
 const ProxyConfigSchema = z
   .strictObject({
     version: z.literal(1),
@@ -188,6 +256,7 @@ const ProxyConfigSchema = z
       })
       .optional(),
     push: PushSchema.optional(),
+    voice: VoiceSchema.optional(),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
@@ -213,6 +282,9 @@ const ProxyConfigSchema = z
 export type ProxyConfig = z.infer<typeof ProxyConfigSchema>
 export type RuntimeConfig = ProxyConfig["runtime"]
 export type RuntimeLimits = ProxyConfig["limits"]
+export type VoiceConfig = NonNullable<ProxyConfig["voice"]>
+export type VoiceTranscriptionConfig = NonNullable<VoiceConfig["transcription"]>
+export type VoiceSpeechConfig = NonNullable<VoiceConfig["speech"]>
 
 export function parseGuestComposerSlashCommandsEnabled(
   value: string | undefined

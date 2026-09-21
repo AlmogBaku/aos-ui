@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -372,6 +372,111 @@ describe("configured proxy composition", () => {
         logger: { info: vi.fn(), error: vi.fn() },
       })
     ).rejects.toThrow("Push state directory")
+  })
+
+  describe("voice providers", () => {
+    /** A runtime whose native speech fails, as OpenCode's and OpenClaw's do. */
+    function speechlessRuntime() {
+      const speak = vi.fn(async () => {
+        throw new Error("native speech unavailable")
+      })
+      const runtimeInstance = {
+        id: "test-runtime",
+        runtime: {
+          runtimeInfo: async () => ({ status: "ready" }),
+          publicError: () => undefined,
+          speak,
+        },
+        sessions: {},
+        close: vi.fn(async () => undefined),
+      } as unknown as RuntimeInstance
+      return { speak, runtimeInstance }
+    }
+
+    async function voiceConfiguration(apiKeyFile: string) {
+      return {
+        ...(await configuration()),
+        voice: {
+          speech: {
+            provider: "openai-compatible",
+            baseUrl: "https://tts.example.test/v1",
+            apiKeyFile,
+            model: "tts-1",
+            voice: "alloy",
+          },
+        },
+      }
+    }
+
+    it("reads the provider key once and serves speech the runtime cannot", async () => {
+      const { speak, runtimeInstance } = speechlessRuntime()
+      const audio = Uint8Array.from([1, 2, 3])
+      const fetchImpl = vi.fn(
+        async () => new Response(audio, { status: 200 })
+      ) as unknown as typeof fetch
+      const logger = { info: vi.fn(), error: vi.fn() }
+
+      const configured = await createConfiguredProxy(
+        await voiceConfiguration(await secretFile("voice-key", "tts-secret")),
+        {
+          runtimeFactory: async () => runtimeInstance,
+          logger,
+          fetch: fetchImpl,
+        }
+      )
+      const response = await configured.app.request(
+        "https://aos.example.test/api/aos/v1/agents/researcher/audio/speak",
+        {
+          method: "POST",
+          headers: {
+            origin: "https://aos.example.test",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ text: "Hello" }),
+        }
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toBe("audio/mpeg")
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(audio)
+      // Fallback tried the runtime first, then said so without the text.
+      expect(speak).toHaveBeenCalledOnce()
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "voice.fallback",
+          direction: "speech",
+        })
+      )
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain("Hello")
+      const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock
+        .calls[0] as [string, RequestInit]
+      expect(url).toBe("https://tts.example.test/v1/audio/speech")
+      expect(new Headers(init.headers).get("authorization")).toBe(
+        "Bearer tts-secret"
+      )
+      // Both lanes and readiness still see one runtime instance.
+      expect(configured.guest).toBeUndefined()
+      expect(
+        (
+          await configured.app.request(
+            "https://aos.example.test/api/aos/v1/readyz"
+          )
+        ).status
+      ).toBe(200)
+    })
+
+    it("refuses to start on a provider key file another user can read", async () => {
+      const { runtimeInstance } = speechlessRuntime()
+      const keyFile = await secretFile("voice-key", "tts-secret")
+      await chmod(keyFile, 0o644)
+
+      await expect(
+        createConfiguredProxy(await voiceConfiguration(keyFile), {
+          runtimeFactory: async () => runtimeInstance,
+          logger: { info: vi.fn(), error: vi.fn() },
+        })
+      ).rejects.toThrow("Secret file permissions are too broad")
+    })
   })
 
   it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {

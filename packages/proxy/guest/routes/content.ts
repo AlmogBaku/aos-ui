@@ -137,13 +137,25 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         !routes.authorize(identity, agentId, identity.ref, "audio:transcribe")
       )
         return emptyError(401)
-      const body = SessionTranscriptionRequestSchema.safeParse(
-        await boundedJson(context.req.raw, 7_500_000)
-      )
-      if (!body.success) return emptyError(400)
-      const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
-      if (!bytes) return emptyError(400)
+      const release = routes.audioBudget.acquire(identity.ref)
+      if (!release) {
+        void context.req.raw.body?.cancel().catch(() => undefined)
+        return routes.projectedError(
+          identity,
+          agentId,
+          identity.ref,
+          "rate_limited",
+          true,
+          503
+        )
+      }
       try {
+        const body = SessionTranscriptionRequestSchema.safeParse(
+          await boundedJson(context.req.raw, 7_500_000)
+        )
+        if (!body.success) return emptyError(400)
+        const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
+        if (!bytes) return emptyError(400)
         return context.json(
           SessionTranscriptionResponseSchema.parse({
             transcript: await routes.options.runtime.runtime.transcribe(
@@ -163,6 +175,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
           true,
           503
         )
+      } finally {
+        release()
       }
     }
   )
@@ -175,11 +189,23 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
     const agentId = context.req.param("agentId")
     if (!routes.authorize(identity, agentId, identity.ref, "audio:speak"))
       return emptyError(401)
-    const body = SessionSpeechRequestSchema.safeParse(
-      await boundedJson(context.req.raw, 40_000)
-    )
-    if (!body.success) return emptyError(400)
+    const release = routes.audioBudget.acquire(identity.ref)
+    if (!release) {
+      void context.req.raw.body?.cancel().catch(() => undefined)
+      return routes.projectedError(
+        identity,
+        agentId,
+        identity.ref,
+        "rate_limited",
+        true,
+        503
+      )
+    }
     try {
+      const body = SessionSpeechRequestSchema.safeParse(
+        await boundedJson(context.req.raw, 40_000)
+      )
+      if (!body.success) return emptyError(400)
       const speech = await routes.options.runtime.runtime.speak(
         agentId,
         body.data.text,
@@ -197,6 +223,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         true,
         503
       )
+    } finally {
+      release()
     }
   })
 

@@ -207,7 +207,7 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
   idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
 - Session rename, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
-- Voice controls appear only for native STT/TTS interfaces; see [Chat voice](../chat-voice.md).
+- Voice controls appear for native STT/TTS interfaces and when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
   This is upstream Hermes behavior; Hermes accepts the token query parameter
   only on loopback or when started with `--insecure`; do not expose a

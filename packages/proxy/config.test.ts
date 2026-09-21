@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
 import {
+  isHttpsOrLoopback,
   parseGuestComposerSlashCommandsEnabled,
   parseProxyConfig,
 } from "./config"
@@ -322,5 +323,239 @@ describe("proxy configuration and secret boundary", () => {
       nested: { token: "[REDACTED]", safe: "kept" },
       url: "https://example.test/path",
     })
+  })
+
+  it("accepts http://localhost:3000 and rejects http://example.test as publicOrigin", () => {
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        publicOrigin: "http://localhost:3000",
+      }).publicOrigin
+    ).toBe("http://localhost:3000")
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        publicOrigin: "http://example.test",
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+})
+
+describe("voice configuration", () => {
+  function validTranscription() {
+    return {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://stt.example.test/v1",
+      apiKeyFile: "/run/secrets/voice-stt-key",
+      model: "whisper-1",
+    }
+  }
+
+  function validSpeech() {
+    return {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://tts.example.test/v1",
+      apiKeyFile: "/run/secrets/voice-tts-key",
+      model: "tts-1",
+      voice: "alloy",
+    }
+  }
+
+  it("accepts a full voice block and applies defaults for mode, format, and timeoutMs", () => {
+    const input = {
+      ...validConfig(),
+      voice: {
+        transcription: validTranscription(),
+        speech: { ...validSpeech(), mode: "override" as const },
+      },
+    }
+    const parsed = parseProxyConfig(input)
+    expect(parsed.voice?.transcription).toMatchObject({
+      ...validTranscription(),
+      mode: "fallback",
+      timeoutMs: 60_000,
+    })
+    expect(parsed.voice?.speech).toMatchObject({
+      ...validSpeech(),
+      mode: "override",
+      format: "mp3",
+      timeoutMs: 60_000,
+    })
+  })
+
+  it("accepts a voice block with only transcription", () => {
+    const parsed = parseProxyConfig({
+      ...validConfig(),
+      voice: { transcription: validTranscription() },
+    })
+    expect(parsed.voice?.transcription?.model).toBe("whisper-1")
+    expect(parsed.voice?.speech).toBeUndefined()
+  })
+
+  it("accepts a voice block with only speech", () => {
+    const parsed = parseProxyConfig({
+      ...validConfig(),
+      voice: { speech: validSpeech() },
+    })
+    expect(parsed.voice?.speech?.model).toBe("tts-1")
+    expect(parsed.voice?.transcription).toBeUndefined()
+  })
+
+  it("rejects an empty voice block", () => {
+    expect(() => parseProxyConfig({ ...validConfig(), voice: {} })).toThrow(
+      "Invalid proxy configuration"
+    )
+  })
+
+  it("rejects an unknown provider", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: { ...validTranscription(), provider: "azure" },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("rejects unknown keys inside a voice child", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: { ...validTranscription(), extra: true },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("rejects a relative apiKeyFile", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: {
+            ...validTranscription(),
+            apiKeyFile: "relative/path",
+          },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("rejects speech without the speaker voice field", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          speech: {
+            provider: "openai-compatible",
+            baseUrl: "https://tts.example.test/v1",
+            model: "tts-1",
+          },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("validates language: rejects 'english', accepts 'he' and 'en-US'", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: { ...validTranscription(), language: "english" },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+    for (const language of ["he", "en-US"]) {
+      expect(
+        parseProxyConfig({
+          ...validConfig(),
+          voice: {
+            transcription: { ...validTranscription(), language },
+          },
+        }).voice?.transcription?.language
+      ).toBe(language)
+    }
+  })
+
+  it("rejects timeoutMs below minimum", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: { ...validTranscription(), timeoutMs: 500 },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+  })
+
+  it("enforces HTTPS or loopback when apiKeyFile is set", () => {
+    // http non-loopback with key → rejected
+    expect(() =>
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: {
+            ...validTranscription(),
+            baseUrl: "http://stt.example.test/v1",
+          },
+        },
+      })
+    ).toThrow("Invalid proxy configuration")
+
+    // http loopback with key → accepted
+    for (const baseUrl of [
+      "http://127.0.0.1:8000/v1",
+      "http://localhost:8000/v1",
+    ]) {
+      expect(
+        parseProxyConfig({
+          ...validConfig(),
+          voice: { transcription: { ...validTranscription(), baseUrl } },
+        }).voice?.transcription?.model
+      ).toBe("whisper-1")
+    }
+
+    // http non-loopback without key → accepted
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: {
+            provider: "openai-compatible" as const,
+            baseUrl: "http://stt.example.test/v1",
+            model: "whisper-1",
+          },
+        },
+      }).voice?.transcription?.model
+    ).toBe("whisper-1")
+
+    // https non-loopback with key → accepted
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: {
+            ...validTranscription(),
+            baseUrl: "https://stt.example.test/v1",
+          },
+        },
+      }).voice?.transcription?.model
+    ).toBe("whisper-1")
+  })
+})
+
+describe("isHttpsOrLoopback", () => {
+  it("accepts HTTPS and loopback HTTP URLs", () => {
+    expect(isHttpsOrLoopback(new URL("https://example.test"))).toBe(true)
+    expect(isHttpsOrLoopback(new URL("http://127.0.0.1:3000"))).toBe(true)
+    expect(isHttpsOrLoopback(new URL("http://localhost:3000"))).toBe(true)
+    expect(isHttpsOrLoopback(new URL("http://[::1]:3000"))).toBe(true)
+  })
+
+  it("rejects non-loopback HTTP URLs", () => {
+    expect(isHttpsOrLoopback(new URL("http://example.test"))).toBe(false)
+    expect(isHttpsOrLoopback(new URL("http://192.168.1.4:3000"))).toBe(false)
   })
 })

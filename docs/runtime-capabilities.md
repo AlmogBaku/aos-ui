@@ -8,30 +8,30 @@ that product order and places the newer OpenCode path last. Optional native
 integrations add presentation tools where stated; they do not change the trust
 boundary.
 
-| Capability                      | Fixture      | Hermes                                   | OpenClaw                              | OpenCode                                      |
-| ------------------------------- | ------------ | ---------------------------------------- | ------------------------------------- | --------------------------------------------- |
-| Provider-backed durable history | No           | Yes                                      | Yes                                   | Yes                                           |
-| Multiple Agents and Sessions    | Demo data    | Yes                                      | Yes                                   | Yes                                           |
-| Create Sessions                 | Temporary    | Yes                                      | Yes                                   | Yes                                           |
-| Rename/archive/delete Sessions  | Temporary    | Yes                                      | Unavailable                           | Unavailable                                   |
-| Agent catalog                   | Demo catalog | Native profiles                          | Native, read-only                     | Native, read-only                             |
-| Change Agent visibility         | Temporary    | Native                                   | Unavailable                           | Unavailable                                   |
-| Agent creation                  | No           | Optional integration; safe write blocked | Unavailable                           | Denied by the launcher (`scripts/opencode-config.ts`) |
-| Session Todos                   | Demo data    | Projected native tool results            | Unavailable                           | Unavailable                                   |
-| Workspace-wide Activity         | Demo events  | Workspace-wide from proxy feed           | Unavailable                           | Unavailable                                   |
-| Session read state              | Demo data    | Native (`unread` catalog row; PATCH `{unread:false}`) | Unavailable              | Unavailable                                   |
-| Models                          | Demo choices | Native                                   | Native catalog; selection unavailable | Native catalog and selection                  |
-| Reasoning-effort selection      | No           | Native                                   | Unavailable                           | Unavailable                                   |
-| Context usage                   | Demo data    | Native                                   | Native usage/estimate                 | Unavailable                                   |
-| Slash-command suggestions       | No           | Native catalog when the profile has one  | Unavailable                           | Unavailable                                   |
-| Questions and approvals         | Demo flows   | Native                                   | Native                                | Native                                        |
-| Attachments                     | Demo flows   | Native                                   | Supported image/file inputs           | Native                                        |
-| Stop and reconnect              | Demo flows   | Native                                   | Native                                | Native                                        |
-| Edit/regenerate                 | Demo flows   | Native truncate/resubmit                 | Unavailable                           | Unavailable                                   |
-| Active-turn steering            | No           | Native visible redirect                  | Unavailable                           | Unavailable                                   |
-| Published Artifacts             | Demo data    | Optional AOS integration                 | Unavailable                           | Unavailable                                   |
-| Rich presentation tools         | Demo data    | Optional AOS integration                 | Optional AOS integration              | Optional AOS integration                      |
-| Voice                           | No           | Native STT/TTS                           | Unavailable                           | Unavailable                                   |
+| Capability                      | Fixture      | Hermes                                                | OpenClaw                              | OpenCode                                              |
+| ------------------------------- | ------------ | ----------------------------------------------------- | ------------------------------------- | ----------------------------------------------------- |
+| Provider-backed durable history | No           | Yes                                                   | Yes                                   | Yes                                                   |
+| Multiple Agents and Sessions    | Demo data    | Yes                                                   | Yes                                   | Yes                                                   |
+| Create Sessions                 | Temporary    | Yes                                                   | Yes                                   | Yes                                                   |
+| Rename/archive/delete Sessions  | Temporary    | Yes                                                   | Unavailable                           | Unavailable                                           |
+| Agent catalog                   | Demo catalog | Native profiles                                       | Native, read-only                     | Native, read-only                                     |
+| Change Agent visibility         | Temporary    | Native                                                | Unavailable                           | Unavailable                                           |
+| Agent creation                  | No           | Optional integration; safe write blocked              | Unavailable                           | Denied by the launcher (`scripts/opencode-config.ts`) |
+| Session Todos                   | Demo data    | Projected native tool results                         | Unavailable                           | Unavailable                                           |
+| Workspace-wide Activity         | Demo events  | Workspace-wide from proxy feed                        | Unavailable                           | Unavailable                                           |
+| Session read state              | Demo data    | Native (`unread` catalog row; PATCH `{unread:false}`) | Unavailable                           | Unavailable                                           |
+| Models                          | Demo choices | Native                                                | Native catalog; selection unavailable | Native catalog and selection                          |
+| Reasoning-effort selection      | No           | Native                                                | Unavailable                           | Unavailable                                           |
+| Context usage                   | Demo data    | Native                                                | Native usage/estimate                 | Unavailable                                           |
+| Slash-command suggestions       | No           | Native catalog when the profile has one               | Unavailable                           | Unavailable                                           |
+| Questions and approvals         | Demo flows   | Native                                                | Native                                | Native                                                |
+| Attachments                     | Demo flows   | Native                                                | Supported image/file inputs           | Native                                                |
+| Stop and reconnect              | Demo flows   | Native                                                | Native                                | Native                                                |
+| Edit/regenerate                 | Demo flows   | Native truncate/resubmit                              | Unavailable                           | Unavailable                                           |
+| Active-turn steering            | No           | Native visible redirect                               | Unavailable                           | Unavailable                                           |
+| Published Artifacts             | Demo data    | Optional AOS integration                              | Unavailable                           | Unavailable                                           |
+| Rich presentation tools         | Demo data    | Optional AOS integration                              | Optional AOS integration              | Optional AOS integration                              |
+| Voice                           | No           | Native STT/TTS; proxy provider optional               | Proxy provider optional               | Proxy provider optional                               |
 
 ## Fixture
 
@@ -43,11 +43,11 @@ Hermes owns profiles, Sessions, authentication, speech providers, tools, and per
 
 ## OpenClaw
 
-The OpenClaw adapter uses the authenticated, negotiated Gateway connection for provider-owned catalog, Session/history, run, interaction, attachment, model, and context operations. It does not expose the Gateway to browsers or infer native mutations that the pinned protocol does not prove. Session creation is available; rename, archive, delete, Todos, Activity, edit/regenerate, steering, artifacts, read state, and voice remain unavailable. See [Run OpenClaw](runtimes/openclaw.md).
+The OpenClaw adapter uses the authenticated, negotiated Gateway connection for provider-owned catalog, Session/history, run, interaction, attachment, model, and context operations. It does not expose the Gateway to browsers or infer native mutations that the pinned protocol does not prove. Session creation is available; rename, archive, delete, Todos, Activity, edit/regenerate, steering, artifacts, and read state remain unavailable. Voice becomes available through the proxy `voice` configuration. See [Run OpenClaw](runtimes/openclaw.md).
 
 ## OpenCode
 
-OpenCode owns Agent definitions, Sessions, execution, provider credentials, worktree, and persistence. The proxy attaches to its authenticated server using a fixed directory and server-side Basic authentication. AOS reads the catalog and session model choices, creates Sessions, and projects durable runs, questions, permissions, attachments, Stop, and reconnect. It intentionally does not invent catalog mutation, title/delete, Todos, Activity, context accounting, artifacts, voice, edit/regenerate, or steering semantics. See [Run OpenCode](runtimes/opencode.md).
+OpenCode owns Agent definitions, Sessions, execution, provider credentials, worktree, and persistence. The proxy attaches to its authenticated server using a fixed directory and server-side Basic authentication. AOS reads the catalog and session model choices, creates Sessions, and projects durable runs, questions, permissions, attachments, Stop, and reconnect. It intentionally does not invent catalog mutation, title/delete, Todos, Activity, context accounting, artifacts, edit/regenerate, or steering semantics. Voice becomes available through the proxy `voice` configuration. See [Run OpenCode](runtimes/opencode.md).
 
 ## Optional Monty integration
 

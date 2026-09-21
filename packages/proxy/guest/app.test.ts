@@ -115,6 +115,10 @@ function harness(options: { existing?: boolean } = {}) {
     filename: "briefing.mp3",
   }))
   const publicError = vi.fn<ServerRuntime["publicError"]>(() => undefined)
+  const speak = vi.fn(async () => ({
+    bytes: Uint8Array.of(1, 2, 3),
+    mimeType: "audio/mpeg",
+  }))
   const runtime = {
     runs: engine,
     resolveInvitedSession,
@@ -200,10 +204,7 @@ function harness(options: { existing?: boolean } = {}) {
       cleanup: vi.fn(async () => undefined),
     })),
     transcribe: vi.fn(async () => "hello"),
-    speak: vi.fn(async () => ({
-      bytes: Uint8Array.of(1, 2, 3),
-      mimeType: "audio/mpeg",
-    })),
+    speak,
     artifact,
     publicError,
   } as unknown as ServerRuntime
@@ -234,8 +235,36 @@ function harness(options: { existing?: boolean } = {}) {
     resolveInvitedSession,
     artifact,
     publicError,
+    speak,
     invitationService,
   }
+}
+
+type Harness = ReturnType<typeof harness>
+
+function speakRequest(subject: Harness, invite: string) {
+  return subject.app.request(
+    `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/speak`,
+    {
+      method: "POST",
+      headers: { ...headers(invite, true), "content-type": "application/json" },
+      body: JSON.stringify({ text: "Read this back." }),
+    }
+  )
+}
+
+function transcribeRequest(subject: Harness, invite: string) {
+  return subject.app.request(
+    `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/transcribe`,
+    {
+      method: "POST",
+      headers: { ...headers(invite, true), "content-type": "application/json" },
+      body: JSON.stringify({
+        mimeType: "audio/webm",
+        dataUrl: "data:audio/webm;base64,AQID",
+      }),
+    }
+  )
 }
 
 async function token(service: GuestInvitationService) {
@@ -550,5 +579,121 @@ describe("guest app", () => {
       STORED,
       "artifact-1"
     )
+  })
+
+  it("holds one invitation to a shared audio allowance in both directions", async () => {
+    const subject = harness()
+    const invite = await token(subject.invitationService)
+    const gate =
+      Promise.withResolvers<Awaited<ReturnType<typeof subject.speak>>>()
+    subject.speak
+      .mockImplementationOnce(() => gate.promise)
+      .mockImplementationOnce(() => gate.promise)
+    const held = [speakRequest(subject, invite), speakRequest(subject, invite)]
+    await vi.waitFor(() => expect(subject.speak).toHaveBeenCalledTimes(2))
+
+    const refused = await speakRequest(subject, invite)
+
+    expect(refused.status).toBe(503)
+    await expect(refused.json()).resolves.toEqual({
+      error: {
+        code: "run_capacity_exceeded",
+        description: "Too many requests. Please try again shortly.",
+      },
+    })
+    // Transcription spends the same allowance, so neither direction is a
+    // loophole around the other.
+    const crossed = await transcribeRequest(subject, invite)
+    expect(crossed.status).toBe(503)
+    expect(subject.runtime.transcribe).not.toHaveBeenCalled()
+    expect(subject.speak).toHaveBeenCalledTimes(2)
+
+    gate.resolve({ bytes: Uint8Array.of(1, 2, 3), mimeType: "audio/mpeg" })
+    for (const response of held) expect((await response).status).toBe(200)
+
+    expect((await speakRequest(subject, invite)).status).toBe(200)
+  })
+
+  it("stops spending for an invitation that used its whole window", async () => {
+    const subject = harness()
+    const invite = await token(subject.invitationService)
+
+    for (let index = 0; index < 60; index += 1)
+      expect(
+        (await speakRequest(subject, invite)).status,
+        `speak ${index + 1}`
+      ).toBe(200)
+
+    const refused = await speakRequest(subject, invite)
+
+    expect(refused.status).toBe(503)
+    await expect(refused.json()).resolves.toMatchObject({
+      error: { code: "run_capacity_exceeded" },
+    })
+    expect(subject.speak).toHaveBeenCalledTimes(60)
+  })
+
+  it("budgets each invitation separately", async () => {
+    const subject = harness()
+    const invite = await token(subject.invitationService)
+    const other = (
+      await subject.invitationService.issue({
+        agentId: AGENT,
+        ref: "other_guest_ref",
+      })
+    ).token
+    const gate =
+      Promise.withResolvers<Awaited<ReturnType<typeof subject.speak>>>()
+    subject.speak
+      .mockImplementationOnce(() => gate.promise)
+      .mockImplementationOnce(() => gate.promise)
+    const held = [speakRequest(subject, invite), speakRequest(subject, invite)]
+    await vi.waitFor(() => expect(subject.speak).toHaveBeenCalledTimes(2))
+
+    expect((await speakRequest(subject, other)).status).toBe(200)
+    expect((await speakRequest(subject, invite)).status).toBe(503)
+
+    gate.resolve({ bytes: Uint8Array.of(1, 2, 3), mimeType: "audio/mpeg" })
+    for (const response of held) expect((await response).status).toBe(200)
+  })
+
+  it("frees the slot a rejected audio body never used", async () => {
+    const subject = harness()
+    const invite = await token(subject.invitationService)
+    const gate =
+      Promise.withResolvers<Awaited<ReturnType<typeof subject.speak>>>()
+    subject.speak.mockImplementationOnce(() => gate.promise)
+    const held = speakRequest(subject, invite)
+    await vi.waitFor(() => expect(subject.speak).toHaveBeenCalledTimes(1))
+
+    const rejected = await subject.app.request(
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/speak`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ text: "" }),
+      }
+    )
+
+    expect(rejected.status).toBe(400)
+    // The rejected request left no slot behind: one more may run beside the
+    // held one.
+    expect((await speakRequest(subject, invite)).status).toBe(200)
+
+    gate.resolve({ bytes: Uint8Array.of(1, 2, 3), mimeType: "audio/mpeg" })
+    expect((await held).status).toBe(200)
+  })
+
+  it("spends nothing for an audio request outside its invitation's scope", async () => {
+    const subject = harness()
+    const invite = await scopedToken({ agent: "other-agent" })
+
+    const response = await speakRequest(subject, invite)
+
+    expect(response.status).toBe(401)
+    expect(subject.speak).not.toHaveBeenCalled()
   })
 })

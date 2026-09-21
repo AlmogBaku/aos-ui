@@ -35,7 +35,7 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
 - Activity history and opt-in browser notifications
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
-- Optional Hermes voice controls and restricted guest invitations
+- Optional voice controls (microphone transcription and read-aloud) and restricted guest invitations
 
 The browser has one real runtime: the normalized AOS proxy. The browser speaks
 ACP v2 over a single WebSocket per tab to the proxy, and uses REST only for

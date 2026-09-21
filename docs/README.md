@@ -16,7 +16,7 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 
 ## Operate
 
-- [Chat voice](chat-voice.md) — configure transcription, voice turns, and read-aloud with Hermes.
+- [Use voice](chat-voice.md) — configure transcription, voice turns, and read-aloud.
 - [Invited chat](invite-chat.md) — issue scoped JWT links through the proxy's separate guest listener.
 - [Troubleshooting](troubleshooting.md) — diagnose configuration, connectivity, authentication, browser, and container problems.
 

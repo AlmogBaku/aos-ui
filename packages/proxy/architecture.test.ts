@@ -27,7 +27,7 @@ describe("runtime adapter boundary", () => {
     const repositoryRoot = join(proxyRoot, "../..")
     const commonProxyFiles = (
       await Promise.all(
-        ["acp", "auth", "core", "guest", "routes"].map((directory) =>
+        ["acp", "auth", "core", "guest", "routes", "voice"].map((directory) =>
           productionFiles(join(proxyRoot, directory))
         )
       )
