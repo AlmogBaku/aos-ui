@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -85,15 +91,19 @@ describe("ConversationSearch", () => {
       name: "Search in conversation",
     })
     await user.type(input, "search")
-    expect(await screen.findByText("1 of 3")).toBeVisible()
+    // "1 of 3" also describes a prefix of this query, so the count cannot say
+    // whether the whole query landed. The highlight itself is what can.
+    await waitFor(() =>
+      expect(
+        highlightRegistry
+          .get("aos-conversation-search-active")
+          ?.ranges.map((range) => range.toString())
+      ).toEqual(["search"])
+    )
+    expect(screen.getByText("1 of 3")).toBeVisible()
     expect(
       highlightRegistry.get("aos-conversation-search-match")?.ranges
     ).toHaveLength(3)
-    expect(
-      highlightRegistry
-        .get("aos-conversation-search-active")
-        ?.ranges.map((range) => range.toString())
-    ).toEqual(["search"])
 
     await user.keyboard("{Enter}")
     expect(screen.getByText("2 of 3")).toBeVisible()
