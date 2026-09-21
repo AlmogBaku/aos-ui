@@ -20,13 +20,16 @@ import {
 } from "react"
 
 import { Button } from "@/components/ui/button"
-import type { Locale } from "@/lib/i18n/config"
+import {
+  MenuPopup,
+  type MenuPopupEntries,
+  type MenuPopupEntry,
+} from "@/components/ui/menu-popup"
+import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
-import { cn } from "@/lib/utils"
 import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
 import type { WorkspaceSession } from "./workspace-shell"
-import styles from "./workspace-shell.module.css"
 
 export type SessionRowMenuCopy = {
   sessionActions: string
@@ -182,79 +185,33 @@ function sessionMenuEntries({
   }
 }
 
-function SessionMenuItem({
-  entry,
-  copy,
-  destructive = false,
-}: {
-  entry: MenuEntry
-  copy: SessionRowMenuCopy
-  destructive?: boolean
-}) {
-  return (
-    <Menu.Item
-      className={cn(
-        styles.sessionMenuItem,
-        destructive && styles.sessionMenuItemDestructive
-      )}
-      disabled={!entry.available}
-      aria-label={
-        entry.available ? undefined : `${entry.label}, ${copy.unavailable}`
-      }
-      title={entry.available ? undefined : copy.unavailable}
-      onClick={entry.run}
-    >
-      {entry.icon}
-      {entry.label}
-    </Menu.Item>
-  )
-}
-
 /**
- * One popup shell for the row menu, shared by the pointer trigger and the
- * visible overflow button so both surfaces offer the same items in the same
- * order.
+ * Carries the Session rules onto the shared popup: why an item is disabled,
+ * and which one is destructive.
  */
-function SessionMenuPopup({
-  copy,
-  locale,
-  entries,
-  finalFocus,
-}: {
+function menuPopupEntries(
+  entries: MenuEntries,
   copy: SessionRowMenuCopy
-  locale: Locale
-  entries: MenuEntries
-  finalFocus?: ComponentProps<typeof Menu.Popup>["finalFocus"]
-}) {
-  return (
-    <Menu.Portal>
-      <Menu.Positioner
-        sideOffset={6}
-        align="end"
-        className={styles.sessionMenuPositioner}
-      >
-        <Menu.Popup
-          className={styles.sessionMenu}
-          dir={locale === "he" ? "rtl" : "ltr"}
-          finalFocus={finalFocus}
-        >
-          {entries.items.map((entry) => (
-            <SessionMenuItem key={entry.id} entry={entry} copy={copy} />
-          ))}
-          {entries.items.length > 0 && entries.destructive ? (
-            <Menu.Separator className={styles.sessionMenuSeparator} />
-          ) : null}
-          {entries.destructive ? (
-            <SessionMenuItem
-              entry={entries.destructive}
-              copy={copy}
-              destructive
-            />
-          ) : null}
-        </Menu.Popup>
-      </Menu.Positioner>
-    </Menu.Portal>
-  )
+): MenuPopupEntries {
+  const toPopupEntry = (
+    entry: MenuEntry,
+    destructive = false
+  ): MenuPopupEntry => ({
+    id: entry.id,
+    label: entry.label,
+    icon: entry.icon,
+    disabled: !entry.available,
+    disabledReason: copy.unavailable,
+    destructive,
+    onSelect: entry.run,
+  })
+
+  return {
+    items: entries.items.map((entry) => toPopupEntry(entry)),
+    destructive: entries.destructive
+      ? toPopupEntry(entries.destructive, true)
+      : null,
+  }
 }
 
 /** The row's own focusable control; the row wrapper cannot take focus. */
@@ -276,10 +233,9 @@ export function SessionRowContextMenu({
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger ref={triggerRef} render={children} />
-      <SessionMenuPopup
-        copy={menu.copy}
-        locale={menu.locale}
-        entries={entries}
+      <MenuPopup
+        entries={menuPopupEntries(entries, menu.copy)}
+        dir={getLocaleDirection(menu.locale)}
         finalFocus={() =>
           triggerRef.current?.querySelector<HTMLElement>(ROW_CONTROL) ??
           triggerRef.current
@@ -308,10 +264,9 @@ export function SessionRowMenuButton({
       >
         <Ellipsis aria-hidden="true" />
       </Menu.Trigger>
-      <SessionMenuPopup
-        copy={menu.copy}
-        locale={menu.locale}
-        entries={entries}
+      <MenuPopup
+        entries={menuPopupEntries(entries, menu.copy)}
+        dir={getLocaleDirection(menu.locale)}
       />
     </Menu.Root>
   )
