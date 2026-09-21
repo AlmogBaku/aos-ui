@@ -584,6 +584,6 @@ it("retires it on the next focus when the browser blocks notifications", async (
   // A blocked site is offered no ask; the master status line explains unblocking.
   expect(device.result.current.browserSettings.ask).toBe(false)
   const line = device.closedAppLine()
-  expect(line).toContain(en.activity.permissionDenied)
+  expect(line).toContain(en.activity.pushBlocked)
   expect(line).not.toContain(en.activity.pushOn)
 })
