@@ -75,6 +75,7 @@ export const he = {
     askDecline: "לא עכשיו",
     whenClosed: "גם כש-AOS סגור",
     pushOn: "מופעל במכשיר הזה.",
+    pushNotYet: "עדיין לא מופעל במכשיר הזה.",
     pushInsecure: "נדרשת כתובת HTTPS כדי לעבוד כש-AOS סגור.",
     pushNotConfigured: "לא הוגדר בפריסה הזו; התראות דורשות לשונית AOS פתוחה.",
     pushUnsupported: "הדפדפן הזה אינו יכול לקבל התראות כש-AOS סגור.",

@@ -319,6 +319,30 @@ export function ActivityAsk({
   )
 }
 
+/**
+ * What alerts while AOS is closed actually are for *this* device: what the
+ * deployment offers is only one of the conditions, and a line that claims more
+ * than the browser will do is worse than no line at all.
+ */
+function closedAppState(
+  copy: Dictionary["activity"],
+  settings?: BrowserSettingsView
+) {
+  if (settings?.iosInstallHint) return copy.pushIosHint
+  // A blocked site is shown no notification at all, pushed or not.
+  if (settings?.status === "denied") return copy.permissionDenied
+  switch (settings?.push ?? "not-configured") {
+    case "insecure-context":
+      return copy.pushInsecure
+    case "unsupported":
+      return copy.pushUnsupported
+    case "not-configured":
+      return copy.pushNotConfigured
+    case "available":
+      return settings?.pushActive ? copy.pushOn : copy.pushNotYet
+  }
+}
+
 export function ActivitySettings({
   dictionary,
   settings,
@@ -342,14 +366,7 @@ export function ActivitySettings({
     // A device that has not been asked yet is described by the ask itself.
     default: undefined,
   }[status]
-  const whenClosed = settings?.iosInstallHint
-    ? copy.pushIosHint
-    : {
-        available: copy.pushOn,
-        "insecure-context": copy.pushInsecure,
-        "not-configured": copy.pushNotConfigured,
-        unsupported: copy.pushUnsupported,
-      }[settings?.push ?? "not-configured"]
+  const whenClosed = closedAppState(copy, settings)
   return (
     <div className={styles.settingsBody}>
       <label className={styles.setting}>

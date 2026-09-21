@@ -64,6 +64,7 @@ export type Dictionary = {
     /** Whether alerts also arrive while no AOS tab is open. */
     whenClosed: string
     pushOn: string
+    pushNotYet: string
     pushInsecure: string
     pushNotConfigured: string
     pushUnsupported: string

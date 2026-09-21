@@ -557,30 +557,54 @@ describe("Activity presentation", () => {
     expect(onSoundChange).toHaveBeenCalledWith(false)
   })
 
-  it.each([
-    ["available", en.activity.pushOn],
-    ["insecure-context", en.activity.pushInsecure],
-    ["not-configured", en.activity.pushNotConfigured],
-    ["unsupported", en.activity.pushUnsupported],
-  ] as const)("reports closed-tab delivery as %s", (push, explanation) => {
-    render(
-      <ActivitySettings dictionary={en} settings={browserSettings({ push })} />
-    )
-    const status = screen.getByRole("status")
-    expect(status).toHaveTextContent(en.activity.whenClosed)
-    expect(status).toHaveTextContent(explanation)
-  })
+  it.each<[string, Partial<BrowserSettingsView>, string]>([
+    ["subscribed", { push: "available", pushActive: true }, en.activity.pushOn],
+    // A deployment that offers push is not the same as a device that has it.
+    [
+      "offered but not subscribed",
+      { push: "available", pushActive: false },
+      en.activity.pushNotYet,
+    ],
+    [
+      "blocked by the browser",
+      { push: "available", pushActive: true, status: "denied" },
+      en.activity.permissionDenied,
+    ],
+    ["insecure", { push: "insecure-context" }, en.activity.pushInsecure],
+    ["unconfigured", { push: "not-configured" }, en.activity.pushNotConfigured],
+    ["unsupported", { push: "unsupported" }, en.activity.pushUnsupported],
+    [
+      "waiting for an install",
+      { push: "available", pushActive: true, iosInstallHint: true },
+      en.activity.pushIosHint,
+    ],
+  ])(
+    "reports this device's closed-tab delivery as %s",
+    (_label, overrides, explanation) => {
+      render(
+        <ActivitySettings
+          dictionary={en}
+          settings={browserSettings(overrides)}
+        />
+      )
+      const status = screen.getByRole("status")
+      expect(status).toHaveTextContent(en.activity.whenClosed)
+      expect(status).toHaveTextContent(explanation)
+    }
+  )
 
-  it("points an uninstalled iPhone at the Home Screen instead", () => {
+  it("never promises closed-tab delivery a blocked browser cannot make", () => {
     render(
       <ActivitySettings
         dictionary={en}
-        settings={browserSettings({ push: "available", iosInstallHint: true })}
+        settings={browserSettings({
+          push: "available",
+          pushActive: true,
+          status: "denied",
+        })}
       />
     )
-    expect(screen.getByRole("status")).toHaveTextContent(
-      en.activity.pushIosHint
-    )
+    expect(screen.getByRole("status")).not.toHaveTextContent(en.activity.pushOn)
   })
 
   it("offers installation only where the browser volunteered a prompt", async () => {
