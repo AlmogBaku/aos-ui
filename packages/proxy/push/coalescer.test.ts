@@ -6,6 +6,7 @@ import {
   type CoalescedSession,
   type PresenceVerdict,
   type PushCoalescerOptions,
+  type SuppressionReason,
 } from "./coalescer"
 import { createTestTimers } from "./test-utils/timers"
 
@@ -20,6 +21,13 @@ type Emitted = {
   closedAt: number
 }
 
+type Suppressed = {
+  principalId: string
+  category: PushCategory
+  reason: SuppressionReason
+  sessions: number
+}
+
 function harness(
   overrides: Partial<
     Pick<PushCoalescerOptions, "filter" | "presence" | "windowMs">
@@ -27,6 +35,7 @@ function harness(
 ) {
   const clock = createTestTimers(START)
   const emitted: Emitted[] = []
+  const suppressed: Suppressed[] = []
   const coalescer = createPushCoalescer({
     now: clock.now,
     schedule: clock.schedule,
@@ -38,8 +47,11 @@ function harness(
     emit: (principalId, category, sessions, closedAt) => {
       emitted.push({ principalId, category, sessions, closedAt })
     },
+    onSuppressed: (principalId, category, reason, sessions) => {
+      suppressed.push({ principalId, category, reason, sessions })
+    },
   })
-  return { clock, coalescer, emitted }
+  return { clock, coalescer, emitted, suppressed }
 }
 
 const session = (
@@ -114,7 +126,7 @@ describe("push coalescer", () => {
   })
 
   it("drops the window while somebody is watching the workspace", () => {
-    const { clock, coalescer, emitted } = harness({
+    const { clock, coalescer, emitted, suppressed } = harness({
       presence: () => ({ state: "present" }),
     })
 
@@ -123,6 +135,14 @@ describe("push coalescer", () => {
 
     expect(emitted).toEqual([])
     expect(clock.pending()).toBe(0)
+    expect(suppressed).toEqual([
+      {
+        principalId: OPERATOR,
+        category: "input",
+        reason: "present",
+        sessions: 1,
+      },
+    ])
   })
 
   it("holds a window until a departing operator's grace has run out", () => {
@@ -130,12 +150,22 @@ describe("push coalescer", () => {
       state: "grace",
       untilMs: START + GRACE_MS,
     }
-    const { clock, coalescer, emitted } = harness({ presence: () => verdict })
+    const { clock, coalescer, emitted, suppressed } = harness({
+      presence: () => verdict,
+    })
 
     coalescer.add(OPERATOR, "input", session("session-1"))
     clock.advance(COALESCE_WINDOW_MS.input)
     expect(emitted).toEqual([])
     expect(clock.pending()).toBe(1)
+    expect(suppressed).toEqual([
+      {
+        principalId: OPERATOR,
+        category: "input",
+        reason: "grace",
+        sessions: 1,
+      },
+    ])
 
     // A Session that arrives while the window waits still joins the same push.
     coalescer.add(OPERATOR, "input", session("session-2"))

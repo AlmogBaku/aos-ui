@@ -12,6 +12,12 @@ export type CoalescedSession = {
   occurredAtMs: number
 }
 
+/**
+ * Why a window closed without sending anything. The injected gate decides the
+ * first two and the presence verdict the last two.
+ */
+export type SuppressionReason = "read" | "exposed" | "present" | "grace"
+
 /** What the workspace looked like when a window tried to close. */
 export type PresenceVerdict =
   | { state: "present" }
@@ -37,6 +43,13 @@ export type PushCoalescerOptions = {
     category: PushCategory,
     sessions: CoalescedSession[],
     closedAt: number
+  ): void
+  /** A window that had candidates and sent nothing, for the deployment's log. */
+  onSuppressed?(
+    principalId: string,
+    category: PushCategory,
+    reason: Extract<SuppressionReason, "present" | "grace">,
+    sessions: number
   ): void
 }
 
@@ -77,6 +90,7 @@ export function createPushCoalescer({
   filter,
   presence,
   emit,
+  onSuppressed,
 }: PushCoalescerOptions): PushCoalescer {
   const windows = new Map<string, Window>()
   let closed = false
@@ -88,6 +102,7 @@ export function createPushCoalescer({
     const candidates = [...window.sessions.values()]
     const sessions = filter(principalId, category, candidates)
     if (sessions.length === 0) {
+      // The gate reports why it emptied the window; it knows which Sessions.
       windows.delete(key)
       return
     }
@@ -96,6 +111,7 @@ export function createPushCoalescer({
       // Somebody is reading this workspace: the events they were told about on
       // screen owe them nothing else.
       windows.delete(key)
+      onSuppressed?.(principalId, category, "present", sessions.length)
       return
     }
     if (verdict.state === "grace" && !window.graced) {
@@ -104,6 +120,7 @@ export function createPushCoalescer({
       window.graced = true
       const delayMs = Math.min(Math.max(0, verdict.untilMs - now()), graceMs)
       window.cancel = schedule(() => close(principalId, category), delayMs)
+      onSuppressed?.(principalId, category, "grace", sessions.length)
       return
     }
     windows.delete(key)

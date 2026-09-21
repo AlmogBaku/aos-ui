@@ -12,6 +12,7 @@ import {
   createPushCoalescer,
   type CoalescedSession,
   type PresenceVerdict,
+  type SuppressionReason,
 } from "./coalescer"
 import type { PresenceRegistry } from "./presence"
 import type { PushRegistrations, StoredRegistration } from "./registrations"
@@ -66,6 +67,17 @@ export function createPushDispatcher({
   now = Date.now,
   schedule = defaultSchedule,
 }: PushDispatcherOptions): PushDispatcher {
+  /** One counts-only line for a window that had candidates and sent nothing. */
+  const suppressed = (
+    category: PushCategory,
+    reason: SuppressionReason,
+    sessions: number
+  ) => {
+    logger?.info(
+      redactForLog({ event: "push.suppressed", category, reason, sessions })
+    )
+  }
+
   /**
    * Whether the operator has already seen *this event*. A Session read after the
    * event happened owes nothing, and neither does one on screen right now. Read
@@ -76,14 +88,27 @@ export function createPushDispatcher({
    */
   const filter = (
     principalId: string,
-    _category: PushCategory,
+    category: PushCategory,
     sessions: CoalescedSession[]
-  ) =>
-    sessions.filter(({ agentId, sessionId, occurredAtMs }) => {
+  ) => {
+    const exposed: CoalescedSession[] = []
+    const kept = sessions.filter(({ agentId, sessionId, occurredAtMs }) => {
       const readAt = sessionRows.get(agentId, sessionId)?.readAt
       if (readAt !== undefined && readAt >= occurredAtMs) return false
-      return !presence.exposed(principalId, sessionId)
+      if (!presence.exposed(principalId, sessionId)) return true
+      exposed.push({ agentId, sessionId, occurredAtMs })
+      return false
     })
+    if (kept.length === 0 && sessions.length > 0)
+      // A Session on screen is the stronger reason to stay quiet, so it is the
+      // one reported when a window was emptied by both.
+      suppressed(
+        category,
+        exposed.length > 0 ? "exposed" : "read",
+        sessions.length
+      )
+    return kept
+  }
 
   /** Presence, or the grace an operator who has just left still holds. */
   const verdict = (principalId: string): PresenceVerdict => {
@@ -176,6 +201,9 @@ export function createPushDispatcher({
       void deliver(principalId, category, sessions, closedAt).catch(
         () => undefined
       )
+    },
+    onSuppressed: (_principalId, category, reason, sessions) => {
+      suppressed(category, reason, sessions)
     },
   })
 

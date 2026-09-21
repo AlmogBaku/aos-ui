@@ -223,6 +223,14 @@ describe("push dispatcher", () => {
 
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(0)
+    expect(lines(test.logger)).toEqual([
+      {
+        event: "push.suppressed",
+        category: "input",
+        reason: "present",
+        sessions: 1,
+      },
+    ])
   })
 
   it("notifies about an event that happened after the operator read the Session", async () => {
@@ -252,6 +260,14 @@ describe("push dispatcher", () => {
 
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(0)
+    expect(lines(test.logger)).toEqual([
+      {
+        event: "push.suppressed",
+        category: "input",
+        reason: "read",
+        sessions: 1,
+      },
+    ])
   })
 
   it("leaves out a Session that is on screen, even behind an idle reader", async () => {
@@ -271,6 +287,32 @@ describe("push dispatcher", () => {
       count: 1,
       sessionId: "session-2",
     })
+  })
+
+  it("reports a window emptied by the Session on screen as exposed", () => {
+    const test = harness()
+    test.presence.set(OPERATOR, CONNECTION, {
+      sessionId: SESSION,
+      foreground: true,
+      idle: true,
+    })
+
+    test.publish(occurred("attention-requested", SESSION))
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+
+    expect(test.send).not.toHaveBeenCalled()
+    expect(lines(test.logger)).toEqual([
+      {
+        event: "push.suppressed",
+        category: "input",
+        reason: "exposed",
+        sessions: 1,
+      },
+    ])
+    const line = JSON.stringify(lines(test.logger))
+    expect(line).not.toContain(SESSION)
+    expect(line).not.toContain(AGENT)
+    expect(line).not.toContain("push.example")
   })
 
   it("waits out the grace of an operator who has just closed the workspace", async () => {
