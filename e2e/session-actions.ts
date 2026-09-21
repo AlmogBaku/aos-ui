@@ -176,12 +176,16 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
     openSessions.getByRole("button", { name: rowName(copy, "Launch review 2") })
   ).toBeVisible()
 
-  // Pinning a History row floats it to the top of its own section.
+  // Pinning a History row opens it: it leads Open sessions and gains a tab.
   await rowMenu(history, copy, "Customer interviews").click()
   await menuItem(page, copy.pin).click()
-  await expect(rows(history, copy).first()).toHaveAccessibleName(
+  await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
     new RegExp(`Customer interviews, ${copy.pinned}$`)
   )
+  await expect(
+    history.getByRole("button", { name: rowName(copy, "Customer interviews") })
+  ).toHaveCount(0)
+  await expect(tab(`Customer interviews, ${copy.pinned}`)).toBeVisible()
 
   // Archiving an open Session closes its tab and keeps the selection put.
   await tab("Competitive scan").click({ button: "right" })
@@ -227,7 +231,8 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
   await menuItem(page, copy.archive).click()
   await expect(tab("Market brief")).toHaveCount(0)
   await expect(tab("Launch review 2")).toHaveAttribute("aria-selected", "true")
-  await expect(page.getByRole("tab")).toHaveCount(2)
+  // The pinned Session, the renamed one, and the restored one remain.
+  await expect(page.getByRole("tab")).toHaveCount(3)
 }
 
 async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
@@ -256,9 +261,13 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   await expect(
     openSessions.getByRole("button", { name: rowName(copy, "Market brief") })
   ).toHaveAccessibleName(new RegExp(`${copy.selected}$`))
+  // The pin opens the Session, so it leads Open sessions and leaves History.
+  await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
+    new RegExp(`Customer interviews, ${copy.pinned}$`)
+  )
   await expect(
     history.getByRole("button", { name: rowName(copy, "Customer interviews") })
-  ).toHaveAccessibleName(new RegExp(`Customer interviews, ${copy.pinned}$`))
+  ).toHaveCount(0)
 
   // Another Agent keeps its archived Sessions behind the same disclosure.
   await drawer.getByRole("button", { name: copy.backToAgents }).click()
@@ -278,13 +287,13 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   await page.keyboard.press("Escape")
   await expect(page.getByRole("menu")).toHaveCount(0)
 
-  // Returning to the Agent rebuilds its order, so the pinned row leads.
+  // Returning to the Agent rebuilds its order, so the pinned row still leads.
   await drawer.getByRole("button", { name: copy.backToAgents }).click()
   await page
     .getByRole("dialog", { name: copy.agents })
     .getByRole("button", { name: /^Aster/ })
     .click()
-  await expect(rows(history, copy).first()).toHaveAccessibleName(
+  await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
     new RegExp(`Customer interviews, ${copy.pinned}$`)
   )
 }

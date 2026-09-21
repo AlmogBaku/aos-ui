@@ -468,6 +468,24 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByText(/unread/i)).toBeNull()
   })
 
+  it("names a pinned tab, and names both states when it is unread too", () => {
+    renderShell({
+      openSessions: [
+        { ...openSessions[0]!, pinned: true, unread: true },
+        { ...openSessions[1]!, pinned: true },
+        ...openSessions.slice(2),
+      ],
+    })
+
+    expect(
+      screen.getByRole("tab", { name: "Market brief, Unread, Pinned" })
+    ).toBeVisible()
+    expect(
+      screen.getByRole("tab", { name: "Launch review, Pinned" })
+    ).toBeVisible()
+    expect(screen.getByRole("tab", { name: "Competitive scan" })).toBeVisible()
+  })
+
   it("lets a Session that needs the operator outrank its unread dot", () => {
     const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
     const sessions = [...openSessions.slice(0, 2), scan]

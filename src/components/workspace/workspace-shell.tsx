@@ -13,6 +13,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   PenLine,
+  Pin,
   Plus,
   Settings2,
   Sparkles,
@@ -740,6 +741,11 @@ function SessionTabs({
           >
             {openSessions.map((session, index) => {
               const isActive = session.threadId === activeThreadId
+              // Tabs name their state in the same order the rows do.
+              const stateLabels = [
+                session.unread ? dictionary.status.unread : null,
+                session.pinned ? dictionary.status.pinned : null,
+              ].filter(Boolean)
 
               return (
                 <SessionRowContextMenu
@@ -785,8 +791,8 @@ function SessionTabs({
                       aria-selected={isActive}
                       title={session.title}
                       aria-label={
-                        session.unread
-                          ? `${session.title}, ${dictionary.status.unread}`
+                        stateLabels.length > 0
+                          ? [session.title, ...stateLabels].join(", ")
                           : undefined
                       }
                       aria-controls="workspace-conversation-panel"
@@ -808,6 +814,12 @@ function SessionTabs({
                           unread={session.unread}
                           unreadLabel={dictionary.status.unread}
                         />
+                        {session.pinned ? (
+                          <Pin
+                            className="size-3 shrink-0 text-muted-foreground"
+                            aria-hidden="true"
+                          />
+                        ) : null}
                         <bdi>
                           <SessionThreadListTitle fallback={session.title} />
                         </bdi>

@@ -66,8 +66,15 @@ export function activeSessionsForAgent(
         Number.isFinite(age) && age >= 0 && age < ACTIVE_SESSION_WINDOW_MS
       const isLive =
         session.status === "running" || session.status === "waiting-for-input"
+      // A pin keeps its Session open however old it is; History never lists one.
+      const isPinned = session.pinned === true
 
-      return isRecent || isLive || manuallyOpenedThreadIds.has(session.threadId)
+      return (
+        isPinned ||
+        isRecent ||
+        isLive ||
+        manuallyOpenedThreadIds.has(session.threadId)
+      )
     })
   )
 }

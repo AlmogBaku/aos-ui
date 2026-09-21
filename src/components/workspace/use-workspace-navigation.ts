@@ -131,6 +131,9 @@ export function useWorkspaceNavigation({
   const [dismissedTabs, setDismissedTabs] = useState<Record<string, string[]>>(
     {}
   )
+  // A pinned tab can still be closed, but only until its Session is next
+  // active. Remembering the `updatedAt` each dismissal saw is what dates it.
+  const pinnedDismissedAt = useRef(new Map<string, string>())
   const tabUndo = useSessionTabUndo()
   const [actionError, setActionError] = useState<Error | null>(null)
   // null until the runtime has answered; every action stays hidden meanwhile.
@@ -259,6 +262,28 @@ export function useWorkspaceNavigation({
       ),
     [sessions, visibleThreadId]
   )
+
+  /**
+   * Dismissals as the lists should read them now: a pinned Session's dismissal
+   * expires as soon as the Session moves on, so its tab comes back when it is
+   * next active. A dismissal nobody dated stays in force.
+   */
+  const liveDismissedTabs = useMemo(() => {
+    const byThread = new Map(
+      sessions.map((session) => [session.threadId, session] as const)
+    )
+    return Object.fromEntries(
+      Object.entries(dismissedTabs).map(([agentId, threadIds]) => [
+        agentId,
+        threadIds.filter((threadId) => {
+          const session = byThread.get(threadId)
+          if (session?.pinned !== true) return true
+          const dismissedAt = pinnedDismissedAt.current.get(threadId) ?? ""
+          return !(Date.parse(session.updatedAt) > Date.parse(dismissedAt))
+        }),
+      ])
+    )
+  }, [dismissedTabs, sessions])
 
   const updateRoute = useCallback(
     (selection: WorkspaceSelection, mode: "push" | "replace") => {
@@ -549,7 +574,7 @@ export function useWorkspaceNavigation({
       ? sessions.find(({ threadId }) => threadId === activeThreadId)
       : undefined
     const manual = new Set([...(manuallyOpened[selectedAgentId] ?? [])])
-    const dismissed = new Set(dismissedTabs[selectedAgentId] ?? [])
+    const dismissed = new Set(liveDismissedTabs[selectedAgentId] ?? [])
     const openSessions = buildAgentSessionView({
       agentId: selectedAgentId,
       sessions,
@@ -611,7 +636,7 @@ export function useWorkspaceNavigation({
     agentsLoading,
     dictionary.actions.newSession,
     defaultAgentId,
-    dismissedTabs,
+    liveDismissedTabs,
     listedSessions,
     manuallyOpened,
     eligibilityNow,
@@ -736,7 +761,7 @@ export function useWorkspaceNavigation({
   const selectedAgent =
     displayAgents.find((agent) => agent.id === selectedAgentId) ?? null
   const selectedDismissedTabs = new Set(
-    selectedAgentId ? (dismissedTabs[selectedAgentId] ?? []) : []
+    selectedAgentId ? (liveDismissedTabs[selectedAgentId] ?? []) : []
   )
   const rawSessionView = selectedAgentId
     ? buildAgentSessionView({
@@ -765,7 +790,7 @@ export function useWorkspaceNavigation({
     agentIds: displayAgents.map(({ id }) => id),
     sessions,
     manuallyOpened,
-    dismissedTabs,
+    dismissedTabs: liveDismissedTabs,
     lastSelected: lastSelected.current,
     titles,
     now: eligibilityNow,
@@ -776,7 +801,7 @@ export function useWorkspaceNavigation({
   async function selectAgent(agentId: string) {
     setPreferredAgentId(agentId)
     const manual = new Set([...(manuallyOpened[agentId] ?? [])])
-    const dismissed = new Set(dismissedTabs[agentId] ?? [])
+    const dismissed = new Set(liveDismissedTabs[agentId] ?? [])
     const rawView = buildAgentSessionView({
       agentId,
       sessions,
@@ -871,6 +896,9 @@ export function useWorkspaceNavigation({
       previousLastSelectedThreadId,
       clearedLastSelected,
     })
+    if (closed.pinned === true) {
+      pinnedDismissedAt.current.set(threadId, closed.updatedAt)
+    }
     setDismissedTabs((current) => ({
       ...current,
       [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],

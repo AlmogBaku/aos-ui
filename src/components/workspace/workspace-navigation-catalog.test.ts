@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 
 import type { SessionMetadata } from "@/runtime-adapters/contracts"
-import { buildAgentSessionView } from "@/lib/workspace-view-model"
 import { buildWorkspaceNavigationCatalog } from "./workspace-navigation-catalog"
 
 const sessions: SessionMetadata[] = [
@@ -135,7 +134,7 @@ describe("buildWorkspaceNavigationCatalog", () => {
     },
   ]
 
-  it("leads both drawer lists with pinned Sessions without reordering tabs", () => {
+  it("leads Open sessions with every pinned Session and lists none in History", () => {
     const navigation = buildWorkspaceNavigationCatalog({
       agentIds: ["agent-p"],
       sessions: pinned,
@@ -148,27 +147,46 @@ describe("buildWorkspaceNavigationCatalog", () => {
       visibleThreadId: null,
     }).get("agent-p")
 
+    // A pin outranks age, so even a week-old pinned Session is open.
     expect(navigation?.openSessions.map((item) => item.threadId)).toEqual([
       "open-pinned",
       "open-pinned-old",
+      "history-pinned",
       "open-new",
       "open-old",
     ])
     expect(navigation?.historySessions.map((item) => item.threadId)).toEqual([
-      "history-pinned",
       "history-new",
       "history-old",
     ])
-    // Tabs answer to provider recency; pins only lead the drawer lists.
-    expect(
-      buildAgentSessionView({
-        agentId: "agent-p",
-        sessions: pinned,
-        manuallyOpenedThreadIds: new Set(),
-        titles: new Map(),
-        now: pinNow,
-      }).openSessions.map((item) => item.threadId)
-    ).toEqual(["open-new", "open-pinned", "open-old", "open-pinned-old"])
+  })
+
+  it("keeps a closed pinned tab listed under Open sessions", () => {
+    const navigation = buildWorkspaceNavigationCatalog({
+      agentIds: ["agent-p"],
+      sessions: pinned,
+      manuallyOpened: {},
+      dismissedTabs: { "agent-p": ["open-pinned", "open-new"] },
+      lastSelected: new Map(),
+      titles: new Map(),
+      now: pinNow,
+      untitledLabel: "New Session",
+      visibleThreadId: null,
+    }).get("agent-p")
+
+    expect(navigation?.openSessions.map((item) => item.threadId)).toEqual([
+      "open-pinned",
+      "open-pinned-old",
+      "history-pinned",
+      "open-old",
+    ])
+    // Dismissing an ordinary tab sends its Session to History; a pinned one has
+    // nowhere else to be listed.
+    expect(navigation?.historySessions.map((item) => item.threadId)).toEqual([
+      "open-new",
+      "history-new",
+      "history-old",
+    ])
   })
 
   it("lists archived Sessions on their own and never offers to close them", () => {

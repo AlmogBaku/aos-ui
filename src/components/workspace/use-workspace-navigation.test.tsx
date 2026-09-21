@@ -283,6 +283,44 @@ it("keeps no tab for a deleted Session provider metadata still lists", async () 
   )
 })
 
+it("returns a closed pinned tab once its Session is active again", async () => {
+  const pinned: SessionMetadata = {
+    threadId: "s-pinned",
+    agentId: "agent-a",
+    updatedAt: "2026-09-01T09:00:00.000Z",
+    status: "idle",
+    pinned: true,
+  }
+  let publishSessions: (metadata: SessionMetadata[]) => void = () => {}
+  const { result } = await mountNavigation(
+    ["s-recent", "s-pinned"],
+    [recent, pinned],
+    {
+      subscribeSessionMetadata: (_threadIds, listener) => {
+        publishSessions = listener
+        return () => {}
+      },
+    }
+  )
+  const openTabs = () =>
+    result.current.shellOpenSessions.map(({ threadId }) => threadId)
+  // The pin keeps a week-old Session open, and leading.
+  await waitFor(() => expect(openTabs()).toEqual(["s-pinned", "s-recent"]))
+
+  await act(async () => {
+    await result.current.closeSession("s-pinned")
+  })
+  expect(openTabs()).toEqual(["s-recent"])
+
+  await act(() => {
+    publishSessions([
+      recent,
+      { ...pinned, updatedAt: "2026-09-08T09:45:00.000Z" },
+    ])
+  })
+  await waitFor(() => expect(openTabs()).toEqual(["s-pinned", "s-recent"]))
+})
+
 it("reports the Session actions the runtime declares, and none otherwise", async () => {
   const declared = await mountNavigation(["s-recent"], [recent])
   await waitFor(() =>

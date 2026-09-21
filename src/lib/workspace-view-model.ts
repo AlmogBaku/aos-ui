@@ -85,6 +85,16 @@ function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
   )
 }
 
+/** Pinned rows lead the open list; recency still orders within either group. */
+function pinnedFirst<Session extends { pinned?: boolean }>(
+  sessions: readonly Session[]
+) {
+  return [
+    ...sessions.filter((session) => session.pinned === true),
+    ...sessions.filter((session) => session.pinned !== true),
+  ]
+}
+
 export function buildAgentSessionView({
   agentId,
   sessions,
@@ -105,14 +115,15 @@ export function buildAgentSessionView({
   )
 
   return {
-    openSessions: activeSessionsForAgent(
-      listed,
-      agentId,
-      now,
-      manuallyOpenedThreadIds
+    openSessions: pinnedFirst(
+      activeSessionsForAgent(listed, agentId, now, manuallyOpenedThreadIds)
     ).map(toView),
+    // A pinned Session is always open, so history never repeats it — not even
+    // while its tab is dismissed.
     allSessions: newestUniqueSessions(
-      listed.filter((session) => session.agentId === agentId)
+      listed.filter(
+        (session) => session.agentId === agentId && session.pinned !== true
+      )
     ).map(toView),
     archivedSessions: newestUniqueSessions(
       sessions.filter(

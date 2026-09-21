@@ -10,16 +10,6 @@ export type AgentSessionNavigation = {
   lastSelectedThreadId: string | null
 }
 
-/** Pinned rows lead their list; recency still orders within either group. */
-function pinnedFirst<Session extends { pinned?: boolean }>(
-  sessions: readonly Session[]
-) {
-  return [
-    ...sessions.filter((session) => session.pinned === true),
-    ...sessions.filter((session) => session.pinned !== true),
-  ]
-}
-
 export function buildWorkspaceNavigationCatalog({
   agentIds,
   sessions,
@@ -64,17 +54,22 @@ export function buildWorkspaceNavigationCatalog({
         untitledLabel,
         visibleThreadId,
       })
+      // Closing a pinned tab drops the tab, not the row: a pinned Session is
+      // never in History, so this row is what keeps it reachable.
       const openSessions = view.openSessions
-        .filter((session) => !dismissed.has(session.threadId))
+        .filter(
+          (session) =>
+            session.pinned === true || !dismissed.has(session.threadId)
+        )
         .map((session) => ({ ...session, canClose: true }))
       const openIds = new Set(openSessions.map((session) => session.threadId))
       return [
         agentId,
         {
           agentId,
-          openSessions: pinnedFirst(openSessions),
-          historySessions: pinnedFirst(
-            view.allSessions.filter((session) => !openIds.has(session.threadId))
+          openSessions,
+          historySessions: view.allSessions.filter(
+            (session) => !openIds.has(session.threadId)
           ),
           archivedSessions: view.archivedSessions,
           lastSelectedThreadId: lastSelected.get(agentId) ?? null,

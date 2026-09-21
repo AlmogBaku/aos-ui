@@ -132,6 +132,46 @@ describe("buildAgentSessionView", () => {
     ])
   })
 
+  it("opens pinned Sessions whatever their age and keeps them out of history", () => {
+    const pinned: SessionMetadata[] = [
+      ...sessions,
+      {
+        threadId: "pinned-stale",
+        agentId: "aster",
+        updatedAt: "2026-08-20T09:00:00.000Z",
+        status: "idle",
+        pinned: true,
+      },
+      {
+        threadId: "pinned-staler",
+        agentId: "aster",
+        updatedAt: "2026-08-10T09:00:00.000Z",
+        status: "idle",
+        pinned: true,
+      },
+    ]
+
+    const result = buildAgentSessionView({
+      agentId: "aster",
+      sessions: pinned,
+      manuallyOpenedThreadIds: new Set(["boundary"]),
+      titles: new Map(),
+      now,
+    })
+
+    // Pinned rows lead; recency still orders within either group.
+    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+      "pinned-stale",
+      "pinned-staler",
+      "recent",
+      "boundary",
+    ])
+    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+      "recent",
+      "boundary",
+    ])
+  })
+
   it("uses a readable fallback without changing provider metadata", () => {
     const result = buildAgentSessionView({
       agentId: "aster",
