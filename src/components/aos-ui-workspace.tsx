@@ -463,7 +463,6 @@ function WorkspaceContent({
     agentCreator,
     creatorNotice,
     selectedAgentIsDraft,
-    discardDraft,
     displayAgents,
     shellOpenSessions,
     sessionView,
@@ -579,7 +578,6 @@ function WorkspaceContent({
         agentBuilderAvailable={Boolean(agentCreator)}
         creatorNotice={creatorNotice}
         selectedAgentIsDraft={selectedAgentIsDraft}
-        onDiscardDraft={discardDraft}
         onSelectAgent={selectAgent}
         onOpenSession={openSession}
         onCloseSession={closeSession}

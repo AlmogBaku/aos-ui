@@ -140,7 +140,6 @@ export const he = {
     hideAgentDetails: "הסתרת פרטי הסוכן",
     switchToEnglish: "מעבר לאנגלית",
     switchToHebrew: "מעבר לעברית",
-    discardDraft: "בטל טיוטה",
   },
   appearance: {
     label: "מראה",
@@ -223,7 +222,6 @@ export const he = {
   creator: {
     kickoff: "בוא ניצור סוכן חדש.",
     draftLabel: "טיוטה",
-    discardConfirm: "למחוק את הטיוטה? שיחת הראיון תימחק.",
     createdPending: "הסוכן נוצר. הוא יופיע ברשימה בקרוב.",
     createdHidden:
       "הסוכן נוצר אך מוסתר עד שמפעיל ישלים את ההגדרה. ניתן למצוא אותו בניהול סוכנים.",

@@ -1960,7 +1960,7 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-current", "true")
   })
 
-  it("discards a pending draft without deleting any Session", async () => {
+  it("retires a pending draft by leaving it, deleting no Session", async () => {
     const user = userEvent.setup()
     const firstTurn = deferred<void>()
     let workspace: FixtureWorkspace | undefined
@@ -1976,15 +1976,16 @@ describe("AosUiApp fixture composition", () => {
     await user.click(screen.getByRole("button", { name: "New Agent" }))
     await screen.findByRole("button", { name: /^New Agent, draft/ })
     const before = workspace!.listAllSessionMetadata()
-
-    await user.click(
-      screen.getByRole("button", { name: en.actions.discardDraft })
-    )
-    await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: en.actions.discardDraft,
+    // An interview with no Session has nothing to act on, so it owns no Session
+    // menu; going somewhere else is what retires it.
+    expect(
+      screen.queryByRole("button", {
+        name: new RegExp(`^${en.actions.sessionActions}: `),
       })
-    )
+    ).toBeNull()
+
+    // An unselected row drops its selection suffix, so match the name alone.
+    await user.click(screen.getByRole("button", { name: /^Aster\b/ }))
 
     await waitFor(() =>
       expect(
@@ -2124,11 +2125,16 @@ describe("AosUiApp fixture composition", () => {
       .find(({ agentId }) => agentId === "agent-builder")!
 
     await user.click(
-      screen.getByRole("button", { name: en.actions.discardDraft })
+      screen.getByRole("button", {
+        name: new RegExp(`^${en.actions.sessionActions}: `),
+      })
+    )
+    await user.click(
+      await screen.findByRole("menuitem", { name: en.actions.deleteSession })
     )
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: en.actions.discardDraft,
+        name: en.actions.deleteSessionConfirm,
       })
     )
 

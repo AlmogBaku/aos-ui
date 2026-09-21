@@ -46,7 +46,6 @@ import {
 } from "@/runtime-adapters/agent-identity"
 import {
   draftAgentId,
-  draftThreadId,
   isDraftAgentId,
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
@@ -1334,18 +1333,6 @@ export function useWorkspaceNavigation({
     })
   }
 
-  /**
-   * Deleting the interview Session is the only way to retire a draft that has
-   * one; a pending draft has nothing to delete but its own local thread.
-   */
-  async function discardDraft() {
-    if (!selectedAgentId || !isDraftAgentId(selectedAgentId)) return
-    const threadId = draftThreadId(selectedAgentId)
-    if (threadId) await runtime.threads.getItemById(threadId).delete()
-    else clearLocalDraft()
-    if (defaultAgentId) await selectAgent(defaultAgentId)
-  }
-
   async function refreshAfterVisibilityChange() {
     const nextAgents = await workspace.refreshAgents()
     setAgents(nextAgents)
@@ -1380,7 +1367,6 @@ export function useWorkspaceNavigation({
     agentCreator,
     creatorNotice,
     selectedAgentIsDraft,
-    discardDraft,
     displayAgents,
     shellOpenSessions,
     sessionView,

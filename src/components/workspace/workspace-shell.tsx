@@ -17,7 +17,6 @@ import {
   Plus,
   Settings2,
   Sparkles,
-  Trash2,
   X,
   type LucideIcon,
 } from "lucide-react"
@@ -38,15 +37,6 @@ import {
   type ReactNode,
 } from "react"
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { SystemNotice } from "@/components/ui/system-notice"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
@@ -151,7 +141,6 @@ export type WorkspaceShellProps = {
   creatorNotice?: string
   /** The selected Agent is an unfinished interview, not a provider Agent. */
   selectedAgentIsDraft?: boolean
-  onDiscardDraft?: () => WorkspaceActionResult
   onSelectAgent: (agentId: string) => WorkspaceActionResult
   onOpenSession: (threadId: string) => WorkspaceActionResult
   onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
@@ -1195,7 +1184,6 @@ export function WorkspaceShell({
   agentBuilderAvailable = true,
   creatorNotice,
   selectedAgentIsDraft = false,
-  onDiscardDraft,
   onSelectAgent,
   onOpenSession,
   onCloseSession,
@@ -1234,7 +1222,15 @@ export function WorkspaceShell({
     { view: "closed" }
   )
   const [activityOpen, setActivityOpen] = useState(false)
-  const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
+  const draftSessionActions = useMemo<SessionActionCapabilities>(
+    () => ({
+      rename: false,
+      archive: false,
+      pin: false,
+      delete: sessionActions?.delete ?? false,
+    }),
+    [sessionActions?.delete]
+  )
   const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
@@ -1665,15 +1661,20 @@ export function WorkspaceShell({
           {navigationHidden ? skipLink : null}
           {conversationHeader}
           {!navigationHidden && selectedAgentIsDraft ? (
+            // An interview is one Session with no tabs to carry its menu, so it
+            // keeps the Session menu every other row has, holding only what an
+            // interview can answer for.
             <div className="flex min-h-10 items-center justify-end border-b border-border px-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setDiscardDraftOpen(true)}
-              >
-                <Trash2 data-icon="inline-start" />
-                {dictionary.actions.discardDraft}
-              </Button>
+              {activeSession ? (
+                <SessionRowMenuButton
+                  session={activeSession}
+                  copy={sessionRowMenuCopy(dictionary)}
+                  locale={locale}
+                  availability={draftSessionActions}
+                  handlers={{ onDelete: sessionMenu.onDelete }}
+                  className={styles.sessionAction}
+                />
+              ) : null}
             </div>
           ) : null}
           {!navigationHidden && !selectedAgentIsDraft ? (
@@ -1903,27 +1904,6 @@ export function WorkspaceShell({
           {artifactViewer}
         </FocusDrawer>
 
-        <AlertDialog open={discardDraftOpen} onOpenChange={setDiscardDraftOpen}>
-          <AlertDialogContent dir={getLocaleDirection(locale)}>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {dictionary.creator.discardConfirm}
-              </AlertDialogTitle>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{dictionary.actions.cancel}</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                onClick={() => {
-                  setDiscardDraftOpen(false)
-                  if (onDiscardDraft) runAction(onDiscardDraft, onActionError)
-                }}
-              >
-                {dictionary.actions.discardDraft}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
 
         {sessionDialog?.kind === "rename" && onRenameSession ? (
           <SessionRenameDialog

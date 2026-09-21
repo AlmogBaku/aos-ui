@@ -146,7 +146,6 @@ export const en = {
     hideAgentDetails: "Hide Agent details",
     switchToEnglish: "Switch to English",
     switchToHebrew: "Switch to Hebrew",
-    discardDraft: "Discard draft",
   },
   appearance: {
     label: "Appearance",
@@ -234,7 +233,6 @@ export const en = {
   creator: {
     kickoff: "Let's create a new Agent.",
     draftLabel: "draft",
-    discardConfirm: "Discard this draft? The interview Session is deleted.",
     createdPending: "Agent created. It will appear in the roster shortly.",
     createdHidden:
       "Agent created but hidden until an operator finishes its setup. Find it under Manage Agents.",
