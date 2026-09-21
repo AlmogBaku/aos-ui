@@ -18,6 +18,7 @@ export const fixtureScenarioNames = [
   "artifact",
   "image",
   "audio",
+  "video",
   "mermaid",
   "mermaid-incomplete",
   "mermaid-malformed",
@@ -30,11 +31,20 @@ export const fixtureScenarioNames = [
 
 export type FixtureScenarioName = (typeof fixtureScenarioNames)[number]
 
+/** Shape carried by the question scenario; the chat model uses it to register a pending request. */
+export type FixtureQuestionTemplate = {
+  header: string
+  options: readonly string[]
+  allowFreeform: boolean
+}
+
 export type FixtureScenario = {
   name: FixtureScenarioName
   parts: AssistantPart[]
   todoEvent?: TodoItem[]
   outage?: Error
+  /** Present on the question scenario; drives the RuntimeInteractionAdapter registration. */
+  questionTemplate?: FixtureQuestionTemplate
 }
 
 function toolPart(
@@ -75,6 +85,11 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           allowFreeform: true,
         }),
       ],
+      questionTemplate: {
+        header: "Which audience should the brief prioritize?",
+        options: ["Executive team", "Product team", "Investors"],
+        allowFreeform: true,
+      },
     }
   }
 
@@ -271,6 +286,19 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           type: "data",
           name: "aos.artifact",
           data: FIXTURE_ARTIFACT_CATALOG.examples.audio,
+        } as AssistantPart,
+      ],
+    }
+  }
+
+  if (input.includes("video")) {
+    return {
+      name: "video",
+      parts: [
+        {
+          type: "data",
+          name: "aos.artifact",
+          data: FIXTURE_ARTIFACT_CATALOG.examples.video,
         } as AssistantPart,
       ],
     }

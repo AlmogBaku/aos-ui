@@ -6,7 +6,7 @@ AOS is organized around provider-owned Agents and Sessions. The selected runtime
 
 Select an Agent from the roster, then open one of its Sessions. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer.
 
-Routes use `/{agentId}/{sessionId}`. Opening a compact route preserves the locally selected English or Hebrew preference. If an Agent or Session no longer exists, AOS refuses to navigate to stale provider data.
+Routes use `/{agentId}/{sessionId}`. The `/en/` and `/he/` path prefixes are accepted and stripped, so bookmarked or shared locale-prefixed URLs resolve to the same route. Opening a compact route preserves the locally selected English or Hebrew preference. If an Agent or Session no longer exists, AOS refuses to navigate to stale provider data.
 
 Creating a Session always creates it for the selected Agent. Provider events remain attached to their originating Agent and Session even if you navigate elsewhere while work is running.
 
@@ -42,13 +42,41 @@ the runtime adapter; it never transfers a queue to another Agent.
 
 An Artifact appears only after an Agent explicitly publishes it. This includes a trusted provider-native delivery receipt, such as a successful Hermes text-to-speech result. Ordinary files, assistant-authored paths, and unmatched `MEDIA:` references are not automatically exposed.
 
-AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy and an inspectable Source view. Operators may allow selected HTTPS asset origins through public configuration; see [Configuration](configuration.md#artifact-html-assets).
+AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy and an inspectable Source view. Operators may allow selected HTTPS asset origins through public configuration; see [Configuration](configuration.md#artifact-html-assets). Inline image, audio, and video Artifacts appear directly in the conversation.
+
+## Rename, archive, or delete a Session
+
+Open the "…" menu on a Session row or at the top of the conversation to rename, archive, or delete the Session. These actions are available only when the selected runtime supports them; they are Hermes-only in V1. Closing the tab after a delete offers a brief undo.
+
+## Select a model and view context usage
+
+When the runtime and deployment support it, the composer shows a model selector and a context-window gauge. Select a model to change the active Session's model; the gauge updates as the window fills. Reasoning-effort selection is available where the runtime reports a reasoning ladder; it is unavailable for OpenCode.
+
+## Search conversations
+
+Use the conversation search control to find messages in the current Session. Results highlight matching text inline.
+
+## Use slash-command suggestions
+
+Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. They are hidden in the guest composer unless `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` is set on the proxy.
+
+## Answer a question or free-text "Other"
+
+When the runtime asks a multiple-choice question, the options appear in the conversation. Choose one of the offered answers or select **Other** to type a free-text reply.
+
+## Edit or regenerate a message
+
+For runtimes that support it (Hermes), you can edit a submitted user message or regenerate the last assistant response from the conversation controls. Editing truncates the conversation at that point and resubmits.
+
+## Start a new Agent
+
+Use the **New Agent** control to open a Session with the creator Agent when exactly one creator is configured in the runtime. This is available only when the provider marks one Agent as the creator.
 
 ## Manage Agent visibility
 
 Open **Manage Agents** to inspect the provider catalog. A visible, selectable Agent appears in the workspace roster. A hidden Agent remains provider-owned but is not selectable in normal navigation.
 
-Visibility edits are available only when the runtime exposes a native mutation and marks the entry editable. AOS confirms the provider result before updating the roster. Hermes can update native profile visibility; OpenClaw and OpenCode currently report their catalogs as read-only. Fixture changes are temporary, and generic AG-UI support depends on the workspace service.
+Visibility edits are available only when the runtime exposes a native mutation and marks the entry editable. AOS confirms the provider result before updating the roster. Hermes can update native profile visibility; OpenClaw and OpenCode currently report their catalogs as read-only. Fixture changes are temporary.
 
 The dedicated creator identity and provider/system definitions never appear in normal management. Agent creation is available only when exactly one native Agent is marked as the creator. The public fixture intentionally omits it. See the [runtime matrix](runtime-capabilities.md) for current support.
 
@@ -56,10 +84,10 @@ The dedicated creator identity and provider/system definitions never appear in n
 
 Activity is the browser inbox for run completion, failures, questions, permissions, and Agent-creation outcomes. Provider state remains authoritative for the underlying work.
 
-Session status dots on navigation rows communicate two independent signals that may appear together:
+Each Session navigation row shows at most one status dot at a time. A state that needs your attention (waiting for input, error) outranks unread, which outranks an in-progress run with nothing pending:
 
-- **Green (unread):** the Session has content you have not yet seen. Clears when you view the Session in a focused window. Browsing the Activity drawer does not mark anything read.
 - **Blue (waiting):** the Session is waiting for your input. Clears when you respond or the run finishes.
+- **Green (unread):** the Session has content you have not yet seen. Clears when you view the Session in a focused window. Browsing the Activity drawer does not mark anything read.
 
 The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from other Sessions add unread markers and an in-app notice. A hidden tab or an unfocused browser window can show a generic operating-system notification after you enable notifications in Activity settings and grant browser permission.
 

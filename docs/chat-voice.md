@@ -14,10 +14,16 @@ Voice support is implemented for evaluation but still requires live acceptance w
 3. Open a Session owned by that profile. AOS checks non-secret native configuration hints independently for STT and TTS; Hermes makes the final provider selection when speech is requested.
 4. Use HTTPS or `localhost` and grant microphone permission only when you start recording.
 
-For local development, run the normalized AOS proxy:
+For local development, run the normalized AOS proxy and the Vite dev server:
 
 ```bash
-AOS_UI_RUNTIME_MODE=aos bun run dev
+# Terminal 1
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+
+# Terminal 2
+AOS_UI_RUNTIME_MODE=aos \
+AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+  bun run dev
 ```
 
 The proxy privately selects and authenticates Hermes; there is no direct
@@ -71,7 +77,7 @@ Switching browser tabs or windows does not stop active capture; use Finish, Send
 - **Microphone unavailable:** use HTTPS or `localhost`; check device support, browser permission, native login, and profile STT configuration.
 - **Voice turn unavailable:** clear the draft, attachments, and queue; wait for an idle attached Session; resolve approvals; confirm both STT and TTS.
 - **Read-aloud unavailable:** check native TTS configuration and authentication. Retry explicitly after generation failure or autoplay rejection.
-- **Upload rejected:** AOS permits 8 MiB only on the exact Hermes transcription proxy route, enough for the 5 MiB recording plus JSON/base64 overhead. Check any upstream proxy for a smaller limit.
+- **Upload rejected:** The transcription route (`POST /api/aos/v1/agents/:agentId/audio/transcribe`) accepts a 7 500 000-byte JSON body. The speech route (`POST /api/aos/v1/agents/:agentId/audio/speak`) accepts a 40 000-byte body. The 8 MiB Hermes WebSocket frame guard is a separate upstream limit. Check your reverse proxy for a smaller limit on either route.
 - **Long response is incomplete:** the current integration uses Hermes's complete-audio response rather than streaming or chunking. Test the configured provider's limit before release.
 
 See [Troubleshooting](troubleshooting.md) for authentication, WebSocket, and container issues.

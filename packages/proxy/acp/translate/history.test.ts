@@ -9,7 +9,7 @@ import {
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound } from "../types"
-import { translateHistory } from "./history"
+import { persistedCorrections, translateHistory } from "./history"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 
@@ -305,5 +305,49 @@ describe("translateHistory", () => {
         "operator"
       )
     ).toEqual([])
+  })
+})
+
+describe("persistedCorrections", () => {
+  const user = (id: string, text: string, correction = false) => ({
+    id,
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    createdAt: "2026-09-19T09:00:00.000Z",
+    ...(correction ? { metadata: { custom: { correction: true } } } : {}),
+  })
+  const agent = {
+    id: "a9",
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "Answered" }],
+    createdAt: "2026-09-19T09:00:01.000Z",
+  }
+  const of = (messages: SessionHistoryResponse["messages"]) =>
+    persistedCorrections({ ...history, messages })
+
+  it("counts nothing when no turn is flagged", () => {
+    expect(of([user("u1", "Summarize"), agent])).toBe(0)
+  })
+
+  it("counts every correction the running turn's prompt collected", () => {
+    expect(of([user("u1", "Summarize"), user("u2", "Shorter", true)])).toBe(1)
+    expect(
+      of([
+        user("u1", "Summarize"),
+        user("u2", "Shorter", true),
+        user("u3", "And bullet it", true),
+      ])
+    ).toBe(2)
+  })
+
+  it("ignores a correction an earlier turn already settled", () => {
+    expect(
+      of([
+        user("u1", "Summarize"),
+        user("u2", "Shorter", true),
+        agent,
+        user("u3", "Now the appendix"),
+      ])
+    ).toBe(0)
   })
 })

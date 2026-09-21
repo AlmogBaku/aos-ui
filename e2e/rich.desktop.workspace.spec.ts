@@ -49,21 +49,31 @@ test("a question records one answer and closes every response control", async ({
   await openWorkspace(page)
   await sendPrompt(page, "Ask me a question")
 
-  const question = toolCard(page, "Which audience should the brief prioritize?")
-  await expect(question).toHaveAttribute("data-state", "pending")
+  const composer = page.getByRole("region", { name: "Questions" })
+  await expect(composer).toBeVisible()
   await expect(
-    question.getByRole("group", { name: "Answer options" })
+    composer.getByRole("option", { name: "Product team" })
   ).toBeVisible()
 
-  await question.getByRole("option", { name: "Product team" }).click()
+  await composer.getByRole("option", { name: "Product team" }).click()
+  await composer.getByRole("button", { name: "Send answer" }).click()
 
-  await expect(question).toHaveAttribute("data-state", "answered")
-  await expect(question.getByText("Response:")).toBeVisible()
-  await expect(question.getByText("Product team", { exact: true })).toHaveCount(
-    1
-  )
-  await expect(question.getByRole("button")).toHaveCount(0)
-  await expect(question.getByRole("textbox")).toHaveCount(0)
+  await expect(composer).not.toBeVisible()
+
+  const record = page
+    .getByRole("heading", {
+      name: "Which audience should the brief prioritize?",
+      level: 2,
+    })
+    .locator("xpath=ancestor::section[1]")
+  await expect(
+    record.getByRole("heading", {
+      name: "Which audience should the brief prioritize?",
+      level: 2,
+    })
+  ).toBeVisible()
+  await expect(record.getByRole("button")).toHaveCount(0)
+  await expect(record.getByRole("textbox")).toHaveCount(0)
 })
 
 test("permission choices preserve the provider label and visible persistent scope", async ({
@@ -334,19 +344,33 @@ test("Hebrew localizes rich controls while preserving provider content verbatim"
   await openWorkspace(page, "he")
   await sendPrompt(page, "Ask me a question", "he")
 
-  const question = toolCard(page, "Which audience should the brief prioritize?")
-  await expect(question).toHaveAttribute("dir", "rtl")
-  await expect(question).toHaveAttribute("lang", "he")
-  await expect(question).toContainText("נדרשת תשובה")
+  const composerHe = page.getByRole("region", { name: "שאלות" })
+  await expect(composerHe).toBeVisible()
   await expect(
-    question.getByRole("option", { name: "Executive team" })
+    composerHe.getByRole("option", { name: "Executive team" })
   ).toHaveAttribute("dir", "auto")
 
-  await question.getByRole("textbox", { name: "התשובה שלך" }).fill("הנהלה")
-  await question.getByRole("button", { name: "שליחת תשובה" }).click()
-  await expect(question).toHaveAttribute("data-state", "answered")
-  await expect(question).toContainText("תשובה:")
-  await expect(question).toContainText("הנהלה")
+  await composerHe
+    .getByRole("button", { name: "אחר (הקלידו תשובה)" })
+    .click()
+  await composerHe
+    .getByRole("textbox", {
+      name: "תשובה אחרת עבור Which audience should the brief prioritize?",
+    })
+    .fill("הנהלה")
+  await composerHe.getByRole("button", { name: "שליחת תשובה" }).click()
+
+  await expect(composerHe).not.toBeVisible()
+
+  const recordHe = page
+    .getByRole("heading", {
+      name: "Which audience should the brief prioritize?",
+      level: 2,
+    })
+    .locator("xpath=ancestor::section[1]")
+  await expect(recordHe).toHaveAttribute("dir", "rtl")
+  await expect(recordHe).toHaveAttribute("lang", "he")
+  await expect(recordHe).toContainText("נדרשת תשובה")
 
   await sendPrompt(page, "Show a chart", "he")
   const chart = toolCard(page, "Enterprise AI spend")

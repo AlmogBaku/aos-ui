@@ -149,6 +149,25 @@ function projectHermesUserContent(text: string, messageId: string) {
   }
 }
 
+/**
+ * The scaffold Hermes prepends to the `api_content` of the user row an accepted
+ * `session.redirect` persists: `agent/conversation_loop.py`
+ * `_apply_active_turn_redirect` writes it there while the interrupted turn is
+ * still open, so the row is the correction itself rather than a new prompt. See
+ * the pinned upstream commit in `UPSTREAM.md`.
+ */
+const REDIRECT_SCAFFOLD_PREFIX =
+  "[Context from the interrupted assistant response]"
+
+/** A mid-turn correction, which the run journal also acknowledges. */
+function isRedirectCorrection(value: JsonRecord): boolean {
+  const apiContent = value.api_content
+  return (
+    typeof apiContent === "string" &&
+    apiContent.startsWith(REDIRECT_SCAFFOLD_PREFIX)
+  )
+}
+
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[]
@@ -283,6 +302,11 @@ export function projectHermesHistory(
         createdAt: timestamp(value.timestamp ?? value.created_at, index),
         ...(userContent?.attachments?.length
           ? { attachments: userContent.attachments }
+          : {}),
+        // The same turn the journal acknowledges as `aos.steer.accepted`: the
+        // flag lets a from-start replay announce it once.
+        ...(role === "user" && isRedirectCorrection(value)
+          ? { metadata: { custom: { correction: true } } }
           : {}),
       })
     }

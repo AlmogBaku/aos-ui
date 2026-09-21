@@ -30,15 +30,46 @@ For a host Gateway, the overlay maps `host.docker.internal` to Docker's host gat
 
 Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API does not prove native downloadable artifact publication, Agent creation, or cross-Agent Session handoff, so those tools are not advertised.
 
+## Run locally
+
+For a Vite development server on port `3000`, configure the private proxy to
+listen on `127.0.0.1:4100` with `publicOrigin` set to
+`http://localhost:3000`. Then run:
+
+```bash
+# Terminal 1
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.openclaw.json
+
+# Terminal 2
+AOS_UI_RUNTIME_MODE=aos \
+AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
+  bun run dev
+```
+
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
-- Creating, renaming, deleting, or changing visibility of Sessions/Agents is unavailable because the pinned Gateway leaves do not prove matching native mutations. Todos, Activity, edit/regenerate, steering, artifacts, transcription, and speech are also unavailable.
+- Session creation is available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, artifacts, read state, transcription, and speech are unavailable because the pinned Gateway leaves do not prove matching native operations.
 - An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
+- The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, and `operator.questions`.
+- A `pairing-required` error is terminal unless the Gateway responds with `pauseReconnect: false` or `recommendedNextStep: "wait_then_retry"`, in which case the adapter retries.
 
 ## Verify
 
-Run the proxy checks for the selected deployment and verify the Gateway is reachable from the proxy host or container. Native live acceptance has not been run; mocked protocol tests do not prove a paired live OpenClaw journey.
+Run the proxy checks for the selected deployment and verify the Gateway is reachable from the proxy host or container:
+
+```bash
+bunx vitest run packages/proxy/adapters/openclaw
+```
+
+Confirm the Gateway is reachable and the device identity and token files are correct:
+
+```bash
+bun run proxy:serve -- --config /absolute/private/path/proxy-config.openclaw.json
+curl --fail --silent --show-error http://127.0.0.1:4100/api/aos/v1/readyz
+```
+
+Native live acceptance has not been run; mocked protocol tests do not prove a paired live OpenClaw journey.
 
 For connection problems, see [Troubleshooting](../troubleshooting.md).

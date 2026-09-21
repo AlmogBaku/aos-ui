@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import { AOS_METHODS, AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
-import { STEER_ACCEPTED_DATA_NAME } from "@/components/assistant-ui/elements/message-queue"
+import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 
 import {
   applyNotification,
@@ -956,25 +956,142 @@ describe("applyNotification", () => {
     })
   })
 
-  it("appends an accepted steer to the latest assistant turn", () => {
-    const params = {
-      sessionId: "s1",
-      ...RUN_META,
-      requestId: "steer-1",
-      text: "Also check the logs",
-      delivery: "steered",
-    }
-    const steered = applyNotification(
-      answered,
-      AOS_METHODS.notify.steerAccepted,
-      params
-    )
-    expect(toThreadMessages(steered)[1]).toMatchObject({
-      content: [
-        { type: "text" },
-        { type: "data", name: STEER_ACCEPTED_DATA_NAME, data: params },
-      ],
+  const correction = {
+    sessionId: "s1",
+    ...RUN_META,
+    requestId: "steer-1",
+    text: "Also check the logs",
+    delivery: "steered",
+  }
+  const steer = (state: ProjectorState) =>
+    applyNotification(state, AOS_METHODS.notify.steerAccepted, correction)
+
+  it("appends an accepted correction as a user turn at the tail", () => {
+    const messages = toThreadMessages(steer(answered))
+
+    expect(messages).toHaveLength(3)
+    expect(messages[2]).toMatchObject({
+      id: steerMessageId("steer-1"),
+      role: "user",
+      content: [{ type: "text", text: "Also check the logs" }],
     })
+  })
+
+  it("lands after the prompt of a run that has written nothing yet", () => {
+    const asked = fold(
+      [userChunk("u2", "And again"), stateUpdate({ state: "running" })],
+      answered
+    )
+    const messages = toThreadMessages(steer(asked))
+
+    expect(messages.map((message) => message.id)).toEqual([
+      "u1",
+      "a1",
+      "u2",
+      steerMessageId("steer-1"),
+    ])
+    expect(messages[1]).toMatchObject({
+      content: [{ type: "text", text: "Hello" }],
+    })
+  })
+
+  it("opens the redirected output in a fresh turn below the correction", () => {
+    const streaming = fold(
+      [
+        userChunk("u2", "And again"),
+        stateUpdate({ state: "running" }),
+        agentChunk("a2", "Partial"),
+      ],
+      answered
+    )
+    const redirected = fold(
+      [agentChunk("a3", "Checking the logs")],
+      steer(streaming)
+    )
+    const messages = toThreadMessages(redirected)
+
+    expect(messages.map((message) => message.id)).toEqual([
+      "u1",
+      "a1",
+      "u2",
+      "a2",
+      steerMessageId("steer-1"),
+      "a3",
+    ])
+    expect(messages[3]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Partial" }],
+    })
+    expect(messages[5]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Checking the logs" }],
+    })
+  })
+
+  it("moves what the interrupted turn is still addressed below the correction", () => {
+    const streaming = fold(
+      [
+        userChunk("u2", "And again"),
+        stateUpdate({ state: "running" }),
+        agentChunk("a2", "Partial"),
+      ],
+      answered
+    )
+    // The provider keeps naming the turn the correction interrupted.
+    const continued = fold(
+      [agentChunk("a2", "Checking the logs")],
+      steer(streaming)
+    )
+    const messages = toThreadMessages(continued)
+
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ])
+    expect(messages[3]).toMatchObject({
+      id: "a2",
+      content: [{ type: "text", text: "Partial" }],
+    })
+    expect(messages[4]).toMatchObject({ id: steerMessageId("steer-1") })
+    expect(messages[5]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Checking the logs" }],
+    })
+  })
+
+  it("settles the sealed turn at the correction and the fresh one at idle", () => {
+    const streaming = fold(
+      [
+        userChunk("u2", "And again"),
+        stateUpdate({ state: "running" }),
+        agentChunk("a2", "Partial"),
+      ],
+      answered
+    )
+    const corrected = toThreadMessages(steer(streaming))
+    expect(corrected[3]).toMatchObject({
+      id: "a2",
+      status: { type: "complete" },
+    })
+
+    const settled = toThreadMessages(
+      fold(
+        [agentChunk("a3", "Checking the logs"), stateUpdate({ state: "idle" })],
+        steer(streaming)
+      )
+    )
+    expect(settled[3]).toMatchObject({ id: "a2", status: { type: "complete" } })
+    expect(settled[5]).toMatchObject({ id: "a3", status: { type: "complete" } })
+  })
+
+  it("grants one correction once however often it is announced", () => {
+    const once = steer(answered)
+
+    expect(steer(once)).toBe(once)
   })
 
   it("ignores a malformed payload and an unknown method", () => {

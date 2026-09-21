@@ -879,4 +879,40 @@ describe("server-side Hermes history projection", () => {
       text: "Visible",
     })
   })
+
+  it("flags the user row an accepted redirect persisted mid-turn", () => {
+    const scaffold =
+      "[Context from the interrupted assistant response]\nThe agent was drafting the summary."
+
+    const messages = projectHermesHistory([
+      userRow("u1", "Summarize the notes", { rowId: 1 }),
+      userRow("u2", "Use the second draft", { rowId: 2, apiContent: scaffold }),
+    ])
+
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Summarize the notes" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Use the second draft" }],
+        metadata: { custom: { correction: true } },
+      },
+    ])
+    expect(messages[0]?.metadata).toBeUndefined()
+  })
+
+  it("leaves an ordinary prompt unflagged whatever its api_content carries", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Summarize the notes", { rowId: 1 }),
+      userRow("u2", "And the appendix", {
+        rowId: 2,
+        apiContent: "And the appendix",
+      }),
+    ])
+
+    expect(messages).toHaveLength(2)
+    for (const message of messages) expect(message.metadata).toBeUndefined()
+  })
 })

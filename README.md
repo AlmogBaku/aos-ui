@@ -25,15 +25,23 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - Agent and Session navigation with provider-verified ownership
 - Streaming chat, queued follow-ups, Stop, active-turn steering, questions,
   approvals, and attachments where the selected runtime supports them
+- Session rename, archive, and delete with provider-owned read state (Hermes)
+- Model and reasoning-effort selection with a context-window gauge where the
+  runtime supports them
+- Inline image, audio, and video Artifacts; conversation search; slash-command
+  suggestions; questions answered from the composer with a free-text "Other";
+  deep links to any Session
 - Session-scoped Todos and message-scoped Plans
 - Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
 - Activity history and opt-in browser notifications
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
 - Optional Hermes voice controls and restricted guest invitations
 
-The browser has one real runtime: the normalized AOS proxy. Hermes is AOS's
-primary and first-supported harness. The proxy can also attach to OpenClaw or
-OpenCode, which is documented last as the newest attachment path. There is no
+The browser has one real runtime: the normalized AOS proxy. The browser speaks
+ACP v2 over a single WebSocket per tab to the proxy, and uses REST only for
+bytes (attachments, Artifacts, audio) and discovery. Hermes is AOS's primary
+and first-supported harness. The proxy can also attach to OpenClaw or OpenCode,
+which is documented last as the newest attachment path. There is no
 browser-direct provider mode.
 
 ## Quick start
@@ -103,6 +111,12 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 > and Session. Expose it only on a trusted private network or behind your own
 > TLS and access-control layer.
 
+> [!NOTE]
+> The default `{}` and the bare `.env.compose.example` value both fail the
+> strict runtime-config schema. Every non-fixture recipe must set
+> `AOS_UI_RUNTIME_CONFIG_FILE`. The readiness endpoint `/api/aos/v1/readyz`
+> returns 503 until the runtime is reachable.
+
 See [Deployment](docs/deployment.md) for native-runtime overlays, networking, health checks, and persistence.
 
 ## Documentation
@@ -124,6 +138,12 @@ bun run test
 bun run typecheck
 bun run lint
 bun run build
+```
+
+For UI, locale, runtime-composition, or browser-behavior changes:
+
+```bash
+bun run test:e2e
 ```
 
 Additional checks are documented beside the runtime or deployment they cover.

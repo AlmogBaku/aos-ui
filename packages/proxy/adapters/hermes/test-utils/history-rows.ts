@@ -37,6 +37,8 @@ export type UserRow = {
   role: "user"
   timestamp?: number
   content: string | ContentPart[]
+  /** The provider-only sidecar; a redirect scaffold lives here. */
+  api_content?: string
 }
 
 type ContentPart =
@@ -150,7 +152,12 @@ export function toolRow(
 export function userRow(
   id: string,
   content: string,
-  options: { timestamp?: number; rowId?: number; displayKind?: string } = {}
+  options: {
+    timestamp?: number
+    rowId?: number
+    displayKind?: string
+    apiContent?: string
+  } = {}
 ): UserRow {
   return {
     id,
@@ -162,6 +169,9 @@ export function userRow(
       : {}),
     ...(options.timestamp !== undefined
       ? { timestamp: options.timestamp }
+      : {}),
+    ...(options.apiContent !== undefined
+      ? { api_content: options.apiContent }
       : {}),
   }
 }

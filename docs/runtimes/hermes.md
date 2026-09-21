@@ -188,7 +188,7 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
 
 - Native profiles form the AOS Agent catalog and can expose visibility changes.
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
-- Activity coverage is limited to the active Session.
+- Activity is workspace-wide: the feed covers every Session the connection may observe.
 - ACP v2 starts or resumes a run and carries its server-to-browser event stream.
   Stop (`session/cancel`) and steering (`_aos/session/steer`) travel over the
   same ACP socket; neither creates another run.
@@ -201,16 +201,31 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
   and continues under the same logical AOS run until Hermes is authoritatively
   idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
+- Session rename, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
 - Voice controls appear only for native STT/TTS interfaces; see [Chat voice](../chat-voice.md).
 - The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
-  Hermes accepts this only on loopback or when started with `--insecure`; do
-  not expose a `--insecure` Hermes instance beyond a trusted private network.
+  This is upstream Hermes behavior; Hermes accepts the token query parameter
+  only on loopback or when started with `--insecure`; do not expose a
+  `--insecure` Hermes instance beyond a trusted private network.
   The close code Hermes sends on token rejection (documented as 4401 or 4403)
   is unverified; treat an immediate WebSocket close after dial as a possible
   authentication failure and check the Hermes server log.
 - A Hermes restart resets every active run once: the next attach produces
   `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
   history from the Hermes transcript. No prompt is re-sent.
+
+## Native routes the proxy calls
+
+When placing an egress allowlist between the proxy and Hermes, allow these
+Hermes-native routes from the proxy host:
+
+- `GET /api/sessions` — session list
+- `GET /api/sessions/:id`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id` — session detail and mutations
+- `GET /api/sessions/:id/messages` — message history
+- `GET /api/fs/read-data-url` — artifact byte reads
+- `GET /api/tools/toolsets/{stt,tts}/config` — audio configuration
+- `POST /api/audio/transcribe`, `POST /api/audio/speak` — transcription and speech
+- `GET /api/ws` (WebSocket upgrade) — gateway connection for profiles, runs, questions, and events
 
 ## Live operator checks
 

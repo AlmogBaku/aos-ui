@@ -29,7 +29,7 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
   docker compose up --build
 ```
 
-Open <http://localhost:3000>. The web health endpoint is <http://localhost:3000/api/health>.
+Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`; the readiness endpoint is `/api/aos/v1/readyz` (returns 503 when the runtime is unavailable).
 
 ## Deploy the Hermes operator surface
 
@@ -57,9 +57,9 @@ the guest listener has no operator API route.
 
 Start from [`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json)
 and customize its listener origins and Hermes address. Hermes uses one server
-token file for both operator and guest requests. Reconnect cursors and guest
-invitations have separate signing-key files. Secret files must be owner-only
-and contain no public runtime configuration. The mounted
+token file for both operator and guest requests. Guest invitations have a
+separate signing-key file. Secret files must be owner-only and contain no
+public runtime configuration. The mounted
 [`runtime-config.hermes.json`](../deploy/runtime-config.hermes.json) contains
 only `{ "mode": "aos" }`.
 
@@ -119,21 +119,14 @@ Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
 ## Use hot reload in containers
 
-Add `compose.dev.yaml` to the selected composition. For example:
+`compose.dev.yaml` swaps the production Bun server command for a Vite dev server. It only works correctly in fixture mode or when `AOS_UI_PROXY_TARGET` points at a separately running proxy (the container does not start the proxy). For fixture mode with source hot-reload:
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
-AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
-AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
-  docker compose \
-    -f compose.yaml \
-    -f compose.hermes.yaml \
-    -f compose.dev.yaml \
-    up --build
+AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
+  docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
-The development overlay bind-mounts frontend source and keeps `node_modules` in a named volume. Native worktree and state mounts remain separate.
+The development overlay bind-mounts frontend source and keeps `node_modules` in a named volume. It does not start or manage a runtime proxy.
 
 ## Change public configuration
 
@@ -145,7 +138,9 @@ See the [configuration reference](configuration.md) for accepted fields and secr
 
 All published ports bind to `127.0.0.1` by default. Set
 `AOS_UI_BIND_ADDRESS` or `AOS_UI_GUEST_BIND_ADDRESS` only when another host
-must connect, and configure the corresponding exact browser origin.
+must connect, and configure the corresponding exact browser origin. A wider
+bind requires TLS in front because non-loopback `http:` origins are rejected
+by the proxy's `publicOrigin` validator.
 
 > [!WARNING]
 > The operator listener has no application login. Treat a wider operator bind
@@ -159,13 +154,16 @@ through `host.docker.internal`.
 
 ## Systemd and a private operator UI
 
-For a host-managed deployment, `aos-ui.service.template` in
-[`deploy/systemd`](../deploy/systemd) runs the Compose service. The V1 process
-it starts owns both distinct listeners:
+For a host-managed deployment, one template `aos-ui.service.template` in
+[`deploy/systemd`](../deploy/systemd) runs the Compose service as
+`Type=oneshot, RemainAfterExit=yes`. The unit's `ExecStart` passes
+`-f compose.yaml -f compose.<runtime>.yaml` plus an optional host overlay; a
+runtime deployment therefore needs both files. `ExecReload` recreates the
+containers without tearing down the stack. `TimeoutStartSec=10min` covers the
+initial image build.
 
-- `aos-ui.service.template` runs the regular operator UI as a private Compose
-  service. Bind it to loopback or a trusted private network; do not publish it
-  through the guest host.
+The service owns both distinct listeners:
+
 - the trusted operator listener is published on loopback port `3000` by
   default;
 - the optional JWT-scoped guest listener is published separately on loopback
@@ -173,12 +171,12 @@ it starts owns both distinct listeners:
 
 An external reverse proxy may expose only the guest listener for invited chat.
 It must pass WebSocket upgrades on `/api/*/acp` and must not route the
-operator API or any native Hermes endpoint. Nginx is optional.
+operator API or any native Hermes endpoint.
 
-Copy and substitute the templates outside the checkout; they are not an
-installer and intentionally contain no domain, proxy provider, tunnel, or
+Copy and substitute the template outside the checkout; it is not an
+installer and intentionally contains no domain, proxy provider, tunnel, or
 credential defaults. Follow [`aos-deploy`'s systemd reference](../.agents/skills/aos-deploy/references/systemd.md)
-when using those templates.
+when using that template.
 
 Keep public runtime JSON separate from service configuration. A process managed
 by systemd receives only its unit, `EnvironmentFile=`, credentials, and other

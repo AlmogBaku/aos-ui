@@ -52,4 +52,17 @@ Any intentional visual departure must be called out before it is introduced.
   reading a Session there does not change its read state.
 - **Audio and video Artifacts play in the conversation:** published media renders
   as an inline native player in the message instead of a card that replaces the
-  inspector with the Artifact viewer. Every other Artifact keeps the viewer.
+  inspector with the Artifact viewer. Images also render inline as a bounded
+  preview that opens the viewer. Every other Artifact stays a compact card that
+  opens the viewer.
+- **Density pass (2026-09-20):** control heights follow a 28/32/36/40 px band
+  scale; theme and locale buttons are 1.75 rem square at fine-pointer sizes.
+  The `--radius-sm|md|lg` token scale is live in `src/app/globals.css`.
+- **Question surface in the composer (2026-09-20, b6787b6):** when the runtime
+  exposes `interactions`, the question form surfaces beside the composer and
+  the transcript keeps a read-only record. An "Other" free-text row is always
+  offered when freeform is allowed.
+- **Mobile drawer changes (2026-09-20):** the two-level drawer opens when the
+  operator taps the search / new-session control in the compact mobile header;
+  the new-session control in the drawer is compact rather than a full-width
+  button.
