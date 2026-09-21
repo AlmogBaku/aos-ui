@@ -207,6 +207,10 @@ Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
+- OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
+  installs the package's own lockfile because the plugin SDK is a peer this checkout
+  does not carry, so the root test and typecheck gates skip that entry and its
+  contract test. The integration's other tests run at the root.
 - Monty wrapper or lock changes: `bun run monty:test`.
 - Compose or Docker changes:
 

@@ -12,6 +12,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 3000",
     "integrations:build": "bun run scripts/build-integrations.ts",
+    "openclaw:test": "cd integrations/openclaw \u0026\u0026 bun install --frozen-lockfile \u0026\u0026 bun run typecheck \u0026\u0026 bun run test",
     "hermes:test": "uv run --project integrations/hermes --frozen pytest -q integrations/hermes/tests",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
