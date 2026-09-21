@@ -1859,7 +1859,7 @@ describe("Hermes server adapter", () => {
       include_sessions: false,
     })
     expect(catalog).toEqual({
-      revision: "profiles:researcher@hermes-bots:7",
+      revision: expect.stringMatching(/^profiles:[0-9a-f]{64}$/),
       agents: [
         {
           summary: {
@@ -1878,6 +1878,36 @@ describe("Hermes server adapter", () => {
     })
     expect(JSON.stringify(catalog)).not.toContain("privatePath")
     expect(JSON.stringify(catalog)).not.toContain("nativeOnly")
+  })
+
+  it("keeps the catalog revision inside the identifier bound for many long profile names", async () => {
+    const many = Array.from({ length: 24 }, (_, index) => ({
+      ...profile(),
+      name: `aos-synthetic-role-with-a-long-name-${index}`,
+      display_name: `Role ${index}`,
+    }))
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async () => ({ profiles: many })),
+    })
+
+    const catalog = await adapter.listAgents()
+
+    expect(catalog.agents).toHaveLength(many.length)
+    expect(catalog.revision.length).toBeLessThanOrEqual(256)
+  })
+
+  it("changes the catalog revision when an Agent's own revision changes", async () => {
+    const revisionFor = async (revision: number) => {
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(async () => ({
+          profiles: [profile(false, revision)],
+        })),
+      })
+      return (await adapter.listAgents()).revision
+    }
+
+    expect(await revisionFor(7)).toBe(await revisionFor(7))
+    expect(await revisionFor(7)).not.toBe(await revisionFor(8))
   })
 
   it("marks visibility unavailable when Hermes omits the CAS revision", async () => {

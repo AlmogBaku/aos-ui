@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   AgentCatalogResponseSchema,
   RuntimeInfoSchema,
@@ -222,11 +224,20 @@ function nativeProfiles(payload: unknown): NativeRecord[] {
   return profiles
 }
 
+/**
+ * A catalog revision is an identifier, so it is bounded at 256 characters,
+ * while the profile list it describes is not bounded at all. Naming every
+ * profile inline crossed that bound at ten profiles and failed the whole
+ * catalog, which reads to the browser as a runtime that is unavailable. A
+ * digest stays bounded whatever the operator names their profiles, and still
+ * changes whenever any agent's own revision does.
+ */
 function catalogRevision(agents: readonly AgentCatalogEntry[]) {
-  return `profiles:${agents
+  const material = agents
     .map(({ summary, revision }) => `${summary.id}@${revision}`)
     .sort()
-    .join(",")}`
+    .join(",")
+  return `profiles:${createHash("sha256").update(material).digest("hex")}`
 }
 
 function sessionId(_profile: string, storedId: string) {
