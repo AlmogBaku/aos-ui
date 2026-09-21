@@ -7,7 +7,7 @@ import {
 } from "../../protocol/push"
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
-import type { SessionRow, SessionRows } from "../core/session-rows"
+import { createSessionRows, type SessionRow } from "../core/session-rows"
 import { createPushDispatcher } from "./dispatcher"
 import { createPresenceRegistry } from "./presence"
 import type { PushRegistrations, StoredRegistration } from "./registrations"
@@ -85,13 +85,11 @@ function harness(options: HarnessOptions = {}) {
     },
   } as unknown as RuntimeInstance
 
-  const rows = new Map(
-    (options.rows ?? []).map((row) => [`${row.agentId}\u0000${row.id}`, row])
-  )
-  const sessionRows = {
-    get: (agentId: string, sessionId: string) =>
-      rows.get(`${agentId}\u0000${sessionId}`),
-  } as unknown as SessionRows
+  // The real cache, so every read the gate consults is one the proxy could have
+  // recorded: a provider report through `rememberList`, an acknowledgement
+  // through `markRead`.
+  const sessionRows = createSessionRows({ now: clock.now })
+  if (options.rows) sessionRows.rememberList(options.rows)
 
   const stored = [...(options.devices ?? [device("device-1")])]
   const registrations: PushRegistrations = {
@@ -128,6 +126,7 @@ function harness(options: HarnessOptions = {}) {
     clock,
     dispatcher,
     presence,
+    rows: sessionRows,
     registrations,
     send,
     logger,
@@ -241,8 +240,10 @@ describe("push dispatcher", () => {
     // The closed-app case: the operator read the Session, then closed the tab,
     // and the turn finished afterwards. Nothing will ever report the row unread
     // again, so only the time the read settled can answer for this event.
-    const test = harness({ rows: [row({ unread: false, readAt: START })] })
+    const test = harness({ rows: [row({ unread: true })] })
+    test.rows.markRead(AGENT, SESSION)
 
+    test.clock.advance(1_000)
     test.publish(occurred("run-finished", SESSION, START + 1_000))
     test.clock.advance(COALESCE_WINDOW_MS.completion)
 
@@ -254,12 +255,34 @@ describe("push dispatcher", () => {
     })
   })
 
-  it("leaves out a Session the operator read after the event, and says which read", () => {
-    const test = harness({
-      rows: [row({ unread: false, readAt: START + 2_000 })],
-    })
+  it("notifies when only a roster read reported the Session read", async () => {
+    // The live failure: the operator read the Session, the turn finished after
+    // that, and a roster read a second later still reported it read. A provider
+    // report carries no read time, so it must not settle over the event.
+    const test = harness({ rows: [row({ unread: true })] })
+    test.rows.markRead(AGENT, SESSION)
 
+    test.clock.advance(1_000)
+    test.publish(occurred("run-finished", SESSION, START + 1_000))
+    test.clock.advance(1_000)
+    test.rows.rememberList([row({ unread: false })])
+    test.clock.advance(COALESCE_WINDOW_MS.completion)
+
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+    expect(test.send.mock.calls[0]![1]).toMatchObject({
+      category: "completion",
+      count: 1,
+      sessionId: SESSION,
+    })
+  })
+
+  it("leaves out a Session the operator read after the event, and says which read", () => {
+    const test = harness({ rows: [row({ unread: true })] })
+
+    test.clock.advance(1_000)
     test.publish(occurred("attention-requested", SESSION, START + 1_000))
+    test.clock.advance(1_000)
+    test.rows.markRead(AGENT, SESSION)
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     expect(test.send).not.toHaveBeenCalled()
@@ -278,14 +301,15 @@ describe("push dispatcher", () => {
 
   it("reports the read decision that held back the oldest event", () => {
     const test = harness({
-      rows: [
-        row({ unread: false, readAt: START + 2_000 }),
-        row({ id: "session-2", unread: false, readAt: START + 1_500 }),
-      ],
+      rows: [row({ unread: true }), row({ id: "session-2", unread: true })],
     })
 
     test.publish(occurred("attention-requested", SESSION, START + 1_000))
     test.publish(occurred("attention-requested", "session-2", START + 500))
+    test.clock.advance(1_500)
+    test.rows.markRead(AGENT, "session-2")
+    test.clock.advance(500)
+    test.rows.markRead(AGENT, SESSION)
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     expect(test.send).not.toHaveBeenCalled()

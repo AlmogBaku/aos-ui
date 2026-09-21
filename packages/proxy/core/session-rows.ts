@@ -5,10 +5,18 @@ import type { Session } from "../../protocol"
  * it or a mark-read write settled it; detail reads never carry it and never
  * clear a known value.
  *
- * `readAt` is Unix ms of the moment that read state was settled as read, which
- * is what answers "has the operator seen what happened before this?" — a
- * boolean cannot, because it says nothing about when. It is proxy-local
- * bookkeeping: no read reports it and nothing projects it to a browser.
+ * `readAt` is Unix ms of the moment *we* acknowledged a read for the operator,
+ * which is what answers "has the operator seen what happened before this?" — a
+ * boolean cannot, because it says nothing about when. Only `markRead` knows that
+ * moment: a provider reports read as a boolean with no time behind it, so a list
+ * page never writes this stamp and can only clear it by reporting the Session
+ * unread again. It is proxy-local bookkeeping: no read reports it and nothing
+ * projects it to a browser.
+ *
+ * The cost is deliberate. A Session read on another device keeps no stamp and
+ * stays notifiable, so that device may get one push for something already seen.
+ * That is the same principle as a row nobody has seen counting as unseen, and it
+ * is the only way to keep the gate from silencing an event nobody ever saw.
  */
 export type SessionRow = Session & { unread?: boolean; readAt?: number }
 
@@ -24,8 +32,8 @@ export interface SessionRows {
   get(agentId: string, sessionId: string): SessionRow | undefined
   /**
    * Merges list rows (which may carry `unread`); returns the rows that changed.
-   * A row the provider reports read stamps `readAt`, and one it reports unread
-   * clears it: the provider re-lit the Session, so nothing in it is read.
+   * A row the provider reports unread clears `readAt`, because the provider re-lit
+   * the Session; no list row ever writes one.
    */
   rememberList(rows: readonly SessionRow[]): SessionRow[]
   /** Merges a detail read; `unread` on the argument is ignored. */
@@ -115,14 +123,11 @@ export function createSessionRows({
         const previous = rows.get(key)
         const stale = guarded(key) && row.unread === true
         const unread = stale ? false : row.unread
-        // A page that only lost a race leaves our own stamp alone; otherwise the
-        // provider is the authority on whether this Session is read, and on when.
-        const readAt =
-          stale || unread === undefined
-            ? previous?.readAt
-            : unread
-              ? undefined
-              : now()
+        // The provider is the authority on *whether* this Session is read, and
+        // nobody but our own acknowledgement knows *when*: a page reporting it
+        // read carries no time, so it leaves the stamp alone. One reporting it
+        // unread re-lit the Session, so nothing in it is read any more.
+        const readAt = unread === true ? undefined : previous?.readAt
         const merged = withReadState({ ...previous, ...row }, unread, readAt)
         rows.set(key, merged)
         if (changed(previous, merged)) updated.push(merged)

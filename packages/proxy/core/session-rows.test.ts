@@ -70,7 +70,7 @@ describe("createSessionRows", () => {
     expect(rows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 
-  it("records when a Session was last settled as read", () => {
+  it("records when we acknowledged a read, and only then", () => {
     let clock = 1_000
     const rows = createSessionRows({ now: () => clock })
     rows.rememberList([session({ unread: true })])
@@ -80,14 +80,22 @@ describe("createSessionRows", () => {
     rows.markRead(AGENT, SESSION)
     expect(rows.get(AGENT, SESSION)?.readAt).toBe(1_000)
 
+    // A page reporting the Session read says nothing about when it was read, so
+    // it leaves our own stamp where it is.
+    clock += 1_000
+    rows.rememberList([session({ unread: false })])
+    expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+    expect(rows.get(AGENT, SESSION)?.readAt).toBe(1_000)
+
     // The provider re-lit the Session: nothing about it is read any more.
     clock += READ_GUARD_MS + 1
     rows.rememberList([session({ unread: true })])
     expect(rows.get(AGENT, SESSION)?.readAt).toBeUndefined()
 
+    // A Session read somewhere else carries no read time we can stand behind.
     clock += 1_000
     rows.rememberList([session({ unread: false })])
-    expect(rows.get(AGENT, SESSION)?.readAt).toBe(clock)
+    expect(rows.get(AGENT, SESSION)?.readAt).toBeUndefined()
   })
 
   it("keeps its own mark-read stamp through a stale unread page", () => {
