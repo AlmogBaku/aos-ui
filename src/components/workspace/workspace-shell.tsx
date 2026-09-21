@@ -485,6 +485,8 @@ type AgentsPanelProps = Pick<
   onAfterSelectAgent?: () => void
   activityButton?: ReactNode
   commandsHost?: boolean
+  /** Raised for a draft whose Session a discard would destroy. */
+  onConfirmDiscardDraft?: (agent: { agentId: string; name: string }) => void
 }
 
 function AgentsPanel({
@@ -501,13 +503,11 @@ function AgentsPanel({
   onManageAgents,
   onActionError,
   onAfterSelectAgent,
+  onConfirmDiscardDraft,
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
-  const [discardTarget, setDiscardTarget] = useState<{
-    agentId: string
-    name: string
-  } | null>(null)
+
   return (
     <div className={styles.agentsPanel}>
       <div className={cn(styles.brand, styles.desktopBrand)}>
@@ -578,8 +578,8 @@ function AgentsPanel({
                 ((agentId) => {
                   // A pending interview destroys nothing, so it needs no
                   // question; one that owns a Session does.
-                  if (draftThreadId(agentId))
-                    setDiscardTarget({ agentId, name: agent.name })
+                  if (draftThreadId(agentId) && onConfirmDiscardDraft)
+                    onConfirmDiscardDraft({ agentId, name: agent.name })
                   else runAction(() => onDiscardDraft(agentId), onActionError)
                 })
               }
@@ -625,27 +625,6 @@ function AgentsPanel({
           )
         })}
       </nav>
-      {onDiscardDraft && discardTarget ? (
-        <SessionDeleteDialog
-          open
-          locale={locale}
-          copy={{
-            title: dictionary.creator.discardTitle,
-            description: dictionary.creator.discardDescription,
-            confirm: dictionary.actions.discardDraft,
-            cancel: dictionary.actions.cancel,
-          }}
-          sessionTitle={discardTarget.name}
-          onOpenChange={(open) => {
-            if (!open) setDiscardTarget(null)
-          }}
-          onConfirm={() => {
-            const { agentId } = discardTarget
-            setDiscardTarget(null)
-            runAction(() => onDiscardDraft(agentId), onActionError)
-          }}
-        />
-      ) : null}
 
       <Button
         className={styles.manageButton}
@@ -1285,6 +1264,10 @@ export function WorkspaceShell({
   )
   const [activityOpen, setActivityOpen] = useState(false)
   const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null)
+  const [draftDiscard, setDraftDiscard] = useState<{
+    agentId: string
+    name: string
+  } | null>(null)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
     subscribeToInspectorPreference,
@@ -1702,6 +1685,7 @@ export function WorkspaceShell({
           >
             <AgentsPanel
               {...agentsPanelProps}
+              onConfirmDiscardDraft={setDraftDiscard}
               activityButton={activityButton}
               commandsHost
             />
@@ -1964,6 +1948,29 @@ export function WorkspaceShell({
                 () => onRenameSession(sessionDialog.threadId, title),
                 onActionError
               )
+            }}
+          />
+        ) : null}
+
+        {onDiscardDraft && draftDiscard ? (
+          <SessionDeleteDialog
+            key={draftDiscard.agentId}
+            open
+            locale={locale}
+            copy={{
+              title: dictionary.creator.discardTitle,
+              description: dictionary.creator.discardDescription,
+              confirm: dictionary.actions.discardDraft,
+              cancel: dictionary.actions.cancel,
+            }}
+            sessionTitle={draftDiscard.name}
+            onOpenChange={(open) => {
+              if (!open) setDraftDiscard(null)
+            }}
+            onConfirm={() => {
+              const { agentId } = draftDiscard
+              setDraftDiscard(null)
+              runAction(() => onDiscardDraft(agentId), onActionError)
             }}
           />
         ) : null}

@@ -1345,9 +1345,18 @@ export function useWorkspaceNavigation({
   async function discardDraft(agentId: string) {
     if (!isDraftAgentId(agentId)) return
     const threadId = draftThreadId(agentId)
-    if (threadId) await runtime.threads.getItemById(threadId).delete()
-    else clearLocalDraft()
+    if (!threadId) {
+      clearLocalDraft()
+      if (defaultAgentId) await selectAgent(defaultAgentId)
+      return
+    }
+    // Leave the interview before deleting it. Deleting the open thread strands
+    // Assistant UI on a draft of its own choosing, which locks the page up, so
+    // this follows the same order archival and Session deletion already use.
     if (defaultAgentId) await selectAgent(defaultAgentId)
+    else await runtime.threads.switchToNewThread()
+    await runtime.threads.getItemById(threadId).delete()
+    forgetTab(agentId, threadId, "forget")
   }
 
   /** The rail's way into the visibility rule Agent management already owns. */
