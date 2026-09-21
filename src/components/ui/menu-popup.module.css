@@ -14,12 +14,24 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  min-block-size: 2.75rem;
-  padding-inline: 0.75rem;
+  min-block-size: 1.75rem;
+  padding-inline: 0.5rem;
   border-radius: var(--radius-md);
   font-size: 0.875rem;
   cursor: pointer;
   outline: none;
+}
+
+/*
+ * A menu item is a `menuitem`, which the global coarse-pointer rule does not
+ * reach, so it carries its own touch target instead of wearing one at every
+ * pointer.
+ */
+@media (pointer: coarse) {
+  .item {
+    min-block-size: 2.75rem;
+    padding-inline: 0.75rem;
+  }
 }
 .item[data-highlighted] {
   background: var(--accent);

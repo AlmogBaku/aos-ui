@@ -82,56 +82,58 @@ export function ComposerContext({
       <div
         className={cn(
           paper,
-          "absolute end-0 bottom-full z-10 mb-2 flex w-60 origin-bottom-right flex-col gap-3.5 rounded-2xl p-4",
+          "absolute end-0 bottom-full z-10 mb-1.5 flex w-48 origin-bottom-right flex-col gap-2 rounded-lg p-2",
           "transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
           "pointer-events-none scale-[0.97] opacity-0",
           "group-hover/ctx:pointer-events-auto group-hover/ctx:scale-100 group-hover/ctx:opacity-100",
           "group-focus-within/ctx:pointer-events-auto group-focus-within/ctx:scale-100 group-focus-within/ctx:opacity-100"
         )}
       >
-        <div className="flex items-baseline justify-between">
-          <p className="text-[13.5px] font-medium">{labels.title}</p>
-          <p
-            className={cn(
-              mono,
-              "tabular-nums",
-              warn ? "text-red-500 dark:text-red-400" : "text-foreground/35"
-            )}
-          >
-            {Math.round(fraction * 100)}%
-          </p>
-        </div>
-        <div className="flex h-[5px] w-full gap-px overflow-hidden rounded-full bg-foreground/[0.06]">
-          {/*
+        <div className="flex flex-col gap-1">
+          <div className="flex items-baseline justify-between">
+            <p className="text-xs font-medium">{labels.title}</p>
+            <p
+              className={cn(
+                mono,
+                "tabular-nums",
+                warn ? "text-red-500 dark:text-red-400" : "text-foreground/35"
+              )}
+            >
+              {Math.round(fraction * 100)}%
+            </p>
+          </div>
+          <div className="flex h-1 w-full gap-px overflow-hidden rounded-full bg-foreground/[0.06]">
+            {/*
             A provider that attributes nothing still knows what it used, so the
             bar reports that one unlabeled amount rather than reading empty
             against a ring that shows the same context as filled.
           */}
-          {(segments.length
-            ? segments
-            : [
-                {
-                  label: labels.total,
-                  value: used,
-                  className: "bg-foreground/80",
-                },
-              ]
-          ).map((segment) => (
-            <span
-              key={segment.label}
-              className={cn(
-                "h-full transition-[width] duration-700 motion-reduce:transition-none",
-                segment.className
-              )}
-              style={{ width: `${pct(segment.value, usage.total)}%` }}
-            />
-          ))}
+            {(segments.length
+              ? segments
+              : [
+                  {
+                    label: labels.total,
+                    value: used,
+                    className: "bg-foreground/80",
+                  },
+                ]
+            ).map((segment) => (
+              <span
+                key={segment.label}
+                className={cn(
+                  "h-full transition-[width] duration-700 motion-reduce:transition-none",
+                  segment.className
+                )}
+                style={{ width: `${pct(segment.value, usage.total)}%` }}
+              />
+            ))}
+          </div>
         </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
           {segments.map((segment) => (
             <div
               key={segment.label}
-              className="flex items-center gap-2.5 text-[13px] text-foreground/55"
+              className="flex items-center gap-1.5 text-xs leading-4 text-foreground/55"
             >
               <span
                 aria-hidden
@@ -145,7 +147,7 @@ export function ComposerContext({
           ))}
         </div>
         <div className="h-px bg-foreground/[0.06]" />
-        <div className="flex items-center justify-between text-[13px] text-foreground/55">
+        <div className="flex items-center justify-between text-xs leading-4 text-foreground/55">
           <span>{labels.total}</span>
           <span className={cn(mono, "text-foreground/40 tabular-nums")}>
             {used}k / {usage.total}k

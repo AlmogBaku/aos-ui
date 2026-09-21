@@ -31,6 +31,10 @@ Use Bun for the JavaScript toolchain.
 bun install
 ```
 
+A fresh worktree, and a checkout whose dependencies predate a new package, each
+need their own `bun install`; `integrations/openclaw` carries a second one, and
+without it `tsconfig.integration.json` fails to resolve its peer SDK.
+
 Run fixture mode for backend-free UI work:
 
 ```bash
@@ -98,9 +102,20 @@ external reverse proxy is optional.
   delivers an `unread` update. One ACP WebSocket is opened per browser tab.
   Usage is reported via ACP `usage_update`; model and effort are set via
   `session/set_config_option`.
+- A pinned Session is always open. It sits in Open sessions and in the tab
+  strip however old it is, leads both, and never appears in History. The pin is
+  provider-owned: native `pinned` on Hermes and OpenClaw, and one AOS-owned key
+  in the Session's native `metadata` on OpenCode, which has no native flag.
+  Closing a pinned tab removes only the tab; its Open sessions row stays so the
+  Session cannot become unreachable, and the tab returns when it is next active.
 - English LTR and Hebrew RTL are first-class. Update both locales, logical
   layout behavior, accessible labels, keyboard flow, and reduced-motion states
-  whenever affected.
+  whenever affected. What triggers a second-locale pass is copy, direction, or
+  positioning: a new or changed string, a new control or popover that has to
+  mirror, or a layout that stops being expressible in logical properties. A
+  change that only moves values on the spacing, type, or radius scale does not
+  earn one, because the utilities are already direction-agnostic; verify it once
+  in the rendered app and move on.
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
   charts, maps, Plans, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser.
@@ -126,6 +141,16 @@ external reverse proxy is optional.
   `packages/proxy/auth` and `packages/proxy/guest` own authorization lanes;
   `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
   server entry point.
+- `src/components/ui/menu-popup.tsx` is the one popup shell for every menu.
+  Session rows use it through `src/components/workspace/session-row-menu.tsx`
+  and messages through
+  `src/components/assistant-ui/elements/message-context-menu.tsx`; both open on
+  a right click and a long press through Base UI's `ContextMenu`. Do not add a
+  second menu library or a parallel popup. A message menu hands the press back
+  to the browser when it lands in a selection or on a field, link, or media, and
+  Base UI suppresses the native menu from a document listener, so a veto needs
+  both `stopPropagation()` and `preventBaseUIHandler()` on the trigger's own
+  handler.
 - `src/components/tool-ui` owns rich tool lifecycles and safe fallbacks.
 - `src/components/assistant-ui/elements` owns Thread/Message composition,
   execution timelines, ordinary tool-call presentation, reasoning disclosure,
@@ -213,6 +238,8 @@ prefer `nice bun run test` for a full sweep beside a live deployment.
 Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
+  A styling-only change has no test to write, because styling is never
+  asserted: look at it in the rendered app, in both themes, and stop there.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
 - OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
   installs the package's own lockfile because the plugin SDK is a peer this checkout
