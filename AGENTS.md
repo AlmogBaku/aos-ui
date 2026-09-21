@@ -108,7 +108,12 @@ external reverse proxy is optional.
   Session cannot become unreachable, and the tab returns when it is next active.
 - English LTR and Hebrew RTL are first-class. Update both locales, logical
   layout behavior, accessible labels, keyboard flow, and reduced-motion states
-  whenever affected.
+  whenever affected. What triggers a second-locale pass is copy, direction, or
+  positioning: a new or changed string, a new control or popover that has to
+  mirror, or a layout that stops being expressible in logical properties. A
+  change that only moves values on the spacing, type, or radius scale does not
+  earn one, because the utilities are already direction-agnostic; verify it once
+  in the rendered app and move on.
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
   charts, maps, Plans, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser.
@@ -231,6 +236,8 @@ prefer `nice bun run test` for a full sweep beside a live deployment.
 Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
+  A styling-only change has no test to write, because styling is never
+  asserted: look at it in the rendered app, in both themes, and stop there.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
 - OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
   installs the package's own lockfile because the plugin SDK is a peer this checkout
