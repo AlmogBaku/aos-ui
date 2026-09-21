@@ -188,23 +188,26 @@ class Creator:
         if not self._native(api.verify, path):
             raise CreationError("Profile verification failed")
 
-        profile_yaml = path / "profile.yaml"
-        self._native(api.write_yaml, profile_yaml, _hidden(self._native(api.read_yaml, profile_yaml)))
-        self._native(api.write_text, path / "SOUL.md", instructions)
-        self._native(
-            api.write_profile_meta, path,
-            display_name=_display_name(canon), description=description,
-        )
+        try:
+            profile_yaml = path / "profile.yaml"
+            self._native(api.write_yaml, profile_yaml, _hidden(self._native(api.read_yaml, profile_yaml)))
+            self._native(api.write_text, path / "SOUL.md", instructions)
+            self._native(
+                api.write_profile_meta, path,
+                display_name=_display_name(canon), description=description,
+            )
 
-        toolsets = sorted(CAPABILITY_TOOLSETS[value] for value in capabilities)
-        failure = self._setup(canon, toolsets)
-        if failure is None and not self._toolsets_enabled(path, toolsets):
-            failure = "Toolset enable failed"
-        if failure is not None:
-            return {"status": "setup-needed", "agentId": canon, "error": failure}
+            toolsets = sorted(CAPABILITY_TOOLSETS[value] for value in capabilities)
+            failure = self._setup(canon, toolsets)
+            if failure is None and not self._toolsets_enabled(path, toolsets):
+                failure = "Toolset enable failed"
+            if failure is not None:
+                return {"status": "setup-needed", "agentId": canon, "error": failure}
 
-        self._native(api.write_yaml, profile_yaml, _revealed(self._native(api.read_yaml, profile_yaml)))
-        return {"status": "ready", "agentId": canon}
+            self._native(api.write_yaml, profile_yaml, _revealed(self._native(api.read_yaml, profile_yaml)))
+            return {"status": "ready", "agentId": canon}
+        except CreationError:
+            return {"status": "setup-needed", "agentId": canon, "error": "Profile creation failed"}
 
     def _native(self, operation: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         """Run one native profile operation; report only constant text on failure."""

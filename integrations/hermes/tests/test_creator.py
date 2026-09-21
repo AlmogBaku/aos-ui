@@ -295,6 +295,27 @@ def test_aos_toolset_never_enabled():
         assert argv[argv.index("--platform") + 2:] == TOOLSETS
 
 
+def test_post_publish_write_failure_is_setup_needed():
+    api = FakeProfileApi()
+    original_write_text = api.write_text
+
+    def failing_write_text(path, text):
+        raise OSError("/home/x: permission denied")
+
+    api.write_text = failing_write_text
+    runner = FakeRunner()
+
+    result = _create(_creator(api, runner))
+
+    assert result == {
+        "status": "setup-needed",
+        "agentId": "data-helper",
+        "error": "Profile creation failed",
+    }
+    assert "/" not in json.dumps(result)
+    assert runner.calls == []
+
+
 def test_creator_rejects_unsafe_profile_and_invalid_capabilities():
     creator = Creator(
         CreatorConfig("hermes", SOURCE, "b" * 40),

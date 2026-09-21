@@ -12,7 +12,8 @@ Usage: $(basename "$0") --ref <40-hex-sha> [OPTIONS]
 Options:
   --ref <sha>       40-hex lowercase git SHA of the plugin (required)
   --source <src>    Plugin source URL
-                    (default: file:///home/anakin/projects/aos-ui#integrations/hermes)
+                    (default: derived from this script's git checkout,
+                     e.g. file:///path/to/repo#integrations/hermes)
   --name <profile>  Profile name to create/update (default: agent-creator)
   --python <path>   Path to a Python interpreter with PyYAML
   --dry-run         Print planned commands without executing
@@ -21,7 +22,7 @@ EOF
 }
 
 REF=
-SOURCE="file:///home/anakin/projects/aos-ui#integrations/hermes"
+SOURCE_OVERRIDE=
 NAME="agent-creator"
 PY_OVERRIDE=
 DRY_RUN=0
@@ -29,7 +30,7 @@ DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ref)     REF="$2";         shift 2 ;;
-    --source)  SOURCE="$2";      shift 2 ;;
+    --source)  SOURCE_OVERRIDE="$2"; shift 2 ;;
     --name)    NAME="$2";        shift 2 ;;
     --python)  PY_OVERRIDE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1;        shift ;;
@@ -37,6 +38,17 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+# Resolve plugin source: explicit override, or derived from this checkout
+if [[ -n "$SOURCE_OVERRIDE" ]]; then
+  SOURCE="$SOURCE_OVERRIDE"
+else
+  ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
+  if [[ -z "$ROOT" ]]; then
+    echo "Error: could not determine repository root from script location; pass --source explicitly" >&2; exit 1
+  fi
+  SOURCE="file://$ROOT#integrations/hermes"
+fi
 
 # Validate --ref (required, 40 lowercase hex characters)
 if [[ -z "$REF" ]]; then
@@ -85,7 +97,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] hermes profile create \"$NAME\" --no-alias --description \"Creates AOS Agents through a guided interview\""
 else
   echo "hermes profile list"
-  if ! hermes profile list | grep -qw "$NAME"; then
+  existing=$(hermes profile list)
+  if ! grep -qw -- "$NAME" <<<"$existing"; then
     echo "hermes profile create \"$NAME\" --no-alias --description \"Creates AOS Agents through a guided interview\""
     hermes profile create "$NAME" --no-alias --description "Creates AOS Agents through a guided interview"
   fi
@@ -188,6 +201,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "  AOS_HERMES_PLUGIN_REF=$REF"
 else
   echo "# Updating $ENV_FILE"
+  [[ -e "$ENV_FILE" ]] || install -m 600 /dev/null "$ENV_FILE"
   if ! grep -q '^AOS_HERMES_PLUGIN_SOURCE=' "$ENV_FILE" 2>/dev/null; then
     echo "AOS_HERMES_PLUGIN_SOURCE=$SOURCE" >> "$ENV_FILE"
   fi

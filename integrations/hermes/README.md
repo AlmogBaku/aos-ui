@@ -75,7 +75,11 @@ half-configured Agent never appears in the roster. Hermes at or after
 can no longer observe or adopt a half-written profile directory.
 
 A `setup-needed` result means the profile exists and is still hidden: one of the
-package or toolset steps failed or timed out. Finish it from a shell, then make
+package or toolset steps failed or timed out. A `setup-needed` result with
+`"error": "Profile creation failed"` specifically means the profile was created
+but one of its metadata writes (ui_meta, SOUL.md, or display name) failed;
+inspect it with `hermes profile list` and the profile directory, then finish
+with the commands below. Finish it from a shell, then make
 the Agent visible in **Manage Agents**:
 
 ```bash
