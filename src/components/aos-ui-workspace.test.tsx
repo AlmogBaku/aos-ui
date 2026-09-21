@@ -2522,6 +2522,30 @@ describe("AosUiApp fixture composition", () => {
     )
   })
 
+  it("hides the selected Agent from its row and moves on", async () => {
+    const user = userEvent.setup()
+    render(<FixtureAosUiApp locale="en" dictionary={en} />)
+    const selected = await screen.findByRole("button", {
+      name: /Selected Agent/,
+    })
+    const name = (selected.getAttribute("aria-label") ?? "").split(",")[0]
+
+    fireEvent.contextMenu(selected, { clientX: 16, clientY: 24 })
+    await user.click(
+      await screen.findByRole("menuitem", { name: en.actions.hideAgent })
+    )
+
+    // Hiding deletes nothing, so the row simply leaves and another Agent leads.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: new RegExp(`^${name}\\b`) })
+      ).toBeNull()
+    )
+    const next = await screen.findByRole("button", { name: /Selected Agent/ })
+    expect(next.getAttribute("aria-label")).not.toContain(name)
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
   it("ignores delayed todo events from the previously visible Session", async () => {
     const user = userEvent.setup()
     let emitStale: () => void = () => undefined
