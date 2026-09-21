@@ -156,6 +156,31 @@ ui_meta:
 """
 
 
+def test_creator_loads_its_interview_from_a_skill_file(tmp_path, monkeypatch):
+    _artifact(tmp_path, monkeypatch)
+    _native_home(tmp_path, monkeypatch, CREATOR_METADATA)
+    monkeypatch.setenv("AOS_HERMES_PLUGIN_SOURCE", "file:///srv/aos#integrations/hermes")
+    monkeypatch.setenv("AOS_HERMES_PLUGIN_REF", "a" * 40)
+    context = FakeContext()
+
+    register(context)
+
+    creator = next(
+        kwargs for _args, kwargs in context.skills
+        if kwargs["name"] == "aos-agent-creator"
+    )
+    assert Path(creator["path"]).name == "agent-creator.md"
+    assert Path(creator["path"]).is_file()
+    assert creator["description"].strip()
+    pointer = next(
+        args[1] for args, _kwargs in context.sections
+        if args[0] == "aos.agent_creator"
+    )
+    # The prompt points at the skill; it does not carry the interview itself.
+    assert "aos-agent-creator" in pointer
+    assert "Establish the Agent's purpose" not in pointer
+
+
 def _creator_tool(tmp_path, monkeypatch, *, configured=True):
     _artifact(tmp_path, monkeypatch)
     home = _native_home(tmp_path, monkeypatch, CREATOR_METADATA)

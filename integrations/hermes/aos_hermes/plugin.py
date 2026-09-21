@@ -259,7 +259,19 @@ def register(ctx: Any) -> None:
     )
     guidance = Path(__file__).parent / "_generated" / "agent-creator.md"
     if guidance.exists():
+        # The interview is a skill the creator loads from its own file, like any
+        # other, rather than a copy of that file pasted into every prompt.
+        ctx.register_skill(
+            name="aos-agent-creator",
+            path=guidance,
+            description=(
+                "Interview the user and create a native Agent once they confirm "
+                "its purpose, instructions, and allowed capabilities."
+            ),
+        )
         ctx.register_system_prompt_section(
-            "aos.agent_creator", guidance.read_text(encoding="utf-8")[:4000],
-            position="after_memory", max_chars=4000,
+            "aos.agent_creator",
+            "When the user asks for a new Agent, load "
+            "`aos-integration:aos-agent-creator` with `skill_view` and follow it.",
+            position="after_memory", max_chars=300,
         )
