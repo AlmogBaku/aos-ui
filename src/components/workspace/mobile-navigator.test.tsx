@@ -179,6 +179,22 @@ describe("MobileNavigator", () => {
     expect(props.onOpenSession).not.toHaveBeenCalled()
   })
 
+  it("closes onto a pending draft instead of browsing a Session list", () => {
+    const props = defaultProps()
+    props.agents = [...agents, { id: "draft-pending", name: "New Agent" }]
+    props.selectedAgentId = "draft-pending"
+    render(<MobileNavigator {...props} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /^New Agent, draft/ }))
+
+    expect(props.onStateChange).toHaveBeenCalledWith({ type: "DISMISS" })
+    expect(props.onOpenSession).not.toHaveBeenCalled()
+    expect(props.onStateChange).not.toHaveBeenCalledWith({
+      type: "BROWSE_AGENT",
+      agentId: "draft-pending",
+    })
+  })
+
   it("selects a draft's only interview Session instead of browsing it", () => {
     const props = defaultProps()
     props.agents = [...agents, { id: "draft:interview-1", name: "New Agent" }]

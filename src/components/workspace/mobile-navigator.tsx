@@ -380,10 +380,14 @@ export function MobileNavigator({
                       agent.id === selectedAgentId ? "true" : undefined
                     }
                     onClick={() => {
-                      const draftThreadId = draftThreadOf(agent.id)
-                      if (draftThreadId) {
+                      // A draft owns one interview and no Session list, so its
+                      // row opens that interview, or closes onto the row it
+                      // already selected while the interview has no Session yet.
+                      if (isDraftAgentId(agent.id)) {
+                        const draftThreadId = draftThreadOf(agent.id)
                         onStateChange({ type: "DISMISS" })
-                        onOpenSession(agent.id, draftThreadId)
+                        if (draftThreadId)
+                          onOpenSession(agent.id, draftThreadId)
                         return
                       }
                       onStateChange({

@@ -16,12 +16,14 @@ export const draftAgentId = (threadId: string) => `${DRAFT_PREFIX}${threadId}`
 /**
  * The one interview that is still a local thread. A provider creates the
  * creator Session on the first turn, so this row precedes any Session and
- * therefore names no thread of its own.
+ * therefore names no thread of its own. It sits outside the `draft:<threadId>`
+ * space so that a Session whose id happens to read like this can never be
+ * mistaken for it.
  */
-export const PENDING_DRAFT_AGENT_ID = `${DRAFT_PREFIX}new`
+export const PENDING_DRAFT_AGENT_ID = "draft-pending"
 
 export const draftThreadId = (agentId: string) =>
-  agentId.startsWith(DRAFT_PREFIX) && agentId !== PENDING_DRAFT_AGENT_ID
+  agentId.startsWith(DRAFT_PREFIX)
     ? agentId.slice(DRAFT_PREFIX.length)
     : undefined
 

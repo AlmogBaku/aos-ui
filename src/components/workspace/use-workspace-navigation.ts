@@ -513,9 +513,11 @@ export function useWorkspaceNavigation({
     setPreferredAgentId(rowAgentId)
     setManuallyOpened((current) => ({
       ...current,
-      [agentId]: [...new Set([...(current[agentId] ?? []), activeThreadId])],
+      [rowAgentId]: [
+        ...new Set([...(current[rowAgentId] ?? []), activeThreadId]),
+      ],
     }))
-    lastSelected.current.set(agentId, activeThreadId)
+    lastSelected.current.set(rowAgentId, activeThreadId)
     updateRoute({ agentId: rowAgentId, sessionId: activeThreadId }, "replace")
   }, [activeThreadId, agentCreator?.id, mainItemId, updateRoute])
 
@@ -1041,6 +1043,9 @@ export function useWorkspaceNavigation({
   }
 
   async function createSession(agentId: string) {
+    // A draft row is a projection of the creator, never an Agent a Session can
+    // belong to, and its interview is the one Session it is allowed to own.
+    if (isDraftAgentId(agentId)) return
     setPreferredAgentId(agentId)
     lastSelected.current.set(agentId, null)
     desiredThread.current = null
@@ -1074,10 +1079,12 @@ export function useWorkspaceNavigation({
     updateRoute({ agentId: PENDING_DRAFT_AGENT_ID, sessionId: null }, "push")
     if (await switchToNewThread(creator.id)) {
       // Never submit the interview to whichever Session a newer navigation won.
-      if (!localDraftId.current || localDraftAgent.current !== creator.id)
+      if (!localDraftId.current || localDraftAgent.current !== creator.id) {
+        if (defaultAgentId) await selectAgent(defaultAgentId)
         throw new Error(
           "Creator Session selection changed before the interview started"
         )
+      }
       runtime.thread.append({
         role: "user",
         content: [{ type: "text", text: dictionary.creator.kickoff }],

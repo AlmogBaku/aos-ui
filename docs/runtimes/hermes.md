@@ -178,6 +178,11 @@ creator profile's model configuration holds a literal credential — it must use
 `${VAR}` placeholders — because Hermes copies that block into every created
 profile.
 
+A freshly provisioned creator has no credentials for its model: Hermes copies a
+new profile's model block but not its credential pool, so the creator's first
+turn fails until you sign that profile in with `hermes -p <name> auth add`.
+Never copy another profile's tokens into it.
+
 Provision the creator profile:
 
 ```bash

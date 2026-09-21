@@ -1923,7 +1923,7 @@ describe("AosUiApp fixture composition", () => {
       name: /^New Agent, draft/,
     })
     expect(draftRow).toHaveAttribute("aria-current", "true")
-    expect(window.location.pathname).toBe("/draft%3Anew")
+    expect(window.location.pathname).toBe("/draft-pending")
     expect(await screen.findByText(en.creator.kickoff)).toBeVisible()
     expect(screen.queryByRole("tablist", { name: "Sessions" })).toBeNull()
     expect(
@@ -1936,7 +1936,7 @@ describe("AosUiApp fixture composition", () => {
     await user.click(draftRow)
 
     expect(screen.getByText(en.creator.kickoff)).toBeVisible()
-    expect(window.location.pathname).toBe("/draft%3Anew")
+    expect(window.location.pathname).toBe("/draft-pending")
 
     await act(async () => firstTurn.resolve())
 
