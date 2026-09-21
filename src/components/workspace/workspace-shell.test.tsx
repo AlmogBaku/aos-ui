@@ -104,6 +104,13 @@ function tabSessionMenu(title: string) {
   })
 }
 
+/** Agents are named in the inspector and drawers too, so scope to the rail. */
+function agentRow(name: string | RegExp, agentsLabel = en.workspace.agents) {
+  return within(
+    screen.getByRole("navigation", { name: agentsLabel })
+  ).getByRole("button", { name })
+}
+
 const olderSessions: WorkspaceSession[] = [
   {
     threadId: "thread-pricing",
@@ -680,7 +687,7 @@ describe("WorkspaceShell", () => {
         ...overrides,
       })
 
-    it("offers the Session menu where Session tabs and details would be", () => {
+    it("carries no Session tabs, Session menu, or Agent details", () => {
       renderDraftShell({
         sessionActions: allSessionActions,
         onDeleteSession: vi.fn(),
@@ -700,65 +707,72 @@ describe("WorkspaceShell", () => {
         screen.queryByRole("complementary", { name: en.workspace.agentDetails })
       ).toBeNull()
       expect(
-        screen.getByRole("button", {
-          name: `${en.actions.sessionActions}: ${interview.title}`,
+        screen.queryByRole("button", {
+          name: new RegExp(`^${en.actions.sessionActions}: `),
         })
-      ).toBeVisible()
-      expect(
-        screen.getByRole("button", { name: /^New Agent, draft/ })
-      ).toHaveAttribute("aria-current", "true")
+      ).toBeNull()
+      expect(agentRow(/^New Agent, draft/)).toHaveAttribute(
+        "aria-current",
+        "true"
+      )
     })
 
-    it("answers for deleting the interview and nothing else", async () => {
+    it("discards the draft from its own row menu, and never hides it", async () => {
       const user = userEvent.setup()
-      const onDeleteSession = vi.fn()
-      renderDraftShell({ sessionActions: allSessionActions, onDeleteSession })
+      const onDiscardDraft = vi.fn()
+      renderDraftShell({ onDiscardDraft, onHideAgent: vi.fn() })
 
-      await user.click(
-        screen.getByRole("button", {
-          name: `${en.actions.sessionActions}: ${interview.title}`,
-        })
-      )
+      fireEvent.contextMenu(agentRow(/^New Agent, draft/), {
+        clientX: 16,
+        clientY: 24,
+      })
       expect(
-        await screen.findByRole("menuitem", { name: en.actions.deleteSession })
+        await screen.findByRole("menuitem", { name: en.actions.discardDraft })
       ).toBeVisible()
-      for (const absent of [
-        en.actions.rename,
-        en.actions.pinSession,
-        en.actions.archiveSession,
-      ]) {
-        expect(screen.queryByRole("menuitem", { name: absent })).toBeNull()
-      }
+      expect(
+        screen.queryByRole("menuitem", { name: en.actions.hideAgent })
+      ).toBeNull()
 
       await user.click(
-        screen.getByRole("menuitem", { name: en.actions.deleteSession })
+        screen.getByRole("menuitem", { name: en.actions.discardDraft })
       )
-      const dialog = await screen.findByRole("alertdialog")
-      await user.click(
-        within(dialog).getByRole("button", {
-          name: en.actions.deleteSessionConfirm,
-        })
+      expect(onDiscardDraft).toHaveBeenCalledExactlyOnceWith(
+        "draft:thread-interview"
       )
-      expect(onDeleteSession).toHaveBeenCalledExactlyOnceWith("thread-interview")
     })
 
-    it("localizes the draft controls in Hebrew", () => {
+    it("offers the same row menu before the interview owns a Session", async () => {
+      const onDiscardDraft = vi.fn()
+      renderDraftShell({
+        onDiscardDraft,
+        activeThreadId: null,
+        openSessions: [],
+        navigationCatalog: new Map(),
+      })
+
+      fireEvent.contextMenu(agentRow(/^New Agent, draft/), {
+        clientX: 16,
+        clientY: 24,
+      })
+      expect(
+        await screen.findByRole("menuitem", { name: en.actions.discardDraft })
+      ).toBeVisible()
+    })
+
+    it("localizes the draft row and its menu in Hebrew", async () => {
       renderDraftShell({
         locale: "he",
         dictionary: he,
-        sessionActions: allSessionActions,
-        onDeleteSession: vi.fn(),
+        onDiscardDraft: vi.fn(),
         // The hook names a draft in the operator's own locale.
         agents: [...agents, { id: "draft:thread-interview", name: "סוכן חדש" }],
       })
 
+      const row = agentRow(/^סוכן חדש, טיוטה/, he.workspace.agents)
+      expect(row).toBeVisible()
+      fireEvent.contextMenu(row, { clientX: 16, clientY: 24 })
       expect(
-        screen.getByRole("button", { name: /^סוכן חדש, טיוטה/ })
-      ).toBeVisible()
-      expect(
-        screen.getByRole("button", {
-          name: `${he.actions.sessionActions}: ${interview.title}`,
-        })
+        await screen.findByRole("menuitem", { name: he.actions.discardDraft })
       ).toBeVisible()
     })
   })
@@ -920,6 +934,40 @@ describe("WorkspaceShell", () => {
       within(confirmed).getByRole("button", { name: "Delete Session" })
     )
     expect(onDeleteSession).toHaveBeenCalledExactlyOnceWith("thread-market")
+  })
+
+  it("hides an Agent from a right click on its rail row", async () => {
+    const user = userEvent.setup()
+    const onHideAgent = vi.fn()
+    renderShell({ onHideAgent })
+
+    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    await user.click(
+      await screen.findByRole("menuitem", { name: en.actions.hideAgent })
+    )
+    expect(onHideAgent).toHaveBeenCalledExactlyOnceWith("agent-mica")
+  })
+
+  it("offers no Agent row menu when the runtime cannot hide an Agent", async () => {
+    renderShell()
+
+    fireEvent.contextMenu(agentRow("Mica"), { clientX: 16, clientY: 24 })
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    expect(
+      screen.queryByRole("menuitem", { name: en.actions.hideAgent })
+    ).toBeNull()
+  })
+
+  it("localizes the Agent row menu in Hebrew", async () => {
+    renderShell({ locale: "he", dictionary: he, onHideAgent: vi.fn() })
+
+    fireEvent.contextMenu(agentRow("Mica", he.workspace.agents), {
+      clientX: 16,
+      clientY: 24,
+    })
+    expect(
+      await screen.findByRole("menuitem", { name: he.actions.hideAgent })
+    ).toBeVisible()
   })
 
   it("opens the same tab menu from a right click on any tab", async () => {

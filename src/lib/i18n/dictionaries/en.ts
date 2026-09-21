@@ -144,6 +144,8 @@ export const en = {
     openSession: "Open session",
     showAgentDetails: "Show Agent details",
     hideAgentDetails: "Hide Agent details",
+    hideAgent: "Hide",
+    discardDraft: "Discard draft",
     switchToEnglish: "Switch to English",
     switchToHebrew: "Switch to Hebrew",
   },

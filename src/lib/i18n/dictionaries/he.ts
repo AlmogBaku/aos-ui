@@ -138,6 +138,8 @@ export const he = {
     openSession: "פתיחת שיחה",
     showAgentDetails: "הצגת פרטי הסוכן",
     hideAgentDetails: "הסתרת פרטי הסוכן",
+    hideAgent: "הסתר",
+    discardDraft: "בטל טיוטה",
     switchToEnglish: "מעבר לאנגלית",
     switchToHebrew: "מעבר לעברית",
   },

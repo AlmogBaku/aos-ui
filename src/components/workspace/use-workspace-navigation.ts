@@ -46,6 +46,7 @@ import {
 } from "@/runtime-adapters/agent-identity"
 import {
   draftAgentId,
+  draftThreadId,
   isDraftAgentId,
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
@@ -1333,6 +1334,27 @@ export function useWorkspaceNavigation({
     })
   }
 
+  /**
+   * Deleting the interview Session is the only way to retire a draft that has
+   * one; a pending draft has nothing to delete but its own local thread. The
+   * row names itself, so any draft row can be discarded, not just the selected.
+   */
+  async function discardDraft(agentId: string) {
+    if (!isDraftAgentId(agentId)) return
+    const threadId = draftThreadId(agentId)
+    if (threadId) await runtime.threads.getItemById(threadId).delete()
+    else clearLocalDraft()
+    if (defaultAgentId) await selectAgent(defaultAgentId)
+  }
+
+  /** The rail's way into the visibility rule Agent management already owns. */
+  async function hideAgent(agentId: string) {
+    if (!workspace.updateAgentVisibility)
+      throw new Error("Agent visibility is unavailable from this provider")
+    await workspace.updateAgentVisibility(agentId, "hidden")
+    await refreshAfterVisibilityChange()
+  }
+
   async function refreshAfterVisibilityChange() {
     const nextAgents = await workspace.refreshAgents()
     setAgents(nextAgents)
@@ -1400,6 +1422,8 @@ export function useWorkspaceNavigation({
     deleteSession,
     createSession,
     openAgentBuilder,
+    discardDraft,
+    hideAgent,
     refreshAfterVisibilityChange,
     retryWorkspace,
   }

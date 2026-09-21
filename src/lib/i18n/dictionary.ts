@@ -139,6 +139,10 @@ export type Dictionary = {
     openSession: string
     showAgentDetails: string
     hideAgentDetails: string
+    /** Removes one Agent from the rail, the same visibility rule as management. */
+    hideAgent: string
+    /** Retires an unfinished creator interview, which owns nothing else. */
+    discardDraft: string
     switchToEnglish: string
     switchToHebrew: string
   }

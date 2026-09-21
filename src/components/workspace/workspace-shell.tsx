@@ -44,6 +44,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary"
 import { cn } from "@/lib/utils"
 import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
+import { AgentRowContextMenu } from "./agent-row-menu"
 import { WorkspacePreferences } from "./workspace-preferences"
 import styles from "./workspace-shell.module.css"
 import {
@@ -142,6 +143,9 @@ export type WorkspaceShellProps = {
   /** The selected Agent is an unfinished interview, not a provider Agent. */
   selectedAgentIsDraft?: boolean
   onSelectAgent: (agentId: string) => WorkspaceActionResult
+  /** Absent when the runtime cannot change Agent visibility. */
+  onHideAgent?: (agentId: string) => WorkspaceActionResult
+  onDiscardDraft?: (agentId: string) => WorkspaceActionResult
   onOpenSession: (threadId: string) => WorkspaceActionResult
   onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
   onCreateSession: (agentId: string) => WorkspaceActionResult
@@ -469,6 +473,8 @@ type AgentsPanelProps = Pick<
   | "environmentLabel"
   | "agentBuilderAvailable"
   | "onSelectAgent"
+  | "onHideAgent"
+  | "onDiscardDraft"
   | "onOpenAgentBuilder"
   | "onManageAgents"
   | "onActionError"
@@ -486,6 +492,8 @@ function AgentsPanel({
   environmentLabel,
   agentBuilderAvailable = true,
   onSelectAgent,
+  onHideAgent,
+  onDiscardDraft,
   onOpenAgentBuilder,
   onManageAgents,
   onActionError,
@@ -548,41 +556,60 @@ function AgentsPanel({
             .join(", ")
 
           return (
-            <button
-              className={cn(styles.agentButton, "gap-2 p-2")}
-              type="button"
+            <AgentRowContextMenu
               key={agent.id}
-              data-agent-id={agent.id}
-              aria-current={isSelected ? "true" : undefined}
-              aria-label={accessibleName}
-              onClick={() => {
-                runAction(() => onSelectAgent(agent.id), onActionError)
-                onAfterSelectAgent?.()
-              }}
+              agentId={agent.id}
+              locale={locale}
+              dictionary={dictionary}
+              onHide={
+                onHideAgent &&
+                ((agentId) =>
+                  runAction(() => onHideAgent(agentId), onActionError))
+              }
+              onDiscardDraft={
+                onDiscardDraft &&
+                ((agentId) =>
+                  runAction(() => onDiscardDraft(agentId), onActionError))
+              }
             >
-              <AgentGlyph
-                agent={agent}
-                className="!size-9 !rounded-lg [&_svg]:!size-4"
-              />
-              <span className={styles.agentText}>
-                <span className={cn(styles.agentName, "text-sm leading-5")}>
-                  <bdi>{agent.name}</bdi>
+              <button
+                className={cn(styles.agentButton, "gap-2 p-2")}
+                type="button"
+                data-agent-id={agent.id}
+                aria-current={isSelected ? "true" : undefined}
+                aria-label={accessibleName}
+                onClick={() => {
+                  runAction(() => onSelectAgent(agent.id), onActionError)
+                  onAfterSelectAgent?.()
+                }}
+              >
+                <AgentGlyph
+                  agent={agent}
+                  className="!size-9 !rounded-lg [&_svg]:!size-4"
+                />
+                <span className={styles.agentText}>
+                  <span className={cn(styles.agentName, "text-sm leading-5")}>
+                    <bdi>{agent.name}</bdi>
+                  </span>
+                  {agent.description ? (
+                    <bdi
+                      className={cn(
+                        styles.agentDescription,
+                        "text-xs leading-4"
+                      )}
+                    >
+                      {agent.description}
+                    </bdi>
+                  ) : null}
                 </span>
-                {agent.description ? (
-                  <bdi
-                    className={cn(styles.agentDescription, "text-xs leading-4")}
-                  >
-                    {agent.description}
-                  </bdi>
-                ) : null}
-              </span>
-              <RowIndicators
-                status={agent.status}
-                statusLabel={statusLabel}
-                unread={agent.unread}
-                unreadLabel={dictionary.status.unread}
-              />
-            </button>
+                <RowIndicators
+                  status={agent.status}
+                  statusLabel={statusLabel}
+                  unread={agent.unread}
+                  unreadLabel={dictionary.status.unread}
+                />
+              </button>
+            </AgentRowContextMenu>
           )
         })}
       </nav>
@@ -1185,6 +1212,8 @@ export function WorkspaceShell({
   creatorNotice,
   selectedAgentIsDraft = false,
   onSelectAgent,
+  onHideAgent,
+  onDiscardDraft,
   onOpenSession,
   onCloseSession,
   onCreateSession,
@@ -1222,15 +1251,6 @@ export function WorkspaceShell({
     { view: "closed" }
   )
   const [activityOpen, setActivityOpen] = useState(false)
-  const draftSessionActions = useMemo<SessionActionCapabilities>(
-    () => ({
-      rename: false,
-      archive: false,
-      pin: false,
-      delete: sessionActions?.delete ?? false,
-    }),
-    [sessionActions?.delete]
-  )
   const [sessionDialog, setSessionDialog] = useState<SessionDialog | null>(null)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const storedInspectorOpen = useSyncExternalStore(
@@ -1508,6 +1528,8 @@ export function WorkspaceShell({
     environmentLabel,
     agentBuilderAvailable,
     onSelectAgent,
+    onHideAgent,
+    onDiscardDraft,
     onOpenAgentBuilder,
     onManageAgents: () => {
       dispatchMobileNavigator({ type: "DISMISS" })
@@ -1660,23 +1682,6 @@ export function WorkspaceShell({
         >
           {navigationHidden ? skipLink : null}
           {conversationHeader}
-          {!navigationHidden && selectedAgentIsDraft ? (
-            // An interview is one Session with no tabs to carry its menu, so it
-            // keeps the Session menu every other row has, holding only what an
-            // interview can answer for.
-            <div className="flex min-h-10 items-center justify-end border-b border-border px-2">
-              {activeSession ? (
-                <SessionRowMenuButton
-                  session={activeSession}
-                  copy={sessionRowMenuCopy(dictionary)}
-                  locale={locale}
-                  availability={draftSessionActions}
-                  handlers={{ onDelete: sessionMenu.onDelete }}
-                  className={styles.sessionAction}
-                />
-              ) : null}
-            </div>
-          ) : null}
           {!navigationHidden && !selectedAgentIsDraft ? (
             <div data-keyboard-region="sessions" className="contents">
               <SessionTabs
@@ -1903,7 +1908,6 @@ export function WorkspaceShell({
         >
           {artifactViewer}
         </FocusDrawer>
-
 
         {sessionDialog?.kind === "rename" && onRenameSession ? (
           <SessionRenameDialog
