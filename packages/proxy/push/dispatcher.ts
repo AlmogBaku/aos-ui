@@ -1,6 +1,7 @@
 import {
   categoryOf,
   COALESCE_WINDOW_MS,
+  PRESENCE_CLOSED_GRACE_MS,
   PRESENCE_GRACE_MS,
   PushMessageSchema,
   type PushCategory,
@@ -110,12 +111,21 @@ export function createPushDispatcher({
     return kept
   }
 
-  /** Presence, or the grace an operator who has just left still holds. */
+  /**
+   * Presence, or the grace an operator who has just left still holds. An
+   * operator who is away — backgrounded, hidden or idle — keeps the full window;
+   * one whose last connection closed gets only long enough for a reload to
+   * reconnect and say so.
+   */
   const verdict = (principalId: string): PresenceVerdict => {
     if (presence.present(principalId)) return { state: "present" }
     const lastPresentAt = presence.lastPresentAt(principalId)
     if (lastPresentAt === undefined) return { state: "absent" }
-    const untilMs = lastPresentAt + PRESENCE_GRACE_MS
+    const untilMs =
+      lastPresentAt +
+      (presence.connected(principalId)
+        ? PRESENCE_GRACE_MS
+        : PRESENCE_CLOSED_GRACE_MS)
     return untilMs > now() ? { state: "grace", untilMs } : { state: "absent" }
   }
 

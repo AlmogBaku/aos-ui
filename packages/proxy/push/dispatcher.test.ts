@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { COALESCE_WINDOW_MS, PRESENCE_GRACE_MS } from "../../protocol/push"
+import {
+  COALESCE_WINDOW_MS,
+  PRESENCE_CLOSED_GRACE_MS,
+  PRESENCE_GRACE_MS,
+} from "../../protocol/push"
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRow, SessionRows } from "../core/session-rows"
@@ -315,29 +319,90 @@ describe("push dispatcher", () => {
     expect(line).not.toContain("push.example")
   })
 
-  it("waits out the grace of an operator who has just closed the workspace", async () => {
+  it("waits out the full grace of an operator who is only away", async () => {
     const test = harness()
     test.presence.set(OPERATOR, CONNECTION, {
       sessionId: null,
       foreground: true,
       idle: false,
     })
-    // The grace runs from the close, not from the last heartbeat before it.
-    const closedAt = START + 30_000
+    // The grace runs from the lapse, not from the last heartbeat before it.
+    const lapsedAt = START + 30_000
     test.clock.advance(30_000)
-    test.presence.clear(OPERATOR, CONNECTION)
+    test.presence.set(OPERATOR, CONNECTION, {
+      sessionId: null,
+      foreground: false,
+      idle: false,
+    })
 
     test.publish(occurred("attention-requested"))
     test.clock.advance(COALESCE_WINDOW_MS.input)
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(1)
 
+    test.clock.advance(PRESENCE_CLOSED_GRACE_MS)
+    expect(test.send).not.toHaveBeenCalled()
     test.clock.advance(PRESENCE_GRACE_MS)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
     expect(test.send.mock.calls[0]![1]).toMatchObject({
-      occurredAt: new Date(closedAt + PRESENCE_GRACE_MS).toISOString(),
+      occurredAt: new Date(lapsedAt + PRESENCE_GRACE_MS).toISOString(),
     })
+  })
+
+  it("waits only long enough for a reconnect once every connection has gone", async () => {
+    const test = harness()
+    test.presence.set(OPERATOR, CONNECTION, {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
+    test.publish(occurred("attention-requested"))
+
+    const closedAt = START + 2_000
+    test.clock.advance(2_000)
+    test.presence.clear(OPERATOR, CONNECTION)
+    test.clock.advance(1_000)
+    expect(test.send).not.toHaveBeenCalled()
+    expect(test.clock.pending()).toBe(1)
+
+    test.clock.advance(PRESENCE_CLOSED_GRACE_MS)
+
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+    expect(test.send.mock.calls[0]![1]).toMatchObject({
+      occurredAt: new Date(closedAt + PRESENCE_CLOSED_GRACE_MS).toISOString(),
+    })
+  })
+
+  it("sends nothing when a reload reconnects inside the closed grace", () => {
+    const test = harness()
+    test.presence.set(OPERATOR, CONNECTION, {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
+    test.publish(occurred("attention-requested"))
+    test.presence.clear(OPERATOR, CONNECTION)
+
+    // The reloaded page opens a new connection and reports itself present again.
+    test.clock.advance(1_000)
+    test.presence.set(OPERATOR, "connection-2", {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+
+    expect(test.send).not.toHaveBeenCalled()
+    expect(test.clock.pending()).toBe(0)
+    expect(lines(test.logger)).toEqual([
+      {
+        event: "push.suppressed",
+        category: "input",
+        reason: "present",
+        sessions: 1,
+      },
+    ])
   })
 
   it("forgets a device the push service reports as gone", async () => {

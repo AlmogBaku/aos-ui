@@ -22,6 +22,12 @@ export interface PresenceRegistry {
   /** Records one connection's report, stamped with the moment it arrived. */
   set(principalId: string, connectionId: string, report: PresenceReport): void
   clear(principalId: string, connectionId: string): void
+  /**
+   * Whether this principal still holds any open connection, however it last
+   * reported. It separates an operator who left from one who is merely away:
+   * a closed workspace may be a reload, so it waits a much shorter grace.
+   */
+  connected(principalId: string): boolean
   present(principalId: string): boolean
   exposed(principalId: string, sessionId: string): boolean
   /**
@@ -89,6 +95,11 @@ export function createPresenceRegistry({
       principal.connections.delete(connectionId)
       const at = now()
       if (wasPresent(removed, at)) principal.lastPresentAt = at
+    },
+
+    connected(principalId) {
+      // A registered entry is an open socket, whether or not it still reports.
+      return (principals.get(principalId)?.connections.size ?? 0) > 0
     },
 
     present(principalId) {

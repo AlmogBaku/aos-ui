@@ -36,6 +36,14 @@ export const PRESENCE_IDLE_MS = 180_000
 export const PRESENCE_HEARTBEAT_MS = 60_000
 /** A connection present within this window still holds pushes. */
 export const PRESENCE_GRACE_MS = 60_000
+/**
+ * The same window for a principal with no connection left at all. A closed
+ * connection may still be a reload or an in-app navigation, which reopens the
+ * socket and reports presence again: that is one round trip, so this covers a
+ * reconnect and nothing more. Anything longer would delay the notification an
+ * operator who really left is owed, inside a 3-second input window.
+ */
+export const PRESENCE_CLOSED_GRACE_MS = 2_000
 /** Fixed window from the first event in which one push per category is sent. */
 export const COALESCE_WINDOW_MS: Readonly<Record<PushCategory, number>> = {
   input: 3_000,

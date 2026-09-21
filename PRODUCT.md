@@ -63,12 +63,13 @@ device carrying a count. Payloads and OS text carry no conversation content and
 no Agent or Session labels — only a category, a count, opaque identifiers,
 timestamp, and locale. Cross-device suppression: push is not sent while the
 operator is present on any device (foreground, active within ~3 minutes; 60-second
-heartbeat, 60-second grace); a Session on screen never alerts. Guest sessions
-receive no notifications. Permission denial and unsupported browsers preserve
-Activity. Multiple tabs elect one delivery tab; Activity history stays in memory
-and never replays OS alerts. Clicks focus AOS and validate provider ownership
-before selecting the owning Agent and Session; deleted targets remain
-unavailable.
+heartbeat). After presence lapses, an away tab holds notifications 60 seconds and
+a closed workspace ~2 seconds, enough for a reload to reconnect; a Session on
+screen never alerts. Guest sessions receive no notifications. Permission denial
+and unsupported browsers preserve Activity. Multiple tabs elect one delivery tab;
+Activity history stays in memory and never replays OS alerts. Clicks focus AOS
+and validate provider ownership before selecting the owning Agent and Session;
+deleted targets remain unavailable.
 
 Stored Activity and OS payloads contain no conversation, tool, question,
 permission, or error content. OS text also omits Agent and Session labels.

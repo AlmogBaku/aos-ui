@@ -103,6 +103,26 @@ describe("workspace presence registry", () => {
     )
   })
 
+  it("reports whether a principal still holds any connection", () => {
+    const { time, presence } = registry()
+    expect(presence.connected(OPERATOR)).toBe(false)
+
+    presence.set(OPERATOR, "connection-1", active)
+    presence.set(OPERATOR, "connection-2", { ...active, foreground: false })
+    expect(presence.connected(OPERATOR)).toBe(true)
+    expect(presence.connected(OTHER)).toBe(false)
+
+    // An open socket that stopped reporting is still a connection.
+    time.advance(10 * PRESENCE_HEARTBEAT_MS)
+    expect(presence.present(OPERATOR)).toBe(false)
+    expect(presence.connected(OPERATOR)).toBe(true)
+
+    presence.clear(OPERATOR, "connection-1")
+    expect(presence.connected(OPERATOR)).toBe(true)
+    presence.clear(OPERATOR, "connection-2")
+    expect(presence.connected(OPERATOR)).toBe(false)
+  })
+
   it("lapses presence the moment a present connection closes", () => {
     const { time, presence } = registry()
     presence.set(OPERATOR, "connection-1", active)

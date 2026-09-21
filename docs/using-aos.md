@@ -81,7 +81,7 @@ Rapid events are coalesced per category into one notification: a 3-second window
 
 When the proxy is configured for Web Push, a device that has notifications turned on receives OS notifications even with no AOS tab open, via a service worker. When at least one tab is open and active on that device, the tab handles delivery and no OS alert is raised.
 
-Cross-device suppression: push is not sent while you are present on any device — defined as a foreground AOS tab that has been active within the last three minutes, with a 60-second heartbeat and a 60-second grace period after leaving. A Session on screen never alerts.
+Cross-device suppression: push is not sent while you are present on any device — defined as a foreground AOS tab that has been active within the last three minutes, with a 60-second heartbeat. After you stop being present, a backgrounded or idle tab holds notifications for 60 seconds; a closed workspace holds them for about 2 seconds, long enough for a reload to reconnect. A Session on screen never alerts.
 
 If the deployment does not configure Web Push, or if the origin is not HTTPS, notifications require at least one open AOS tab. Activity settings reflect the current state.
 
