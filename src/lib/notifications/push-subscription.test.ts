@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { OPEN_MESSAGE_TYPE, type PushRegistration } from "@aos/protocol/push"
+import {
+  OPEN_ACK_MESSAGE_TYPE,
+  OPEN_MESSAGE_TYPE,
+  type PushRegistration,
+} from "@aos/protocol/push"
 import { defaultBrowserPreferences } from "./policy"
 import {
   createBrowserPushPlatform,
@@ -37,7 +41,9 @@ function setup(
   } = {}
 ) {
   let current = options.subscription ?? null
-  let message: ((data: unknown) => void) | undefined
+  let message:
+    | ((data: unknown, reply?: (answer: unknown) => void) => void)
+    | undefined
   const pushInfo = vi.fn(async () => {
     if (options.info === "failure") throw new Error("offline")
     return (
@@ -95,7 +101,8 @@ function setup(
     register,
     subscribe,
     subscribed,
-    post: (data: unknown) => message?.(data),
+    post: (data: unknown, reply?: (answer: unknown) => void) =>
+      message?.(data, reply),
     listening: () => message !== undefined,
     replace: (subscription: PushSubscriptionLike | null) => {
       current = subscription
@@ -425,6 +432,20 @@ describe("notification clicks the worker forwards", () => {
     expect(h.listening()).toBe(false)
   })
 
+  it("tells the worker this window took the click, and only then", () => {
+    const h = setup()
+    const reply = vi.fn()
+    h.manager.listen({ onOpen: vi.fn() })
+
+    h.post({ type: OPEN_MESSAGE_TYPE, agentId: "a", sessionId: "t" }, reply)
+    h.post({ type: "aos:other" }, reply)
+    h.post("not-a-message", reply)
+
+    // Silence is what sends the click on to a window of its own, so only a
+    // window that actually received an open answers.
+    expect(reply.mock.calls).toEqual([[{ type: OPEN_ACK_MESSAGE_TYPE }]])
+  })
+
   it("drops every observer on stop", () => {
     const h = setup()
     const onOpen = vi.fn()
@@ -490,11 +511,30 @@ describe("the browser push platform", () => {
       await expect(platform.getSubscription()).resolves.toBe(subscription)
 
       const received: unknown[] = []
-      const stop = platform.onMessage((data) => received.push(data))
+      const answers: unknown[] = []
+      const port = { postMessage: (answer: unknown) => answers.push(answer) }
+      const stop = platform.onMessage((data, reply) => {
+        received.push(data)
+        reply?.({ type: OPEN_ACK_MESSAGE_TYPE })
+      })
       for (const listener of listeners)
-        listener({ data: { type: OPEN_MESSAGE_TYPE } } as MessageEvent)
+        listener({
+          data: { type: OPEN_MESSAGE_TYPE },
+          ports: [port],
+        } as unknown as MessageEvent)
+      // A worker that sent no port -- an older one still installed -- is still
+      // bridged; it simply hears nothing back.
+      for (const listener of listeners)
+        listener({
+          data: { type: OPEN_MESSAGE_TYPE },
+          ports: [],
+        } as unknown as MessageEvent)
       stop()
-      expect(received).toEqual([{ type: OPEN_MESSAGE_TYPE }])
+      expect(received).toEqual([
+        { type: OPEN_MESSAGE_TYPE },
+        { type: OPEN_MESSAGE_TYPE },
+      ])
+      expect(answers).toEqual([{ type: OPEN_ACK_MESSAGE_TYPE }])
       expect(listeners.size).toBe(0)
     } finally {
       Reflect.deleteProperty(navigator, "serviceWorker")

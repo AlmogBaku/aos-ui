@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { acknowledge } from "./acknowledge"
 import { handleNotificationClick, handlePush } from "./logic"
 
 /**
@@ -31,5 +32,7 @@ self.addEventListener("push", (event) => {
 })
 
 self.addEventListener("notificationclick", (event) => {
-  event.waitUntil(handleNotificationClick(self.clients, event.notification))
+  event.waitUntil(
+    handleNotificationClick(self.clients, event.notification, acknowledge)
+  )
 })

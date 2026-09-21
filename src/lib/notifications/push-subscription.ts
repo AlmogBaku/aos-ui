@@ -7,7 +7,7 @@ import {
   type PushRegistration,
 } from "@aos/protocol/push"
 
-import { OPEN_MESSAGE_TYPE } from "@aos/protocol/push"
+import { OPEN_ACK_MESSAGE_TYPE, OPEN_MESSAGE_TYPE } from "@aos/protocol/push"
 import type { BrowserPermission, BrowserPreferences } from "./policy"
 
 /**
@@ -40,7 +40,13 @@ export type PushPlatform = {
   getSubscription(): Promise<PushSubscriptionLike | null>
   /** Null until a registration is ready; called straight from the gesture. */
   subscribe(applicationServerKey: string): Promise<PushSubscriptionLike> | null
-  onMessage(listener: (data: unknown) => void): () => void
+  /**
+   * Bridges worker messages. `reply` answers the port the worker handed this
+   * window, which is how a notification click learns a window took it.
+   */
+  onMessage(
+    listener: (data: unknown, reply?: (answer: unknown) => void) => void
+  ): () => void
 }
 
 export type PushOpenTarget = { agentId: string; sessionId: string }
@@ -252,9 +258,12 @@ export function createPushSubscriptionManager({
     },
     listen(listener) {
       listeners.add(listener)
-      bridge ??= platform.onMessage((data) => {
+      bridge ??= platform.onMessage((data, reply) => {
         const message = openMessageSchema.safeParse(data)
         if (!message.success || message.data.type !== OPEN_MESSAGE_TYPE) return
+        // Answered before the observers run: the worker is waiting to hear that
+        // a running window took the click, not what the workspace did with it.
+        reply?.({ type: OPEN_ACK_MESSAGE_TYPE })
         const { agentId, sessionId } = message.data
         const target = agentId && sessionId ? { agentId, sessionId } : undefined
         for (const observer of [...listeners]) {
@@ -328,7 +337,13 @@ export function createBrowserPushPlatform(): PushPlatform {
       const workers =
         typeof navigator === "undefined" ? undefined : navigator.serviceWorker
       if (!workers) return () => {}
-      const receive = (event: MessageEvent) => listener(event.data)
+      const receive = (event: MessageEvent) => {
+        const port = event.ports[0]
+        listener(
+          event.data,
+          port ? (answer) => port.postMessage(answer) : undefined
+        )
+      }
       workers.addEventListener("message", receive)
       return () => workers.removeEventListener("message", receive)
     },

@@ -57,6 +57,14 @@ export const COALESCE_WINDOW_MS: Readonly<Record<PushCategory, number>> = {
  */
 export const OPEN_MESSAGE_TYPE = "aos:open"
 
+/**
+ * `type` of the answer a window posts back on the port the worker handed it.
+ * The click only counts as delivered once a window answers: an open window may
+ * be loading, frozen, or already gone, and a message lost to one of those would
+ * leave the click with no window at all.
+ */
+export const OPEN_ACK_MESSAGE_TYPE = "aos:open-ack"
+
 /** The encrypted payload a device receives; ids are present iff count is 1. */
 export const PushMessageSchema = z
   .strictObject({

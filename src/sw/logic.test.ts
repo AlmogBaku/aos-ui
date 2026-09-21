@@ -65,6 +65,21 @@ function createClients(...tabs: ReturnType<typeof createTab>[]) {
   }
 }
 
+/** Stands in for the port the worker hands the tab it is asking. */
+const PORT = { transferred: "port" }
+/** A window whose app is running answers at once. */
+const answering = () => ({ port: PORT, answered: Promise.resolve(true) })
+/** A window that is loading, frozen, or gone never answers. */
+const silent = () => ({ port: PORT, answered: Promise.resolve(false) })
+
+function click(
+  clients: ReturnType<typeof createClients>,
+  notification: { close(): void; data: unknown },
+  acknowledge = answering
+) {
+  return handleNotificationClick(clients, notification, acknowledge)
+}
+
 async function pushed(payload: unknown, openTags: string[] = []) {
   const registration = createRegistration(openTags)
   await handlePush(
@@ -227,24 +242,27 @@ describe("notification clicks", () => {
     const tab = createTab()
     const clients = createClients(tab)
     const close = vi.fn()
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close,
       data: singlePush({ agentId: "agent-1", sessionId: "session-1" }),
     })
 
     expect(close).toHaveBeenCalledOnce()
     expect(tab.focus).toHaveBeenCalledOnce()
-    expect(tab.postMessage).toHaveBeenCalledWith({
-      type: OPEN_MESSAGE_TYPE,
-      agentId: "agent-1",
-      sessionId: "session-1",
-    })
+    expect(tab.postMessage).toHaveBeenCalledWith(
+      {
+        type: OPEN_MESSAGE_TYPE,
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+      [PORT]
+    )
     expect(clients.openWindow).not.toHaveBeenCalled()
   })
 
   it("carries no ids to the tab when a count was notified", async () => {
     const tab = createTab()
-    await handleNotificationClick(createClients(tab), {
+    await click(createClients(tab), {
       close: vi.fn(),
       data: {
         v: 1,
@@ -255,14 +273,44 @@ describe("notification clicks", () => {
       },
     })
 
-    expect(tab.postMessage).toHaveBeenCalledWith({
-      type: OPEN_MESSAGE_TYPE,
-    })
+    expect(tab.postMessage).toHaveBeenCalledWith(
+      { type: OPEN_MESSAGE_TYPE },
+      [PORT]
+    )
+  })
+
+  it("opens a window when the tab it was handed never answers", async () => {
+    // The browser reports windows it has restored but not loaded, documents it
+    // has frozen, and tabs still starting the app. None of them will act on a
+    // message, so the click has to end in a window of its own.
+    const loading = createTab({ focused: false, visibilityState: "hidden" })
+    const clients = createClients(loading)
+    await click(clients, { close: vi.fn(), data: singlePush() }, silent)
+
+    expect(loading.focus).toHaveBeenCalledOnce()
+    expect(clients.openWindow).toHaveBeenCalledWith(
+      "/agent%20one/session%2Fone"
+    )
+  })
+
+  it("opens the workspace when a counted click reaches no running window", async () => {
+    const loading = createTab()
+    const clients = createClients(loading)
+    await click(
+      clients,
+      {
+        close: vi.fn(),
+        data: { v: 1, category: "input", count: 3, occurredAt, locale: "en" },
+      },
+      silent
+    )
+
+    expect(clients.openWindow).toHaveBeenCalledWith("/")
   })
 
   it("opens the Session deep link when no tab is open", async () => {
     const clients = createClients()
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -274,12 +322,12 @@ describe("notification clicks", () => {
 
   it("opens the workspace root for a count or unreadable data", async () => {
     const counted = createClients()
-    await handleNotificationClick(counted, {
+    await click(counted, {
       close: vi.fn(),
       data: { v: 1, category: "input", count: 2, occurredAt, locale: "en" },
     })
     const unreadable = createClients()
-    await handleNotificationClick(unreadable, {
+    await click(unreadable, {
       close: vi.fn(),
       data: undefined,
     })
@@ -291,7 +339,7 @@ describe("notification clicks", () => {
   it("prefers the tab the operator is looking at", async () => {
     const background = createTab({ focused: false, visibilityState: "hidden" })
     const focused = createTab({ focused: true, visibilityState: "visible" })
-    await handleNotificationClick(createClients(background, focused), {
+    await click(createClients(background, focused), {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -303,7 +351,7 @@ describe("notification clicks", () => {
   it("prefers a visible tab over a hidden one when none is focused", async () => {
     const hidden = createTab({ focused: false, visibilityState: "hidden" })
     const visible = createTab({ focused: false, visibilityState: "visible" })
-    await handleNotificationClick(createClients(hidden, visible), {
+    await click(createClients(hidden, visible), {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -315,7 +363,7 @@ describe("notification clicks", () => {
   it("takes the first tab when the browser reports neither trait", async () => {
     const first = createTab()
     const second = createTab()
-    await handleNotificationClick(createClients(first, second), {
+    await click(createClients(first, second), {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -328,7 +376,7 @@ describe("notification clicks", () => {
     const closing = createTab()
     closing.focus.mockRejectedValue(new Error("client is closing"))
     const clients = createClients(closing)
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -344,7 +392,7 @@ describe("notification clicks", () => {
       throw new Error("channel closed")
     })
     const clients = createClients(unreachable)
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -361,7 +409,7 @@ describe("notification clicks", () => {
         throw new Error("unsupported")
       },
     }
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -374,7 +422,7 @@ describe("notification clicks", () => {
   it("falls back to the workspace root when the deep link will not open", async () => {
     const clients = createClients()
     clients.openWindow.mockRejectedValueOnce(new Error("cannot open"))
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: vi.fn(),
       data: singlePush(),
     })
@@ -390,7 +438,7 @@ describe("notification clicks", () => {
     clients.openWindow.mockRejectedValue(new Error("cannot open"))
 
     await expect(
-      handleNotificationClick(clients, {
+      click(clients, {
         close: vi.fn(),
         data: singlePush(),
       })
@@ -400,7 +448,7 @@ describe("notification clicks", () => {
 
   it("opens a window even when the notification will not dismiss", async () => {
     const clients = createClients()
-    await handleNotificationClick(clients, {
+    await click(clients, {
       close: () => {
         throw new Error("already closed")
       },

@@ -50,10 +50,16 @@ type ClickedNotification = ClosableNotification & { data: unknown }
 
 type WindowClientSurface = {
   focus(): Promise<unknown>
-  postMessage(message: unknown): void
+  postMessage(message: unknown, transfer?: readonly unknown[]): void
   /** Optional so a browser reporting neither still yields a usable tab. */
   focused?: boolean
   visibilityState?: string
+}
+
+/** What a window must answer on before the click counts as delivered. */
+export type ClickAcknowledgement = {
+  port: unknown
+  answered: Promise<boolean>
 }
 
 type ClientsSurface = {
@@ -206,45 +212,74 @@ function bestTab(
   )
 }
 
+/** Windows that cannot be listed are no windows: the click still owes one. */
+async function listTabs(clients: ClientsSurface) {
+  try {
+    return await clients.matchAll({ type: "window", includeUncontrolled: true })
+  } catch {
+    return []
+  }
+}
+
 /**
  * Hands the Session to an open tab, which validates provider ownership before
- * selecting it, and answers whether that tab took the click. Chrome can return
- * a tab that is already closing, so a refused focus is an answer of no rather
- * than the end of the click.
+ * selecting it, and answers whether that tab took the click.
+ *
+ * Existing is not the same as running: a browser reports windows it restored
+ * but has not loaded, frozen and discarded documents, and tabs still starting
+ * the app, and a message posted to any of those reaches no listener. Only the
+ * tab's own answer settles it — as a refused focus, on a tab that is already
+ * closing, settles it the other way.
  */
 async function askOpenTab(
-  clients: ClientsSurface,
-  message: PushMessage | undefined
+  tab: WindowClientSurface | undefined,
+  message: PushMessage | undefined,
+  acknowledge: () => ClickAcknowledgement
 ): Promise<boolean> {
+  if (!tab) return false
   try {
-    const tab = bestTab(
-      await clients.matchAll({ type: "window", includeUncontrolled: true })
-    )
-    if (!tab) return false
     await tab.focus()
-    tab.postMessage({
-      type: OPEN_MESSAGE_TYPE,
-      ...(message?.agentId ? { agentId: message.agentId } : {}),
-      ...(message?.sessionId ? { sessionId: message.sessionId } : {}),
-    })
-    return true
+    const { port, answered } = acknowledge()
+    tab.postMessage(
+      {
+        type: OPEN_MESSAGE_TYPE,
+        ...(message?.agentId ? { agentId: message.agentId } : {}),
+        ...(message?.sessionId ? { sessionId: message.sessionId } : {}),
+      },
+      [port]
+    )
+    return await answered
   } catch {
     return false
   }
 }
 
 /** Opens the deep link, falling back to the workspace root it already is. */
-async function openWindow(clients: ClientsSurface, target: string) {
+async function openWindow(
+  clients: ClientsSurface,
+  target: string
+): Promise<boolean> {
   const attempts =
     target === WORKSPACE_ROOT ? [target] : [target, WORKSPACE_ROOT]
   for (const url of attempts) {
     try {
       await clients.openWindow(url)
-      return
+      return true
     } catch {
       // A root that will not open leaves nothing further to try.
     }
   }
+  return false
+}
+
+/**
+ * The click path has no page to report to and no step allowed to throw, so this
+ * one line is all that separates a focused window from an opened one — or from a
+ * click that produced neither — in `chrome://serviceworker-internals`. Branch
+ * and counts only: a notification names a Session, and logs stay content-free.
+ */
+function trace(branch: "focused" | "opened" | "nothing", tabs: number) {
+  console.info(`aos push click: ${branch}, windows=${tabs}`)
 }
 
 /**
@@ -254,7 +289,8 @@ async function openWindow(clients: ClientsSurface, target: string) {
  */
 export async function handleNotificationClick(
   clients: ClientsSurface,
-  notification: ClickedNotification
+  notification: ClickedNotification,
+  acknowledge: () => ClickAcknowledgement
 ): Promise<void> {
   try {
     notification.close()
@@ -262,12 +298,17 @@ export async function handleNotificationClick(
     // A notification that will not dismiss still owes the operator a window.
   }
   const message = readMessage(notification.data)
-  if (await askOpenTab(clients, message)) return
-  await openWindow(
+  const tabs = await listTabs(clients)
+  if (await askOpenTab(bestTab(tabs), message, acknowledge)) {
+    trace("focused", tabs.length)
+    return
+  }
+  const opened = await openWindow(
     clients,
     buildWorkspacePathname({
       agentId: message?.agentId ?? null,
       sessionId: message?.sessionId ?? null,
     })
   )
+  trace(opened ? "opened" : "nothing", tabs.length)
 }
