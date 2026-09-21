@@ -39,7 +39,7 @@ Use fixture mode to evaluate layout, localization, keyboard flow, rich output, a
 
 ## Hermes
 
-Hermes owns profiles, Sessions, authentication, speech providers, tools, and persistence. AOS connects directly to the native HTTP/WebSocket API over the server adapter; the browser sees ACP v2. Native active-turn steering records a visible user correction and can fall back to Hermes's provider queue. Profile visibility is native. The optional integration can provide a creator interview, but automated profile creation fails closed until Hermes provides an atomic no-overwrite create operation.
+Hermes owns profiles, Sessions, authentication, speech providers, tools, and persistence. AOS connects directly to the native HTTP/WebSocket API over the server adapter; the browser sees ACP v2. Native active-turn steering records a visible user correction and can fall back to Hermes's provider queue. Profile visibility is native. The optional integration can provide a creator interview and creates the profile itself, hidden until its package and toolsets verify; an incomplete setup is reported for an operator to finish.
 
 ## OpenClaw
 

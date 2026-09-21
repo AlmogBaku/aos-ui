@@ -52,10 +52,21 @@ class NativeProfileApi:
     """Binds lazily to the host Hermes process; importable without it."""
 
     def reserved_names(self) -> frozenset[str]:
-        """Whatever this Hermes reserves; duplicating the list would drift."""
+        """Whatever this Hermes reserves; duplicating the list would drift.
+
+        A local copy is not an option: the native plugin scanner reads a literal
+        list holding names like the superuser's as privilege escalation and
+        blocks the install. Losing the list only costs the friendly message,
+        because Hermes still refuses a reserved name itself, so say so loudly
+        rather than letting the pre-check vanish unnoticed.
+        """
         try:
             from hermes_cli.profiles import _RESERVED_NAMES
         except ImportError:
+            logger.warning(
+                "Hermes exposes no reserved profile names; relying on its own "
+                "rejection instead of the creator's pre-check"
+            )
             return frozenset()
         return frozenset(_RESERVED_NAMES)
 
