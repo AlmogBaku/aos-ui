@@ -182,11 +182,18 @@ function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
 }
 
+/**
+ * The `hermes-bots` CAS revision of one profile-list row. Hermes always sends
+ * `ui_meta_revisions` on a list row — that map is how it feature-detects its
+ * own gateway-owned CAS — but a profile that has never been written through it
+ * has no `hermes-bots` key, and the gateway then compares against `0`. So an
+ * absent key is revision `0`, and only a missing map means the CAS itself is
+ * unavailable. `profiles.describe` never carries the map, so it cannot answer
+ * this question.
+ */
 function nativeRevision(profile: NativeRecord) {
-  const revisions = isRecord(profile.ui_meta_revisions)
-    ? profile.ui_meta_revisions
-    : undefined
-  const revision = revisions?.["hermes-bots"]
+  if (!isRecord(profile.ui_meta_revisions)) return undefined
+  const revision = profile.ui_meta_revisions["hermes-bots"] ?? 0
   return typeof revision === "number" &&
     Number.isSafeInteger(revision) &&
     revision >= 0
@@ -830,24 +837,34 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
-  async listAgents(): Promise<AgentCatalogResponse> {
-    let payload: unknown
+  /** The validated native profile rows, one per distinct Agent id. */
+  async #profiles(): Promise<NativeRecord[]> {
     try {
-      payload = await this.transport.request("profiles.list", {
+      const payload = await this.transport.request("profiles.list", {
         include_sessions: false,
       })
-      const agents = nativeProfiles(payload).map(projectProfile)
+      const profiles = nativeProfiles(payload)
       if (
-        new Set(agents.map(({ summary }) => summary.id)).size !== agents.length
+        new Set(profiles.map(({ name }) => trimmedText(name))).size !==
+        profiles.length
       )
         throw new HermesUnavailableError()
+      return profiles
+    } catch (error) {
+      if (error instanceof HermesAuthenticationError) throw error
+      throw new HermesUnavailableError()
+    }
+  }
+
+  async listAgents(): Promise<AgentCatalogResponse> {
+    try {
+      const agents = (await this.#profiles()).map(projectProfile)
       return AgentCatalogResponseSchema.parse({
         revision: catalogRevision(agents),
         agents,
       })
     } catch (error) {
       if (error instanceof HermesAuthenticationError) throw error
-      if (error instanceof HermesUnavailableError) throw error
       throw new HermesUnavailableError()
     }
   }
@@ -968,27 +985,20 @@ export class HermesServerAdapter implements ServerRuntime {
     visibility: "visible" | "hidden",
     observedRevision: string
   ): Promise<VisibilityUpdateResponse> {
-    const before = await this.listAgents()
-    const current = before.agents.find(({ summary }) => summary.id === agentId)
-    if (!current) throw new HermesAgentNotFoundError()
+    // The list row is the only read that carries the CAS revision and the
+    // stored `hermes-bots` keys the write must preserve; `profiles.configure`
+    // then compares that revision itself, so a write that races another client
+    // is rejected by Hermes rather than by a second read here.
+    const profile = (await this.#profiles()).find(
+      (row) => trimmedText(row.name) === agentId
+    )
+    if (!profile) throw new HermesAgentNotFoundError()
+    const current = projectProfile(profile)
     if (!current.editable || current.revision === "unavailable")
       throw new HermesUnavailableError()
     if (current.revision !== observedRevision)
       throw new HermesRevisionConflictError()
     const expected = Number(current.revision.slice("hermes-bots:".length))
-
-    let described: unknown
-    try {
-      described = await this.transport.request("profiles.describe", {
-        name: agentId,
-      })
-    } catch (error) {
-      throwUnavailable(error)
-    }
-    if (!isRecord(described) || trimmedText(described.name) !== agentId)
-      throw new HermesUnavailableError()
-    if (nativeRevision(described) !== expected)
-      throw new HermesRevisionConflictError()
 
     let configured: unknown
     try {
@@ -996,7 +1006,7 @@ export class HermesServerAdapter implements ServerRuntime {
         name: agentId,
         ui_meta: {
           "hermes-bots": {
-            ...nativeBots(described),
+            ...nativeBots(profile),
             hidden: visibility === "hidden",
           },
         },

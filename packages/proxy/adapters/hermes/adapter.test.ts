@@ -38,7 +38,9 @@ function profile(hidden = false, revision: number | null = 7) {
       aos: { role: "agent", privatePath: "/srv/hermes/researcher" },
       "hermes-bots": { hidden, nativeOnly: "keep-server-side" },
     },
-    ui_meta_revisions: revision === null ? {} : { "hermes-bots": revision },
+    ...(revision === null
+      ? {}
+      : { ui_meta_revisions: { "hermes-bots": revision } }),
   }
 }
 
@@ -2014,7 +2016,7 @@ describe("Hermes server adapter", () => {
     expect(await revisionFor(7)).not.toBe(await revisionFor(8))
   })
 
-  it("marks visibility unavailable when Hermes omits the CAS revision", async () => {
+  it("marks visibility unavailable when Hermes omits the CAS revision map", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(async () => ({ profiles: [profile(false, null)] })),
     })
@@ -2029,11 +2031,69 @@ describe("Hermes server adapter", () => {
     })
   })
 
-  it("updates visibility with the observed revision and confirms an authoritative reread", async () => {
+  it("treats a profile never written through the CAS as revision 0 and edits it", async () => {
+    // Hermes sends `ui_meta_revisions: {}` for such a profile and compares a
+    // write against 0; the row is editable, not provider-managed.
+    const untouched = {
+      name: "default",
+      display_name: "Default",
+      ui_meta: { "hermes-bots": { shape: "squircle", color: "#8b5cf6" } },
+      ui_meta_revisions: {},
+    }
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ profiles: [untouched] })
+      .mockResolvedValueOnce({ profiles: [untouched] })
+      .mockResolvedValueOnce({ applied: { ui_meta: true } })
+      .mockResolvedValueOnce({
+        profiles: [
+          {
+            ...untouched,
+            ui_meta: {
+              "hermes-bots": {
+                ...untouched.ui_meta["hermes-bots"],
+                hidden: true,
+              },
+            },
+            ui_meta_revisions: { "hermes-bots": 1 },
+          },
+        ],
+      })
+    const adapter = new HermesServerAdapter({ request })
+
+    expect((await adapter.listAgents()).agents[0]).toMatchObject({
+      editable: true,
+      revision: "hermes-bots:0",
+    })
+
+    const updated = await adapter.updateAgentVisibility(
+      "default",
+      "hidden",
+      "hermes-bots:0"
+    )
+
+    expect(request.mock.calls[2]).toEqual([
+      "profiles.configure",
+      {
+        name: "default",
+        ui_meta: {
+          "hermes-bots": { shape: "squircle", color: "#8b5cf6", hidden: true },
+        },
+        ui_meta_expected_revisions: { "hermes-bots": 0 },
+      },
+    ])
+    expect(updated.agent).toMatchObject({
+      visibility: "hidden",
+      revision: "hermes-bots:1",
+    })
+  })
+
+  it("updates visibility from the list row's revision and confirms an authoritative reread", async () => {
+    // `profiles.describe` carries neither `ui_meta` nor its revisions, so the
+    // list row is the only read; Hermes's own CAS on configure guards the race.
     const request = vi
       .fn()
       .mockResolvedValueOnce({ profiles: [profile()] })
-      .mockResolvedValueOnce(profile())
       .mockResolvedValueOnce({ applied: { ui_meta: true } })
       .mockResolvedValueOnce({ profiles: [profile(true, 8)] })
     const adapter = new HermesServerAdapter({ request })
@@ -2046,7 +2106,6 @@ describe("Hermes server adapter", () => {
 
     expect(request.mock.calls).toEqual([
       ["profiles.list", { include_sessions: false }],
-      ["profiles.describe", { name: "researcher" }],
       [
         "profiles.configure",
         {
