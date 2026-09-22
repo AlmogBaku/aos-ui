@@ -43,8 +43,12 @@ must not be group- or world-writable; a file left at mode `0664` by
 host path in `/etc/aos-ui/aos-ui.env`. The `invite` subcommand requires
 `--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a default path.
 For Web Push deployments, also set `AOS_UI_PUSH_VAPID_SUBJECT` (a `mailto:` or
-`https:` contact URL) in the env file; `deploy/setup-push.sh` appends all
-three push variables at once when run with `--subject`. Do not install
+`https:` contact URL) in the env file; `deploy/setup-push.sh` appends the
+three push variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`, each only
+when missing, when run with `--subject`. After the script succeeds, add
+`-f compose.push.yaml` after the runtime overlay in `ExecStart`, `ExecReload`,
+and `ExecStop`, then run `systemctl daemon-reload && systemctl reload aos-ui`.
+Do not install
 Cloudflare, create a tunnel, alter DNS, or assume Tailscale unless the
 operator explicitly selected it. For Cloudflare, route the selected guest
 hostname to the guest listener and retain the same guest-only path boundary.

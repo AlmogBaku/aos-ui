@@ -39,6 +39,10 @@ cp deploy/proxy.hermes.example.yaml /absolute/private/path/proxy.yaml
 chmod 600 /absolute/private/path/proxy.yaml
 ```
 
+The proxy accepts the file when it is owned by the user running it at mode 0600
+or 0640, or owned by root at mode 0644; it refuses any group- or world-writable
+mode.
+
 Set these fields in the private copy:
 
 - `listen` and `publicOrigin` for the trusted operator listener;

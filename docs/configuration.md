@@ -37,6 +37,18 @@ The AOS proxy privately selects and authenticates exactly one Hermes, OpenClaw,
 or OpenCode runtime. Hermes is the primary and first-supported harness. There
 is no browser runtime mode or provider route for any of them.
 
+### Compose host variables
+
+These variables control how the Compose stack publishes its listeners on the
+host. They are not read by the Vite dev server.
+
+| Variable                      | Default     | Use                                                 |
+| ----------------------------- | ----------- | --------------------------------------------------- |
+| `AOS_UI_BIND_ADDRESS`         | `127.0.0.1` | Host bind address for the operator listener.        |
+| `AOS_UI_WEB_PUBLISHED_PORT`   | `3000`      | Host-side published port for the operator listener. |
+| `AOS_UI_GUEST_BIND_ADDRESS`   | `127.0.0.1` | Host bind address for the guest listener.           |
+| `AOS_UI_GUEST_PUBLISHED_PORT` | `3001`      | Host-side published port for the guest listener.    |
+
 ## Private proxy configuration
 
 The Bun proxy reads a private YAML configuration file. JSON is valid YAML and

@@ -113,7 +113,8 @@ The overlay builds and starts OpenCode, mounts the external worktree at
 `/workspace`, and keeps native port `4096` internal to Compose. The proxy uses
 the private OpenCode password file and the `opencode:4096` service address in
 the supplied private example. Its operator health endpoint is
-`/api/aos/v1/healthz`.
+`/api/aos/v1/healthz`. `AOS_UI_AWS_CONFIG_DIR` overrides the host AWS
+credentials directory mounted into the OpenCode container (default `$HOME/.aws`).
 
 Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
@@ -150,8 +151,9 @@ Omitting `-f compose.push.yaml` leaves tab-only delivery active and requires
 none of these variables.
 
 **One-time setup.** Run `deploy/setup-push.sh` as root from the checkout
-directory to generate the VAPID key, create the state directory, and append all
-three variables to the env file in one step:
+directory to generate the VAPID key, create the state directory, and append the
+three push variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` to the env
+file, each only when missing:
 
 ```bash
 sudo bash deploy/setup-push.sh \
@@ -273,7 +275,9 @@ See the [configuration reference](configuration.md) for accepted fields and secr
 
 ## Network exposure
 
-All published ports bind to `127.0.0.1` by default. Set
+All published ports bind to `127.0.0.1` by default. `AOS_UI_WEB_PUBLISHED_PORT`
+(default `3000`) and `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) set the
+host-side published ports for the operator and guest listeners. Set
 `AOS_UI_BIND_ADDRESS` or `AOS_UI_GUEST_BIND_ADDRESS` only when another host
 must connect, and configure the corresponding exact browser origin. A wider
 bind requires TLS in front because non-loopback `http:` origins are rejected
@@ -384,7 +388,7 @@ the next reload. Push deployments require three additional steps:
    or `0640`, or owned by root at mode `0644` so the container user can still
    read it.
 
-The pre-YAML configuration environment variable is rejected on startup with a
+The retired `AOS_RUNTIME_PROXY_CONFIG` variable is rejected on startup with a
 message pointing to `--config` or `AOS_UI_PROXY_CONFIG_FILE`.
 
 ## Validate Compose changes
