@@ -17,6 +17,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FC,
@@ -122,10 +123,18 @@ function stepZoom(zoom: number, direction: 1 | -1) {
   )
 }
 
-// Never upscale past the diagram's own size, never shrink below the readable
-// floor, and otherwise fit the frame. One expression, so the diagram keeps
-// following its container without measuring it.
-function diagramHolderWidth(size: DiagramSize, zoom: number) {
+// When the frame has been measured we use a direct pixel width so zoom is a
+// true scale factor. Before measurement (jsdom, content-visibility: auto) we
+// fall back to a CSS-only expression that keeps the diagram at the readable
+// floor scale without needing JavaScript.
+function diagramHolderWidth(
+  size: DiagramSize,
+  zoom: number,
+  measured: boolean
+) {
+  if (measured) {
+    return `${Math.round(size.width * zoom)}px`
+  }
   const natural = Math.round(size.width)
   const floor = Math.round(size.width * MERMAID_MIN_READABLE_SCALE)
   return `calc(min(${natural}px, max(100%, ${floor}px)) * ${zoom})`
@@ -267,16 +276,113 @@ function DiagramFrame({
   size,
   label,
   zoom,
+  onZoomChange,
+  isDefaultZoom = false,
   fill = false,
 }: {
   svg: string
   size: DiagramSize | null
   label: string
   zoom: number
+  onZoomChange?: (zoom: number) => void
+  isDefaultZoom?: boolean
   fill?: boolean
 }) {
   const { frameRef, isDragging, onMouseDown, onMouseMove, onMouseUp } =
     useDragToPan()
+
+  // Measure the frame's available width via ResizeObserver so zoom becomes a
+  // true scale factor. Guards against jsdom (clientWidth = 0) and
+  // content-visibility: auto (measures 0 for off-screen messages).
+  const [measuredWidth, setMeasuredWidth] = useState(0)
+  useLayoutEffect(() => {
+    const el = frameRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const measure = () => {
+      const w = el.clientWidth
+      if (w > 0) setMeasuredWidth(w)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [frameRef])
+
+  // Keep stable refs so the pinch and fit effects don't need to re-attach on
+  // every render.
+  const onZoomChangeRef = useRef(onZoomChange)
+  useLayoutEffect(() => {
+    onZoomChangeRef.current = onZoomChange
+  })
+
+  const isDefaultZoomRef = useRef(isDefaultZoom)
+  useLayoutEffect(() => {
+    isDefaultZoomRef.current = isDefaultZoom
+  })
+
+  // When the frame has been measured and no explicit zoom is set, push the fit
+  // scale up to the parent so the controls reflect the real effective zoom.
+  useLayoutEffect(() => {
+    if (!size || measuredWidth <= 0 || !isDefaultZoomRef.current) return
+    const fitZoom = clamp(
+      measuredWidth / size.width,
+      MERMAID_MIN_ZOOM,
+      MERMAID_MAX_ZOOM
+    )
+    onZoomChangeRef.current?.(fitZoom)
+  }, [size, measuredWidth])
+
+  // Pinch-to-zoom: track two-finger distance from touchstart and apply the
+  // cumulative scale delta to the zoom stored at touch start. passive: false on
+  // touchmove so we can preventDefault and stop the page from panning.
+  const pinchStartRef = useRef<{ dist: number; zoom: number } | null>(null)
+  const zoomRef = useRef(zoom)
+  useLayoutEffect(() => {
+    zoomRef.current = zoom
+  })
+
+  useEffect(() => {
+    const el = frameRef.current
+    if (!el) return
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return
+      const dx = e.touches[0]!.clientX - e.touches[1]!.clientX
+      const dy = e.touches[0]!.clientY - e.touches[1]!.clientY
+      pinchStartRef.current = {
+        dist: Math.hypot(dx, dy),
+        zoom: zoomRef.current,
+      }
+    }
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinchStartRef.current || e.touches.length !== 2) return
+      const dx = e.touches[0]!.clientX - e.touches[1]!.clientX
+      const dy = e.touches[0]!.clientY - e.touches[1]!.clientY
+      const newDist = Math.hypot(dx, dy)
+      const scale = newDist / pinchStartRef.current.dist
+      const newZoom = clamp(
+        pinchStartRef.current.zoom * scale,
+        MERMAID_MIN_ZOOM,
+        MERMAID_MAX_ZOOM
+      )
+      onZoomChangeRef.current?.(newZoom)
+      e.preventDefault()
+    }
+
+    const onTouchEnd = () => {
+      pinchStartRef.current = null
+    }
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true })
+    el.addEventListener("touchmove", onTouchMove, { passive: false })
+    el.addEventListener("touchend", onTouchEnd, { passive: true })
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart)
+      el.removeEventListener("touchmove", onTouchMove)
+      el.removeEventListener("touchend", onTouchEnd)
+    }
+  }, [frameRef]) // frameRef is stable; handlers read live values via refs
 
   if (size === null || isCompactDiagram(size)) {
     return (
@@ -315,7 +421,7 @@ function DiagramFrame({
       <div
         className="mx-auto"
         style={{
-          width: diagramHolderWidth(size, zoom),
+          width: diagramHolderWidth(size, zoom, measuredWidth > 0),
           // While the expanded view holds the diagram this holder is empty, and
           // its own ratio is what keeps the frame from collapsing underneath.
           aspectRatio:
@@ -381,12 +487,26 @@ function ExpandedDiagram({
   onOpenChange: (open: boolean) => void
 }) {
   const [zoom, setZoom] = useState(1)
+  // Track whether auto-fit has already run so that window resizes while the
+  // dialog is open do not override a zoom the user set manually.
+  const [hasAutoZoomed, setHasAutoZoomed] = useState(false)
+
+  const handleZoomChange = useCallback(
+    (next: number) => {
+      setZoom(next)
+      setHasAutoZoomed(true)
+    },
+    []
+  )
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setZoom(1)
+        if (!next) {
+          setZoom(1)
+          setHasAutoZoomed(false)
+        }
         onOpenChange(next)
       }}
     >
@@ -414,12 +534,14 @@ function ExpandedDiagram({
           size={size}
           label={labels.expandedDiagram}
           zoom={zoom}
+          onZoomChange={handleZoomChange}
+          isDefaultZoom={!hasAutoZoomed}
           fill
         />
         <div className="flex items-center gap-1 pe-8">
           <DiagramZoomControls
             zoom={zoom}
-            onZoomChange={setZoom}
+            onZoomChange={handleZoomChange}
             labels={labels}
           />
         </div>
@@ -574,6 +696,8 @@ export function MermaidDiagram({ code }: SyntaxHighlighterProps) {
           size={ready.size}
           label={labels.diagram}
           zoom={zoom}
+          onZoomChange={(next) => setZoomState({ key: sourceKey, zoom: next })}
+          isDefaultZoom={zoomState?.key !== sourceKey}
         />
       ) : null}
 
