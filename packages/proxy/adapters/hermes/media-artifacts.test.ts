@@ -214,6 +214,30 @@ describe("Hermes published artifact receipts", () => {
     expect(publishedArtifact(rows, "report-2")).toBeUndefined()
   })
 
+  it("reads by absolute path when the receipt carries its validated workdir", () => {
+    const row = (workdir: string) => ({
+      role: "tool",
+      content: receipt({
+        id: "report-1",
+        filename: "report.md",
+        path: "reports/report.md",
+        workdir,
+      }),
+    })
+
+    expect(
+      publishedArtifact([row("/home/agent/scratch/")], "report-1")
+    ).toEqual({
+      reference: "/home/agent/scratch/reports/report.md",
+      filename: "report.md",
+    })
+    for (const workdir of ["relative/root", "/home/agent/../root"])
+      expect(publishedArtifact([row(workdir)], "report-1")).toEqual({
+        reference: "reports/report.md",
+        filename: "report.md",
+      })
+  })
+
   it("refuses an absolute, drive-rooted or traversing native reference", () => {
     for (const path of [
       "/srv/private/report.md",

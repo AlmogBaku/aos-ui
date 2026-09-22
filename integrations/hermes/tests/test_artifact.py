@@ -27,6 +27,7 @@ def test_publishes_a_small_receipt_for_a_regular_session_file(tmp_path):
         "type": "aos.artifact",
         "artifact": {
             "id": receipt["artifact"]["id"],
+            "workdir": str(tmp_path),
             "path": "reports/summary.csv",
             "filename": "Quarterly summary.csv",
             "mimeType": "text/csv",

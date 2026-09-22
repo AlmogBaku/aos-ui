@@ -387,17 +387,24 @@ export function publishedArtifact(
     if (!value || value.ok !== true || value.type !== "aos.artifact") continue
     const artifact = isRecord(value.artifact) ? value.artifact : undefined
     const id = trimmedText(artifact?.id)
-    const reference = trimmedText(artifact?.path)
+    const path = trimmedText(artifact?.path)
     const filename = trimmedText(artifact?.filename)
     if (
       id !== artifactId ||
-      !reference ||
+      !path ||
       !filename ||
-      reference.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/u.test(reference) ||
-      reference.split(/[\\/]/u).includes("..")
+      path.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/u.test(path) ||
+      path.split(/[\\/]/u).includes("..")
     )
       continue
+    // Hermes resolves a relative path only against the Session's persisted cwd,
+    // which is often empty; the receipt's validated root makes the read absolute.
+    const workdir = trimmedText(artifact?.workdir)
+    const reference =
+      workdir && workdir.startsWith("/") && !workdir.split("/").includes("..")
+        ? `${workdir.replace(/\/+$/u, "")}/${path}`
+        : path
     return { reference, filename }
   }
   return undefined

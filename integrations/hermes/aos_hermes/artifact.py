@@ -102,8 +102,12 @@ class ArtifactPublisher:
         if mime is None:
             mime = mimetypes.guess_type(target.name)[0]
 
+        # The provider's file reader resolves a relative path only against the
+        # Session's persisted cwd, which Hermes leaves empty for many Sessions.
+        # Carrying the validated root lets the proxy read by absolute path.
         artifact: dict[str, object] = {
             "id": f"hermes-artifact-{uuid.uuid4().hex}",
+            "workdir": str(root),
             "path": portable.as_posix(),
             "filename": filename,
             "sizeBytes": status.st_size,
