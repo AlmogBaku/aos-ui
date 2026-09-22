@@ -100,12 +100,8 @@ describe("optional renderer loading", () => {
       <>
         <RichToolRenderer
           {...toolPart({
-            toolName: "present_plan",
-            args: {
-              id: "plan",
-              title: "Plan",
-              steps: [{ id: "first", label: "First step", status: "pending" }],
-            },
+            toolName: "delegate_subagent",
+            args: { task: "Validate the market segments" },
           })}
         />
         <RichToolRenderer
@@ -122,7 +118,7 @@ describe("optional renderer loading", () => {
         />
       </>
     )
-    expect(screen.getByText("First step")).toBeInTheDocument()
+    expect(screen.getByText("Validate the market segments")).toBeVisible()
     fireEvent.click(screen.getByText("tool_activity"))
     expect(screen.getByText(/Provider activity/)).toBeVisible()
     fireEvent.click(screen.getByText("unknown_tool"))

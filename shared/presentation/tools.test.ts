@@ -17,13 +17,12 @@ describe("portable presentation definitions", () => {
       ).toBe(true)
     }
   })
-  it("exports four model-visible JSON schemas without React dependencies", () => {
+  it("exports three model-visible JSON schemas without React dependencies", () => {
     const tools = presentationCatalog()
     expect(tools.map(({ name }) => name)).toEqual([
       "render_chart",
       "render_map",
       "render_stats",
-      "present_plan",
     ])
     expect(tools.every(({ parameters }) => parameters.type === "object")).toBe(
       true

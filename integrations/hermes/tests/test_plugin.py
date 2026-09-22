@@ -28,7 +28,7 @@ def _artifact(tmp_path, monkeypatch):
     artifact.write_text(json.dumps({
         "tools": [
             {"name": name, "description": name, "parameters": {"type": "object", "properties": {}}}
-            for name in ["render_chart", "render_map", "render_stats", "present_plan"]
+            for name in ["render_chart", "render_map", "render_stats"]
         ],
         "instructions": "Use structured presentation tools.",
     }))
@@ -51,7 +51,7 @@ def test_legacy_plugin_registers_browser_independent_tools_and_prompt(tmp_path, 
     context = FakeContext()
     register(context)
     assert {tool["name"] for tool in context.tools} == {
-        "render_chart", "render_map", "render_stats", "present_plan", "aos_start_session",
+        "render_chart", "render_map", "render_stats", "aos_start_session",
         "present_artifact",
     }
     assert [args[0] for args, _ in context.sections] == [

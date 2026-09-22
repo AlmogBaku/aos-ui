@@ -230,32 +230,6 @@ describe("fixture Assistant UI thread adapter", () => {
     ).resolves.toEqual([])
   })
 
-  it("keeps a plan in both the launch Session and the market showcase", async () => {
-    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
-    const adapter = createFixtureThreadListAdapter(workspace)
-
-    const market = await adapter.historyFor("thread-aster-market").load()
-    const launch = await adapter.historyFor("thread-aster-launch").load()
-
-    expect(
-      launch.messages.some(({ message }) =>
-        message.content.some(
-          (part) =>
-            part.type === "tool-call" && part.toolName === "present_plan"
-        )
-      )
-    ).toBe(true)
-    expect(
-      market.messages.some(({ message }) =>
-        message.content.some(
-          (part) =>
-            part.type === "tool-call" && part.toolName === "present_plan"
-        )
-      )
-    ).toBe(true)
-    expect(launch.messages).not.toEqual(market.messages)
-  })
-
   it("keeps artifact descriptors parseable and uniquely identified", async () => {
     const artifacts = Object.values(FIXTURE_ARTIFACT_CATALOG.examples)
 
@@ -359,7 +333,6 @@ describe("fixture Assistant UI thread adapter", () => {
       "apply_patch",
       "delegate_subagent",
       "render_chart",
-      "present_plan",
     ])
     expect(parts).toEqual(
       expect.arrayContaining([

@@ -67,4 +67,4 @@ def test_every_canonical_generated_example_passes_native_validation():
             result = json.loads(tools.handle(definition["name"], example))
             assert result == {"ok": True, "value": example}
             validated.append(definition["name"])
-    assert validated == ["render_chart", "render_map", "render_stats", "present_plan"]
+    assert validated == ["render_chart", "render_map", "render_stats"]

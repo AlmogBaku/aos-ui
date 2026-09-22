@@ -97,7 +97,6 @@ export function buildOpenCodeConfigContent(
                   render_chart: "allow",
                   render_map: "allow",
                   render_stats: "allow",
-                  present_plan: "allow",
                 }
               : {}),
             ...(monty ? { monty_execute: "allow", monty_search: "allow" } : {}),

@@ -22,7 +22,6 @@ import {
   permissionPayloadSchema,
   type PermissionPayload,
 } from "./payloads/permission"
-import { PlanTool, planPayloadSchema, type PlanPayload } from "./plan"
 import { statsPayloadSchema, type StatsPayload } from "./payloads/stats"
 import {
   questionPayloadSchema,
@@ -160,12 +159,6 @@ const permission = defineToolRenderer<PermissionPayload>({
   acceptsPart: (part) => part.approval !== undefined,
 })
 
-const plan = defineToolRenderer<PlanPayload>({
-  displayNameKey: "plan",
-  schema: planPayloadSchema,
-  Renderer: PlanTool,
-})
-
 const monty = defineToolRenderer<MontyPayload>({
   displayNameKey: "monty",
   schema: montyPayloadSchema,
@@ -213,7 +206,6 @@ const presentationToolRenderers = {
   render_chart: chart,
   render_map: map,
   render_stats: stats,
-  present_plan: plan,
 } satisfies Record<PresentationToolName, RichToolRegistration>
 
 const presentationRichToolRegistry = Object.fromEntries(

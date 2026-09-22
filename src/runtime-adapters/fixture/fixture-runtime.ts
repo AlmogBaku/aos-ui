@@ -42,22 +42,6 @@ const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
 ) => structuredClone(repository)
 
-const launchPlanResult = {
-  id: "plan-launch",
-  title: "Plan",
-  steps: [
-    { id: "goals", label: "Confirm launch goals", status: "completed" },
-    { id: "audience", label: "Validate the audience", status: "active" },
-    {
-      id: "narrative",
-      label: "Review the narrative",
-      status: "pending",
-    },
-    { id: "risks", label: "Surface launch risks", status: "pending" },
-    { id: "decision", label: "Recommend the next decision", status: "pending" },
-  ],
-} as const
-
 const marketInvestmentChartArgs = {
   title: "Investment is shifting into applied AI",
   type: "line",
@@ -160,18 +144,6 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
             result: { ok: true },
           },
           {
-            type: "tool-call",
-            toolCallId: "fixture-market-plan",
-            toolName: "present_plan",
-            args: { title: "Fund the next planning cycle" },
-            argsText: '{"title":"Fund the next planning cycle"}',
-            result: {
-              ...launchPlanResult,
-              id: "plan-market",
-              title: "Fund the next planning cycle",
-            },
-          },
-          {
             type: "source",
             sourceType: "url",
             id: "fixture-market-source",
@@ -246,20 +218,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         threadId === "thread-lumen-roadmap"
           ? "I’ve reviewed the available roadmap. Which customer segment should define the first release?"
           : threadId === "thread-aster-launch"
-            ? [
-                {
-                  type: "text",
-                  text: "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention.",
-                },
-                {
-                  type: "tool-call",
-                  toolCallId: "fixture-launch-plan",
-                  toolName: "present_plan",
-                  args: { title: "Launch review" },
-                  argsText: '{"title":"Launch review"}',
-                  result: launchPlanResult,
-                },
-              ]
+            ? "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention."
             : "The Session is ready to continue. The existing context remains scoped to this Agent.",
       createdAt: FIXTURE_NOW,
     },

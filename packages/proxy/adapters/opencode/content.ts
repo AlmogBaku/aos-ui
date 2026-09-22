@@ -1,10 +1,3 @@
-import {
-  present_planSchema,
-  render_chartSchema,
-  render_mapSchema,
-  render_statsSchema,
-} from "../../../../shared/presentation/tools"
-
 const MAX_ATTACHMENTS = 16
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024
@@ -28,13 +21,6 @@ export class OpenCodeContentUnavailableError extends Error {
   }
 }
 
-const RICH_TOOLS = {
-  render_chart: { kind: "chart", schema: render_chartSchema },
-  render_map: { kind: "map", schema: render_mapSchema },
-  render_stats: { kind: "stats", schema: render_statsSchema },
-  present_plan: { kind: "plan", schema: present_planSchema },
-} as const
-
 const promptFiles = new WeakMap<
   object,
   readonly { uri: string; name?: string }[]
@@ -50,77 +36,6 @@ export function openCodePromptFiles(stage: unknown) {
   const files = promptFiles.get(stage)
   if (!files) throw new OpenCodeContentUnavailableError()
   return files.length ? files : undefined
-}
-
-/**
- * Maps only the AOS integration's validated presentation tools. Native tool
- * state, metadata, IDs, and unknown tools deliberately never become rich UI.
- */
-export function mapOpenCodeRichTool(value: unknown) {
-  const part = record(value)
-  const descriptor =
-    typeof part?.tool === "string"
-      ? RICH_TOOLS[part.tool as keyof typeof RICH_TOOLS]
-      : undefined
-  const state = record(part?.state)
-  if (
-    !descriptor ||
-    !state ||
-    !["pending", "running", "completed", "error"].includes(String(state.status))
-  )
-    return undefined
-  const parsed = descriptor.schema.safeParse(state.input)
-  if (!parsed.success) return undefined
-  const safe = safeRichValue(parsed.data)
-  if (safe === undefined)
-    return {
-      kind: descriptor.kind,
-      fallback: "Presentation is ready for display.",
-    }
-  return {
-    kind: descriptor.kind,
-    data: safe,
-    fallback: "Presentation is ready for display.",
-  }
-}
-
-function safeRichValue(value: unknown): unknown {
-  if (
-    value === null ||
-    typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
-  )
-    return value
-  if (typeof value === "string") {
-    if (
-      value.length > 512 ||
-      !/^[\p{L}\p{N}][\p{L}\p{N} .,;:!?()%'“”‘’+-]*$/u.test(value) ||
-      /(?:authorization|bearer|token|password|secret|key|data:|https?:|wss?:|file:)/iu.test(
-        value
-      )
-    )
-      return
-    return value
-  }
-  if (Array.isArray(value)) {
-    const result = value.map(safeRichValue)
-    return result.some((item) => item === undefined) ? undefined : result
-  }
-  if (!value || typeof value !== "object") return
-  const result: Record<string, unknown> = {}
-  for (const [name, item] of Object.entries(value)) {
-    if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(name)) return
-    const safe = safeRichValue(item)
-    if (safe === undefined) return
-    result[name] = safe
-  }
-  return result
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined
 }
 
 function bytes(value: string) {

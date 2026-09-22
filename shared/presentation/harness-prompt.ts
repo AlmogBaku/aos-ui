@@ -1,4 +1,4 @@
-export type HarnessRichUiKind = "chart" | "map" | "stats" | "plan"
+export type HarnessRichUiKind = "chart" | "map" | "stats"
 
 export type HarnessRichUiTool = Readonly<{
   kind: HarnessRichUiKind
@@ -28,7 +28,6 @@ const richToolGuidance: Record<HarnessRichUiKind, string> = {
   chart: "Use it for charts with structured series and labels.",
   map: "Use it for geographic locations with structured coordinates.",
   stats: "Use it for compact structured metrics and comparisons.",
-  plan: "A Plan is a message-scoped presentation artifact. It never creates or updates a Todo.",
 }
 
 export function buildAosUiHarnessPrompt(

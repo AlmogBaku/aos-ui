@@ -1210,39 +1210,6 @@ describe("provider permission renderer", () => {
 })
 
 describe("informational renderers", () => {
-  it("renders four plan rows with truthful progress and discloses overflow", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "present_plan",
-          args: { title: "Market brief" },
-          result: {
-            id: "plan-market",
-            title: "Plan",
-            steps: [
-              { id: "scope", label: "Define scope", status: "completed" },
-              { id: "trends", label: "Aggregate trends", status: "active" },
-              { id: "segments", label: "Segment market", status: "pending" },
-              { id: "drivers", label: "Identify drivers", status: "pending" },
-              { id: "summary", label: "Write summary", status: "pending" },
-            ],
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: "Plan" })).toBeVisible()
-    expect(screen.getByText("Define scope")).toBeInTheDocument()
-    expect(screen.getByText("In progress")).toBeInTheDocument()
-    expect(screen.getByText("1 of 5 plan steps complete")).toBeInTheDocument()
-    expect(screen.queryByText("Write summary")).not.toBeInTheDocument()
-
-    await user.click(screen.getByText("Show 1 more step"))
-    expect(screen.getByText("Write summary")).toBeVisible()
-  })
-
   it("keeps subagent activity visible as message content", async () => {
     await renderTool(
       <RichToolRenderer
@@ -1694,50 +1661,6 @@ describe("safe result renderers", () => {
     )
   })
 
-  it("renders provider-native plans retained in OpenCode tool arguments", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "present_plan",
-          args: {
-            id: "plan-launch",
-            title: "Launch plan",
-            steps: [
-              { id: "brief", label: "Confirm the brief", status: "active" },
-            ],
-          },
-          result: "Plan ready for display.",
-        })}
-      />
-    )
-
-    expect(screen.getByText("Confirm the brief")).toBeInTheDocument()
-  })
-
-  it("localizes response-scoped Plan copy in Hebrew", async () => {
-    await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "present_plan",
-            args: {
-              id: "plan-launch",
-              title: "תוכנית השקה",
-              steps: [
-                { id: "brief", label: "אישור התקציר", status: "completed" },
-              ],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("מצורפת לתשובה הזו.")).toBeInTheDocument()
-    expect(
-      screen.getByText("1 מתוך 1 שלבים בתוכנית הושלמו")
-    ).toBeInTheDocument()
-  })
-
   it("renders a described subagent delegation as visible activity", async () => {
     await renderTool(
       <RichToolRenderer
@@ -1986,35 +1909,8 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
   })
 
-  it("localizes plan and visible activity chrome", async () => {
-    const { rerender } = await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "present_plan",
-            args: { title: "Provider plan" },
-            result: {
-              id: "plan-he",
-              title: "Provider plan title",
-              steps: [
-                { id: "step-he", label: "Provider step", status: "active" },
-              ],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("בביצוע")).toBeInTheDocument()
-    expect(
-      screen.getByText("0 מתוך 1 שלבים בתוכנית הושלמו")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Provider plan title")).toHaveAttribute(
-      "dir",
-      "auto"
-    )
-
-    await rerender(
+  it("localizes visible activity chrome", async () => {
+    await renderTool(
       <ToolUiLocaleProvider locale="he">
         <RichToolRenderer
           {...toolPart({

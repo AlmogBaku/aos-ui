@@ -7,6 +7,5 @@ provides_tools:
   - render_chart
   - render_map
   - render_stats
-  - present_plan
   - present_artifact
   - aos_start_session

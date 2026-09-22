@@ -10,7 +10,6 @@ export const fixtureScenarioNames = [
   "question",
   "permission",
   "subagent",
-  "plan",
   "todos",
   "chart",
   "map",
@@ -133,49 +132,6 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
             name: "Data analyst",
             status: "completed",
             summary: "Validated three segments against the fixture dataset.",
-          }
-        ),
-      ],
-    }
-  }
-
-  if (input.includes("plan")) {
-    return {
-      name: "plan",
-      parts: [
-        toolPart(
-          "present_plan",
-          { title: "Market brief" },
-          {
-            id: "plan-market",
-            title: "Plan",
-            steps: [
-              {
-                id: "scope",
-                label: "Define scope and coverage",
-                status: "completed",
-              },
-              {
-                id: "trends",
-                label: "Aggregate spend trends",
-                status: "active",
-              },
-              {
-                id: "segments",
-                label: "Segment by function and industry",
-                status: "pending",
-              },
-              {
-                id: "drivers",
-                label: "Identify drivers and shifts",
-                status: "pending",
-              },
-              {
-                id: "summary",
-                label: "Summarize key takeaways",
-                status: "pending",
-              },
-            ],
           }
         ),
       ],

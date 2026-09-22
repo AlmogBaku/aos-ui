@@ -63,20 +63,6 @@ export const render_statsSchema = z.object({
     .min(1),
 })
 
-export const present_planSchema = z.object({
-  id: z.string().min(1).describe("A stable plan identifier"),
-  title: z.string().min(1),
-  steps: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        label: z.string().min(1),
-        status: z.enum(["pending", "active", "completed", "failed"]),
-      })
-    )
-    .min(1),
-})
-
 export const render_chartSchema = chartResultSchema.safeExtend({
   title: z.string().min(1),
 })
@@ -96,11 +82,6 @@ export const presentationToolDefinitions = {
     description:
       "Render compact accessible metrics from supplied structured data. Label illustrative examples; do not invent facts.",
     schema: render_statsSchema,
-  },
-  present_plan: {
-    description:
-      "Present a message-scoped plan. This does not create Todos or change execution state.",
-    schema: present_planSchema,
   },
 } as const
 
@@ -127,11 +108,6 @@ export const presentationExamples = {
   render_stats: {
     title: "Illustrative metric",
     stats: [{ key: "count", label: "Example count", value: 2 }],
-  },
-  present_plan: {
-    id: "example-plan",
-    title: "Illustrative plan",
-    steps: [{ id: "inspect", label: "Inspect inputs", status: "pending" }],
   },
 } as const
 

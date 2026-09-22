@@ -12,12 +12,6 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": [
-      "render_chart",
-      "render_map",
-      "render_stats",
-      "present_plan",
-      "present_artifact"
-    ]
+    "tools": ["render_chart", "render_map", "render_stats", "present_artifact"]
   }
 }
