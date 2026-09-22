@@ -244,7 +244,10 @@ Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
   A styling-only change has no test to write, because styling is never
-  asserted: look at it in the rendered app, in both themes, and stop there.
+  asserted: look at the changed surface once in the rendered app and stop
+  there. A second look in the other theme is earned only by a change to
+  color, contrast, or theme tokens; a behavior change that happens to alter
+  what renders needs no theme pass at all, its tests already cover it.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
 - OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
   installs the package's own lockfile because the plugin SDK is a peer this checkout
