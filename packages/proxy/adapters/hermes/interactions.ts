@@ -20,6 +20,7 @@ import { INTERACTION_PROTOCOL } from "../../../protocol"
 import type { RunInterruptOutcome } from "../../core/events"
 
 import {
+  HermesRpcRejectedError,
   JSON_RPC_METHOD_NOT_FOUND,
   type HermesLog,
   type ServerRequest,
@@ -53,6 +54,16 @@ export type HermesInteractionTransport = {
   onRequest(handler: (request: ServerRequest) => boolean | void): () => void
   onEvent(listener: (event: unknown) => void): () => void
   connected(): boolean
+  /**
+   * Dispatch one ordinary client→server RPC. Answering through `request.answer`
+   * instead of the response frame buys the only acknowledgement Hermes offers:
+   * the frame is fire-and-forget, so an answer another attached client already
+   * settled is dropped without a trace.
+   */
+  request(
+    method: string,
+    params: Readonly<Record<string, unknown>>
+  ): Promise<unknown>
 }
 
 /**
@@ -214,7 +225,11 @@ type ProjectedInteraction =
     }
 
 export type HermesInteractionResult = {
-  status: "resolved" | "expired" | "already-resolved" | "uncertain"
+  /**
+   * `in-use`: Hermes settled this request without withdrawing it, which only
+   * another user attached to the same Session does.
+   */
+  status: "resolved" | "expired" | "already-resolved" | "uncertain" | "in-use"
 }
 
 export type HermesInteractionResumeSnapshot = {
@@ -754,6 +769,12 @@ export class HermesInteractions {
    */
   readonly #resuming = new Map<string, number>()
   readonly #loggedMethods = new Set<string>()
+  /**
+   * Native ids of answers dispatched without an acknowledgement. Hermes may have
+   * applied one, so a request that later stops being listed was settled by this
+   * answer rather than by another user's.
+   */
+  readonly #unacknowledged = new Set<string>()
   /** Reconciliation counter: what a pending request's `confirmed` is stamped with. */
   #reconciliation = 0
   readonly #stopRequests: () => void
@@ -835,11 +856,68 @@ export class HermesInteractions {
     // written now would be lost silently. Keep the card: a reconnect
     // re-delivers the request and the user can answer it again.
     if (!this.transport.connected()) return { status: "uncertain" }
-    interaction.request.respond(result)
+    const settlement = await this.#answer(interaction, result)
+    // Nothing is known about this answer, so nothing is settled: the card stays
+    // and a reconnect re-delivers the request to answer again.
+    if (settlement === "uncertain") return { status: "uncertain" }
+    const status = settlement === "expired" ? "in-use" : "resolved"
     this.#pending.delete(key)
-    this.#complete(key, { status: "resolved" }, fingerprint)
+    this.#complete(key, { status }, fingerprint)
     this.#release(interaction.scope)
-    return { status: "resolved" }
+    return { status }
+  }
+
+  /**
+   * Answer one open request and report what Hermes did with it. `request.answer`
+   * carries the same frame `resolve_response` routes, and is the only path that
+   * says whether the request was still open: `expired` means Hermes had already
+   * settled it. A withdrawal arrives as `request.cancel` and settles the card
+   * before this point, so `expired` here is a request another user attached to
+   * the same Session already answered.
+   *
+   * An older Hermes without the method falls back to the response frame, whose
+   * silence is what AOS answered with before.
+   */
+  async #answer(
+    interaction: PendingInteraction,
+    result: ClarifyResult | ApprovalResult
+  ): Promise<"ok" | "expired" | "uncertain"> {
+    let response: unknown
+    try {
+      response = await this.transport.request("request.answer", {
+        id: interaction.request.id,
+        result,
+      })
+    } catch (error) {
+      if (
+        error instanceof HermesRpcRejectedError &&
+        error.code === JSON_RPC_METHOD_NOT_FOUND
+      ) {
+        this.#logMethod(
+          "hermes.interactions.answer_unsupported",
+          "request.answer"
+        )
+        interaction.request.respond(result)
+        return "ok"
+      }
+      return this.#unacknowledge(interaction)
+    }
+    const status = isRecord(response) ? response.status : undefined
+    if (status === "ok") return "ok"
+    if (status === "expired") return "expired"
+    // A result the contract does not describe says nothing about the answer.
+    return this.#unacknowledge(interaction)
+  }
+
+  /** Remember an answer whose fate is unknown, and report it as such. */
+  #unacknowledge(interaction: PendingInteraction) {
+    this.#unacknowledged.add(interaction.request.id)
+    while (this.#unacknowledged.size > HERMES_INTERACTION_LIMITS.maxPending) {
+      const oldest = this.#unacknowledged.keys().next().value
+      if (oldest === undefined) break
+      this.#unacknowledged.delete(oldest)
+    }
+    return "uncertain" as const
   }
 
   /**
@@ -863,7 +941,7 @@ export class HermesInteractions {
         throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
       }
       this.#settleDeferred()
-      this.#expireUnconfirmed(scope, reconciliation)
+      this.#expireUnconfirmed(scope, reconciliation, attachment.liveSessionId)
       const interrupts = this.pending(scope).flatMap(
         ({ interrupts: pending }) => pending
       )
@@ -1073,16 +1151,32 @@ export class HermesInteractions {
   /**
    * Whatever this reconciliation did not re-deliver is no longer open: Hermes
    * answered it elsewhere, cancelled it, or minted a new live Session for which
-   * it never existed.
+   * it never existed. A cancellation settles its card when the event arrives, so
+   * a request the same live Session simply stopped listing was answered by
+   * another user attached to it; one belonging to a superseded live Session
+   * could never be answered at all.
    */
-  #expireUnconfirmed(scope: HermesInteractionScope, reconciliation: number) {
+  #expireUnconfirmed(
+    scope: HermesInteractionScope,
+    reconciliation: number,
+    liveSessionId: string
+  ) {
     for (const [key, interaction] of [...this.#pending])
       if (
         sameSession(interaction.scope, scope) &&
         interaction.confirmed < reconciliation
       ) {
         this.#pending.delete(key)
-        this.#complete(key, { status: "expired" })
+        // An answer of this Session's own, dispatched without an
+        // acknowledgement, is what settled a request Hermes stopped listing.
+        const answered = this.#unacknowledged.delete(interaction.request.id)
+        this.#complete(key, {
+          status: answered
+            ? "already-resolved"
+            : interaction.liveSessionId === liveSessionId
+              ? "in-use"
+              : "expired",
+        })
       }
     this.#release(scope)
   }

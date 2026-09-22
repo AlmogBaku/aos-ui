@@ -189,19 +189,22 @@ describe("HermesRunEngine", () => {
     expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
     expect(
       events.filter(
-        (event) => (event as { type?: unknown }).type === RunEventKind.RUN_STARTED
+        (event) =>
+          (event as { type?: unknown }).type === RunEventKind.RUN_STARTED
       )
     ).toHaveLength(1)
     expect(
       events.filter(
-        (event) => (event as { type?: unknown }).type === RunEventKind.RUN_FINISHED
+        (event) =>
+          (event as { type?: unknown }).type === RunEventKind.RUN_FINISHED
       )
     ).toHaveLength(1)
     expect(
       events
         .filter(
           (event) =>
-            (event as { type?: unknown }).type === RunEventKind.TEXT_MESSAGE_START
+            (event as { type?: unknown }).type ===
+            RunEventKind.TEXT_MESSAGE_START
         )
         .map((event) => (event as { messageId: string }).messageId)
     ).toEqual(["reply-before", "reply-after"])
@@ -401,7 +404,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "run-1:assistant",
@@ -454,7 +461,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.REASONING_MESSAGE_START,
         messageId: "message-42:reasoning",
@@ -705,7 +716,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -743,7 +758,11 @@ describe("HermesRunEngine", () => {
         )
       )
     ).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-2" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-2",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "continued",
@@ -876,7 +895,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(resumed).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-2" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-2",
+      },
       {
         type: RunEventKind.TOOL_CALL_START,
         toolCallId: "clarify-call",
@@ -1071,6 +1094,22 @@ describe("HermesRunEngine", () => {
     )
   })
 
+  it("reports an answer another user already gave as a Session in use", async () => {
+    const { handle } = await resumedRun({
+      respondInteractions: async () => [{ status: "in-use" as const }],
+    })
+
+    const events = await collect(handle)
+    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
+    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+      {
+        type: RunEventKind.RUN_ERROR,
+        code: "AOS_SESSION_IN_USE",
+        message: "Another user answered this request in this Hermes Session.",
+      },
+    ])
+  })
+
   it("rejects non-standard top-level run fields instead of accepting provider payloads", async () => {
     const engine = new HermesRunEngine(runtime())
 
@@ -1126,7 +1165,11 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes rejected this command.",
@@ -1151,7 +1194,11 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Slash commands cannot be sent with attachments.",
@@ -1238,7 +1285,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.REASONING_MESSAGE_START,
         messageId: "message-42:reasoning",
@@ -1609,7 +1660,11 @@ describe("HermesRunEngine", () => {
 
     await expect(handle.stop()).resolves.toBe("idle")
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -1649,7 +1704,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -1789,7 +1848,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -1826,7 +1889,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -1872,7 +1939,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-43",
@@ -1952,7 +2023,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-43",
@@ -2065,7 +2140,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -2120,7 +2199,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -2206,7 +2289,11 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -2244,7 +2331,11 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -2334,7 +2425,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -2661,13 +2756,16 @@ describe("HermesRunEngine", () => {
     )
 
     const events = await collect(await engine.start(scope, input()))
-    const args = events.find((event) => event.type === RunEventKind.TOOL_CALL_ARGS)
+    const args = events.find(
+      (event) => event.type === RunEventKind.TOOL_CALL_ARGS
+    )
     const result = events.find(
       (event) => event.type === RunEventKind.TOOL_CALL_RESULT
     )
 
     expect(args?.type).toBe(RunEventKind.TOOL_CALL_ARGS)
-    if (args?.type !== RunEventKind.TOOL_CALL_ARGS) throw new Error("missing args")
+    if (args?.type !== RunEventKind.TOOL_CALL_ARGS)
+      throw new Error("missing args")
     expect(args.delta).toContain("[Truncated]")
     expect(args.delta).not.toContain("\\ud83d")
     expect(result).toMatchObject({
@@ -2706,7 +2804,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -2751,7 +2853,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "partial-reply",
@@ -2818,7 +2924,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "partial-reply",
@@ -3088,7 +3198,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes is already running this Session.",
@@ -3202,7 +3316,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -3249,7 +3367,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(cursors).toEqual([0])
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -3416,7 +3538,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -3528,7 +3654,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -3608,7 +3738,11 @@ describe("HermesRunEngine", () => {
         })
       )
     ).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -3641,7 +3775,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await preActive.start(scope, input()))).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -3721,7 +3859,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await unread.start(scope, input()))).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes produced more events than AOS can safely buffer.",
@@ -4043,7 +4185,11 @@ describe("HermesRunEngine", () => {
       })
     )
     expect(recovered).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -4086,7 +4232,11 @@ describe("HermesRunEngine", () => {
     )
     const streamed = await collect(await live.start(scope, input()))
     expect(streamed).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes produced more events than AOS can safely buffer.",
@@ -4149,7 +4299,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await engine.start(scope, input()))).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes produced more events than AOS can safely buffer.",
@@ -4481,7 +4635,8 @@ describe("HermesRunEngine", () => {
     expect(
       events.filter(
         (event) =>
-          (event as { type?: unknown }).type === RunEventKind.TEXT_MESSAGE_CONTENT
+          (event as { type?: unknown }).type ===
+          RunEventKind.TEXT_MESSAGE_CONTENT
       )
     ).toEqual([
       {
@@ -4521,7 +4676,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(cursors).toEqual([2])
     expect(events).toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -4605,7 +4764,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -4669,7 +4832,11 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -4696,7 +4863,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_CONTENT,
         messageId: "message-42",
@@ -4720,7 +4891,11 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "rebound" })
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -4837,7 +5012,11 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-b", secondHeld)
 
     await expect(collect(runA)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-a" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-a",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-a",
@@ -4857,7 +5036,11 @@ describe("HermesRunEngine", () => {
       },
     ])
     await expect(collect(runB)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: other.threadId, runId: "run-b" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: other.threadId,
+        runId: "run-b",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-b",
@@ -4912,7 +5095,11 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-secret", delta)
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -4930,7 +5117,11 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -5001,7 +5192,11 @@ describe("HermesRunEngine", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -5071,7 +5266,11 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-secret", complete)
 
     await expect(collect(resumed)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.TEXT_MESSAGE_START,
         messageId: "message-42",
@@ -5111,7 +5310,11 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message: "Hermes is already running this Session.",
@@ -5153,7 +5356,11 @@ describe("HermesRunEngine", () => {
     expect(resumes).toBe(2)
     expect(attachment.attached("live-1")).toBe(false)
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -5180,7 +5387,11 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_ERROR,
         message:
@@ -5451,7 +5662,11 @@ describe("HermesRunEngine", () => {
     publish(turn.error("Turn cancelled before the agent was ready"))
 
     await expect(collect(handle)).resolves.toEqual([
-      { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId: "run-1" },
+      {
+        type: RunEventKind.RUN_STARTED,
+        threadId: scope.threadId,
+        runId: "run-1",
+      },
       {
         type: RunEventKind.RUN_FINISHED,
         threadId: scope.threadId,
@@ -6399,7 +6614,9 @@ describe("live and refreshed Hermes tool projection agree", () => {
       forCall(RunEventKind.TOOL_CALL_RESULT)?.content ?? ""
     )
     return {
-      toolName: String(forCall(RunEventKind.TOOL_CALL_START)?.toolCallName ?? ""),
+      toolName: String(
+        forCall(RunEventKind.TOOL_CALL_START)?.toolCallName ?? ""
+      ),
       args: JSON.parse(argsText || "null"),
       argsText,
       result: JSON.parse(resultText || "null"),

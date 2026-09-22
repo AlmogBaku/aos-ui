@@ -173,6 +173,7 @@ export const he = {
       "ייתכן שהתשובה שלכם נתקבלה. מתחברים מחדש לפני תשובה נוספת.",
     AOS_INTERACTION_FAILED: "לא ניתן היה להחיל את התשובה שלכם.",
     AOS_INTERACTION_EXPIRED: "הבקשה הזו אינה ממתינה יותר לתשובה.",
+    AOS_SESSION_IN_USE: "משתמש אחר עובד בשיחה הזו והשיב לבקשה הזו.",
     AOS_PROVIDER_RUN_FAILED: "הספק לא הצליח להשלים את ההרצה הזו.",
     AOS_PROVIDER_AGENT_UNAVAILABLE:
       "הספק לא הצליח להפעיל את הסוכן עבור השיחה הזו.",

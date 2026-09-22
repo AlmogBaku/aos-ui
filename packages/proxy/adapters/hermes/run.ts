@@ -223,6 +223,8 @@ export class HermesRunEngine {
       if (active.terminal) return this.#handle(active)
       if (results.some(({ status }) => status === "uncertain"))
         this.#detach(active, RUN_FAILURES.interactionUncertain)
+      else if (results.some(({ status }) => status === "in-use"))
+        this.#fail(active, RUN_FAILURES.sessionInUse)
       else if (results.some(({ status }) => status === "expired"))
         this.#fail(active, RUN_FAILURES.interactionExpired)
       return this.#handle(active)

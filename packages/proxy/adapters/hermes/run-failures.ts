@@ -90,6 +90,10 @@ export const RUN_FAILURES = {
     code: "AOS_INTERACTION_EXPIRED",
     message: "This Hermes interaction is no longer pending.",
   },
+  sessionInUse: {
+    code: "AOS_SESSION_IN_USE",
+    message: "Another user answered this request in this Hermes Session.",
+  },
   sessionBusy: {
     code: "AOS_SESSION_BUSY",
     message: "Hermes is already running this Session.",

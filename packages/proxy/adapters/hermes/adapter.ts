@@ -422,6 +422,7 @@ export class HermesServerAdapter implements ServerRuntime {
         // Only the gateway knows its socket; a transport that cannot say is
         // taken at its word when a write does not throw.
         connected: () => transport.connected?.() ?? true,
+        request: (method, params) => transport.request(method, params),
       },
       {
         ensure: ensureAttached,

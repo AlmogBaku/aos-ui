@@ -527,6 +527,7 @@ describe("guest AG-UI projection", () => {
     ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
     ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
     ["AOS_INTERACTION_EXPIRED", "request_failed"],
+    ["AOS_SESSION_IN_USE", "request_failed"],
     ["AOS_UNKNOWN_TO_THIS_BUILD", "request_failed"],
     ["constructor", "request_failed"],
     ["toString", "request_failed"],
