@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, type RefObject } from "react"
 
 const DEFAULT_BOTTOM_THRESHOLD_PX = 48
+/** How long after the reader's own input a scroll still counts as theirs. */
+const READER_INPUT_WINDOW_MS = 1_000
 const MESSAGE_SELECTOR = "[data-message-id]"
 
 export type ThreadReadingBookmark =
@@ -115,16 +117,17 @@ export class ThreadReadingPositionController {
   }
 
   /**
-   * Only a scroll up leaves follow mode. A scroll down while following is
-   * someone else catching up with grown content — Assistant UI's own smooth
-   * scroll to the bottom — and a position captured mid-animation would pin
-   * the thread short of its latest content.
+   * Only the reader scrolling up leaves follow mode. Everything else that
+   * moves a following viewport — Assistant UI's smooth scroll toward grown
+   * content, scroll anchoring, a focus change — would otherwise be captured
+   * mid-way and pin the thread short of its latest content.
    */
-  capture(threadId: string, viewport: HTMLElement) {
+  capture(threadId: string, viewport: HTMLElement, byReader = true) {
     const previous = this.#bookmarks.get(threadId)
-    const scrolledDown = viewport.scrollTop >= this.#scrollTop
+    const scrolledUp = viewport.scrollTop < this.#scrollTop
     this.#scrollTop = viewport.scrollTop
-    if (previous?.mode === "follow" && scrolledDown) return previous
+    if (previous?.mode === "follow" && !(scrolledUp && byReader))
+      return previous
     const bookmark = captureThreadReadingBookmark(
       viewport,
       this.#bottomThresholdPx
@@ -212,6 +215,13 @@ export function useThreadReadingPosition({
 
     let frame: number | null = null
     let capturePending = false
+    let inputAt = Number.NEGATIVE_INFINITY
+    const noteInput = () => {
+      inputAt = performance.now()
+    }
+    const inputEvents = ["wheel", "touchmove", "pointerdown", "keydown"]
+    for (const type of inputEvents)
+      viewport.addEventListener(type, noteInput, { passive: true })
     const schedule = (capture: boolean) => {
       capturePending ||= capture
       if (frame !== null) return
@@ -219,7 +229,11 @@ export function useThreadReadingPosition({
         frame = null
         if (capturePending) {
           capturePending = false
-          controller.capture(threadId, viewport)
+          controller.capture(
+            threadId,
+            viewport,
+            performance.now() - inputAt < READER_INPUT_WINDOW_MS
+          )
           return
         }
         controller.syncAfterContentChange(threadId, viewport)
@@ -239,6 +253,8 @@ export function useThreadReadingPosition({
 
     return () => {
       viewport.removeEventListener("scroll", capture)
+      for (const type of inputEvents)
+        viewport.removeEventListener(type, noteInput)
       resizeObserver?.disconnect()
       if (frame !== null) window.cancelAnimationFrame(frame)
     }

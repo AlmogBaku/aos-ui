@@ -169,6 +169,17 @@ describe("thread reading position", () => {
     expect(controller.capture("thread-a", viewport).mode).toBe("reading")
   })
 
+  it("keeps following through an upward scroll the reader did not make", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })
+    controller.restore("thread-a", viewport)
+
+    viewport.scrollTop = 200
+    expect(controller.capture("thread-a", viewport, false)).toEqual({
+      mode: "follow",
+    })
+  })
+
   it("keeps bookmarks independent by thread for the controller lifetime", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ scrollTop: 300 })
