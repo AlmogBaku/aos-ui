@@ -225,6 +225,10 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
   disconnect, and an unreadable ownership registry, are retried for a few
   seconds without a visible error, then fail with `AOS_PROVIDER_UNAVAILABLE`.
   A question Hermes no longer holds open fails with `AOS_INTERACTION_EXPIRED`.
+- A Session AOS finds `waiting` whose open request Hermes does not re-deliver
+  within about two seconds, while nothing else changes, reports
+  `AOS_INTERACTION_LOST`. The turn stays running so Stop remains available;
+  Stop interrupts it natively and the Session then accepts a new prompt.
 - A Hermes restart resets every active run once: the next attach produces
   `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
   history from the Hermes transcript. No prompt is re-sent.

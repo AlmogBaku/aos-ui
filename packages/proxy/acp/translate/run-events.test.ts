@@ -186,6 +186,43 @@ describe("translateRunEvent lifecycle", () => {
     })
     expect(state).toEqual(initialTranslateState)
   })
+
+  it("reports a failure awaiting Stop as a running state that keeps the segment", () => {
+    const { state: streaming } = translate([
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+    ])
+    const { state, outbound } = translate(
+      [
+        {
+          type: RunEventKind.RUN_ERROR,
+          code: "AOS_INTERACTION_LOST",
+          message: "question lost",
+          awaitingStop: true,
+        },
+      ],
+      undefined,
+      streaming
+    )
+    const [update] = updatesOf(outbound)
+
+    expect(update).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "running",
+    })
+    expect(update).not.toHaveProperty("stopReason")
+    expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
+      sequence: 7,
+      runId: "run-1",
+      at: AT,
+      code: "AOS_INTERACTION_LOST",
+      message: "question lost",
+    })
+    expect(state).toBe(streaming)
+  })
 })
 
 describe("translateRunEvent messages", () => {

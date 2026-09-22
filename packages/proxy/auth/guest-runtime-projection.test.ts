@@ -528,6 +528,7 @@ describe("guest AG-UI projection", () => {
     ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
     ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
     ["AOS_INTERACTION_EXPIRED", "request_failed"],
+    ["AOS_INTERACTION_LOST", "request_failed"],
     ["AOS_SESSION_IN_USE", "request_failed"],
     ["AOS_UNKNOWN_TO_THIS_BUILD", "request_failed"],
     ["constructor", "request_failed"],
@@ -562,5 +563,21 @@ describe("guest AG-UI projection", () => {
       message: guestErrorDescription("temporarily_unavailable"),
     })
     expect(JSON.stringify(projected)).not.toContain("ValidationException")
+  })
+
+  it("keeps a guest run whose failure awaits Stop stoppable", () => {
+    expect(
+      project({
+        type: RunEventKind.RUN_ERROR,
+        code: "AOS_INTERACTION_LOST",
+        message: "Hermes lost the question",
+        awaitingStop: true,
+      })
+    ).toEqual({
+      type: RunEventKind.RUN_ERROR,
+      code: "request_failed",
+      message: guestErrorDescription("request_failed"),
+      awaitingStop: true,
+    })
   })
 })

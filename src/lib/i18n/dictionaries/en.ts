@@ -181,6 +181,8 @@ export const en = {
     AOS_INTERACTION_FAILED: "Your response could not be applied.",
     AOS_INTERACTION_EXPIRED:
       "This request is no longer waiting for a response.",
+    AOS_INTERACTION_LOST:
+      "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
     AOS_SESSION_IN_USE:
       "This Session is open in another app. Use it there, or start a new Session.",
     AOS_PROVIDER_RUN_FAILED: "The provider could not complete this run.",

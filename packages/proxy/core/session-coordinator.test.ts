@@ -8,6 +8,7 @@ import {
 } from "./events"
 
 import {
+  ServerRunConflictError,
   ServerRunStopNotDispatchedError,
   type ServerRunEngine,
   type ServerAttachmentStage,
@@ -1593,6 +1594,66 @@ describe("SessionCoordinator", () => {
     await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
 
     expect(sessions.state(scope)).toBe("stopping")
+  })
+
+  it("keeps a run that reports a failure awaiting Stop active and stoppable", async () => {
+    const source = new EventSource()
+    const next = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi
+        .fn<ServerRunEngine["start"]>()
+        .mockResolvedValueOnce(source)
+        .mockResolvedValueOnce(next),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine)
+    const announced: ExecutionEvent["type"][] = []
+    sessions.observe((event) => announced.push(event.type))
+    const onTerminal = vi.fn(async () => undefined)
+    const read = reader(
+      await sessions.start(scope, input("run-1"), {
+        ...access("operator"),
+        onTerminal,
+      })
+    )
+    const lost = {
+      type: RunEventKind.RUN_ERROR,
+      code: "AOS_INTERACTION_LOST",
+      message:
+        "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
+      awaitingStop: true,
+    } as const
+    source.emit(runStarted("run-1"))
+    source.emit(lost)
+
+    await expect(read()).resolves.toMatchObject({
+      value: { event: runStarted("run-1") },
+    })
+    await expect(read()).resolves.toMatchObject({ value: { event: lost } })
+    expect(sessions.state(scope)).toBe("running")
+    expect(onTerminal).not.toHaveBeenCalled()
+    await expect(
+      sessions.start(scope, input("run-2"), access("operator"))
+    ).rejects.toBeInstanceOf(ServerRunConflictError)
+
+    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
+    expect(source.stop).toHaveBeenCalledTimes(1)
+    expect(sessions.state(scope)).toBe("stopping")
+    const finished = {
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      result: { stopped: true },
+      outcome: { type: "success" },
+    } as const
+    source.emit(finished)
+    source.finish()
+
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    expect(onTerminal).toHaveBeenCalledExactlyOnceWith(finished)
+    expect(announced).toEqual(["run-started", "run-finished"])
+    await sessions.start(scope, input("run-2"), access("operator"))
+    expect(sessions.state(scope)).toBe("running")
   })
 
   it("rechecks a stopping handle without granting another controller", async () => {

@@ -30,6 +30,7 @@ import {
   HermesRunRewindConflictError,
   nativeFailure,
   providerUnavailable,
+  RUN_FAILED_LOG,
   RUN_FAILURES,
   withDetail,
   type RunFailure,
@@ -95,6 +96,11 @@ const REFUSAL_FAILURES: Record<
   unknown: RUN_FAILURES.commandRejected,
 }
 
+/**
+ * How long a discovered turn Hermes reports `waiting` has for its open request
+ * to be re-delivered before AOS reports the question lost.
+ */
+const LOST_INTERACTION_GRACE_MS = 2_000
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const RUN_INPUT_FIELDS = new Set([
@@ -137,10 +143,16 @@ export class HermesRunEngine {
   readonly #settling = new Map<string, SettlingWatcher>()
   readonly #plans = new Map<string, { messageId: string; todos: Todo[] }>()
   readonly #host: RunEngineHost
+  readonly #lostInteractionGraceMs: number
 
-  constructor(native: HermesRunNative, options: { log?: HermesLog } = {}) {
+  constructor(
+    native: HermesRunNative,
+    options: { log?: HermesLog; lostInteractionGraceMs?: number } = {}
+  ) {
     this.#native = native
     this.#log = options.log ?? { warn: () => undefined }
+    this.#lostInteractionGraceMs =
+      options.lostInteractionGraceMs ?? LOST_INTERACTION_GRACE_MS
     this.#host = {
       native: this.#native,
       log: this.#log,
@@ -352,10 +364,47 @@ export class HermesRunEngine {
       }
     }
     if (snapshot.status !== "running") return undefined
-    return {
-      state: "running" as const,
-      handle: await this.recover(scope, { threadId: scope.threadId, runId }),
-    }
+    const handle = await this.recover(scope, {
+      threadId: scope.threadId,
+      runId,
+    })
+    this.#watchLostInteraction(scope)
+    return { state: "running" as const, handle }
+  }
+
+  /**
+   * A discovered turn Hermes holds `waiting` is blocked on a request. Hermes
+   * re-delivers every open request on resume, so one that has not arrived
+   * within the grace, while the Session did nothing else, is one AOS can no
+   * longer answer: only Stop ends that turn, and the failure says so.
+   */
+  #watchLostInteraction(scope: HermesRunScope) {
+    const active = this.#active.get(sessionKey(scope))
+    if (!active || active.terminal) return
+    const { liveSessionId, lastSeen } = active
+    const unchanged = () =>
+      this.#active.get(sessionKey(scope)) === active &&
+      !active.terminal &&
+      !active.stopping &&
+      !active.uncertain &&
+      !active.detached &&
+      active.liveSessionId === liveSessionId &&
+      active.lastSeen === lastSeen
+    const timer = setTimeout(async () => {
+      if (!unchanged()) return
+      const status = await readStatus(this.#host, liveSessionId)
+      if (status !== "waiting" || !unchanged()) return
+      const { code, message } = RUN_FAILURES.interactionLost
+      this.#log.warn(RUN_FAILED_LOG, { publicCode: code })
+      this.#emit(active, {
+        type: RunEventKind.RUN_ERROR,
+        message,
+        code,
+        awaitingStop: true,
+      })
+    }, this.#lostInteractionGraceMs)
+    // Detection is reconciliation, never a reason to keep the process alive.
+    if (typeof timer !== "number") timer.unref()
   }
 
   /** The same run continues on a new stream from the browser's own cursor. */

@@ -312,6 +312,49 @@ describe("applyUpdate messages", () => {
     })
   })
 
+  it("shows a failure awaiting Stop while the Session stays running", () => {
+    const error = {
+      code: "AOS_INTERACTION_LOST",
+      message: "Stop the turn to continue.",
+    }
+    const failing = fold([
+      userChunk("u1", "Pick a branch"),
+      stateUpdate({ state: "running" }),
+      stateUpdate({ state: "running" }, { ...RUN_META, ...error }),
+    ])
+
+    expect(failing.execution).toMatchObject({
+      status: "running",
+      runId: "run-1",
+      error,
+    })
+    const hosted = toThreadMessages(failing).at(-1)
+    expect(hosted?.role).toBe("assistant")
+    expect(hosted?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error,
+    })
+
+    // Stopping the turn ends it, and the failure it reported stays on it.
+    const stopped = fold(
+      [
+        stateUpdate(
+          { state: "running" },
+          { ...RUN_META, execution: "stopping" }
+        ),
+        stateUpdate({ state: "idle", stopReason: "cancelled" }),
+      ],
+      failing
+    )
+    expect(stopped.execution).toMatchObject({ status: "failed", error })
+    expect(toThreadMessages(stopped).at(-1)?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error,
+    })
+  })
+
   it("keeps unchanged turns reference-equal across updates", () => {
     const first = fold([userChunk("u1", "Hi")])
     const second = fold([agentChunk("a1", "Hello")], first)

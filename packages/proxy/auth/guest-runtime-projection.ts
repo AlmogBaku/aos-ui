@@ -531,6 +531,7 @@ function createRunProjector(
             message:
               projected.payload.description ??
               guestErrorDescription(projected.payload.code),
+            ...(candidate.awaitingStop ? { awaitingStop: true as const } : {}),
           }
         : undefined
     }

@@ -131,7 +131,10 @@ Every event emitted from a run segment carries a base of
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (`acp.ts:303-307`); no sequence/runId |
 
 Stop reasons `_aos_error` and `_aos_uncertain` appear in
-`state_update { state: "idle" }` (`AOS_STOP_REASONS`, `acp.ts:54-57`).
+`state_update { state: "idle" }` (`AOS_STOP_REASONS`, `acp.ts:54-57`). A
+`state_update { state: "running" }` carrying `code` and `message` reports a
+final failure on a run that stays active until it is stopped: the browser shows
+the failure and keeps Stop available, and the run's own idle update ends it.
 
 ## AOS extension methods (`_aos/*`)
 
