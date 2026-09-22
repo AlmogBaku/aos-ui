@@ -122,14 +122,13 @@ that cannot report usage sends none, and the last reading stands.
 Every event emitted from a run segment carries a base of
 `{ sequence, runId }` (`acp.ts:251-254`).
 
-| Event                                 | Extra `_meta.aos` fields                                                    |
-| ------------------------------------- | --------------------------------------------------------------------------- |
+| Event                                 | Extra `_meta.aos` fields                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------- |
 | `state_update`                        | `execution?: "stopping"`, `code?`, `message?` (`acp.ts:257-264`)           |
-| `agent_message_chunk`/`thought_chunk` | (base only) (`acp.ts:267`)                                                  |
+| `agent_message_chunk`/`thought_chunk` | (base only) — identical live and on replay (`AosChunkMetaSchema`)          |
 | `tool_call_update`                    | `messageId`, `argsTextDelta?`, `argsText?` (`acp.ts:281-287`)              |
-| `plan_update`                         | `sequence`, `runId?`, `todos` (`acp.ts:290-294`)                            |
+| `plan_update`                         | `sequence`, `runId?`, `todos` (`acp.ts:290-294`)                           |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (`acp.ts:303-307`); no sequence/runId |
-| `agent_message` (replay failure)      | `sequence`, `runId`, `status` (`acp.ts:274-277`)                           |
 
 Stop reasons `_aos_error` and `_aos_uncertain` appear in
 `state_update { state: "idle" }` (`AOS_STOP_REASONS`, `acp.ts:54-57`).
@@ -138,48 +137,48 @@ Stop reasons `_aos_error` and `_aos_uncertain` appear in
 
 ### Requests (client → server, expect a response)
 
-| Method                       | Purpose                                            |
-| ---------------------------- | -------------------------------------------------- |
+| Method                       | Purpose                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------ |
 | `_aos/session/update`        | Set title, archived, or unread (exactly one intent per call; `acp.ts:206-222`) |
-| `_aos/session/steer`         | Deliver a text correction to the active run        |
-| `_aos/agents/list`           | Fetch the agent catalog                            |
-| `_aos/agents/set_visibility` | Mutate agent visibility                            |
+| `_aos/session/steer`         | Deliver a text correction to the active run                                    |
+| `_aos/agents/list`           | Fetch the agent catalog                                                        |
+| `_aos/agents/set_visibility` | Mutate agent visibility                                                        |
 
 ### Notifications (no response expected)
 
-| Method                       | Direction     | Purpose                                            |
-| ---------------------------- | ------------- | -------------------------------------------------- |
-| `_aos/session/focus`         | client→server | Report the exposed Session (arms read-state); `AosFocusNotificationSchema`, `acp.ts:232-235` |
-| `_aos/activity`              | server→client | Workspace-wide activity feed item (union type, `acp.ts:419-446`) |
-| `_aos/artifact`              | server→client | Published Artifact descriptor (`acp.ts:373-378`)  |
-| `_aos/steer_accepted`        | server→client | Replayable steering acknowledgement                |
-| `_aos/composer_prefill`      | server→client | Composer prefill text from a slash command         |
-| `_aos/catalog_invalidated`   | server→client | Agent catalog may have changed (no params)         |
-| `_aos/session_invalidated`   | server→client | Reserved in the contract (`acp.ts:396-399`); **not emitted by the proxy today**. Session row changes reach the browser as `session_info_update`. Wiring or removing this notification is a follow-up decision. |
-| `_aos/error`                 | server→client | Connection-level failure with no request to answer |
+| Method                     | Direction     | Purpose                                                                                                                                                                                                        |
+| -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_aos/session/focus`       | client→server | Report the exposed Session (arms read-state); `AosFocusNotificationSchema`, `acp.ts:232-235`                                                                                                                   |
+| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts:419-446`)                                                                                                                                               |
+| `_aos/artifact`            | server→client | Published Artifact descriptor (`acp.ts:373-378`)                                                                                                                                                               |
+| `_aos/steer_accepted`      | server→client | Replayable steering acknowledgement                                                                                                                                                                            |
+| `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command                                                                                                                                                                     |
+| `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)                                                                                                                                                                     |
+| `_aos/session_invalidated` | server→client | Reserved in the contract (`acp.ts:396-399`); **not emitted by the proxy today**. Session row changes reach the browser as `session_info_update`. Wiring or removing this notification is a follow-up decision. |
+| `_aos/error`               | server→client | Connection-level failure with no request to answer                                                                                                                                                             |
 
 #### `_aos/activity` union (`acp.ts:419-446`)
 
 Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `type`:
 
-| `type`               | Extra fields                                  |
-| -------------------- | --------------------------------------------- |
-| `run-started`        | `lifecycleId`                                 |
-| `run-finished`       | `lifecycleId`                                 |
-| `run-failed`         | `lifecycleId`                                 |
-| `attention-requested`| `requestId`, `attentionKind: "question" | "permission"` |
-| `attention-resolved` | `requestId`                                   |
-| `unread-changed`     | `unread: boolean`                             |
+| `type`                | Extra fields                            |
+| --------------------- | --------------------------------------- |
+| `run-started`         | `lifecycleId`                           |
+| `run-finished`        | `lifecycleId`                           |
+| `run-failed`          | `lifecycleId`                           |
+| `attention-requested` | `requestId`, `attentionKind: "question" | "permission"` |
+| `attention-resolved`  | `requestId`                             |
+| `unread-changed`      | `unread: boolean`                       |
 
 #### `_aos/artifact` descriptor (`acp.ts:352-378`)
 
 `source` is a discriminated union on `type`:
 
-| `type`     | Extra fields                        |
-| ---------- | ----------------------------------- |
+| `type`     | Extra fields      |
+| ---------- | ----------------- |
 | `inline`   | `encoding: "utf8" | "base64"`, `data` |
-| `url`      | `url`                               |
-| `provider` | `reference`                         |
+| `url`      | `url`             |
+| `provider` | `reference`       |
 
 ## Interactions: permission and elicitation
 
@@ -204,41 +203,41 @@ remains valid because the response schema does not constrain values to the enum.
 The proxy returns these vendor error codes beyond the standard JSON-RPC set
 (`AOS_JSONRPC_ERRORS`, `acp.ts:69-79`):
 
-| Code     | Name                    | Meaning                                         |
-| -------- | ----------------------- | ----------------------------------------------- |
-| `-32001` | `authenticationRequired`| No valid session token (guest lane)             |
-| `-32002` | `runInProgress`         | Cannot send while a run is active               |
-| `-32003` | `staleInterrupt`        | Interrupt ID no longer valid                    |
-| `-32004` | `notFound`              | Agent or Session does not exist                 |
-| `-32005` | `revisionConflict`      | Edit/rewind source message no longer current    |
-| `-32006` | `temporarilyUnavailable`| Runtime not reachable; retry later              |
-| `-32007` | `connectionInterrupted` | Transport dropped mid-mutation                  |
-| `-32008` | `uncertainMutation`     | Mutation dispatched but outcome unknown         |
-| `-32602` | `invalidRequest`        | Request parameters failed validation            |
+| Code     | Name                     | Meaning                                      |
+| -------- | ------------------------ | -------------------------------------------- |
+| `-32001` | `authenticationRequired` | No valid session token (guest lane)          |
+| `-32002` | `runInProgress`          | Cannot send while a run is active            |
+| `-32003` | `staleInterrupt`         | Interrupt ID no longer valid                 |
+| `-32004` | `notFound`               | Agent or Session does not exist              |
+| `-32005` | `revisionConflict`       | Edit/rewind source message no longer current |
+| `-32006` | `temporarilyUnavailable` | Runtime not reachable; retry later           |
+| `-32007` | `connectionInterrupted`  | Transport dropped mid-mutation               |
+| `-32008` | `uncertainMutation`      | Mutation dispatched but outcome unknown      |
+| `-32602` | `invalidRequest`         | Request parameters failed validation         |
 
 ## REST remains for bytes and discovery
 
-| Method  | Path                                                                 | Purpose                  |
-| ------- | -------------------------------------------------------------------- | ------------------------ |
-| `GET`   | `/api/aos/v1/healthz`                                                | Liveness probe           |
-| `GET`   | `/api/aos/v1/readyz`                                                 | Readiness probe          |
-| `GET`   | `/api/aos/v1/runtime`                                                | Runtime discovery        |
-| `POST`  | `/api/aos/v1/agents/:agentId/sessions/:sessionId/attachments/stage`  | Stage an attachment      |
-| `GET`   | `/api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` | Download an Artifact  |
-| `POST`  | `/api/aos/v1/agents/:agentId/audio/transcribe`                       | Audio → text             |
-| `POST`  | `/api/aos/v1/agents/:agentId/audio/speak`                            | Text → audio             |
-| `POST`  | `/api/aos/v1/guest-invitations`                                      | Issue a guest invitation |
+| Method | Path                                                                    | Purpose                  |
+| ------ | ----------------------------------------------------------------------- | ------------------------ |
+| `GET`  | `/api/aos/v1/healthz`                                                   | Liveness probe           |
+| `GET`  | `/api/aos/v1/readyz`                                                    | Readiness probe          |
+| `GET`  | `/api/aos/v1/runtime`                                                   | Runtime discovery        |
+| `POST` | `/api/aos/v1/agents/:agentId/sessions/:sessionId/attachments/stage`     | Stage an attachment      |
+| `GET`  | `/api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` | Download an Artifact     |
+| `POST` | `/api/aos/v1/agents/:agentId/audio/transcribe`                          | Audio → text             |
+| `POST` | `/api/aos/v1/agents/:agentId/audio/speak`                               | Text → audio             |
+| `POST` | `/api/aos/v1/guest-invitations`                                         | Issue a guest invitation |
 
 Guest-lane mirrors under `/api/guest/v1/` (authenticated with the invitation
 token, scoped to the invited Agent and Session):
 
-| Method  | Path                                                                        | Purpose             |
-| ------- | --------------------------------------------------------------------------- | ------------------- |
-| `GET`   | `/api/guest/v1/runtime`                                                     | Guest runtime info  |
-| `POST`  | `/api/guest/v1/agents/:agentId/sessions/:sessionId/attachments/stage`       | Stage an attachment |
-| `GET`   | `/api/guest/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`   | Download an Artifact|
-| `POST`  | `/api/guest/v1/agents/:agentId/audio/transcribe`                            | Audio → text        |
-| `POST`  | `/api/guest/v1/agents/:agentId/audio/speak`                                 | Text → audio        |
+| Method | Path                                                                      | Purpose              |
+| ------ | ------------------------------------------------------------------------- | -------------------- |
+| `GET`  | `/api/guest/v1/runtime`                                                   | Guest runtime info   |
+| `POST` | `/api/guest/v1/agents/:agentId/sessions/:sessionId/attachments/stage`     | Stage an attachment  |
+| `GET`  | `/api/guest/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` | Download an Artifact |
+| `POST` | `/api/guest/v1/agents/:agentId/audio/transcribe`                          | Audio → text         |
+| `POST` | `/api/guest/v1/agents/:agentId/audio/speak`                               | Text → audio         |
 
 ## Browser modules
 

@@ -4,7 +4,6 @@ import {
   AgentCatalogResponseSchema,
   RunSteerResponseSchema,
   SessionContextResponseSchema,
-  SessionMessageErrorStatusSchema,
   SessionStatusSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -265,6 +264,12 @@ const RunMetaBase = {
 /** `state_update._meta.aos` */
 export const AosStateMetaSchema = z.strictObject({
   ...RunMetaBase,
+  /**
+   * When the state took effect. The two state updates that bracket a turn carry
+   * the turn's span, live and on replay alike, so the browser reads a turn's
+   * duration from the wire rather than from its own clock.
+   */
+  at: z.string().datetime().optional(),
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
   /** Present with the `_aos_error` and `_aos_uncertain` stop reasons. */
@@ -274,17 +279,6 @@ export const AosStateMetaSchema = z.strictObject({
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
 export const AosChunkMetaSchema = z.strictObject(RunMetaBase)
-
-/**
- * `agent_message._meta.aos` on a replayed turn the provider failed. A replay has
- * no run of its own to settle, so the durable failure travels with the message
- * it belongs to instead of through a run's `state_update`.
- */
-export const AosHistoryStatusMetaSchema = z.strictObject({
-  ...RunMetaBase,
-  status: SessionMessageErrorStatusSchema,
-})
-export type AosHistoryStatusMeta = z.infer<typeof AosHistoryStatusMetaSchema>
 
 /** `tool_call_update._meta.aos` */
 export const AosToolCallMetaSchema = z.strictObject({

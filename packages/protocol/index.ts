@@ -235,6 +235,8 @@ export const SessionMessageSchema = z.strictObject({
   content: z.array(SessionMessagePartSchema).max(2_000),
   attachments: z.array(SessionMessageAttachmentSchema).max(16).optional(),
   createdAt: z.string().datetime(),
+  /** When the turn's newest stored part landed; absent when the provider keeps no per-row time. */
+  completedAt: z.string().datetime().optional(),
   // The two states a durable message may carry besides a plain completion: a
   // turn still waiting on the user, and a turn the provider failed. Both shapes
   // are the ones the workspace already renders for a live run.
