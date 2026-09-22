@@ -624,7 +624,7 @@ describe("ACP workspace client", () => {
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "call-1",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "in_progress",
     })
     emitUpdate({
@@ -645,7 +645,7 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("reports a replayed receipt and an OpenCode tool name once", async () => {
+  it("reports a replayed receipt once", async () => {
     const { client, emitUpdate } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
@@ -671,6 +671,23 @@ describe("ACP workspace client", () => {
     ])
   })
 
+  it("reports nothing for a native tool name an adapter renames", async () => {
+    const { client, emitUpdate } = createClient()
+    const events: unknown[] = []
+    client.subscribeActivity((event) => events.push(event))
+    await client.attachSession(SESSION_ID)
+
+    emitUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call-native",
+      title: "aos_create_agent",
+      status: "completed",
+      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
+    })
+
+    expect(events).toEqual([])
+  })
+
   it("reports a created Agent that still needs operator setup as a failure", async () => {
     const { client, emitUpdate } = createClient()
     const events: unknown[] = []
@@ -680,7 +697,7 @@ describe("ACP workspace client", () => {
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "call-3",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "completed",
       rawOutput: {
         ok: false,
@@ -725,28 +742,28 @@ describe("ACP workspace client", () => {
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "running",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "in_progress",
       rawOutput: receipt,
     })
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "failed-call",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "failed",
       rawOutput: receipt,
     })
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "malformed",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "completed",
       rawOutput: { ok: true, status: "ready" },
     })
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "not-json",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "completed",
       rawOutput: "created the Agent",
     })
@@ -769,7 +786,7 @@ describe("ACP workspace client", () => {
     emitUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "call-4",
-      title: "aos_create_agent",
+      title: "create_agent",
       status: "in_progress",
     })
     emitUpdate(settled)

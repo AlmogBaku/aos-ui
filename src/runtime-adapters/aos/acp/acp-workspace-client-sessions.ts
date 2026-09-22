@@ -9,6 +9,7 @@ import {
   AOS_METHODS,
   AOS_STOP_REASONS,
   AosActivityNotificationSchema,
+  AosAgentCreationReceiptSchema,
   AosPlanMetaSchema,
   AosSessionInfoMetaSchema,
   AosSessionInvalidatedNotificationSchema,
@@ -96,22 +97,8 @@ function activityEventOf(
   return { ...base, type, lifecycleId: notification.lifecycleId }
 }
 
-/** The creator's own tool, named identically over Hermes and OpenCode. */
-const AGENT_CREATION_TOOLS = new Set(["aos_create_agent", "create_agent"])
-
-const AgentCreationReceiptSchema = z.discriminatedUnion("status", [
-  z.object({
-    ok: z.literal(true),
-    status: z.literal("ready"),
-    agentId: z.string().min(1).max(128),
-  }),
-  z.object({
-    ok: z.literal(false),
-    status: z.literal("setup-needed"),
-    agentId: z.string().min(1).max(128),
-    error: z.string().optional(),
-  }),
-])
+/** The creator's canonical tool name; adapters rename native names to it. */
+const AGENT_CREATION_TOOL = "create_agent"
 
 /** The proxy usually parses tool output; a provider may still send raw text. */
 function agentCreationReceiptOf(rawOutput: unknown) {
@@ -123,7 +110,7 @@ function agentCreationReceiptOf(rawOutput: unknown) {
       return undefined
     }
   }
-  const parsed = AgentCreationReceiptSchema.safeParse(value)
+  const parsed = AosAgentCreationReceiptSchema.safeParse(value)
   return parsed.success ? parsed.data : undefined
 }
 
@@ -244,7 +231,7 @@ export function createAcpSessionStore({
   ) {
     const key = toolCallKey(threadId, update.toolCallId)
     if (typeof update.title === "string") {
-      if (AGENT_CREATION_TOOLS.has(update.title)) creatorCalls.add(key)
+      if (update.title === AGENT_CREATION_TOOL) creatorCalls.add(key)
       else creatorCalls.delete(key)
     }
     const status = update.status

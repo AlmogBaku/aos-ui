@@ -295,6 +295,21 @@ export const AosToolCallMetaSchema = z.strictObject({
   argsText: z.string().optional(),
 })
 
+/** The creator tool's settled output, as one content-free creation receipt. */
+export const AosAgentCreationReceiptSchema = z.discriminatedUnion("status", [
+  z.object({
+    ok: z.literal(true),
+    status: z.literal("ready"),
+    agentId: z.string().min(1).max(128),
+  }),
+  z.object({
+    ok: z.literal(false),
+    status: z.literal("setup-needed"),
+    agentId: z.string().min(1).max(128),
+    error: z.string().optional(),
+  }),
+])
+
 /** `plan_update._meta.aos`: the lossless Session Todos. */
 export const AosPlanMetaSchema = z.strictObject({
   sequence: SequenceSchema,
