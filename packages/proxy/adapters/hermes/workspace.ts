@@ -86,7 +86,7 @@ export type HermesWorkspaceCapabilities = {
         status: "available"
         scope: "attached-active-session"
         coverage: "active-session-only"
-        source: "session.info"
+        source: "provider-session-state"
       }
     | { status: "unavailable"; reason: "session-info-unavailable" }
 }
@@ -531,7 +531,7 @@ export function createHermesWorkspaceOperations(input: {
               status: "available",
               scope: "attached-active-session",
               coverage: "active-session-only",
-              source: "session.info",
+              source: "provider-session-state",
             }
           : { status: "unavailable", reason: "session-info-unavailable" },
       }

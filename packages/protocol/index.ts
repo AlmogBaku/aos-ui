@@ -400,7 +400,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
         status: z.literal("available"),
         scope: z.literal("attached-active-session"),
         coverage: z.literal("active-session-only"),
-        source: z.literal("session.info"),
+        source: z.literal("provider-session-state"),
       }),
       CapabilityUnavailableSchema,
     ]),
