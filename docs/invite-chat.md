@@ -8,9 +8,9 @@ conversation reference.
 ## Configure the guest listener
 
 Add `guest` to the private proxy configuration for the selected runtime, as
-shown in the maintained [Hermes](../deploy/proxy-config.hermes.example.json),
-[OpenClaw](../deploy/proxy-config.openclaw.example.json), or
-[OpenCode](../deploy/proxy-config.opencode.example.json) example.
+shown in the maintained [Hermes](../deploy/proxy.hermes.example.yaml),
+[OpenClaw](../deploy/proxy.openclaw.example.yaml), or
+[OpenCode](../deploy/proxy.opencode.example.yaml) example.
 The signing key must be a private 32-byte secret file. The default invitation
 lifetime is 72 hours.
 
@@ -61,8 +61,7 @@ Session can be created on first Send depends on the selected runtime's exact
 native semantics.
 
 ```bash
-AOS_RUNTIME_PROXY_CONFIG=/absolute/path/proxy-config.json \
-  bun run gateway -- invite --agent interviewer
+bun run gateway -- invite --config /absolute/private/path/proxy.yaml --agent interviewer
 ```
 
 The packaged native integration skill instead sends one POST to the trusted

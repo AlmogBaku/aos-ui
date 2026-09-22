@@ -12,7 +12,7 @@ The worktree is native runtime state. Do not point OpenCode at the AOS checkout 
 
 ## Attach a locally operated server
 
-Start OpenCode independently, with server authentication enabled, then create a private proxy configuration from [`deploy/proxy-config.opencode.example.json`](../../deploy/proxy-config.opencode.example.json). Set its `runtime.baseUrl` to the server address reachable by the proxy, `runtime.directory` to the exact absolute worktree, `runtime.username` to the OpenCode server username, and `runtime.passwordFile` to the matching private password file.
+Start OpenCode independently, with server authentication enabled, then create a private proxy configuration from [`deploy/proxy.opencode.example.yaml`](../../deploy/proxy.opencode.example.yaml). Set its `runtime.baseUrl` to the server address reachable by the proxy, `runtime.directory` to the exact absolute worktree, `runtime.username` to the OpenCode server username, and `runtime.passwordFile` to the matching private password file.
 
 ```bash
 # Terminal 1: OpenCode owns this process and its provider credentials.
@@ -22,7 +22,7 @@ OPENCODE_SERVER_PASSWORD='replace-with-a-private-secret' \
   opencode serve --hostname 127.0.0.1 --port 4096
 
 # Terminal 2: the browser talks only to this proxy.
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.opencode.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.opencode.yaml
 ```
 
 For Vite development, point the browser at that normalized proxy:
@@ -42,7 +42,7 @@ The optional overlay starts OpenCode alongside the proxy. The native port is int
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
 AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \

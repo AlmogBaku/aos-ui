@@ -42,16 +42,24 @@ Use `readyz` (`/api/aos/v1/readyz`) to confirm the proxy is ready, not only
 
 The service template runs the repository's Compose definition. Start with the
 versioned proxy configuration documented in `docs/configuration.md`, store the
-host copy outside the checkout, and point `AOS_UI_PROXY_CONFIG_FILE` at that
-absolute path from `/etc/aos-ui/aos-ui.env`. The same configuration defines the
-distinct operator and optional guest listeners and selects one runtime.
+host copy outside the checkout as a YAML file (JSON is valid YAML and still
+parses), and point `AOS_UI_PROXY_CONFIG_FILE` at that absolute path from
+`/etc/aos-ui/aos-ui.env`. The file must be owned by the proxy user
+(`AOS_UI_HOST_UID`) or by root and must not be group- or world-writable; a
+file left at mode `0664` by `umask 002` fails startup. The `invite` subcommand
+requires `--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a path.
+The same configuration defines the distinct operator and optional guest
+listeners and selects one runtime.
 
 Set the Compose secret-file variables for the Hermes token and optional guest
-invitation signing key (`compose.hermes.yaml` secrets block). Create and protect
-those files with the host's documented secret-management workflow. If encrypted
-credentials are unavailable, use root-owned mode-0600 files mounted as Compose
-secrets; do not put secret values in a world-readable unit, `.env`, shell
-profile, proxy JSON, or browser runtime JSON.
+invitation signing key (`compose.hermes.yaml` secrets block). For Web Push,
+also add `AOS_UI_PUSH_VAPID_SUBJECT` (a `mailto:` or `https:` contact URL) to
+`/etc/aos-ui/aos-ui.env`; `deploy/setup-push.sh` appends all three push
+variables when run with `--subject`. Create and protect those files with the
+host's documented secret-management workflow. If encrypted credentials are
+unavailable, use root-owned mode-0600 files mounted as Compose secrets; do not
+put secret values in a world-readable unit, `.env`, shell profile, proxy
+configuration file, or browser runtime JSON.
 
 Published ports are commonly overridden in a host overlay; the operator listener
 remains loopback-only regardless. The public reverse proxy points only at the

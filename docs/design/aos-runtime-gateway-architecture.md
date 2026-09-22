@@ -382,9 +382,16 @@ global cap (`config.ts:166-172`).
 (default 259 200 s, `:159`); `guest` must use a separate origin and listener
 (`:166-184`); `shutdownGraceMs`.
 
-Parse errors are opaque (`config.ts:196-201`): the full config is rejected with
-`"Invalid proxy configuration"` so rejected input containing secrets is never
-logged.
+`parseProxyConfig` stays opaque for library callers: it rejects the whole
+config with `"Invalid proxy configuration"` so rejected input containing
+secrets is never logged. The startup path is different. `loadProxyConfig` in
+`config-file.ts` resolves the path, checks the file, parses the YAML, merges
+defaults and `AOS_UI_PROXY_*` overrides, and validates with the exported schema
+directly; a failure becomes a `ProxyConfigurationError` carrying the file path
+and the field paths (never a value), and `cli.ts` logs it through
+`describeStartFailure`, which unwraps only that class into a plain object.
+`redactForLog` therefore keeps its every-`Error`-is-opaque invariant for every
+other failure while a configuration problem stays readable in the startup log.
 
 **Secret files** (`secrets.ts:6-23`): absolute paths, regular non-symlink
 files, permissions `0o600` or tighter, max 8 KiB, read once at startup.

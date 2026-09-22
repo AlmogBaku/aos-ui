@@ -35,8 +35,8 @@ outside AOS.
 Copy the example outside the checkout:
 
 ```bash
-cp deploy/proxy-config.hermes.example.json /absolute/private/path/proxy-config.json
-chmod 600 /absolute/private/path/proxy-config.json
+cp deploy/proxy.hermes.example.yaml /absolute/private/path/proxy.yaml
+chmod 600 /absolute/private/path/proxy.yaml
 ```
 
 Set these fields in the private copy:
@@ -70,7 +70,7 @@ listen on `127.0.0.1:4100` with `publicOrigin` set to
 
 ```bash
 # Terminal 1
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
 
 # Terminal 2
 AOS_UI_RUNTIME_MODE=aos \
@@ -88,7 +88,7 @@ API. Hermes itself remains outside the stack:
 
 ```bash
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
@@ -106,8 +106,7 @@ The browser talks only to same-origin `/api/aos/v1`; guests use the separate
 Create a guest invitation locally from the configured signing key:
 
 ```bash
-AOS_RUNTIME_PROXY_CONFIG=/absolute/private/path/proxy-config.json \
-  bun run gateway -- invite --agent default
+bun run gateway -- invite --config /absolute/private/path/proxy.yaml --agent default
 ```
 
 The installed `aos-invite-link` skill uses `curl` against the operator proxy's

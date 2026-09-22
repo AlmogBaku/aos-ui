@@ -67,13 +67,15 @@ For local proxy development (the browser supports only `aos` and explicit
 
 ```bash
 # Terminal 1: use the private example for the selected runtime
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
 
 # Terminal 2
 AOS_UI_RUNTIME_MODE=aos \
 AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
+
+With no `--config`, the proxy discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`.
 
 Open <http://localhost:3000>. The browser sends only normalized AOS requests;
 the proxy owns provider credentials and all native communication. Configure

@@ -45,8 +45,10 @@ For local proxy development, run the proxy against an independently operated
 Hermes server, then attach Vite to the normalized proxy:
 
 ```bash
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
 ```
+
+With no `--config`, the proxy discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`.
 
 ```bash
 AOS_UI_RUNTIME_MODE=aos \
@@ -254,23 +256,24 @@ Additional checks by area:
   ```bash
   bunx vitest run test/containers/compose.test.ts
   docker compose -f compose.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
     AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
     AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
     AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
     AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir \
     AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+    AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
     docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.openclaw.yaml \
     AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
     AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
     AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
   AOS_UI_OPENCODE_WORKTREE=/absolute/external/worktree \
-    AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+    AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
     AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
     AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
     docker compose -f compose.yaml -f compose.opencode.yaml config --quiet
