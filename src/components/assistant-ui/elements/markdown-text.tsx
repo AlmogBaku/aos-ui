@@ -224,6 +224,13 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
+  img: ({ className, ...props }) => (
+    <img
+      alt=""
+      className={cn("aui-md-img my-3 h-auto max-w-full rounded-lg", className)}
+      {...props}
+    />
+  ),
   hr: ({ className, ...props }) => (
     <hr
       className={cn("aui-md-hr my-3 border-muted-foreground/20", className)}
@@ -231,13 +238,15 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   table: ({ className, ...props }) => (
-    <table
-      className={cn(
-        "aui-md-table my-3 w-full border-separate border-spacing-0 overflow-y-auto",
-        className
-      )}
-      {...props}
-    />
+    <div className="aui-md-table-scroll my-3 overflow-x-auto">
+      <table
+        className={cn(
+          "aui-md-table w-full border-separate border-spacing-0",
+          className
+        )}
+        {...props}
+      />
+    </div>
   ),
   th: ({ className, ...props }) => (
     <th

@@ -515,7 +515,7 @@ const ThreadRoot: FC<{
         ref={viewportRef}
         {...THREAD_VIEWPORT_SCROLL_BEHAVIOR}
         data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
+        className="relative flex flex-1 flex-col overflow-x-hidden overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}
       >
         <ConversationSearch
@@ -1856,7 +1856,7 @@ const UserMessage: FC = () => {
     >
       <MessagePrimitive.Root
         data-slot="aui_user-message-root"
-        className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
+        className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,auto)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
         data-role="user"
       >
         <UserMessageAttachments />
