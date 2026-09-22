@@ -64,4 +64,31 @@ describe("log redaction", () => {
       category: "input",
     })
   })
+
+  it("keeps every thrown Error opaque, however it is described", () => {
+    class ConfigurationLikeError extends Error {}
+    expect(
+      redactForLog(new ConfigurationLikeError("listen.port: Too big"))
+    ).toEqual({ name: "Error", message: "Upstream request failed" })
+  })
+
+  it("passes a reported failure description through as written", () => {
+    expect(
+      redactForLog({
+        event: "proxy.start_failed",
+        error: {
+          name: "ProxyConfigurationError",
+          message:
+            "Invalid proxy configuration in /etc/aos-ui/proxy.yaml:\n  listen.port: Too big",
+        },
+      })
+    ).toEqual({
+      event: "proxy.start_failed",
+      error: {
+        name: "ProxyConfigurationError",
+        message:
+          "Invalid proxy configuration in /etc/aos-ui/proxy.yaml:\n  listen.port: Too big",
+      },
+    })
+  })
 })

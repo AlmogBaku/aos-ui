@@ -19,11 +19,44 @@ If Vite is using environment-derived configuration, restart it after changing va
 
 ## The proxy returns "Invalid proxy configuration"
 
-Parser errors are deliberately opaque because rejected input may contain secrets. Validate the private proxy JSON against the [configuration reference](configuration.md): all required fields present, no unknown fields, `version: 1`, `listen.host` one of `127.0.0.1|::1|0.0.0.0|::`, `publicOrigin` must be `https:` unless the host is `127.0.0.1`, `[::1]`, or `localhost`.
+The startup log entry (`proxy.start_failed`) carries a readable
+`ProxyConfigurationError` message. The message begins with the file path,
+followed by one indented line per field; values are never included and
+unrecognized keys are reported as a count:
+
+```
+Invalid proxy configuration in /etc/aos-ui/proxy.yaml:
+  runtime.tokenFile: Invalid input: expected string, received undefined
+  limits: 1 unrecognized key
+```
+
+When a `AOS_UI_PROXY_*` variable set the failing field, its name appears in
+parentheses after the message. File-check failures produce their own messages
+before parsing begins:
+
+- `the configuration file must be a regular file`
+- `the configuration file must not be group- or world-writable`
+- `the configuration file must be owned by this user or by root`
+- `the configuration file is larger than the 1048576 byte limit`
+
+If no `--config` flag or `AOS_UI_PROXY_CONFIG_FILE` variable is set, the proxy
+discovers `${XDG_CONFIG_HOME:-$HOME/.config}/aos-ui/proxy.yaml`. A discovered
+path that does not exist is not an error; an explicitly supplied path that does
+not exist is. Use `--config` or `AOS_UI_PROXY_CONFIG_FILE` to make the path
+explicit.
+
+If the proxy fails with a message about a configuration variable that is no
+longer read, use `--config` or `AOS_UI_PROXY_CONFIG_FILE` instead.
+
+To validate the schema interactively, check all required fields are present
+(`deploymentId`, `publicOrigin`, `runtime`), `version: 1`, `listen.host` is one
+of `127.0.0.1|::1|0.0.0.0|::`, and `publicOrigin` is `https:` unless the host
+is `127.0.0.1`, `[::1]`, or `localhost`. See the
+[configuration reference](configuration.md) for the full field list.
 
 ## A request returns 403 Forbidden
 
-The `Origin` header on attachments, transcription, speech, and guest-invitation requests must match the operator `publicOrigin` configured in the private proxy JSON. Mismatches — including `http://` vs `https://` or a wrong port — return 403.
+The `Origin` header on attachments, transcription, speech, and guest-invitation requests must match the operator `publicOrigin` configured in the private proxy configuration. Mismatches — including `http://` vs `https://` or a wrong port — return 403.
 
 ## A secret file is rejected
 

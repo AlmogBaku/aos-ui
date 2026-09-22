@@ -36,10 +36,18 @@ processes. Treat each later material change as a new confirmation point.
 
 Use the provider-neutral template under `deploy/systemd/` and the versioned
 proxy configuration described in `docs/configuration.md`; adapt them to the
-selected host. Do not install Cloudflare, create a tunnel, alter DNS, or assume
-Tailscale unless the operator explicitly selected it. For Cloudflare, route the
-selected guest hostname to the guest listener and retain the same guest-only
-path boundary.
+selected host. The private proxy configuration is a YAML file (JSON is valid
+YAML and still parses). The file must be owned by the proxy user or root and
+must not be group- or world-writable; a file left at mode `0664` by
+`umask 002` fails startup. Point `AOS_UI_PROXY_CONFIG_FILE` at the absolute
+host path in `/etc/aos-ui/aos-ui.env`. The `invite` subcommand requires
+`--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a default path.
+For Web Push deployments, also set `AOS_UI_PUSH_VAPID_SUBJECT` (a `mailto:` or
+`https:` contact URL) in the env file; `deploy/setup-push.sh` appends all
+three push variables at once when run with `--subject`. Do not install
+Cloudflare, create a tunnel, alter DNS, or assume Tailscale unless the
+operator explicitly selected it. For Cloudflare, route the selected guest
+hostname to the guest listener and retain the same guest-only path boundary.
 
 ## Secrets and runtime integration
 

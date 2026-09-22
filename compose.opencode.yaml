@@ -11,12 +11,12 @@ services:
       - proxy:serve
       - --
       - --config
-      - /run/aos-ui/proxy-config.json
+      - /run/aos-ui/proxy.yaml
     ports:
       - ${AOS_UI_GUEST_BIND_ADDRESS:-127.0.0.1}:${AOS_UI_GUEST_PUBLISHED_PORT:-3001}:3001
     configs:
       - source: proxy-config
-        target: /run/aos-ui/proxy-config.json
+        target: /run/aos-ui/proxy.yaml
         mode: 0444
     secrets:
       - source: opencode-password
@@ -104,7 +104,7 @@ configs:
   runtime-config:
     file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.opencode.json}
   proxy-config:
-    file: ${AOS_UI_PROXY_CONFIG_FILE:?Set AOS_UI_PROXY_CONFIG_FILE to a private proxy configuration file}
+    file: ${AOS_UI_PROXY_CONFIG_FILE:?Set AOS_UI_PROXY_CONFIG_FILE to a private proxy YAML configuration file}
 
 secrets:
   opencode-password:

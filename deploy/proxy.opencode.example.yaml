@@ -1,0 +1,39 @@
+# Private AOS proxy configuration for the OpenCode overlay. Every key is
+# documented in docs/configuration.md. Copy this file outside the checkout,
+# adjust the origins and the OpenCode address, and keep it readable by the
+# container user: owned by AOS_UI_HOST_UID at mode 0600 or 0640, or by root at
+# 0644, never group- or world-writable. Secrets stay in the mounted files this
+# config points at; never put a secret value here.
+version: 1
+deploymentId: aos-opencode-local
+listen:
+  host: 0.0.0.0
+  port: 3000
+  exposure: private-container
+publicOrigin: http://127.0.0.1:3000
+runtime:
+  id: opencode-default
+  kind: opencode
+  baseUrl: http://opencode:4096
+  directory: /workspace
+  username: aos-ui
+  passwordFile: /run/secrets/opencode-password
+guest:
+  listen:
+    host: 0.0.0.0
+    port: 3001
+    exposure: private-container
+  publicOrigin: http://127.0.0.1:3001
+  invitations:
+    keys:
+      - id: current
+        secretFile: /run/secrets/guest-invite-signing-key
+    ttlSeconds: 259200
+    clockSkewSeconds: 0
+limits:
+  activeExecutions: 256
+  guestActiveExecutions: 32
+  operatorEventPeers: 256
+  subscriberEvents: 512
+  subscriberBytes: 2097152
+shutdownGraceMs: 5000

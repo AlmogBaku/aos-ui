@@ -8,7 +8,7 @@ The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`
 - Private, owner-only files containing the Gateway device identity and device token
 - A private guest-invitation signing-key file when the guest lane is enabled
 
-Start from [`deploy/proxy-config.openclaw.example.json`](../../deploy/proxy-config.openclaw.example.json). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
+Start from [`deploy/proxy.openclaw.example.yaml`](../../deploy/proxy.openclaw.example.yaml). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
 
 ## Compose attachment
 
@@ -17,7 +17,7 @@ The OpenClaw overlay runs the AOS proxy and static UI only. It does not start, p
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.openclaw.yaml \
 AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
 AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
@@ -38,7 +38,7 @@ listen on `127.0.0.1:4100` with `publicOrigin` set to
 
 ```bash
 # Terminal 1
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.openclaw.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.openclaw.yaml
 
 # Terminal 2
 AOS_UI_RUNTIME_MODE=aos \
@@ -66,7 +66,7 @@ bunx vitest run packages/proxy/adapters/openclaw
 Confirm the Gateway is reachable and the device identity and token files are correct:
 
 ```bash
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.openclaw.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.openclaw.yaml
 curl --fail --silent --show-error http://127.0.0.1:4100/api/aos/v1/readyz
 ```
 

@@ -25,9 +25,12 @@ export async function runProxyCli(
   command
     .command("serve")
     .description("Run the private AOS runtime proxy")
-    .requiredOption("--config <path>", "absolute or relative proxy config file")
-    .action(async ({ config }: { config: string }) => {
-      result = await serveProxy(config, dependencies)
+    .option(
+      "--config <path>",
+      "proxy configuration file; discovered under XDG_CONFIG_HOME when omitted"
+    )
+    .action(async ({ config }: { config?: string }) => {
+      result = await serveProxy({ config }, dependencies)
     })
 
   command
@@ -41,7 +44,7 @@ The command runs locally and does not contact the native runtime. Keep the print
 private: it is a reusable bearer credential until it expires.
 
 Examples:
-  aos-gateway invite --agent interviewer \
+  aos-gateway invite --config /run/aos-ui/proxy.yaml --agent interviewer \
     --expires-in 72h --prefill "Hey, Almog sent me here!" \
     --instruction "Load the interview skill for Dan." --lang en
 
@@ -49,6 +52,7 @@ Examples:
     --instruction "Continue the scheduled interview."
 `
     )
+    .option("--config <path>", "proxy configuration file (required)")
     .requiredOption("--agent <name>", "Native Agent ID (required)")
     .option(
       "--ref <reference>",

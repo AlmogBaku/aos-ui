@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { parse } from "yaml"
 import { describe, expect, it } from "vitest"
 
 type ComposeConfig = {
@@ -84,11 +85,8 @@ describe("container orchestration", () => {
   )
 
   it("ships the V1 Hermes proxy example with one runtime credential", () => {
-    const proxy = JSON.parse(
-      readFileSync(
-        resolve(root, "deploy/proxy-config.hermes.example.json"),
-        "utf8"
-      )
+    const proxy = parse(
+      readFileSync(resolve(root, "deploy/proxy.hermes.example.yaml"), "utf8")
     ) as {
       deploymentId: string
       listen: { host: string; port: number; exposure: string }
@@ -132,6 +130,7 @@ describe("container orchestration", () => {
       operatorEventPeers: 256,
     })
     expect(proxy).not.toHaveProperty("operator")
+    expect(proxy).not.toHaveProperty("push")
     expect(proxy.guest).not.toHaveProperty("hermes")
     expect(JSON.stringify(proxy).toLowerCase()).not.toMatch(
       /oidc|browser-broker|operator-session|guest-hermes-token/u
@@ -162,7 +161,7 @@ describe("container orchestration", () => {
       ),
       AOS_UI_PROXY_CONFIG_FILE: resolve(
         root,
-        "deploy/proxy-config.opencode.example.json"
+        "deploy/proxy.opencode.example.yaml"
       ),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCODE_PASSWORD_FILE: resolve(root, ".env.example"),
@@ -179,7 +178,7 @@ describe("container orchestration", () => {
       resolve(root, "deploy/runtime-config.opencode.json")
     )
     expect(config.configs?.["proxy-config"]?.file).toBe(
-      resolve(root, "deploy/proxy-config.opencode.example.json")
+      resolve(root, "deploy/proxy.opencode.example.yaml")
     )
     expect(config.services.web.command).toEqual([
       "bun",
@@ -187,7 +186,7 @@ describe("container orchestration", () => {
       "proxy:serve",
       "--",
       "--config",
-      "/run/aos-ui/proxy-config.json",
+      "/run/aos-ui/proxy.yaml",
     ])
     expect(config.services.web.ports).toContainEqual(
       expect.objectContaining({ published: "3000", target: 3000 })
@@ -198,7 +197,7 @@ describe("container orchestration", () => {
     expect(config.services.web.configs).toContainEqual(
       expect.objectContaining({
         source: "proxy-config",
-        target: "/run/aos-ui/proxy-config.json",
+        target: "/run/aos-ui/proxy.yaml",
       })
     )
     expect(config.services.web.secrets).toEqual([
@@ -242,11 +241,8 @@ describe("container orchestration", () => {
     expect(config.secrets?.["opencode-password"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    const proxy = JSON.parse(
-      readFileSync(
-        resolve(root, "deploy/proxy-config.opencode.example.json"),
-        "utf8"
-      )
+    const proxy = parse(
+      readFileSync(resolve(root, "deploy/proxy.opencode.example.yaml"), "utf8")
     ) as { runtime: Record<string, unknown> }
     expect(proxy.runtime).toEqual({
       id: "opencode-default",
@@ -256,6 +252,7 @@ describe("container orchestration", () => {
       username: "aos-ui",
       passwordFile: "/run/secrets/opencode-password",
     })
+    expect(proxy).not.toHaveProperty("push")
     expect(JSON.stringify(config)).not.toContain("AOS_GATEWAY_")
   })
 
@@ -267,7 +264,7 @@ describe("container orchestration", () => {
       ),
       AOS_UI_PROXY_CONFIG_FILE: resolve(
         root,
-        "deploy/proxy-config.hermes.example.json"
+        "deploy/proxy.hermes.example.yaml"
       ),
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
@@ -289,7 +286,7 @@ describe("container orchestration", () => {
       "proxy:serve",
       "--",
       "--config",
-      "/run/aos-ui/proxy-config.json",
+      "/run/aos-ui/proxy.yaml",
     ])
     expect(config.services.web.ports).toContainEqual(
       expect.objectContaining({ published: "3000", target: 3000 })
@@ -304,7 +301,7 @@ describe("container orchestration", () => {
     expect(config.services.web.configs).toContainEqual(
       expect.objectContaining({
         source: "proxy-config",
-        target: "/run/aos-ui/proxy-config.json",
+        target: "/run/aos-ui/proxy.yaml",
       })
     )
     expect(config.services.web.secrets).toEqual([
@@ -325,7 +322,7 @@ describe("container orchestration", () => {
       resolve(root, "deploy/runtime-config.hermes.json")
     )
     expect(config.configs?.["proxy-config"]?.file).toBe(
-      resolve(root, "deploy/proxy-config.hermes.example.json")
+      resolve(root, "deploy/proxy.hermes.example.yaml")
     )
     expect(config.secrets?.["hermes-token"]?.file).toBe(
       resolve(root, ".env.example")
@@ -350,7 +347,7 @@ describe("container orchestration", () => {
       ),
       AOS_UI_PROXY_CONFIG_FILE: resolve(
         root,
-        "deploy/proxy-config.openclaw.example.json"
+        "deploy/proxy.openclaw.example.yaml"
       ),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
       AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE: resolve(root, ".env.example"),
@@ -367,7 +364,7 @@ describe("container orchestration", () => {
       "proxy:serve",
       "--",
       "--config",
-      "/run/aos-ui/proxy-config.json",
+      "/run/aos-ui/proxy.yaml",
     ])
     expect(config.services.web.ports).toContainEqual(
       expect.objectContaining({ published: "3000", target: 3000 })
@@ -382,12 +379,12 @@ describe("container orchestration", () => {
       resolve(root, "deploy/runtime-config.openclaw.json")
     )
     expect(config.configs?.["proxy-config"]?.file).toBe(
-      resolve(root, "deploy/proxy-config.openclaw.example.json")
+      resolve(root, "deploy/proxy.openclaw.example.yaml")
     )
     expect(config.services.web.configs).toContainEqual(
       expect.objectContaining({
         source: "proxy-config",
-        target: "/run/aos-ui/proxy-config.json",
+        target: "/run/aos-ui/proxy.yaml",
       })
     )
     expect(config.services.web.secrets).toEqual([
@@ -419,11 +416,8 @@ describe("container orchestration", () => {
     expect(config.secrets?.["openclaw-device-token"]?.file).toBe(
       resolve(root, ".env.example")
     )
-    const proxy = JSON.parse(
-      readFileSync(
-        resolve(root, "deploy/proxy-config.openclaw.example.json"),
-        "utf8"
-      )
+    const proxy = parse(
+      readFileSync(resolve(root, "deploy/proxy.openclaw.example.yaml"), "utf8")
     ) as { runtime: Record<string, unknown> }
     expect(proxy.runtime).toEqual({
       id: "openclaw-default",
@@ -432,6 +426,7 @@ describe("container orchestration", () => {
       deviceIdentityFile: "/run/secrets/openclaw-device-identity",
       deviceTokenFile: "/run/secrets/openclaw-device-token",
     })
+    expect(proxy).not.toHaveProperty("push")
     expect(config.services.web.environment).not.toHaveProperty(
       "AOS_UI_OPENCLAW_HOST"
     )
@@ -464,12 +459,13 @@ describe("container orchestration", () => {
         ),
         AOS_UI_PROXY_CONFIG_FILE: resolve(
           root,
-          "deploy/proxy-config.hermes.example.json"
+          "deploy/proxy.hermes.example.yaml"
         ),
         AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
         AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
         AOS_UI_PUSH_STATE_DIR: root,
         AOS_UI_VAPID_PRIVATE_KEY_FILE: resolve(root, ".env.example"),
+        AOS_UI_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
         AOS_UI_HOST_UID: "1234",
         AOS_UI_HOST_GID: "2345",
       }
@@ -494,6 +490,18 @@ describe("container orchestration", () => {
     expect(config.secrets?.["vapid-private-key"]?.file).toBe(
       resolve(root, ".env.example")
     )
+    expect(config.services.web.environment).toMatchObject({
+      AOS_UI_PROXY_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
+      AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE:
+        "/run/secrets/vapid-private-key",
+      AOS_UI_PROXY_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
+    })
+    for (const [key, value] of Object.entries(
+      config.services.web.environment ?? {}
+    )) {
+      if (!key.startsWith("AOS_UI_PROXY_")) continue
+      expect(value).toMatch(/^(?:\/|mailto:|https:)/u)
+    }
   })
 
   it("does not require push variables and carries no push state without the push overlay", () => {
@@ -505,7 +513,7 @@ describe("container orchestration", () => {
       ),
       AOS_UI_PROXY_CONFIG_FILE: resolve(
         root,
-        "deploy/proxy-config.hermes.example.json"
+        "deploy/proxy.hermes.example.yaml"
       ),
       AOS_UI_HERMES_TOKEN_FILE: resolve(root, ".env.example"),
       AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE: resolve(root, ".env.example"),
@@ -516,6 +524,15 @@ describe("container orchestration", () => {
     expect(config.secrets).not.toHaveProperty("vapid-private-key")
     expect(config.services.web.volumes ?? []).not.toContainEqual(
       expect.objectContaining({ target: "/var/lib/aos-ui/push" })
+    )
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_PROXY_PUSH_STATE_DIR"
+    )
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE"
+    )
+    expect(config.services.web.environment).not.toHaveProperty(
+      "AOS_UI_PROXY_PUSH_VAPID_SUBJECT"
     )
   })
 

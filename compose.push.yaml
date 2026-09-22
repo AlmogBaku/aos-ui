@@ -1,9 +1,14 @@
-# Add this overlay when proxy-config.json includes a "push" block.
-# It mounts the push state directory and the VAPID private key used by
-# the Web Push implementation; the two required variables follow the
-# same operator-owned pattern as the other secret mounts.
+# Add this overlay to enable Web Push. It sets the proxy's push environment
+# variables, mounts the push state directory, and mounts the VAPID private key
+# used by the Web Push implementation; the required variables follow the same
+# operator-owned pattern as the other secret mounts. The private proxy
+# configuration file needs no push section.
 services:
   web:
+    environment:
+      AOS_UI_PROXY_PUSH_STATE_DIR: /var/lib/aos-ui/push
+      AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE: /run/secrets/vapid-private-key
+      AOS_UI_PROXY_PUSH_VAPID_SUBJECT: "${AOS_UI_PUSH_VAPID_SUBJECT:?Set AOS_UI_PUSH_VAPID_SUBJECT to the VAPID contact (mailto: or https:)}"
     volumes:
       # Bind-mount rather than a named volume: a named volume is initially
       # root-owned, but the proxy runs as the host UID.

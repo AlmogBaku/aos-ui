@@ -1,10 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { stringify } from "yaml"
 
+import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
+import { describeStartFailure } from "./config-file"
+import { redactForLog } from "./redaction"
 import type { startProxyServer } from "./server"
 
 const temporaryDirectories: string[] = []
@@ -17,6 +21,12 @@ afterEach(async () => {
   )
 })
 
+/**
+ * Writes one configuration file inside a synthetic XDG config home, so a test
+ * can pass it as `--config`, name it in the environment, or let the CLI
+ * discover it. The explicit mode matters: a default one under `umask 002` is
+ * group-writable, which the loader refuses.
+ */
 async function proxyConfig() {
   const directory = await mkdtemp(join(tmpdir(), "aos-proxy-cli-"))
   temporaryDirectories.push(directory)
@@ -28,10 +38,12 @@ async function proxyConfig() {
   }
   const tokenFile = await writeSecret("hermes-token", "hermes-token")
   const invitationKey = await writeSecret("invitation-key", key)
-  const configFile = join(directory, "proxy.json")
+  const configHome = join(directory, "config")
+  await mkdir(join(configHome, "aos-ui"), { recursive: true })
+  const configFile = join(configHome, "aos-ui", "proxy.yaml")
   await writeFile(
     configFile,
-    JSON.stringify({
+    stringify({
       version: 1,
       deploymentId: "test-deployment",
       listen: {
@@ -64,9 +76,35 @@ async function proxyConfig() {
         },
       },
       shutdownGraceMs: 5_000,
-    })
+    }),
+    { mode: 0o600 }
   )
-  return configFile
+  return { configFile, configHome }
+}
+
+/** A Hermes runtime that answers without a provider socket. */
+function stubbedHermesRuntime(): RuntimeFactory {
+  return (config, limits) => {
+    if (config.kind !== "hermes")
+      throw new Error("the configuration fixture selects Hermes")
+    return createHermesRuntime(config, limits, {
+      transportFactory: () => ({
+        request: vi.fn(),
+        close: vi.fn(async () => undefined),
+      }),
+    })
+  }
+}
+
+/** Models one listener that settles as soon as it is asked to stop. */
+function stubbedStart() {
+  return vi.fn((options: Parameters<typeof startProxyServer>[0]) => ({
+    server: { stop: vi.fn() },
+    shutdown: vi.fn(async () => {
+      await options.close?.()
+      options.onSettled?.({ forced: false })
+    }),
+  }))
 }
 
 describe("proxy executable", () => {
@@ -75,7 +113,11 @@ describe("proxy executable", () => {
     const start = vi.fn()
 
     await expect(
-      runProxyCli(["bun", "proxy", "--help"], { logger, start })
+      runProxyCli(["bun", "proxy", "--help"], {
+        logger,
+        start,
+        getenv: () => undefined,
+      })
     ).resolves.toBeUndefined()
     expect(start).not.toHaveBeenCalled()
     expect(logger.error).not.toHaveBeenCalled()
@@ -103,7 +145,7 @@ describe("proxy executable", () => {
         return { server: { stop: vi.fn() }, shutdown }
       })
       const lifecycle = await runProxyCli(
-        ["bun", "proxy", "serve", "--config", await proxyConfig()],
+        ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
         {
           runtimeFactory: (config, limits) =>
             createHermesRuntime(config, limits, {
@@ -231,6 +273,7 @@ describe("proxy executable", () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--help"], {
         logger: { info: vi.fn(), error: vi.fn() },
+        getenv: () => undefined,
         writeOut: (value) => {
           output += value
         },
@@ -239,6 +282,7 @@ describe("proxy executable", () => {
 
     expect(output).toContain("invite --agent NAME [flags]")
     for (const flag of [
+      "--config",
       "--agent",
       "--ref",
       "--expires-in",
@@ -255,7 +299,7 @@ describe("proxy executable", () => {
   })
 
   it("generates a stable conversation reference when --ref is omitted", async () => {
-    const configFile = await proxyConfig()
+    const { configFile } = await proxyConfig()
     let output = ""
     let entropyCall = 0
 
@@ -285,7 +329,7 @@ describe("proxy executable", () => {
         {
           logger: { info: vi.fn(), error: vi.fn() },
           getenv: (name) =>
-            name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+            name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
             entropyCall += 1
             return Buffer.alloc(size, entropyCall === 1 ? 0xab : 0xcd)
@@ -330,7 +374,7 @@ describe("proxy executable", () => {
   })
 
   it("preserves an explicit trimmed --ref without generating one", async () => {
-    const configFile = await proxyConfig()
+    const { configFile } = await proxyConfig()
     let output = ""
 
     await expect(
@@ -339,6 +383,8 @@ describe("proxy executable", () => {
           "bun",
           "proxy",
           "invite",
+          "--config",
+          configFile,
           "--agent",
           "default",
           "--ref",
@@ -348,8 +394,7 @@ describe("proxy executable", () => {
         ],
         {
           logger: { info: vi.fn(), error: vi.fn() },
-          getenv: (name) =>
-            name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+          getenv: () => undefined,
           randomBytes: () => {
             throw new Error("reference randomness was read")
           },
@@ -371,12 +416,12 @@ describe("proxy executable", () => {
   })
 
   it("defaults to 72 hours and does not require a first-turn instruction", async () => {
-    const configFile = await proxyConfig()
+    const { configFile } = await proxyConfig()
     let output = ""
     await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
       logger: { info: vi.fn(), error: vi.fn() },
       getenv: (name) =>
-        name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+        name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
       randomBytes: (size) => Buffer.alloc(size, 1),
       clock: () => Date.UTC(2026, 8, 15, 8),
       writeOut: (value) => {
@@ -392,5 +437,77 @@ describe("proxy executable", () => {
     ) as Record<string, unknown>
     expect(payload.exp).toBe(Date.UTC(2026, 8, 18, 8) / 1_000)
     expect(payload).not.toHaveProperty("firstTurn")
+  })
+
+  it("serves the discovered configuration file when no flag is given", async () => {
+    const { configHome } = await proxyConfig()
+    const start = stubbedStart()
+    const logger = { info: vi.fn(), error: vi.fn() }
+
+    const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
+      runtimeFactory: stubbedHermesRuntime(),
+      logger,
+      getenv: (name) => (name === "XDG_CONFIG_HOME" ? configHome : undefined),
+      start,
+      exit: vi.fn(),
+    })
+
+    expect(start).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ host: "0.0.0.0", port: 4_100 })
+    )
+    expect(logger.error).not.toHaveBeenCalled()
+    await lifecycle!.shutdown()
+  })
+
+  it("requires an explicit configuration file to mint an invitation", async () => {
+    await expect(
+      runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
+        logger: { info: vi.fn(), error: vi.fn() },
+        getenv: () => undefined,
+      })
+    ).rejects.toThrow(/--config/u)
+  })
+
+  it("points an operator at the replacement for the removed variable", async () => {
+    const { configFile } = await proxyConfig()
+
+    await expect(
+      runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
+        logger: { info: vi.fn(), error: vi.fn() },
+        getenv: (name) =>
+          name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
+      })
+    ).rejects.toThrow(
+      /--config.*AOS_UI_PROXY_CONFIG_FILE|AOS_UI_PROXY_CONFIG_FILE/u
+    )
+  })
+
+  it("reports a start failure an operator can act on", async () => {
+    const start = vi.fn()
+    const missing = join(tmpdir(), "aos-proxy-absent", "proxy.yaml")
+
+    const failure = await runProxyCli(
+      ["bun", "proxy", "serve", "--config", missing],
+      {
+        logger: { info: vi.fn(), error: vi.fn() },
+        getenv: () => undefined,
+        start,
+      }
+    ).catch((error: unknown) => error)
+
+    expect(start).not.toHaveBeenCalled()
+    expect(
+      redactForLog({
+        event: "proxy.start_failed",
+        error: describeStartFailure(failure),
+      })
+    ).toEqual({
+      event: "proxy.start_failed",
+      error: {
+        name: "ProxyConfigurationError",
+        message: expect.stringContaining(missing),
+      },
+    })
   })
 })

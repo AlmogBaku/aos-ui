@@ -39,7 +39,7 @@ unless you specifically operate another runtime.
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml up --build
@@ -55,7 +55,7 @@ The operator listener has no application authentication: anyone who can reach
 it has full operator access. The operator listener has no guest API route, and
 the guest listener has no operator API route.
 
-Start from [`deploy/proxy-config.hermes.example.json`](../deploy/proxy-config.hermes.example.json)
+Start from [`deploy/proxy.hermes.example.yaml`](../deploy/proxy.hermes.example.yaml)
 and customize its listener origins and Hermes address. Hermes uses one server
 token file for both operator and guest requests. Guest invitations have a
 separate signing-key file. Secret files must be owner-only and contain no
@@ -82,7 +82,7 @@ independently operated Gateway; it does not publish a native Gateway route.
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.openclaw.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.openclaw.yaml \
 AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
 AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
@@ -102,7 +102,7 @@ beside that proxy.
 ```bash
 cp .env.compose.example .env
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.opencode.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
 AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
@@ -119,28 +119,54 @@ Read [OpenCode server adapter status](runtimes/opencode.md) before using it.
 
 ## Web Push state and VAPID secret
 
-Web Push is optional. When `proxy-config.json` includes a `push` block, add
-`-f compose.push.yaml` after the runtime overlay and set the two variables:
+Web Push is optional. `compose.push.yaml` passes push settings to the proxy as
+container environment variables; the private configuration file needs no `push`
+block. Add `-f compose.push.yaml` after the runtime overlay and set these three
+variables:
 
 ```bash
-AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push     # operator-owned directory
+AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push            # operator-owned directory
 AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key
+AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com      # or https: URL
 ```
+
+`AOS_UI_PUSH_VAPID_SUBJECT` is the VAPID contact that push services use to
+reach the operator. It is required when the push overlay is active.
 
 For example, with Hermes:
 
 ```bash
 AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
 AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
 AOS_UI_PUSH_STATE_DIR=/var/lib/aos-ui/push \
 AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
   docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml up --build
 ```
 
 Omitting `-f compose.push.yaml` leaves tab-only delivery active and requires
-neither variable.
+none of these variables.
+
+**One-time setup.** Run `deploy/setup-push.sh` as root from the checkout
+directory to generate the VAPID key, create the state directory, and append all
+three variables to the env file in one step:
+
+```bash
+sudo bash deploy/setup-push.sh \
+  --key-file  /etc/aos-ui/secrets/vapid-private-key \
+  --state-dir /var/lib/aos-ui/push \
+  --env-file  /etc/aos-ui/aos-ui.env \
+  --subject   "mailto:ops@example.com" \
+  --uid       1002 \
+  --gid       1002
+```
+
+The script is idempotent: it skips steps that are already complete. After it
+succeeds, add `-f compose.push.yaml` to `ExecStart`, `ExecReload`, and
+`ExecStop` in the systemd service and run `systemctl daemon-reload && systemctl
+reload aos-ui`.
 
 **State directory.** The proxy writes device registrations to
 `${AOS_UI_PUSH_STATE_DIR}`. Create it before the first start and ensure the
@@ -185,7 +211,7 @@ check-to-connect window remains.
 
 ## Voice provider key files
 
-Voice provider key files are optional. When `proxy-config.json` includes a
+Voice provider key files are optional. When the proxy configuration includes a
 `voice` block with `apiKeyFile` entries, mount those files into the container.
 There is no dedicated voice Compose overlay; use a user-owned
 `compose.override.yaml` alongside the runtime overlay:
@@ -220,12 +246,13 @@ AOS_UI_VOICE_STT_API_KEY_FILE=/absolute/private/path/voice-stt-api-key
 AOS_UI_VOICE_TTS_API_KEY_FILE=/absolute/private/path/voice-tts-api-key
 ```
 
-Reference the mounted paths in `proxy-config.json` as the `apiKeyFile` values
-for each voice direction (e.g. `/run/secrets/voice-stt-api-key`). The mounted
-files must be owner-only and follow the same rules as `runtime.tokenFile`. The
-key value itself never goes in `.env`, the Compose environment, or the proxy
-JSON — the variables above carry file paths only, unlike OpenCode's env-borne
-`AOS_UI_OPENAI_COMPATIBLE_API_KEY`, which is a different credential.
+Reference the mounted paths in the proxy configuration as the `apiKeyFile`
+values for each voice direction (e.g. `/run/secrets/voice-stt-api-key`). The
+mounted files must be owner-only and follow the same rules as
+`runtime.tokenFile`. The key value itself never goes in `.env`, the Compose
+environment, or the proxy configuration file — the variables above carry file
+paths only, unlike OpenCode's env-borne `AOS_UI_OPENAI_COMPATIBLE_API_KEY`,
+which is a different credential.
 
 ## Use hot reload in containers
 
@@ -335,22 +362,54 @@ docker compose -f compose.yaml -f compose.opencode.yaml down
 
 Do not add `-v` unless you intend to delete named native-state volumes.
 
+## Cutover from JSON
+
+Existing JSON configuration files continue to work because JSON is valid YAML.
+Rename at leisure and point `AOS_UI_PROXY_CONFIG_FILE` at the new name before
+the next reload. Push deployments require three additional steps:
+
+1. Add `AOS_UI_PUSH_VAPID_SUBJECT` to `/etc/aos-ui/aos-ui.env`. Re-running
+   `deploy/setup-push.sh` with the same arguments appends only what is missing.
+2. Optionally remove the `push` block from the private configuration file; the
+   `compose.push.yaml` overlay now supplies all three push fields as container
+   environment variables.
+3. Confirm the file is owned by `AOS_UI_HOST_UID` (or by root) and is not
+   group- or world-writable. Compose bind mounts keep host ownership, so a file
+   owned by a third user, or left at mode `0664` by `umask 002`, fails startup
+   with an error naming the failed check. Check with:
+   ```bash
+   stat -c '%U %a' /etc/aos-ui/proxy.yaml
+   ```
+   Before reloading, make it either owned by `AOS_UI_HOST_UID` at mode `0600`
+   or `0640`, or owned by root at mode `0644` so the container user can still
+   read it.
+
+The pre-YAML configuration environment variable is rejected on startup with a
+message pointing to `--config` or `AOS_UI_PROXY_CONFIG_FILE`.
+
 ## Validate Compose changes
 
 ```bash
 bunx vitest run test/containers/compose.test.ts
 docker compose -f compose.yaml config --quiet
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
 AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
   AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.hermes.yaml config --quiet
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.openclaw.json \
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
+AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
+AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
+AOS_UI_PUSH_STATE_DIR=/absolute/operator/dir \
+AOS_UI_VAPID_PRIVATE_KEY_FILE=/absolute/private/path/vapid-private-key \
+AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com \
+  docker compose -f compose.yaml -f compose.hermes.yaml -f compose.push.yaml config --quiet
+AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.openclaw.yaml \
   AOS_UI_OPENCLAW_DEVICE_IDENTITY_FILE=/absolute/private/path/openclaw-device-identity \
   AOS_UI_OPENCLAW_DEVICE_TOKEN_FILE=/absolute/private/path/openclaw-device-token \
   AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.openclaw.yaml config --quiet
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
-  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy-config.opencode.json \
+  AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.opencode.yaml \
   AOS_UI_OPENCODE_PASSWORD_FILE=/absolute/private/path/opencode-password \
   AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
   docker compose -f compose.yaml -f compose.opencode.yaml config --quiet

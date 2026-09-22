@@ -19,7 +19,7 @@ For local development, run the normalized AOS proxy and the Vite dev server:
 
 ```bash
 # Terminal 1
-bun run proxy:serve -- --config /absolute/private/path/proxy-config.json
+bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
 
 # Terminal 2
 AOS_UI_RUNTIME_MODE=aos \
