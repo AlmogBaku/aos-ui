@@ -196,8 +196,8 @@ code initially, and is not recommended.
 Hermes is MIT licensed. Any copied substantial source must retain the upstream
 copyright and permission notice required by its
 [`LICENSE`](https://github.com/NousResearch/hermes-agent/blob/643b3f450df1c6c884b2de8d0832d0af9b6ed272/LICENSE).
-Follow the repository's Monty-style provenance pattern with a colocated
-`LICENSE` and `UPSTREAM.md` recording exact commit, files, and divergences.
+Keep a colocated `LICENSE` and an `UPSTREAM.md` that records the exact
+commit, files, and divergences.
 
 Do not track unpinned `main`: between the currently documented AOS revision
 and this snapshot, the web API grew and the shared gateway was substantially

@@ -329,7 +329,7 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 
 - **Todos and activity:** stay eager because the default workspace uses them;
   Todos progress has a localized accessible name and a proper heading level.
-- **Optional visuals:** question, permission, Monty, chart, map, and stats
+- **Optional visuals:** question, permission, chart, map, and stats
   renderers load on demand behind a localized loading state and error boundary.
 - **Fallback:** loading or failure leaves an inspectable textual/JSON
   representation available. Markdown follows the same rule: plain text stays

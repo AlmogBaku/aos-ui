@@ -156,32 +156,8 @@ test("published artifacts open from Outputs and close cleanly", async ({
   await expect(viewer).toBeHidden()
 })
 
-test("Monty stays inspect-only and malformed tools retain a safe JSON fallback", async ({
-  page,
-}) => {
+test("malformed tools retain a safe JSON fallback", async ({ page }) => {
   await openWorkspace(page)
-  await sendPrompt(page, "Run Monty")
-
-  const monty = toolCard(page, "Monty result")
-  await expect(monty).toHaveAttribute("data-state", "complete")
-  const sourceCode = monty.getByText("market.total_by_quarter()", {
-    exact: true,
-  })
-  await expect(sourceCode).toBeHidden()
-  await expect(monty.getByText("Q1’25: 365", { exact: true })).toBeVisible()
-  await expect(monty.getByRole("button", { name: "Copy code" })).toBeVisible()
-  await expect(monty.getByRole("button", { name: /run|execute/i })).toHaveCount(
-    0
-  )
-
-  const inspectSource = monty.getByText("Inspect source code", { exact: true })
-  await inspectSource.focus()
-  await page.keyboard.press("Enter")
-  await expect(sourceCode).toBeVisible()
-
-  await monty.getByText("Inspect full result", { exact: true }).click()
-  await expect(monty.getByText(/fixture-monty-001/)).toBeVisible()
-
   await sendPrompt(page, "Return a malformed tool")
 
   // The reply is all trace and no answer, so the whole turn folds.
@@ -194,16 +170,6 @@ test("Monty stays inspect-only and malformed tools retain a safe JSON fallback",
   await fallback.getByRole("button").click()
   await expect(fallback).toContainText('"unexpected"')
   await expect(fallback).toContainText("not-an-object")
-
-  await sendPrompt(page, "Make Monty fail")
-
-  const failedMonty = page.getByText("Fixture Monty execution failed", {
-    exact: true,
-  })
-  await expect(failedMonty).toBeVisible()
-  await expect(
-    page.getByRole("button", { name: /\b(?:run|execute)\b/i })
-  ).toHaveCount(0)
 })
 
 test("charts and maps expose complete textual alternatives", async ({

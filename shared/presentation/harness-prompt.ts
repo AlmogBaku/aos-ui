@@ -92,34 +92,3 @@ export function buildAosUiHarnessPrompt(
 
   return sections.join("\n")
 }
-
-export function buildMontyInstructions(
-  advertisedToolNames: readonly string[]
-): string {
-  const names = new Set(advertisedToolNames.map(assertToolName))
-  const canSearch = names.has("monty_search")
-  const canExecute = names.has("monty_execute")
-  if (!canSearch && !canExecute) return ""
-
-  const sections = ["Monty sandbox guidance:"]
-  if (canSearch) {
-    sections.push(
-      "- Call `monty_search` to discover exact names and signatures when the function you need is not already described in the tool catalog."
-    )
-  }
-  if (canExecute) {
-    sections.push(
-      "- Use `monty_execute` to run Python that combines builtins and configured downstream MCP tools. Await tool calls; the final expression is returned directly."
-    )
-  }
-  sections.push(
-    "- Native/importable modules: `json`, `math`, `datetime`, `re`, `collections`, `itertools`, `dataclasses`, `typing`, and `unicodedata`.",
-    "- Discoverable injected helpers: `stdlib_functools_reduce`, `stdlib_base64_b64encode`, `stdlib_base64_b64decode`, `stdlib_binascii_hexlify`, and `stdlib_binascii_unhexlify`; the corresponding modules are not importable.",
-    canSearch
-      ? "- Bundled backend tools include `math_*` helpers and non-cryptographic `random_*` helpers. Discover their exact signatures with `monty_search` before use."
-      : "- Bundled backend tools include `math_*` helpers and non-cryptographic `random_*` helpers. Use only exact names and signatures already supplied by the provider.",
-    "- Python has no direct host OS, network, process, or filesystem access. Configured downstream MCP tools provide their own capabilities and may have side effects."
-  )
-
-  return sections.join("\n")
-}

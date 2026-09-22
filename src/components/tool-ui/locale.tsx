@@ -9,7 +9,6 @@ export type ToolUiDirection = "ltr" | "rtl"
 export type ToolUiToolName =
   | "question"
   | "permission"
-  | "monty"
   | "chart"
   | "map"
   | "stats"
@@ -123,16 +122,6 @@ export type ToolUiLocaleLabels = {
     malformed: (displayName: string) => string
     malformedExplanation: string
     copyJson: string
-  }
-  monty: {
-    title: string
-    description: string
-    code: string
-    copyCode: string
-    inspectCode: string
-    result: string
-    copyResult: string
-    inspectResult: string
   }
   chart: {
     unavailable: string
@@ -299,17 +288,6 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       "The tool returned data that did not match this renderer. The raw payload is preserved below.",
     copyJson: "Copy JSON",
   },
-  monty: {
-    title: "Monty result",
-    description:
-      "Provider-executed code and its recorded output. Browser execution is disabled.",
-    code: "Code",
-    copyCode: "Copy code",
-    inspectCode: "Inspect source code",
-    result: "Result",
-    copyResult: "Copy result",
-    inspectResult: "Inspect full result",
-  },
   chart: {
     unavailable: "Chart visual unavailable. The data table remains available.",
     loading: "Loading chart visual…",
@@ -333,7 +311,6 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "Question",
     permission: "Permission",
-    monty: "Monty",
     chart: "Chart",
     map: "Map",
     stats: "Metrics",
@@ -479,16 +456,6 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       "הכלי החזיר נתונים שאינם תואמים למציג זה. המטען הגולמי נשמר למטה.",
     copyJson: "העתקת JSON",
   },
-  monty: {
-    title: "תוצאת Monty",
-    description: "הקוד הופעל אצל הספק והפלט תועד. הרצה בדפדפן מושבתת.",
-    code: "קוד",
-    copyCode: "העתקת קוד",
-    inspectCode: "בדיקת קוד המקור",
-    result: "תוצאה",
-    copyResult: "העתקת תוצאה",
-    inspectResult: "בדיקת התוצאה המלאה",
-  },
   chart: {
     unavailable: "התרשים אינו זמין. טבלת הנתונים עדיין זמינה.",
     loading: "התרשים נטען…",
@@ -512,7 +479,6 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "שאלה",
     permission: "הרשאה",
-    monty: "Monty",
     chart: "תרשים",
     map: "מפה",
     stats: "מדדים",

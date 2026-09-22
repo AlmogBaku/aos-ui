@@ -95,7 +95,7 @@ external reverse proxy is optional.
 - The browser supports only the normalized `aos` runtime and explicit
   `fixture` mode. The proxy selects one server adapter per deployment; Hermes
   is the primary V1 implementation. OpenClaw and OpenCode adapters keep their
-  distinct native transports server-side. Monty is optional.
+  distinct native transports server-side.
 - The three `AOS_UI_OPENAI_COMPATIBLE_*` values (`AOS_UI_OPENAI_COMPATIBLE_BASE_URL`,
   `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`) are
   all-or-none; setting any one without the others is an error.
@@ -176,8 +176,6 @@ external reverse proxy is optional.
 - Architecture boundary tests live in `test/architecture/` and
   `packages/proxy/architecture.test.ts`; the ESLint rule is
   `scripts/eslint-runtime-boundaries.mjs`.
-- `integrations/monty` is the runtime fork, named `monty`. Preserve its MIT
-  license and the upstream commit attribution in `integrations/monty/UPSTREAM.md`.
 
 Treat generated and user-owned material carefully. Do not blindly regenerate
 customized shadcn/Assistant UI components. Only `aos-deploy` and
@@ -258,7 +256,6 @@ Additional checks by area:
   installs the package's own lockfile because the plugin SDK is a peer this checkout
   does not carry, so the root test and typecheck gates skip that entry and its
   contract test. The integration's other tests run at the root.
-- Monty wrapper or lock changes: `bun run monty:test`.
 - Compose or Docker changes:
 
   ```bash

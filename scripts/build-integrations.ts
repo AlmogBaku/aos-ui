@@ -3,10 +3,8 @@ import { fileURLToPath } from "node:url"
 import { resolve } from "node:path"
 import { format } from "prettier"
 import { presentationCatalog } from "../shared/presentation/tools"
-import {
-  buildProviderInstructions,
-  hermesHarnessCapabilities,
-} from "../shared/presentation/manifests"
+import { buildAosUiHarnessPrompt } from "../shared/presentation/harness-prompt"
+import { hermesHarnessCapabilities } from "../shared/presentation/manifests"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const generated = resolve(root, "integrations/hermes/aos_hermes/_generated")
@@ -16,7 +14,7 @@ await writeFile(
   JSON.stringify(
     {
       tools: presentationCatalog(),
-      instructions: buildProviderInstructions(hermesHarnessCapabilities),
+      instructions: buildAosUiHarnessPrompt(hermesHarnessCapabilities),
     },
     null,
     2

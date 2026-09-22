@@ -23,7 +23,7 @@ load failure leaves an inspectable textual fallback instead of a blank area.
 
 **Eager renderers** (Todos) are imported directly because the default workspace
 always uses them. **Lazy renderers** (question-flow, chart, geo-map, stats,
-permission, monty) are imported with `React.lazy` to keep the main bundle lean.
+permission) are imported with `React.lazy` to keep the main bundle lean.
 
 ## Tool names each surface answers
 
@@ -35,7 +35,6 @@ permission, monty) are imported with `React.lazy` to keep the main bundle lean.
 | `ask_user_question`, `question`             | question-flow |
 | `request_permission`, `request_approval`    | permission    |
 | `delegate_subagent`, `run_subagent`, `task` | activity      |
-| `monty_execute`                             | monty         |
 
 ## Safety rule
 

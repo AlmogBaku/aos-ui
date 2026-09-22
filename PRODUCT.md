@@ -20,8 +20,7 @@ AOS is a UI for native harnesses, with Agent creation and rich messages around
 their conversations. Hermes is the primary and first-supported harness;
 OpenClaw and OpenCode use separate integrations behind the same harness-runtime
 boundary. The browser connects to the proxy over a single ACP v2 WebSocket per
-tab. Explicit fixtures remain available. Monty is an independent optional
-integration.
+tab. Explicit fixtures remain available.
 
 ## Operating Context
 

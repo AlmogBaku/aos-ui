@@ -91,8 +91,8 @@ export function isOrdinaryToolPart(
 
 /**
  * Parts that stay outside the fold and always visible: rich tool views,
- * question and permission flows, subagent activity, Monty, and attached data,
- * media or sources. `DESIGN.md` keeps meaningful rich output as message content.
+ * question and permission flows, subagent activity, and attached data, media
+ * or sources. `DESIGN.md` keeps meaningful rich output as message content.
  */
 export function isFirstClassPart(
   part: TurnPart,

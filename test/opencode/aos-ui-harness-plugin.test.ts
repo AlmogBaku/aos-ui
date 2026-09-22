@@ -36,7 +36,6 @@ describe("OpenCode harness plugin", () => {
     expect(system).toHaveLength(2)
     expect(system[0]).toBe("Provider-owned Agent instructions")
     expect(system[1]).toContain("AOS presentation harness:")
-    expect(system[1]).not.toMatch(/monty_/)
     expect(get).toHaveBeenCalledWith({
       path: { id: "session-build" },
       query: { directory: "/external/worktree" },
@@ -76,7 +75,6 @@ describe("OpenCode harness plugin", () => {
     expect(system).toHaveLength(1)
     expect(system[0]).toContain("`question`")
     expect(system[0]).not.toContain("`render_chart`")
-    expect(system[0]).not.toMatch(/monty_/)
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({

@@ -76,22 +76,19 @@ already occupied.
 
 The launcher accepts these environment variables:
 
-| Variable                             | Default     | Meaning                                         |
-| ------------------------------------ | ----------- | ----------------------------------------------- |
-| `AOS_UI_OPENCODE_HOST`               | `127.0.0.1` | Bind address for the OpenCode server.           |
-| `AOS_UI_OPENCODE_PORT`               | `4096`      | Port for the OpenCode server.                   |
-| `AOS_UI_OPENCODE_CORS_ORIGINS`       | unset       | Comma-separated allowed CORS origins.           |
-| `AOS_UI_OPENCODE_PLUGIN_PATH`        | built path  | Absolute path to the compiled plugin JS.        |
-| `AOS_UI_OPENCODE_PASSWORD_FILE`      | unset       | Owner-only file containing the server password. |
-| `AOS_UI_OPENCODE_WORKTREE`           | required    | Absolute path to the OpenCode working tree.     |
-| `AOS_UI_OPENAI_COMPATIBLE_BASE_URL`  | unset       | OpenAI-compatible provider base URL.            |
-| `AOS_UI_OPENAI_COMPATIBLE_API_KEY`   | unset       | OpenAI-compatible API key.                      |
-| `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`  | unset       | OpenAI-compatible model identifier.             |
-| `AOS_UI_OPENCODE_MONTY_COMMAND_JSON` | unset       | JSON array launching an MCP Monty server.       |
-| `AOS_UI_OPENCODE_MONTY_URL`          | unset       | HTTP(S) URL of an MCP Monty server.             |
+| Variable                            | Default     | Meaning                                         |
+| ----------------------------------- | ----------- | ----------------------------------------------- |
+| `AOS_UI_OPENCODE_HOST`              | `127.0.0.1` | Bind address for the OpenCode server.           |
+| `AOS_UI_OPENCODE_PORT`              | `4096`      | Port for the OpenCode server.                   |
+| `AOS_UI_OPENCODE_CORS_ORIGINS`      | unset       | Comma-separated allowed CORS origins.           |
+| `AOS_UI_OPENCODE_PLUGIN_PATH`       | built path  | Absolute path to the compiled plugin JS.        |
+| `AOS_UI_OPENCODE_PASSWORD_FILE`     | unset       | Owner-only file containing the server password. |
+| `AOS_UI_OPENCODE_WORKTREE`          | required    | Absolute path to the OpenCode working tree.     |
+| `AOS_UI_OPENAI_COMPATIBLE_BASE_URL` | unset       | OpenAI-compatible provider base URL.            |
+| `AOS_UI_OPENAI_COMPATIBLE_API_KEY`  | unset       | OpenAI-compatible API key.                      |
+| `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` | unset       | OpenAI-compatible model identifier.             |
 
-The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none. The two
-Monty variables are mutually exclusive.
+The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none.
 
 The integration sets `create_agent: "deny"` in the OpenCode permission config
 when the plugin is loaded. This prevents the Agent from spawning new OpenCode

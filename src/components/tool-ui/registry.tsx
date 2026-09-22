@@ -17,7 +17,6 @@ import { chartPayloadSchema, type ChartPayload } from "./payloads/chart"
 import { GenericJsonTool } from "./generic-json"
 import { LazyVisualBoundary } from "./lazy-boundary"
 import { mapPayloadSchema, type MapPayload } from "./payloads/map"
-import { montyPayloadSchema, type MontyPayload } from "./payloads/monty"
 import {
   permissionPayloadSchema,
   type PermissionPayload,
@@ -37,9 +36,6 @@ const QuestionFlowTool = lazy(() =>
 )
 const PermissionTool = lazy(() =>
   import("./permission").then((module) => ({ default: module.PermissionTool }))
-)
-const MontyTool = lazy(() =>
-  import("./monty").then((module) => ({ default: module.MontyTool }))
 )
 const ChartTool = lazy(() =>
   import("./chart").then((module) => ({ default: module.ChartTool }))
@@ -159,13 +155,6 @@ const permission = defineToolRenderer<PermissionPayload>({
   acceptsPart: (part) => part.approval !== undefined,
 })
 
-const monty = defineToolRenderer<MontyPayload>({
-  displayNameKey: "monty",
-  schema: montyPayloadSchema,
-  Renderer: MontyTool,
-  optional: true,
-})
-
 const chart = defineToolRenderer<ChartPayload>({
   displayNameKey: "chart",
   schema: chartPayloadSchema,
@@ -227,7 +216,6 @@ export const richToolRegistry: RichToolRegistry = Object.freeze({
   request_approval: permission,
   delegate_subagent: subagentActivity,
   run_subagent: subagentActivity,
-  monty_execute: monty,
 })
 
 /** Direct `MessagePrimitive.Parts` tool-call renderer. */

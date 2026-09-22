@@ -131,7 +131,7 @@ describe("packaged OpenCode plugin", () => {
     ).rejects.toThrow()
   })
 
-  it("injects conservative native guidance without Monty instructions by default", async () => {
+  it("injects conservative native guidance", async () => {
     const hooks = await createAosUiPlugin(
       input() as never,
       "/external/worktree"
@@ -144,6 +144,5 @@ describe("packaged OpenCode plugin", () => {
     )
 
     expect(output.system.join("\n")).toContain("AOS presentation harness:")
-    expect(output.system.join("\n")).not.toContain("Monty sandbox guidance")
   })
 })

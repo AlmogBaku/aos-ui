@@ -22,8 +22,6 @@ describe("deterministic fixture scenarios", () => {
       ["show incomplete mermaid stream", "mermaid-incomplete"],
       ["show malformed mermaid", "mermaid-malformed"],
       ["show oversized mermaid", "mermaid-oversized"],
-      ["run monty", "monty-success"],
-      ["make monty fail", "monty-failure"],
       ["return a malformed tool", "malformed-tool"],
       ["simulate provider outage", "provider-outage"],
     ]
@@ -121,29 +119,10 @@ describe("deterministic fixture scenarios", () => {
     ).toBeLessThan(2_000)
   })
 
-  it("marks Monty failure and malformed tools for the generic failed lifecycle", () => {
-    expect(buildFixtureScenario("monty should fail").parts[0]).toMatchObject({
-      type: "tool-call",
-      toolName: "monty_execute",
-      isError: true,
-    })
+  it("returns an unknown tool for the malformed scenario", () => {
     expect(buildFixtureScenario("malformed tool").parts[0]).toMatchObject({
       type: "tool-call",
       toolName: "unknown_fixture_tool",
-    })
-  })
-
-  it("gives successful and failed Monty calls distinct deterministic IDs", () => {
-    const successfulCall = buildFixtureScenario("run monty").parts[0]
-    const failedCall = buildFixtureScenario("make monty fail").parts[0]
-
-    expect(successfulCall).toMatchObject({
-      type: "tool-call",
-      toolCallId: "fixture-monty_execute-success",
-    })
-    expect(failedCall).toMatchObject({
-      type: "tool-call",
-      toolCallId: "fixture-monty_execute-failure",
     })
   })
 })

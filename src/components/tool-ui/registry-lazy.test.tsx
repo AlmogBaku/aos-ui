@@ -36,7 +36,6 @@ afterEach(() => {
   cleanup()
   vi.doUnmock("./question-flow")
   vi.doUnmock("./permission")
-  vi.doUnmock("./monty")
   vi.doUnmock("./chart")
   vi.doUnmock("./map")
   vi.doUnmock("./stats")
@@ -51,7 +50,6 @@ describe("optional renderer loading", () => {
     }
     vi.doMock("./question-flow", unavailable)
     vi.doMock("./permission", unavailable)
-    vi.doMock("./monty", unavailable)
     vi.doMock("./chart", unavailable)
     vi.doMock("./map", unavailable)
     vi.doMock("./stats", unavailable)
@@ -69,7 +67,6 @@ describe("optional renderer loading", () => {
         args: { action: "Read" },
         approval: { id: "approval" },
       }),
-      toolPart({ toolName: "monty_execute", args: { code: "print(42)" } }),
       toolPart({
         toolName: "render_chart",
         args: {

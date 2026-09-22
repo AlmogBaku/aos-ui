@@ -23,8 +23,6 @@ export const fixtureScenarioNames = [
   "mermaid-incomplete",
   "mermaid-malformed",
   "mermaid-oversized",
-  "monty-success",
-  "monty-failure",
   "malformed-tool",
   "provider-outage",
 ] as const
@@ -345,34 +343,6 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           type: "text",
           text: "```mermaid\nflowchart LR\n  Request --> Plan\n  Plan --> Result\n```",
         },
-      ],
-    }
-  }
-
-  if (input.includes("monty") && input.includes("fail")) {
-    return {
-      name: "monty-failure",
-      parts: [
-        toolPart(
-          "monty_execute",
-          { code: "fetch_market()" },
-          { error: "Fixture Monty execution failed" },
-          { isError: true, toolCallId: "fixture-monty_execute-failure" }
-        ),
-      ],
-    }
-  }
-
-  if (input.includes("monty")) {
-    return {
-      name: "monty-success",
-      parts: [
-        toolPart(
-          "monty_execute",
-          { code: "market.total_by_quarter()" },
-          { stdout: "Q1’25: 365", receipt: "fixture-monty-001" },
-          { toolCallId: "fixture-monty_execute-success" }
-        ),
       ],
     }
   }

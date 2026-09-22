@@ -1281,68 +1281,6 @@ describe("safe result renderers", () => {
     expect(screen.getByText("Textual data")).toBeInTheDocument()
   })
 
-  it("makes Monty inspectable and copyable without exposing browser execution", async () => {
-    const user = userEvent.setup()
-    const source =
-      '<script>alert("not executed")</script>\nmarket.total_by_quarter()'
-
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "monty_execute",
-          args: { code: source },
-          result: { stdout: "Q1’25: 365", receipt: "fixture-monty-001" },
-        })}
-      />
-    )
-
-    const sourceCode = screen.getByText(/not executed/)
-    expect(sourceCode).not.toBeVisible()
-    expect(document.querySelector("script")).not.toBeInTheDocument()
-    expect(screen.getByText("Q1’25: 365")).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /run|execute/i })
-    ).not.toBeInTheDocument()
-
-    const inspectSource = screen.getByText("Inspect source code")
-    const summary = inspectSource.closest("summary")
-    expect(summary).toBeInTheDocument()
-    await user.click(summary!)
-    expect(sourceCode).toBeVisible()
-
-    await user.click(screen.getByText("Inspect full result"))
-    expect(screen.getByText(/fixture-monty-001/)).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Copy code" }))
-    expect(await navigator.clipboard.readText()).toBe(source)
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
-  })
-
-  it("shows a provider Monty failure without offering browser execution", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "monty_execute",
-          args: { code: "broken_call()" },
-          isError: true,
-          status: {
-            type: "incomplete",
-            reason: "error",
-            error: "Monty worker timed out",
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Failed")).toBeInTheDocument()
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Monty worker timed out"
-    )
-    expect(
-      screen.queryByRole("button", { name: /run|execute/i })
-    ).not.toBeInTheDocument()
-  })
-
   it("uses the inspectable JSON fallback for unknown and malformed known tools", async () => {
     const user = userEvent.setup()
     const { rerender } = await renderTool(
@@ -1816,9 +1754,9 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByText("datasets/market/**")).toHaveAttribute("dir", "ltr")
   })
 
-  it("localizes malformed fallback, Monty controls, and copy feedback", async () => {
+  it("localizes malformed fallback and copy feedback", async () => {
     const user = userEvent.setup()
-    const { rerender } = await renderTool(
+    await renderTool(
       <ToolUiLocaleProvider locale="he">
         <RichToolRenderer
           {...toolPart({
@@ -1834,26 +1772,7 @@ describe("Hebrew tool UI", () => {
     await user.click(screen.getByText("לא ניתן להציג בבטחה: תרשים"))
     expect(screen.getByRole("button", { name: "העתקת JSON" })).toBeVisible()
 
-    await rerender(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "monty_execute",
-            args: { code: "market.total_by_quarter()" },
-            result: { stdout: "Provider output" },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByRole("heading", { name: "תוצאת Monty" })).toBeVisible()
-    expect(screen.getByRole("button", { name: "העתקת קוד" })).toBeVisible()
-    const sourceCode = screen.getByText("market.total_by_quarter()")
-    expect(sourceCode).not.toBeVisible()
-    expect(sourceCode).toHaveAttribute("dir", "ltr")
-    await user.click(screen.getByText("בדיקת קוד המקור"))
-    expect(sourceCode).toBeVisible()
-    await user.click(screen.getByRole("button", { name: "העתקת קוד" }))
+    await user.click(screen.getByRole("button", { name: "העתקת JSON" }))
     expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
   })
 

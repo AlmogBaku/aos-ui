@@ -111,10 +111,6 @@ credential.
 `integrations/hermes/scripts/provision-creator.sh` provisions a creator profile
 with these values.
 
-## Optional Monty
-
-Configure Monty through native Hermes MCP settings for profiles that need it. This package neither starts Monty nor depends on it.
-
 ## Verify the package
 
 ```bash

@@ -1,6 +1,5 @@
 import {
   buildAosUiHarnessPrompt,
-  buildMontyInstructions,
   type HarnessCapabilities,
 } from "./harness-prompt"
 
@@ -62,32 +61,18 @@ export const agentBuilderHarnessCapabilities = {
   providerSubagents: false,
 } as const satisfies HarnessCapabilities
 
-export const openCodeMontyToolNames = ["monty_search", "monty_execute"] as const
-
-export function buildProviderInstructions(
-  capabilities: HarnessCapabilities,
-  montyToolNames: readonly string[] = []
-) {
-  return [
-    buildAosUiHarnessPrompt(capabilities),
-    buildMontyInstructions(montyToolNames),
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-}
-
-export const openCodeProviderInstructions = buildProviderInstructions(
+export const openCodeProviderInstructions = buildAosUiHarnessPrompt(
   openCodeHarnessCapabilities
 )
 
-export const fixtureProviderInstructions = buildProviderInstructions(
+export const fixtureProviderInstructions = buildAosUiHarnessPrompt(
   fixtureHarnessCapabilities
 )
 
-export const agUiProviderInstructions = buildProviderInstructions(
+export const agUiProviderInstructions = buildAosUiHarnessPrompt(
   agUiHarnessCapabilities
 )
 
-export const agentBuilderProviderInstructions = buildProviderInstructions(
+export const agentBuilderProviderInstructions = buildAosUiHarnessPrompt(
   agentBuilderHarnessCapabilities
 )

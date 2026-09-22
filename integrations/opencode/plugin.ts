@@ -10,8 +10,7 @@ import {
 import {
   agUiProviderInstructions,
   agentBuilderProviderInstructions,
-  buildProviderInstructions,
-  openCodeHarnessCapabilities,
+  openCodeProviderInstructions,
 } from "../../shared/presentation/manifests"
 import { presentationToolDefinitions } from "../../shared/presentation/tools"
 import {
@@ -79,33 +78,15 @@ function presentationTools(): Hooks["tool"] {
   )
 }
 
-function montyToolNames(environment: Environment) {
-  const value = environment.AOS_UI_OPENCODE_MONTY_TOOLS?.trim()
-  if (!value) return []
-  const names = value
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean)
-  const supported = new Set(["monty_search", "monty_execute"])
-  if (names.some((name) => !supported.has(name)))
-    throw new Error("AOS_UI_OPENCODE_MONTY_TOOLS contains an unsupported tool")
-  return [...new Set(names)]
-}
-
 export async function createAosUiPlugin(
   input: PluginInput,
-  configuredWorktree = resolveConfiguredWorktree(process.env),
-  environment: Environment = process.env
+  configuredWorktree = resolveConfiguredWorktree(process.env)
 ): Promise<Hooks> {
   if (resolve(input.directory) !== configuredWorktree)
     throw new Error(
       "OpenCode plugin directory does not match the configured worktree"
     )
 
-  const normalInstructions = buildProviderInstructions(
-    openCodeHarnessCapabilities,
-    montyToolNames(environment)
-  )
   let reportedHealthy = false
   const report = async (
     level: "info" | "warn",
@@ -208,7 +189,7 @@ export async function createAosUiPlugin(
       delete output.options.aos_ui_role
     },
     "experimental.chat.system.transform": async (hookInput, output) => {
-      let instructions = normalInstructions
+      let instructions = openCodeProviderInstructions
       let manifest = "opencode"
       let resolutionError: unknown
       if (hookInput.sessionID) {

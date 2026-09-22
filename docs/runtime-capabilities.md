@@ -48,7 +48,3 @@ The OpenClaw adapter uses the authenticated, negotiated Gateway connection for p
 ## OpenCode
 
 OpenCode owns Agent definitions, Sessions, execution, provider credentials, worktree, and persistence. The proxy attaches to its authenticated server using a fixed directory and server-side Basic authentication. AOS reads the catalog and session model choices, creates Sessions, and projects durable runs, questions, permissions, attachments, Stop, and reconnect. It intentionally does not invent catalog mutation, title/delete, Todos, Activity, context accounting, artifacts, edit/regenerate, or steering semantics. Voice becomes available through the proxy `voice` configuration. See [Run OpenCode](runtimes/opencode.md).
-
-## Optional Monty integration
-
-Monty is not an AOS runtime mode. It is an optional harness-side MCP integration configured in Hermes or OpenCode. AOS does not start it or manage its credentials. See the [Monty integration README](../integrations/monty/README.md).

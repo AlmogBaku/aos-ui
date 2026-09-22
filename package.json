@@ -19,8 +19,6 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.shared.json --noEmit && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.tools.json --noEmit && tsc -p tsconfig.integration.json --noEmit && tsc -p tsconfig.proxy.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "monty:sync": "uv sync --project integrations/monty --frozen",
-    "monty:test": "uv run --project integrations/monty --frozen pytest -q integrations/monty/tests",
     "test:e2e": "playwright test"
   },
   "dependencies": {
