@@ -296,7 +296,15 @@ const translators: Translators = {
               sessionUpdate: "state_update",
               state: "idle",
               stopReason: AOS_STOP_REASONS.uncertain,
-              ...meta,
+              // As the real translator does, the failure itself travels with
+              // the state it settled, which is what the attachment logs.
+              _meta: {
+                [AOS_META_KEY]: {
+                  ...meta._meta[AOS_META_KEY],
+                  ...(event.code ? { code: event.code } : {}),
+                  message: event.message,
+                },
+              },
             },
           },
         ],
@@ -1707,7 +1715,7 @@ describe("AOS ACP agent", () => {
     )
   })
 
-  it("logs the stop reason a failed run reported", async () => {
+  it("logs the code and message a failed run reported, not only its class", async () => {
     const test = await harness()
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1734,6 +1742,8 @@ describe("AOS ACP agent", () => {
             connectionId: "connection-1",
             sessionId: CREATED,
             stopReason: AOS_STOP_REASONS.uncertain,
+            errorCode: "AOS_CONNECTION_INTERRUPTED",
+            message: "the transport dropped",
             runId: expect.any(String),
           }),
         ])

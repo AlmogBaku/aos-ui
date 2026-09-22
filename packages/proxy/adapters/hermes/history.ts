@@ -3,6 +3,7 @@ import {
   isRecord as isNativeRecord,
   rowText,
   timestamp,
+  timestampMs,
   trimmedText,
   utf8BytesWithin,
 } from "./native"
@@ -175,6 +176,23 @@ export function projectHermesHistory(
   const messages: SessionMessage[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
   const mediaReferences = new Map<number, Set<string>>()
+  /** The newest row time each merged turn was built from, in epoch ms. */
+  const completions = new Map<number, number>()
+
+  /** One turn spans every row that patched into it, so its end is their newest. */
+  function contributed(messageIndex: number, row: JsonRecord) {
+    const ms = timestampMs(row.timestamp ?? row.created_at)
+    if (ms === undefined) return
+    const newest = completions.get(messageIndex)
+    if (newest === undefined || ms > newest) completions.set(messageIndex, ms)
+  }
+
+  /** Keeps every open call of one turn addressing its part after an insertion. */
+  function shifted(messageIndex: number, afterPartIndex: number, by: number) {
+    for (const [id, call] of calls)
+      if (call.messageIndex === messageIndex && call.partIndex > afterPartIndex)
+        calls.set(id, { ...call, partIndex: call.partIndex + by })
+  }
 
   rows.forEach((value, index) => {
     if (!isRecord(value) || trimmedText(value.display_kind)) return
@@ -208,13 +226,19 @@ export function projectHermesHistory(
         result: outcome.result,
         ...(outcome.isError ? { isError: true } : {}),
       }
-      for (const artifact of outcome.parts) content.push(artifact)
+      // Live publishes an artifact the moment its tool result lands, so the
+      // stored turn places it there too rather than at the turn's end.
+      if (outcome.parts.length > 0) {
+        content.splice(target.partIndex + 1, 0, ...outcome.parts)
+        shifted(target.messageIndex, target.partIndex, outcome.parts.length)
+      }
       if (outcome.trustedMedia.length) {
         const trusted = mediaReferences.get(target.messageIndex) ?? new Set()
         for (const reference of outcome.trustedMedia) trusted.add(reference)
         mediaReferences.set(target.messageIndex, trusted)
       }
       messages[target.messageIndex] = { ...message, content }
+      contributed(target.messageIndex, value)
       return
     }
 
@@ -292,6 +316,9 @@ export function projectHermesHistory(
         calls.set(toolCallId, { messageIndex, partIndex })
       }
     }
+    // Only an assistant turn spans more than one row, so only its end is worth
+    // recording: every other role completed where it was created.
+    if (role === "assistant") contributed(messageIndex, value)
     if (previousAssistant) {
       messages[messageIndex] = { ...previousAssistant, content }
     } else {
@@ -311,5 +338,12 @@ export function projectHermesHistory(
       })
     }
   })
-  return messages
+  // Stamped last because the rows that finish an assistant turn arrive after the
+  // row that opened it.
+  return messages.map((message, index) => {
+    const ms = completions.get(index)
+    return ms === undefined
+      ? message
+      : { ...message, completedAt: new Date(ms).toISOString() }
+  })
 }

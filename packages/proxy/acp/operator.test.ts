@@ -354,6 +354,8 @@ const TurnInputSchema = z.object({
 
 type HarnessOptions = {
   rows?: Session[]
+  /** Queue depth one browser's run stream is allowed, before it is dropped. */
+  maxSubscriberEvents?: number
   history?: SessionHistoryResponse
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
   elicitation?: (params: unknown) => Promise<CreateElicitationResponse>
@@ -373,7 +375,7 @@ async function harness(options: HarnessOptions = {}) {
     engine,
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: 64,
+    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
     maxSubscriberBytes: 256 * 1024,
     maxReplayEvents: 64,
     maxReplayBytes: 256 * 1024,
@@ -609,6 +611,13 @@ function turnUpdates(recorder: Recorder) {
       !text.includes("usage_update")
     )
   })
+}
+
+/** The window readings the browser received; only a settled turn owes it one. */
+function usageUpdates(recorder: Recorder) {
+  return updates(recorder).filter((update) =>
+    JSON.stringify(update).includes("usage_update")
+  )
 }
 
 /** Every `_meta.aos.sequence` the recorded run-stream updates carry, in order. */
@@ -907,6 +916,36 @@ describe("operator ACP lane", () => {
     expect([...sequences].sort((left, right) => left - right)).toEqual(
       sequences
     )
+    test.close()
+  })
+
+  it("asks the browser to resync a run its stream was dropped from", async () => {
+    // One event of queue, so the burst below outruns the send the pump awaits.
+    const test = await harness({ maxSubscriberEvents: 1 })
+    const { source } = await runningTurn(test, "Summarize")
+    await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("usage_update")
+    )
+
+    source.emit(runStarted("run-1", CREATED))
+    for (const delta of ["one", "two", "three", "four"])
+      source.emit({
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-1",
+        delta,
+      })
+    source.emit(runFinished("run-1", CREATED))
+
+    const invalidated = await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+    )
+    expect(invalidated.params).toEqual({ sessionId: CREATED })
+    // A dropped stream is not an outcome: the run failed nowhere, the turn this
+    // browser half-saw never ends for it, and the window it did not read stays
+    // at the one reading the Session opened with.
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
+    expect(usageUpdates(test.recorder)).toHaveLength(1)
     test.close()
   })
 
@@ -1209,7 +1248,9 @@ describe("operator ACP lane", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT } },
     })
 
-    expect(updates(test.recorder).slice(0, 2)).toMatchObject([
+    // The stored turn replays as the stream its run sent: the states that
+    // bracket it, and its prose as the chunk it arrived as.
+    expect(updates(test.recorder).slice(0, 4)).toMatchObject([
       {
         sessionId: SESSION,
         update: {
@@ -1220,10 +1261,22 @@ describe("operator ACP lane", () => {
       },
       {
         sessionId: SESSION,
+        update: { sessionUpdate: "state_update", state: "running" },
+      },
+      {
+        sessionId: SESSION,
         update: {
-          sessionUpdate: "agent_message",
+          sessionUpdate: "agent_message_chunk",
           messageId: "message-agent",
-          content: [{ type: "text", text: "Here they are" }],
+          content: { type: "text", text: "Here they are" },
+        },
+      },
+      {
+        sessionId: SESSION,
+        update: {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "end_turn",
         },
       },
     ])

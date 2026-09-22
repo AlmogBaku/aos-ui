@@ -1,20 +1,24 @@
-import type {
-  ContentBlock,
-  SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
 import type { SessionHistoryResponse, SessionMessage } from "../../../protocol"
 import {
-  AOS_META_KEY,
+  AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
 } from "../../../protocol/acp"
 import type {
   AcpOutbound,
   Lane,
   PersistedCorrections,
+  TranslateContext,
   TranslateHistory,
 } from "../types"
-import { planUpdate } from "./updates"
+import {
+  chunkOutbound,
+  planUpdate,
+  stateOutbound,
+  toolOutbound,
+  update,
+} from "./updates"
 
 type MessagePart = SessionMessage["content"][number]
 type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
@@ -26,6 +30,15 @@ const HISTORY_RUN_ID = "history"
 
 /** The `data` part name a published artifact travels under, live and stored. */
 const ARTIFACT_PART_NAME = "aos.artifact"
+
+/**
+ * The run identity the shared builders ask for, given a replay has no run of its
+ * own. Reusing them is what makes a stored turn and a watched turn one stream,
+ * so the browser reads both through one code path.
+ */
+function historyContext(lane: Lane): TranslateContext {
+  return { runId: HISTORY_RUN_ID, sequence: 0, lane, stopping: false }
+}
 
 function imageBlock(image: string): ContentBlock | undefined {
   const match = DATA_URL.exec(image)
@@ -65,105 +78,142 @@ function artifactOutbound(messageId: string, part: MessagePart): AcpOutbound[] {
     : []
 }
 
-function toolCallUpdate(messageId: string, part: ToolCallPart): SessionUpdate {
-  return {
-    sessionUpdate: "tool_call_update",
-    toolCallId: part.toolCallId,
-    title: part.toolName,
-    status: part.isError ? "failed" : "completed",
-    rawInput: part.args,
-    ...(part.result === undefined ? {} : { rawOutput: part.result }),
-    _meta: {
-      [AOS_META_KEY]: {
-        sequence: 0,
-        runId: HISTORY_RUN_ID,
-        messageId,
-        argsText: part.argsText,
-      },
+/**
+ * A settled call, as the single update the live stream arrives at: the live run
+ * opens it, streams its arguments, then settles it, and a replay knows only
+ * where that ended.
+ */
+function toolCallOutbound(
+  context: TranslateContext,
+  messageId: string,
+  part: ToolCallPart
+): AcpOutbound {
+  return toolOutbound(
+    context,
+    messageId,
+    {
+      toolCallId: part.toolCallId,
+      title: part.toolName,
+      status: part.isError ? "failed" : "completed",
+      rawInput: part.args,
+      ...(part.result === undefined ? {} : { rawOutput: part.result }),
     },
-  }
+    { argsText: part.argsText }
+  )
 }
 
-/** Assistant and system turns; ACP v2 has no system role of its own. */
-function agentOutbound(message: SessionMessage, lane: Lane): AcpOutbound[] {
-  const outbound: AcpOutbound[] = []
-  const reasoning: ContentBlock[] = message.content.flatMap((part) =>
-    part.type === "reasoning" ? [{ type: "text", text: part.text }] : []
-  )
-  // One message carries the turn, as the run stream sends it: the thought
-  // upsert sets its reasoning, the message upsert its prose, and reasoning
-  // replays first because that is the order the provider produced it in.
-  if (lane !== "guest" && reasoning.length > 0)
-    outbound.push({
-      kind: "update",
-      update: {
-        sessionUpdate: "agent_thought",
-        messageId: message.id,
-        content: reasoning,
-      },
-    })
-  const content = contentBlocks(message.content)
-  // A turn the provider failed is replayed even when it streamed no prose: its
-  // durable failure rides on the message it belongs to, because a replay settles
-  // no run of its own.
+/**
+ * How the turn ended, as the live run reports it. The provider's own failure
+ * carries the stored message; every other stored turn ended its turn, including
+ * one still waiting on an answer, because the request the attachment reissues is
+ * what reopens it.
+ *
+ * A durable status has no cancelled reason (`SessionMessageErrorStatusSchema`),
+ * so a stopped turn replays as the failure or the end of turn the provider
+ * persisted for it.
+ */
+function settledOutbound(
+  context: TranslateContext,
+  message: SessionMessage
+): AcpOutbound {
+  const at = message.completedAt ?? message.createdAt
   const failure =
     message.status?.type === "incomplete" ? message.status : undefined
-  if (content.length > 0 || failure)
-    outbound.push({
-      kind: "update",
-      update: {
-        sessionUpdate: "agent_message",
-        messageId: message.id,
-        content,
-        ...(failure
-          ? {
-              _meta: {
-                [AOS_META_KEY]: {
-                  sequence: 0,
-                  runId: HISTORY_RUN_ID,
-                  status: failure,
-                },
-              },
-            }
-          : {}),
-      },
-    })
-  // Execution history is the operator's. A published artifact is the turn's
-  // outcome, so it replays on both lanes; the guest history projection already
-  // dropped the parts a guest may not see.
+  return failure
+    ? stateOutbound(
+        context,
+        { state: "idle", stopReason: AOS_STOP_REASONS.error },
+        { at, message: failure.error }
+      )
+    : stateOutbound(context, { state: "idle", stopReason: "end_turn" }, { at })
+}
+
+/**
+ * One stored turn's parts, in the order the provider produced them, which is the
+ * order the run stream sent: a whole-message upsert cannot say that this
+ * paragraph came after that tool call, because it replaces one source's content
+ * as one block. Execution history is the operator's; a published artifact is the
+ * turn's outcome, so it replays on both lanes and the guest history projection
+ * has already dropped the parts a guest may not see.
+ */
+function partsOutbound(
+  message: SessionMessage,
+  context: TranslateContext
+): AcpOutbound[] {
+  const outbound: AcpOutbound[] = []
+  const chunk = (
+    sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
+    content: ContentBlock
+  ) => {
+    outbound.push(chunkOutbound(context, sessionUpdate, message.id, content))
+  }
   for (const part of message.content) {
-    outbound.push(...artifactOutbound(message.id, part))
-    if (lane !== "guest" && part.type === "tool-call")
-      outbound.push({
-        kind: "update",
-        update: toolCallUpdate(message.id, part),
-      })
+    if (part.type === "reasoning") {
+      if (context.lane !== "guest")
+        chunk("agent_thought_chunk", { type: "text", text: part.text })
+    } else if (part.type === "text")
+      chunk("agent_message_chunk", { type: "text", text: part.text })
+    else if (part.type === "image") {
+      const image = imageBlock(part.image)
+      if (image) chunk("agent_message_chunk", image)
+    } else if (part.type === "tool-call") {
+      if (context.lane !== "guest")
+        outbound.push(toolCallOutbound(context, message.id, part))
+    } else outbound.push(...artifactOutbound(message.id, part))
   }
   return outbound
 }
 
+/**
+ * Assistant and system turns; ACP v2 has no system role of its own. An assistant
+ * turn replays between the two state updates its run sent, because that is what
+ * opens the turn, dates it, and settles it on the browser's one code path.
+ */
+function agentOutbound(
+  message: SessionMessage,
+  context: TranslateContext,
+  startedAt: string
+): AcpOutbound[] {
+  const parts = partsOutbound(message, context)
+  // A notice the provider wrote is no turn: no run produced it, so no run state
+  // brackets it.
+  if (message.role !== "assistant") return parts
+  // A turn this lane shows nothing of is no turn either. Only a failure the
+  // provider persisted is worth bracketing alone, because the browser shows it.
+  if (parts.length === 0 && message.status === undefined) return []
+  return [
+    stateOutbound(context, { state: "running" }, { at: startedAt }),
+    ...parts,
+    settledOutbound(context, message),
+  ]
+}
+
 export const translateHistory = ((history, lane) => {
+  const context = historyContext(lane)
   const outbound: AcpOutbound[] = []
+  // What live's RUN_STARTED approximates: the turn started when its prompt
+  // landed. A page that opens mid-conversation has only the turn's own time.
+  let promptedAt: string | undefined
   for (const message of history.messages) {
     if (message.role === "activity")
-      outbound.push({
-        kind: "update",
-        update: planUpdate(message.content.todos, { sequence: 0 }),
-      })
+      outbound.push(update(planUpdate(message.content.todos, { sequence: 0 })))
     else if (message.role === "user") {
-      outbound.push({
-        kind: "update",
-        update: {
+      promptedAt = message.createdAt
+      outbound.push(
+        update({
           sessionUpdate: "user_message",
           messageId: message.id,
           content: contentBlocks(message.content),
-        },
-      })
+        })
+      )
       // The turn exists before anything lands on it, so the attachment it
       // carried follows the message it belongs to.
       for (const part of message.content)
         outbound.push(...artifactOutbound(message.id, part))
-    } else outbound.push(...agentOutbound(message, lane))
+    } else
+      outbound.push(
+        ...agentOutbound(message, context, promptedAt ?? message.createdAt)
+      )
   }
   return outbound
 }) satisfies TranslateHistory

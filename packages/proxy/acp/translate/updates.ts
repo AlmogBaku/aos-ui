@@ -1,4 +1,5 @@
 import type {
+  ContentBlock,
   SessionUpdate,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -36,31 +37,39 @@ export function update(value: SessionUpdate): AcpOutbound {
   return { kind: "update", update: value }
 }
 
+/**
+ * `at` says when the state took effect: a live run reads the clock, and a replay
+ * passes the time the transcript recorded, so a turn's span is the same whether
+ * the browser watched it or reloaded onto it.
+ */
 export function stateOutbound(
   context: TranslateContext,
   state:
     | { state: "running" }
     | { state: "requires_action" }
     | { state: "idle"; stopReason: string },
-  extra?: { code?: string; message?: string }
+  extra?: { code?: string; message?: string; at?: string }
 ): AcpOutbound {
+  const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()
   return update({
     sessionUpdate: "state_update",
     ...state,
-    _meta: { [AOS_META_KEY]: { ...runMeta(context), ...extra } },
+    _meta: { [AOS_META_KEY]: { ...runMeta(context), ...extra, at } },
   })
 }
 
+/** A streamed delta, or the whole block a stored part replays as. */
 export function chunkOutbound(
   context: TranslateContext,
   sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
   messageId: string,
-  text: string
+  content: string | ContentBlock
 ): AcpOutbound {
   return update({
     sessionUpdate,
     messageId,
-    content: { type: "text", text },
+    content:
+      typeof content === "string" ? { type: "text", text: content } : content,
     _meta: { [AOS_META_KEY]: runMeta(context) },
   })
 }

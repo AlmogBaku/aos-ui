@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest"
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
   AOS_META_KEY,
-  AosHistoryStatusMetaSchema,
+  AOS_STOP_REASONS,
+  AosChunkMetaSchema,
   AosPlanMetaSchema,
+  AosStateMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound } from "../types"
@@ -106,21 +108,23 @@ function updatesOf(outbound: readonly AcpOutbound[]) {
 }
 
 describe("translateHistory", () => {
-  it("replays every message in order for the operator", () => {
+  it("replays every message in the order the run stream sent it", () => {
     expect(kinds(translateHistory(history, "operator"))).toEqual([
       "user_message",
-      "agent_thought",
-      "agent_message",
+      "state_update",
+      "agent_thought_chunk",
+      "agent_message_chunk",
       "tool_call_update",
       "tool_call_update",
       "artifact",
+      "state_update",
       "plan_update",
-      "agent_message",
+      "agent_message_chunk",
     ])
   })
 
   it("replays a published artifact against the message that stored it", () => {
-    expect(translateHistory(history, "operator")[5]).toEqual({
+    expect(translateHistory(history, "operator")[6]).toEqual({
       kind: "artifact",
       runId: "history",
       messageId: "a1",
@@ -175,23 +179,77 @@ describe("translateHistory", () => {
     })
   })
 
-  it("replays reasoning and prose on one assistant message", () => {
-    const [, thought, prose] = updatesOf(translateHistory(history, "operator"))
+  it("replays reasoning and prose as the chunks the run streamed", () => {
+    const [, , thought, prose] = updatesOf(
+      translateHistory(history, "operator")
+    )
 
-    expect(thought).toEqual({
-      sessionUpdate: "agent_thought",
+    expect(thought).toMatchObject({
+      sessionUpdate: "agent_thought_chunk",
       messageId: "a1",
-      content: [{ type: "text", text: "weigh the options" }],
+      content: { type: "text", text: "weigh the options" },
     })
-    expect(prose).toEqual({
-      sessionUpdate: "agent_message",
+    expect(prose).toMatchObject({
+      sessionUpdate: "agent_message_chunk",
       messageId: "a1",
-      content: [{ type: "text", text: "Done." }],
+      content: { type: "text", text: "Done." },
+    })
+    // Strict, so a replayed chunk carries no field a live one does not.
+    expect(AosChunkMetaSchema.parse(aosMeta(prose!))).toEqual({
+      sequence: 0,
+      runId: "history",
     })
   })
 
+  it("brackets the turn with the states its run reported, and their moments", () => {
+    const updates = updatesOf(translateHistory(history, "operator"))
+    const states = updates.filter(
+      (update) => update.sessionUpdate === "state_update"
+    )
+
+    expect(states).toHaveLength(2)
+    expect(states[0]).toMatchObject({ state: "running" })
+    expect(states[1]).toMatchObject({ state: "idle", stopReason: "end_turn" })
+    // The turn started when its prompt landed and ended where the transcript
+    // last recorded it; a page without a stored completion has the turn itself.
+    expect(AosStateMetaSchema.parse(aosMeta(states[0]!)).at).toBe(
+      "2026-09-19T09:00:00.000Z"
+    )
+    expect(AosStateMetaSchema.parse(aosMeta(states[1]!)).at).toBe(
+      "2026-09-19T09:00:01.000Z"
+    )
+  })
+
+  it("ends the turn where the provider recorded its last part", () => {
+    const updates = updatesOf(
+      translateHistory(
+        {
+          ...history,
+          messages: [
+            {
+              id: "a4",
+              role: "assistant",
+              content: [{ type: "text", text: "Shipped." }],
+              createdAt: "2026-09-19T09:00:01.000Z",
+              completedAt: "2026-09-19T09:00:42.000Z",
+            },
+          ],
+        },
+        "operator"
+      )
+    )
+
+    // A page that opens on the turn has only the turn's own moment to start it.
+    expect(AosStateMetaSchema.parse(aosMeta(updates[0]!)).at).toBe(
+      "2026-09-19T09:00:01.000Z"
+    )
+    expect(AosStateMetaSchema.parse(aosMeta(updates.at(-1)!)).at).toBe(
+      "2026-09-19T09:00:42.000Z"
+    )
+  })
+
   it("replays a settled tool call with parseable history metadata", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[3]
+    const update = updatesOf(translateHistory(history, "operator"))[4]
 
     expect(update).toMatchObject({
       sessionUpdate: "tool_call_update",
@@ -210,14 +268,14 @@ describe("translateHistory", () => {
   })
 
   it("replays a failed tool call without an output", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[4]
+    const update = updatesOf(translateHistory(history, "operator"))[5]
 
     expect(update).toMatchObject({ toolCallId: "c2", status: "failed" })
     expect(update).not.toHaveProperty("rawOutput")
   })
 
   it("replays the Session Todos as the one plan", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[5]
+    const update = updatesOf(translateHistory(history, "operator"))[7]
 
     expect(update).toMatchObject({
       sessionUpdate: "plan_update",
@@ -238,10 +296,12 @@ describe("translateHistory", () => {
   it("keeps execution history out of the guest lane, but not outcomes", () => {
     expect(kinds(translateHistory(history, "guest"))).toEqual([
       "user_message",
-      "agent_message",
+      "state_update",
+      "agent_message_chunk",
       "artifact",
+      "state_update",
       "plan_update",
-      "agent_message",
+      "agent_message_chunk",
     ])
   })
 
@@ -268,21 +328,47 @@ describe("translateHistory", () => {
       )
     )
 
-    expect(updates).toHaveLength(1)
-    const [update] = updates
-    expect(update).toMatchObject({
-      sessionUpdate: "agent_message",
-      messageId: "a3",
-      content: [],
+    // A failed turn replays the way a live run reports failure: the turn's
+    // idle state update carries the vendor stop reason and the stored error.
+    const idle = updates.at(-1)
+    expect(idle).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: AOS_STOP_REASONS.error,
     })
     expect(
-      AosHistoryStatusMetaSchema.parse(
-        (update as { _meta: Record<string, unknown> })._meta[AOS_META_KEY]
-      ).status
-    ).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "The model provider rejected this turn.",
+      AosStateMetaSchema.parse(
+        (idle as { _meta: Record<string, unknown> })._meta[AOS_META_KEY]
+      ).message
+    ).toBe("The model provider rejected this turn.")
+  })
+
+  it("ends a turn still waiting on an answer as an ordinary end of turn", () => {
+    // The wait itself is reissued as the pending request the browser answers,
+    // so the replayed turn only says the run stopped here. A durable status has
+    // no cancelled reason, so a stopped turn cannot replay as one either.
+    const updates = updatesOf(
+      translateHistory(
+        {
+          ...history,
+          messages: [
+            {
+              id: "a5",
+              role: "assistant",
+              content: [{ type: "text", text: "Which branch?" }],
+              createdAt: "2026-09-19T09:00:05.000Z",
+              status: { type: "requires-action", reason: "interrupt" },
+            },
+          ],
+        },
+        "operator"
+      )
+    )
+
+    expect(updates.at(-1)).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
     })
   })
 

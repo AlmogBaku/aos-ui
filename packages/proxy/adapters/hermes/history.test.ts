@@ -374,6 +374,7 @@ describe("server-side Hermes history projection", () => {
         id: "assistant-native-1",
         role: "assistant",
         createdAt: "1970-01-01T00:00:02.000Z",
+        completedAt: "1970-01-01T00:00:03.000Z",
         content: [
           { type: "reasoning", text: "Inspecting the measurements" },
           {
@@ -914,5 +915,68 @@ describe("server-side Hermes history projection", () => {
 
     expect(messages).toHaveLength(2)
     for (const message of messages) expect(message.metadata).toBeUndefined()
+  })
+
+  it("ends a merged assistant turn at the newest row that built it", () => {
+    const messages = projectHermesHistory([
+      assistantToolCall(
+        "a1",
+        [{ toolCallId: "c1", name: "read_file", args: { path: "a.txt" } }],
+        { timestamp: 100 }
+      ),
+      { ...toolRow("c1", "read_file", { ok: true }), timestamp: 140 },
+      assistantText("a2", "Read it.", { timestamp: 160 }),
+    ])
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      createdAt: "1970-01-01T00:01:40.000Z",
+      completedAt: "1970-01-01T00:02:40.000Z",
+    })
+  })
+
+  it("ends a single-row turn where it started", () => {
+    const [message] = projectHermesHistory([
+      assistantText("a1", "Done.", { timestamp: 100 }),
+    ])
+
+    expect(message?.completedAt).toBe(message?.createdAt)
+  })
+
+  it("records no completion for rows the provider kept no time for", () => {
+    const [message] = projectHermesHistory([assistantText("a1", "Done.")])
+
+    expect(message).toMatchObject({
+      content: [{ type: "text", text: "Done." }],
+    })
+    expect(message?.completedAt).toBeUndefined()
+  })
+
+  it("stores a published artifact right after the call that published it", () => {
+    const messages = projectHermesHistory([
+      assistantToolCall("a1", [
+        { toolCallId: "c1", name: "present_artifact", args: { path: "r.md" } },
+        { toolCallId: "c2", name: "read_file", args: { path: "a.txt" } },
+      ]),
+      toolRow("c1", "present_artifact", {
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: "report-1",
+          filename: "report.md",
+          mimeType: "text/markdown",
+          sizeBytes: 42,
+        },
+      }),
+      toolRow("c2", "read_file", { ok: true }),
+    ])
+
+    // The later call's result still patches the part it belongs to, which the
+    // inserted artifact moved along.
+    expect(messages[0]?.content).toMatchObject([
+      { type: "tool-call", toolCallId: "c1" },
+      { type: "data", name: "aos.artifact", data: { id: "report-1" } },
+      { type: "tool-call", toolCallId: "c2", result: { ok: true } },
+    ])
   })
 })

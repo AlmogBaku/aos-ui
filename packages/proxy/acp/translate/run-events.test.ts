@@ -19,11 +19,15 @@ import {
 } from "../types"
 import { translateRunEvent } from "./run-events"
 
+/** The moment every state update in this suite stamps itself with. */
+const AT = "2026-09-22T10:00:00.000Z"
+
 const context: TranslateContext = {
   runId: "run-1",
   sequence: 7,
   lane: "operator",
   stopping: false,
+  now: () => Date.parse(AT),
 }
 
 function translate(
@@ -105,6 +109,7 @@ describe("translateRunEvent lifecycle", () => {
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       runId: "run-1",
+      at: AT,
     })
   })
 
@@ -119,7 +124,7 @@ describe("translateRunEvent lifecycle", () => {
         sessionUpdate: "state_update",
         state: "idle",
         stopReason,
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1", at: AT } },
       },
     ])
     expect(state).toEqual(initialTranslateState)
@@ -175,6 +180,7 @@ describe("translateRunEvent lifecycle", () => {
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       runId: "run-1",
+      at: AT,
       code,
       message: "provider refused",
     })

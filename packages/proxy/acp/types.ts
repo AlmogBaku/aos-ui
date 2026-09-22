@@ -124,6 +124,8 @@ export type TranslateContext = {
   lane: Lane
   /** Stop was acknowledged for this run and the provider has not settled. */
   stopping: boolean
+  /** The clock a state update stamps itself with; the system clock by default. */
+  now?: () => number
 }
 
 /**

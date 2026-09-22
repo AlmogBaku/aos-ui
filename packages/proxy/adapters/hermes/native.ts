@@ -328,12 +328,18 @@ export function nativeId(
  * the epoch.
  */
 export function timestamp(value: unknown, fallbackMs = 0): string {
+  return new Date(timestampMs(value) ?? fallbackMs).toISOString()
+}
+
+/**
+ * The same conversion in epoch-milliseconds, and `undefined` rather than a
+ * fallback when the row carries no usable time: a caller comparing row times
+ * cannot tell a real epoch value from a stand-in.
+ */
+export function timestampMs(value: unknown): number | undefined {
   const numeric = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(numeric) && numeric > 0
-    ? new Date(
-        numeric < 10_000_000_000 ? numeric * 1000 : numeric
-      ).toISOString()
-    : new Date(fallbackMs).toISOString()
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined
+  return numeric < 10_000_000_000 ? numeric * 1000 : numeric
 }
 
 // ---------------------------------------------------------------------------

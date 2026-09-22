@@ -1554,6 +1554,7 @@ describe("Hermes server adapter", () => {
             { type: "text", text: "second" },
           ],
           createdAt: "1970-01-01T00:00:02.000Z",
+          completedAt: "1970-01-01T00:00:02.000Z",
         },
       ],
       total: 2,
