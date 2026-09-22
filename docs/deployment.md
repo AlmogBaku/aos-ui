@@ -335,10 +335,10 @@ systemctl daemon-reload
 
 Use Cloudflare Tunnel only when the operator selects it. Tunnel ingress must
 target the Bun proxy's loopback guest listener exclusively; it must not expose
-the private operator UI, `/hermes`, `/auth`, a native runtime, or a host Docker socket.
-Then verify the guest root and an unauthenticated `/api/guest/v1` request
-(`401`/`404` as appropriate), and that `/hermes/`, `/auth/`, and non-guest
-`/api/` routes cannot reach the native runtime. The guest origin remains a
+the private operator UI, a native runtime's own endpoints, `/auth`, or a host
+Docker socket. Then verify the guest root and an unauthenticated
+`/api/guest/v1` request (`401`/`404` as appropriate), and that `/auth/` and
+non-guest `/api/` routes cannot reach the native runtime. The guest origin remains a
 separate host and listener; it is never routed through the operator
 `/api/aos/v1` boundary.
 

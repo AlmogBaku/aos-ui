@@ -85,8 +85,8 @@ external reverse proxy is optional.
   and creation never transfers ownership or starts the created Agent's first
   Session.
 - Provider data is authoritative. Every Session belongs to one Agent; delayed
-  events stay scoped to their originating Agent and Session. Plans are
-  message-scoped and Todos are Session-scoped.
+  events stay scoped to their originating Agent and Session. Todos are
+  Session-scoped.
 - Runtime selection is strict. Fixture data appears only in explicit `fixture`
   mode; invalid provider configuration renders unavailable state instead of
   falling back to synthetic data. Public fixtures intentionally omit Agent
@@ -119,7 +119,7 @@ external reverse proxy is optional.
   earn one, because the utilities are already direction-agnostic; verify it once
   in the rendered app and move on.
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
-  charts, maps, Plans, tools, and Mermaid; never execute generated code or
+  charts, maps, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain

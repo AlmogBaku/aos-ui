@@ -31,7 +31,7 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 - Inline image, audio, and video Artifacts; conversation search; slash-command
   suggestions; questions answered from the composer with a free-text "Other";
   deep links to any Session
-- Session-scoped Todos and message-scoped Plans
+- Session-scoped Todos
 - Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
 - Activity history and opt-in browser notifications
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
