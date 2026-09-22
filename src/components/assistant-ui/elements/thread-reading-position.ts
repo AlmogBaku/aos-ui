@@ -215,6 +215,7 @@ export function useThreadReadingPosition({
 
     let frame: number | null = null
     let capturePending = false
+    let resizePending = false
     let inputAt = Number.NEGATIVE_INFINITY
     const noteInput = () => {
       inputAt = performance.now()
@@ -224,12 +225,10 @@ export function useThreadReadingPosition({
       viewport.addEventListener(type, noteInput, { passive: true })
     const schedule = (capture: boolean) => {
       capturePending ||= capture
+      resizePending ||= !capture
       if (frame !== null) return
       frame = window.requestAnimationFrame(() => {
         frame = null
-        // A scroll the reader did not make leaves a following thread where it
-        // landed, and it can share a frame with growth that must still pull the
-        // thread to its end, so every frame re-applies the bookmark it keeps.
         if (capturePending) {
           capturePending = false
           controller.capture(
@@ -238,7 +237,12 @@ export function useThreadReadingPosition({
             performance.now() - inputAt < READER_INPUT_WINDOW_MS
           )
         }
-        controller.syncAfterContentChange(threadId, viewport)
+        // Growth that shares a frame with a scroll must still move the thread;
+        // a scroll alone stays where it landed.
+        if (resizePending) {
+          resizePending = false
+          controller.syncAfterContentChange(threadId, viewport)
+        }
       })
     }
     const capture = () => schedule(true)

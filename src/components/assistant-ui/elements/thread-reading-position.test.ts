@@ -301,13 +301,22 @@ describe("thread reading position", () => {
 
     viewport.dispatchEvent(new Event("scroll"))
     viewport.dispatchEvent(new Event("scroll"))
+    expect(frames).toHaveLength(1)
+    const [[scrollFrame, scrollCallback]] = frames
+    frames.delete(scrollFrame)
+    scrollCallback(0)
+    expect(capture).toHaveBeenCalledTimes(1)
+    // A scroll alone stays where it landed.
+    expect(sync).not.toHaveBeenCalled()
+
+    viewport.dispatchEvent(new Event("scroll"))
     resize?.([], {} as ResizeObserver)
 
     expect(frames).toHaveLength(1)
     const [[frame, callback]] = frames
     frames.delete(frame)
     callback(0)
-    expect(capture).toHaveBeenCalledTimes(1)
+    expect(capture).toHaveBeenCalledTimes(2)
     // Growth that shared the frame with a scroll still reaches the end.
     expect(sync).toHaveBeenCalledTimes(1)
 
@@ -317,7 +326,7 @@ describe("thread reading position", () => {
     const [[resizeFrame, resizeCallback]] = frames
     frames.delete(resizeFrame)
     resizeCallback(1)
-    expect(capture).toHaveBeenCalledTimes(1)
+    expect(capture).toHaveBeenCalledTimes(2)
     expect(sync).toHaveBeenCalledTimes(2)
 
     resize?.([], {} as ResizeObserver)
