@@ -10,6 +10,7 @@ import {
 
 describe("canonicalToolName", () => {
   it("maps known aliases to their canonical names", () => {
+    expect(canonicalToolName("aos_create_agent")).toBe("create_agent")
     expect(canonicalToolName("delegate_task")).toBe("delegate_subagent")
     expect(canonicalToolName("skill_view")).toBe("use_skill")
     expect(canonicalToolName("todo_list")).toBe("todo")

@@ -23,7 +23,8 @@ import {
 } from "./media-artifacts"
 
 /** Hermes' native tool names AOS renames. */
-const CANONICAL_TOOL_NAMES = new Map<string, string>([
+export const CANONICAL_TOOL_NAMES = new Map<string, string>([
+  ["aos_create_agent", "create_agent"],
   ["delegate_task", "delegate_subagent"],
   ["skill_view", "use_skill"],
   ["todo_list", "todo"],
