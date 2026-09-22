@@ -20,8 +20,8 @@ import {
   type RecoveryRequest,
   type ServerRunHandle,
 } from "../../core/runtime"
+import { projectTodos, type Todo } from "../todos"
 import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
-import { projectHermesTodos, type HermesTodo } from "./workspace"
 import { boundedNativeBytes, isRecord, sessionKey } from "./native"
 import { startedQueue } from "./event-queue"
 import { attachRun, scheduleCatchUp } from "./run-attach"
@@ -116,10 +116,7 @@ export class HermesRunEngine {
   readonly #active = new Map<string, ActiveRun>()
   readonly #admissions = new Set<string>()
   readonly #settling = new Map<string, SettlingWatcher>()
-  readonly #plans = new Map<
-    string,
-    { messageId: string; todos: HermesTodo[] }
-  >()
+  readonly #plans = new Map<string, { messageId: string; todos: Todo[] }>()
   readonly #host: RunEngineHost
 
   constructor(native: HermesRunNative, options: { log?: HermesLog } = {}) {
@@ -601,7 +598,7 @@ export class HermesRunEngine {
       role: "tool",
     })
     if (tool.name === "todo") {
-      const todos = projectHermesTodos(payload.result)
+      const todos = projectTodos(payload.result)
       if (todos !== undefined) this.#emitPlan(active, todos)
     }
     for (const reference of outcome.trustedMedia)
@@ -713,7 +710,7 @@ export class HermesRunEngine {
     this.#endText(active)
   }
 
-  #emitPlan(active: ActiveRun, todos: HermesTodo[]) {
+  #emitPlan(active: ActiveRun, todos: Todo[]) {
     const key = sessionKey(active.scope)
     const messageId = `aos-plan:${active.scope.threadId}`
     const previous = this.#plans.get(key)

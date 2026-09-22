@@ -70,8 +70,27 @@ describe("optional renderer loading", () => {
         approval: { id: "approval" },
       }),
       toolPart({ toolName: "monty_execute", args: { code: "print(42)" } }),
-      toolPart({ toolName: "render_chart", args: { title: "Chart" } }),
-      toolPart({ toolName: "render_map", args: { title: "Map" } }),
+      toolPart({
+        toolName: "render_chart",
+        args: {
+          title: "Chart",
+          type: "line",
+          xKey: "quarter",
+          series: [{ key: "value", label: "Value" }],
+          data: [{ quarter: "Q1", value: 12 }],
+        },
+        result: "Chart ready",
+      }),
+      toolPart({
+        toolName: "render_map",
+        args: {
+          title: "Map",
+          locations: [
+            { id: "origin", label: "Origin", latitude: 0, longitude: 0 },
+          ],
+        },
+        result: "Map ready",
+      }),
       statsPart,
     ]) {
       expect(richToolRegistry[part.toolName].validate(part).valid).toBe(true)
@@ -81,12 +100,8 @@ describe("optional renderer loading", () => {
       <>
         <RichToolRenderer
           {...toolPart({
-            toolName: "present_plan",
-            args: {
-              id: "plan",
-              title: "Plan",
-              steps: [{ id: "first", label: "First step", status: "pending" }],
-            },
+            toolName: "delegate_subagent",
+            args: { task: "Validate the market segments" },
           })}
         />
         <RichToolRenderer
@@ -103,7 +118,7 @@ describe("optional renderer loading", () => {
         />
       </>
     )
-    expect(screen.getByText("First step")).toBeInTheDocument()
+    expect(screen.getByText("Validate the market segments")).toBeVisible()
     fireEvent.click(screen.getByText("tool_activity"))
     expect(screen.getByText(/Provider activity/)).toBeVisible()
     fireEvent.click(screen.getByText("unknown_tool"))

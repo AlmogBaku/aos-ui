@@ -48,16 +48,14 @@ async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
   await expect(page.getByRole("tablist")).toBeVisible()
 }
 
-test("desktop workspace shows body text and plan steps", async ({ page }) => {
+test("desktop workspace shows assistant body text", async ({ page }) => {
   await openWorkspace(page)
 
   const prose = page
     .getByText(/^Applied AI is accelerating fastest in the planning dataset/)
     .first()
-  const planStep = page.getByText("Confirm launch goals", { exact: true })
 
   await expect(prose).toBeVisible()
-  await expect(planStep).toBeVisible()
 })
 
 test("inline artifact cards are visible with fully named action buttons", async ({

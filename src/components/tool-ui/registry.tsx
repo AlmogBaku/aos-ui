@@ -22,7 +22,6 @@ import {
   permissionPayloadSchema,
   type PermissionPayload,
 } from "./payloads/permission"
-import { PlanTool, planPayloadSchema, type PlanPayload } from "./plan"
 import { statsPayloadSchema, type StatsPayload } from "./payloads/stats"
 import {
   questionPayloadSchema,
@@ -160,12 +159,6 @@ const permission = defineToolRenderer<PermissionPayload>({
   acceptsPart: (part) => part.approval !== undefined,
 })
 
-const plan = defineToolRenderer<PlanPayload>({
-  displayNameKey: "plan",
-  schema: planPayloadSchema,
-  Renderer: PlanTool,
-})
-
 const monty = defineToolRenderer<MontyPayload>({
   displayNameKey: "monty",
   schema: montyPayloadSchema,
@@ -213,7 +206,6 @@ const presentationToolRenderers = {
   render_chart: chart,
   render_map: map,
   render_stats: stats,
-  present_plan: plan,
 } satisfies Record<PresentationToolName, RichToolRegistration>
 
 const presentationRichToolRegistry = Object.fromEntries(
@@ -235,7 +227,6 @@ export const richToolRegistry: RichToolRegistry = Object.freeze({
   request_approval: permission,
   delegate_subagent: subagentActivity,
   run_subagent: subagentActivity,
-  task: subagentActivity,
   monty_execute: monty,
 })
 
@@ -244,9 +235,9 @@ export const RichToolRenderer: RichToolRendererComponent = (part) => {
   const { labels } = useToolUiLocale()
   const registration = richToolRegistry[part.toolName]
 
-  // OpenCode's reserved batched Question tool is rendered beside the composer
-  // by OpenCodeQuestionBridge. A provider-neutral single question (including
-  // canonical Hermes history) remains a normal semantic message.
+  // A batched question that does not satisfy the single-question schema is
+  // answered beside the composer by the pending-interaction flow, so nothing is
+  // rendered here. A single question remains a normal semantic message.
   if (
     part.toolName === "question" &&
     richToolRegistry.question.validate(part).valid === false

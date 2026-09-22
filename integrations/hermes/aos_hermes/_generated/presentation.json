@@ -355,75 +355,7 @@
           "stats"
         ]
       }
-    },
-    {
-      "name": "present_plan",
-      "description": "Present a message-scoped plan. This does not create Todos or change execution state.",
-      "examples": [
-        {
-          "id": "example-plan",
-          "title": "Illustrative plan",
-          "steps": [
-            {
-              "id": "inspect",
-              "label": "Inspect inputs",
-              "status": "pending"
-            }
-          ]
-        }
-      ],
-      "parameters": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "A stable plan identifier"
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1
-          },
-          "steps": {
-            "minItems": 1,
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "label": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "pending",
-                    "active",
-                    "completed",
-                    "failed"
-                  ]
-                }
-              },
-              "required": [
-                "id",
-                "label",
-                "status"
-              ]
-            }
-          }
-        },
-        "required": [
-          "id",
-          "title",
-          "steps"
-        ]
-      }
     }
   ],
-  "instructions": "AOS presentation harness:\n- Write normal answers in clear Markdown. Preserve user content verbatim and never emit executable HTML, scripts, or browser-side code.\n- You may use fenced `mermaid` blocks for concise explanatory flows and relationships. Keep diagrams reasonably small, use Mermaid syntax only, and never put HTML, callbacks, or external resources in a diagram.\n- `render_chart` is the advertised chart presentation tool. Use it for charts with structured series and labels. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- `render_map` is the advertised map presentation tool. Use it for geographic locations with structured coordinates. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- `render_stats` is the advertised stats presentation tool. Use it for compact structured metrics and comparisons. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- `present_plan` is the advertised plan presentation tool. A Plan is a message-scoped presentation artifact. It never creates or updates a Todo. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- Artifact delivery: Use `present_artifact` when a concrete file is part of the answer delivered to the user—whether as its source, subject, or output. A file qualifies only after it is selected for the final response; inspecting a candidate does not qualify. Publish each selected file after its final edit and before the final response.\n- Use `clarify` when a real interactive answer is required. Ask one focused question, preserve the provider's available choices, allow free text only when its schema permits it, and wait for the recorded answer.\n- Permissions are provider-native controls attached to the guarded action. Never fabricate a permission card or an ‘always’ scope; wait for the provider-recorded decision.\n- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose or a Plan.\n- Subagent delegation is provider-native activity. Use only the provider's native delegation control and wait for its actual result."
+  "instructions": "AOS presentation harness:\n- Write normal answers in clear Markdown. Preserve user content verbatim and never emit executable HTML, scripts, or browser-side code.\n- You may use fenced `mermaid` blocks for concise explanatory flows and relationships. Keep diagrams reasonably small, use Mermaid syntax only, and never put HTML, callbacks, or external resources in a diagram.\n- `render_chart` is the advertised chart presentation tool. Use it for charts with structured series and labels. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- `render_map` is the advertised map presentation tool. Use it for geographic locations with structured coordinates. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- `render_stats` is the advertised stats presentation tool. Use it for compact structured metrics and comparisons. Call the tool with structured arguments; do not imitate its UI in prose or tool-shaped JSON.\n- Artifact delivery: Use `present_artifact` when a concrete file is part of the answer delivered to the user—whether as its source, subject, or output. A file qualifies only after it is selected for the final response; inspecting a candidate does not qualify. Publish each selected file after its final edit and before the final response.\n- Use `clarify` when a real interactive answer is required. Ask one focused question, preserve the provider's available choices, allow free text only when its schema permits it, and wait for the recorded answer.\n- Permissions are provider-native controls attached to the guarded action. Never fabricate a permission card or an ‘always’ scope; wait for the provider-recorded decision.\n- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose.\n- Subagent delegation is provider-native activity. Use only the provider's native delegation control and wait for its actual result."
 }

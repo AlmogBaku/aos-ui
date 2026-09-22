@@ -13,7 +13,6 @@ const fullCapabilities: HarnessCapabilities = {
     { kind: "chart", name: "render_chart" },
     { kind: "map", name: "render_map" },
     { kind: "stats", name: "render_stats" },
-    { kind: "plan", name: "present_plan" },
   ],
   askUserQuestionTool: "ask_user_question",
   nativePermissions: true,
@@ -35,22 +34,20 @@ describe("buildAosUiHarnessPrompt", () => {
       mermaid: true,
       richUiTools: [
         { kind: "chart", name: "host_chart" },
-        { kind: "plan", name: "host_plan" },
+        { kind: "stats", name: "host_stats" },
       ],
     })
 
     expect(prompt).toContain("`host_chart`")
-    expect(prompt).toContain("`host_plan`")
+    expect(prompt).toContain("`host_stats`")
     expect(prompt).not.toContain("render_chart")
     expect(prompt).not.toContain("render_map")
     expect(prompt).not.toContain("render_stats")
-    expect(prompt).not.toContain("present_plan")
   })
 
-  it("keeps plans message-scoped and Todos provider-owned", () => {
+  it("keeps Todos session-scoped and provider-owned", () => {
     const prompt = buildAosUiHarnessPrompt(fullCapabilities)
 
-    expect(prompt).toMatch(/Plans?.*message-scoped/i)
     expect(prompt).toMatch(/never.*Todo/i)
     expect(prompt).toMatch(/Todos?.*session-scoped.*provider-owned/i)
   })

@@ -1,4 +1,4 @@
-export type HarnessRichUiKind = "chart" | "map" | "stats" | "plan"
+export type HarnessRichUiKind = "chart" | "map" | "stats"
 
 export type HarnessRichUiTool = Readonly<{
   kind: HarnessRichUiKind
@@ -28,7 +28,6 @@ const richToolGuidance: Record<HarnessRichUiKind, string> = {
   chart: "Use it for charts with structured series and labels.",
   map: "Use it for geographic locations with structured coordinates.",
   stats: "Use it for compact structured metrics and comparisons.",
-  plan: "A Plan is a message-scoped presentation artifact. It never creates or updates a Todo.",
 }
 
 export function buildAosUiHarnessPrompt(
@@ -81,8 +80,8 @@ export function buildAosUiHarnessPrompt(
 
   sections.push(
     capabilities.providerTodos
-      ? "- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose or a Plan."
-      : "- Todo controls are unavailable in this UI. Native Todo tools may still exist; use only actual native capabilities. Plans and prose must not claim to create or update Todos."
+      ? "- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose."
+      : "- Todo controls are unavailable in this UI. Native Todo tools may still exist; use only actual native capabilities. Prose must not claim to create or update Todos."
   )
 
   sections.push(

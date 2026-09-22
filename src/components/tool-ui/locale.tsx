@@ -9,7 +9,6 @@ export type ToolUiDirection = "ltr" | "rtl"
 export type ToolUiToolName =
   | "question"
   | "permission"
-  | "plan"
   | "monty"
   | "chart"
   | "map"
@@ -92,13 +91,7 @@ export type ToolUiLocaleLabels = {
     scopeTitle: string
     scopeLabel: string
   }
-  planSteps: Record<"pending" | "active" | "completed" | "failed", string>
-  planCaption: string
-  planProgressLabel: string
-  planProgress: (done: number, total: number) => string
   questionProgressLabel: string
-  showMorePlanSteps: (count: number) => string
-  hideMorePlanSteps: string
   activities: Record<ToolUiActivityKind, string>
   activityStatuses: Record<ToolUiActivityStatus, string>
   activityTranscript: {
@@ -229,19 +222,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     scopeTitle: "Persistent scope",
     scopeLabel: "Persistent permission scope",
   },
-  planSteps: {
-    pending: "Pending",
-    active: "In progress",
-    completed: "Complete",
-    failed: "Failed",
-  },
-  planCaption: "Attached to this response.",
-  planProgressLabel: "Plan progress",
-  planProgress: (done, total) => `${done} of ${total} plan steps complete`,
   questionProgressLabel: "Question progress",
-  showMorePlanSteps: (count) =>
-    `Show ${count} more ${count === 1 ? "step" : "steps"}`,
-  hideMorePlanSteps: "Hide extra steps",
   activities: {
     subagent: "Subagent",
     skill: "Skill",
@@ -298,7 +279,6 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "Question",
     permission: "Permission",
-    plan: "Plan",
     monty: "Monty",
     chart: "Chart",
     map: "Map",
@@ -391,18 +371,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     scopeTitle: "היקף הרשאה קבועה",
     scopeLabel: "היקף ההרשאה הקבועה",
   },
-  planSteps: {
-    pending: "ממתין",
-    active: "בביצוע",
-    completed: "הושלם",
-    failed: "נכשל",
-  },
-  planCaption: "מצורפת לתשובה הזו.",
-  planProgressLabel: "התקדמות התוכנית",
-  planProgress: (done, total) => `${done} מתוך ${total} שלבים בתוכנית הושלמו`,
   questionProgressLabel: "התקדמות השאלה",
-  showMorePlanSteps: (count) => `הצגת ${count} שלבים נוספים`,
-  hideMorePlanSteps: "הסתרת השלבים הנוספים",
   activities: {
     subagent: "סוכן משנה",
     skill: "מיומנות",
@@ -458,7 +427,6 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "שאלה",
     permission: "הרשאה",
-    plan: "תוכנית",
     monty: "Monty",
     chart: "תרשים",
     map: "מפה",

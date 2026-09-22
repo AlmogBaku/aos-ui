@@ -29,7 +29,7 @@ hermes -p PROFILE tools enable --platform cli aos
 
 For a committed local checkout, use `file:///absolute/path/to/aos-ui#integrations/hermes` as the source.
 
-Enable both platforms. `api_server` serves browser and gateway runs; `cli` is required by `aos_start_session`. The plugin registers seven tools: `render_chart`, `render_map`, `render_stats`, `present_plan`, and `present_artifact` (toolset `aos-presentation`; `plugin.py:133-135,175-177`), `aos_start_session` (toolset `aos-session-handoff`; `plugin.py:153-154`), and `aos_create_agent` (toolset `aos`; `plugin.py:239-240`).
+Enable both platforms. `api_server` serves browser and gateway runs; `cli` is required by `aos_start_session`. The plugin registers six tools: `render_chart`, `render_map`, `render_stats`, and `present_artifact` (toolset `aos-presentation`; `plugin.py:133-135,175-177`), `aos_start_session` (toolset `aos-session-handoff`; `plugin.py:153-154`), and `aos_create_agent` (toolset `aos`; `plugin.py:239-240`).
 
 `aos_start_session` requires an explicit profile, absolute worktree, and prompt. It invokes Hermes with a fixed argument vector:
 

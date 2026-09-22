@@ -29,7 +29,13 @@ describe("createExecutionPartSelector", () => {
         type: "tool-call",
         toolCallId: "chart",
         toolName: "render_chart",
-        args: { title: "Trend" },
+        args: {
+          title: "Trend",
+          type: "line",
+          xKey: "quarter",
+          series: [{ key: "value", label: "Value" }],
+          data: [{ quarter: "Q1", value: 12 }],
+        },
         status: { type: "complete" },
       },
     ])
@@ -126,7 +132,13 @@ describe("createToolTimelineModel", () => {
         type: "tool-call",
         toolCallId: "chart",
         toolName: "render_chart",
-        args: { title: "Investment trend" },
+        args: {
+          title: "Investment trend",
+          type: "line",
+          xKey: "quarter",
+          series: [{ key: "applied", label: "Applied AI" }],
+          data: [{ quarter: "Q1 ’25", applied: 128 }],
+        },
         status: { type: "complete" },
       },
       {

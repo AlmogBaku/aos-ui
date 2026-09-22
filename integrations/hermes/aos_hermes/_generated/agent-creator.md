@@ -20,4 +20,4 @@ filesystem, network, credentials, and approval policy accordingly. Agent
 visibility and invitation scope are authorization boundaries, not an Agent
 sandbox.
 
-The created Agent should use the installed presentation tools for appropriate structured output and the native start_session tool when independent Agent-owned work is needed. A Plan is message-scoped presentation; Todos are native Session execution state.
+The created Agent should use the installed presentation tools for appropriate structured output and the native start_session tool when independent Agent-owned work is needed. Todos are native Session execution state.

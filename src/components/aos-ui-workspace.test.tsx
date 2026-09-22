@@ -1594,18 +1594,6 @@ describe("AosUiApp fixture composition", () => {
               role: "assistant",
               content: [
                 { type: "text", text: "The requested summary is ready." },
-                {
-                  type: "tool-call",
-                  toolCallId: "controlled-plan",
-                  toolName: "present_plan",
-                  args: { title: "Selected plan" },
-                  argsText: '{"title":"Selected plan"}',
-                  result: {
-                    id: "selected-plan",
-                    title: "Selected plan",
-                    steps: [{ id: "step", label: "Review", status: "active" }],
-                  },
-                },
               ],
             },
           ],
@@ -1631,15 +1619,10 @@ describe("AosUiApp fixture composition", () => {
       within(conversation).queryByRole("button", { name: /tool call/i })
     ).toBeNull()
     expect(
-      await within(conversation).findByRole("heading", {
-        name: "Selected plan",
-      })
+      await within(conversation).findByText("The requested summary is ready.")
     ).toBeVisible()
     const todos = screen.getByRole("region", { name: "Session todos" })
     expect(within(todos).getAllByRole("listitem")).toHaveLength(2)
-    expect(todos).not.toContainElement(
-      screen.getByRole("heading", { name: "Selected plan" })
-    )
     expect(screen.queryByRole("button", { name: /^Secondary,/ })).toBeNull()
   })
 

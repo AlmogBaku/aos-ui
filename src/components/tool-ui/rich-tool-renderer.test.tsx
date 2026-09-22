@@ -28,8 +28,6 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
-import { Plan } from "./plan/index"
-import { SerializablePlanSchema } from "./plan/schema"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
 
@@ -150,13 +148,14 @@ describe("rich tool classification", () => {
       isAosRichTool(
         toolPart({
           toolName: "render_chart",
-          args: { title: "Spend" },
-          result: {
+          args: {
+            title: "Spend",
             type: "line",
             xKey: "quarter",
             series: [{ key: "value", label: "Spend" }],
             data: [{ quarter: "Q1", value: 12 }],
           },
+          result: "Chart ready for display.",
         })
       )
     ).toBe(true)
@@ -164,8 +163,8 @@ describe("rich tool classification", () => {
       isAosRichTool(
         toolPart({
           toolName: "render_chart",
-          args: { title: "Spend" },
-          result: { type: "line", data: "invalid" },
+          args: { title: "Spend", type: "line", data: "invalid" },
+          result: "Chart ready for display.",
         })
       )
     ).toBe(false)
@@ -277,13 +276,13 @@ describe("AosToolFallback", () => {
     expect(screen.getByText("Built successfully")).toBeVisible()
   })
 
-  it("uses Code Runner for execute_code output", async () => {
+  it("uses Code Runner for any tool call carrying code and a language", async () => {
     const user = userEvent.setup()
-    const { container } = render(
+    render(
       <AosToolFallback
         {...toolPart({
-          toolName: "execute_code",
-          args: { code: "print(42)" },
+          toolName: "run_snippet",
+          args: { code: "print(42)", language: "python" },
           result: {
             status: "success",
             output: "42",
@@ -295,19 +294,39 @@ describe("AosToolFallback", () => {
     )
 
     const trigger = screen.getByRole("button")
-    expect(within(trigger).getByText("execute_code")).toBeVisible()
+    expect(within(trigger).getByText("run_snippet")).toBeVisible()
     expect(screen.queryByText("print(42)")).not.toBeInTheDocument()
 
     await user.click(trigger)
 
-    expect(container.querySelector('[data-slot="code-runner"]')).toBeVisible()
-    expect(container.querySelector('[data-slot="terminal-block"]')).toBeNull()
     expect(screen.getByText("python")).toBeVisible()
     expect(screen.getByText("print(42)")).toBeVisible()
     expect(screen.getByText("42")).toBeVisible()
     expect(
       screen.getByRole("button", { name: "Run this snippet" })
     ).toBeDisabled()
+  })
+
+  it("shows code without a language label when the call declares none", async () => {
+    const user = userEvent.setup()
+    render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "run_snippet",
+          args: { code: "print(42)" },
+          result: { status: "success", output: "42", exit_code: 0 },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button"))
+
+    expect(screen.getByText("print(42)")).toBeVisible()
+    expect(screen.getByText("42")).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Run this snippet" })
+    ).toBeDisabled()
+    expect(screen.queryByText("python")).not.toBeInTheDocument()
   })
 })
 
@@ -318,23 +337,11 @@ describe("accessible rich-tool semantics", () => {
     canRespond: false,
   } as const
 
-  it("renders standalone ToolChrome and Plan titles at heading level 2", () => {
-    render(
-      <>
-        <ToolChrome title="Standalone tool" state={completeState} />
-        <Plan
-          id="standalone-plan"
-          title="Standalone plan"
-          todos={[{ id: "first", label: "First step", status: "pending" }]}
-        />
-      </>
-    )
+  it("renders a standalone ToolChrome title at heading level 2", () => {
+    render(<ToolChrome title="Standalone tool" state={completeState} />)
 
     expect(
       screen.getByRole("heading", { name: "Standalone tool", level: 2 })
-    ).toBeVisible()
-    expect(
-      screen.getByRole("heading", { name: "Standalone plan", level: 2 })
     ).toBeVisible()
   })
 
@@ -344,12 +351,6 @@ describe("accessible rich-tool semantics", () => {
         <ToolChrome
           title="Nested tool"
           state={completeState}
-          headingLevel={3}
-        />
-        <Plan
-          id="nested-plan"
-          title="Nested plan"
-          todos={[{ id: "first", label: "First step", status: "pending" }]}
           headingLevel={3}
         />
         <QuestionFlow
@@ -362,7 +363,7 @@ describe("accessible rich-tool semantics", () => {
       </>
     )
 
-    for (const name of ["Nested tool", "Nested plan", "Nested question"]) {
+    for (const name of ["Nested tool", "Nested question"]) {
       expect(screen.getByRole("heading", { name, level: 3 })).toBeVisible()
     }
   })
@@ -422,31 +423,6 @@ describe("accessible rich-tool semantics", () => {
   })
 
   it.each([
-    ["en", "Plan progress"],
-    ["he", "התקדמות התוכנית"],
-  ] as const)(
-    "gives the Plan progressbar its localized %s accessible name",
-    (locale, accessibleName) => {
-      render(
-        <ToolUiLocaleProvider locale={locale}>
-          <Plan
-            id={`plan-${locale}`}
-            title="Plan"
-            todos={[
-              { id: "done", label: "Done", status: "completed" },
-              { id: "next", label: "Next", status: "pending" },
-            ]}
-          />
-        </ToolUiLocaleProvider>
-      )
-
-      expect(
-        screen.getByRole("progressbar", { name: accessibleName })
-      ).toHaveAttribute("aria-valuenow", "50")
-    }
-  )
-
-  it.each([
     ["en", "Question progress"],
     ["he", "התקדמות השאלה"],
   ] as const)(
@@ -478,13 +454,7 @@ describe("accessible rich-tool semantics", () => {
     }
   )
 
-  it("keeps headingLevel out of serializable Plan and QuestionFlow payloads", () => {
-    const plan = SerializablePlanSchema.parse({
-      id: "plan-schema",
-      title: "Plan schema",
-      todos: [{ id: "step", label: "Step", status: "pending" }],
-      headingLevel: 3,
-    })
+  it("keeps headingLevel out of the serializable QuestionFlow payload", () => {
     const question = SerializableQuestionFlowSchema.parse({
       id: "question-schema",
       step: 1,
@@ -493,7 +463,6 @@ describe("accessible rich-tool semantics", () => {
       headingLevel: 3,
     })
 
-    expect(plan).not.toHaveProperty("headingLevel")
     expect(question).not.toHaveProperty("headingLevel")
   })
 })
@@ -1189,39 +1158,6 @@ describe("provider permission renderer", () => {
 })
 
 describe("informational renderers", () => {
-  it("renders four plan rows with truthful progress and discloses overflow", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "present_plan",
-          args: { title: "Market brief" },
-          result: {
-            id: "plan-market",
-            title: "Plan",
-            steps: [
-              { id: "scope", label: "Define scope", status: "completed" },
-              { id: "trends", label: "Aggregate trends", status: "active" },
-              { id: "segments", label: "Segment market", status: "pending" },
-              { id: "drivers", label: "Identify drivers", status: "pending" },
-              { id: "summary", label: "Write summary", status: "pending" },
-            ],
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: "Plan" })).toBeVisible()
-    expect(screen.getByText("Define scope")).toBeInTheDocument()
-    expect(screen.getByText("In progress")).toBeInTheDocument()
-    expect(screen.getByText("1 of 5 plan steps complete")).toBeInTheDocument()
-    expect(screen.queryByText("Write summary")).not.toBeInTheDocument()
-
-    await user.click(screen.getByText("Show 1 more step"))
-    expect(screen.getByText("Write summary")).toBeVisible()
-  })
-
   it("keeps subagent activity visible as message content", async () => {
     await renderTool(
       <RichToolRenderer
@@ -1428,8 +1364,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_chart",
-          args: { title: "Broken chart" },
-          result: { type: "line", data: "invalid" },
+          args: { title: "Broken chart", type: "line", data: "invalid" },
+          result: "Chart ready for display.",
         })}
       />
     )
@@ -1444,8 +1380,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_chart",
-          args: { title: "Enterprise AI spend" },
-          result: {
+          args: {
+            title: "Enterprise AI spend",
             type: "line",
             xKey: "quarter",
             series: [
@@ -1457,6 +1393,7 @@ describe("safe result renderers", () => {
               { quarter: "Q1’25", total: 365, genai: 275 },
             ],
           },
+          result: "Chart ready for display.",
         })}
       />
     )
@@ -1466,8 +1403,12 @@ describe("safe result renderers", () => {
       screen.getByRole("table", { name: "Enterprise AI spend data" })
     ).toBeInTheDocument()
     expect(screen.getByRole("cell", { name: "365" })).toBeInTheDocument()
+    // The loaded visual repeats the provider title beside the table, so a
+    // second occurrence of it means the chart itself arrived.
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="chart"]')).toBeTruthy()
+      expect(screen.getAllByText("Enterprise AI spend").length).toBeGreaterThan(
+        1
+      )
     )
   })
 
@@ -1668,62 +1609,19 @@ describe("safe result renderers", () => {
     )
   })
 
-  it("renders provider-native plans retained in OpenCode tool arguments", async () => {
+  it("renders a described subagent delegation as visible activity", async () => {
     await renderTool(
       <RichToolRenderer
         {...toolPart({
-          toolName: "present_plan",
-          args: {
-            id: "plan-launch",
-            title: "Launch plan",
-            steps: [
-              { id: "brief", label: "Confirm the brief", status: "active" },
-            ],
-          },
-          result: "Plan ready for display.",
-        })}
-      />
-    )
-
-    expect(screen.getByText("Confirm the brief")).toBeInTheDocument()
-  })
-
-  it("localizes response-scoped Plan copy in Hebrew", async () => {
-    await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "present_plan",
-            args: {
-              id: "plan-launch",
-              title: "תוכנית השקה",
-              steps: [
-                { id: "brief", label: "אישור התקציר", status: "completed" },
-              ],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("מצורפת לתשובה הזו.")).toBeInTheDocument()
-    expect(
-      screen.getByText("1 מתוך 1 שלבים בתוכנית הושלמו")
-    ).toBeInTheDocument()
-  })
-
-  it("renders native OpenCode task calls as visible subagent activity", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "task",
+          toolName: "delegate_subagent",
           args: { description: "Review the launch plan" },
-          result: "The review is complete.",
+          result: { summary: "The review is complete." },
         })}
       />
     )
 
     expect(screen.getByText("Review the launch plan")).toBeInTheDocument()
+    expect(screen.getByText("The review is complete.")).toBeInTheDocument()
   })
 
   it("keeps map locations available as text while the visual loads", async () => {
@@ -1732,8 +1630,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_map",
-          args: { title: "Interview coverage" },
-          result: {
+          args: {
+            title: "Interview coverage",
             locations: [
               {
                 id: "london",
@@ -1749,6 +1647,7 @@ describe("safe result renderers", () => {
               },
             ],
           },
+          result: "Map ready for display.",
         })}
       />
     )
@@ -1924,8 +1823,8 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_chart",
-            args: { title: "Provider chart" },
-            result: { data: "invalid" },
+            args: { title: "Provider chart", data: "invalid" },
+            result: "Chart ready for display.",
           })}
         />
       </ToolUiLocaleProvider>
@@ -1958,35 +1857,8 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
   })
 
-  it("localizes plan and visible activity chrome", async () => {
-    const { rerender } = await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "present_plan",
-            args: { title: "Provider plan" },
-            result: {
-              id: "plan-he",
-              title: "Provider plan title",
-              steps: [
-                { id: "step-he", label: "Provider step", status: "active" },
-              ],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("בביצוע")).toBeInTheDocument()
-    expect(
-      screen.getByText("0 מתוך 1 שלבים בתוכנית הושלמו")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Provider plan title")).toHaveAttribute(
-      "dir",
-      "auto"
-    )
-
-    await rerender(
+  it("localizes visible activity chrome", async () => {
+    await renderTool(
       <ToolUiLocaleProvider locale="he">
         <RichToolRenderer
           {...toolPart({
@@ -2016,13 +1888,14 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_chart",
-            args: { title: "Provider chart" },
-            result: {
+            args: {
+              title: "Provider chart",
               type: "line",
               xKey: "quarter",
               series: [{ key: "total", label: "Provider series" }],
               data: [{ quarter: "Q1", total: 365 }],
             },
+            result: "Chart ready for display.",
           })}
         />
       </ToolUiLocaleProvider>
@@ -2038,8 +1911,8 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_map",
-            args: { title: "Provider map" },
-            result: {
+            args: {
+              title: "Provider map",
               locations: [
                 {
                   id: "location-he",
@@ -2049,6 +1922,7 @@ describe("Hebrew tool UI", () => {
                 },
               ],
             },
+            result: "Map ready for display.",
           })}
         />
       </ToolUiLocaleProvider>

@@ -116,20 +116,13 @@ test("permission choices preserve the provider label and visible persistent scop
   ).toBeVisible()
 })
 
-test("message plans and session todos remain independent artifacts", async ({
+test("session todos arrive as provider state, not message content", async ({
   page,
 }) => {
   await openWorkspace(page)
   await createFreshSession(page)
 
   const todoDock = page.locator('[data-slot="todo-dock"]')
-  await expect(todoDock).toHaveCount(0)
-
-  await sendPrompt(page, "Present a plan")
-
-  const plans = page.locator('[data-slot="inline-plan"]')
-  await expect(plans).toHaveCount(1)
-  await expect(plans.getByText("Aggregate spend trends")).toBeVisible()
   await expect(todoDock).toHaveCount(0)
 
   await sendPrompt(page, "Update the todo list")
@@ -140,7 +133,6 @@ test("message plans and session todos remain independent artifacts", async ({
     todoDock.getByText("Review the result", { exact: true })
   ).toBeVisible()
   await expect(todoDock).toContainText("0 of 1 session tasks complete")
-  await expect(plans).toHaveCount(1)
 })
 
 test("published artifacts open from Outputs and close cleanly", async ({
@@ -350,9 +342,7 @@ test("Hebrew localizes rich controls while preserving provider content verbatim"
     composerHe.getByRole("option", { name: "Executive team" })
   ).toHaveAttribute("dir", "auto")
 
-  await composerHe
-    .getByRole("button", { name: "אחר (הקלידו תשובה)" })
-    .click()
+  await composerHe.getByRole("button", { name: "אחר (הקלידו תשובה)" }).click()
   await composerHe
     .getByRole("textbox", {
       name: "תשובה אחרת עבור Which audience should the brief prioritize?",

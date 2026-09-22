@@ -55,7 +55,6 @@ describe("packaged OpenCode plugin", () => {
     expect(Object.keys(hooks.tool ?? {}).sort()).toEqual([
       "create_agent",
       "present_artifact",
-      "present_plan",
       "render_chart",
       "render_map",
       "render_stats",

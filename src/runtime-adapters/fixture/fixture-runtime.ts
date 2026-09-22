@@ -42,23 +42,8 @@ const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
 ) => structuredClone(repository)
 
-const launchPlanResult = {
-  id: "plan-launch",
-  title: "Plan",
-  steps: [
-    { id: "goals", label: "Confirm launch goals", status: "completed" },
-    { id: "audience", label: "Validate the audience", status: "active" },
-    {
-      id: "narrative",
-      label: "Review the narrative",
-      status: "pending",
-    },
-    { id: "risks", label: "Surface launch risks", status: "pending" },
-    { id: "decision", label: "Recommend the next decision", status: "pending" },
-  ],
-} as const
-
-const marketInvestmentChart = {
+const marketInvestmentChartArgs = {
+  title: "Investment is shifting into applied AI",
   type: "line",
   xKey: "quarter",
   series: [
@@ -154,21 +139,9 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
             type: "tool-call",
             toolCallId: "fixture-initial-chart",
             toolName: "render_chart",
-            args: { title: "Investment is shifting into applied AI" },
-            argsText: '{"title":"Investment is shifting into applied AI"}',
-            result: marketInvestmentChart,
-          },
-          {
-            type: "tool-call",
-            toolCallId: "fixture-market-plan",
-            toolName: "present_plan",
-            args: { title: "Fund the next planning cycle" },
-            argsText: '{"title":"Fund the next planning cycle"}',
-            result: {
-              ...launchPlanResult,
-              id: "plan-market",
-              title: "Fund the next planning cycle",
-            },
+            args: marketInvestmentChartArgs,
+            argsText: JSON.stringify(marketInvestmentChartArgs),
+            result: { ok: true },
           },
           {
             type: "source",
@@ -245,20 +218,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
         threadId === "thread-lumen-roadmap"
           ? "I’ve reviewed the available roadmap. Which customer segment should define the first release?"
           : threadId === "thread-aster-launch"
-            ? [
-                {
-                  type: "text",
-                  text: "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention.",
-                },
-                {
-                  type: "tool-call",
-                  toolCallId: "fixture-launch-plan",
-                  toolName: "present_plan",
-                  args: { title: "Launch review" },
-                  argsText: '{"title":"Launch review"}',
-                  result: launchPlanResult,
-                },
-              ]
+            ? "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention."
             : "The Session is ready to continue. The existing context remains scoped to this Agent.",
       createdAt: FIXTURE_NOW,
     },
@@ -592,7 +552,11 @@ export function createFixtureChatModel(
           )
           workspace.publishAttention(threadId, kind, requestId)
           if (kind === "question" && scenario.questionTemplate) {
-            const { header, options: opts, allowFreeform } = scenario.questionTemplate
+            const {
+              header,
+              options: opts,
+              allowFreeform,
+            } = scenario.questionTemplate
             onQuestion?.(threadId, {
               kind: "question",
               requestId,

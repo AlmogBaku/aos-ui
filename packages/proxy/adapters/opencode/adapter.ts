@@ -11,6 +11,7 @@ import {
   type SessionCatalogResponse,
   type SessionHistoryResponse,
   type SessionModelUpdateRequest,
+  type SessionPlanActivityMessage,
   type VisibilityUpdateResponse,
 } from "../../../protocol"
 import type {
@@ -18,6 +19,7 @@ import type {
   ServerRunEngine,
   ServerRuntime,
 } from "../../core/runtime"
+import { projectTodos } from "../todos"
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
@@ -29,6 +31,7 @@ import {
 import { openCodeCapabilities } from "./capabilities"
 import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
 import { projectOpenCodeHistory } from "./history"
+import { OPENCODE_TODO_STATUS_ALIASES } from "./todos"
 import {
   OpenCodeInteractionPublicError,
   OpenCodeInteractions,
@@ -65,6 +68,7 @@ export type OpenCodeAdapterClient = Readonly<{
     | "switchModel"
     | "messages"
     | "context"
+    | "todos"
     | "events"
     | "active"
     | "history"
@@ -350,11 +354,20 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     if (!Number.isSafeInteger(required))
       throw new OpenCodeClientError("invalid_request")
     const { messages, hasMore } = await this.#readHistory(sessionId, required)
-    const page = messages.slice(offset, offset + limit)
+    const page: Array<(typeof messages)[number] | SessionPlanActivityMessage> =
+      messages.slice(offset, offset + limit)
     const nextOffset = offset + page.length
     const total = hasMore
       ? Math.max(messages.length, nextOffset + 1)
       : messages.length
+    const todos = await this.#todos(sessionId)
+    if (todos)
+      page.push({
+        id: `aos-plan:${sessionId}`,
+        role: "activity",
+        activityType: "PLAN",
+        content: { todos },
+      })
     return SessionHistoryResponseSchema.parse({
       sessionId,
       messages: page,
@@ -363,6 +376,22 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       offset,
       nextOffset,
     })
+  }
+
+  /**
+   * The Session's own authoritative Todo list, read once per history load. A
+   * Session the provider cannot answer for has no plan rather than a stale or
+   * invented one, and history still loads either way.
+   */
+  async #todos(sessionId: string) {
+    try {
+      return projectTodos(
+        { todos: await this.options.client.sessions.todos(sessionId) },
+        OPENCODE_TODO_STATUS_ALIASES
+      )
+    } catch {
+      return undefined
+    }
   }
 
   getSession(agentId: string, sessionId: string): Promise<Session> {

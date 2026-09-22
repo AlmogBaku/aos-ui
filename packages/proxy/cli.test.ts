@@ -216,8 +216,6 @@ describe("proxy executable", () => {
       for (const reservedPath of [
         "/auth",
         "/auth/callback",
-        "/hermes",
-        "/hermes/api/profiles",
         // A guest installs no workspace and registers no service worker, and an
         // encoded path reaches the same file the static handler would decode.
         "/sw.js",

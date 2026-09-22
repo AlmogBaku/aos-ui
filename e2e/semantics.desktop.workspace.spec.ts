@@ -5,13 +5,11 @@ const localeCopy = {
     conversation: "Conversation",
     messageInput: "Message input",
     sendMessage: "Send message",
-    planProgress: "Plan progress",
   },
   he: {
     conversation: "שיחה",
     messageInput: "שדה הודעה",
     sendMessage: "שליחת הודעה",
-    planProgress: "התקדמות התוכנית",
   },
 } as const
 
@@ -41,7 +39,9 @@ for (const locale of ["en", "he"] as const) {
     const composerLabel = locale === "he" ? "שאלות" : "Questions"
     const sendLabel = locale === "he" ? "שליחת תשובה" : "Send answer"
     const questionComposer = page.getByRole("region", { name: composerLabel })
-    await questionComposer.getByRole("option", { name: "Executive team" }).click()
+    await questionComposer
+      .getByRole("option", { name: "Executive team" })
+      .click()
     await questionComposer.getByRole("button", { name: sendLabel }).click()
     await expect(questionComposer).not.toBeVisible()
 
@@ -64,51 +64,5 @@ for (const locale of ["en", "he"] as const) {
         level: 2,
       })
     ).toBeVisible()
-    await sendPrompt(page, "Present a plan", locale)
-    const plan = page.locator('[data-slot="inline-plan"]').filter({
-      has: page.getByRole("heading", {
-        name: "Plan",
-        level: 2,
-        exact: true,
-      }),
-    })
-    await expect(
-      plan.getByRole("heading", { name: "Plan", level: 2 })
-    ).toBeVisible()
-    await expect(
-      plan.getByRole("progressbar", {
-        name: localeCopy[locale].planProgress,
-      })
-    ).toHaveAttribute("aria-valuenow", "20")
   })
 }
-
-test("plan steps show and hide correctly under reduced motion", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "no-preference" })
-  await openWorkspace(page)
-  await sendPrompt(page, "Present a plan")
-
-  const plan = page.locator('[data-slot="inline-plan"]').filter({
-    has: page.getByRole("heading", {
-      name: "Plan",
-      level: 2,
-      exact: true,
-    }),
-  })
-  const progress = plan.getByRole("progressbar")
-  const moreSteps = plan.getByRole("button", { name: "Show 1 more step" })
-
-  await expect(progress).toBeVisible()
-
-  await moreSteps.click()
-  await expect(plan.getByText("Summarize key takeaways")).toBeVisible()
-
-  await page.emulateMedia({ reducedMotion: "reduce" })
-
-  await expect(plan.getByText("Summarize key takeaways")).toBeVisible()
-
-  await moreSteps.click()
-  await expect(plan.getByText("Summarize key takeaways")).toBeHidden()
-})

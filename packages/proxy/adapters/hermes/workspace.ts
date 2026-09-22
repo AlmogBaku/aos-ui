@@ -2,8 +2,9 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "../../../protocol"
+import { projectTodos, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
-import { isRecord, parseJson, parseJsonOrValue } from "./native"
+import { isRecord, parseJson } from "./native"
 
 type NativeRecord = Record<string, unknown>
 
@@ -85,7 +86,7 @@ export type HermesWorkspaceCapabilities = {
         status: "available"
         scope: "attached-active-session"
         coverage: "active-session-only"
-        source: "session.info"
+        source: "provider-session-state"
       }
     | { status: "unavailable"; reason: "session-info-unavailable" }
 }
@@ -126,12 +127,6 @@ export type HermesContext = {
     toolTokens: number
     messageTokens: number
   }
-}
-
-export type HermesTodo = {
-  id: string
-  label: string
-  status: "pending" | "active" | "completed" | "failed"
 }
 
 export type HermesActivity =
@@ -391,40 +386,11 @@ function completedToolRow(row: NativeRecord) {
   )
 }
 
-/**
- * Session Todos are a plan a person reads, and the frame carrying them is bound
- * by bytes alone. A list longer than this is machine noise or a corrupt payload,
- * so the projection truncates it instead of publishing an unbounded PLAN.
- */
-const MAX_PROJECTED_TODOS = 256
-
-export function projectHermesTodos(value: unknown): HermesTodo[] | undefined {
-  const payload = parseJsonOrValue(value)
-  if (!isRecord(payload) || !Array.isArray(payload.todos)) return undefined
-  const seen = new Set<string>()
-  return payload.todos.slice(0, MAX_PROJECTED_TODOS).flatMap((raw, index) => {
-    if (!isRecord(raw)) return []
-    const id = stringValue(raw.id, 256) ?? String(index)
-    const label = stringValue(raw.label ?? raw.content, 4_096)
-    if (!label || seen.has(id)) return []
-    seen.add(id)
-    const rawStatus = stringValue(raw.status, 64)
-    const status =
-      rawStatus === "active" ||
-      rawStatus === "completed" ||
-      rawStatus === "failed" ||
-      rawStatus === "pending"
-        ? rawStatus
-        : "pending"
-    return [{ id, label, status }]
-  })
-}
-
 export function latestHermesTodos(
   rows: readonly unknown[]
-): HermesTodo[] | undefined {
+): Todo[] | undefined {
   const calls = todoCallIds(rows)
-  let latest: HermesTodo[] | undefined
+  let latest: Todo[] | undefined
   for (const row of rows) {
     if (
       !isRecord(row) ||
@@ -442,7 +408,7 @@ export function latestHermesTodos(
       (resultName !== undefined && resultName !== invokedName)
     )
       continue
-    latest = projectHermesTodos(row.content ?? row.result)
+    latest = projectTodos(row.content ?? row.result)
   }
   return latest
 }
@@ -467,7 +433,7 @@ export type HermesWorkspaceOperations = {
     patch: SessionModelUpdateRequest
   ): Promise<SessionModelUpdateResponse>
   context(agentId: string, sessionId: string): Promise<HermesContext>
-  todos(agentId: string, sessionId: string): Promise<HermesTodo[]>
+  todos(agentId: string, sessionId: string): Promise<Todo[]>
   activity(agentId: string, sessionId: string): Promise<HermesActivity>
 }
 
@@ -565,7 +531,7 @@ export function createHermesWorkspaceOperations(input: {
               status: "available",
               scope: "attached-active-session",
               coverage: "active-session-only",
-              source: "session.info",
+              source: "provider-session-state",
             }
           : { status: "unavailable", reason: "session-info-unavailable" },
       }

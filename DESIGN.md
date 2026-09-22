@@ -327,8 +327,8 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 
 **Character:** informative when available and inspectable when it is not.
 
-- **Plan and activity:** stay eager because the default workspace uses them;
-  Plan progress has a localized accessible name and a proper heading level.
+- **Todos and activity:** stay eager because the default workspace uses them;
+  Todos progress has a localized accessible name and a proper heading level.
 - **Optional visuals:** question, permission, Monty, chart, map, and stats
   renderers load on demand behind a localized loading state and error boundary.
 - **Fallback:** loading or failure leaves an inspectable textual/JSON
@@ -409,9 +409,9 @@ assistant's answer.
 
 **Character:** short state confirmation, never spectacle.
 
-- **Normal preference:** status changes, drawers, dialogs, accordions, and Plan
+- **Normal preference:** status changes, drawers, dialogs, accordions, and Todos
   progress may transition to clarify a state change.
-- **Reduced preference:** alert dialogs, accordions, Plan progress, workspace
+- **Reduced preference:** alert dialogs, accordions, Todos progress, workspace
   controls, and rich presentation fallbacks intentionally remove animation or
   transitions while preserving visible state and focus behavior.
 

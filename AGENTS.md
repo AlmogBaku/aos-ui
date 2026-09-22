@@ -85,8 +85,8 @@ external reverse proxy is optional.
   and creation never transfers ownership or starts the created Agent's first
   Session.
 - Provider data is authoritative. Every Session belongs to one Agent; delayed
-  events stay scoped to their originating Agent and Session. Plans are
-  message-scoped and Todos are Session-scoped.
+  events stay scoped to their originating Agent and Session. Todos are
+  Session-scoped.
 - Runtime selection is strict. Fixture data appears only in explicit `fixture`
   mode; invalid provider configuration renders unavailable state instead of
   falling back to synthetic data. Public fixtures intentionally omit Agent
@@ -119,7 +119,7 @@ external reverse proxy is optional.
   earn one, because the utilities are already direction-agnostic; verify it once
   in the rendered app and move on.
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
-  charts, maps, Plans, tools, and Mermaid; never execute generated code or
+  charts, maps, tools, and Mermaid; never execute generated code or
   arbitrary HTML in the browser.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
@@ -244,7 +244,10 @@ Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
   A styling-only change has no test to write, because styling is never
-  asserted: look at it in the rendered app, in both themes, and stop there.
+  asserted: look at the changed surface once in the rendered app and stop
+  there. A second look in the other theme is earned only by a change to
+  color, contrast, or theme tokens; a behavior change that happens to alter
+  what renders needs no theme pass at all, its tests already cover it.
 - Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
 - OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
   installs the package's own lockfile because the plugin SDK is a peer this checkout

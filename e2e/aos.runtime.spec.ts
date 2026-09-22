@@ -85,7 +85,7 @@ const sessionCapabilities = {
       status: "available",
       scope: "attached-active-session",
       coverage: "active-session-only",
-      source: "session.info",
+      source: "provider-session-state",
     },
   },
   interactions: {

@@ -230,32 +230,6 @@ describe("fixture Assistant UI thread adapter", () => {
     ).resolves.toEqual([])
   })
 
-  it("keeps a plan in both the launch Session and the market showcase", async () => {
-    const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
-    const adapter = createFixtureThreadListAdapter(workspace)
-
-    const market = await adapter.historyFor("thread-aster-market").load()
-    const launch = await adapter.historyFor("thread-aster-launch").load()
-
-    expect(
-      launch.messages.some(({ message }) =>
-        message.content.some(
-          (part) =>
-            part.type === "tool-call" && part.toolName === "present_plan"
-        )
-      )
-    ).toBe(true)
-    expect(
-      market.messages.some(({ message }) =>
-        message.content.some(
-          (part) =>
-            part.type === "tool-call" && part.toolName === "present_plan"
-        )
-      )
-    ).toBe(true)
-    expect(launch.messages).not.toEqual(market.messages)
-  })
-
   it("keeps artifact descriptors parseable and uniquely identified", async () => {
     const artifacts = Object.values(FIXTURE_ARTIFACT_CATALOG.examples)
 
@@ -286,29 +260,29 @@ describe("fixture Assistant UI thread adapter", () => {
     expect(chart).toMatchObject({
       type: "tool-call",
       toolName: "render_chart",
-      args: expect.objectContaining({ title: expect.any(String) }),
-      result: expect.objectContaining({
+      args: expect.objectContaining({
+        title: expect.any(String),
         type: "line",
         xKey: expect.any(String),
       }),
     })
     if (!chart || chart.type !== "tool-call") throw new Error("Missing chart")
-    const result = chart.result
-    expect(result).toEqual(
+    const args = chart.args
+    expect(args).toEqual(
       expect.objectContaining({
         series: expect.any(Array),
         data: expect.any(Array),
       })
     )
-    if (!result || typeof result !== "object")
-      throw new Error("Invalid chart result")
-    const resultRecord = result as {
+    if (!args || typeof args !== "object")
+      throw new Error("Invalid chart arguments")
+    const chartRecord = args as {
       series?: unknown[]
       data?: unknown[]
       xKey?: unknown
     }
-    const series = resultRecord.series ?? []
-    const data = resultRecord.data ?? []
+    const series = chartRecord.series ?? []
+    const data = chartRecord.data ?? []
     expect(series.length).toBeGreaterThan(0)
     expect(data.length).toBeGreaterThan(0)
     for (const row of data) {
@@ -316,7 +290,7 @@ describe("fixture Assistant UI thread adapter", () => {
       const rowRecord = row as Record<string, unknown>
       expect(row).toEqual(
         expect.objectContaining({
-          [String(resultRecord.xKey)]: expect.any(String),
+          [String(chartRecord.xKey)]: expect.any(String),
         })
       )
       for (const item of series) {
@@ -359,7 +333,6 @@ describe("fixture Assistant UI thread adapter", () => {
       "apply_patch",
       "delegate_subagent",
       "render_chart",
-      "present_plan",
     ])
     expect(parts).toEqual(
       expect.arrayContaining([

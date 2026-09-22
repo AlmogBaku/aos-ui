@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  mapOpenCodeRichTool,
-  OpenCodeContent,
-  OpenCodeContentUnavailableError,
-} from "./content"
+import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
 
 describe("OpenCodeContent", () => {
   it("stages a bounded batch without exposing a native path", () => {
@@ -54,47 +50,5 @@ describe("OpenCodeContent", () => {
     expect(() =>
       content.artifactReceipt({ path: "/private/report.pdf" })
     ).toThrow(OpenCodeContentUnavailableError)
-  })
-
-  it("maps only integration-advertised rich tool input and drops raw provider fields", () => {
-    expect(
-      mapOpenCodeRichTool({
-        tool: "render_stats",
-        state: {
-          status: "completed",
-          input: {
-            title: "Build",
-            stats: [{ key: "tests", label: "Tests", value: 5 }],
-            nativePath: "/private/worktree",
-          },
-          output: "Build is ready for display.",
-        },
-      })
-    ).toEqual({
-      kind: "stats",
-      data: {
-        title: "Build",
-        stats: [{ key: "tests", label: "Tests", value: 5 }],
-      },
-      fallback: "Presentation is ready for display.",
-    })
-    expect(
-      mapOpenCodeRichTool({ tool: "shell", state: { input: {} } })
-    ).toBeUndefined()
-    expect(
-      JSON.stringify(
-        mapOpenCodeRichTool({
-          tool: "render_stats",
-          state: {
-            status: "completed",
-            input: {
-              title: "https://private.example token=abc /private/worktree",
-              stats: [{ key: "tests", label: "Tests", value: 5 }],
-            },
-            output: "https://private.example token=abc /private/worktree",
-          },
-        })
-      )
-    ).not.toMatch(/private\.example|token=abc|\/private\/worktree/)
   })
 })

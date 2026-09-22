@@ -15,7 +15,6 @@ describe("OpenClaw external plugin contract", () => {
 
     expect(names.sort()).toEqual([
       "present_artifact",
-      "present_plan",
       "render_chart",
       "render_map",
       "render_stats",
@@ -29,7 +28,6 @@ describe("OpenClaw external plugin contract", () => {
 
     expect(manifest.contracts.tools.sort()).toEqual([
       "present_artifact",
-      "present_plan",
       "render_chart",
       "render_map",
       "render_stats",

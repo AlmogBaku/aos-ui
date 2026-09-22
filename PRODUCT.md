@@ -12,7 +12,7 @@ AOS is for people who operate several provider-owned AI agents and need to follo
 
 ## Product Purpose
 
-AOS provides one calm workspace for selecting a primary Agent, resuming its Sessions, observing nested Subagents, reviewing message-scoped Plans, and tracking session-scoped Todos. Success means users can move between active work streams confidently while delayed events, unsupported provider capabilities, and failures remain explicit and correctly scoped.
+AOS provides one calm workspace for selecting a primary Agent, resuming its Sessions, observing nested Subagents, and tracking session-scoped Todos. Success means users can move between active work streams confidently while delayed events, unsupported provider capabilities, and failures remain explicit and correctly scoped.
 
 ## Positioning
 
@@ -29,7 +29,7 @@ Users work in a three-pane desktop workspace or a focus-managed narrow-screen la
 
 ## Capabilities and Constraints
 
-- An Agent is a provider-owned primary agent; a Session belongs to exactly one Agent; a Subagent is a nested delegated run; a Plan belongs to the message that produced it; Todos belong to the Session.
+- An Agent is a provider-owned primary agent; a Session belongs to exactly one Agent; a Subagent is a nested delegated run; Todos belong to the Session.
 - Native runtimes own durable conversations and execution. Assistant UI owns their frontend projection, composer, queue, and thread lifecycle.
 - Provider data is authoritative. Session read state is provider-owned: the
   browser reports the focused Session and the runtime decides when it becomes
@@ -97,7 +97,7 @@ The frontend uses Vite, React, Tailwind, and shadcn with static production hosti
 
 ## Product Principles
 
-1. Preserve ownership: every Agent, Session, Subagent, Plan, Todo, and event has an unambiguous scope.
+1. Preserve ownership: every Agent, Session, Subagent, Todo, and event has an unambiguous scope.
 2. Make system state legible: running, waiting, failed, stale, expired, malformed, and unsupported states are visible and actionable.
 3. Prefer provider truth over duplicated client state.
 4. Keep the workspace calm under complexity through progressive disclosure and restrained visual hierarchy.

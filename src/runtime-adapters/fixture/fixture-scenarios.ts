@@ -10,7 +10,6 @@ export const fixtureScenarioNames = [
   "question",
   "permission",
   "subagent",
-  "plan",
   "todos",
   "chart",
   "map",
@@ -139,49 +138,6 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
     }
   }
 
-  if (input.includes("plan")) {
-    return {
-      name: "plan",
-      parts: [
-        toolPart(
-          "present_plan",
-          { title: "Market brief" },
-          {
-            id: "plan-market",
-            title: "Plan",
-            steps: [
-              {
-                id: "scope",
-                label: "Define scope and coverage",
-                status: "completed",
-              },
-              {
-                id: "trends",
-                label: "Aggregate spend trends",
-                status: "active",
-              },
-              {
-                id: "segments",
-                label: "Segment by function and industry",
-                status: "pending",
-              },
-              {
-                id: "drivers",
-                label: "Identify drivers and shifts",
-                status: "pending",
-              },
-              {
-                id: "summary",
-                label: "Summarize key takeaways",
-                status: "pending",
-              },
-            ],
-          }
-        ),
-      ],
-    }
-  }
-
   if (input.includes("todo")) {
     return {
       name: "todos",
@@ -198,8 +154,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_chart",
-          { title: "Enterprise AI spend" },
           {
+            title: "Enterprise AI spend",
             type: "line",
             xKey: "quarter",
             series: [
@@ -210,7 +166,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
               { quarter: "Q4’24", total: 300, genai: 220 },
               { quarter: "Q1’25", total: 365, genai: 275 },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }
@@ -222,8 +179,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_map",
-          { title: "Interview coverage" },
           {
+            title: "Interview coverage",
             locations: [
               {
                 id: "london",
@@ -238,7 +195,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
                 longitude: 34.7818,
               },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }
@@ -250,9 +208,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_stats",
-          { title: "Launch metrics" },
           {
-            id: "fixture-launch-metrics",
             title: "Launch metrics",
             description: "Illustrative execution metrics",
             stats: [
@@ -272,7 +228,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
                 diff: { value: 4.1 },
               },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }

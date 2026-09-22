@@ -9,7 +9,6 @@ describe("deterministic fixture scenarios", () => {
       ["ask a question", "question"],
       ["request permission", "permission"],
       ["delegate to a subagent", "subagent"],
-      ["show a plan", "plan"],
       ["update todos", "todos"],
       ["render a chart", "chart"],
       ["publish an artifact", "artifact"],
@@ -65,15 +64,9 @@ describe("deterministic fixture scenarios", () => {
     expect(permission.parts[0]).toHaveProperty("approval")
   })
 
-  it("keeps Plan output message-scoped and Todo output event-scoped", () => {
-    const plan = buildFixtureScenario("Show a plan")
+  it("keeps Todo output event-scoped instead of message-scoped", () => {
     const todos = buildFixtureScenario("Update todos")
 
-    expect(plan.parts[0]).toMatchObject({
-      type: "tool-call",
-      toolName: "present_plan",
-    })
-    expect(plan.todoEvent).toBeUndefined()
     expect(todos.parts.some((part) => part.type === "tool-call")).toBe(false)
     expect(todos.todoEvent?.[0]?.id).toBe("todo-fixture-1")
   })

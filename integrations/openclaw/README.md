@@ -13,8 +13,8 @@ bun run test
 bun run build
 ```
 
-The registered tools are `render_chart`, `render_map`, `render_stats`,
-`present_plan`, and `present_artifact`. The plugin takes no configuration;
+The registered tools are `render_chart`, `render_map`, `render_stats`, and
+`present_artifact`. The plugin takes no configuration;
 remove the previously advertised `creatorAgentId` setting when upgrading.
 
 `create_agent` and `start_session` are omitted from registration and manifest

@@ -141,7 +141,11 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
 
   if (state.phase === "failed") return <AosToolError {...part} />
 
-  const useCodeRunner = part.toolName === "execute_code"
+  // Any call that carries source code reads best as code, whatever the runtime
+  // named it. The language is shown only when the call declares one.
+  const code = safeToolDisplayValue(part.args, ["code"], "")
+  const language = safeToolDisplayValue(part.args, ["language"], "")
+  const useCodeRunner = Boolean(code)
   const useTerminalBlock =
     !useCodeRunner &&
     kind === "command" &&
@@ -161,8 +165,8 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
       details={
         useCodeRunner ? (
           <CodeRunner
-            language="python"
-            code={safeToolDisplayValue(part.args, ["code"], "")}
+            {...(language ? { language } : {})}
+            code={code}
             state={codeRunnerState(state.phase)}
             output={terminalLines(part.result)}
             durationMs={codeRunnerDuration(part.result)}

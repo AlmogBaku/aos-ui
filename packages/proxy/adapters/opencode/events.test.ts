@@ -1,7 +1,11 @@
 import { RunEventKind, RunEventSchema } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
-import { OpenCodeEventProjector, OpenCodeEventValidationError } from "./events"
+import {
+  OpenCodeEventProjector,
+  OpenCodeEventValidationError,
+  validateOpenCodeLiveEvent,
+} from "./events"
 
 const scope = {
   sessionId: "session-1",
@@ -43,6 +47,13 @@ function live(
     event: "session",
     data: durable(seq, type, data, overrides),
   }
+}
+
+function planEvents(event: { type: RunEventKind }) {
+  return (
+    event.type === RunEventKind.ACTIVITY_SNAPSHOT ||
+    event.type === RunEventKind.ACTIVITY_DELTA
+  )
 }
 
 describe("OpenCodeEventProjector", () => {
@@ -190,6 +201,271 @@ describe("OpenCodeEventProjector", () => {
         },
       ],
     })
+  })
+
+  it("emits the native subagent tool under its canonical name with a summary result", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+
+    expect(
+      projector.accept(
+        live(1, "session.next.tool.input.started", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          name: "task",
+          timestamp: 1,
+        })
+      ).events
+    ).toEqual([
+      {
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "call-1",
+        toolCallName: "delegate_subagent",
+        parentMessageId: "assistant-1",
+      },
+    ])
+
+    expect(
+      projector.accept(
+        live(2, "session.next.tool.called", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          tool: "task",
+          input: { description: "Review the launch plan" },
+          provider: { executed: true },
+          timestamp: 2,
+        })
+      ).events
+    ).toEqual([
+      {
+        type: RunEventKind.TOOL_CALL_ARGS,
+        toolCallId: "call-1",
+        delta: '{"description":"Review the launch plan"}',
+      },
+    ])
+
+    expect(
+      projector.accept(
+        live(3, "session.next.tool.success", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          structured: {},
+          content: [{ type: "text", text: "The review is complete." }],
+          provider: { executed: true },
+          timestamp: 3,
+        })
+      ).events
+    ).toEqual([
+      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+      {
+        type: RunEventKind.TOOL_CALL_RESULT,
+        messageId: "assistant-1:tool:call-1",
+        toolCallId: "call-1",
+        content: '{"summary":"The review is complete."}',
+        role: "tool",
+      },
+    ])
+  })
+
+  it("publishes the native Todo tool's own input as this Session's plan", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    const called = (
+      seq: number,
+      callId: string,
+      input: Record<string, unknown>
+    ) =>
+      projector.accept(
+        live(seq, "session.next.tool.called", {
+          assistantMessageID: "assistant-1",
+          callID: callId,
+          tool: "todowrite",
+          input,
+          provider: { executed: true },
+          timestamp: seq,
+        })
+      ).events
+    const succeeded = (seq: number, callId: string) =>
+      projector.accept(
+        live(seq, "session.next.tool.success", {
+          assistantMessageID: "assistant-1",
+          callID: callId,
+          structured: {},
+          content: [{ type: "text", text: "Todos updated." }],
+          provider: { executed: true },
+          timestamp: seq,
+        })
+      ).events
+    const running = {
+      todos: [
+        {
+          content: "Read the adapter",
+          status: "in_progress",
+          priority: "high",
+        },
+        { content: "Write the test", status: "pending", priority: "medium" },
+      ],
+    }
+
+    called(1, "call-1", running)
+
+    expect(succeeded(2, "call-1").at(-1)).toEqual({
+      type: RunEventKind.ACTIVITY_SNAPSHOT,
+      messageId: `aos-plan:${scope.threadId}`,
+      activityType: "PLAN",
+      content: {
+        todos: [
+          { id: "0", label: "Read the adapter", status: "active" },
+          { id: "1", label: "Write the test", status: "pending" },
+        ],
+      },
+      replace: true,
+    })
+
+    // An unchanged list is the plan the browser already holds.
+    called(3, "call-2", running)
+    expect(succeeded(4, "call-2").filter(planEvents)).toEqual([])
+
+    called(5, "call-3", {
+      todos: [
+        { content: "Read the adapter", status: "completed", priority: "high" },
+        { content: "Write the test", status: "cancelled", priority: "medium" },
+      ],
+    })
+
+    expect(succeeded(6, "call-3").at(-1)).toEqual({
+      type: RunEventKind.ACTIVITY_DELTA,
+      messageId: `aos-plan:${scope.threadId}`,
+      activityType: "PLAN",
+      patch: [
+        {
+          op: "replace",
+          path: "/todos",
+          value: [
+            { id: "0", label: "Read the adapter", status: "completed" },
+            { id: "1", label: "Write the test", status: "failed" },
+          ],
+        },
+      ],
+    })
+  })
+
+  it("publishes no plan at all for a native Todo tool input it cannot read", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    projector.accept(
+      live(1, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        tool: "todowrite",
+        input: { items: "everything" },
+        provider: { executed: true },
+        timestamp: 1,
+      })
+    )
+
+    expect(
+      projector.accept(
+        live(2, "session.next.tool.success", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          structured: {},
+          content: [{ type: "text", text: "Todos updated." }],
+          provider: { executed: true },
+          timestamp: 2,
+        })
+      ).events
+    ).toEqual([
+      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+      {
+        type: RunEventKind.TOOL_CALL_RESULT,
+        messageId: "assistant-1:tool:call-1",
+        toolCallId: "call-1",
+        content: "Todos updated.",
+        role: "tool",
+      },
+    ])
+  })
+
+  it("publishes no plan for a native Todo tool call that failed", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    projector.accept(
+      live(1, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        tool: "todowrite",
+        input: { todos: [{ content: "Never shown", status: "pending" }] },
+        provider: { executed: true },
+        timestamp: 1,
+      })
+    )
+
+    expect(
+      projector
+        .accept(
+          live(2, "session.next.tool.failed", {
+            assistantMessageID: "assistant-1",
+            callID: "call-1",
+            error: { type: "unknown", message: "The tool failed." },
+            provider: { executed: true },
+            timestamp: 2,
+          })
+        )
+        .events.filter(planEvents)
+    ).toEqual([])
+  })
+
+  it("rebuilds the plan from a suppressed replay without publishing it again", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    const input = {
+      todos: [{ content: "Read the adapter", status: "in_progress" }],
+    }
+    for (const event of [
+      live(1, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        tool: "todowrite",
+        input,
+        provider: { executed: true },
+        timestamp: 1,
+      }),
+      live(2, "session.next.tool.success", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        structured: {},
+        content: [{ type: "text", text: "Todos updated." }],
+        provider: { executed: true },
+        timestamp: 2,
+      }),
+    ])
+      expect(
+        projector.reconstructValidated(
+          validateOpenCodeLiveEvent(event, scope.sessionId)
+        ).events
+      ).toEqual([])
+
+    projector.accept(
+      live(3, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-2",
+        tool: "todowrite",
+        input,
+        provider: { executed: true },
+        timestamp: 3,
+      })
+    )
+
+    expect(
+      projector
+        .accept(
+          live(4, "session.next.tool.success", {
+            assistantMessageID: "assistant-1",
+            callID: "call-2",
+            structured: {},
+            content: [{ type: "text", text: "Todos updated." }],
+            provider: { executed: true },
+            timestamp: 4,
+          })
+        )
+        .events.filter(planEvents)
+    ).toEqual([])
   })
 
   it("validates the complete native durable envelope and rejects foreign aggregate correlation", () => {

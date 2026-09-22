@@ -4,6 +4,33 @@ import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import { CANONICAL_TOOL_NAMES } from "./adapters/hermes/tool-data"
+import { OPENCODE_CANONICAL_TOOL_NAMES } from "./adapters/opencode/tool-names"
+
+const COMMON_PROXY_DIRECTORIES = [
+  "acp",
+  "auth",
+  "cli",
+  "core",
+  "guest",
+  "routes",
+  "voice",
+]
+
+/** Block comments, and line comments that start a line or follow whitespace. */
+function stripComments(source: string) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .replace(/(^|\s)\/\/.*$/gmu, "$1")
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+
+const RUNTIME_NAME_LITERAL =
+  /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
+
 async function productionFiles(root: string): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true })
   return (
@@ -22,6 +49,45 @@ async function productionFiles(root: string): Promise<string[]> {
 }
 
 describe("runtime adapter boundary", () => {
+  it("keeps runtime vocabulary out of browser, protocol, and common proxy modules", async () => {
+    const proxyRoot = import.meta.dirname
+    const repositoryRoot = join(proxyRoot, "../..")
+    const fixtureRoot = join(repositoryRoot, "src/runtime-adapters/fixture")
+    const nativeNames = [
+      ...CANONICAL_TOOL_NAMES.keys(),
+      ...OPENCODE_CANONICAL_TOOL_NAMES.keys(),
+    ]
+    const nativeLiteral = new RegExp(
+      `["'\`](?:${nativeNames.map(escapeRegExp).join("|")})["'\`]`,
+      "u"
+    )
+    const files = [
+      ...(await productionFiles(join(repositoryRoot, "src"))).filter(
+        (path) => !path.startsWith(fixtureRoot)
+      ),
+      ...(await productionFiles(join(repositoryRoot, "packages/protocol"))),
+      ...(
+        await Promise.all(
+          COMMON_PROXY_DIRECTORIES.map((directory) =>
+            productionFiles(join(proxyRoot, directory))
+          )
+        )
+      ).flat(),
+    ]
+
+    for (const path of files) {
+      const source = stripComments(await readFile(path, "utf8"))
+      expect(
+        source.match(RUNTIME_NAME_LITERAL)?.[0],
+        `${path} names a runtime`
+      ).toBeUndefined()
+      expect(
+        source.match(nativeLiteral)?.[0],
+        `${path} uses a native tool name an adapter renames`
+      ).toBeUndefined()
+    }
+  })
+
   it("keeps provider-native code out of common proxy and browser modules", async () => {
     const proxyRoot = import.meta.dirname
     const repositoryRoot = join(proxyRoot, "../..")

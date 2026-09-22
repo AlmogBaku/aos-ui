@@ -7,12 +7,12 @@ tool-call result into a safe, localized, theme-aware UI component.
 
 Each surface lives in its own directory and follows the same layout:
 
-| File              | Role                                                       |
-| ----------------- | ---------------------------------------------------------- |
-| `_adapter.tsx`    | Converts raw provider args/result to the surface's schema  |
-| `index.tsx`       | Public React export (re-exports the component)             |
-| `schema.ts`       | Zod schema + TypeScript types for the payload              |
-| `<surface>.tsx`   | The React component                                        |
+| File            | Role                                                      |
+| --------------- | --------------------------------------------------------- |
+| `_adapter.tsx`  | Converts raw provider args/result to the surface's schema |
+| `index.tsx`     | Public React export (re-exports the component)            |
+| `schema.ts`     | Zod schema + TypeScript types for the payload             |
+| `<surface>.tsx` | The React component                                       |
 
 ## Registry
 
@@ -21,22 +21,21 @@ Each surface lives in its own directory and follows the same layout:
 surfaces (`optional: true`) wrap their output in `OptionalToolDisplay` so a
 load failure leaves an inspectable textual fallback instead of a blank area.
 
-**Eager renderers** (Plan) are imported directly because the default workspace
+**Eager renderers** (Todos) are imported directly because the default workspace
 always uses them. **Lazy renderers** (question-flow, chart, geo-map, stats,
 permission, monty) are imported with `React.lazy` to keep the main bundle lean.
 
 ## Tool names each surface answers
 
-| Registry key(s)                          | Surface         |
-| ---------------------------------------- | --------------- |
-| `render_chart`                           | chart           |
-| `render_map`                             | geo-map         |
-| `render_stats`                           | stats-display   |
-| `present_plan`                           | plan            |
-| `ask_user_question`, `question`          | question-flow   |
-| `request_permission`, `request_approval` | permission      |
-| `delegate_subagent`, `run_subagent`, `task` | activity     |
-| `monty_execute`                          | monty           |
+| Registry key(s)                             | Surface       |
+| ------------------------------------------- | ------------- |
+| `render_chart`                              | chart         |
+| `render_map`                                | geo-map       |
+| `render_stats`                              | stats-display |
+| `ask_user_question`, `question`             | question-flow |
+| `request_permission`, `request_approval`    | permission    |
+| `delegate_subagent`, `run_subagent`, `task` | activity      |
+| `monty_execute`                             | monty         |
 
 ## Safety rule
 

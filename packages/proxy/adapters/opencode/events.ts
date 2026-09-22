@@ -5,7 +5,14 @@ import {
 } from "../../core/events"
 import type { RunEvent } from "../../core/events"
 
+import { projectTodos, type Todo } from "../todos"
+
 import type { OpenCodeDurableEvent } from "./client"
+import { OPENCODE_TODO_STATUS_ALIASES, OPENCODE_TODO_TOOL } from "./todos"
+import {
+  canonicalOpenCodeToolCall,
+  canonicalOpenCodeToolName,
+} from "./tool-names"
 
 const MAX_ID_LENGTH = 512
 const MAX_TEXT_BYTES = 1024 * 1024
@@ -37,9 +44,15 @@ export type ValidatedOpenCodeEvent = Readonly<{
 
 type ToolState = {
   messageId: string
+  /** The native name, so later native-tool recognition still works. */
   name: string
   args: string
   ended: boolean
+  /**
+   * The native Todo tool's own call input, kept only for that tool. The input
+   * is the list OpenCode is about to write, so the plan needs no second read.
+   */
+  todoInput?: Record<string, unknown>
 }
 
 export class OpenCodeEventValidationError extends Error {
@@ -229,6 +242,14 @@ function safeTextContent(value: unknown) {
     } else throw new OpenCodeEventValidationError()
   }
   return parts.join("\n")
+}
+
+/** The canonical text or JSON outcome AOS emits for one native tool call. */
+function toolResultContent(nativeName: string, text: string) {
+  const { result } = canonicalOpenCodeToolCall(nativeName, undefined, text)
+  if (typeof result === "string")
+    return result || JSON.stringify({ status: "completed" })
+  return JSON.stringify(result)
 }
 
 function tokenUsage(value: unknown): TokenUsage[] {
@@ -513,6 +534,12 @@ export class OpenCodeEventProjector {
   #textOpen = false
   #reasoningId?: string
   #reasoningOpen = false
+  /**
+   * The last plan this projector published, so an unchanged list is silent and
+   * the first change after one is a patch. A projector lives for one run
+   * segment, and a suppressed replay rebuilds this without emitting.
+   */
+  #plan?: string
   readonly #usage: TokenUsage[] = []
 
   constructor(
@@ -692,6 +719,8 @@ export class OpenCodeEventProjector {
         data.assistantMessageID as string,
         data.tool as string
       )
+      if (tool.name === OPENCODE_TODO_TOOL)
+        tool.todoInput = data.input as Record<string, unknown>
       if (!tool.args) {
         const args = JSON.stringify(data.input)
         events.push({
@@ -728,10 +757,14 @@ export class OpenCodeEventProjector {
         content:
           type === "session.next.tool.failed"
             ? JSON.stringify({ status: "error" })
-            : safeTextContent(data.content) ||
-              JSON.stringify({ status: "completed" }),
+            : toolResultContent(tool.name, safeTextContent(data.content)),
         role: "tool",
       })
+      // A written list is authoritative; a failed write left the plan alone.
+      if (type === "session.next.tool.success" && tool.todoInput) {
+        const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
+        if (todos) this.#emitPlan(events, todos)
+      }
     } else if (type === "session.next.step.ended") {
       this.#usage.push(...tokenUsage(data.tokens))
     } else if (type === "session.next.step.failed") {
@@ -741,6 +774,34 @@ export class OpenCodeEventProjector {
       )
     }
     return { events }
+  }
+
+  /**
+   * Publishes this Session's plan on the one standard Todo channel: a snapshot
+   * the first time, a patch for every later change, and nothing at all when the
+   * list did not change.
+   */
+  #emitPlan(events: RunEvent[], todos: Todo[]) {
+    const plan = JSON.stringify(todos)
+    if (this.#plan === plan) return
+    const messageId = `aos-plan:${this.#scope.threadId}`
+    events.push(
+      this.#plan === undefined
+        ? {
+            type: RunEventKind.ACTIVITY_SNAPSHOT,
+            messageId,
+            activityType: "PLAN",
+            content: { todos },
+            replace: true,
+          }
+        : {
+            type: RunEventKind.ACTIVITY_DELTA,
+            messageId,
+            activityType: "PLAN",
+            patch: [{ op: "replace", path: "/todos", value: todos }],
+          }
+    )
+    this.#plan = plan
   }
 
   #openReasoning(events: RunEvent[], messageId: string, reasoningId: string) {
@@ -786,12 +847,12 @@ export class OpenCodeEventProjector {
         throw new OpenCodeEventValidationError()
       return existing
     }
-    const tool = { messageId, name, args: "", ended: false }
+    const tool: ToolState = { messageId, name, args: "", ended: false }
     this.#tools.set(callId, tool)
     events.push({
       type: RunEventKind.TOOL_CALL_START,
       toolCallId: callId,
-      toolCallName: name,
+      toolCallName: canonicalOpenCodeToolName(name),
       parentMessageId: messageId,
     })
     return tool

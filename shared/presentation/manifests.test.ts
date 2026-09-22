@@ -12,7 +12,6 @@ describe("provider harness manifests", () => {
     expect(openCodeProviderInstructions).toContain("`render_chart`")
     expect(openCodeProviderInstructions).toContain("`render_map`")
     expect(openCodeProviderInstructions).toContain("`render_stats`")
-    expect(openCodeProviderInstructions).toContain("`present_plan`")
     expect(openCodeProviderInstructions).toContain("`present_artifact`")
     expect(openCodeProviderInstructions).toContain("`question`")
     expect(openCodeProviderInstructions).not.toMatch(/monty_/)
