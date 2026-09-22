@@ -5,6 +5,7 @@ import type {
 import { projectTodos, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson } from "./native"
+import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { toolCallSelections } from "./tool-data"
 
 type NativeRecord = Record<string, unknown>
@@ -416,7 +417,10 @@ export function latestHermesTodos(
       (resultName !== undefined && !names.has(resultName))
     )
       continue
-    const todos = projectTodos(row.content ?? row.result)
+    const todos = projectTodos(
+      row.content ?? row.result,
+      HERMES_TODO_STATUS_ALIASES
+    )
     // A batched call may settle a Todo tool beside another one, and a row that
     // carries no Todo list at all leaves the plan the last one published
     // standing rather than emptying it.

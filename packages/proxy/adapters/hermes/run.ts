@@ -24,6 +24,7 @@ import { projectTodos, type Todo } from "../todos"
 import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
 import { boundedNativeBytes, isRecord, sessionKey } from "./native"
 import { startedQueue } from "./event-queue"
+import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { attachRun, scheduleCatchUp } from "./run-attach"
 import {
   HermesRunRewindConflictError,
@@ -600,7 +601,7 @@ export class HermesRunEngine {
       role: "tool",
     })
     if (tool.name === "todo") {
-      const todos = projectTodos(payload.result)
+      const todos = projectTodos(payload.result, HERMES_TODO_STATUS_ALIASES)
       if (todos !== undefined) this.#emitPlan(active, todos)
     }
     for (const reference of outcome.trustedMedia)

@@ -1366,7 +1366,9 @@ describe("HermesRunEngine", () => {
                 tool_id: "todo-1",
                 name: "todo_list",
                 result: {
-                  todos: [{ id: "ship", content: "Ship", status: "active" }],
+                  todos: [
+                    { id: "ship", content: "Ship", status: "in_progress" },
+                  ],
                 },
               },
             ],

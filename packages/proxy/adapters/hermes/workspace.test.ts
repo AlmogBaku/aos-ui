@@ -817,7 +817,7 @@ describe("Hermes workspace operations", () => {
               {
                 id: "one",
                 content: "Ship proxy",
-                status: "active",
+                status: "in_progress",
                 path: "/srv/private",
               },
               { id: "two", label: "Verify", status: "done" },
@@ -956,7 +956,7 @@ describe("Hermes workspace operations", () => {
     await expect(
       operations.todos("research", "hermes:research:stored-1")
     ).resolves.toEqual([
-      { id: "preflight", label: "Run preflight", status: "pending" },
+      { id: "preflight", label: "Run preflight", status: "active" },
     ])
   })
 
