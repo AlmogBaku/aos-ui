@@ -87,6 +87,14 @@ function client(): OpenCodeAdapterClient {
       }),
       switchModel: vi.fn(async () => {}),
       context: async () => ({ data: [] }),
+      todos: vi.fn(async () => [
+        {
+          content: "Read the adapter",
+          status: "in_progress",
+          priority: "high",
+        },
+        { content: "Write the test", status: "cancelled", priority: "low" },
+      ]),
       questions: { reply: async () => {}, reject: async () => {} },
       permissions: { reply: async () => {} },
     },
@@ -145,6 +153,17 @@ describe("OpenCode server adapter", () => {
           createdAt: "1970-01-01T00:33:20.000Z",
           content: [{ type: "text", text: "message-2" }],
         },
+        {
+          id: "aos-plan:session-1",
+          role: "activity",
+          activityType: "PLAN",
+          content: {
+            todos: [
+              { id: "0", label: "Read the adapter", status: "active" },
+              { id: "1", label: "Write the test", status: "failed" },
+            ],
+          },
+        },
       ],
       total: 2,
       limit: 1,
@@ -159,6 +178,37 @@ describe("OpenCode server adapter", () => {
       limit: 100,
       cursor: "second",
     })
+    // One authoritative native Todo read per history load, and no second one.
+    expect(native.sessions.todos).toHaveBeenCalledTimes(1)
+    expect(native.sessions.todos).toHaveBeenCalledWith("session-1")
+  })
+
+  it("loads history without a plan when the native Todo read fails or is unreadable", async () => {
+    for (const todos of [
+      vi.fn(async () => {
+        throw new Error("native todo read failed")
+      }),
+      vi.fn(async () => "not a list" as unknown as unknown[]),
+    ]) {
+      const native = client()
+      native.sessions.todos = todos
+      const adapter = new OpenCodeServerAdapter({
+        client: native,
+        runs: runEngine,
+      })
+
+      const history = await adapter.history("research", "session-1", 1, 1)
+
+      expect(history.messages).toEqual([
+        {
+          id: "message-2",
+          role: "user",
+          createdAt: "1970-01-01T00:33:20.000Z",
+          content: [{ type: "text", text: "message-2" }],
+        },
+      ])
+      expect(todos).toHaveBeenCalledTimes(1)
+    }
   })
 
   it("renames, archives, pins, and deletes an owned Session through the native routes", async () => {

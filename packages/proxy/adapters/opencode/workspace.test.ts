@@ -211,7 +211,12 @@ describe("OpenCode workspace operations", () => {
         status: "unavailable",
         reason: "native-context-accounting-unavailable",
       },
-      todos: { status: "unavailable", reason: "native-todo-read-unavailable" },
+      todos: {
+        status: "available",
+        scope: "session",
+        mode: "read-only-projection",
+        source: "latest-completed-todo-tool-result",
+      },
     })
   })
 

@@ -117,6 +117,39 @@ describe("OpenCodeClient", () => {
     }
   })
 
+  it("reads one Session's native Todo list as a bare or enveloped array", async () => {
+    const bare = [{ content: "Read the adapter", status: "pending" }]
+    for (const body of [bare, { data: bare }]) {
+      const server = await nativeServer((request) => {
+        expect(request.url.pathname).toBe("/session/session-1/todo")
+        expect(request.directory).toBe("/workspaces/aos")
+        return Response.json(body)
+      })
+      const subject = client(server.baseUrl)
+
+      try {
+        await expect(subject.sessions.todos("session-1")).resolves.toEqual(bare)
+      } finally {
+        await subject.close()
+        await server.close()
+      }
+    }
+  })
+
+  it("rejects a native Todo body that is neither a bare nor an enveloped array", async () => {
+    const server = await nativeServer(() => Response.json({ todos: [] }))
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(subject.sessions.todos("session-1")).rejects.toMatchObject({
+        code: "invalid_response",
+      })
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
   it("switches an exact native model with the same uncertain acknowledgement fence", async () => {
     const server = await nativeServer(async (request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/model")

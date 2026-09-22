@@ -127,6 +127,12 @@ export type OpenCodeClient = Readonly<{
       }>
     ): Promise<unknown>
     context(sessionId: string, signal?: AbortSignal): Promise<unknown>
+    /**
+     * The pinned SDK exposes the Todo read only on the pre-v2 route, and types
+     * its body as a bare array while every other Session read is enveloped, so
+     * the reader accepts either shape and answers with the list itself.
+     */
+    todos(sessionId: string, signal?: AbortSignal): Promise<unknown[]>
     prompt(
       sessionId: string,
       input: Readonly<{
@@ -183,6 +189,18 @@ function providerEnvelope(value: unknown) {
   if (!envelope || !Object.hasOwn(envelope, "data"))
     throw new OpenCodeClientError("invalid_response")
   return value
+}
+
+/**
+ * The native Todo read is the one Session route the pinned SDK types as a bare
+ * array, so this reader accepts the array either way and leaves bounding the
+ * rows themselves to the Todo projection.
+ */
+function todoList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+  const envelope = record(value)
+  if (envelope && Array.isArray(envelope.data)) return envelope.data
+  throw new OpenCodeClientError("invalid_response")
 }
 
 function text(value: unknown) {
@@ -524,6 +542,16 @@ class Facade implements OpenCodeClient {
             { signal: requestSignal }
           ),
         providerEnvelope,
+        signal
+      ),
+    todos: (sessionId, signal) =>
+      this.#request(
+        (requestSignal) =>
+          this.#sdk.session.todo(
+            { sessionID: identifier(sessionId, "session") },
+            { signal: requestSignal }
+          ),
+        todoList,
         signal
       ),
     prompt: (sessionId, input, signal) =>

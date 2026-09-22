@@ -224,9 +224,13 @@ export function createOpenCodeWorkspaceOperations(input: {
         status: "unavailable" as const,
         reason: "native-context-accounting-unavailable",
       },
+      // OpenCode owns the list: the native Todo route restores it and the
+      // native Todo tool's own input publishes every change during a run.
       todos: {
-        status: "unavailable" as const,
-        reason: "native-todo-read-unavailable",
+        status: "available" as const,
+        scope: "session" as const,
+        mode: "read-only-projection" as const,
+        source: "latest-completed-todo-tool-result" as const,
       },
       activity: {
         status: "unavailable" as const,
