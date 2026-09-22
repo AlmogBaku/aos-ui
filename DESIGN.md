@@ -391,7 +391,9 @@ assistant's answer.
   moves relative to another, and consecutive ordinary tool calls read as one
   run. Once the turn settles, everything before its final answer — mid-turn
   prose, tool runs, reasoning — collapses into one "Worked for 29 s" disclosure
-  that keeps its contents in that order inside it. Rich tool views, question and
+  that keeps its contents in that order inside it. Work the turn did after its
+  final answer folds too, into its own disclosure after that answer, named by
+  what it ran. Rich tool views, question and
   permission flows, subagent activity, and attached data, media or sources stay
   outside the fold. Nothing folds while the turn is still running: a live turn
   offers only the elapsed time.

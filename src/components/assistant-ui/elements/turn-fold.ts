@@ -35,8 +35,6 @@ export type TurnLayout = {
   readonly settled: boolean
   /** Position of the turn's final answer: its last text part. */
   readonly terminalIndex: number | undefined
-  /** Parts before this position fold; `0` leaves every part in place. */
-  readonly foldEnd: number
 }
 
 const OUTSIDE: readonly TurnGroupKey[] = []
@@ -141,11 +139,7 @@ export function turnLayout(
   const settled = status !== "running"
   const lastText = parts.findLastIndex((part) => part.type === "text")
   const terminalIndex = lastText === -1 ? undefined : lastText
-  return {
-    settled,
-    terminalIndex,
-    foldEnd: settled ? (terminalIndex ?? parts.length) : 0,
-  }
+  return { settled, terminalIndex }
 }
 
 /**
@@ -154,14 +148,15 @@ export function turnLayout(
  * resolve it; an unmapped part is treated as outside the fold, which is what a
  * running turn wants anyway.
  *
- * Consequences of ordering the fold by position rather than by kind:
+ * Once the turn settles, every foldable part but the final answer folds, in
+ * place, so the order stays chronological:
  *
- * - Nothing folds while the turn runs, because `foldEnd` is then `0`.
- * - A first-class part inside the prefix splits the fold into two adjacent
+ * - Nothing folds while the turn runs.
+ * - A first-class part or the final answer splits the fold into adjacent
  *   `group-working` runs; only the run that opens the turn's work reports the
- *   turn's duration.
- * - Parts after the final answer render in place as a trailing tool group or
- *   reasoning disclosure: chronological order outranks hiding them.
+ *   turn's duration, and a later run names what it ran.
+ * - Work after the final answer — a turn that kept going after its last prose
+ *   and never wrote another — folds into its own run after that prose.
  * - A turn that ended mid-work has no text at all, so its whole trace folds.
  */
 export function createTurnGroupBy(
@@ -171,7 +166,9 @@ export function createTurnGroupBy(
   const positions = new Map(parts.map((part, index) => [part, index]))
   const groupBy = (part: TurnPart, context?: TurnGroupContext) => {
     if (isFirstClassPart(part, context)) return OUTSIDE
-    const folded = (positions.get(part) ?? parts.length) < layout.foldEnd
+    const index = positions.get(part)
+    const folded =
+      layout.settled && index !== undefined && index !== layout.terminalIndex
     switch (part.type) {
       case "reasoning":
         return folded ? WORKING_REASONING : REASONING

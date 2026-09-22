@@ -37,11 +37,10 @@ describe("turnLayout", () => {
     expect(turnLayout(parts, "running")).toEqual({
       settled: false,
       terminalIndex: 2,
-      foldEnd: 0,
     })
   })
 
-  it("folds everything before the settled turn's last text part", () => {
+  it("finds the settled turn's answer in its last text part", () => {
     const parts = [
       text("Let me look."),
       tool("read_file"),
@@ -51,17 +50,15 @@ describe("turnLayout", () => {
     expect(turnLayout(parts, "complete")).toEqual({
       settled: true,
       terminalIndex: 2,
-      foldEnd: 2,
     })
   })
 
-  it("folds the whole trace of a turn that ended with no answer", () => {
+  it("finds no answer in a turn that ended with no text", () => {
     const parts = [reasoning(), tool("read_file")]
 
     expect(turnLayout(parts, "incomplete")).toEqual({
       settled: true,
       terminalIndex: undefined,
-      foldEnd: 2,
     })
   })
 })
@@ -117,19 +114,28 @@ describe("createTurnGroupBy", () => {
     ])
   })
 
-  it("leaves a trailing tool run and reasoning after the answer in place", () => {
+  it("folds work after the last prose into its own run after that prose", () => {
     const parts = [
       tool("read_file"),
-      text("The final answer."),
-      tool("apply_patch"),
+      text("Scaffold generated. Verifying before wiring them."),
       reasoning(),
+      tool("apply_patch"),
     ]
 
     expect(paths(parts, "complete")).toEqual([
       ["group-working", "group-tool"],
       [],
-      ["group-tool"],
-      ["group-reasoning"],
+      ["group-working", "group-reasoning"],
+      ["group-working", "group-tool"],
+    ])
+  })
+
+  it("folds the whole trace of a turn that ended with no text", () => {
+    const parts = [reasoning(), tool("read_file")]
+
+    expect(paths(parts, "incomplete")).toEqual([
+      ["group-working", "group-reasoning"],
+      ["group-working", "group-tool"],
     ])
   })
 
