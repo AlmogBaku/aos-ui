@@ -28,8 +28,9 @@ function escapeAttributeValue(value: string) {
   return value
     .replaceAll("\\", "\\\\")
     .replaceAll('"', '\\"')
-    .replace(/[\n\r\f]/g, (character) =>
-      `\\${character.codePointAt(0)!.toString(16)} `
+    .replace(
+      /[\n\r\f]/g,
+      (character) => `\\${character.codePointAt(0)!.toString(16)} `
     )
     .replaceAll("\0", "�")
 }
@@ -106,12 +107,24 @@ export function restoreThreadReadingBookmark(
 export class ThreadReadingPositionController {
   readonly #bookmarks = new Map<string, ThreadReadingBookmark>()
   readonly #bottomThresholdPx: number
+  /** Where the viewport last settled, so a scroll's direction is known. */
+  #scrollTop = 0
 
   constructor(bottomThresholdPx = DEFAULT_BOTTOM_THRESHOLD_PX) {
     this.#bottomThresholdPx = bottomThresholdPx
   }
 
+  /**
+   * Only a scroll up leaves follow mode. A scroll down while following is
+   * someone else catching up with grown content — Assistant UI's own smooth
+   * scroll to the bottom — and a position captured mid-animation would pin
+   * the thread short of its latest content.
+   */
   capture(threadId: string, viewport: HTMLElement) {
+    const previous = this.#bookmarks.get(threadId)
+    const scrolledDown = viewport.scrollTop >= this.#scrollTop
+    this.#scrollTop = viewport.scrollTop
+    if (previous?.mode === "follow" && scrolledDown) return previous
     const bookmark = captureThreadReadingBookmark(
       viewport,
       this.#bottomThresholdPx
@@ -126,14 +139,18 @@ export class ThreadReadingPositionController {
       bookmark = { mode: "follow" }
       this.#bookmarks.set(threadId, bookmark)
     }
-    restoreThreadReadingBookmark(viewport, bookmark)
+    this.#apply(viewport, bookmark)
     return bookmark
   }
 
   syncAfterContentChange(threadId: string, viewport: HTMLElement) {
     const bookmark = this.#bookmarks.get(threadId)
-    if (!bookmark) return
+    if (bookmark) this.#apply(viewport, bookmark)
+  }
+
+  #apply(viewport: HTMLElement, bookmark: ThreadReadingBookmark) {
     restoreThreadReadingBookmark(viewport, bookmark)
+    this.#scrollTop = viewport.scrollTop
   }
 
   clear() {

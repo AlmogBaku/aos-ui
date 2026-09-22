@@ -147,6 +147,28 @@ describe("thread reading position", () => {
     expect(viewport.scrollTop).toBe(800)
   })
 
+  it("keeps following while something else scrolls toward grown content", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })
+    controller.restore("thread-a", viewport)
+
+    setMetric(viewport, "scrollHeight", 2_000)
+    viewport.scrollTop = 900
+    expect(controller.capture("thread-a", viewport)).toEqual({ mode: "follow" })
+
+    controller.syncAfterContentChange("thread-a", viewport)
+    expect(viewport.scrollTop).toBe(1_600)
+  })
+
+  it("leaves follow mode when the reader scrolls up", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })
+    controller.restore("thread-a", viewport)
+
+    viewport.scrollTop = 200
+    expect(controller.capture("thread-a", viewport).mode).toBe("reading")
+  })
+
   it("keeps bookmarks independent by thread for the controller lifetime", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ scrollTop: 300 })
