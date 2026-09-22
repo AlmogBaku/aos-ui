@@ -47,6 +47,7 @@ import type {
   AcpConnectionStatus,
   AcpPendingRequest,
   AcpResumeOptions,
+  AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
 
@@ -153,7 +154,7 @@ export function createAcpConnection(
       setTimeout(task, delayMs)
     })
   const updateListeners = new Map<string, Set<AcpSessionUpdateListener>>()
-  const replayListeners = new Map<string, Set<() => void>>()
+  const replayListeners = new Map<string, Set<AcpSessionReplayListener>>()
   const notificationListeners = new Map<
     string,
     Set<(params: unknown) => void>
@@ -313,20 +314,27 @@ export function createAcpConnection(
     // A from-start replay resends the whole Session, and its turns arrive as
     // chunks: whoever projects this one drops what the replay replaces first, or
     // every part it already holds is appended to a second time.
-    if (resume.replayFromStart)
-      for (const listener of replayListeners.get(sessionId) ?? []) listener()
-    const response = await agent.request(methods.agent.session.resume, {
-      sessionId,
-      cwd: SERVER_OWNED_CWD,
-      ...(resume.replayFromStart ? { replayFrom: { type: "start" } } : {}),
-      _meta: {
-        [AOS_META_KEY]: {
-          ...(agentId === undefined ? {} : { agentId }),
-          ...(resume.after === undefined ? {} : { after: resume.after }),
-          ...(resume.runId === undefined ? {} : { runId: resume.runId }),
+    const settled = resume.replayFromStart
+      ? [...(replayListeners.get(sessionId) ?? [])].map((listener) =>
+          listener()
+        )
+      : []
+    const response = await agent
+      .request(methods.agent.session.resume, {
+        sessionId,
+        cwd: SERVER_OWNED_CWD,
+        ...(resume.replayFromStart ? { replayFrom: { type: "start" } } : {}),
+        _meta: {
+          [AOS_META_KEY]: {
+            ...(agentId === undefined ? {} : { agentId }),
+            ...(resume.after === undefined ? {} : { after: resume.after }),
+            ...(resume.runId === undefined ? {} : { runId: resume.runId }),
+          },
         },
-      },
-    })
+      })
+      .finally(() => {
+        for (const settle of settled) settle?.()
+      })
     const meta = AosSessionResumeResponseMetaSchema.parse(
       aosMetaOf(response._meta)
     )

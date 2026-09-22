@@ -494,13 +494,17 @@ describe("ACP connection", () => {
   it("replays a Session from the start when asked", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
-    const dropTranscript = vi.fn()
+    const replaySettled = vi.fn()
+    const dropTranscript = vi.fn(() => replaySettled)
     connection.onSessionReplay(SESSION_ID, dropTranscript)
 
-    await connection.resumeSession(SESSION_ID, {
+    const resumed = connection.resumeSession(SESSION_ID, {
       replayFromStart: true,
       agentId: AGENT_ID,
     })
+    expect(replaySettled).not.toHaveBeenCalled()
+    await resumed
+    expect(replaySettled).toHaveBeenCalledTimes(1)
 
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       replayFrom: { type: "start" },

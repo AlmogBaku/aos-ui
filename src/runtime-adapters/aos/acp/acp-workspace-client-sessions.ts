@@ -138,6 +138,8 @@ export function createAcpSessionStore({
   const titles = new Map<string, string>()
   const todos = new Map<string, TodoItem[]>()
   const observed = new Map<string, () => void>()
+  /** Sessions mid-replay, with the newest status that replay has sent. */
+  const replaying = new Map<string, SessionStatus | undefined>()
   const subscriptions = new Set<MetadataSubscription>()
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
@@ -257,8 +259,11 @@ export function createAcpSessionStore({
     update: SessionUpdate,
     meta: Record<string, unknown> | undefined
   ) {
-    if (SessionUpdate.isStateUpdate(update))
-      return patch(threadId, { status: statusFromState(update) })
+    if (SessionUpdate.isStateUpdate(update)) {
+      const status = statusFromState(update)
+      if (replaying.has(threadId)) return void replaying.set(threadId, status)
+      return patch(threadId, { status })
+    }
     if (SessionUpdate.isSessionInfoUpdate(update)) {
       if (update.title) titles.set(threadId, update.title)
       const info = AosSessionInfoMetaSchema.safeParse(meta)
@@ -272,15 +277,33 @@ export function createAcpSessionStore({
     if (plan.success) setTodos(threadId, plan.data.todos)
   }
 
+  /**
+   * A replay resends every stored turn's running and idle, and a row that
+   * followed each one would repaint every surface showing it per turn. It
+   * takes only the status the replay ends on.
+   */
+  function holdReplayedStatus(threadId: string) {
+    replaying.set(threadId, undefined)
+    return () => {
+      const status = replaying.get(threadId)
+      replaying.delete(threadId)
+      if (status) patch(threadId, { status })
+    }
+  }
+
   /** Attached Sessions stream their own status, Todos, and row changes. */
   function observe(threadId: string) {
     if (observed.has(threadId)) return
-    observed.set(
-      threadId,
-      connection.onSessionUpdate(threadId, (update, meta) =>
-        acceptUpdate(threadId, update, meta)
-      )
+    const offUpdates = connection.onSessionUpdate(threadId, (update, meta) =>
+      acceptUpdate(threadId, update, meta)
     )
+    const offReplays = connection.onSessionReplay(threadId, () =>
+      holdReplayedStatus(threadId)
+    )
+    observed.set(threadId, () => {
+      offUpdates()
+      offReplays()
+    })
   }
 
   onAosNotification(

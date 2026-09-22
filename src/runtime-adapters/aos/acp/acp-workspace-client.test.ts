@@ -17,7 +17,11 @@ import {
 
 import type { SessionMetadata, WorkspaceAdapter } from "../../contracts"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
-import type { AcpConnection, AcpSessionUpdateListener } from "./types"
+import type {
+  AcpConnection,
+  AcpSessionReplayListener,
+  AcpSessionUpdateListener,
+} from "./types"
 
 const SESSION_ID = "session-1"
 const AGENT_ID = "agent-1"
@@ -185,6 +189,7 @@ function createFakeConnection() {
   const calls: ConnectionCall[] = []
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
+  const replays = new Map<string, Set<AcpSessionReplayListener>>()
   const record = (method: string, ...args: unknown[]) => {
     calls.push({ method, args })
   }
@@ -200,7 +205,12 @@ function createFakeConnection() {
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},
-    onSessionReplay: () => () => {},
+    onSessionReplay(sessionId, listener) {
+      const listeners = replays.get(sessionId) ?? new Set()
+      listeners.add(listener)
+      replays.set(sessionId, listeners)
+      return () => listeners.delete(listener)
+    },
     async login(token) {
       record("login", token)
     },
@@ -304,6 +314,15 @@ function createFakeConnection() {
     },
     emitNotification(method: string, params: unknown) {
       for (const listener of notifications.get(method) ?? []) listener(params)
+    },
+    /** Starts a from-start replay; the returned callback settles it. */
+    startReplay(sessionId = SESSION_ID) {
+      const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
+        listener()
+      )
+      return () => {
+        for (const settle of settles) settle?.()
+      }
     },
   }
 }
@@ -554,6 +573,35 @@ describe("ACP workspace client", () => {
       stopReason: "end_turn",
     })
     expect(client.sessionStatus(SESSION_ID)).toBe("idle")
+  })
+
+  it("publishes only the status a replay ends on", async () => {
+    const { client, emitUpdate, startReplay } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    await client.attachSession(SESSION_ID)
+    const statuses: (string | undefined)[] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      statuses.push(metadata[0]?.status)
+    )
+    await settle()
+    statuses.length = 0
+
+    const settleReplay = startReplay()
+    for (let turn = 0; turn < 3; turn += 1) {
+      emitUpdate({ sessionUpdate: "state_update", state: "running" })
+      emitUpdate({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      })
+    }
+    expect(statuses).toEqual([])
+
+    settleReplay()
+    expect(statuses).toEqual(["idle"])
+
+    emitUpdate({ sessionUpdate: "state_update", state: "running" })
+    expect(statuses).toEqual(["idle", "running"])
   })
 
   it("publishes Session Todos from the plan update", async () => {

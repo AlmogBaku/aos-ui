@@ -56,6 +56,9 @@ export type AcpSessionUpdateListener = (
   meta: Record<string, unknown> | undefined
 ) => void
 
+/** Told a from-start replay is starting; may return its settle callback. */
+export type AcpSessionReplayListener = () => (() => void) | void
+
 export type AcpResumeOptions = {
   replayFromStart: boolean
   /** Owning Agent when known before listing, e.g. from a deep link. */
@@ -136,9 +139,13 @@ export interface AcpConnection {
   ): () => void
   /**
    * Fires just before a from-start replay is requested, so whoever projects the
-   * Session can drop the transcript that replay is about to resend.
+   * Session can drop the transcript that replay is about to resend. A listener
+   * may return a callback, called once that replay has settled either way.
    */
-  onSessionReplay(sessionId: string, listener: () => void): () => void
+  onSessionReplay(
+    sessionId: string,
+    listener: AcpSessionReplayListener
+  ): () => void
   /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
   onNotification(
     method: string,
