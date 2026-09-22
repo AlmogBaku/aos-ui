@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { stringify } from "yaml"
+
 import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
 
 /**
@@ -74,10 +76,10 @@ async function proxyConfig(port: number, hermesBaseUrl: string) {
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const tokenFile = join(directory, "hermes-token")
   await writeFile(tokenFile, "shutdown-spec-token", { mode: 0o600 })
-  const configFile = join(directory, "proxy.json")
+  const configFile = join(directory, "proxy.yaml")
   await writeFile(
     configFile,
-    JSON.stringify({
+    stringify({
       version: 1,
       deploymentId: "shutdown-spec",
       listen: { host: "127.0.0.1", port },
@@ -97,9 +99,25 @@ async function proxyConfig(port: number, hermesBaseUrl: string) {
         subscriberBytes: 1_048_576,
       },
       shutdownGraceMs: SHUTDOWN_GRACE_MS,
-    })
+    }),
+    // A default mode under `umask 002` is group-writable, which the loader refuses.
+    { mode: 0o600 }
   )
   return { configFile, directory }
+}
+
+/**
+ * The spawned proxy reads the real environment, so the spec hands it one with
+ * every configuration override removed: a developer who followed the old
+ * documentation still exports the rejected legacy variable.
+ */
+function scrubbedEnvironment() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) =>
+        !name.startsWith("AOS_UI_PROXY_") && name !== "AOS_RUNTIME_PROXY_CONFIG"
+    )
+  )
 }
 
 /** Collects one spawned stream without blocking the spec on its end. */
@@ -136,7 +154,7 @@ describe("proxy shutdown under SIGTERM", () => {
         configFile,
       ],
       cwd: REPOSITORY_ROOT,
-      env: { ...process.env, AOS_UI_STATIC_ROOT: directory },
+      env: { ...scrubbedEnvironment(), AOS_UI_STATIC_ROOT: directory },
       stdout: "pipe",
       stderr: "pipe",
     })

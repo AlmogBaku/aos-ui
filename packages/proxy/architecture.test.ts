@@ -52,6 +52,25 @@ describe("runtime adapter boundary", () => {
     }
   })
 
+  /**
+   * Raw zod issues can quote operator input, so only the loader that formats
+   * them safely may reach the schema; every other caller uses `parseProxyConfig`.
+   */
+  it("keeps the configuration schema behind the configuration loader", async () => {
+    const proxyRoot = import.meta.dirname
+    const files = await productionFiles(proxyRoot)
+    const importers: string[] = []
+
+    for (const path of files) {
+      if (path === join(proxyRoot, "config.ts")) continue
+      const source = await readFile(path, "utf8")
+      if (/import[^;]*\bProxyConfigSchema\b[^;]*from/u.test(source))
+        importers.push(path)
+    }
+
+    expect(importers).toEqual([join(proxyRoot, "config-file.ts")])
+  })
+
   it("selects every server adapter in exactly one production module", async () => {
     const proxyRoot = import.meta.dirname
     const files = await productionFiles(proxyRoot)

@@ -1,8 +1,7 @@
-import { readFile } from "node:fs/promises"
-
 import { AOS_ACP_GUEST_PATH, AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { parseGuestComposerSlashCommandsEnabled } from "../config"
+import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
 import {
   startProxyServer,
   type ShutdownSettlement,
@@ -95,12 +94,17 @@ function listenerApp(
 }
 
 export async function serveProxy(
-  configFile: string,
+  { config }: { config?: string },
   dependencies: ProxyCliDependencies
 ): Promise<ProxyLifecycle> {
-  const input = JSON.parse(await readFile(configFile, "utf8")) as unknown
+  const { getenv } = dependencies
+  const input = await loadProxyConfig({
+    flag: config,
+    getenv,
+    discover: true,
+    ...nodeConfigFileAccess(dependencies),
+  })
   const configured = await createConfiguredProxy(input, dependencies)
-  const getenv = dependencies.getenv ?? ((name: string) => process.env[name])
   const guestComposerSlashCommandsEnabled =
     parseGuestComposerSlashCommandsEnabled(
       getenv("AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED")

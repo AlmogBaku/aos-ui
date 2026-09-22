@@ -1,4 +1,5 @@
 import { runProxyCli } from "./cli/program"
+import { describeStartFailure } from "./config-file"
 import { redactForLog } from "./redaction"
 import { createStaticHandler } from "./static"
 
@@ -23,8 +24,14 @@ if (import.meta.main) {
   void runProxyCli(process.argv, {
     logger,
     staticHandler,
+    // The only reader of the real environment, and of the real process uid.
+    getenv: (name: string) => process.env[name],
+    getuid: process.getuid?.bind(process),
   }).catch((error: unknown) => {
-    logger.error({ event: "proxy.start_failed", error })
+    logger.error({
+      event: "proxy.start_failed",
+      error: describeStartFailure(error),
+    })
     process.exitCode = 1
   })
 }
