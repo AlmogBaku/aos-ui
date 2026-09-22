@@ -5,6 +5,7 @@ import type {
 import { projectTodos, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson } from "./native"
+import { toolCallSelections } from "./tool-data"
 
 type NativeRecord = Record<string, unknown>
 
@@ -343,14 +344,19 @@ function projectModels(
   }
 }
 
-function nativeToolName(value: unknown) {
+function nativeFunction(value: unknown) {
   if (!isRecord(value)) return undefined
-  const functionValue = isRecord(value.function) ? value.function : undefined
-  return stringValue(functionValue?.name, 256)
+  return isRecord(value.function) ? value.function : undefined
 }
 
-function todoCallIds(rows: readonly unknown[]) {
-  const calls = new Map<string, string>()
+/**
+ * Every name that legitimately identifies the result row of each durable tool
+ * call. Hermes invokes a tool either by name or through its `tool_call` batch
+ * envelope, and a batched result row names the tool the envelope selected
+ * rather than the envelope itself, so both names stand for the same call.
+ */
+function toolCallNames(rows: readonly unknown[]) {
+  const calls = new Map<string, Set<string>>()
   for (const row of rows) {
     if (
       !isRecord(row) ||
@@ -359,16 +365,18 @@ function todoCallIds(rows: readonly unknown[]) {
     )
       continue
     for (const call of row.tool_calls) {
-      if (!isRecord(call)) continue
-      const id = stringValue(call.id, 256)
-      const name = nativeToolName(call)
-      if (id && name) calls.set(id, name)
+      const invoked = nativeFunction(call)
+      const id = isRecord(call) ? stringValue(call.id, 256) : undefined
+      const name = stringValue(invoked?.name, 256)
+      if (!id || !name) continue
+      const selected = toolCallSelections(name, invoked?.arguments)
+      calls.set(id, new Set([name, ...selected.map((tool) => tool.name)]))
     }
   }
   return calls
 }
 
-function recognizedTodoTool(name: string | undefined) {
+function recognizedTodoTool(name: string) {
   return (
     name === "todo" ||
     name === "todos" ||
@@ -389,7 +397,7 @@ function completedToolRow(row: NativeRecord) {
 export function latestHermesTodos(
   rows: readonly unknown[]
 ): Todo[] | undefined {
-  const calls = todoCallIds(rows)
+  const calls = toolCallNames(rows)
   let latest: Todo[] | undefined
   for (const row of rows) {
     if (
@@ -400,15 +408,19 @@ export function latestHermesTodos(
     )
       continue
     const callId = stringValue(row.tool_call_id ?? row.toolCallId, 256)
-    const invokedName = callId ? calls.get(callId) : undefined
+    const names = callId ? calls.get(callId) : undefined
     const resultName = stringValue(row.tool_name ?? row.toolName, 256)
     if (
-      !callId ||
-      !recognizedTodoTool(invokedName) ||
-      (resultName !== undefined && resultName !== invokedName)
+      !names ||
+      ![...names].some(recognizedTodoTool) ||
+      (resultName !== undefined && !names.has(resultName))
     )
       continue
-    latest = projectTodos(row.content ?? row.result)
+    const todos = projectTodos(row.content ?? row.result)
+    // A batched call may settle a Todo tool beside another one, and a row that
+    // carries no Todo list at all leaves the plan the last one published
+    // standing rather than emptying it.
+    if (todos) latest = todos
   }
   return latest
 }

@@ -9,9 +9,7 @@ import {
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesRunScope } from "./run"
-import type {
-  RunInterruptOutcome,
-} from "../../core/events"
+import type { RunInterruptOutcome } from "../../core/events"
 
 const scope: HermesRunScope = {
   agentId: "researcher",
@@ -41,7 +39,10 @@ function stubInteractions() {
   }
 }
 
-function runtime(handlers: Partial<Record<string, RpcHandler>> = {}) {
+function runtime(
+  handlers: Partial<Record<string, RpcHandler>> = {},
+  history: readonly unknown[] = []
+) {
   const router = rpcRouter(handlers)
   const release = vi.fn()
   const attachments = {
@@ -59,7 +60,7 @@ function runtime(handlers: Partial<Record<string, RpcHandler>> = {}) {
     transport: router,
     attachments,
     interactions,
-    history: async () => [],
+    history: async () => history,
     log: { warn },
   })
   return { native, router, attachments, interactions, release, warn }
@@ -192,6 +193,31 @@ describe("Hermes native submit outcomes", () => {
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
     expect(router.calls("prompt.submit")).toHaveLength(0)
+  })
+
+  it("logs the durable address a rewind submit truncated before", async () => {
+    const { native, warn } = runtime(
+      { "prompt.submit": async () => ({ status: "streaming" }) },
+      [
+        { row_id: 10, role: "user", text: "Keep" },
+        { row_id: 11, role: "assistant", text: "Kept reply" },
+        { row_id: 12, role: "user", text: "Original" },
+      ]
+    )
+
+    await native.submit("live-secret", {
+      scope,
+      text: "Edited",
+      runId: "edit-run",
+      rewindSourceId: "hermes-row-12",
+    })
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.rewind.submit", {
+      sessionId: "stored",
+      rewindSourceId: "hermes-row-12",
+      confirm_truncate: true,
+      truncate_before_row_id: 12,
+    })
   })
 
   it("reports an unusable native admission status as a lost acknowledgement", async () => {

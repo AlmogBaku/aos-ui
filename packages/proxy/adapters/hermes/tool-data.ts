@@ -324,25 +324,50 @@ function boundedSelection(value: unknown) {
     : value
 }
 
+/** One native tool a bridge envelope selected, with the arguments it recorded. */
+export type HermesToolSelection = { name: string; args: NativeToolArgs }
+
+function toolSelection(value: unknown): HermesToolSelection | undefined {
+  if (!isRecord(value)) return undefined
+  const name = trimmedText(value.name)
+  if (!name || name.length > MAX_TOOL_NAME_LENGTH) return undefined
+  const args = boundedSelection(value.arguments)
+  return isRecord(args) ? { name, args } : undefined
+}
+
 /**
- * Hermes' tool-search bridge reports the tool it selected inside a `tool_call`
- * envelope. A selection is accepted only when the envelope names it and carries
- * its arguments as a bounded record; anything else stays the envelope, which the
- * operator can still inspect.
+ * The tools Hermes' tool-search bridge selected inside a `tool_call` envelope,
+ * in the order it recorded them. Hermes writes either one selection inline or a
+ * `calls` batch of them, and a selection counts only when the envelope names it
+ * and carries its arguments as a bounded record. An envelope that selected
+ * nothing usable reports nothing, so its caller keeps the envelope.
+ */
+export function toolCallSelections(
+  name: string,
+  value: unknown
+): HermesToolSelection[] {
+  if (name !== "tool_call") return []
+  const args = nativeToolArgs(value)
+  const batch = boundedSelection(args.calls)
+  if (Array.isArray(batch))
+    return batch.flatMap((call) => toolSelection(call) ?? [])
+  const selection = toolSelection(args)
+  return selection ? [selection] : []
+}
+
+/**
+ * The single tool one native call stands for. A `tool_call` envelope that
+ * selected exactly one tool reads as that tool; a batch of several stays the
+ * envelope, because one public tool call cannot honestly carry two names and
+ * the operator can still inspect the batch it shows instead.
  */
 export function unwrapToolCall(
   name: string,
   value: unknown
-): { name: string; args: NativeToolArgs } {
+): HermesToolSelection {
   const args = nativeToolArgs(value)
-  if (name !== "tool_call") return { name, args }
-  const selectedName = trimmedText(args.name)
-  if (!selectedName || selectedName.length > MAX_TOOL_NAME_LENGTH)
-    return { name, args }
-  const selected = boundedSelection(args.arguments)
-  return isRecord(selected)
-    ? { name: selectedName, args: selected }
-    : { name, args }
+  const [selection, ...rest] = toolCallSelections(name, args)
+  return selection && rest.length === 0 ? selection : { name, args }
 }
 
 // ---------------------------------------------------------------------------

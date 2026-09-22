@@ -10,10 +10,7 @@
  * part of that vocabulary: when one fails Hermes never saw the user's text, so
  * the failure is an outage and the caller must not present it as a refusal.
  */
-import type {
-  RequestReply,
-  RunInterruptOutcome,
-} from "../../core/events"
+import type { RequestReply, RunInterruptOutcome } from "../../core/events"
 
 import {
   HermesRpcRejectedError,
@@ -341,7 +338,7 @@ export class HermesNativeRuntime implements HermesRunNative {
     }
 
     let rewind: Record<string, unknown> = {}
-    if (!invocation && prompt.rewindSourceId !== undefined)
+    if (!invocation && prompt.rewindSourceId !== undefined) {
       try {
         rewind = rewindSubmitParams(
           await this.#history(prompt.scope),
@@ -351,6 +348,15 @@ export class HermesNativeRuntime implements HermesRunNative {
         if (error instanceof HermesRunRewindConflictError) throw error
         throwUnavailable(error)
       }
+      // A rewind is the one submit that destroys durable rows, so the address it
+      // truncates before is reported exactly as Hermes receives it. The prompt
+      // replacing those rows is never logged.
+      this.#log?.warn("hermes.rewind.submit", {
+        sessionId: prompt.scope.sessionId,
+        rewindSourceId: prompt.rewindSourceId,
+        ...rewind,
+      })
+    }
 
     if (invocation) {
       let execution: HermesSlashExecution

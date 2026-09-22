@@ -912,6 +912,129 @@ describe("Hermes workspace operations", () => {
     ).resolves.toEqual([{ id: "done", label: "Current", status: "completed" }])
   })
 
+  it("projects the Todo list a batched native tool_call envelope wrote", async () => {
+    const { operations } = harness({
+      history: [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "call_batched",
+              type: "function",
+              function: {
+                name: "tool_call",
+                arguments: JSON.stringify({
+                  calls: [
+                    {
+                      name: "todo_list",
+                      arguments: {
+                        todos: [
+                          {
+                            id: "preflight",
+                            content: "Run preflight",
+                            status: "in_progress",
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call_batched",
+          tool_name: "todo_list",
+          content:
+            '{"todos": [{"id": "preflight", "content": "Run preflight", "status": "in_progress"}]}',
+        },
+      ],
+    })
+
+    await expect(
+      operations.todos("research", "hermes:research:stored-1")
+    ).resolves.toEqual([
+      { id: "preflight", label: "Run preflight", status: "pending" },
+    ])
+  })
+
+  it("does not read a batched envelope that selected no Todo tool as a Todo result", async () => {
+    const { operations } = harness({
+      history: [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "call_read",
+              function: {
+                name: "tool_call",
+                arguments: JSON.stringify({
+                  calls: [
+                    { name: "read_file", arguments: { path: "plan.json" } },
+                  ],
+                }),
+              },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "call_read",
+          tool_name: "read_file",
+          content: '{"todos": [{"id": "read", "content": "Not a plan"}]}',
+        },
+      ],
+    })
+
+    await expect(
+      operations.todos("research", "hermes:research:stored-1")
+    ).resolves.toEqual([])
+  })
+
+  it("keeps the last published plan when a later batched Todo row failed", async () => {
+    const batchedCall = (id: string, todoId: string) => ({
+      role: "assistant",
+      tool_calls: [
+        {
+          id,
+          function: {
+            name: "tool_call",
+            arguments: JSON.stringify({
+              calls: [
+                { name: "todo_list", arguments: { todos: [{ id: todoId }] } },
+              ],
+            }),
+          },
+        },
+      ],
+    })
+    const { operations } = harness({
+      history: [
+        batchedCall("call_ok", "kept"),
+        {
+          role: "tool",
+          tool_call_id: "call_ok",
+          tool_name: "todo_list",
+          content: { todos: [{ id: "kept", content: "Kept", status: "done" }] },
+        },
+        batchedCall("call_failed", "ignored"),
+        {
+          role: "tool",
+          tool_call_id: "call_failed",
+          tool_name: "todo_list",
+          is_error: true,
+          content: { todos: [{ id: "ignored", content: "Ignored" }] },
+        },
+      ],
+    })
+
+    await expect(
+      operations.todos("research", "hermes:research:stored-1")
+    ).resolves.toEqual([{ id: "kept", label: "Kept", status: "pending" }])
+  })
+
   it("uses a valid attached Session usage snapshot before requesting context", async () => {
     const { operations, request } = harness({
       scope: {

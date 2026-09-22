@@ -5,6 +5,7 @@ import {
   canonicalToolName,
   projectHermesToolCall,
   projectHermesToolOutcome,
+  toolCallSelections,
   unwrapToolCall,
 } from "./tool-data"
 
@@ -87,6 +88,84 @@ describe("unwrapToolCall", () => {
       name: "tool_call",
       args: { name: "read_file", arguments: "{oops" },
     })
+  })
+
+  it("unwraps a batch envelope that selected one tool", () => {
+    expect(
+      unwrapToolCall("tool_call", {
+        calls: [
+          {
+            name: "todo_list",
+            arguments: { todos: [{ id: "preflight", status: "in_progress" }] },
+          },
+        ],
+      })
+    ).toEqual({
+      name: "todo_list",
+      args: { todos: [{ id: "preflight", status: "in_progress" }] },
+    })
+    expect(
+      unwrapToolCall(
+        "tool_call",
+        JSON.stringify({
+          calls: [{ name: "read_file", arguments: '{"path":"a.txt"}' }],
+        })
+      )
+    ).toEqual({ name: "read_file", args: { path: "a.txt" } })
+  })
+
+  it("keeps the envelope for a batch that selected several tools", () => {
+    const batch = {
+      calls: [
+        { name: "todo_list", arguments: { todos: [] } },
+        { name: "read_file", arguments: { path: "a.txt" } },
+      ],
+    }
+    expect(unwrapToolCall("tool_call", batch)).toEqual({
+      name: "tool_call",
+      args: batch,
+    })
+  })
+
+  it("keeps the envelope for an oversized or malformed batch", () => {
+    const oversized = {
+      calls: [{ name: "read_file", arguments: { note: "x".repeat(70_000) } }],
+    }
+    expect(unwrapToolCall("tool_call", oversized)).toEqual({
+      name: "tool_call",
+      args: oversized,
+    })
+    for (const calls of [
+      [{ name: "  ", arguments: {} }],
+      [{ name: "read_file", arguments: "[1,2]" }],
+      [{ name: "read_file", arguments: "{oops" }],
+      ["read_file"],
+      [],
+      "{oops",
+    ]) {
+      expect(unwrapToolCall("tool_call", { calls })).toEqual({
+        name: "tool_call",
+        args: { calls },
+      })
+    }
+  })
+
+  it("reports every tool a batch envelope selected", () => {
+    expect(
+      toolCallSelections("tool_call", {
+        calls: [
+          { name: "todo_list", arguments: { todos: [] } },
+          { name: "read_file", arguments: { path: "a.txt" } },
+        ],
+      })
+    ).toEqual([
+      { name: "todo_list", args: { todos: [] } },
+      { name: "read_file", args: { path: "a.txt" } },
+    ])
+    expect(
+      toolCallSelections("tool_call", { name: "read_file", arguments: "{}" })
+    ).toEqual([{ name: "read_file", args: {} }])
+    expect(toolCallSelections("todo_list", { todos: [] })).toEqual([])
   })
 
   it("returns an ordinary call and coerces a non-record payload to empty args", () => {
