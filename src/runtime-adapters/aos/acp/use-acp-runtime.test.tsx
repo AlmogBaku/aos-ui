@@ -198,6 +198,42 @@ describe("useAcpRuntime", () => {
     ])
   })
 
+  it("tells its observers once for a replay, however many updates it carries", async () => {
+    const fake = createFakeConnection()
+    const onStateChange = vi.fn()
+    const { result } = renderHook(() =>
+      useAcpRuntime({
+        connection: fake.connection,
+        sessionId: SESSION_ID,
+        agentId: "agent-1",
+        onStateChange,
+      })
+    )
+    // The replay's updates answer the resume, so they land while it is in
+    // flight. A stored Session sends one per part, and the reader only ever sees
+    // the transcript whole.
+    await act(async () => {})
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(chunkUpdate("a1", "Working"))
+      fake.emit(chunkUpdate("a1", " on it"))
+    })
+    expect(onStateChange).not.toHaveBeenCalled()
+    await act(async () => {
+      await fake.settleResume()
+    })
+    expect(onStateChange).toHaveBeenCalledTimes(1)
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a1", role: "assistant", text: "Working on it" },
+    ])
+    // Once the replay is over, a live update is told as it lands.
+    act(() => {
+      fake.emit(chunkUpdate("a1", " now"))
+    })
+    expect(onStateChange).toHaveBeenCalledTimes(2)
+  })
+
   it("resumes the opened Session once, whatever its caller's callbacks do", async () => {
     const fake = createFakeConnection()
     // The workspace closes these over the `AssistantClient`, which a

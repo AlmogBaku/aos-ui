@@ -257,11 +257,40 @@ function createAcpController({
     for (const listener of listeners) listener()
   }
 
+  /**
+   * A replay arrives as one update per stored part, so a Session with hundreds
+   * of them would rebuild the thread and repaint once per part for a transcript
+   * the reader only ever sees whole. Every update still applies in arrival
+   * order; only the telling waits for the replay that carries them.
+   */
+  let replaying = 0
+  let untold = false
+
+  const announce = () => {
+    untold = false
+    notify()
+    callbacks.onStateChange?.(state)
+  }
+
   const commit = (next: ProjectorState) => {
     if (next === state) return
     state = next
-    notify()
-    callbacks.onStateChange?.(state)
+    if (replaying > 0) {
+      untold = true
+      return
+    }
+    announce()
+  }
+
+  /** Holds a replay's updates back until the replay itself settles. */
+  const whileReplaying = async (run: () => Promise<unknown>) => {
+    replaying += 1
+    try {
+      return await run()
+    } finally {
+      replaying -= 1
+      if (replaying === 0 && untold) announce()
+    }
   }
 
   const observe = (params: unknown, method: string) => {
@@ -306,7 +335,7 @@ function createAcpController({
     retry = 0
   ) => {
     try {
-      await resume(session)
+      await whileReplaying(() => resume(session))
     } catch (error) {
       if (
         isTemporarilyUnavailable(error) &&
