@@ -526,9 +526,10 @@ class SessionAttachment {
     // The answered question reaches the transcript before the run resumes, so
     // the call that asked it stops reading as unanswered while the next segment
     // streams.
-    const record = answeredQuestionOutbound(request, response)
+    const lane = this.#context.lane
+    const record = answeredQuestionOutbound(request, response, lane)
     if (record) await this.send(record)
-    await this.#settle(request, replyFromElicitation(request, response))
+    await this.#settle(request, replyFromElicitation(request, response, lane))
   }
 
   /** The interrupt an answer belongs to; a settled one can no longer be answered. */

@@ -1025,13 +1025,13 @@ describe("operator ACP lane", () => {
       message: "3 questions require answers",
       requestedSchema: {
         properties: {
-          q0: { type: "string", title: "Which environment?" },
+          q0: { type: "string", title: "Question 1" },
           q1: {
             type: "array",
-            title: "Which services?",
+            title: "Question 2",
             items: { type: "string", enum: ["api", "worker", "web"] },
           },
-          q2: { type: "string", title: "Anything else to watch?" },
+          q2: { type: "string", title: "Question 3" },
         },
         required: ["q0", "q1", "q2"],
       },
@@ -1054,15 +1054,15 @@ describe("operator ACP lane", () => {
     const meta = AosElicitationMetaSchema.parse(aosMetaOf(asked.params))
     expect(meta.interruptId).toBe(CLARIFY)
     expect(meta.questions).toMatchObject([
-      { header: "Which environment?", multiple: false, custom: true },
+      { header: "Question 1", multiple: false, custom: true },
       {
-        header: "Which services?",
+        header: "Question 2",
         multiple: true,
         custom: true,
         options: [{ label: "api" }, { label: "worker" }, { label: "web" }],
       },
       {
-        header: "Anything else to watch?",
+        header: "Question 3",
         multiple: true,
         custom: true,
         options: [],

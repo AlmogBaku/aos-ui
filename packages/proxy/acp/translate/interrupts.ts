@@ -39,6 +39,29 @@ const PERMISSION_KINDS = new Map([
 const GUEST_DENIED_CHOICES = new Set(["always", "session"])
 
 /**
+ * A filesystem location, not every slash in prose: a POSIX path needs a second
+ * separator (`/etc/passwd`) or a dot-extension (`/run.sh`), so `X / twitter`,
+ * `and/or`, `24/7` and a lone `/` stay the text the agent wrote.
+ */
+const providerPathText =
+  /(^|[\s("'=,:;\x5b])(?:\/(?!\/)(?:[^\s"'<>/]+\/|[^\s"'<>/]*\.[A-Za-z0-9])|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*/gu
+
+const PATH_REDACTED = "[provider path redacted]"
+
+/**
+ * What a lane may read of the operator's machine. The adapters already strip
+ * credentials for everyone; a filesystem path is the one other thing the
+ * agent's own words reveal, and it is the operator's to see and a guest's not
+ * to. The projection is deterministic, so a guest's answer maps back to the
+ * native choice it stood for.
+ */
+function laneText(lane: Lane, text: string) {
+  return lane === "guest"
+    ? text.replace(providerPathText, `$1${PATH_REDACTED}`)
+    : text
+}
+
+/**
  * `Omit` over `CreateElicitationRequest` drops the whole mode union, so the
  * form fields are restored here before the value reaches `AcpOutbound`.
  */
@@ -84,7 +107,7 @@ function permissionOutbound(
   request: PendingRequest,
   lane: Lane
 ): InterruptOutbound {
-  const title = request.message ?? "Permission required"
+  const title = laneText(lane, request.message ?? "Permission required")
   return {
     kind: "request-permission",
     interruptId: request.id,
@@ -116,8 +139,29 @@ function permissionOutbound(
   }
 }
 
-function optionsOf(schema: Record<string, unknown> | undefined) {
-  return enumValues(schema).map((label) => ({ label }))
+/** The answer fields as the adapter shaped them, before any lane projection. */
+type NativeQuestion = {
+  title: string | undefined
+  choices: string[]
+  multiple: boolean
+}
+
+function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
+  const schema = record(request.responseSchema)
+  const answers = record(record(schema?.properties)?.answers)
+  const prefixItems = Array.isArray(answers?.prefixItems)
+    ? answers.prefixItems
+    : undefined
+  if (prefixItems?.length)
+    return prefixItems.map((item: unknown) => {
+      const question = record(item)
+      return {
+        title: typeof question?.title === "string" ? question.title : undefined,
+        choices: enumValues(record(question?.items)),
+        multiple: question?.maxItems !== 1,
+      }
+    })
+  return [{ title: undefined, choices: enumValues(schema), multiple: false }]
 }
 
 /**
@@ -127,36 +171,21 @@ function optionsOf(schema: Record<string, unknown> | undefined) {
  * always appends an Other (type your answer) row"), so the browser must always
  * offer that row.
  */
-function questionsOf(request: PendingRequest): AosQuestion[] {
-  const schema = record(request.responseSchema)
-  const answers = record(record(schema?.properties)?.answers)
-  const prefixItems = Array.isArray(answers?.prefixItems)
-    ? answers.prefixItems
-    : undefined
-  if (prefixItems?.length)
-    return prefixItems.map((item: unknown, index) => {
-      const question = record(item)
-      const title =
-        typeof question?.title === "string" ? question.title : undefined
-      const options = optionsOf(record(question?.items))
-      return {
-        header: (title ?? `Question ${index + 1}`).slice(0, 256),
-        prompt: title ?? request.message ?? "Question",
-        options,
-        multiple: question?.maxItems !== 1,
-        custom: true,
-      }
-    })
-  const options = optionsOf(schema)
-  return [
-    {
-      header: "Question",
-      prompt: request.message ?? "Question",
-      options,
-      multiple: false,
-      custom: true,
-    },
-  ]
+/**
+ * The clarify contract carries no short label per question, only its text, so
+ * the header is the question's place in the batch and the prompt its words.
+ */
+function questionsOf(request: PendingRequest, lane: Lane): AosQuestion[] {
+  const natives = nativeQuestionsOf(request)
+  return natives.map((question, index) => ({
+    header: natives.length === 1 ? "Question" : `Question ${index + 1}`,
+    prompt: laneText(lane, question.title ?? request.message ?? "Question"),
+    options: question.choices.map((label) => ({
+      label: laneText(lane, label),
+    })),
+    multiple: question.multiple,
+    custom: true,
+  }))
 }
 
 /**
@@ -185,11 +214,14 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
   }
 }
 
-function elicitationOutbound(request: PendingRequest): InterruptOutbound {
-  const questions = questionsOf(request)
+function elicitationOutbound(
+  request: PendingRequest,
+  lane: Lane
+): InterruptOutbound {
+  const questions = questionsOf(request, lane)
   const form: ElicitationForm = {
     mode: "form",
-    message: request.message ?? "Input required",
+    message: laneText(lane, request.message ?? "Input required"),
     requestedSchema: {
       type: "object",
       properties: Object.fromEntries(
@@ -222,7 +254,7 @@ function answerValues(value: unknown): string[] {
 export const pendingRequestToOutbound = ((request, lane) =>
   APPROVAL_REASONS.has(request.reason)
     ? permissionOutbound(request, lane)
-    : elicitationOutbound(request)) satisfies PendingRequestToOutbound
+    : elicitationOutbound(request, lane)) satisfies PendingRequestToOutbound
 
 /** `optionId` is the adapter's own choice value, which is what resume expects. */
 export const replyFromPermission = ((request, response) => {
@@ -236,12 +268,27 @@ export const replyFromPermission = ((request, response) => {
     : { interruptId: request.id, status: "resolved", payload: optionId }
 }) satisfies ReplyFromPermission
 
-export const replyFromElicitation = ((request, response) => {
+/**
+ * The native choice a displayed one stood for. A guest picks the projected
+ * label, so the choice whose projection it is goes back to the adapter; free
+ * text, and everything the operator sees unprojected, travels as typed.
+ */
+function nativeAnswer(lane: Lane, question: NativeQuestion, answer: string) {
+  if (lane !== "guest") return answer
+  return (
+    question.choices.find((choice) => laneText(lane, choice) === answer) ??
+    answer
+  )
+}
+
+export const replyFromElicitation = ((request, response, lane) => {
   if (response.action !== "accept")
     return { interruptId: request.id, status: "cancelled" }
   const content = record(response.content)
-  const answers = questionsOf(request).map((_, index) =>
-    answerValues(content?.[`q${index}`])
+  const answers = nativeQuestionsOf(request).map((question, index) =>
+    answerValues(content?.[`q${index}`]).map((answer) =>
+      nativeAnswer(lane, question, answer)
+    )
   )
   return { interruptId: request.id, status: "resolved", payload: { answers } }
 }) satisfies ReplyFromElicitation
@@ -257,13 +304,14 @@ export const replyFromElicitation = ((request, response) => {
  */
 export function answeredQuestionOutbound(
   request: PendingRequest,
-  response: CreateElicitationResponse
+  response: CreateElicitationResponse,
+  lane: Lane
 ): AcpOutbound | undefined {
   const toolCallId = request.toolCallId
   if (toolCallId === undefined) return undefined
   const content =
     response.action === "accept" ? record(response.content) : undefined
-  const responses = questionsOf(request).map((question, index) => ({
+  const responses = questionsOf(request, lane).map((question, index) => ({
     question: question.prompt,
     answers: content ? answerValues(content[`q${index}`]) : [],
   }))

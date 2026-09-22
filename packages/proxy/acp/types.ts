@@ -248,7 +248,8 @@ export type ReplyFromPermission = (
 /** `translate/interrupts.ts` → `replyFromElicitation` */
 export type ReplyFromElicitation = (
   request: PendingRequest,
-  response: CreateElicitationResponse
+  response: CreateElicitationResponse,
+  lane: Lane
 ) => RequestReply
 
 /** `config-options.ts` → `configOptionsOf` */

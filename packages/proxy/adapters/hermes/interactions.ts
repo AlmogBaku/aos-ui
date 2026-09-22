@@ -254,20 +254,13 @@ function nativeText(
 
 const credentialText =
   /(?:\bauthorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:access[-_]?token|api[-_]?key|credential|password|secret|token)\s*[=:]\s*[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)/giu
-const providerLocationText = /\b(?:https?|wss?|file):\/\/[^\s"'<>]+/giu
 /**
- * A filesystem location, not every slash in prose: a POSIX path needs a second
- * separator (`/etc/passwd`) or a dot-extension (`/run.sh`), so `X / twitter`,
- * `and/or`, `24/7` and a lone `/` stay the text the agent wrote.
+ * A credential is nobody's to read, so it goes before the text leaves the
+ * adapter. Paths and URLs are the operator's own machine and stay: the ACP lane
+ * projection decides what a guest may see of them.
  */
-const providerPathText =
-  /(^|[\s("'=,:;\x5b])(?:\/(?!\/)(?:[^\s"'<>/]+\/|[^\s"'<>/]*\.[A-Za-z0-9])|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*/gu
-
 function publicText(value: string) {
-  return value
-    .replace(credentialText, "[credential redacted]")
-    .replace(providerLocationText, "[provider location redacted]")
-    .replace(providerPathText, "$1[provider path redacted]")
+  return value.replace(credentialText, "[credential redacted]")
 }
 
 function publicChoices(nativeChoices: string[] | null) {

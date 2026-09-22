@@ -168,7 +168,96 @@ describe("pendingRequestToOutbound approvals", () => {
   })
 })
 
+/** A clarification whose words name the operator's own machine. */
+const located: PendingRequest = {
+  id: "clarify-5",
+  reason: "question",
+  message: "Where should exports live? Not under /srv/aos/repo.",
+  responseSchema: {
+    type: "object",
+    properties: {
+      answers: {
+        type: "array",
+        prefixItems: [
+          {
+            type: "array",
+            title: "Where should exports live? Not under /srv/aos/repo.",
+            items: {
+              type: "string",
+              enum: ["/home/operator/exports (Recommended)", "ask later"],
+            },
+            minItems: 0,
+            maxItems: 1,
+          },
+          {
+            type: "array",
+            title: "Anything else? See https://docs.example.test/exports",
+            items: { type: "string", maxLength: 4096 },
+            minItems: 0,
+            maxItems: 1,
+          },
+        ],
+        minItems: 2,
+        maxItems: 2,
+      },
+    },
+    required: ["answers"],
+    additionalProperties: false,
+  },
+}
+
 describe("pendingRequestToOutbound questions", () => {
+  it("shows the operator the paths and URLs the agent wrote", () => {
+    const meta = AosElicitationMetaSchema.parse(metaOf(elicitationOf(located)))
+    expect(meta.questions[0]).toMatchObject({
+      prompt: "Where should exports live? Not under /srv/aos/repo.",
+      options: [
+        { label: "/home/operator/exports (Recommended)" },
+        { label: "ask later" },
+      ],
+    })
+    expect(meta.questions[1]?.prompt).toBe(
+      "Anything else? See https://docs.example.test/exports"
+    )
+  })
+
+  it("keeps the operator's filesystem out of a guest's view, URLs included as prose", () => {
+    const outbound = elicitationOf(located, "guest")
+    const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
+    expect(fieldOf(outbound, "message")).toBe(
+      "Where should exports live? Not under [provider path redacted]"
+    )
+    expect(meta.questions[0]).toMatchObject({
+      prompt: "Where should exports live? Not under [provider path redacted]",
+      options: [
+        { label: "[provider path redacted] (Recommended)" },
+        { label: "ask later" },
+      ],
+    })
+    expect(meta.questions[1]?.prompt).toBe(
+      "Anything else? See https://docs.example.test/exports"
+    )
+  })
+
+  it("keeps prose slashes for a guest", () => {
+    const meta = AosElicitationMetaSchema.parse(
+      metaOf(
+        elicitationOf(
+          {
+            ...located,
+            message: "Post on X / twitter and/or 24/7?",
+            responseSchema: {
+              type: "object",
+              properties: { answers: { type: "object" } },
+            },
+          },
+          "guest"
+        )
+      )
+    )
+    expect(meta.questions[0]?.prompt).toBe("Post on X / twitter and/or 24/7?")
+  })
+
   it("projects each prefixed answer schema into one form field", () => {
     const outbound = elicitationOf(questions)
 
@@ -181,12 +270,12 @@ describe("pendingRequestToOutbound questions", () => {
       properties: {
         q0: {
           type: "string",
-          title: "Which environment?",
+          title: "Question 1",
           description: "Which environment?",
         },
         q1: {
           type: "string",
-          title: "Anything else to watch?",
+          title: "Question 2",
           description: "Anything else to watch?",
         },
       },
@@ -204,14 +293,14 @@ describe("pendingRequestToOutbound questions", () => {
       expiresAt: "2026-09-19T10:00:00.000Z",
       questions: [
         {
-          header: "Which environment?",
+          header: "Question 1",
           prompt: "Which environment?",
           options: [{ label: "staging" }, { label: "production" }],
           multiple: false,
           custom: true,
         },
         {
-          header: "Anything else to watch?",
+          header: "Question 2",
           prompt: "Anything else to watch?",
           options: [],
           multiple: true,
@@ -249,7 +338,7 @@ describe("pendingRequestToOutbound questions", () => {
       properties: {
         q0: {
           type: "array",
-          title: "Pick the suites",
+          title: "Question",
           description: "Pick the suites",
           items: { type: "string", enum: ["unit", "e2e"] },
         },
@@ -259,7 +348,7 @@ describe("pendingRequestToOutbound questions", () => {
     expect(
       AosElicitationMetaSchema.parse(metaOf(outbound)).questions[0]
     ).toEqual({
-      header: "Pick the suites",
+      header: "Question",
       prompt: "Pick the suites",
       options: [{ label: "unit" }, { label: "e2e" }],
       multiple: true,
@@ -267,7 +356,10 @@ describe("pendingRequestToOutbound questions", () => {
     })
   })
 
-  it("keeps an over-long question header inside the metadata contract", () => {
+  it("labels a question by its place, because clarify carries no short title", () => {
+    // Hermes Desktop heads each question with its full text; the AOS tab strip
+    // has room only for a label, so the number is the label and the prompt
+    // keeps every word.
     const title = "w".repeat(600)
     const outbound = elicitationOf({
       id: "clarify-3",
@@ -278,7 +370,7 @@ describe("pendingRequestToOutbound questions", () => {
     })
     const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
 
-    expect(meta.questions[0]?.header).toHaveLength(256)
+    expect(meta.questions[0]?.header).toBe("Question")
     expect(meta.questions[0]?.prompt).toBe(title)
   })
 
@@ -333,10 +425,14 @@ describe("replyFromPermission", () => {
 describe("replyFromElicitation", () => {
   it("rebuilds the answer sets in question order", () => {
     expect(
-      replyFromElicitation(questions, {
-        action: "accept",
-        content: { q1: ["logs", "metrics"], q0: "production" },
-      })
+      replyFromElicitation(
+        questions,
+        {
+          action: "accept",
+          content: { q1: ["logs", "metrics"], q0: "production" },
+        },
+        "operator"
+      )
     ).toEqual({
       interruptId: "clarify-1",
       status: "resolved",
@@ -344,9 +440,37 @@ describe("replyFromElicitation", () => {
     })
   })
 
+  it("answers the native choice a guest's projected label stood for", () => {
+    const reply = replyFromElicitation(
+      located,
+      {
+        action: "accept",
+        content: {
+          q0: "[provider path redacted] (Recommended)",
+          q1: "just keep it in the repo",
+        },
+      },
+      "guest"
+    )
+    expect(reply).toEqual({
+      interruptId: "clarify-5",
+      status: "resolved",
+      payload: {
+        answers: [
+          ["/home/operator/exports (Recommended)"],
+          ["just keep it in the repo"],
+        ],
+      },
+    })
+  })
+
   it("answers an unfilled field with an empty set", () => {
     expect(
-      replyFromElicitation(questions, { action: "accept", content: { q0: "" } })
+      replyFromElicitation(
+        questions,
+        { action: "accept", content: { q0: "" } },
+        "operator"
+      )
     ).toEqual({
       interruptId: "clarify-1",
       status: "resolved",
@@ -357,7 +481,7 @@ describe("replyFromElicitation", () => {
   it.each([["decline"], ["cancel"]])(
     "cancels the interrupt on %s",
     (action) => {
-      expect(replyFromElicitation(questions, { action })).toEqual({
+      expect(replyFromElicitation(questions, { action }, "operator")).toEqual({
         interruptId: "clarify-1",
         status: "cancelled",
       })
@@ -371,10 +495,14 @@ describe("answeredQuestionOutbound", () => {
 
   it("records every value the operator chose against the question it answers", () => {
     expect(
-      answeredQuestionOutbound(asking, {
-        action: "accept",
-        content: { q0: "production", q1: ["logs", "metrics"] },
-      })
+      answeredQuestionOutbound(
+        asking,
+        {
+          action: "accept",
+          content: { q0: "production", q1: ["logs", "metrics"] },
+        },
+        "operator"
+      )
     ).toEqual({
       kind: "update",
       update: {
@@ -396,7 +524,9 @@ describe("answeredQuestionOutbound", () => {
   })
 
   it("records a declined question as an answer nobody gave", () => {
-    expect(answeredQuestionOutbound(asking, { action: "decline" })).toEqual({
+    expect(
+      answeredQuestionOutbound(asking, { action: "decline" }, "operator")
+    ).toEqual({
       kind: "update",
       update: {
         sessionUpdate: "tool_call_update",
@@ -415,10 +545,14 @@ describe("answeredQuestionOutbound", () => {
 
   it("leaves no record when the interrupt names no tool call", () => {
     expect(
-      answeredQuestionOutbound(questions, {
-        action: "accept",
-        content: { q0: "production" },
-      })
+      answeredQuestionOutbound(
+        questions,
+        {
+          action: "accept",
+          content: { q0: "production" },
+        },
+        "operator"
+      )
     ).toBeUndefined()
   })
 })
