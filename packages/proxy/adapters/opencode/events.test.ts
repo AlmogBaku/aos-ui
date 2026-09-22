@@ -192,6 +192,69 @@ describe("OpenCodeEventProjector", () => {
     })
   })
 
+  it("emits the native subagent tool under its canonical name with a summary result", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+
+    expect(
+      projector.accept(
+        live(1, "session.next.tool.input.started", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          name: "task",
+          timestamp: 1,
+        })
+      ).events
+    ).toEqual([
+      {
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "call-1",
+        toolCallName: "delegate_subagent",
+        parentMessageId: "assistant-1",
+      },
+    ])
+
+    expect(
+      projector.accept(
+        live(2, "session.next.tool.called", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          tool: "task",
+          input: { description: "Review the launch plan" },
+          provider: { executed: true },
+          timestamp: 2,
+        })
+      ).events
+    ).toEqual([
+      {
+        type: RunEventKind.TOOL_CALL_ARGS,
+        toolCallId: "call-1",
+        delta: '{"description":"Review the launch plan"}',
+      },
+    ])
+
+    expect(
+      projector.accept(
+        live(3, "session.next.tool.success", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          structured: {},
+          content: [{ type: "text", text: "The review is complete." }],
+          provider: { executed: true },
+          timestamp: 3,
+        })
+      ).events
+    ).toEqual([
+      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+      {
+        type: RunEventKind.TOOL_CALL_RESULT,
+        messageId: "assistant-1:tool:call-1",
+        toolCallId: "call-1",
+        content: '{"summary":"The review is complete."}',
+        role: "tool",
+      },
+    ])
+  })
+
   it("validates the complete native durable envelope and rejects foreign aggregate correlation", () => {
     const projector = new OpenCodeEventProjector(scope, 0)
     const malformed = live(

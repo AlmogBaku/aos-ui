@@ -19,7 +19,8 @@ const activityStatusSchema = z.enum([
   "failed",
 ])
 
-const fixtureActivityPayloadSchema = z
+/** The provider-neutral shape every delegated activity call arrives in. */
+export const activityPayloadSchema = z
   .object({
     args: z
       .object({
@@ -44,37 +45,6 @@ const fixtureActivityPayloadSchema = z
       .optional(),
   })
   .passthrough()
-
-const openCodeTaskPayloadSchema = z
-  .object({
-    args: z.object({
-      description: z.string().min(1),
-    }),
-    result: z.unknown().optional(),
-  })
-  .transform(({ args, result }) => ({
-    args: {
-      task: undefined as string | undefined,
-      name: undefined as string | undefined,
-      skill: undefined as string | undefined,
-      description: args.description,
-    },
-    result:
-      typeof result === "string" && result.trim()
-        ? {
-            name: undefined as string | undefined,
-            status: undefined as ActivityChildStatus | undefined,
-            summary: result,
-            transcript: undefined as string | undefined,
-          }
-        : undefined,
-  }))
-
-/** OpenCode's native task tool reports its child work as a string result. */
-export const activityPayloadSchema = z.union([
-  fixtureActivityPayloadSchema,
-  openCodeTaskPayloadSchema,
-])
 
 export type ActivityPayload = z.infer<typeof activityPayloadSchema>
 export type ActivityChildStatus = z.infer<typeof activityStatusSchema>

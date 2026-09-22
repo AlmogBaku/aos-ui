@@ -6,6 +6,10 @@ import {
 import type { RunEvent } from "../../core/events"
 
 import type { OpenCodeDurableEvent } from "./client"
+import {
+  canonicalOpenCodeToolCall,
+  canonicalOpenCodeToolName,
+} from "./tool-names"
 
 const MAX_ID_LENGTH = 512
 const MAX_TEXT_BYTES = 1024 * 1024
@@ -37,6 +41,7 @@ export type ValidatedOpenCodeEvent = Readonly<{
 
 type ToolState = {
   messageId: string
+  /** The native name, so later native-tool recognition still works. */
   name: string
   args: string
   ended: boolean
@@ -229,6 +234,14 @@ function safeTextContent(value: unknown) {
     } else throw new OpenCodeEventValidationError()
   }
   return parts.join("\n")
+}
+
+/** The canonical text or JSON outcome AOS emits for one native tool call. */
+function toolResultContent(nativeName: string, text: string) {
+  const { result } = canonicalOpenCodeToolCall(nativeName, undefined, text)
+  if (typeof result === "string")
+    return result || JSON.stringify({ status: "completed" })
+  return JSON.stringify(result)
 }
 
 function tokenUsage(value: unknown): TokenUsage[] {
@@ -728,8 +741,7 @@ export class OpenCodeEventProjector {
         content:
           type === "session.next.tool.failed"
             ? JSON.stringify({ status: "error" })
-            : safeTextContent(data.content) ||
-              JSON.stringify({ status: "completed" }),
+            : toolResultContent(tool.name, safeTextContent(data.content)),
         role: "tool",
       })
     } else if (type === "session.next.step.ended") {
@@ -791,7 +803,7 @@ export class OpenCodeEventProjector {
     events.push({
       type: RunEventKind.TOOL_CALL_START,
       toolCallId: callId,
-      toolCallName: name,
+      toolCallName: canonicalOpenCodeToolName(name),
       parentMessageId: messageId,
     })
     return tool

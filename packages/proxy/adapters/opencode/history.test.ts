@@ -147,4 +147,52 @@ describe("OpenCode history projection", () => {
     expect(JSON.stringify(result)).not.toContain("providerID")
     expect(JSON.stringify(result)).not.toContain("private recent data")
   })
+
+  it("projects the native subagent tool under its canonical name and summary result", () => {
+    const result = projectOpenCodeHistory({
+      messages: [
+        {
+          id: "assistant-1",
+          type: "assistant",
+          agent: "research",
+          model: { providerID: "openai", id: "gpt" },
+          time: { created: 2_000 },
+          content: [
+            {
+              id: "subagent-tool",
+              type: "tool",
+              name: "task",
+              time: { created: 2_000 },
+              state: {
+                status: "completed",
+                input: { description: "Review the launch plan" },
+                content: [],
+                structured: {},
+                result: "The review is complete.",
+              },
+            },
+          ],
+        },
+      ],
+      sessionId: "session-1",
+    })
+
+    expect(result).toEqual([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        createdAt: "1970-01-01T00:33:20.000Z",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "subagent-tool",
+            toolName: "delegate_subagent",
+            args: { description: "Review the launch plan" },
+            argsText: '{"description":"Review the launch plan"}',
+            result: { summary: "The review is complete." },
+          },
+        ],
+      },
+    ])
+  })
 })

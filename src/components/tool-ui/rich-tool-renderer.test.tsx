@@ -277,13 +277,13 @@ describe("AosToolFallback", () => {
     expect(screen.getByText("Built successfully")).toBeVisible()
   })
 
-  it("uses Code Runner for execute_code output", async () => {
+  it("uses Code Runner for any tool call carrying code and a language", async () => {
     const user = userEvent.setup()
-    const { container } = render(
+    render(
       <AosToolFallback
         {...toolPart({
-          toolName: "execute_code",
-          args: { code: "print(42)" },
+          toolName: "run_snippet",
+          args: { code: "print(42)", language: "python" },
           result: {
             status: "success",
             output: "42",
@@ -295,19 +295,39 @@ describe("AosToolFallback", () => {
     )
 
     const trigger = screen.getByRole("button")
-    expect(within(trigger).getByText("execute_code")).toBeVisible()
+    expect(within(trigger).getByText("run_snippet")).toBeVisible()
     expect(screen.queryByText("print(42)")).not.toBeInTheDocument()
 
     await user.click(trigger)
 
-    expect(container.querySelector('[data-slot="code-runner"]')).toBeVisible()
-    expect(container.querySelector('[data-slot="terminal-block"]')).toBeNull()
     expect(screen.getByText("python")).toBeVisible()
     expect(screen.getByText("print(42)")).toBeVisible()
     expect(screen.getByText("42")).toBeVisible()
     expect(
       screen.getByRole("button", { name: "Run this snippet" })
     ).toBeDisabled()
+  })
+
+  it("shows code without a language label when the call declares none", async () => {
+    const user = userEvent.setup()
+    render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "run_snippet",
+          args: { code: "print(42)" },
+          result: { status: "success", output: "42", exit_code: 0 },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button"))
+
+    expect(screen.getByText("print(42)")).toBeVisible()
+    expect(screen.getByText("42")).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Run this snippet" })
+    ).toBeDisabled()
+    expect(screen.queryByText("python")).not.toBeInTheDocument()
   })
 })
 
@@ -1712,18 +1732,19 @@ describe("safe result renderers", () => {
     ).toBeInTheDocument()
   })
 
-  it("renders native OpenCode task calls as visible subagent activity", async () => {
+  it("renders a described subagent delegation as visible activity", async () => {
     await renderTool(
       <RichToolRenderer
         {...toolPart({
-          toolName: "task",
+          toolName: "delegate_subagent",
           args: { description: "Review the launch plan" },
-          result: "The review is complete.",
+          result: { summary: "The review is complete." },
         })}
       />
     )
 
     expect(screen.getByText("Review the launch plan")).toBeInTheDocument()
+    expect(screen.getByText("The review is complete.")).toBeInTheDocument()
   })
 
   it("keeps map locations available as text while the visual loads", async () => {

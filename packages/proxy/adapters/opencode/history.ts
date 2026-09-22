@@ -3,6 +3,7 @@ import {
   parseOpenCodeMessageCatalog,
   type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
+import { canonicalOpenCodeToolCall } from "./tool-names"
 
 type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
@@ -84,20 +85,23 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
             ? parseToolInput(part.state.input)
             : publicJson(part.state.input)
         if (!args || typeof args !== "object" || Array.isArray(args)) continue
-        const result =
+        const call = canonicalOpenCodeToolCall(
+          part.name,
+          args as { [key: string]: JsonValue },
           part.state.status === "completed"
             ? publicJson(part.state.result)
             : undefined
+        )
         content.push({
           type: "tool-call",
           toolCallId: part.id,
-          toolName: part.name,
-          args: args as { [key: string]: JsonValue },
+          toolName: call.toolName,
+          args: call.args,
           argsText:
             part.state.status === "pending"
               ? part.state.input
-              : JSON.stringify(args),
-          ...(result === undefined ? {} : { result }),
+              : JSON.stringify(call.args),
+          ...(call.result === undefined ? {} : { result: call.result }),
           ...(part.state.status === "error" ? { isError: true } : {}),
         })
       }

@@ -29,7 +29,7 @@ export function CodeRunner({
   ComponentProps<"div">,
   "children" | "language" | "code" | "state" | "output" | "durationMs" | "onRun"
 > & {
-  language: string
+  language?: string
   code: string
   state: RunState
   output: readonly string[]
@@ -48,10 +48,17 @@ export function CodeRunner({
       )}
       {...props}
     >
-      <div className="flex items-center gap-2 px-3.5 py-2">
-        <span className={cn(mono, "min-w-0 flex-1 text-foreground/35")}>
-          {language}
-        </span>
+      <div
+        className={cn(
+          "flex items-center gap-2 px-3.5 py-2",
+          !language && "justify-end"
+        )}
+      >
+        {language ? (
+          <span className={cn(mono, "min-w-0 flex-1 text-foreground/35")}>
+            {language}
+          </span>
+        ) : null}
         {durationMs !== undefined && state !== "running" ? (
           <span
             className={cn(mono, "shrink-0 text-foreground/30 tabular-nums")}
