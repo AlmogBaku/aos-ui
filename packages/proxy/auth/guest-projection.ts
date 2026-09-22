@@ -430,6 +430,7 @@ function projectJsonSchema(
   const allowed = [
     "type",
     "title",
+    "description",
     "enum",
     "properties",
     "required",
@@ -460,6 +461,10 @@ function projectJsonSchema(
   if (value.title !== undefined) {
     if (!validText(value.title, 2_048)) return undefined
     output.title = value.title
+  }
+  if (value.description !== undefined) {
+    if (!validText(value.description, 2_048)) return undefined
+    output.description = value.description
   }
   if (value.enum !== undefined) {
     if (

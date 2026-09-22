@@ -438,10 +438,15 @@ function lockAnswers(answers: unknown, questions: Question[]) {
   }
 }
 
+/**
+ * `title` is a label and `description` the words: `clarify` carries only the
+ * words, so the question text describes the field and the label stays unset.
+ * Naming the whole question as a label is what put a paragraph in a tab.
+ */
 function questionSchema(question: Question) {
   return {
     type: "array",
-    title: question.question,
+    description: question.question,
     items: question.choices
       ? { type: "string", enum: question.choices }
       : { type: "string", maxLength: HERMES_INTERACTION_LIMITS.maxStringBytes },

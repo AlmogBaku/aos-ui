@@ -175,7 +175,8 @@ export type RuntimeQuestionOption = {
 export type RuntimeQuestion = {
   /** Provider-stable item identity for batched interaction responses. */
   id?: string
-  header: string
+  /** The provider's short label, when it has one; the browser numbers it when not. */
+  header?: string
   prompt: string
   options: readonly RuntimeQuestionOption[]
   multiple?: boolean

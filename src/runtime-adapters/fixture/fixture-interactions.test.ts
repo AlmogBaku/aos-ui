@@ -9,8 +9,7 @@ const questionRequest: RuntimeQuestionRequest = {
   sessionId: "thread-aster-market",
   questions: [
     {
-      header: "Which audience should the brief prioritize?",
-      prompt: "",
+      prompt: "Which audience should the brief prioritize?",
       options: [
         { label: "Executive team" },
         { label: "Product team" },

@@ -553,7 +553,7 @@ export function createFixtureChatModel(
           workspace.publishAttention(threadId, kind, requestId)
           if (kind === "question" && scenario.questionTemplate) {
             const {
-              header,
+              prompt,
               options: opts,
               allowFreeform,
             } = scenario.questionTemplate
@@ -563,8 +563,7 @@ export function createFixtureChatModel(
               sessionId: threadId,
               questions: [
                 {
-                  header,
-                  prompt: "",
+                  prompt,
                   options: opts.map((label) => ({ label })),
                   custom: allowFreeform,
                 },

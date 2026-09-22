@@ -74,14 +74,14 @@ const questions: PendingRequest = {
         prefixItems: [
           {
             type: "array",
-            title: "Which environment?",
+            description: "Which environment?",
             items: { type: "string", enum: ["staging", "production"] },
             minItems: 0,
             maxItems: 1,
           },
           {
             type: "array",
-            title: "Anything else to watch?",
+            description: "Anything else to watch?",
             items: { type: "string", maxLength: 4096 },
             minItems: 0,
             maxItems: 64,
@@ -181,7 +181,7 @@ const located: PendingRequest = {
         prefixItems: [
           {
             type: "array",
-            title: "Where should exports live? Not under /srv/aos/repo.",
+            description: "Where should exports live? Not under /srv/aos/repo.",
             items: {
               type: "string",
               enum: ["/home/operator/exports (Recommended)", "ask later"],
@@ -191,7 +191,7 @@ const located: PendingRequest = {
           },
           {
             type: "array",
-            title: "Anything else? See https://docs.example.test/exports",
+            description: "Anything else? See https://docs.example.test/exports",
             items: { type: "string", maxLength: 4096 },
             minItems: 0,
             maxItems: 1,
@@ -268,16 +268,8 @@ describe("pendingRequestToOutbound questions", () => {
     expect(fieldOf(outbound, "requestedSchema")).toEqual({
       type: "object",
       properties: {
-        q0: {
-          type: "string",
-          title: "Question 1",
-          description: "Which environment?",
-        },
-        q1: {
-          type: "string",
-          title: "Question 2",
-          description: "Anything else to watch?",
-        },
+        q0: { type: "string", description: "Which environment?" },
+        q1: { type: "string", description: "Anything else to watch?" },
       },
       required: ["q0", "q1"],
     })
@@ -293,14 +285,12 @@ describe("pendingRequestToOutbound questions", () => {
       expiresAt: "2026-09-19T10:00:00.000Z",
       questions: [
         {
-          header: "Question 1",
           prompt: "Which environment?",
           options: [{ label: "staging" }, { label: "production" }],
           multiple: false,
           custom: true,
         },
         {
-          header: "Question 2",
           prompt: "Anything else to watch?",
           options: [],
           multiple: true,
@@ -320,7 +310,7 @@ describe("pendingRequestToOutbound questions", () => {
           answers: {
             prefixItems: [
               {
-                title: "Pick the suites",
+                description: "Pick the suites",
                 items: { type: "string", enum: ["unit", "e2e"] },
                 maxItems: 2,
               },
@@ -338,7 +328,6 @@ describe("pendingRequestToOutbound questions", () => {
       properties: {
         q0: {
           type: "array",
-          title: "Question",
           description: "Pick the suites",
           items: { type: "string", enum: ["unit", "e2e"] },
         },
@@ -348,7 +337,6 @@ describe("pendingRequestToOutbound questions", () => {
     expect(
       AosElicitationMetaSchema.parse(metaOf(outbound)).questions[0]
     ).toEqual({
-      header: "Question",
       prompt: "Pick the suites",
       options: [{ label: "unit" }, { label: "e2e" }],
       multiple: true,
@@ -356,22 +344,101 @@ describe("pendingRequestToOutbound questions", () => {
     })
   })
 
-  it("labels a question by its place, because clarify carries no short title", () => {
-    // Hermes Desktop heads each question with its full text; the AOS tab strip
-    // has room only for a label, so the number is the label and the prompt
-    // keeps every word.
-    const title = "w".repeat(600)
+  it("leaves a question the provider did not label for the browser to name", () => {
+    // `clarify` carries the question's words and no short label. Numbering it
+    // here would send English to a Hebrew reader, so the header stays unset
+    // and the browser, which knows the locale, supplies the label.
+    const description = "w".repeat(600)
     const outbound = elicitationOf({
       id: "clarify-3",
       reason: "question",
       responseSchema: {
-        properties: { answers: { prefixItems: [{ title, maxItems: 1 }] } },
+        properties: { answers: { prefixItems: [{ description, maxItems: 1 }] } },
       },
     })
     const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
 
-    expect(meta.questions[0]?.header).toBe("Question")
-    expect(meta.questions[0]?.prompt).toBe(title)
+    expect(meta.questions[0]?.header).toBeUndefined()
+    expect(meta.questions[0]?.prompt).toBe(description)
+  })
+
+  it("heads a question with the short label its provider supplied", () => {
+    const outbound = elicitationOf({
+      id: "clarify-6",
+      reason: "question",
+      responseSchema: {
+        properties: {
+          answers: {
+            prefixItems: [
+              {
+                title: "Region",
+                description: "Which region should the export land in?",
+                items: { type: "string", enum: ["eu", "us"] },
+                maxItems: 1,
+              },
+            ],
+          },
+        },
+      },
+    })
+    const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
+
+    expect(meta.questions[0]).toEqual({
+      header: "Region",
+      prompt: "Which region should the export land in?",
+      options: [{ label: "eu" }, { label: "us" }],
+      multiple: false,
+      custom: true,
+    })
+    expect(fieldOf(outbound, "requestedSchema")).toMatchObject({
+      properties: {
+        q0: {
+          title: "Region",
+          description: "Which region should the export land in?",
+        },
+      },
+    })
+  })
+
+  it("keeps a provider's overlong label inside the header bound", () => {
+    const meta = AosElicitationMetaSchema.parse(
+      metaOf(
+        elicitationOf({
+          id: "clarify-7",
+          reason: "question",
+          responseSchema: {
+            properties: {
+              answers: { prefixItems: [{ title: "w".repeat(600) }] },
+            },
+          },
+        })
+      )
+    )
+
+    expect(meta.questions[0]?.header).toBe("w".repeat(256))
+  })
+
+  it("redacts a guest's view of a label that names the operator's machine", () => {
+    const meta = AosElicitationMetaSchema.parse(
+      metaOf(
+        elicitationOf(
+          {
+            id: "clarify-8",
+            reason: "question",
+            responseSchema: {
+              properties: {
+                answers: {
+                  prefixItems: [{ title: "Under /srv/aos/repo?" }],
+                },
+              },
+            },
+          },
+          "guest"
+        )
+      )
+    )
+
+    expect(meta.questions[0]?.header).toBe("Under [provider path redacted]")
   })
 
   it("asks one free-text question when the schema lists no answer fields", () => {
@@ -388,7 +455,6 @@ describe("pendingRequestToOutbound questions", () => {
 
     expect(AosElicitationMetaSchema.parse(metaOf(outbound)).questions).toEqual([
       {
-        header: "Question",
         prompt: "Which branch should I use?",
         options: [],
         multiple: false,

@@ -84,7 +84,7 @@ describe("HermesInteractions server requests", () => {
                 prefixItems: [
                   {
                     type: "array",
-                    title: "Which region?",
+                    description: "Which region?",
                     items: { type: "string", enum: ["eu", "us"] },
                     minItems: 0,
                     maxItems: 1,

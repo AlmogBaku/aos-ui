@@ -141,9 +141,17 @@ function permissionOutbound(
 
 /** The answer fields as the adapter shaped them, before any lane projection. */
 type NativeQuestion = {
-  title: string | undefined
+  /** The provider's short label, from JSON Schema `title`. */
+  label: string | undefined
+  /** The question's own words, from JSON Schema `description`. */
+  text: string | undefined
   choices: string[]
   multiple: boolean
+}
+
+function schemaText(schema: Record<string, unknown> | undefined, key: string) {
+  const value = schema?.[key]
+  return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
 function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
@@ -156,12 +164,20 @@ function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
     return prefixItems.map((item: unknown) => {
       const question = record(item)
       return {
-        title: typeof question?.title === "string" ? question.title : undefined,
+        label: schemaText(question, "title"),
+        text: schemaText(question, "description"),
         choices: enumValues(record(question?.items)),
         multiple: question?.maxItems !== 1,
       }
     })
-  return [{ title: undefined, choices: enumValues(schema), multiple: false }]
+  return [
+    {
+      label: schemaText(schema, "title"),
+      text: schemaText(schema, "description"),
+      choices: enumValues(schema),
+      multiple: false,
+    },
+  ]
 }
 
 /**
@@ -172,14 +188,19 @@ function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
  * offer that row.
  */
 /**
- * The clarify contract carries no short label per question, only its text, so
- * the header is the question's place in the batch and the prompt its words.
+ * A header is the provider's short label and only that: a provider without one
+ * leaves it unset rather than have the proxy invent English copy the browser
+ * would show a Hebrew reader, and the browser labels that question by its place.
  */
 function questionsOf(request: PendingRequest, lane: Lane): AosQuestion[] {
-  const natives = nativeQuestionsOf(request)
-  return natives.map((question, index) => ({
-    header: natives.length === 1 ? "Question" : `Question ${index + 1}`,
-    prompt: laneText(lane, question.title ?? request.message ?? "Question"),
+  return nativeQuestionsOf(request).map((question) => ({
+    ...(question.label
+      ? { header: laneText(lane, question.label).slice(0, 256) }
+      : {}),
+    prompt: laneText(
+      lane,
+      question.text ?? question.label ?? request.message ?? "Question"
+    ),
     options: question.choices.map((label) => ({
       label: laneText(lane, label),
     })),
@@ -203,13 +224,13 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
   if (question.multiple && values.length > 0)
     return {
       type: "array",
-      title: question.header,
+      ...(question.header ? { title: question.header } : {}),
       description: question.prompt,
       items: { type: "string", enum: values },
     }
   return {
     type: "string",
-    title: question.header,
+    ...(question.header ? { title: question.header } : {}),
     description: question.prompt,
   }
 }

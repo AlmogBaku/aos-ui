@@ -23,6 +23,8 @@ import type {
 
 type QuestionCopy = {
   questionsLabel: string
+  /** The label for a question the provider gave no short label of its own. */
+  questionLabel: (index: number, count: number) => string
   answerFor: (header: string) => string
   otherAnswerFor: (header: string) => string
   typeAnswer: string
@@ -44,6 +46,8 @@ type QuestionCopy = {
 const questionCopy: Record<Locale, QuestionCopy> = {
   en: {
     questionsLabel: "Questions",
+    questionLabel: (index: number, count: number) =>
+      count === 1 ? "Question" : `Question ${index + 1}`,
     answerFor: (header: string) => `Your answer for ${header}`,
     otherAnswerFor: (header: string) => `Other answer for ${header}`,
     typeAnswer: "Type an answer",
@@ -63,6 +67,8 @@ const questionCopy: Record<Locale, QuestionCopy> = {
   },
   he: {
     questionsLabel: "שאלות",
+    questionLabel: (index: number, count: number) =>
+      count === 1 ? "שאלה" : `שאלה ${index + 1}`,
     answerFor: (header: string) => `התשובה שלך עבור ${header}`,
     otherAnswerFor: (header: string) => `תשובה אחרת עבור ${header}`,
     typeAnswer: "הקלדת תשובה",
@@ -154,6 +160,10 @@ export function RuntimeQuestionComposer({
   ])
   const activeQuestion = request.questions[questionIndex]
   const activeDraft = drafts[questionIndex]
+  /** A provider's own short label, or this question's place in the batch. */
+  const headerAt = (index: number) =>
+    request.questions[index]?.header ??
+    copy.questionLabel(index, request.questions.length)
   const isLastQuestion = questionIndex === request.questions.length - 1
 
   useEffect(() => {
@@ -380,7 +390,7 @@ export function RuntimeQuestionComposer({
                         >
                           {index + 1}
                         </span>
-                        <bdi dir="auto">{question.header}</bdi>
+                        <bdi dir="auto">{headerAt(index)}</bdi>
                       </button>
                     )
                   })}
@@ -406,7 +416,7 @@ export function RuntimeQuestionComposer({
                     <legend className="space-y-1">
                       {request.questions.length === 1 ? (
                         <span className="block text-xs font-medium tracking-wide text-muted-foreground">
-                          <bdi dir="auto">{activeQuestion.header}</bdi>
+                          <bdi dir="auto">{headerAt(questionIndex)}</bdi>
                         </span>
                       ) : null}
                       <span className="block text-sm font-medium" dir="auto">
@@ -422,7 +432,7 @@ export function RuntimeQuestionComposer({
                         {optionEntries.length > 0 ? (
                           <OptionList
                             id={`${request.requestId}-${questionIndex}`}
-                            ariaLabel={activeQuestion.header}
+                            ariaLabel={headerAt(questionIndex)}
                             options={optionEntries}
                             selectionMode={
                               activeQuestion.multiple ? "multi" : "single"
@@ -465,8 +475,10 @@ export function RuntimeQuestionComposer({
                               <input
                                 aria-label={
                                   offersOther
-                                    ? copy.otherAnswerFor(activeQuestion.header)
-                                    : copy.answerFor(activeQuestion.header)
+                                    ? copy.otherAnswerFor(
+                                        headerAt(questionIndex)
+                                      )
+                                    : copy.answerFor(headerAt(questionIndex))
                                 }
                                 id={`${request.requestId}-custom-${questionIndex}`}
                                 type="text"

@@ -755,21 +755,21 @@ function runQuestioned(
                 prefixItems: [
                   {
                     type: "array",
-                    title: "Which environment?",
+                    description: "Which environment?",
                     items: { type: "string", enum: ["staging", "production"] },
                     minItems: 0,
                     maxItems: 1,
                   },
                   {
                     type: "array",
-                    title: "Which services?",
+                    description: "Which services?",
                     items: { type: "string", enum: ["api", "worker", "web"] },
                     minItems: 0,
                     maxItems: 3,
                   },
                   {
                     type: "array",
-                    title: "Anything else to watch?",
+                    description: "Anything else to watch?",
                     items: { type: "string", maxLength: 4096 },
                     minItems: 0,
                     maxItems: 64,
@@ -1025,13 +1025,13 @@ describe("operator ACP lane", () => {
       message: "3 questions require answers",
       requestedSchema: {
         properties: {
-          q0: { type: "string", title: "Question 1" },
+          q0: { type: "string", description: "Which environment?" },
           q1: {
             type: "array",
-            title: "Question 2",
+            description: "Which services?",
             items: { type: "string", enum: ["api", "worker", "web"] },
           },
-          q2: { type: "string", title: "Question 3" },
+          q2: { type: "string", description: "Anything else to watch?" },
         },
         required: ["q0", "q1", "q2"],
       },
@@ -1054,15 +1054,15 @@ describe("operator ACP lane", () => {
     const meta = AosElicitationMetaSchema.parse(aosMetaOf(asked.params))
     expect(meta.interruptId).toBe(CLARIFY)
     expect(meta.questions).toMatchObject([
-      { header: "Question 1", multiple: false, custom: true },
+      { prompt: "Which environment?", multiple: false, custom: true },
       {
-        header: "Question 2",
+        prompt: "Which services?",
         multiple: true,
         custom: true,
         options: [{ label: "api" }, { label: "worker" }, { label: "web" }],
       },
       {
-        header: "Question 3",
+        prompt: "Anything else to watch?",
         multiple: true,
         custom: true,
         options: [],
