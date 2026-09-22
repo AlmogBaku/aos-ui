@@ -4,13 +4,13 @@ import { createProviderMock } from "./provider-mock"
 
 describe("provider mock", () => {
   it("binds loopback, logs expected requests, and rejects unexpected traffic", async () => {
-    const provider = createProviderMock({ mode: "ag-ui", port: 0 })
+    const provider = createProviderMock({ port: 0 })
     await provider.start()
     try {
-      const response = await fetch(`${provider.origin}/agents`)
+      const response = await fetch(`${provider.origin}/agent`)
       expect(response.status).toBe(200)
       expect(provider.requests.map((request) => request.path)).toEqual([
-        "/agents",
+        "/agent",
       ])
       const rejected = await fetch(`${provider.origin}/not-a-provider-route`)
       expect(rejected.status).toBe(404)
@@ -21,33 +21,20 @@ describe("provider mock", () => {
     }
   })
 
-  it("holds an AG-UI run until released and can fail once", async () => {
-    const provider = createProviderMock({
-      mode: "ag-ui",
-      port: 0,
-      run: { hold: true },
-    })
-    provider.failOnce("/agents", 503)
+  it("fails a route once when asked", async () => {
+    const provider = createProviderMock({ port: 0 })
+    provider.failOnce("/agent", 503)
     await provider.start()
     try {
-      expect((await fetch(`${provider.origin}/agents`)).status).toBe(503)
-      expect((await fetch(`${provider.origin}/agents`)).status).toBe(200)
-      const runResponse = await fetch(`${provider.origin}/runs`, {
-        method: "POST",
-        body: JSON.stringify({ runId: "run-1", threadId: "thread-1" }),
-      })
-      expect(runResponse.body).toBeTruthy()
-      expect(provider.pendingRuns).toEqual(["run-1"])
-      provider.releaseRun("run-1")
-      const body = await runResponse.text()
-      expect(body).toContain('"type":"RUN_FINISHED"')
+      expect((await fetch(`${provider.origin}/agent`)).status).toBe(503)
+      expect((await fetch(`${provider.origin}/agent`)).status).toBe(200)
     } finally {
       await provider.stop()
     }
   })
 
   it("serves the minimal OpenCode session and question contract", async () => {
-    const provider = createProviderMock({ mode: "opencode", port: 0 })
+    const provider = createProviderMock({ port: 0 })
     provider.enqueueQuestion({
       id: "question-1",
       sessionID: "session-research",

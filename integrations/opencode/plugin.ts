@@ -8,8 +8,8 @@ import {
 } from "@opencode-ai/plugin"
 
 import {
-  agUiProviderInstructions,
   agentBuilderProviderInstructions,
+  conservativeProviderInstructions,
   openCodeProviderInstructions,
 } from "../../shared/presentation/manifests"
 import { presentationToolDefinitions } from "../../shared/presentation/tools"
@@ -219,8 +219,8 @@ export async function createAosUiPlugin(
             manifest = "agent-builder"
           }
         } catch (reason) {
-          instructions = agUiProviderInstructions
-          manifest = "ag-ui-fallback"
+          instructions = conservativeProviderInstructions
+          manifest = "conservative"
           resolutionError = reason
         }
       }

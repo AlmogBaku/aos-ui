@@ -107,7 +107,7 @@ describe("OpenCode harness plugin", () => {
           "AOS harness could not resolve Session ownership; conservative guidance was injected",
         extra: {
           error: "provider unavailable",
-          manifest: "ag-ui-fallback",
+          manifest: "conservative",
           sessionID: "session-unknown",
         },
       },

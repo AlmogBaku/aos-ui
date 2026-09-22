@@ -44,8 +44,9 @@ export const fixtureHarnessCapabilities = {
   providerSubagents: true,
 } as const satisfies HarnessCapabilities
 
-// An unconfigured generic AG-UI endpoint promises only streamed Markdown.
-export const agUiHarnessCapabilities = {
+// Conservative guidance for a harness whose capabilities are unknown: it
+// promises only streamed Markdown, Mermaid, and Artifact publication.
+export const conservativeHarnessCapabilities = {
   mermaid: true,
   artifactPublicationTool: "present_artifact",
   nativePermissions: false,
@@ -69,8 +70,8 @@ export const fixtureProviderInstructions = buildAosUiHarnessPrompt(
   fixtureHarnessCapabilities
 )
 
-export const agUiProviderInstructions = buildAosUiHarnessPrompt(
-  agUiHarnessCapabilities
+export const conservativeProviderInstructions = buildAosUiHarnessPrompt(
+  conservativeHarnessCapabilities
 )
 
 export const agentBuilderProviderInstructions = buildAosUiHarnessPrompt(

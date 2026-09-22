@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   agentBuilderProviderInstructions,
-  agUiProviderInstructions,
+  conservativeProviderInstructions,
   fixtureProviderInstructions,
   openCodeProviderInstructions,
 } from "./manifests"
@@ -16,15 +16,15 @@ describe("provider harness manifests", () => {
     expect(openCodeProviderInstructions).toContain("`question`")
   })
 
-  it("keeps fixture and AG-UI prompts honest about their integrations", () => {
+  it("keeps fixture and conservative prompts honest about their integrations", () => {
     expect(fixtureProviderInstructions).toContain("`ask_user_question`")
 
-    expect(agUiProviderInstructions).toMatch(/fenced `mermaid` blocks/i)
-    expect(agUiProviderInstructions).toMatch(
+    expect(conservativeProviderInstructions).toMatch(/fenced `mermaid` blocks/i)
+    expect(conservativeProviderInstructions).toMatch(
       /Interactive questions are unavailable/i
     )
-    expect(agUiProviderInstructions).not.toContain("`render_chart`")
-    expect(agUiProviderInstructions).toContain("`present_artifact`")
+    expect(conservativeProviderInstructions).not.toContain("`render_chart`")
+    expect(conservativeProviderInstructions).toContain("`present_artifact`")
   })
 
   it("advertises only the Builder controls its permission set exposes", () => {
