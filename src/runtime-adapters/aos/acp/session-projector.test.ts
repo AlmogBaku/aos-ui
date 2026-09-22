@@ -9,8 +9,10 @@ import { steerMessageId } from "@/components/assistant-ui/elements/message-queue
 import {
   applyNotification,
   applyUpdate,
+  clearTranscript,
   failLatestTurn,
   initialProjectorState,
+  LOCAL_PROMPT_PREFIX,
   messageBlocks,
   renameMessage,
   retainBefore,
@@ -283,45 +285,31 @@ describe("applyUpdate messages", () => {
     ).toBe(streamed)
   })
 
-  it("carries a replayed turn's own failure without settling the Session", () => {
-    const status = {
+  it("fails a replayed turn as the run that wrote it reported it", () => {
+    const error = { code: "provider_error", message: "Broke" }
+    const history = { sequence: 0, runId: "history" }
+    const replayed = fold([
+      stateUpdate({ state: "running" }, history),
+      agentChunk("a1", "Half an answer"),
+      stateUpdate(
+        { state: "idle", stopReason: AOS_STOP_REASONS.error },
+        { ...history, ...error }
+      ),
+    ])
+
+    expect(toThreadMessages(replayed)[0]?.status).toEqual({
       type: "incomplete",
       reason: "error",
-      error: "The model provider rejected this turn.",
-    } as const
-    const replayed = fold([
-      [
-        {
-          sessionUpdate: "agent_message",
-          messageId: "a1",
-          content: [{ type: "text", text: "Half an answer" }],
-        },
-        { sequence: 0, runId: "history", status },
-      ],
-    ])
-
-    expect(toThreadMessages(replayed)[0]).toMatchObject({ status })
-    // A replay settles no run: only the message the status arrived with takes it.
-    expect(replayed.execution).toEqual({ status: "idle" })
-  })
-
-  it("ignores a replayed status on a turn that is not the agent's message", () => {
-    const thought = fold([
-      [
-        {
-          sessionUpdate: "agent_thought",
-          messageId: "a1",
-          content: [{ type: "text", text: "weighing" }],
-        },
-        {
-          sequence: 0,
-          runId: "history",
-          status: { type: "incomplete", reason: "error", error: "no" },
-        },
-      ],
-    ])
-
-    expect(toThreadMessages(thought)[0]?.status).toBeUndefined()
+      error,
+    })
+    // A replay brackets each turn with its own state updates, so the Session is
+    // left in the state the last one reported.
+    expect(replayed.execution).toEqual({
+      status: "failed",
+      runId: "history",
+      stopReason: AOS_STOP_REASONS.error,
+      error,
+    })
   })
 
   it("keeps unchanged turns reference-equal across updates", () => {
@@ -786,6 +774,70 @@ describe("applyUpdate execution", () => {
   })
 })
 
+describe("applyUpdate turn timing", () => {
+  const STARTED_AT = "2026-09-22T10:00:00.000Z"
+  const COMPLETED_AT = "2026-09-22T10:00:04.500Z"
+  const at = (moment?: string) =>
+    moment === undefined ? RUN_META : { ...RUN_META, at: moment }
+  const started = (moment?: string) =>
+    stateUpdate({ state: "running" }, at(moment))
+  const settled = (moment?: string) =>
+    stateUpdate({ state: "idle", stopReason: "end_turn" }, at(moment))
+
+  it("times a turn by the two moments its run reported", () => {
+    const timed = fold([
+      started(STARTED_AT),
+      agentChunk("a1", "Half"),
+      agentChunk("a1", " an answer"),
+      toolCall({ title: "grep", status: "completed" }, TOOL_META),
+      settled(COMPLETED_AT),
+    ])
+
+    expect(toThreadMessages(timed)[0]?.metadata?.timing).toEqual({
+      streamStartTime: Date.parse(STARTED_AT),
+      totalStreamTime: 4_500,
+      totalChunks: 2,
+      toolCallCount: 1,
+    })
+  })
+
+  it("keeps the start of a turn whose run has not ended", () => {
+    const open = fold([started(STARTED_AT), agentChunk("a1", "Working")])
+
+    expect(toThreadMessages(open)[0]?.metadata?.timing).toEqual({
+      streamStartTime: Date.parse(STARTED_AT),
+      totalChunks: 1,
+      toolCallCount: 0,
+    })
+  })
+
+  it("leaves a turn untimed when its run reported no moment", () => {
+    const untimed = fold([started(), agentChunk("a1", "Hello"), settled()])
+
+    expect(toThreadMessages(untimed)[0]?.metadata).toBeUndefined()
+  })
+
+  it("settles and times the turn a replayed run's chunks opened", () => {
+    const replayed = fold([
+      userChunk("hermes-row-41", "Ship it"),
+      started(STARTED_AT),
+      agentChunk("hermes-row-42", "Shipped"),
+      settled(COMPLETED_AT),
+    ])
+
+    expect(toThreadMessages(replayed)[1]).toMatchObject({
+      id: "hermes-row-42",
+      status: { type: "complete", reason: "stop" },
+      metadata: {
+        timing: {
+          streamStartTime: Date.parse(STARTED_AT),
+          totalStreamTime: 4_500,
+        },
+      },
+    })
+  })
+})
+
 describe("applyUpdate Session metadata", () => {
   const plan = (planId: string) => ({
     sessionUpdate: "plan_update" as const,
@@ -1105,6 +1157,48 @@ describe("applyNotification", () => {
         sessionId: "s1",
       })
     ).toBe(answered)
+  })
+})
+
+describe("from-start replay", () => {
+  const page: readonly Entry[] = [
+    userChunk("u1", "Ship it"),
+    stateUpdate(
+      { state: "running" },
+      { ...RUN_META, at: "2026-09-22T10:00:00.000Z" }
+    ),
+    agentChunk("a1", "Shipped"),
+    toolCall({ title: "grep", status: "completed" }, TOOL_META),
+    stateUpdate(
+      { state: "idle", stopReason: "end_turn" },
+      { ...RUN_META, at: "2026-09-22T10:00:01.000Z" }
+    ),
+  ]
+
+  it("projects one copy of every part however often the page replays", () => {
+    const once = fold(page)
+    const twice = fold(page, clearTranscript(once))
+
+    expect(toThreadMessages(twice)).toEqual(toThreadMessages(once))
+  })
+
+  it("keeps a prompt the provider has not echoed yet", () => {
+    const localId = `${LOCAL_PROMPT_PREFIX}1`
+    const sending = fold([userChunk(localId, "Ship it again")], fold(page))
+    const cleared = clearTranscript(sending)
+
+    expect(toThreadMessages(cleared).map((message) => message.id)).toEqual([
+      localId,
+    ])
+    expect(clearTranscript(cleared)).toBe(cleared)
+    // The replay carries the provider's own copy of that prompt, and the reply
+    // to the prompt re-keys the local turn onto it.
+    const replayed = fold([userChunk("u2", "Ship it again")], cleared)
+    expect(
+      toThreadMessages(renameMessage(replayed, localId, "u2")).map(
+        (message) => message.id
+      )
+    ).toEqual(["u2"])
   })
 })
 

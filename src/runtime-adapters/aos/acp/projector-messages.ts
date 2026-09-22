@@ -2,7 +2,11 @@ import type {
   ContentBlock,
   ToolCallContent,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
+import type {
+  MessageStatus,
+  MessageTiming,
+  ThreadMessageLike,
+} from "@assistant-ui/core"
 
 /**
  * The message half of the ACP session projector: ACP blocks kept in arrival
@@ -48,11 +52,23 @@ export type ProjectedPart =
   | { readonly source: "tool"; readonly call: ProjectedToolCall }
   | { readonly source: "data"; readonly name: string; readonly data: unknown }
 
+/**
+ * A turn's own span, in epoch ms, as the two `state_update`s bracketing its run
+ * reported it. Both moments come from the wire, so a replayed turn is timed
+ * exactly as the live one was.
+ */
+export type ProjectedTiming = {
+  readonly startedAt: number
+  readonly completedAt?: number
+  readonly chunks: number
+}
+
 export type ProjectedMessage = {
   readonly id: string
   readonly role: MessageRole
   readonly parts: readonly ProjectedPart[]
   readonly status?: MessageStatus
+  readonly timing?: ProjectedTiming
 }
 
 /** ACP three-state patch: omitted keeps, `null` clears, a value replaces. */
@@ -158,6 +174,33 @@ export function withStatus(
   status: MessageStatus
 ): ProjectedMessage {
   return { ...message, status }
+}
+
+/** Opens a turn's span at the moment its run reported starting. */
+export function startTiming(
+  message: ProjectedMessage,
+  startedAt: number
+): ProjectedMessage {
+  return { ...message, timing: { startedAt, chunks: 0 } }
+}
+
+/** Closes a timed turn's span; an untimed turn has no span to close. */
+export function completeTiming(
+  message: ProjectedMessage,
+  completedAt: number
+): ProjectedMessage {
+  const { timing } = message
+  return timing === undefined
+    ? message
+    : { ...message, timing: { ...timing, completedAt } }
+}
+
+/** One more streamed chunk of a timed turn. */
+export function countChunk(message: ProjectedMessage): ProjectedMessage {
+  const { timing } = message
+  return timing === undefined
+    ? message
+    : { ...message, timing: { ...timing, chunks: timing.chunks + 1 } }
 }
 
 function mergeCall(
@@ -303,17 +346,38 @@ function threadPart(part: ProjectedPart): ThreadMessagePart[] {
   return blockPart(part.block)
 }
 
+/**
+ * The turn's span and shape, as Assistant UI's own message timing. The total is
+ * the difference between the two moments the wire reported, so nothing on the
+ * way to the UI consults a clock.
+ */
+function timingMetadata(message: ProjectedMessage): MessageTiming | undefined {
+  const { timing } = message
+  if (timing === undefined) return undefined
+  return {
+    streamStartTime: timing.startedAt,
+    ...(timing.completedAt === undefined
+      ? {}
+      : { totalStreamTime: timing.completedAt - timing.startedAt }),
+    totalChunks: timing.chunks,
+    toolCallCount: message.parts.filter((part) => part.source === "tool")
+      .length,
+  }
+}
+
 const converted = new WeakMap<ProjectedMessage, ThreadMessageLike>()
 
 /** Memoized by message reference so an unchanged turn keeps its identity. */
 export function toThreadMessage(message: ProjectedMessage): ThreadMessageLike {
   const cached = converted.get(message)
   if (cached) return cached
+  const timing = timingMetadata(message)
   const value: ThreadMessageLike = {
     id: message.id,
     role: message.role,
     content: message.parts.flatMap(threadPart),
     ...(message.status === undefined ? {} : { status: message.status }),
+    ...(timing === undefined ? {} : { metadata: { timing } }),
   }
   converted.set(message, value)
   return value

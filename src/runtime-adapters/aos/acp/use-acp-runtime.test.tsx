@@ -21,7 +21,11 @@ import {
   AOS_PLAN_ID,
 } from "@aos/protocol/acp"
 
-import type { AcpConnection, AcpSessionUpdateListener } from "./types"
+import type {
+  AcpConnection,
+  AcpResumeOptions,
+  AcpSessionUpdateListener,
+} from "./types"
 import {
   useAcpExecution,
   useAcpRuntime,
@@ -43,6 +47,7 @@ const resumeReply = (): ResumeReply => JSON.parse("{}")
 
 function createFakeConnection() {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
+  const replays = new Map<string, Set<() => void>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const unused = (): never => {
     throw new Error("The ACP runtime does not use this connection method")
@@ -51,7 +56,13 @@ function createFakeConnection() {
   const resumed = new Promise<ResumeReply>((resolve) => {
     settle = () => resolve(resumeReply())
   })
-  const resumeSession = vi.fn(() => resumed)
+  const resumeSession = vi.fn((sessionId: string, resume: AcpResumeOptions) => {
+    // As the connection does: a from-start replay announces itself, so whoever
+    // projects the Session drops what the replay is about to resend.
+    if (resume.replayFromStart)
+      for (const listener of replays.get(sessionId) ?? []) listener()
+    return resumed
+  })
   const prompt = vi.fn(async () => ({ messageId: "u1" }))
   const cancel = vi.fn()
 
@@ -79,6 +90,12 @@ function createFakeConnection() {
       const listeners = updates.get(sessionId) ?? new Set()
       listeners.add(listener)
       updates.set(sessionId, listeners)
+      return () => listeners.delete(listener)
+    },
+    onSessionReplay: (sessionId, listener) => {
+      const listeners = replays.get(sessionId) ?? new Set()
+      listeners.add(listener)
+      replays.set(sessionId, listeners)
       return () => listeners.delete(listener)
     },
     onNotification: (method, listener) => {
@@ -121,6 +138,13 @@ const textUpdate = (
   sessionUpdate,
   messageId,
   content: [{ type: "text", text }],
+})
+
+/** A streamed part, which a transcript the replay did not drop would double. */
+const chunkUpdate = (messageId: string, text: string): SessionUpdate => ({
+  sessionUpdate: "agent_message_chunk",
+  messageId,
+  content: { type: "text", text },
 })
 
 const messageText = (part: { type: string }) =>
@@ -338,6 +362,38 @@ describe("useAcpRuntime", () => {
       expect(fake.resumeSession).toHaveBeenCalledTimes(4)
       expect(vi.getTimerCount()).toBe(0)
     })
+  })
+
+  it("replays the Session again when the proxy invalidates it", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(chunkUpdate("a1", "On it"))
+    })
+
+    await act(async () => {
+      fake.notify(AOS_METHODS.notify.sessionInvalidated, {
+        sessionId: "other-session",
+      })
+    })
+    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      fake.notify(AOS_METHODS.notify.sessionInvalidated, {
+        sessionId: SESSION_ID,
+      })
+    })
+    expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+    expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
+      replayFromStart: true,
+    })
+    // The replay rebuilds the transcript it dropped, rather than doubling it.
+    act(() => {
+      fake.emit(chunkUpdate("a1", "On it"))
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "a1", role: "assistant", text: "On it" },
+    ])
   })
 
   it("tracks the run state the Session reports", async () => {

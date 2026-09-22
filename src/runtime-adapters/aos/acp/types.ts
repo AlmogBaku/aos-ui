@@ -134,6 +134,11 @@ export interface AcpConnection {
     sessionId: string,
     listener: AcpSessionUpdateListener
   ): () => void
+  /**
+   * Fires just before a from-start replay is requested, so whoever projects the
+   * Session can drop the transcript that replay is about to resend.
+   */
+  onSessionReplay(sessionId: string, listener: () => void): () => void
   /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
   onNotification(
     method: string,

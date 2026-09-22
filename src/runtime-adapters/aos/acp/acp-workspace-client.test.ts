@@ -200,6 +200,7 @@ function createFakeConnection() {
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},
+    onSessionReplay: () => () => {},
     async login(token) {
       record("login", token)
     },

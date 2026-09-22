@@ -494,6 +494,8 @@ describe("ACP connection", () => {
   it("replays a Session from the start when asked", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
+    const dropTranscript = vi.fn()
+    connection.onSessionReplay(SESSION_ID, dropTranscript)
 
     await connection.resumeSession(SESSION_ID, {
       replayFromStart: true,
@@ -504,6 +506,13 @@ describe("ACP connection", () => {
       replayFrom: { type: "start" },
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
+    // The whole Session is on its way, so whoever projects it is told to drop
+    // what this replay resends.
+    expect(dropTranscript).toHaveBeenCalledTimes(1)
+
+    await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+    // An incremental resume replaces nothing already projected.
+    expect(dropTranscript).toHaveBeenCalledTimes(1)
     connection.close()
   })
 

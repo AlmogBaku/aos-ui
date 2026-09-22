@@ -44,8 +44,10 @@ import type { AcpConnection } from "./types"
 import {
   applyNotification,
   applyUpdate,
+  clearTranscript,
   failLatestTurn,
   initialProjectorState,
+  LOCAL_PROMPT_PREFIX,
   messageBlocks,
   renameMessage,
   retainMessages,
@@ -280,6 +282,13 @@ function createAcpController({
     return resolved && sourceId ? { meta: resolved, sourceId } : undefined
   }
 
+  /**
+   * The replays asked for, in order. Two in flight at once would each clear the
+   * transcript the other is still filling, so a resync waits for the replay it
+   * arrived during rather than racing it.
+   */
+  let resumes: Promise<unknown> = Promise.resolve()
+
   /** Whether a resume still belongs to the binding that started it. */
   const isBound = (session: string, generation: number) =>
     bound === session && generation === bindings
@@ -316,6 +325,16 @@ function createAcpController({
     notify()
   }
 
+  const queueResume = (session: string, generation: number) => {
+    const run = () =>
+      isBound(session, generation)
+        ? attemptResume(session, generation)
+        : undefined
+    // Either outcome of the resume ahead releases this one; a rejection there is
+    // already reported where it happened.
+    resumes = resumes.then(run, run)
+  }
+
   /**
    * Subscribes to one Session and replays it from the start. Attaching is what
    * binds a Session, so a draft's first turn attaches the Session it creates.
@@ -326,10 +345,16 @@ function createAcpController({
     bound = next
     bindings += 1
     const generation = bindings
-    const { artifact, steerAccepted, composerPrefill } = AOS_METHODS.notify
+    const { artifact, steerAccepted, composerPrefill, sessionInvalidated } =
+      AOS_METHODS.notify
     const subscriptions = [
       connection.onSessionUpdate(next, (update, meta) => {
         commit(applyUpdate(state, update, meta))
+      }),
+      // The replay that follows carries the Session whole, so the transcript it
+      // replaces goes first.
+      connection.onSessionReplay(next, () => {
+        commit(clearTranscript(state))
       }),
       connection.onNotification(artifact, (params) => {
         observe(params, artifact)
@@ -338,13 +363,20 @@ function createAcpController({
         observe(params, steerAccepted)
       }),
       connection.onNotification(composerPrefill, observePrefill),
+      // The proxy has dropped this Session's live subscriber, so whatever it
+      // streamed while unobserved is missing: only a replay from the start can
+      // say what the Session holds now.
+      connection.onNotification(sessionInvalidated, (params) => {
+        if (isRecord(params) && params.sessionId === bound)
+          queueResume(next, generation)
+      }),
     ]
     unsubscribe = () => {
       clearTimeout(retryTimer)
       retryTimer = undefined
       for (const off of subscriptions) off()
     }
-    void attemptResume(next, generation)
+    queueResume(next, generation)
   }
 
   /** The bound Session, creating one for a local draft's first turn. */
@@ -374,7 +406,7 @@ function createAcpController({
     rewoundFrom?: string
   ) => {
     locals += 1
-    const localId = `aos-local-${locals}`
+    const localId = `${LOCAL_PROMPT_PREFIX}${locals}`
     const content = [...blocks]
     commit(
       applyUpdate(

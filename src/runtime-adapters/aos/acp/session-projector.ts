@@ -5,13 +5,13 @@ import type {
   SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
+import type { z } from "zod"
 
 import {
   AOS_METHODS,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
   AosArtifactNotificationSchema,
-  AosHistoryStatusMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -26,12 +26,15 @@ import {
   appendBlock,
   appendData,
   appendToolContent,
+  completeTiming,
+  countChunk,
   isContentBlock,
   isRecord,
   isToolCallContent,
   latestAssistantId,
   patchToolCall,
   replaceBlocks,
+  startTiming,
   toolCallOwner,
   toThreadMessage,
   withMessage,
@@ -62,6 +65,8 @@ export type TurnFailure = {
 export type ProjectorExecution = {
   readonly status: SessionStatus
   readonly runId?: string
+  /** When the running run started, as its own `state_update` reported it. */
+  readonly startedAt?: number
   readonly stopReason?: string
   readonly error?: TurnFailure
 }
@@ -90,7 +95,13 @@ export const initialProjectorState: ProjectorState = {
   todos: [],
 }
 
+type StateMeta = z.infer<typeof AosStateMetaSchema>
+
 const text = (value: unknown) => (typeof value === "string" ? value : undefined)
+
+/** The wire's own instant as epoch ms; the schema validated its format. */
+const epochOf = (at: string | undefined) =>
+  at === undefined ? undefined : Date.parse(at)
 
 /** Omitted or ill-typed keeps, `null` clears, a string replaces. */
 const textPatch = (value: unknown) =>
@@ -153,12 +164,26 @@ function onMessage(
   const next = withMessages(
     source,
     withMessage(source.messages, id, role, (message) =>
-      patch(opened ? withStatus(message, { type: "running" }) : message)
+      patch(opened ? opening(message, state.execution) : message)
     )
   )
   return opened || host !== undefined
     ? { ...next, activeAssistantId: id }
     : next
+}
+
+/**
+ * The status and the span a turn a running run opens is born with. The run's own
+ * `state_update` timed it, so a replayed turn is timed exactly as the live one
+ * was; a run that started without a reported moment leaves its turns untimed.
+ */
+function opening(
+  message: ProjectedMessage,
+  execution: ProjectorExecution
+): ProjectedMessage {
+  const running = withStatus(message, { type: "running" })
+  const { startedAt } = execution
+  return startedAt === undefined ? running : startTiming(running, startedAt)
 }
 
 /** The turn that carries what a superseded turn's id addresses from now on. */
@@ -173,6 +198,9 @@ function activeAssistantId(state: ProjectorState): string | undefined {
     ? id
     : undefined
 }
+
+/** The optimistic user turn a prompt shows before the provider echoes it. */
+export const LOCAL_PROMPT_PREFIX = "aos-local-"
 
 const INTERRUPT_HOST_PREFIX = "aos-interrupt-"
 
@@ -222,14 +250,10 @@ function applyToolCall(
 }
 
 /** The vendor stop reasons carry the failure the run reported. */
-function errorFrom(meta: unknown): TurnFailure | undefined {
-  const parsed = AosStateMetaSchema.safeParse(meta)
-  if (!parsed.success) return undefined
+function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
-    ...(parsed.data.code === undefined ? {} : { code: parsed.data.code }),
-    ...(parsed.data.message === undefined
-      ? {}
-      : { message: parsed.data.message }),
+    ...(aos?.code === undefined ? {} : { code: aos.code }),
+    ...(aos?.message === undefined ? {} : { message: aos.message }),
   }
   return error.code === undefined && error.message === undefined
     ? undefined
@@ -240,12 +264,12 @@ function applyIdle(
   state: ProjectorState,
   carried: { runId?: string },
   stopReason: string | undefined,
-  meta: unknown
+  aos: StateMeta | undefined
 ): ProjectorState {
   const failed =
     stopReason === AOS_STOP_REASONS.error ||
     stopReason === AOS_STOP_REASONS.uncertain
-  const error = failed ? errorFrom(meta) : undefined
+  const error = failed ? errorFrom(aos) : undefined
   const execution: ProjectorExecution = {
     status: failed ? "failed" : "idle",
     ...carried,
@@ -257,6 +281,9 @@ function applyIdle(
     : stopReason === "cancelled"
       ? { type: "incomplete", reason: "cancelled" }
       : { type: "complete", reason: "stop" }
+  // The turn this run opened ends where the wire says the run did; a moment it
+  // did not report leaves the turn's span as open as it was.
+  const completedAt = epochOf(aos?.at)
   const id = activeAssistantId(state)
   // A run that wrote no turn settles the Session alone: the history before it
   // keeps the status it was projected with. Only the run a correction
@@ -270,7 +297,12 @@ function applyIdle(
   return id === undefined
     ? settled
     : onMessage(settled, id, "assistant", (message) =>
-        withStatus(message, status)
+        withStatus(
+          completedAt === undefined
+            ? message
+            : completeTiming(message, completedAt),
+          status
+        )
       )
 }
 
@@ -280,13 +312,24 @@ function applyState(
   meta: unknown
 ): ProjectorState {
   const parsed = AosStateMetaSchema.safeParse(meta)
-  const runId = parsed.success ? parsed.data.runId : state.execution.runId
+  const aos = parsed.success ? parsed.data : undefined
+  const runId = aos?.runId ?? state.execution.runId
   const carried = runId === undefined ? {} : { runId }
   const next = text(update.state)
   // The run owns no turn until one of its updates opens one, so starting only
-  // moves the Session's own status.
-  if (next === "running")
-    return { ...state, execution: { status: "running", ...carried } }
+  // moves the Session's own status — and records the moment every turn this run
+  // opens is timed from.
+  if (next === "running") {
+    const startedAt = epochOf(aos?.at)
+    return {
+      ...state,
+      execution: {
+        status: "running",
+        ...carried,
+        ...(startedAt === undefined ? {} : { startedAt }),
+      },
+    }
+  }
   if (next === "requires_action") {
     const blocked: ProjectorState = {
       ...state,
@@ -308,7 +351,7 @@ function applyState(
     }
   }
   if (next !== "idle") return state
-  return applyIdle(state, carried, text(update.stopReason), meta)
+  return applyIdle(state, carried, text(update.stopReason), aos)
 }
 
 /** Only the Session's own plan is projected, and `_meta.aos` carries it. */
@@ -329,33 +372,17 @@ function applyPlan(
  */
 type UpdatePayload = Record<string, unknown>
 
-/**
- * The durable failure a replayed turn carries, if any. Only the message the
- * status arrived with takes it, so a replay never restates the Session's state.
- */
-function replayedStatus(meta: unknown) {
-  const parsed = AosHistoryStatusMetaSchema.safeParse(meta)
-  return parsed.success ? parsed.data.status : undefined
-}
-
 function applyWhole(
   state: ProjectorState,
   kind: string,
-  update: UpdatePayload,
-  meta: unknown
+  update: UpdatePayload
 ): ProjectorState {
   const named = text(update.messageId)
   if (named === undefined) return state
   const messageId = addressed(state, named)
-  const status = kind === "agent_message" ? replayedStatus(meta) : undefined
-  return onMessage(state, messageId, roleOf(kind), (message) => {
-    const replaced = replaceBlocks(
-      message,
-      sourceOf(kind),
-      blockPatch(update.content)
-    )
-    return status === undefined ? replaced : withStatus(replaced, status)
-  })
+  return onMessage(state, messageId, roleOf(kind), (message) =>
+    replaceBlocks(message, sourceOf(kind), blockPatch(update.content))
+  )
 }
 
 function applyChunk(
@@ -367,7 +394,7 @@ function applyChunk(
   const block = update.content
   if (named === undefined || !isContentBlock(block)) return state
   return onMessage(state, addressed(state, named), roleOf(kind), (message) =>
-    appendBlock(message, sourceOf(kind), block)
+    countChunk(appendBlock(message, sourceOf(kind), block))
   )
 }
 
@@ -421,7 +448,7 @@ export function applyUpdate(
     case "user_message":
     case "agent_message":
     case "agent_thought":
-      return applyWhole(state, kind, update, meta)
+      return applyWhole(state, kind, update)
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":
@@ -544,6 +571,30 @@ export function renameMessage(
           message === current ? { ...message, id: toId } : message
         )
   )
+}
+
+/**
+ * Drops the transcript ahead of a replay that resends the whole Session. The
+ * replay's parts arrive as chunks, so the ones already projected would be
+ * doubled rather than replaced; the Session's own state stays, because the
+ * replay restates that itself.
+ *
+ * A prompt the provider has not echoed yet is the browser's alone: a draft's
+ * first turn binds and resumes while its own prompt is in flight, and the reply
+ * re-keys it onto the id the proxy assigned, which drops it if the replay
+ * already carried that turn.
+ */
+export function clearTranscript(state: ProjectorState): ProjectorState {
+  const kept = state.messages.filter((message) =>
+    message.id.startsWith(LOCAL_PROMPT_PREFIX)
+  )
+  if (kept.length === state.messages.length) return state
+  return {
+    ...state,
+    messages: kept,
+    activeAssistantId: undefined,
+    supersededAssistants: undefined,
+  }
 }
 
 /** Keeps the listed turns in order; the runtime's removals flow back here. */
