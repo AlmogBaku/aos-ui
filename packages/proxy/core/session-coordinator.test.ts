@@ -19,6 +19,7 @@ import {
   type CoordinatedRunSubscription,
   type SessionCoordinatorOptions,
 } from "./session-coordinator"
+import { FanoutOverflowError } from "./subscriber-fanout"
 
 class EventSource implements ServerRunHandle {
   readonly #values: RunEvent[] = []
@@ -331,6 +332,42 @@ describe("SessionCoordinator", () => {
     })
     expect(engine.start).toHaveBeenCalledOnce()
     expect(engine.recover).not.toHaveBeenCalled()
+  })
+
+  it("fails the stream of a subscriber whose queue fell behind the run", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+    }
+    const sessions = coordinator(engine, { maxSubscriberEvents: 1 })
+    const subscription = await sessions.start(
+      scope,
+      input("run-1"),
+      access("one")
+    )
+
+    // Nothing reads this subscription, so the run outruns its one-event queue
+    // while settling normally at the provider.
+    source.emit(runStarted("run-1"))
+    source.emit({
+      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      messageId: "assistant-1",
+      delta: "Hel",
+    })
+    source.emit({
+      type: RunEventKind.RUN_FINISHED,
+      threadId: scope.threadId,
+      runId: "run-1",
+      outcome: { type: "success" },
+    })
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    // The subscriber missed part of the run, so its stream reports the gap
+    // instead of the end the provider reached.
+    await expect(reader(subscription)()).rejects.toBeInstanceOf(
+      FanoutOverflowError
+    )
   })
 
   it("replays a compacted active run from the beginning for a cursorless reload", async () => {
@@ -1301,7 +1338,9 @@ describe("SessionCoordinator", () => {
       messageId: "assistant-1",
       delta: "x".repeat(300 * 1024),
     })
-    await reader(initial)()
+    // The event is larger than one subscriber queue as well as the journal, so
+    // this browser is told it missed it.
+    await expect(reader(initial)()).rejects.toBeInstanceOf(FanoutOverflowError)
     initial.close()
 
     const refreshed = await sessions.recover(

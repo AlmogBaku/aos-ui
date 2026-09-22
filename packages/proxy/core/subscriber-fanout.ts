@@ -1,9 +1,29 @@
-type Waiter<T> = (result: IteratorResult<T>) => void
+type Waiter<T> = {
+  resolve(result: IteratorResult<T>): void
+  reject(cause: unknown): void
+}
 
 export type FanoutSubscription<T> = {
   readonly events: AsyncIterable<T>
   readonly closed: boolean
   close(): void
+}
+
+/**
+ * A subscriber the fanout dropped because it fell behind its own bounds. Its
+ * iterator rejects with this rather than reporting the end a closed source
+ * reports: a consumer that cannot tell the two apart treats every missed event
+ * as a stream that finished normally.
+ */
+export class FanoutOverflowError extends Error {
+  constructor(
+    /** The backlog the dropped subscriber held: its events, and their bytes. */
+    readonly events: number,
+    readonly bytes: number
+  ) {
+    super("Subscriber queue overflowed")
+    this.name = "FanoutOverflowError"
+  }
 }
 
 export type SubscriberFanoutOptions<T> = {
@@ -17,6 +37,8 @@ type Subscriber<T> = {
   bytes: number
   waiters: Waiter<T>[]
   closed: boolean
+  /** Set when the queue overflowed, which is the one unclean end. */
+  failure?: FanoutOverflowError
   project(value: T): T | undefined
   onDetach?(): void
 }
@@ -64,9 +86,12 @@ export class SubscriberFanout<T> {
             subscriber.bytes -= next.bytes
             return Promise.resolve({ done: false, value: next.value })
           }
+          if (subscriber.failure) return Promise.reject(subscriber.failure)
           if (subscriber.closed)
             return Promise.resolve({ done: true, value: undefined })
-          return new Promise((resolve) => subscriber.waiters.push(resolve))
+          return new Promise((resolve, reject) =>
+            subscriber.waiters.push({ resolve, reject })
+          )
         },
         return: async () => {
           close()
@@ -103,11 +128,14 @@ export class SubscriberFanout<T> {
         subscriber.values.length >= this.options.maxEvents ||
         subscriber.bytes + bytes > this.options.maxBytes
       ) {
-        this.#detach(subscriber)
+        this.#detach(
+          subscriber,
+          new FanoutOverflowError(subscriber.values.length, subscriber.bytes)
+        )
         continue
       }
       const waiter = subscriber.waiters.shift()
-      if (waiter) waiter({ done: false, value: projected })
+      if (waiter) waiter.resolve({ done: false, value: projected })
       else {
         subscriber.values.push({ value: projected, bytes })
         subscriber.bytes += bytes
@@ -126,18 +154,21 @@ export class SubscriberFanout<T> {
     subscriber.closed = true
     this.#subscribers.delete(subscriber)
     for (const waiter of subscriber.waiters.splice(0))
-      waiter({ done: true, value: undefined })
+      waiter.resolve({ done: true, value: undefined })
     subscriber.onDetach?.()
   }
 
-  #detach(subscriber: Subscriber<T>) {
+  /** Abandons one subscriber's queue: cleanly, or reporting an overflow. */
+  #detach(subscriber: Subscriber<T>, overflow?: FanoutOverflowError) {
     if (subscriber.closed) return
     subscriber.closed = true
     this.#subscribers.delete(subscriber)
     subscriber.values.splice(0)
     subscriber.bytes = 0
+    if (overflow) subscriber.failure = overflow
     for (const waiter of subscriber.waiters.splice(0))
-      waiter({ done: true, value: undefined })
+      if (overflow) waiter.reject(overflow)
+      else waiter.resolve({ done: true, value: undefined })
     subscriber.onDetach?.()
   }
 }

@@ -19,6 +19,7 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import type { CoordinatedRunSubscription } from "../core/session-coordinator"
+import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
 import { answeredQuestionOutbound } from "./translate/interrupts"
 import {
@@ -65,11 +66,16 @@ const AOS_STOP_CODES: ReadonlySet<string> = new Set(
   Object.values(AOS_STOP_REASONS)
 )
 
+/** How much of a provider sentence one log line carries. */
+const MAX_LOGGED_FAILURE_CHARS = 200
+
 /**
  * The failure an idle `state_update` reports, when it reports one. Every other
- * update — including every streamed chunk — falls out on the first check.
- * `redactForLog` masks any field named `code`, so each logged machine code
- * travels under the protocol's own name for it.
+ * update — including every streamed chunk — falls out on the first check. A
+ * stop reason names the class of failure and nothing else, so the machine code
+ * and the provider's sentence travel with it: they are what an operator
+ * diagnoses one run by. `errorCode` is the name `acp.error` already logs the
+ * same classification under.
  */
 function runFailureOf(update: SessionUpdate) {
   if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
@@ -78,7 +84,16 @@ function runFailureOf(update: SessionUpdate) {
   if (typeof stopReason !== "string" || !AOS_STOP_CODES.has(stopReason))
     return undefined
   const meta = AosStateMetaSchema.safeParse(update._meta?.[AOS_META_KEY])
-  return { stopReason, ...(meta.success ? { runId: meta.data.runId } : {}) }
+  if (!meta.success) return { stopReason }
+  const { runId, code, message } = meta.data
+  return {
+    stopReason,
+    runId,
+    ...(code === undefined ? {} : { errorCode: code }),
+    ...(message === undefined
+      ? {}
+      : { message: message.slice(0, MAX_LOGGED_FAILURE_CHARS) }),
+  }
 }
 
 /**
@@ -382,6 +397,11 @@ class SessionAttachment {
     )
   }
 
+  /** The subscriber the coordinator knows this attachment's stream by. */
+  get #subscriberId() {
+    return `${this.#context.connectionId}:${this.#scope.threadId}`
+  }
+
   /** The controller the coordinator knows this connection by. */
   get #controllerId() {
     return (
@@ -395,9 +415,9 @@ class SessionAttachment {
    * the same controller identity, so a guest may Stop only its own run.
    */
   #access(runId: string) {
-    const { connectionId, lane, guest } = this.#context
+    const { lane, guest } = this.#context
     const base = {
-      subscriberId: `${connectionId}:${this.#scope.threadId}`,
+      subscriberId: this.#subscriberId,
       controllerId: this.#controllerId,
       lane,
       canControl: lane === "operator",
@@ -417,6 +437,7 @@ class SessionAttachment {
 
   async #pump(subscription: CoordinatedRunSubscription) {
     const { translateRunEvent } = this.#context.translators
+    let overflow: FanoutOverflowError | undefined
     try {
       for await (const { sequence, event } of subscription.events) {
         this.#sequence = sequence
@@ -431,15 +452,43 @@ class SessionAttachment {
           await this.#send(outbound, sequence)
       }
     } catch (cause) {
-      await this.report(cause)
+      if (cause instanceof FanoutOverflowError) overflow = cause
+      else await this.report(cause)
     } finally {
       if (this.#subscription === subscription) this.#subscription = undefined
     }
+    if (overflow) return this.#resync(subscription.runId, overflow)
     // The turn this segment carried has settled, so the window it grew is now
     // readable. A failed or cancelled turn still consumed context, so this
     // follows the drain rather than a successful outcome. Nothing awaits the
     // pump, so this reports its own failure rather than rejecting into nowhere.
     await this.reportUsage().catch((cause: unknown) => this.report(cause))
+  }
+
+  /**
+   * Tells the client that what it holds of this Session is incomplete, because
+   * the stream it was reading was dropped for falling behind its bounds.
+   *
+   * The run itself is unharmed and may still be going, so this is not a run
+   * failure and the segment did not settle: reporting either would leave the
+   * client believing a turn it only saw part of had ended. The client owes
+   * itself the Session from the start, which is what invalidation asks for.
+   */
+  async #resync(runId: string, overflow: FanoutOverflowError) {
+    this.#log("error", "acp.fanout.detached", {
+      subscriberId: this.#subscriberId,
+      runId,
+      events: overflow.events,
+      bytes: overflow.bytes,
+    })
+    // A detached attachment has no client left to resync, exactly as it has
+    // none to report a failure to.
+    if (this.#detached) return
+    await this.#client
+      .notify(AOS_METHODS.notify.sessionInvalidated, {
+        sessionId: this.#scope.threadId,
+      })
+      .catch(() => undefined)
   }
 
   async #send(outbound: AcpOutbound, sequence: number) {
