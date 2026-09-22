@@ -776,6 +776,30 @@ runtime:
     })
   })
 
+  it("treats a guest key with no value as no guest block", async () => {
+    const message = await loadFailure({
+      flag: CONFIG_PATH,
+      getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
+      ...access({ [CONFIG_PATH]: { source: `${MINIMAL_YAML}guest: ~\n` } }),
+    })
+    expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
+    expect(message).toContain("guest block")
+  })
+
+  it("lets the schema report an unknown runtime kind before any branch row is judged", async () => {
+    const message = await loadFailure({
+      flag: CONFIG_PATH,
+      getenv: env({ AOS_UI_PROXY_RUNTIME_TOKEN_FILE: "/run/secrets/token" }),
+      ...access({
+        [CONFIG_PATH]: {
+          source: MINIMAL_YAML.replace("kind: hermes", "kind: hermez"),
+        },
+      }),
+    })
+    expect(message).toContain("runtime.kind")
+    expect(message).not.toContain("applies only")
+  })
+
   it("refuses a guest override when the file has no guest block", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
@@ -913,6 +937,14 @@ runtime:
       expect(reachable.has(path), `${path} is not a configuration leaf`).toBe(
         true
       )
+  })
+
+  it("never lets a secret-bearing field be set by value", () => {
+    // Every credential leaf is reachable only as a file path, so a row whose
+    // name ends in a secret word must be a *_FILE row.
+    for (const { suffix } of PROXY_ENV_OVERRIDES)
+      if (/(TOKEN|PASSWORD|SECRET|KEY|IDENTITY)$/u.test(suffix))
+        expect(suffix).toMatch(/_FILE$/u)
   })
 
   it("claims no variable name the deployment already uses", () => {

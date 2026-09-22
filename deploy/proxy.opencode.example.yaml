@@ -1,8 +1,9 @@
 # Private AOS proxy configuration for the OpenCode overlay. Every key is
 # documented in docs/configuration.md. Copy this file outside the checkout,
-# adjust the origins and the OpenCode address, and keep it owner-only-writable
-# (chmod 0600) and owned by the container uid or root. Secrets stay in the
-# mounted files this config points at; never put a secret value here.
+# adjust the origins and the OpenCode address, and keep it readable by the
+# container user: owned by AOS_UI_HOST_UID at mode 0600 or 0640, or by root at
+# 0644, never group- or world-writable. Secrets stay in the mounted files this
+# config points at; never put a secret value here.
 version: 1
 deploymentId: aos-opencode-local
 listen:

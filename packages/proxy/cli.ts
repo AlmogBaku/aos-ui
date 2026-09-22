@@ -24,9 +24,8 @@ if (import.meta.main) {
   void runProxyCli(process.argv, {
     logger,
     staticHandler,
-    // The only reader of the real environment, and of the real process uid.
+    // The only reader of the real environment.
     getenv: (name: string) => process.env[name],
-    getuid: process.getuid?.bind(process),
   }).catch((error: unknown) => {
     logger.error({
       event: "proxy.start_failed",

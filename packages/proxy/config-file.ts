@@ -521,13 +521,12 @@ function assertOverrideApplies(
       )
     return
   }
+  // An unknown kind is the schema's finding; reporting a row first would point
+  // the operator at the wrong fix.
+  if (runtimeKind === undefined) return
   if (override.appliesWhen !== runtimeKind)
     throw new ProxyConfigurationError(
-      `${variable} applies only to a ${override.appliesWhen} runtime${
-        runtimeKind === undefined
-          ? ", and no runtime of that kind is configured"
-          : `, and the configured runtime kind is ${runtimeKind}`
-      }`
+      `${variable} applies only to a ${override.appliesWhen} runtime, and the configured runtime kind is ${runtimeKind}`
     )
 }
 
@@ -634,11 +633,12 @@ export async function loadProxyConfig(
         })
       : DEFAULT_PROXY_CONFIG
   const merged = deepMerge(defaults, document)
+  // `guest:` with no value is not a lane the file opened.
   const sources = applyEnvOverrides(
     merged,
     options.getenv,
     runtimeKind,
-    document.guest !== undefined
+    isRecord(document.guest)
   )
   const result = ProxyConfigSchema.safeParse(merged)
   if (result.success) return result.data

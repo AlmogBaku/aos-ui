@@ -64,8 +64,11 @@ describe("runtime adapter boundary", () => {
     for (const path of files) {
       if (path === join(proxyRoot, "config.ts")) continue
       const source = await readFile(path, "utf8")
-      if (/import[^;]*\bProxyConfigSchema\b[^;]*from/u.test(source))
-        importers.push(path)
+      const specifiers = source.matchAll(
+        /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']\.\/config["']/gu
+      )
+      for (const [, names] of specifiers)
+        if (/\bProxyConfigSchema\b/u.test(names)) importers.push(path)
     }
 
     expect(importers).toEqual([join(proxyRoot, "config-file.ts")])
