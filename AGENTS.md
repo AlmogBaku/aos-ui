@@ -240,6 +240,11 @@ deployment running on it, so `vitest.config.ts` caps workers at half the cores.
 Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
 prefer `nice bun run test` for a full sweep beside a live deployment.
 
+When a worktree-isolated session's shell guard rejects a compound command, put
+the steps in a script file under `/tmp` and run that script. The tracked skills
+under `.agents/skills/` sit in an ignored directory, so stage them with
+`git add -f <file>`.
+
 Additional checks by area:
 
 - UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.

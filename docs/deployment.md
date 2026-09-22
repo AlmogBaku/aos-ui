@@ -68,6 +68,17 @@ the secret files before starting any runtime overlay. Local Docker Compose
 bind-mounts secret files and does not apply the long-form secret ownership
 fields, so the non-root proxy runs with these IDs. The defaults are `1000:1000`.
 
+The private configuration file is bind-mounted the same way and keeps its host
+ownership, so it must be owned by `AOS_UI_HOST_UID` at mode `0600` or `0640`,
+or owned by root at mode `0644` so the container user can still read it, and it
+must never be group- or world-writable. A file owned by a third user, or left
+at mode `0664` by `umask 002`, fails startup with an error naming the failed
+check. Verify it before every start or reload:
+
+```bash
+stat -c '%U %a' /etc/aos-ui/proxy.yaml
+```
+
 The example enables the guest listener. For an operator-only deployment,
 remove the `guest` block and its invitation-key secret mount from a private
 overlay. The one Hermes token and runtime instance remain unchanged.
@@ -132,7 +143,9 @@ AOS_UI_PUSH_VAPID_SUBJECT=mailto:ops@example.com      # or https: URL
 ```
 
 `AOS_UI_PUSH_VAPID_SUBJECT` is the VAPID contact that push services use to
-reach the operator. It is required when the push overlay is active.
+reach the operator. It is required when the push overlay is active, and a
+systemd-managed deployment reads it from `EnvironmentFile=`, so
+`/etc/aos-ui/aos-ui.env` must set it.
 
 For example, with Hermes:
 
@@ -365,31 +378,6 @@ docker compose -f compose.yaml -f compose.opencode.yaml down
 ```
 
 Do not add `-v` unless you intend to delete named native-state volumes.
-
-## Cutover from JSON
-
-Existing JSON configuration files continue to work because JSON is valid YAML.
-Rename at leisure and point `AOS_UI_PROXY_CONFIG_FILE` at the new name before
-the next reload. Push deployments require three additional steps:
-
-1. Add `AOS_UI_PUSH_VAPID_SUBJECT` to `/etc/aos-ui/aos-ui.env`. Re-running
-   `deploy/setup-push.sh` with the same arguments appends only what is missing.
-2. Optionally remove the `push` block from the private configuration file; the
-   `compose.push.yaml` overlay now supplies all three push fields as container
-   environment variables.
-3. Confirm the file is owned by `AOS_UI_HOST_UID` (or by root) and is not
-   group- or world-writable. Compose bind mounts keep host ownership, so a file
-   owned by a third user, or left at mode `0664` by `umask 002`, fails startup
-   with an error naming the failed check. Check with:
-   ```bash
-   stat -c '%U %a' /etc/aos-ui/proxy.yaml
-   ```
-   Before reloading, make it either owned by `AOS_UI_HOST_UID` at mode `0600`
-   or `0640`, or owned by root at mode `0644` so the container user can still
-   read it.
-
-The retired `AOS_RUNTIME_PROXY_CONFIG` variable is rejected on startup with a
-message pointing to `--config` or `AOS_UI_PROXY_CONFIG_FILE`.
 
 ## Validate Compose changes
 

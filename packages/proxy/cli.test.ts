@@ -467,20 +467,6 @@ describe("proxy executable", () => {
     ).rejects.toThrow(/--config/u)
   })
 
-  it("points an operator at the replacement for the removed variable", async () => {
-    const { configFile } = await proxyConfig()
-
-    await expect(
-      runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-        logger: { info: vi.fn(), error: vi.fn() },
-        getenv: (name) =>
-          name === "AOS_RUNTIME_PROXY_CONFIG" ? configFile : undefined,
-      })
-    ).rejects.toThrow(
-      /--config.*AOS_UI_PROXY_CONFIG_FILE|AOS_UI_PROXY_CONFIG_FILE/u
-    )
-  })
-
   it("reports a start failure an operator can act on", async () => {
     const start = vi.fn()
     const missing = join(tmpdir(), "aos-proxy-absent", "proxy.yaml")

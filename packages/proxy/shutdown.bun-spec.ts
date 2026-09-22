@@ -108,14 +108,12 @@ async function proxyConfig(port: number, hermesBaseUrl: string) {
 
 /**
  * The spawned proxy reads the real environment, so the spec hands it one with
- * every configuration override removed: a developer who followed the old
- * documentation still exports the rejected legacy variable.
+ * every configuration override removed and points it at the spec's own file.
  */
 function scrubbedEnvironment() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      ([name]) =>
-        !name.startsWith("AOS_UI_PROXY_") && name !== "AOS_RUNTIME_PROXY_CONFIG"
+      ([name]) => !name.startsWith("AOS_UI_PROXY_")
     )
   )
 }

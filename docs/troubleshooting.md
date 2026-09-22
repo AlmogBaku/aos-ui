@@ -45,9 +45,6 @@ path that does not exist is not an error; an explicitly supplied path that does
 not exist is. Use `--config` or `AOS_UI_PROXY_CONFIG_FILE` to make the path
 explicit.
 
-If the proxy fails with `AOS_RUNTIME_PROXY_CONFIG is no longer read`, pass
-`--config` or set `AOS_UI_PROXY_CONFIG_FILE` instead.
-
 To validate the schema interactively, check all required fields are present
 (`deploymentId`, `publicOrigin`, `runtime`), `version: 1`, `listen.host` is one
 of `127.0.0.1|::1|0.0.0.0|::`, and `publicOrigin` is `https:` unless the host

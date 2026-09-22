@@ -51,9 +51,8 @@ host. They are not read by the Vite dev server.
 
 ## Private proxy configuration
 
-The Bun proxy reads a private YAML configuration file. JSON is valid YAML and
-still parses, so an existing `.json` file continues to work without
-renaming. Start from the maintained example for the selected provider:
+The Bun proxy reads a private YAML configuration file. Start from the
+maintained example for the selected provider:
 [`Hermes`](../deploy/proxy.hermes.example.yaml),
 [`OpenClaw`](../deploy/proxy.openclaw.example.yaml), or
 [`OpenCode`](../deploy/proxy.opencode.example.yaml).
