@@ -4,7 +4,6 @@ import {
   HermesAuthenticationError,
   HermesGateway,
   HermesRequestAbortedError,
-  HermesRpcRejectedError,
   HermesRpcUncertainError,
   HermesUnavailableError,
   type HermesGatewayOptions,
@@ -225,7 +224,7 @@ describe("Hermes gateway dial and authentication", () => {
 
 describe("Hermes gateway request classification", () => {
   it.each([-32601, 4018])(
-    "preserves sanitized RPC error code %s without native detail",
+    "keeps the native text of RPC error code %s off the error message",
     async (code) => {
       const { gateway, sockets } = harness()
       await gateway.connect()
@@ -235,11 +234,35 @@ describe("Hermes gateway request classification", () => {
       const { id } = sockets[0]!.lastRequest() as { id: string }
       sockets[0]!.replyError(id, { code, message: "native secret detail" })
 
-      await expect(request).rejects.toEqual(new HermesRpcRejectedError(code))
+      await expect(request).rejects.toMatchObject({
+        name: "HermesRpcRejectedError",
+        code,
+        nativeMessage: "native secret detail",
+      })
       await expect(request).rejects.not.toThrow("native secret detail")
       await gateway.close()
     }
   )
+
+  it("keeps the machine-readable reason of a refusal", async () => {
+    const { gateway, sockets } = harness()
+    await gateway.connect()
+
+    const request = gateway.request("prompt.submit", {})
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    const { id } = sockets[0]!.lastRequest() as { id: string }
+    sockets[0]!.replyError(id, {
+      code: 4090,
+      message: "This chat is open in another Hermes window/terminal.",
+      data: { reason: "SESSION_NOT_OWNED" },
+    })
+
+    await expect(request).rejects.toMatchObject({
+      code: 4090,
+      reason: "SESSION_NOT_OWNED",
+    })
+    await gateway.close()
+  })
 
   it("correlates concurrent out-of-order replies on one persistent socket", async () => {
     const { gateway, sockets, factory } = harness()

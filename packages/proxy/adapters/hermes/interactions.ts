@@ -226,10 +226,11 @@ type ProjectedInteraction =
 
 export type HermesInteractionResult = {
   /**
-   * `in-use`: Hermes settled this request without withdrawing it, which only
-   * another user attached to the same Session does.
+   * `expired`: Hermes no longer holds this request open. It timed out, was
+   * cancelled, answered elsewhere, or belongs to another process; Hermes does
+   * not say which, so neither does AOS.
    */
-  status: "resolved" | "expired" | "already-resolved" | "uncertain" | "in-use"
+  status: "resolved" | "expired" | "already-resolved" | "uncertain"
 }
 
 export type HermesInteractionResumeSnapshot = {
@@ -867,7 +868,7 @@ export class HermesInteractions {
     // Nothing is known about this answer, so nothing is settled: the card stays
     // and a reconnect re-delivers the request to answer again.
     if (settlement === "uncertain") return { status: "uncertain" }
-    const status = settlement === "expired" ? "in-use" : "resolved"
+    const status = settlement === "expired" ? "expired" : "resolved"
     this.#pending.delete(key)
     this.#complete(key, { status }, fingerprint)
     this.#release(interaction.scope)
@@ -877,10 +878,8 @@ export class HermesInteractions {
   /**
    * Answer one open request and report what Hermes did with it. `request.answer`
    * carries the same frame `resolve_response` routes, and is the only path that
-   * says whether the request was still open: `expired` means Hermes had already
-   * settled it. A withdrawal arrives as `request.cancel` and settles the card
-   * before this point, so `expired` here is a request another user attached to
-   * the same Session already answered.
+   * says whether the request was still open: `expired` means Hermes no longer
+   * holds it open (`server_requests.py`), for a reason it does not report.
    *
    * An older Hermes without the method falls back to the response frame, whose
    * silence is what AOS answered with before.
@@ -948,7 +947,7 @@ export class HermesInteractions {
         throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
       }
       this.#settleDeferred()
-      this.#expireUnconfirmed(scope, reconciliation, attachment.liveSessionId)
+      this.#expireUnconfirmed(scope, reconciliation)
       const interrupts = this.pending(scope).flatMap(
         ({ interrupts: pending }) => pending
       )
@@ -1158,16 +1157,9 @@ export class HermesInteractions {
   /**
    * Whatever this reconciliation did not re-deliver is no longer open: Hermes
    * answered it elsewhere, cancelled it, or minted a new live Session for which
-   * it never existed. A cancellation settles its card when the event arrives, so
-   * a request the same live Session simply stopped listing was answered by
-   * another user attached to it; one belonging to a superseded live Session
-   * could never be answered at all.
+   * it never existed. Hermes does not say which, so each is simply expired.
    */
-  #expireUnconfirmed(
-    scope: HermesInteractionScope,
-    reconciliation: number,
-    liveSessionId: string
-  ) {
+  #expireUnconfirmed(scope: HermesInteractionScope, reconciliation: number) {
     for (const [key, interaction] of [...this.#pending])
       if (
         sameSession(interaction.scope, scope) &&
@@ -1178,11 +1170,7 @@ export class HermesInteractions {
         // acknowledgement, is what settled a request Hermes stopped listing.
         const answered = this.#unacknowledged.delete(interaction.request.id)
         this.#complete(key, {
-          status: answered
-            ? "already-resolved"
-            : interaction.liveSessionId === liveSessionId
-              ? "in-use"
-              : "expired",
+          status: answered ? "already-resolved" : "expired",
         })
       }
     this.#release(scope)

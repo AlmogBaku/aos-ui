@@ -4,6 +4,7 @@ import {
   AosSteerAcceptedNotificationSchema,
 } from "../../../protocol/acp"
 import {
+  isAwaitingStopError,
   isUncertainError,
   pendingRequestsOf,
   RunEventKind,
@@ -199,19 +200,22 @@ function errorOutbound(
   context: TranslateContext,
   event: RunEventOf<typeof RunEventKind.RUN_ERROR>
 ): AcpOutbound[] {
+  const failure = {
+    ...(event.code ? { code: event.code } : {}),
+    message: event.message.slice(0, 4_096),
+  }
   return [
     stateOutbound(
       context,
-      {
-        state: "idle",
-        stopReason: isUncertainError(event)
-          ? AOS_STOP_REASONS.uncertain
-          : AOS_STOP_REASONS.error,
-      },
-      {
-        ...(event.code ? { code: event.code } : {}),
-        message: event.message.slice(0, 4_096),
-      }
+      isAwaitingStopError(event)
+        ? { state: "running" }
+        : {
+            state: "idle",
+            stopReason: isUncertainError(event)
+              ? AOS_STOP_REASONS.uncertain
+              : AOS_STOP_REASONS.error,
+          },
+      failure
     ),
   ]
 }
@@ -346,8 +350,10 @@ export const translateRunEvent = ((state, event: RunEvent, context) => {
         outbound: finishedOutbound(context, event),
       }
     case RunEventKind.RUN_ERROR:
+      // A failure awaiting Stop reports on a run that is still going, so the
+      // segment keeps its state until the run actually ends.
       return {
-        state: initialTranslateState,
+        state: isAwaitingStopError(event) ? state : initialTranslateState,
         outbound: errorOutbound(context, event),
       }
     default:

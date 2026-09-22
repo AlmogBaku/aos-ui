@@ -208,6 +208,12 @@ const RunErrorEventSchema = z.looseObject({
   message: z.string(),
   code: z.string().optional(),
   usage: z.array(TokenUsageSchema).optional(),
+  /**
+   * The failure is final, but the provider's turn outlives it and ends only
+   * when stopped: the run stays active and stoppable, and its settlement, not
+   * this event, ends it.
+   */
+  awaitingStop: z.literal(true).optional(),
 })
 
 const TextMessageStartEventSchema = z.looseObject({
@@ -389,6 +395,11 @@ export function isRedialableError(event: RunEvent): boolean {
     event.type === RunEventKind.RUN_ERROR &&
     REDIALABLE_ERROR_CODES.some((code) => code === event.code)
   )
+}
+
+/** A final failure the run reports before its provider turn has been stopped. */
+export function isAwaitingStopError(event: RunEvent): boolean {
+  return event.type === RunEventKind.RUN_ERROR && event.awaitingStop === true
 }
 
 /**

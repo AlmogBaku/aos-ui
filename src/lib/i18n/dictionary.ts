@@ -175,6 +175,7 @@ export type Dictionary = {
     AOS_INTERACTION_UNCERTAIN: string
     AOS_INTERACTION_FAILED: string
     AOS_INTERACTION_EXPIRED: string
+    AOS_INTERACTION_LOST: string
     AOS_PROVIDER_RUN_FAILED: string
     AOS_PROVIDER_AGENT_UNAVAILABLE: string
     AOS_PROVIDER_BILLING_FAILED: string
@@ -182,6 +183,7 @@ export type Dictionary = {
     AOS_PROVIDER_UNAVAILABLE: string
     AOS_SESSION_BUSY: string
     AOS_SESSION_IN_USE: string
+    AOS_SESSION_LIMIT: string
     AOS_RESET_REQUIRED: string
     AOS_STOP_UNCERTAIN: string
     AOS_STREAM_OVERFLOW: string

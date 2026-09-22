@@ -272,7 +272,11 @@ export const AosStateMetaSchema = z.strictObject({
   at: z.string().datetime().optional(),
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
-  /** Present with the `_aos_error` and `_aos_uncertain` stop reasons. */
+  /**
+   * Present with the `_aos_error` and `_aos_uncertain` stop reasons, and on a
+   * `running` update when the run reports a final failure but stays active
+   * until it is stopped.
+   */
   code: z.string().min(1).max(128).optional(),
   message: z.string().max(4096).optional(),
 })

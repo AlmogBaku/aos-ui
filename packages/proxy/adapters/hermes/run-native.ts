@@ -28,7 +28,13 @@ import {
   nativeSlashInvocation,
   type HermesSlashExecution,
 } from "./slash-commands"
-import { HermesRunRewindConflictError } from "./run-failures"
+import { HermesRunRewindConflictError, publicDetail } from "./run-failures"
+import {
+  DEFAULT_RETRY_SCHEDULE,
+  isTransientRejection,
+  retryTransient,
+  type HermesRetrySchedule,
+} from "./transient-rejections"
 import type { HermesRecovery } from "./run-frames"
 import type { HermesRunScope } from "./run-state"
 import { ServerRunSteerUncertainError } from "../../core/runtime"
@@ -72,6 +78,8 @@ export type HermesSubmitRejection =
   | "command-with-attachments"
   | "session-gone"
   | "busy"
+  | "in-use"
+  | "session-limit"
   | "storage"
   | "invalid"
   | "unknown"
@@ -92,6 +100,8 @@ export type HermesSubmitOutcome =
   | {
       acknowledgement: "rejected"
       reason: HermesSubmitRejection
+      /** Hermes' own words for the refusal, already redaction-checked. */
+      detail?: string
       /** Set when a `prompt.submit` was refused, so nothing it carried ran. */
       refused?: HermesRefusedPrompt
     }
@@ -172,6 +182,8 @@ export type HermesNativeOptions = {
   /** Authoritative durable history, used only for rewind addressing. */
   history(scope: HermesRunScope): Promise<readonly unknown[]>
   log?: HermesLog
+  /** When a transient `prompt.submit` refusal is tried again. */
+  retry?: HermesRetrySchedule
 }
 
 /** A replayed ring page may legitimately be large; a single reply is bounded. */
@@ -185,13 +197,32 @@ const REJECTION_BY_CODE = new Map<number, HermesSubmitRejection>([
   [4001, "session-gone"],
   [4007, "session-gone"],
   [4009, "busy"],
-  [4090, "busy"],
   [4091, "busy"],
   [5070, "storage"],
   [5071, "storage"],
   [-32600, "invalid"],
   [-32602, "invalid"],
 ])
+
+/**
+ * A 4090 names why Hermes refused the Session slot in `error.data.reason`
+ * (`hermes_cli.active_sessions`). An unknown reason keeps Hermes' words behind
+ * a generic refusal rather than claiming an owner nobody reported.
+ */
+const REJECTION_BY_SLOT_REASON = new Map<string, HermesSubmitRejection>([
+  ["SESSION_NOT_OWNED", "in-use"],
+  ["MAX_CONCURRENT_SESSIONS", "session-limit"],
+])
+
+function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
+  const reason =
+    error.code === 4090
+      ? REJECTION_BY_SLOT_REASON.get(error.reason ?? "")
+      : error.code === undefined
+        ? undefined
+        : REJECTION_BY_CODE.get(error.code)
+  return reason ?? "unknown"
+}
 
 /** Hermes has no live Session left to address; the binding must be rebound. */
 const GONE_CODES = new Set([4001, 4007, -32602])
@@ -270,6 +301,7 @@ export class HermesNativeRuntime implements HermesRunNative {
   readonly #interactions: HermesNativeInteractions
   readonly #history: (scope: HermesRunScope) => Promise<readonly unknown[]>
   readonly #log: HermesLog | undefined
+  readonly #retry: HermesRetrySchedule
 
   constructor(options: HermesNativeOptions) {
     this.#transport = options.transport
@@ -277,6 +309,7 @@ export class HermesNativeRuntime implements HermesRunNative {
     this.#interactions = options.interactions
     this.#history = options.history
     this.#log = options.log
+    this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
   }
 
   resume(scope: HermesRunScope) {
@@ -381,9 +414,10 @@ export class HermesNativeRuntime implements HermesRunNative {
   }
 
   /**
-   * The one `prompt.submit` write. A refusal reports the params it carried, so
-   * the single session-gone re-send repeats that write against the rebound
-   * live Session instead of running the command path a second time.
+   * The one `prompt.submit` write. A transient refusal changed nothing, so the
+   * same write is repeated until Hermes settles. A refusal reports the params it
+   * carried, so the single session-gone re-send repeats that write against the
+   * rebound live Session instead of running the command path a second time.
    */
   async #submitPrompt(
     liveSessionId: string,
@@ -391,10 +425,14 @@ export class HermesNativeRuntime implements HermesRunNative {
   ): Promise<HermesSubmitOutcome> {
     let result: unknown
     try {
-      result = await this.#transport.request("prompt.submit", {
-        session_id: liveSessionId,
-        ...params,
-      })
+      result = await retryTransient(
+        () =>
+          this.#transport.request("prompt.submit", {
+            session_id: liveSessionId,
+            ...params,
+          }),
+        this.#retry
+      )
     } catch (error) {
       const outcome = this.#writeOutcome("prompt.submit", liveSessionId, error)
       return outcome.acknowledgement === "rejected"
@@ -511,9 +549,11 @@ export class HermesNativeRuntime implements HermesRunNative {
 
   /**
    * Classify a failure of a dispatched write. A JSON-RPC error frame is an
-   * authoritative rejection with a public reason; a lost acknowledgement is
-   * uncertain, exactly like a reply whose admission status is unusable
-   * (`submittedOutcome`); anything else means nothing usable came back.
+   * authoritative rejection with a public reason and Hermes' own words; a
+   * transient refusal that outlasted its retries ran nothing, so it is an
+   * outage; a lost acknowledgement is uncertain, exactly like a reply whose
+   * admission status is unusable (`submittedOutcome`); anything else means
+   * nothing usable came back.
    */
   #writeOutcome(
     method: string,
@@ -522,23 +562,30 @@ export class HermesNativeRuntime implements HermesRunNative {
   ): HermesSubmitOutcome {
     if (error instanceof HermesRpcRejectedError) {
       this.#logRejection(method, error)
-      const reason =
-        (error.code === undefined
-          ? undefined
-          : REJECTION_BY_CODE.get(error.code)) ?? "unknown"
+      if (isTransientRejection(error)) throw new HermesUnavailableError()
+      const reason = rejectionReason(error)
       if (reason === "session-gone") this.#attachments.invalidate(liveSessionId)
-      return { acknowledgement: "rejected", reason }
+      const detail = publicDetail(error.nativeMessage)
+      return {
+        acknowledgement: "rejected",
+        reason,
+        ...(detail === undefined ? {} : { detail }),
+      }
     }
     if (error instanceof HermesRpcUncertainError)
       return { acknowledgement: "uncertain" }
     throwUnavailable(error)
   }
 
-  /** The native code is the diagnosable part; no native message is retained. */
+  /**
+   * The native code and reason are the diagnosable part; the native message
+   * reaches only a public failure, and only redaction-checked.
+   */
   #logRejection(method: string, error: HermesRpcRejectedError) {
     this.#log?.warn("hermes.native.rejected", {
       method,
       ...(error.code === undefined ? {} : { code: error.code }),
+      ...(error.reason === undefined ? {} : { reason: error.reason }),
     })
   }
 

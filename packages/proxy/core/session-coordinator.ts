@@ -1,5 +1,6 @@
 import {
   RunEventKind,
+  isAwaitingStopError,
   isRedialableError,
   pendingRequestsOf,
   type ExecutionEvent,
@@ -947,9 +948,13 @@ export class SessionCoordinator {
       try {
         for await (const event of segment.handle.events) {
           if (execution.segment !== segment) return
+          // A failure awaiting Stop leaves the run active: its settlement, not
+          // this event, is the terminal one.
+          const awaitingStop = isAwaitingStopError(event)
           if (
-            event.type === RunEventKind.RUN_FINISHED ||
-            event.type === RunEventKind.RUN_ERROR
+            !awaitingStop &&
+            (event.type === RunEventKind.RUN_FINISHED ||
+              event.type === RunEventKind.RUN_ERROR)
           )
             try {
               await segment.onTerminal?.(event)
@@ -985,7 +990,7 @@ export class SessionCoordinator {
             else this.#announce({ ...origin, type: "run-finished" })
             break
           }
-          if (event.type === RunEventKind.RUN_ERROR) {
+          if (event.type === RunEventKind.RUN_ERROR && !awaitingStop) {
             // The journal outlives an interrupt so a reload after recovery
             // still replays this run from its beginning.
             if (!interrupted) this.#forgetJournal(segment)

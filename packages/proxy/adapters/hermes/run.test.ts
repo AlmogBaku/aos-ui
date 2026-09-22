@@ -1094,9 +1094,9 @@ describe("HermesRunEngine", () => {
     )
   })
 
-  it("reports an answer another user already gave as a Session in use", async () => {
+  it("reports an answer to a request Hermes no longer holds open as expired", async () => {
     const { handle } = await resumedRun({
-      respondInteractions: async () => [{ status: "in-use" as const }],
+      respondInteractions: async () => [{ status: "expired" as const }],
     })
 
     const events = await collect(handle)
@@ -1104,8 +1104,8 @@ describe("HermesRunEngine", () => {
     expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
       {
         type: RunEventKind.RUN_ERROR,
-        code: "AOS_SESSION_IN_USE",
-        message: "Another user answered this request in this Hermes Session.",
+        code: "AOS_INTERACTION_EXPIRED",
+        message: "This Hermes interaction is no longer pending.",
       },
     ])
   })
@@ -3300,6 +3300,138 @@ describe("HermesRunEngine", () => {
     ])
   })
 
+  /** A discovered turn Hermes holds `waiting` on a question it asked AOS. */
+  function waitingOnQuestion(
+    overrides: Partial<HermesRunNative> = {},
+    options: { lostInteractionGraceMs?: number } = {}
+  ) {
+    const ring = nativeTurn("live-secret", 1)
+    const retained = [
+      ring.messageStart("question-turn"),
+      ring.delta("Before I continue, I need one answer."),
+      ring.toolStart("clarify-1", "clarify", { question: "Which branch?" }),
+    ]
+    const native: { status: HermesNativeStatus } = { status: "waiting" }
+    const interrupted: string[] = []
+    const submitted: string[] = []
+    const questions = interrupts()
+    const engine = new HermesRunEngine(
+      runtime({
+        inspectExecution: async () => ({ running: true, status: "running" }),
+        replay: async () => ({
+          epoch: "epoch-1",
+          lastSeen: 3,
+          events: retained,
+        }),
+        cursor: async () => ({ epoch: "epoch-1", latestSeq: 3 }),
+        status: async () => native.status,
+        interrupt: async (liveSessionId) => {
+          interrupted.push(liveSessionId)
+          native.status = "idle"
+          return "interrupted"
+        },
+        submit: async (_liveSessionId, prompt) => {
+          submitted.push(prompt.text)
+          return { acknowledgement: "accepted", status: "streaming" }
+        },
+        onInterrupt: questions.onInterrupt,
+        ...overrides,
+      }),
+      options
+    )
+    return { engine, interrupted, submitted, questions }
+  }
+
+  it("reports a question Hermes no longer re-delivers and keeps the turn stoppable", async () => {
+    vi.useFakeTimers()
+    try {
+      const { engine, interrupted, submitted } = waitingOnQuestion()
+      const discovered = await engine.discover(scope, "recovered-run")
+      expect(discovered?.state).toBe("running")
+      const events: unknown[] = []
+      const reading = (async () => {
+        for await (const event of discovered!.handle.events) events.push(event)
+      })()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+        {
+          type: RunEventKind.RUN_ERROR,
+          code: "AOS_INTERACTION_LOST",
+          message:
+            "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
+          awaitingStop: true,
+        },
+      ])
+      expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
+
+      await expect(discovered!.handle.stop()).resolves.toBe("idle")
+      await reading
+      expect(interrupted).toEqual(["live-secret"])
+      expect(events.at(-1)).toMatchObject({
+        type: RunEventKind.RUN_FINISHED,
+        result: { stopped: true },
+      })
+
+      // Stop settled the native turn, so the Session takes the next prompt.
+      await engine.start(scope, input({ runId: "run-2" }))
+      expect(submitted).toEqual(["Hello Hermes"])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("reports no lost question when Hermes re-delivers it within the grace", async () => {
+    vi.useFakeTimers()
+    try {
+      const { engine, questions } = waitingOnQuestion()
+      const discovered = await engine.discover(scope, "recovered-run")
+      const events: unknown[] = []
+      const reading = (async () => {
+        for await (const event of discovered!.handle.events) events.push(event)
+      })()
+      const question = {
+        id: "question-1",
+        reason: "question",
+        message: "Which branch?",
+        responseSchema: { type: "string" },
+      }
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      questions.raise({ type: "interrupt", interrupts: [question] })
+      await vi.advanceTimersByTimeAsync(2_000)
+      await reading
+
+      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+      expect(events.at(-1)).toEqual({
+        type: RunEventKind.RUN_FINISHED,
+        threadId: scope.threadId,
+        runId: "recovered-run",
+        outcome: { type: "interrupt", interrupts: [question] },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("reports no lost question for a discovered turn Hermes is still working on", async () => {
+    vi.useFakeTimers()
+    try {
+      const { engine } = waitingOnQuestion({ status: async () => "working" })
+      const discovered = await engine.discover(scope, "recovered-run")
+      const events: unknown[] = []
+      void (async () => {
+        for await (const event of discovered!.handle.events) events.push(event)
+      })()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("classifies a changed Hermes replay epoch as reset-required", async () => {
     const engine = new HermesRunEngine(
       runtime({
@@ -5328,6 +5460,56 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
     expect(submissions).toBe(2)
   })
+
+  it.each([
+    [
+      "busy",
+      "AOS_SESSION_BUSY",
+      "Hermes is already running this Session.",
+      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo.",
+    ],
+    [
+      "in-use",
+      "AOS_SESSION_IN_USE",
+      "This Session is open in another app. Use it there, or start a new Session.",
+      "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.",
+    ],
+    [
+      "session-limit",
+      "AOS_SESSION_LIMIT",
+      "Hermes has reached its limit of active Sessions.",
+      "Hermes is at the active session limit (4/4). Try again when another session finishes.",
+    ],
+    [
+      "unknown",
+      "AOS_PROVIDER_RUN_FAILED",
+      "Hermes rejected this command.",
+      "Hermes refused this prompt.",
+    ],
+  ] as const)(
+    "reports a %s refusal as %s followed by Hermes' own words",
+    async (reason, code, headline, detail) => {
+      const engine = new HermesRunEngine(
+        runtime({
+          submit: async () => ({
+            acknowledgement: "rejected",
+            reason,
+            detail,
+          }),
+        })
+      )
+
+      const events = await collect(await engine.start(scope, input()))
+
+      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+        {
+          type: RunEventKind.RUN_ERROR,
+          code,
+          message: `${headline}\n${detail}`,
+        },
+      ])
+    }
+  )
 
   it("rebinds the durable Session once and resubmits when Hermes reports it gone", async () => {
     const attachment = observation()

@@ -260,16 +260,55 @@ function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
     : error
 }
 
+/**
+ * The final failure a still-running run already reported, which it keeps until
+ * it ends however it ends: a run awaiting Stop reports its failure first.
+ */
+function reportedFailure(
+  state: ProjectorState,
+  runId: string | undefined
+): TurnFailure | undefined {
+  const { execution } = state
+  return execution.status === "running" && execution.runId === runId
+    ? execution.error
+    : undefined
+}
+
+/**
+ * A run that reports a final failure but stays active until it is stopped. The
+ * failure reads on the turn the run opened, or on a hosted one when it opened
+ * none, and the Session stays running so Stop remains available.
+ */
+function applyRunningFailure(
+  state: ProjectorState,
+  carried: { runId?: string },
+  error: TurnFailure
+): ProjectorState {
+  const id = activeAssistantId(state) ?? interruptHostId(carried.runId)
+  const failing: ProjectorState = {
+    ...state,
+    execution: { ...state.execution, status: "running", ...carried, error },
+  }
+  return {
+    ...onMessage(failing, id, "assistant", (message) =>
+      withStatus(message, { type: "incomplete", reason: "error", error })
+    ),
+    activeAssistantId: id,
+  }
+}
+
 function applyIdle(
   state: ProjectorState,
   carried: { runId?: string },
   stopReason: string | undefined,
   aos: StateMeta | undefined
 ): ProjectorState {
+  const reported = reportedFailure(state, carried.runId)
   const failed =
+    reported !== undefined ||
     stopReason === AOS_STOP_REASONS.error ||
     stopReason === AOS_STOP_REASONS.uncertain
-  const error = failed ? errorFrom(aos) : undefined
+  const error = reported ?? (failed ? errorFrom(aos) : undefined)
   const execution: ProjectorExecution = {
     status: failed ? "failed" : "idle",
     ...carried,
@@ -320,13 +359,17 @@ function applyState(
   // moves the Session's own status — and records the moment every turn this run
   // opens is timed from.
   if (next === "running") {
+    const failure = errorFrom(aos)
+    if (failure) return applyRunningFailure(state, carried, failure)
     const startedAt = epochOf(aos?.at)
+    const reported = reportedFailure(state, runId)
     return {
       ...state,
       execution: {
         status: "running",
         ...carried,
         ...(startedAt === undefined ? {} : { startedAt }),
+        ...(reported === undefined ? {} : { error: reported }),
       },
     }
   }

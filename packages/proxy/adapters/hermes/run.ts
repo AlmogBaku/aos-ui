@@ -30,7 +30,9 @@ import {
   HermesRunRewindConflictError,
   nativeFailure,
   providerUnavailable,
+  RUN_FAILED_LOG,
   RUN_FAILURES,
+  withDetail,
   type RunFailure,
 } from "./run-failures"
 import {
@@ -64,7 +66,11 @@ import {
   type SettlingWatcher,
 } from "./run-state"
 import type { HermesLog } from "./gateway"
-import type { HermesRunNative, HermesSubmitPrompt } from "./run-native"
+import type {
+  HermesRunNative,
+  HermesSubmitPrompt,
+  HermesSubmitRejection,
+} from "./run-native"
 
 export {
   HermesRunPublicError,
@@ -77,6 +83,24 @@ export type HermesRunHandle = ServerRunHandle
 
 export type HermesReconnectRequest = RecoveryRequest
 
+/** The public failure each refused submit reports, with Hermes' own words. */
+const REFUSAL_FAILURES: Record<
+  Exclude<HermesSubmitRejection, "command-with-attachments" | "session-gone">,
+  RunFailure
+> = {
+  busy: RUN_FAILURES.sessionBusy,
+  "in-use": RUN_FAILURES.sessionInUse,
+  "session-limit": RUN_FAILURES.sessionLimit,
+  storage: RUN_FAILURES.commandRejected,
+  invalid: RUN_FAILURES.commandRejected,
+  unknown: RUN_FAILURES.commandRejected,
+}
+
+/**
+ * How long a discovered turn Hermes reports `waiting` has for its open request
+ * to be re-delivered before AOS reports the question lost.
+ */
+const LOST_INTERACTION_GRACE_MS = 2_000
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const RUN_INPUT_FIELDS = new Set([
@@ -119,10 +143,16 @@ export class HermesRunEngine {
   readonly #settling = new Map<string, SettlingWatcher>()
   readonly #plans = new Map<string, { messageId: string; todos: Todo[] }>()
   readonly #host: RunEngineHost
+  readonly #lostInteractionGraceMs: number
 
-  constructor(native: HermesRunNative, options: { log?: HermesLog } = {}) {
+  constructor(
+    native: HermesRunNative,
+    options: { log?: HermesLog; lostInteractionGraceMs?: number } = {}
+  ) {
     this.#native = native
     this.#log = options.log ?? { warn: () => undefined }
+    this.#lostInteractionGraceMs =
+      options.lostInteractionGraceMs ?? LOST_INTERACTION_GRACE_MS
     this.#host = {
       native: this.#native,
       log: this.#log,
@@ -224,8 +254,6 @@ export class HermesRunEngine {
       if (active.terminal) return this.#handle(active)
       if (results.some(({ status }) => status === "uncertain"))
         this.#detach(active, RUN_FAILURES.interactionUncertain)
-      else if (results.some(({ status }) => status === "in-use"))
-        this.#fail(active, RUN_FAILURES.sessionInUse)
       else if (results.some(({ status }) => status === "expired"))
         this.#fail(active, RUN_FAILURES.interactionExpired)
       return this.#handle(active)
@@ -336,10 +364,47 @@ export class HermesRunEngine {
       }
     }
     if (snapshot.status !== "running") return undefined
-    return {
-      state: "running" as const,
-      handle: await this.recover(scope, { threadId: scope.threadId, runId }),
-    }
+    const handle = await this.recover(scope, {
+      threadId: scope.threadId,
+      runId,
+    })
+    this.#watchLostInteraction(scope)
+    return { state: "running" as const, handle }
+  }
+
+  /**
+   * A discovered turn Hermes holds `waiting` is blocked on a request. Hermes
+   * re-delivers every open request on resume, so one that has not arrived
+   * within the grace, while the Session did nothing else, is one AOS can no
+   * longer answer: only Stop ends that turn, and the failure says so.
+   */
+  #watchLostInteraction(scope: HermesRunScope) {
+    const active = this.#active.get(sessionKey(scope))
+    if (!active || active.terminal) return
+    const { liveSessionId, lastSeen } = active
+    const unchanged = () =>
+      this.#active.get(sessionKey(scope)) === active &&
+      !active.terminal &&
+      !active.stopping &&
+      !active.uncertain &&
+      !active.detached &&
+      active.liveSessionId === liveSessionId &&
+      active.lastSeen === lastSeen
+    const timer = setTimeout(async () => {
+      if (!unchanged()) return
+      const status = await readStatus(this.#host, liveSessionId)
+      if (status !== "waiting" || !unchanged()) return
+      const { code, message } = RUN_FAILURES.interactionLost
+      this.#log.warn(RUN_FAILED_LOG, { publicCode: code })
+      this.#emit(active, {
+        type: RunEventKind.RUN_ERROR,
+        message,
+        code,
+        awaitingStop: true,
+      })
+    }, this.#lostInteractionGraceMs)
+    // Detection is reconciliation, never a reason to keep the process alive.
+    if (typeof timer !== "number") timer.unref()
   }
 
   /** The same run continues on a new stream from the browser's own cursor. */
@@ -414,10 +479,11 @@ export class HermesRunEngine {
     }
     if (outcome.reason === "command-with-attachments")
       return this.#fail(active, RUN_FAILURES.commandWithAttachments)
-    if (outcome.reason === "busy")
-      return this.#fail(active, RUN_FAILURES.sessionBusy)
     if (outcome.reason !== "session-gone")
-      return this.#fail(active, RUN_FAILURES.commandRejected)
+      return this.#fail(
+        active,
+        withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
+      )
     if (retried) return this.#fail(active, RUN_FAILURES.resetRequired)
     const refused = outcome.refused
     try {
