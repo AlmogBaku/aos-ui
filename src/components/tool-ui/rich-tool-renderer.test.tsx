@@ -28,8 +28,6 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
-import { Plan } from "./plan/index"
-import { SerializablePlanSchema } from "./plan/schema"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
 
@@ -339,23 +337,11 @@ describe("accessible rich-tool semantics", () => {
     canRespond: false,
   } as const
 
-  it("renders standalone ToolChrome and Plan titles at heading level 2", () => {
-    render(
-      <>
-        <ToolChrome title="Standalone tool" state={completeState} />
-        <Plan
-          id="standalone-plan"
-          title="Standalone plan"
-          todos={[{ id: "first", label: "First step", status: "pending" }]}
-        />
-      </>
-    )
+  it("renders a standalone ToolChrome title at heading level 2", () => {
+    render(<ToolChrome title="Standalone tool" state={completeState} />)
 
     expect(
       screen.getByRole("heading", { name: "Standalone tool", level: 2 })
-    ).toBeVisible()
-    expect(
-      screen.getByRole("heading", { name: "Standalone plan", level: 2 })
     ).toBeVisible()
   })
 
@@ -365,12 +351,6 @@ describe("accessible rich-tool semantics", () => {
         <ToolChrome
           title="Nested tool"
           state={completeState}
-          headingLevel={3}
-        />
-        <Plan
-          id="nested-plan"
-          title="Nested plan"
-          todos={[{ id: "first", label: "First step", status: "pending" }]}
           headingLevel={3}
         />
         <QuestionFlow
@@ -383,7 +363,7 @@ describe("accessible rich-tool semantics", () => {
       </>
     )
 
-    for (const name of ["Nested tool", "Nested plan", "Nested question"]) {
+    for (const name of ["Nested tool", "Nested question"]) {
       expect(screen.getByRole("heading", { name, level: 3 })).toBeVisible()
     }
   })
@@ -443,31 +423,6 @@ describe("accessible rich-tool semantics", () => {
   })
 
   it.each([
-    ["en", "Plan progress"],
-    ["he", "התקדמות התוכנית"],
-  ] as const)(
-    "gives the Plan progressbar its localized %s accessible name",
-    (locale, accessibleName) => {
-      render(
-        <ToolUiLocaleProvider locale={locale}>
-          <Plan
-            id={`plan-${locale}`}
-            title="Plan"
-            todos={[
-              { id: "done", label: "Done", status: "completed" },
-              { id: "next", label: "Next", status: "pending" },
-            ]}
-          />
-        </ToolUiLocaleProvider>
-      )
-
-      expect(
-        screen.getByRole("progressbar", { name: accessibleName })
-      ).toHaveAttribute("aria-valuenow", "50")
-    }
-  )
-
-  it.each([
     ["en", "Question progress"],
     ["he", "התקדמות השאלה"],
   ] as const)(
@@ -499,13 +454,7 @@ describe("accessible rich-tool semantics", () => {
     }
   )
 
-  it("keeps headingLevel out of serializable Plan and QuestionFlow payloads", () => {
-    const plan = SerializablePlanSchema.parse({
-      id: "plan-schema",
-      title: "Plan schema",
-      todos: [{ id: "step", label: "Step", status: "pending" }],
-      headingLevel: 3,
-    })
+  it("keeps headingLevel out of the serializable QuestionFlow payload", () => {
     const question = SerializableQuestionFlowSchema.parse({
       id: "question-schema",
       step: 1,
@@ -514,7 +463,6 @@ describe("accessible rich-tool semantics", () => {
       headingLevel: 3,
     })
 
-    expect(plan).not.toHaveProperty("headingLevel")
     expect(question).not.toHaveProperty("headingLevel")
   })
 })

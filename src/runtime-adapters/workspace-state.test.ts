@@ -74,22 +74,19 @@ describe("workspace capabilities", () => {
   })
 })
 
-describe("Plan and Todo independence", () => {
-  it("stores Plans by message and Todos by Session without deriving one from the other", () => {
+describe("Session-scoped Todos", () => {
+  it("keeps Todos with the Session that owns them", () => {
     const store = new WorkspaceArtifactStore()
 
-    store.setPlan("message-1", {
-      id: "plan-1",
-      title: "Launch plan",
-      steps: [{ id: "step-1", label: "Define scope", status: "active" }],
-    })
     expect(store.getTodos("thread-1")).toEqual([])
 
     store.setTodos("thread-1", [
       { id: "todo-1", label: "Confirm audience", status: "pending" },
     ])
-    expect(store.getPlan("message-1")?.title).toBe("Launch plan")
-    expect(store.getPlan("thread-1")).toBeUndefined()
+    expect(store.getTodos("thread-1")).toEqual([
+      { id: "todo-1", label: "Confirm audience", status: "pending" },
+    ])
+    expect(store.getTodos("thread-2")).toEqual([])
   })
 })
 

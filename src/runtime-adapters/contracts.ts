@@ -109,18 +109,6 @@ export type TodoItem = {
   status: TodoStatus
 }
 
-export type PlanStep = {
-  id: string
-  label: string
-  status: TodoStatus
-}
-
-export type PlanArtifact = {
-  id: string
-  title: string
-  steps: PlanStep[]
-}
-
 export type AgentPatch = Partial<Pick<AgentSummary, "name" | "description">>
 
 export type SessionCreationOptions = {

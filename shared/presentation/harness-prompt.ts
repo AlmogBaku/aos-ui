@@ -80,8 +80,8 @@ export function buildAosUiHarnessPrompt(
 
   sections.push(
     capabilities.providerTodos
-      ? "- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose or a Plan."
-      : "- Todo controls are unavailable in this UI. Native Todo tools may still exist; use only actual native capabilities. Plans and prose must not claim to create or update Todos."
+      ? "- Todos are session-scoped, provider-owned execution state. Update them only through the provider's native Todo mechanism; never derive a Todo from prose."
+      : "- Todo controls are unavailable in this UI. Native Todo tools may still exist; use only actual native capabilities. Prose must not claim to create or update Todos."
   )
 
   sections.push(

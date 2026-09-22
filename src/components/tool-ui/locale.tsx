@@ -91,9 +91,7 @@ export type ToolUiLocaleLabels = {
     scopeTitle: string
     scopeLabel: string
   }
-  planProgressLabel: string
   questionProgressLabel: string
-  hideMorePlanSteps: string
   activities: Record<ToolUiActivityKind, string>
   activityStatuses: Record<ToolUiActivityStatus, string>
   activityTranscript: {
@@ -224,9 +222,7 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     scopeTitle: "Persistent scope",
     scopeLabel: "Persistent permission scope",
   },
-  planProgressLabel: "Plan progress",
   questionProgressLabel: "Question progress",
-  hideMorePlanSteps: "Hide extra steps",
   activities: {
     subagent: "Subagent",
     skill: "Skill",
@@ -375,9 +371,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     scopeTitle: "היקף הרשאה קבועה",
     scopeLabel: "היקף ההרשאה הקבועה",
   },
-  planProgressLabel: "התקדמות התוכנית",
   questionProgressLabel: "התקדמות השאלה",
-  hideMorePlanSteps: "הסתרת השלבים הנוספים",
   activities: {
     subagent: "סוכן משנה",
     skill: "מיומנות",

@@ -1,5 +1,4 @@
 import type {
-  PlanArtifact,
   AgentSummary,
   SessionActionCapabilities,
   TodoItem,
@@ -32,17 +31,7 @@ export function getWorkspaceCapabilities(
 }
 
 export class WorkspaceArtifactStore {
-  readonly #plansByMessage = new Map<string, PlanArtifact>()
   readonly #todosByThread = new Map<string, TodoItem[]>()
-
-  setPlan(messageId: string, plan: PlanArtifact) {
-    this.#plansByMessage.set(messageId, structuredClone(plan))
-  }
-
-  getPlan(messageId: string) {
-    const plan = this.#plansByMessage.get(messageId)
-    return plan ? structuredClone(plan) : undefined
-  }
 
   setTodos(threadId: string, todos: TodoItem[]) {
     this.#todosByThread.set(threadId, structuredClone(todos))
