@@ -184,7 +184,11 @@ test("Monty stays inspect-only and malformed tools retain a safe JSON fallback",
 
   await sendPrompt(page, "Return a malformed tool")
 
-  await page.getByRole("button", { name: "1 tool call" }).last().click()
+  // The reply is all trace and no answer, so the whole turn folds.
+  await page
+    .getByRole("button", { name: /^Worked/ })
+    .last()
+    .click()
   const fallback = page.locator('[data-slot="tool-call"]').last()
   await expect(fallback).toContainText("unknown_fixture_tool")
   await fallback.getByRole("button").click()

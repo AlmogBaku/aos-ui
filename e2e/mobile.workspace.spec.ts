@@ -54,19 +54,22 @@ test("expanded reasoning remains independently scrollable", async ({
 }) => {
   await page.goto("/en")
 
-  const timeline = page.locator('[data-slot="tool-timeline"]').first()
-  await timeline.locator("button").first().click()
-
-  const reasoningTrigger = timeline
-    .locator('[data-slot="reasoning-trigger"]')
+  // A settled turn folds the work it did, so its reasoning opens from there.
+  await page
+    .getByRole("button", { name: /^Worked/ })
     .first()
-  const reasoningBody = timeline.locator(".aui-reasoning-text-content").first()
+    .click()
+
+  const reasoningTrigger = page
+    .getByRole("button", { name: "Reasoning" })
+    .first()
+  const reasoningBody = page.locator(".aui-reasoning-text-content").first()
   await reasoningTrigger.click()
   await reasoningBody.evaluate((element) => {
     element.textContent = `${"Long reasoning must remain fully inspectable. ".repeat(80)}END`
   })
 
-  const reasoning = timeline.locator('[data-slot="reasoning-text"]').first()
+  const reasoning = page.locator('[data-slot="reasoning-text"]').first()
   await expect(reasoning).toBeVisible()
 
   const threadViewport = page.locator('[data-slot="aui_thread-viewport"]')
@@ -87,20 +90,22 @@ test("expanded reasoning remains independently scrollable", async ({
 test("expanded execution rows render expected elements", async ({ page }) => {
   await page.goto("/en")
 
-  const timeline = page.locator('[data-slot="tool-timeline"]').first()
-  await timeline.locator("button").first().click()
-
-  const firstReasoning = timeline
-    .getByText("Reasoning", { exact: true })
-    .first()
-  const nextToolLabel = timeline.getByText("Read", { exact: true }).first()
-  const firstToolChip = timeline.getByText("planning-dataset-q1.md", {
+  const firstToolChip = page.getByText("planning-dataset-q1.md", {
     exact: true,
   })
-  const reasoningTrigger = timeline
-    .locator('[data-slot="reasoning-trigger"]')
+  // The fold is closed, so the turn's execution rows are not on the page yet.
+  await expect(firstToolChip).toBeHidden()
+  await page
+    .getByRole("button", { name: /^Worked/ })
     .first()
-  const firstToolTrigger = timeline
+    .click()
+
+  const firstReasoning = page.getByText("Reasoning", { exact: true }).first()
+  const nextToolLabel = page.getByText("Read", { exact: true }).first()
+  const reasoningTrigger = page
+    .getByRole("button", { name: "Reasoning" })
+    .first()
+  const firstToolTrigger = page
     .locator('[data-slot="tool-call"] button')
     .first()
   await expect(firstReasoning).toBeVisible()
