@@ -34,6 +34,11 @@ Any intentional visual departure must be called out before it is introduced.
 
 ## Intentional departures introduced 2026-09
 
+- **A large Mermaid diagram spans the message content width:** diagrams wider
+  than the shared `max-w-2xl` card were scaled down to illegibility. One that
+  fits keeps the compact card and no controls; a larger one widens to the
+  message content width and gains zoom and an expanded view in its existing
+  footer row, rather than an overlay or a second card.
 - **Attention color is orange (`--warning`):** waiting-for-input and attention
   states use the semantic `--warning` token. Blue (`--info`) was tried on
   2026-09 and replaced on 2026-09-20 because it read as informational rather

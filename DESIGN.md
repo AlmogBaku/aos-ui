@@ -336,6 +336,12 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   lightweight, while deferred Markdown retains a localized raw-text fallback.
 - **Safety:** charts, maps, Mermaid, tool results, and generated content retain
   textual alternatives. Never execute generated browser code or arbitrary HTML.
+- **Mermaid size follows the diagram:** one that fits stays a compact card at
+  its natural size with no controls. One past 36rem wide or 24rem tall widens to
+  the message content width and renders in a bounded, scrollable frame (max
+  `28rem` tall) that scales the diagram down only to a readable floor, with zoom
+  and an expanded view in the card's existing footer row. The diagram renders in
+  one place at a time, and the source fallback stays available in every state.
 - **Published artifacts:** audio, video, and images are first-class inline
   outcomes with no download control of their own. Audio and video play in the
   message as native players inside a `w-full max-w-[30rem]` container, whose

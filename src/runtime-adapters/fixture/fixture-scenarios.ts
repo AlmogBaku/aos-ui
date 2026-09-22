@@ -19,6 +19,7 @@ export const fixtureScenarioNames = [
   "audio",
   "video",
   "mermaid",
+  "mermaid-wide",
   "mermaid-incomplete",
   "mermaid-malformed",
   "mermaid-oversized",
@@ -320,6 +321,18 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
           {
             type: "text",
             text: `\`\`\`mermaid\nflowchart LR\n${"  A\n".repeat(401)}\`\`\``,
+          },
+        ],
+      }
+    }
+
+    if (input.includes("wide") || input.includes("large")) {
+      return {
+        name: "mermaid-wide",
+        parts: [
+          {
+            type: "text",
+            text: "```mermaid\nflowchart LR\n  Intake[Intake the request] --> Triage[Triage and classify]\n  Triage --> Research[Research the sources]\n  Research --> Draft[Draft the answer]\n  Draft --> Review[Review for accuracy]\n  Review --> Publish[Publish the brief]\n  Publish --> Archive[Archive the record]\n```",
           },
         ],
       }

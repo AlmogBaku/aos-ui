@@ -18,6 +18,7 @@ describe("deterministic fixture scenarios", () => {
       ["show a map", "map"],
       ["show metrics", "stats"],
       ["show mermaid", "mermaid"],
+      ["show wide mermaid", "mermaid-wide"],
       ["show incomplete mermaid stream", "mermaid-incomplete"],
       ["show malformed mermaid", "mermaid-malformed"],
       ["show oversized mermaid", "mermaid-oversized"],

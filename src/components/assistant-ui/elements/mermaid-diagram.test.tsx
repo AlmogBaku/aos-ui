@@ -29,6 +29,9 @@ vi.mock("mermaid", () => ({
 
 const CODE = "flowchart LR\n  A[Request] --> B[Response]"
 
+const WIDE_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 200"><marker viewBox="0 0 10 10"><path d="M 0 0 L 10 5 z" /></marker><text>Wide flow</text></svg>'
+
 const components: SyntaxHighlighterProps["components"] = {
   Pre: ({ node, ...props }) => {
     void node
@@ -275,5 +278,97 @@ describe("MermaidDiagram", () => {
     })
     expect(viewport).toHaveTextContent("Current")
     expect(viewport).not.toHaveTextContent("Stale")
+  })
+  it("keeps a diagram that already fits free of zoom controls", async () => {
+    render(<TestDiagram />)
+
+    expect(
+      await screen.findByRole("img", { name: "Mermaid diagram" })
+    ).toHaveTextContent("Rendered flow")
+    expect(
+      screen.queryByRole("button", { name: "Zoom in on the diagram" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Zoom out of the diagram" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Expand the diagram" })
+    ).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "View diagram source" })
+    ).toBeVisible()
+  })
+
+  it("offers zoom controls for a diagram too wide for the compact card", async () => {
+    const user = userEvent.setup()
+    mermaid.render.mockResolvedValue({ svg: WIDE_SVG })
+
+    render(<TestDiagram />)
+
+    expect(
+      await screen.findByRole("img", { name: "Mermaid diagram" })
+    ).toHaveTextContent("Wide flow")
+    expect(screen.getByText("Diagram zoom 100%")).toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("button", { name: "Zoom in on the diagram" })
+    )
+    expect(screen.getByText("Diagram zoom 125%")).toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("button", { name: "Zoom out of the diagram" })
+    )
+    expect(screen.getByText("Diagram zoom 100%")).toBeInTheDocument()
+
+    const zoomOut = screen.getByRole("button", {
+      name: "Zoom out of the diagram",
+    })
+    for (let click = 0; click < 4; click += 1) await user.click(zoomOut)
+    expect(zoomOut).toBeDisabled()
+  })
+
+  it("moves the diagram into an expanded view and back", async () => {
+    const user = userEvent.setup()
+    mermaid.render.mockResolvedValue({ svg: WIDE_SVG })
+
+    render(<TestDiagram />)
+
+    const expand = await screen.findByRole("button", {
+      name: "Expand the diagram",
+    })
+    await user.click(expand)
+
+    const expanded = await screen.findByRole("img", {
+      name: "Mermaid diagram, expanded view",
+    })
+    expect(expanded).toHaveTextContent("Wide flow")
+    // The expanded view holds the only copy of the diagram while it is open.
+    expect(screen.getAllByText("Wide flow")).toHaveLength(1)
+
+    await user.click(
+      screen.getByRole("button", { name: "Close the expanded diagram" })
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("img", { name: "Mermaid diagram, expanded view" })
+      ).toBeNull()
+    )
+    expect(
+      screen.getByRole("img", { name: "Mermaid diagram" })
+    ).toHaveTextContent("Wide flow")
+    expect(expand).toHaveFocus()
+  })
+
+  it("localizes the diagram controls in Hebrew", async () => {
+    mermaid.render.mockResolvedValue({ svg: WIDE_SVG })
+
+    render(<TestDiagram locale="he" />)
+
+    expect(
+      await screen.findByRole("button", { name: "הרחבת התרשים" })
+    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "הגדלת התרשים" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "הקטנת התרשים" })).toBeVisible()
   })
 })
