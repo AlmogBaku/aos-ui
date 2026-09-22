@@ -50,11 +50,53 @@ export function composerUsageFromTokens({
   return { system, tools, messages: used - system - tools, total }
 }
 
+export type ComposerSlashCommand = {
+  readonly name: string
+  readonly description?: string | undefined
+}
+
+/**
+ * A slash command the workspace runs itself instead of sending to the runtime:
+ * `/new` opens a Session, which no provider turn can do. `args` is whatever
+ * followed the command name, trimmed; empty when the command stood alone.
+ */
+export type ComposerLocalCommand = ComposerSlashCommand & {
+  readonly run: (args: string) => void | Promise<void>
+}
+
+const LOCAL_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/u
+
+/** The local command a draft invokes, by name, case-insensitively. */
+export function matchLocalCommand(
+  text: string,
+  commands: readonly ComposerLocalCommand[] | undefined
+): { command: ComposerLocalCommand; args: string } | undefined {
+  const match = LOCAL_COMMAND.exec(text.trim())
+  if (!match || !commands?.length) return undefined
+  const name = match[1]!.toLowerCase()
+  const command = commands.find((entry) => entry.name.toLowerCase() === name)
+  return command ? { command, args: match[2]?.trim() ?? "" } : undefined
+}
+
+/** Local commands lead the completion menu and shadow a provider's namesake. */
+export function menuSlashCommands(
+  features: Pick<ComposerFeatureViewModel, "slashCommands" | "localCommands">
+): readonly ComposerSlashCommand[] {
+  const local = features.localCommands ?? []
+  const shadowed = new Set(local.map((command) => command.name.toLowerCase()))
+  return [
+    ...local.map(({ name, description }) => ({ name, description })),
+    ...(features.slashCommands ?? []).filter(
+      (command) => !shadowed.has(command.name.toLowerCase())
+    ),
+  ]
+}
+
 export type ComposerFeatureViewModel = {
   /** Undefined hides completion only; execution remains runtime-owned. */
-  readonly slashCommands?:
-    | readonly { readonly name: string; readonly description?: string }[]
-    | undefined
+  readonly slashCommands?: readonly ComposerSlashCommand[] | undefined
+  /** Commands the UI runs itself; a submitted one never reaches the runtime. */
+  readonly localCommands?: readonly ComposerLocalCommand[] | undefined
   readonly steer?:
     | ((request: {
         readonly requestId: string

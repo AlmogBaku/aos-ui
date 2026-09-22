@@ -1141,6 +1141,40 @@ describe("Thread accessibility", () => {
     expect(stop).not.toHaveBeenCalled()
   })
 
+  it("runs a local slash command instead of sending it as a turn", async () => {
+    const user = userEvent.setup()
+    const run = vi.fn(async () => ({ content: [] }))
+    const open = vi.fn()
+    render(
+      <LocalThread
+        model={{ run }}
+        initialMessages={[]}
+        composerFeatures={{
+          slashCommands: [{ name: "new", description: "Provider's /new" }],
+          localCommands: [
+            { name: "new", description: "Start a new Session", run: open },
+          ],
+        }}
+      />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+
+    await user.type(input, "/ne")
+    const menu = await screen.findByRole("listbox", { name: "Slash commands" })
+    // The workspace's command shadows the provider's namesake in the menu.
+    expect(within(menu).getAllByRole("option")).toHaveLength(1)
+    expect(menu).toHaveTextContent("Start a new Session")
+    await user.keyboard("{Escape}")
+
+    await user.clear(input)
+    await user.type(input, "/New   first prompt ")
+    await user.keyboard("{Enter}")
+
+    await waitFor(() => expect(open).toHaveBeenCalledWith("first prompt"))
+    expect(run).not.toHaveBeenCalled()
+    expect(input).toHaveValue("")
+  })
+
   it("does not cancel a running response when Escape closes the slash command popover", async () => {
     const user = userEvent.setup()
     const stop = vi.fn()

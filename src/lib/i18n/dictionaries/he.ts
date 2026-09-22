@@ -112,6 +112,7 @@ export const he = {
   actions: {
     newAgent: "סוכן חדש",
     newSession: "שיחה חדשה",
+    newSessionCommand: "פתיחת שיחה חדשה עם הסוכן הזה",
     openAgents: "פתיחת רשימת הסוכנים",
     openAgentDetails: "פתיחת פרטי הסוכן",
     closePanel: "סגירת החלונית",

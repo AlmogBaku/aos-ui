@@ -118,6 +118,7 @@ export const en = {
   actions: {
     newAgent: "New Agent",
     newSession: "New session",
+    newSessionCommand: "Start a new Session with this Agent",
     openAgents: "Open Agents",
     openAgentDetails: "Open Agent details",
     closePanel: "Close panel",

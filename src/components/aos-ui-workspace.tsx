@@ -21,6 +21,7 @@ import {
   Thread,
   type ThreadComponents,
 } from "@/components/assistant-ui/elements/thread.aui"
+import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
@@ -511,6 +512,41 @@ function WorkspaceContent({
     [displayAgents, sessionActions, workspace]
   )
   const workspaceError = agentError ?? sessionError ?? actionError
+  // `/new` is the composer's spelling of the New Session action: a Session is
+  // the workspace's to open, so the command runs here and never becomes a turn.
+  // Text after the command seeds the new Session's draft instead of being lost.
+  const localCommands = useMemo<readonly ComposerLocalCommand[] | undefined>(
+    () =>
+      selectedAgentId && !selectedAgentIsDraft
+        ? [
+            {
+              name: "new",
+              description: dictionary.actions.newSessionCommand,
+              run: async (args) => {
+                try {
+                  await createSession(selectedAgentId)
+                  if (args) runtime.thread.composer.setText(args)
+                } catch (reason) {
+                  setActionError(toError(reason))
+                }
+              },
+            },
+          ]
+        : undefined,
+    [
+      createSession,
+      dictionary,
+      runtime,
+      selectedAgentId,
+      selectedAgentIsDraft,
+      setActionError,
+    ]
+  )
+  const threadComposerFeatures = useMemo(
+    () => ({ ...composerFeatures, localCommands }),
+    [composerFeatures, localCommands]
+  )
+
   const threadChrome = useMemo<WorkspaceThreadChrome>(
     () => ({
       locale,
@@ -632,7 +668,7 @@ function WorkspaceContent({
                   autoFocus={false}
                   direction={getLocaleDirection(locale)}
                   labels={threadLabels[locale]}
-                  composerFeatures={composerFeatures}
+                  composerFeatures={threadComposerFeatures}
                   messageRewind={bundle.messageRewind}
                   components={activeThreadComponents}
                 />

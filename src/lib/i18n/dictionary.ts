@@ -113,6 +113,8 @@ export type Dictionary = {
   actions: {
     newAgent: string
     newSession: string
+    /** The `/new` slash command's menu description. */
+    newSessionCommand: string
     openAgents: string
     openAgentDetails: string
     closePanel: string

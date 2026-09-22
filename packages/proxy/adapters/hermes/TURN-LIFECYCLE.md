@@ -110,7 +110,10 @@ The Hermes adapter applies these rules (the ACP layer translates the
 proxy-owned vocabulary for the browser):
 
 - `message.interim` closes only the current text message in the proxy-owned vocabulary. It does not emit
-  `RUN_FINISHED` or `RUN_ERROR`.
+  `RUN_FINISHED` or `RUN_ERROR`. The adapter rotates its own message id at that
+  boundary, but the ACP translation pins every chunk and tool call of the run to
+  the segment's first id, so the browser streams the one assistant turn that
+  history later replays.
 - When `already_streamed` is false, the adapter emits the interim text before
   closing that text message. When it is true, the adapter closes the text
   already received through `message.delta` without duplicating it.
