@@ -52,9 +52,11 @@ function assistantIdOf(messageId: string) {
 }
 
 /**
- * One ACP assistant message per run segment: the first text or reasoning start
- * of the segment fixes its id, and every later chunk and tool call of the
- * segment carries that one id, so reasoning stays on the turn it answers with.
+ * One ACP assistant message per run segment: the first text, reasoning, or
+ * tool call of the segment fixes its id, and every later chunk and tool call of
+ * the segment carries that one id, so reasoning stays on the turn it answers
+ * with and a provider that rotates its own message id mid-turn (Hermes does at
+ * every `message.interim`) still streams the one turn its history replays.
  * `RUN_FINISHED` and `RUN_ERROR` reset it with the rest of the segment state.
  */
 function segmentMessage(state: TranslateState, messageId: string) {
@@ -65,13 +67,9 @@ function segmentMessage(state: TranslateState, messageId: string) {
   }
 }
 
-/** The assistant message a tool call hangs off; a run id always exists. */
-function attachedTo(
-  state: TranslateState,
-  context: TranslateContext,
-  parentMessageId?: string
-) {
-  return parentMessageId ?? state.messageId ?? context.runId
+/** The assistant message a later tool patch hangs off; a run id always exists. */
+function attachedTo(state: TranslateState, context: TranslateContext) {
+  return state.messageId ?? context.runId
 }
 
 function openArgs(
@@ -228,10 +226,11 @@ function toolStarted(
     title: event.toolCallName,
     status: "in_progress",
   }
-  const messageId = attachedTo(state, context, event.parentMessageId)
+  // The adapter's parent id only names the segment when nothing has yet.
+  const segment = segmentMessage(state, event.parentMessageId ?? context.runId)
   return {
-    state: openArgs(state, event.toolCallId, ""),
-    outbound: [toolOutbound(context, messageId, call)],
+    state: openArgs(segment.state, event.toolCallId, ""),
+    outbound: [toolOutbound(context, segment.messageId, call)],
   }
 }
 

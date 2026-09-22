@@ -396,8 +396,9 @@ describe("translateRunEvent tool calls", () => {
   })
 
   it.each([
-    ["the parent message of the event", "m9", "m1", "m9"],
+    ["the streaming message over the event's parent", "m9", "m1", "m1"],
     ["the streaming message", undefined, "m1", "m1"],
+    ["the parent message of the event", "m9", undefined, "m9"],
     ["the run itself", undefined, undefined, "run-1"],
   ])(
     "attaches a tool call to %s",
@@ -427,6 +428,85 @@ describe("translateRunEvent tool calls", () => {
       )
     }
   )
+
+  it("streams one message across the provider's mid-turn message rotation", () => {
+    // Hermes rotates its message id at every `message.interim`: the commentary
+    // is one message, the tools that follow another, the closing text a third.
+    // History replays the whole turn as one message, so the live stream must.
+    const { outbound } = translate([
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "m1",
+        delta: "Checking.",
+      },
+      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
+      {
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "c1",
+        toolCallName: "terminal",
+        parentMessageId: "run-1:assistant:2",
+      },
+      { type: RunEventKind.TOOL_CALL_END, toolCallId: "c1" },
+      {
+        type: RunEventKind.TOOL_CALL_RESULT,
+        messageId: "run-1:assistant:2:tool:c1",
+        toolCallId: "c1",
+        content: "ok",
+        role: "tool",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "run-1:assistant:3",
+        role: "assistant",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "run-1:assistant:3",
+        delta: "Done.",
+      },
+    ])
+
+    // Chunks name their message on the update; tool calls in `_meta.aos`.
+    const owners = updatesOf(outbound).map((update) => {
+      const meta = aosMeta(update)
+      return "messageId" in update
+        ? update.messageId
+        : isRecord(meta)
+          ? meta.messageId
+          : undefined
+    })
+    expect(owners).toEqual(["m1", "m1", "m1", "m1", "m1"])
+  })
+
+  it("lets a tool call that opens the segment name it for the text after", () => {
+    const { outbound } = translate([
+      {
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "c1",
+        toolCallName: "read_file",
+        parentMessageId: "m9",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_START,
+        messageId: "m1",
+        role: "assistant",
+      },
+      {
+        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        messageId: "m1",
+        delta: "Read.",
+      },
+    ])
+
+    const [call, chunk] = updatesOf(outbound)
+    expect(AosToolCallMetaSchema.parse(aosMeta(call!)).messageId).toBe("m9")
+    expect(chunk).toMatchObject({ messageId: "m9" })
+  })
 
   it("keeps unparseable streamed arguments as text", () => {
     const { outbound } = translate([

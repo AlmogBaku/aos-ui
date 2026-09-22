@@ -84,7 +84,7 @@ describe("HermesInteractions server requests", () => {
                 prefixItems: [
                   {
                     type: "array",
-                    title: "Which region?",
+                    description: "Which region?",
                     items: { type: "string", enum: ["eu", "us"] },
                     minItems: 0,
                     maxItems: 1,
@@ -245,10 +245,9 @@ describe("HermesInteractions server requests", () => {
       properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
     }
     const locked = schema.properties.answers.prefixItems[0]!.default!
-    expect(locked).toEqual(["[provider path redacted]"])
+    expect(locked).toEqual(["/home/operator/secret"])
 
-    // A locked free-text answer is echoed back as its native value: the public
-    // redaction must never become the answer Hermes stores.
+    // A locked free-text answer is echoed back as its native value.
     await interactions.respond(scope, {
       interruptId: id,
       status: "resolved",
@@ -826,7 +825,9 @@ describe("HermesInteractions server requests", () => {
     })
   })
 
-  it("redacts native credentials, URLs, and paths while answering exactly", async () => {
+  it("redacts credentials and keeps the operator's URLs and paths", async () => {
+    // A credential is nobody's to read. A location is the operator's own
+    // machine: what a guest may see of it is the ACP lane projection's call.
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {
@@ -837,7 +838,7 @@ describe("HermesInteractions server requests", () => {
 
     const interrupt = interactions.pending(scope)[0]?.interrupts[0]
     expect(interrupt?.message).toBe(
-      "Use [provider location redacted] with [credential redacted]"
+      "Use https://hermes.internal with [credential redacted]"
     )
     const choices = (
       interrupt?.responseSchema as {
@@ -848,7 +849,7 @@ describe("HermesInteractions server requests", () => {
         }
       }
     ).properties.answers.prefixItems[0]!.items.enum!
-    expect(choices[0]).toBe("[provider path redacted]")
+    expect(choices).toEqual(["/home/operator/run.sh", "skip"])
 
     await interactions.respond(scope, {
       interruptId: id,
@@ -862,22 +863,9 @@ describe("HermesInteractions server requests", () => {
   it.each([
     ["a POSIX path", "Read /home/operator/secret now"],
     ["a system file", "cat /etc/passwd"],
-    ["a dot-extension path", "Open /tmp/a.txt"],
-    ["a relative-looking home path", "Copy /home/anakin/x"],
     ["a Windows path", "Edit C:\\Users\\operator\\notes"],
     ["a UNC path", "Mount \\\\fileserver\\share"],
-  ])("redacts %s from question text", (_label, question) => {
-    const { requests, interactions, bind } = harness()
-    bind()
-
-    requests.deliver("clarify", { session_id: LIVE, question })
-
-    const message = interactions.pending(scope)[0]?.interrupts[0]?.message
-    expect(message).toContain("[provider path redacted]")
-    expect(message).not.toMatch(/operator|passwd|anakin|fileserver|a\.txt/u)
-  })
-
-  it.each([
+    ["a URL", "Open https://docs.example.test/exports"],
     ["a slash between words", "Should I post on X / twitter?"],
     ["a lone slash", "/"],
     ["an inline alternative", "Use and/or here"],
@@ -890,8 +878,6 @@ describe("HermesInteractions server requests", () => {
 
     requests.deliver("clarify", { session_id: LIVE, question })
 
-    // The live defect: `X / twitter` rendered as `X [provider path redacted]
-    // twitter`. Redaction covers provider filesystem locations, not prose.
     expect(interactions.pending(scope)[0]?.interrupts[0]?.message).toBe(
       question
     )
@@ -924,7 +910,7 @@ describe("HermesInteractions server requests", () => {
         }
       }
     ).properties.answers.prefixItems
-    const redacted = prefixItems[0]!.items.enum![0]!
+    const displayed = prefixItems[0]!.items.enum![0]!
 
     // Hermes always offers "Other (type your answer)" beside the choices it
     // lists (`MAX_CHOICES` in `tools/clarify_tool.py`), so an answer that is
@@ -933,7 +919,7 @@ describe("HermesInteractions server requests", () => {
       interactions.respond(scope, {
         interruptId: id,
         status: "resolved",
-        payload: { answers: [[redacted], ["ap-southeast"]] },
+        payload: { answers: [[displayed], ["ap-southeast"]] },
       })
     ).resolves.toEqual({ status: "resolved" })
 

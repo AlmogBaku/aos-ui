@@ -17,8 +17,7 @@ it("renders the Other row when the fixture question request has custom answers",
     sessionId: "thread-aster-market",
     questions: [
       {
-        header: "Which audience should the brief prioritize?",
-        prompt: "",
+        prompt: "Which audience should the brief prioritize?",
         options: [
           { label: "Executive team" },
           { label: "Product team" },

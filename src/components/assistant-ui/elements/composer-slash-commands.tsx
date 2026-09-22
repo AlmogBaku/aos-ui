@@ -5,7 +5,7 @@ import {
   type Unstable_DirectiveFormatter,
 } from "@assistant-ui/react"
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react"
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type { ComposerSlashCommand } from "@/components/assistant-ui/composer-features"
 
 const plainCommandFormatter: Unstable_DirectiveFormatter = {
   serialize: (item) => `/${item.id}`,
@@ -37,7 +37,7 @@ export function ComposerSlashCommands({
   commands,
   label,
 }: {
-  commands: ComposerFeatureViewModel["slashCommands"]
+  commands: readonly ComposerSlashCommand[] | undefined
   label: string
 }) {
   const menuRef = useRef<HTMLDivElement>(null)

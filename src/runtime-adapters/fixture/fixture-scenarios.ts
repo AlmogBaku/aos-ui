@@ -32,7 +32,8 @@ export type FixtureScenarioName = (typeof fixtureScenarioNames)[number]
 
 /** Shape carried by the question scenario; the chat model uses it to register a pending request. */
 export type FixtureQuestionTemplate = {
-  header: string
+  /** The question's words; the preview offers no short label, as clarify does not. */
+  prompt: string
   options: readonly string[]
   allowFreeform: boolean
 }
@@ -85,7 +86,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
         }),
       ],
       questionTemplate: {
-        header: "Which audience should the brief prioritize?",
+        prompt: "Which audience should the brief prioritize?",
         options: ["Executive team", "Product team", "Investors"],
         allowFreeform: true,
       },

@@ -48,7 +48,11 @@ import {
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import {
+  matchLocalCommand,
+  menuSlashCommands,
+  type ComposerFeatureViewModel,
+} from "@/components/assistant-ui/composer-features"
 import {
   isUncertainDelivery,
   MessageQueue,
@@ -742,8 +746,21 @@ const Composer: FC<{
   const submitOrdinary = useCallback(() => {
     if (voice?.media.captureActive || voiceActive) return
     setSteeringError(undefined)
+    const draft = aui.composer.getState()
+    // A local command is the workspace's to run, so the draft that invoked it
+    // is consumed here and never becomes a turn. An attachment is content the
+    // command has no place for, so that draft is sent as written.
+    const local =
+      draft.attachments.length === 0
+        ? matchLocalCommand(draft.text, features.localCommands)
+        : undefined
+    if (local) {
+      void aui.composer.reset()
+      void local.command.run(local.args)
+      return
+    }
     aui.composer.send({ steer: false })
-  }, [aui, voice?.media.captureActive, voiceActive])
+  }, [aui, features.localCommands, voice?.media.captureActive, voiceActive])
 
   const rememberUnconfirmed = useCallback(
     (delivery: UnconfirmedDelivery) => {
@@ -1284,9 +1301,10 @@ const Composer: FC<{
 const ThreadSlashCommands: FC = () => {
   const features = useContext(ThreadComposerFeaturesContext)
   const labels = useContext(ThreadLabelsContext)
+  const commands = useMemo(() => menuSlashCommands(features), [features])
   return (
     <ComposerSlashCommands
-      commands={features.slashCommands}
+      commands={commands}
       label={labels.slashCommands ?? "Slash commands"}
     />
   )

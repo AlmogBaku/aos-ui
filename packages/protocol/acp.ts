@@ -349,7 +349,12 @@ export const AosQuestionOptionSchema = z.strictObject({
 })
 export const AosQuestionSchema = z.strictObject({
   id: IdentifierSchema.optional(),
-  header: z.string().min(1).max(256),
+  /**
+   * The provider's own short label for the question, when it has one. A
+   * provider that carries only the question's words omits it, and the browser
+   * labels the question by its place in the batch, in the reader's language.
+   */
+  header: z.string().min(1).max(256).optional(),
   prompt: z.string().max(65_536),
   options: z.array(AosQuestionOptionSchema).max(64),
   multiple: z.boolean().optional(),

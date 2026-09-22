@@ -27,6 +27,46 @@ const request: RuntimeQuestionRequest = {
 }
 
 describe("RuntimeQuestionComposer", () => {
+  it.each([
+    ["en", "Question", "Question 2"],
+    ["he", "\u05e9\u05d0\u05dc\u05d4", "\u05e9\u05d0\u05dc\u05d4 2"],
+  ] as const)(
+    "names an unlabeled question in %s, because the provider sent no label",
+    (locale, single, second) => {
+      const unlabeled: RuntimeQuestionRequest = {
+        ...request,
+        questions: [{ prompt: "How should I proceed?", options: [] }],
+      }
+      const props = {
+        locale,
+        interactions: {
+          respond: vi.fn().mockResolvedValue(undefined),
+          reject: vi.fn().mockResolvedValue(undefined),
+        },
+        onResponsePending: vi.fn(),
+        onResolved: vi.fn(),
+        onDismissExpired: vi.fn(),
+      }
+      render(<RuntimeQuestionComposer {...props} request={unlabeled} />)
+      expect(screen.getByText(single)).toBeInTheDocument()
+
+      cleanup()
+      render(
+        <RuntimeQuestionComposer
+          {...props}
+          request={{
+            ...request,
+            questions: [
+              { prompt: "First?", options: [] },
+              { prompt: "Second?", options: [] },
+            ],
+          }}
+        />
+      )
+      expect(screen.getByRole("tab", { name: second })).toBeInTheDocument()
+    }
+  )
+
   it.each([false, true])(
     "preserves distinct option values when labels repeat (multiple=%s)",
     async (multiple) => {

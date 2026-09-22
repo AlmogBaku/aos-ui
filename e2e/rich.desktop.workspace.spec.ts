@@ -345,7 +345,7 @@ test("Hebrew localizes rich controls while preserving provider content verbatim"
   await composerHe.getByRole("button", { name: "אחר (הקלידו תשובה)" }).click()
   await composerHe
     .getByRole("textbox", {
-      name: "תשובה אחרת עבור Which audience should the brief prioritize?",
+      name: "תשובה אחרת עבור שאלה",
     })
     .fill("הנהלה")
   await composerHe.getByRole("button", { name: "שליחת תשובה" }).click()

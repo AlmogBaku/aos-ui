@@ -432,6 +432,51 @@ describe("guest outbound projection", () => {
     })
   })
 
+  it("keeps a guest's question schema, words and label alike", () => {
+    // The words of a question describe its answer field. Dropping an unknown
+    // key here would take the whole schema with it and leave the guest a
+    // question with no answer field at all.
+    expect(
+      projectGuestOutbound(
+        {
+          transport: "ag-ui",
+          agentId: "agent_planner",
+          sessionId: "session_launch",
+          payload: {
+            type: "interrupt",
+            interrupts: [
+              {
+                id: "clarify-1",
+                reason: "question",
+                message: "1 question requires an answer",
+                responseSchema: {
+                  type: "string",
+                  title: "Region",
+                  description: "Which region?",
+                  enum: ["eu", "us"],
+                },
+              },
+            ],
+          },
+        },
+        authorization
+      )
+    ).toMatchObject({
+      payload: {
+        interrupts: [
+          {
+            responseSchema: {
+              type: "string",
+              title: "Region",
+              description: "Which region?",
+              enum: ["eu", "us"],
+            },
+          },
+        ],
+      },
+    })
+  })
+
   it("rejects cross-Agent and cross-Session projection", () => {
     const payload = {
       type: "message",
