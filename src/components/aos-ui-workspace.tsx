@@ -15,7 +15,15 @@ import {
   LoaderCircle,
   RotateCw,
 } from "lucide-react"
-import { createContext, memo, useContext, useMemo, useState } from "react"
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import {
   Thread,
@@ -515,6 +523,16 @@ function WorkspaceContent({
   // `/new` is the composer's spelling of the New Session action: a Session is
   // the workspace's to open, so the command runs here and never becomes a turn.
   // Text after the command seeds the new Session's draft instead of being lost.
+  // An empty Session is already new: the command leaves the menu there, and a
+  // typed one only seeds the draft rather than opening a second empty Session.
+  const subscribeThread = useCallback(
+    (onChange: () => void) => runtime.thread.subscribe(onChange),
+    [runtime]
+  )
+  const threadIsEmpty = useSyncExternalStore(
+    subscribeThread,
+    () => runtime.thread.getState().messages.length === 0
+  )
   const localCommands = useMemo<readonly ComposerLocalCommand[] | undefined>(
     () =>
       selectedAgentId && !selectedAgentIsDraft
@@ -522,9 +540,10 @@ function WorkspaceContent({
             {
               name: "new",
               description: dictionary.actions.newSessionCommand,
+              available: !threadIsEmpty,
               run: async (args) => {
                 try {
-                  await createSession(selectedAgentId)
+                  if (!threadIsEmpty) await createSession(selectedAgentId)
                   if (args) runtime.thread.composer.setText(args)
                 } catch (reason) {
                   setActionError(toError(reason))
@@ -540,6 +559,7 @@ function WorkspaceContent({
       selectedAgentId,
       selectedAgentIsDraft,
       setActionError,
+      threadIsEmpty,
     ]
   )
   const threadComposerFeatures = useMemo(

@@ -62,6 +62,11 @@ export type ComposerSlashCommand = {
  */
 export type ComposerLocalCommand = ComposerSlashCommand & {
   readonly run: (args: string) => void | Promise<void>
+  /**
+   * `false` keeps the command out of the menu while it still shadows the
+   * provider's namesake and still runs, so a typed draft never becomes a turn.
+   */
+  readonly available?: boolean
 }
 
 const LOCAL_COMMAND = /^\/(\S+)(?:\s+([\s\S]*))?$/u
@@ -85,7 +90,9 @@ export function menuSlashCommands(
   const local = features.localCommands ?? []
   const shadowed = new Set(local.map((command) => command.name.toLowerCase()))
   return [
-    ...local.map(({ name, description }) => ({ name, description })),
+    ...local
+      .filter((command) => command.available !== false)
+      .map(({ name, description }) => ({ name, description })),
     ...(features.slashCommands ?? []).filter(
       (command) => !shadowed.has(command.name.toLowerCase())
     ),

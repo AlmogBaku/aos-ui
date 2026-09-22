@@ -45,4 +45,16 @@ describe("menuSlashCommands", () => {
       { name: "review", description: "Review the diff" },
     ])
   })
+
+  it("hides an unavailable local command yet keeps shadowing its provider namesake", () => {
+    expect(
+      menuSlashCommands({
+        slashCommands: [
+          { name: "new", description: "provider" },
+          { name: "review", description: "Review the diff" },
+        ],
+        localCommands: [{ ...open, available: false }],
+      })
+    ).toEqual([{ name: "review", description: "Review the diff" }])
+  })
 })

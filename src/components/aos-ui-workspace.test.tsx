@@ -1814,6 +1814,24 @@ describe("AosUiApp fixture composition", () => {
     ).toBeVisible()
   })
 
+  it("offers /new only once the Session has a conversation", async () => {
+    const user = userEvent.setup()
+    render(<EmptyAgentFixture />)
+
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    await user.type(input, "/ne")
+    expect(await screen.findByText(en.actions.newSessionCommand)).toBeVisible()
+    await user.keyboard("{Escape}")
+    await user.clear(input)
+
+    await user.click(screen.getByRole("button", { name: "Empty" }))
+    const emptyInput = await screen.findByRole("textbox", {
+      name: "Message input",
+    })
+    await user.type(emptyInput, "/ne")
+    expect(screen.queryByText(en.actions.newSessionCommand)).toBeNull()
+  })
+
   it("identifies the selected Agent beside the shared empty conversation", async () => {
     const user = userEvent.setup()
     render(<EmptyAgentFixture />)
