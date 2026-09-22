@@ -13,7 +13,16 @@ import {
   ZoomOut,
 } from "lucide-react"
 import { useTheme } from "next-themes"
-import { useEffect, useId, useRef, useState, type FC } from "react"
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FC,
+  type MouseEvent as ReactMouseEvent,
+  type RefObject,
+} from "react"
 
 import { CopyButton } from "@/components/tool-ui/common"
 import { useToolUiLocale } from "@/components/tool-ui/locale"
@@ -202,6 +211,57 @@ function SourcePanel({ code }: { code: string }) {
   )
 }
 
+// Drag-to-pan for wide diagram frames. Returns a ref to attach to the
+// scrollable element and the three mouse handlers to spread onto it.
+function useDragToPan(): {
+  frameRef: RefObject<HTMLDivElement | null>
+  isDragging: boolean
+  onMouseDown: (e: ReactMouseEvent<HTMLDivElement>) => void
+  onMouseMove: (e: ReactMouseEvent<HTMLDivElement>) => void
+  onMouseUp: () => void
+} {
+  const frameRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{
+    startX: number
+    startY: number
+    scrollLeft: number
+    scrollTop: number
+  } | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+
+  const onMouseDown = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    // Only primary button; skip clicks on interactive children.
+    if (e.button !== 0) return
+    const target = e.target as HTMLElement
+    if (target.closest("a, button, input, select, textarea")) return
+    const el = frameRef.current
+    if (!el) return
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    }
+    setIsDragging(true)
+    e.preventDefault()
+  }, [])
+
+  const onMouseMove = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!dragRef.current || !frameRef.current) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+    frameRef.current.scrollLeft = dragRef.current.scrollLeft - dx
+    frameRef.current.scrollTop = dragRef.current.scrollTop - dy
+  }, [])
+
+  const onMouseUp = useCallback(() => {
+    dragRef.current = null
+    setIsDragging(false)
+  }, [])
+
+  return { frameRef, isDragging, onMouseDown, onMouseMove, onMouseUp }
+}
+
 function DiagramFrame({
   svg,
   size,
@@ -215,6 +275,9 @@ function DiagramFrame({
   zoom: number
   fill?: boolean
 }) {
+  const { frameRef, isDragging, onMouseDown, onMouseMove, onMouseUp } =
+    useDragToPan()
+
   if (size === null || isCompactDiagram(size)) {
     return (
       <div
@@ -229,6 +292,7 @@ function DiagramFrame({
 
   return (
     <div
+      ref={frameRef}
       className={cn(
         "[scrollbar-gutter:stable] overflow-auto rounded-lg bg-background p-4 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
         // Mermaid writes an inline max-width on the SVG, so only an important
@@ -236,12 +300,17 @@ function DiagramFrame({
         "[&_svg]:h-auto [&_svg]:w-full [&_svg]:max-w-none!",
         // The frame hugs its diagram and scrolls past this bound, so a tall
         // diagram cannot take over the conversation.
-        fill ? "min-h-0" : "max-h-112"
+        fill ? "min-h-0" : "max-h-112",
+        isDragging ? "cursor-grabbing select-none" : "cursor-grab"
       )}
       role="img"
       aria-label={label}
       dir="ltr"
       tabIndex={0}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseUp}
     >
       <div
         className="mx-auto"
