@@ -1043,6 +1043,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
   })
 
   it("keeps a turn's reasoning and prose on one assistant message", async () => {
+    const user = userEvent.setup()
     const { proxy, runtime } = await mount()
     const assistantParts = () =>
       runtime()
@@ -1072,7 +1073,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() =>
       expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(true)
     )
-    expect(screen.getAllByRole("button", { name: "Reasoning" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: /Worked/ })).toHaveLength(1)
     expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
 
     // Hermes streams the reasoning half of a turn under `<id>:reasoning`,
@@ -1138,14 +1139,14 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
       "Think it through",
       "Shipping it.",
     ])
-    // One execution disclosure per assistant turn, not one per streamed id.
-    expect(screen.getAllByText("Reasoning")).toHaveLength(2)
     expect(screen.getAllByText("Shipping it.")).toHaveLength(1)
-    // Both turns are finished, so neither disclosure reports a running run.
-    const disclosures = screen.getAllByRole("button", { name: "Reasoning" })
-    expect(disclosures).toHaveLength(2)
-    for (const disclosure of disclosures)
-      expect(disclosure).toHaveAccessibleDescription("Complete")
+    // Both turns have settled, so each folds the work it did before answering.
+    const folds = screen.getAllByRole("button", { name: /Worked/ })
+    expect(folds).toHaveLength(2)
+    for (const fold of folds) await user.click(fold)
+    // One reasoning disclosure per assistant turn, not one per streamed id. A
+    // settled turn's outcome is the fold's to report, so no row claims to run.
+    expect(screen.getAllByRole("button", { name: "Reasoning" })).toHaveLength(2)
     expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
     await proxy.close()
   })

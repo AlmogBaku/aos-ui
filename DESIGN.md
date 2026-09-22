@@ -381,6 +381,14 @@ assistant's answer.
   a cohesive execution trace. Final prose and meaningful interactive or visual
   output remain first-class message content and are never hidden by execution
   chrome.
+- **Fold a settled turn's work:** provider order is absolute, so a part never
+  moves relative to another, and consecutive ordinary tool calls read as one
+  run. Once the turn settles, everything before its final answer — mid-turn
+  prose, tool runs, reasoning — collapses into one "Worked for 29 s" disclosure
+  that keeps its contents in that order inside it. Rich tool views, question and
+  permission flows, subagent activity, and attached data, media or sources stay
+  outside the fold. Nothing folds while the turn is still running: a live turn
+  offers only the elapsed time.
 - **Preserve fidelity:** retain provider order and lifecycle, render each piece
   of content once, and degrade to an honest inspectable fallback when richer
   presentation is unavailable.

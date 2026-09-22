@@ -134,8 +134,15 @@ describe("assistant source parts", () => {
   })
 })
 
-describe("assistant tool timeline", () => {
-  it("renders one timeline while keeping completed tool UI visible", async () => {
+const TURN_TIMING = {
+  streamStartTime: Date.parse("2026-09-03T09:11:31.000Z"),
+  totalStreamTime: 29_000,
+  totalChunks: 48,
+  toolCallCount: 3,
+}
+
+describe("settled turn fold", () => {
+  it("collapses the turn's work behind one disclosure and keeps rich output outside it", async () => {
     const user = userEvent.setup()
     render(
       <LocalThread
@@ -144,6 +151,7 @@ describe("assistant tool timeline", () => {
           {
             id: "tools-complete",
             role: "assistant",
+            metadata: { timing: TURN_TIMING },
             content: [
               {
                 type: "reasoning",
@@ -186,25 +194,24 @@ describe("assistant tool timeline", () => {
                 },
                 result: "Chart ready for display.",
               },
+              { type: "text", text: "The recommendation stays visible." },
             ],
           },
         ]}
       />
     )
 
-    const trigger = await screen.findByRole("button", {
-      name: "Reasoning · 3 tool calls",
+    const fold = await screen.findByRole("button", {
+      name: "Worked for 29 s",
     })
-    expect(trigger).toHaveAttribute("aria-expanded", "false")
-    await user.click(trigger)
-    expect(trigger).toHaveAttribute("aria-expanded", "true")
-    const reasoning = screen.getByRole("button", {
-      name: /^Reasoning$/,
-    })
-    await user.click(reasoning)
+    expect(fold).toHaveAttribute("aria-expanded", "false")
     expect(
-      screen.getByText("I should inspect the project before changing it.")
+      await screen.findByRole("heading", { name: "Investment trend" })
     ).toBeVisible()
+    expect(screen.getByText("The recommendation stays visible.")).toBeVisible()
+
+    await user.click(fold)
+    expect(fold).toHaveAttribute("aria-expanded", "true")
     expect(screen.getAllByText("Read")).toHaveLength(1)
     expect(screen.getAllByText("Searched")).toHaveLength(1)
     expect(screen.getAllByText("Loaded")).toHaveLength(1)
@@ -212,12 +219,15 @@ describe("assistant tool timeline", () => {
     expect(
       screen.queryByText("private skill instructions must stay hidden")
     ).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: /^Reasoning$/ }))
     expect(
-      await screen.findByRole("heading", { name: "Investment trend" })
+      screen.getByText("I should inspect the project before changing it.")
     ).toBeVisible()
   })
 
-  it("keeps assistant prose visible between completed tool calls", async () => {
+  it("keeps folded prose and tool runs in provider order", async () => {
+    const user = userEvent.setup()
     render(
       <LocalThread
         toolFallback={AosToolPresentation}
@@ -225,6 +235,7 @@ describe("assistant tool timeline", () => {
           {
             id: "tool-loop-with-interleaved-prose",
             role: "assistant",
+            metadata: { timing: TURN_TIMING },
             content: [
               {
                 type: "tool-call",
@@ -244,26 +255,86 @@ describe("assistant tool timeline", () => {
                 args: { path: "README.md" },
                 result: "updated",
               },
+              { type: "text", text: "The fix is in place." },
             ],
           },
         ]}
       />
     )
 
+    expect(screen.getByText("The fix is in place.")).toBeVisible()
+    await user.click(screen.getByRole("button", { name: "Worked for 29 s" }))
+
+    const firstRun = screen.getByText("Read 1 file")
     const prose = screen.getByText(
       "Big finding already. Let me fix the call-site shape."
     )
-    const timelines = document.querySelectorAll(
-      '[data-slot="message-tool-experience"]'
-    )
+    const secondRun = screen.getByText("Changed 1 file")
 
     expect(prose).toBeVisible()
-    expect(timelines).toHaveLength(2)
-    expect(timelines[0]?.compareDocumentPosition(prose)).toBe(
+    expect(firstRun.compareDocumentPosition(prose)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     )
-    expect(prose.compareDocumentPosition(timelines[1]!)).toBe(
+    expect(prose.compareDocumentPosition(secondRun)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
+    )
+  })
+
+  it("drops the duration clause for a turn the provider did not time", async () => {
+    render(
+      <LocalThread
+        toolFallback={AosToolPresentation}
+        initialMessages={[
+          {
+            id: "tools-untimed",
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "read",
+                toolName: "read_file",
+                args: { path: "README.md" },
+                result: "contents",
+              },
+              { type: "text", text: "Answered without timing." },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(await screen.findByRole("button", { name: "Worked" })).toBeVisible()
+  })
+
+  it("folds nothing while the turn is still running", async () => {
+    render(
+      <LocalThread
+        toolFallback={AosToolPresentation}
+        initialMessages={[
+          {
+            id: "tools-running",
+            role: "assistant",
+            status: { type: "running" },
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "read",
+                toolName: "read_file",
+                args: { path: "README.md" },
+                result: "contents",
+              },
+              { type: "text", text: "Partial answer so far" },
+            ],
+          },
+        ]}
+      />
+    )
+
+    expect(await screen.findByText("Working")).toBeVisible()
+    expect(screen.queryByRole("button", { name: /worked/i })).toBeNull()
+    expect(screen.getByRole("button", { name: "Running" })).toHaveAttribute(
+      "aria-expanded",
+      "false"
     )
   })
 })

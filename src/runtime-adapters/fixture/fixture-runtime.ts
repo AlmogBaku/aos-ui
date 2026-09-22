@@ -161,6 +161,16 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
           },
         ],
         createdAt: new Date("2026-09-03T09:12:00.000Z"),
+        // A real turn always arrives with the span the wire reported, and the
+        // preview says how long this one worked rather than only that it did.
+        metadata: {
+          timing: {
+            streamStartTime: Date.parse("2026-09-03T09:11:31.000Z"),
+            totalStreamTime: 29_000,
+            totalChunks: 48,
+            toolCallCount: 7,
+          },
+        },
       },
     ]
   }

@@ -17,7 +17,22 @@ import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
-import { MessageToolExperience } from "@/components/assistant-ui/elements/message-tool-experience"
+import { ToolRunGroup } from "@/components/assistant-ui/elements/message-tool-experience"
+import {
+  ReasoningContent,
+  ReasoningRoot,
+  ReasoningText,
+  ReasoningTrigger,
+} from "@/components/assistant-ui/elements/reasoning.aui"
+import {
+  createTurnGroupBy,
+  turnLayout,
+} from "@/components/assistant-ui/elements/turn-fold"
+import {
+  TurnWorkingFold,
+  TurnWorkingStatus,
+  useInsideTurnFold,
+} from "@/components/assistant-ui/elements/turn-working-fold"
 import { isAosRichTool, useToolUiLocale } from "@/components/tool-ui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import {
@@ -86,13 +101,13 @@ import {
   type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
-  groupPartByType,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
   type ThreadMessage,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
+  type PartState,
   type ToolCallMessagePartComponent,
   useAui,
   useAuiEvent,
@@ -127,14 +142,11 @@ import {
   type ReactNode,
 } from "react"
 
-export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart
-
 /**
  * Optional component overrides for the thread. `AssistantMessage` and
- * `Welcome` replace whole sections; the remaining slots override how the
- * assistant message renders tool calls and part groups. Tool UIs registered
- * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
- * `ToolFallback`.
+ * `Welcome` replace whole sections; `ToolFallback` overrides how the assistant
+ * message renders a tool call. Tool UIs registered by name (toolkit `render`,
+ * `useAssistantDataUI`) take precedence over `ToolFallback`.
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined
@@ -143,10 +155,6 @@ export type ThreadComponents = {
   Composer?: ComponentType<ThreadComposerOverrideProps> | undefined
   Welcome?: ComponentType | undefined
   ToolFallback?: ToolCallMessagePartComponent | undefined
-  ToolGroup?:
-    ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined
-  ReasoningGroup?:
-    ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined
 }
 
 export type ThreadComposerOverrideProps = {
@@ -337,13 +345,17 @@ const isHistoryLoadingView = (s: AssistantState) =>
 
 const hasMessages = (s: AssistantState) => s.thread.messages.length > 0
 
-const ASSISTANT_MESSAGE_GROUPER = groupPartByType<
-  "group-chainOfThought" | "group-reasoning" | "group-tool"
->({
-  reasoning: ["group-chainOfThought", "group-reasoning"],
-  "tool-call": ["group-chainOfThought"],
-  "standalone-tool-call": [],
-})
+const NO_PARTS: readonly PartState[] = []
+
+/**
+ * Nothing folds while a turn runs, so the running case needs no part positions
+ * and this selector holds one value across every streaming update; a settled
+ * turn's parts no longer change, so its array identity is stable too.
+ */
+const selectTurnParts = (state: AssistantState) =>
+  state.message.status?.type === "running" ? NO_PARTS : state.message.parts
+
+const selectTurnStatus = (state: AssistantState) => state.message.status?.type
 
 const ThreadHistorySkeleton: FC = () => {
   const labels = useContext(ThreadLabelsContext)
@@ -1539,12 +1551,56 @@ const MessageError: FC = () => {
   )
 }
 
+/**
+ * Reasoning as its own disclosure, whether it sits inside the turn's fold or
+ * trails the answer. It holds itself open while its own parts stream.
+ */
+const TurnReasoning: FC<PropsWithChildren<{ indices: readonly number[] }>> = ({
+  indices,
+  children,
+}) => {
+  const streaming = useAuiState(
+    (state) =>
+      state.message.status?.type === "running" &&
+      indices.some(
+        (index) => state.message.parts[index]?.status.type === "running"
+      )
+  )
+  return (
+    <ReasoningRoot variant="ghost" className="mb-0" streaming={streaming}>
+      <ReasoningTrigger active={streaming} />
+      <ReasoningContent aria-busy={streaming}>
+        <ReasoningText>{children}</ReasoningText>
+      </ReasoningContent>
+    </ReasoningRoot>
+  )
+}
+
+/** Mid-turn prose is trace; the turn's final answer is its answer. */
+const TurnText: FC = () => {
+  const inFold = useInsideTurnFold()
+  return (
+    <div
+      className={cn("contents", inFold && "text-muted-foreground")}
+      data-searchable-message-text
+    >
+      <MarkdownText />
+    </div>
+  )
+}
+
 const AssistantMessage: FC = () => {
   const reading = useVoiceMessageReading()
   const completedWithoutContent = useAuiState(
     (state) =>
       state.message.status?.type === "complete" &&
       state.message.content.length === 0
+  )
+  const turnParts = useAuiState(selectTurnParts)
+  const turnStatus = useAuiState(selectTurnStatus)
+  const groupBy = useMemo(
+    () => createTurnGroupBy(turnParts, turnLayout(turnParts, turnStatus)),
+    [turnParts, turnStatus]
   )
   const labels = useContext(ThreadLabelsContext)
   const direction = useContext(ThreadDirectionContext)
@@ -1584,35 +1640,33 @@ const AssistantMessage: FC = () => {
           >
             <InlineReadAloud />
           </div>
-          <MessagePrimitive.GroupedParts groupBy={ASSISTANT_MESSAGE_GROUPER}>
+          <TurnWorkingStatus />
+          <MessagePrimitive.GroupedParts groupBy={groupBy}>
             {({ part, children }) => {
               switch (part.type) {
-                case "group-chainOfThought":
+                case "group-working":
                   return (
-                    <>
-                      <MessageToolExperience
-                        renderTool={ToolFallbackComponent}
-                        indices={part.indices}
-                      />
+                    <TurnWorkingFold indices={part.indices}>
                       {children}
-                    </>
+                    </TurnWorkingFold>
                   )
                 case "group-tool":
-                  return null
-                case "group-reasoning": {
-                  return null
-                }
-                case "text": {
-                  return reading ? (
-                    <></>
-                  ) : (
-                    <div className="contents" data-searchable-message-text>
-                      <MarkdownText />
-                    </div>
+                  return (
+                    <ToolRunGroup
+                      renderTool={ToolFallbackComponent}
+                      indices={part.indices}
+                    />
                   )
-                }
+                case "group-reasoning":
+                  return (
+                    <TurnReasoning indices={part.indices}>
+                      {children}
+                    </TurnReasoning>
+                  )
+                case "text":
+                  return reading ? <></> : <TurnText />
                 case "reasoning":
-                  return null
+                  return <MarkdownText />
                 case "tool-call":
                   return (part.toolUI ?? isAosRichTool(part)) ? (
                     <div className="-mx-2 py-2">

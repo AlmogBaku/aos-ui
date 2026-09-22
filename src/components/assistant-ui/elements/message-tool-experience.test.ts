@@ -1,91 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  createExecutionPartSelector,
   createToolPartSelector,
   createToolTimelineModel,
-  executionTimelineState,
   shouldRenderToolDetails,
   toolIconKind,
+  toolRunState,
 } from "./message-tool-experience"
-
-describe("createExecutionPartSelector", () => {
-  it("keeps reasoning and ordinary tools together in source order", () => {
-    const select = createExecutionPartSelector()
-    const parts = select([
-      {
-        type: "reasoning",
-        text: "Checking the implementation",
-        status: { type: "complete" },
-      },
-      {
-        type: "tool-call",
-        toolCallId: "read",
-        toolName: "read_file",
-        args: { path: "thread.tsx" },
-        status: { type: "complete" },
-      },
-      {
-        type: "tool-call",
-        toolCallId: "chart",
-        toolName: "render_chart",
-        args: {
-          title: "Trend",
-          type: "line",
-          xKey: "quarter",
-          series: [{ key: "value", label: "Value" }],
-          data: [{ quarter: "Q1", value: 12 }],
-        },
-        status: { type: "complete" },
-      },
-    ])
-
-    expect(
-      parts.map((part) =>
-        part.type === "tool-call" ? part.toolName : part.text
-      )
-    ).toEqual(["Checking the implementation", "read_file"])
-  })
-
-  it("keeps assistant prose out of the execution timeline", () => {
-    const select = createExecutionPartSelector()
-    const parts = select([
-      {
-        type: "text",
-        text: "I will inspect the repository.",
-        status: { type: "complete" },
-      },
-      {
-        type: "tool-call",
-        toolCallId: "read",
-        toolName: "read_file",
-        args: { path: "thread.tsx" },
-        status: { type: "complete" },
-      },
-      {
-        type: "text",
-        text: "The first check found another issue.",
-        status: { type: "complete" },
-      },
-      {
-        type: "reasoning",
-        text: "Checking the second issue",
-        status: { type: "complete" },
-      },
-      {
-        type: "text",
-        text: "The final answer stays visible.",
-        status: { type: "complete" },
-      },
-    ])
-
-    expect(
-      parts.map((part) =>
-        part.type === "tool-call" ? part.toolName : part.text
-      )
-    ).toEqual(["read_file", "Checking the second issue"])
-  })
-})
 
 describe("createToolTimelineModel", () => {
   it("keeps every tool call in order and marks the active final call", () => {
@@ -216,41 +137,19 @@ describe("createToolTimelineModel", () => {
     expect(shouldRenderToolDetails("read_file")).toBe(true)
   })
 
-  it("derives one semantic state for the collapsed execution timeline", () => {
-    expect(
-      executionTimelineState(
-        [{ type: "reasoning", status: { type: "complete" } }],
-        false
-      )
-    ).toBe("complete")
-    expect(
-      executionTimelineState(
-        [
-          {
-            type: "tool-call",
-            status: { type: "requires-action" },
-          },
-        ],
-        true
-      )
-    ).toBe("attention")
-    expect(
-      executionTimelineState(
-        [
-          {
-            type: "tool-call",
-            status: { type: "incomplete" },
-          },
-        ],
-        false
-      )
-    ).toBe("failed")
-    expect(
-      executionTimelineState(
-        [{ type: "reasoning", status: { type: "running" } }],
-        true
-      )
-    ).toBe("running")
+  it("derives one semantic state for a collapsed tool run", () => {
+    expect(toolRunState([{ status: { type: "complete" } }], false)).toBe(
+      "complete"
+    )
+    expect(toolRunState([{ status: { type: "requires-action" } }], true)).toBe(
+      "attention"
+    )
+    expect(toolRunState([{ status: { type: "incomplete" } }], false)).toBe(
+      "failed"
+    )
+    expect(toolRunState([{ status: { type: "running" } }], true)).toBe(
+      "running"
+    )
   })
 
   it("uses semantic icons for compact tool rows", () => {

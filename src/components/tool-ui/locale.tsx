@@ -28,6 +28,19 @@ export type ToolUiActionKind =
   | "inspect"
   | "subagent"
   | "generic"
+/** How a settled turn's collapsed work is headlined. */
+export type TurnFoldKind = "worked" | "working" | "stopped" | "failed"
+/** What a run of tool calls did, counted per kind. */
+export type ToolRunKind =
+  | "readFiles"
+  | "changedFiles"
+  | "ranCommands"
+  | "searchedCode"
+  | "searchedWeb"
+  | "loadedSkills"
+  | "inspected"
+  | "delegated"
+  | "usedTools"
 
 export type ToolUiLocaleLabels = {
   states: Record<RichToolPhase, string>
@@ -41,6 +54,13 @@ export type ToolUiLocaleLabels = {
   assistant: {
     toolCalls: (count: number) => string
     toolActions: Record<ToolUiActionKind, { active: string; complete: string }>
+    /** The turn's work disclosure; the duration clause is dropped without one. */
+    fold: Record<TurnFoldKind, (duration?: string) => string>
+    duration: {
+      seconds: (seconds: number) => string
+      minutes: (minutes: number, seconds: number) => string
+    }
+    toolRun: Record<ToolRunKind, (count: number) => string>
     reasoning: string
     reasoningDuration: (seconds: number) => string
     copyCode: string
@@ -168,6 +188,40 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       inspect: { active: "Inspecting", complete: "Inspected" },
       subagent: { active: "Delegating", complete: "Delegated" },
       generic: { active: "Using", complete: "Used" },
+    },
+    fold: {
+      worked: (duration) => (duration ? `Worked for ${duration}` : "Worked"),
+      working: (duration) => (duration ? `Working for ${duration}` : "Working"),
+      stopped: (duration) =>
+        duration ? `You stopped after ${duration}` : "You stopped",
+      failed: (duration) => (duration ? `Failed after ${duration}` : "Failed"),
+    },
+    duration: {
+      seconds: (seconds) => `${seconds} s`,
+      minutes: (minutes, seconds) =>
+        seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`,
+    },
+    toolRun: {
+      readFiles: (count) =>
+        count === 1 ? "read 1 file" : `read ${count} files`,
+      changedFiles: (count) =>
+        count === 1 ? "changed 1 file" : `changed ${count} files`,
+      ranCommands: (count) =>
+        count === 1 ? "ran 1 command" : `ran ${count} commands`,
+      searchedCode: (count) =>
+        count === 1 ? "searched code once" : `searched code ${count} times`,
+      searchedWeb: (count) =>
+        count === 1
+          ? "searched the web once"
+          : `searched the web ${count} times`,
+      loadedSkills: (count) =>
+        count === 1 ? "loaded 1 skill" : `loaded ${count} skills`,
+      inspected: (count) =>
+        count === 1 ? "inspected once" : `inspected ${count} times`,
+      delegated: (count) =>
+        count === 1 ? "delegated 1 task" : `delegated ${count} tasks`,
+      usedTools: (count) =>
+        count === 1 ? "used 1 tool" : `used ${count} tools`,
     },
     reasoning: "Reasoning",
     reasoningDuration: (seconds) => `Reasoning (${seconds}s)`,
@@ -320,6 +374,37 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       inspect: { active: "בבדיקה", complete: "נבדק" },
       subagent: { active: "בהאצלה", complete: "הואצל" },
       generic: { active: "בשימוש", complete: "בוצע" },
+    },
+    fold: {
+      worked: (duration) => (duration ? `עבד ${duration}` : "עבד"),
+      working: (duration) => (duration ? `עובד ${duration}` : "עובד"),
+      stopped: (duration) => (duration ? `עצרת אחרי ${duration}` : "עצרת"),
+      failed: (duration) => (duration ? `נכשל אחרי ${duration}` : "נכשל"),
+    },
+    duration: {
+      seconds: (seconds) => `${seconds} שנ׳`,
+      minutes: (minutes, seconds) =>
+        seconds === 0 ? `${minutes} דק׳` : `${minutes} דק׳ ${seconds} שנ׳`,
+    },
+    toolRun: {
+      readFiles: (count) =>
+        count === 1 ? "קרא קובץ אחד" : `קרא ${count} קבצים`,
+      changedFiles: (count) =>
+        count === 1 ? "שינה קובץ אחד" : `שינה ${count} קבצים`,
+      ranCommands: (count) =>
+        count === 1 ? "הריץ פקודה אחת" : `הריץ ${count} פקודות`,
+      searchedCode: (count) =>
+        count === 1 ? "חיפש בקוד פעם אחת" : `חיפש בקוד ${count} פעמים`,
+      searchedWeb: (count) =>
+        count === 1 ? "חיפש ברשת פעם אחת" : `חיפש ברשת ${count} פעמים`,
+      loadedSkills: (count) =>
+        count === 1 ? "טען מיומנות אחת" : `טען ${count} מיומנויות`,
+      inspected: (count) =>
+        count === 1 ? "בדק פעם אחת" : `בדק ${count} פעמים`,
+      delegated: (count) =>
+        count === 1 ? "האציל משימה אחת" : `האציל ${count} משימות`,
+      usedTools: (count) =>
+        count === 1 ? "השתמש בכלי אחד" : `השתמש ב-${count} כלים`,
     },
     reasoning: "חשיבה",
     reasoningDuration: (seconds) => `חשיבה (${seconds} שנ׳)`,

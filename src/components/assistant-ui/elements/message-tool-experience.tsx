@@ -15,13 +15,9 @@ import {
   type ToolTimelineState,
 } from "./tool-timeline"
 import { ToolCall } from "./tool-call"
-import {
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "./reasoning.aui"
-import { isAosRichTool, useToolUiLocale } from "@/components/tool-ui"
+import { describeToolRun, isOrdinaryToolPart, partsAt } from "./turn-fold"
+import { useInsideTurnFold } from "./turn-working-fold"
+import { useToolUiLocale } from "@/components/tool-ui"
 import {
   DEFAULT_TOOL_ACTIONS,
   toolIconForName,
@@ -39,8 +35,6 @@ type ToolPart = Pick<
 }
 
 type RuntimeToolPart = Extract<EnrichedPartState, { type: "tool-call" }>
-type RuntimeReasoningPart = Extract<EnrichedPartState, { type: "reasoning" }>
-type RuntimeExecutionPart = RuntimeReasoningPart | RuntimeToolPart
 
 const summaryOnlyToolNames = new Set([
   "skill",
@@ -102,25 +96,6 @@ function isRuntimeToolPart(part: unknown): part is RuntimeToolPart {
   )
 }
 
-function isRuntimeReasoningPart(part: unknown): part is RuntimeReasoningPart {
-  return (
-    typeof part === "object" &&
-    part !== null &&
-    (part as { type?: unknown }).type === "reasoning"
-  )
-}
-
-function isOrdinaryToolPart(part: RuntimeToolPart) {
-  return part.toolName !== "question" && !part.toolUI && !isAosRichTool(part)
-}
-
-function isExecutionBoundaryPart(part: unknown) {
-  return (
-    isRuntimeReasoningPart(part) ||
-    (isRuntimeToolPart(part) && isOrdinaryToolPart(part))
-  )
-}
-
 export function createToolPartSelector() {
   let previous: readonly RuntimeToolPart[] = []
   return (parts: readonly unknown[]) => {
@@ -138,106 +113,71 @@ export function createToolPartSelector() {
   }
 }
 
-export function createExecutionPartSelector() {
-  let previous: readonly RuntimeExecutionPart[] = []
-  return (parts: readonly unknown[]) => {
-    const next = parts.filter(
-      (part): part is RuntimeExecutionPart => isExecutionBoundaryPart(part)
-    )
-    if (
-      previous.length === next.length &&
-      previous.every((part, index) => part === next[index])
-    )
-      return previous
-    previous = next
-    return previous
-  }
-}
-
-export function executionTimelineState(
-  parts: readonly {
-    type: RuntimeExecutionPart["type"]
-    status: Pick<ToolCallMessagePartStatus, "type">
-  }[],
+/** One semantic state for a run of tool calls, collapsed or expanded. */
+export function toolRunState(
+  parts: readonly { status: Pick<ToolCallMessagePartStatus, "type"> }[],
   streaming: boolean
 ): ToolTimelineState {
-  if (
-    parts.some(
-      (part) =>
-        part.type === "tool-call" && part.status.type === "requires-action"
-    )
-  )
+  if (parts.some((part) => part.status.type === "requires-action"))
     return "attention"
-  if (
-    parts.some(
-      (part) => part.type === "tool-call" && part.status.type === "incomplete"
-    )
-  )
-    return "failed"
+  if (parts.some((part) => part.status.type === "incomplete")) return "failed"
   if (streaming || parts.some((part) => part.status.type === "running"))
     return "running"
   return "complete"
 }
 
-export function MessageToolExperience({
+/**
+ * One run of consecutive ordinary tool calls, as a single compact timeline
+ * labelled by what the run did. Inside a settled turn's fold the rows are
+ * already shown, so one click on the fold reveals the whole trace; a live or
+ * trailing run keeps its own disclosure and shimmers on the active step.
+ */
+export function ToolRunGroup({
   renderTool,
   indices,
 }: {
   renderTool: ToolCallMessagePartComponent
-  /** Source-part positions for one contiguous execution segment. */
-  indices?: readonly number[]
+  /** Source-part positions for one contiguous run, in order. */
+  indices: readonly number[]
 }) {
-  const selectParts = useMemo(() => createExecutionPartSelector(), [])
+  const flat = useInsideTurnFold()
+  const selectParts = useMemo(() => createToolPartSelector(), [])
   const parts = useAuiState((state) =>
-    selectParts(
-      indices
-        ? indices.flatMap((index) => {
-            const part = state.message.parts[index]
-            return part === undefined ? [] : [part]
-          })
-        : state.message.parts
-    )
+    selectParts(partsAt(state.message.parts, indices))
   )
-  const toolParts = useMemo(() => parts.filter(isRuntimeToolPart), [parts])
-  const reasoningParts = useMemo(
-    () => parts.filter(isRuntimeReasoningPart),
-    [parts]
+  const streaming = useAuiState(
+    (state) => state.message.status?.type === "running"
   )
-  const status = useAuiState((state) => state.message.status)
-  const { labels } = useToolUiLocale()
+  const { labels, locale } = useToolUiLocale()
   const model = useMemo(
     () =>
-      createToolTimelineModel(toolParts, {
+      createToolTimelineModel(parts, {
         running: labels.states.running,
         pending: labels.states.pending,
         failed: labels.states.failed,
         complete: labels.states.complete,
         actions: labels.assistant.toolActions,
       }),
-    [labels.assistant.toolActions, labels.states, toolParts]
+    [labels.assistant.toolActions, labels.states, parts]
   )
-  const streaming = status?.type === "running"
-  const timelineState = executionTimelineState(parts, streaming)
-  const [userOpen, setUserOpen] = useState<boolean | undefined>(undefined)
-  // Execution stays compact even while active. Shimmering conveys activity;
-  // semantic UI is rendered separately in the ordinary message flow.
-  const open = userOpen ?? false
-  const onOpenChange = useCallback((next: boolean) => setUserOpen(next), [])
+  const timelineState = toolRunState(parts, streaming)
+  const [open, setOpen] = useState(false)
+  const onOpenChange = useCallback((next: boolean) => setOpen(next), [])
   if (!parts.length) return null
-  const restingLabel = reasoningParts.length
-    ? toolParts.length
-      ? `${labels.assistant.reasoning} · ${labels.assistant.toolCalls(toolParts.length)}`
-      : labels.assistant.reasoning
-    : labels.assistant.toolCalls(toolParts.length)
   return (
     <div data-slot="message-tool-experience" className="mt-0.5 mb-1.5">
       <ToolTimeline
         steps={model.steps}
         visibleSteps={model.steps.length}
         streaming={streaming}
+        collapsible={!flat}
         open={open}
         onOpenChange={onOpenChange}
-        restingLabel={restingLabel}
+        restingLabel={describeToolRun(
+          parts.map((part) => part.toolName),
+          labels.assistant.toolRun,
+          locale
+        )}
         activeLabel={labels.states.running}
         state={timelineState}
         statusLabel={
@@ -255,28 +195,7 @@ export function MessageToolExperience({
             data-slot="message-tool-details"
             className="flex min-w-0 flex-col gap-0.5"
           >
-            {parts.map((part, index) => {
-              if (part.type === "reasoning") {
-                const running = part.status.type === "running"
-                return (
-                  <ReasoningRoot
-                    key={`reasoning-${index}`}
-                    className="mb-0"
-                    variant="ghost"
-                    streaming={running}
-                  >
-                    <ReasoningTrigger
-                      active={running}
-                      className="gap-1 py-0 text-xs leading-4 [&_[data-slot=reasoning-trigger-chevron]]:text-foreground/35 [&_[data-slot=reasoning-trigger-icon]]:text-foreground/35"
-                    />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>
-                        <div className="whitespace-pre-wrap">{part.text}</div>
-                      </ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                )
-              }
+            {parts.map((part) => {
               // Artifact data parts are the single canonical artifact card.
               // Keep the command in the timeline but do not mirror its payload.
               if (!shouldRenderToolDetails(part.toolName)) {
