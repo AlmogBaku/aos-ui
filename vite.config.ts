@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react"
+import { readFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import {
@@ -18,6 +19,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   getRuntimeEntrypoint,
 } from "./shared/runtime-modes.ts"
+import { readTitleBarColors } from "./shared/theme-color.ts"
 
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
@@ -68,6 +70,29 @@ function runtimeConfigurationPlugin(environment: NodeJS.ProcessEnv): Plugin {
   }
 }
 
+/**
+ * `src/app/globals.css` owns the title-bar color; the meta tags only mirror it.
+ * A missing placeholder throws so the build fails loudly instead of shipping a
+ * literal `%AOS_TITLE_BAR_*%` to the browser.
+ */
+function titleBarColorPlugin(colors: { light: string; dark: string }): Plugin {
+  return {
+    name: "aos-title-bar-color",
+    transformIndexHtml(html) {
+      let filled = html
+      for (const [placeholder, color] of [
+        ["%AOS_TITLE_BAR_LIGHT%", colors.light],
+        ["%AOS_TITLE_BAR_DARK%", colors.dark],
+      ] as const) {
+        if (!filled.includes(placeholder))
+          throw new Error(`title bar color: \`${placeholder}\` is missing`)
+        filled = filled.replaceAll(placeholder, color)
+      }
+      return filled
+    },
+  }
+}
+
 function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
   const runtimeMode = environment.AOS_UI_RUNTIME_MODE ?? DEFAULT_RUNTIME_MODE
   const runtimeEntry = getRuntimeEntrypoint(runtimeMode)
@@ -115,6 +140,12 @@ export default defineConfig(({ mode }) => {
     ...loadEnv(mode, process.cwd(), ""),
     ...process.env,
   }
+  const titleBarColors = readTitleBarColors(
+    readFileSync(
+      path.resolve(import.meta.dirname, "src/app/globals.css"),
+      "utf8"
+    )
+  )
   const cacheKey = (
     environment.AOS_UI_E2E_CACHE_KEY ??
     environment.AOS_UI_RUNTIME_MODE ??
@@ -144,6 +175,7 @@ export default defineConfig(({ mode }) => {
       react(),
       runtimeConfigurationPlugin(environment),
       e2eReadinessPlugin(environment),
+      titleBarColorPlugin(titleBarColors),
       // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest
       // injected, no offline shell, and no registration script in the HTML.
       VitePWA({
@@ -163,8 +195,12 @@ export default defineConfig(({ mode }) => {
           scope: "/",
           display: "standalone",
           lang: "en",
-          background_color: "#fcfcfd",
-          theme_color: "#232326",
+          // Derived from light `--sidebar`, the surface the title bar meets at
+          // both top corners. The manifest carries no theme variants, so the
+          // light value covers the splash and the window before the
+          // `theme-color` meta tags in `index.html` apply.
+          background_color: titleBarColors.light,
+          theme_color: titleBarColors.light,
           icons: [
             {
               src: "/icons/pwa-64x64.png",

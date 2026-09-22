@@ -10,15 +10,21 @@
       name="description"
       content="A multilingual workspace for provider-owned AI agents and sessions."
     />
+    <!--
+      The installed window's title bar is browser chrome outside the page, so no
+      CSS rule reaches it and a meta tag cannot resolve a custom property.
+      `titleBarColorPlugin` fills these from `--sidebar` in
+      `src/app/globals.css`, the surface the title bar meets at both top corners.
+    -->
     <meta
       name="theme-color"
       media="(prefers-color-scheme: light)"
-      content="#fcfcfd"
+      content="%AOS_TITLE_BAR_LIGHT%"
     />
     <meta
       name="theme-color"
       media="(prefers-color-scheme: dark)"
-      content="#232326"
+      content="%AOS_TITLE_BAR_DARK%"
     />
     <link rel="icon" href="/logo-adaptive.svg" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180x180.png" />

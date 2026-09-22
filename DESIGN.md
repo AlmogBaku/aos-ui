@@ -111,6 +111,15 @@ semantic state roles that remain meaningful in both light and dark themes.
 - **Layered cool surfaces:** `canvas`, `background`, and `card` establish the
   tonal hierarchy; `foreground` and `border` keep content and boundaries
   readable without heavy lines.
+- **The installed title bar is `sidebar`:** an installed window paints the band
+  behind the window controls from the theme colour, and that band meets the
+  Agents rail and the inspector at both top corners, so it takes `--sidebar`.
+  That band is browser chrome outside the page: no CSS rule reaches it, and
+  neither a meta tag nor the JSON manifest can resolve a custom property.
+  `shared/theme-color.ts` therefore reads the token at build time and converts
+  it to sRGB for the `theme-color` tags and the manifest, keeping this file the
+  only place the value is written. Renaming or reformatting the token fails the
+  build rather than shipping a mismatched window.
 - **Semantic state:** `success` represents completed or healthy work and the
   unread signal on navigation rows; `destructive` represents failure,
   cancellation, and confirmed destructive intent; `warning` represents work
