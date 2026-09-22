@@ -54,12 +54,12 @@ Use `readyz` (`/api/aos/v1/readyz`) to confirm the proxy is ready, not only
 
 The service template runs the repository's Compose definition. Start with the
 versioned proxy configuration documented in `docs/configuration.md`, store the
-host copy outside the checkout as a YAML file (JSON is valid YAML and still
-parses), and point `AOS_UI_PROXY_CONFIG_FILE` at that absolute path from
-`/etc/aos-ui/aos-ui.env`. The file must be owned by the proxy user
-(`AOS_UI_HOST_UID`) or by root and must not be group- or world-writable; a
-file left at mode `0664` by `umask 002` fails startup. The `invite` subcommand
-requires `--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a path.
+host copy outside the checkout as a YAML file, and point
+`AOS_UI_PROXY_CONFIG_FILE` at that absolute path from `/etc/aos-ui/aos-ui.env`.
+The file must be owned by the proxy user (`AOS_UI_HOST_UID`) or by root and must
+not be group- or world-writable; a file left at mode `0664` by `umask 002` fails
+startup. The `invite` subcommand requires `--config` or
+`AOS_UI_PROXY_CONFIG_FILE`; it never discovers a path.
 The same configuration defines the distinct operator and optional guest
 listeners and selects one runtime.
 

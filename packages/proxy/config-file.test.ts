@@ -90,21 +90,6 @@ describe("proxy configuration path resolution", () => {
     expect(message).toContain("--config")
   })
 
-  it("rejects the removed AOS_RUNTIME_PROXY_CONFIG even when a flag is given", () => {
-    let message = ""
-    try {
-      resolveProxyConfigPath({
-        flag: "/etc/aos-ui/flag.yaml",
-        getenv: env({ AOS_RUNTIME_PROXY_CONFIG: "/etc/aos-ui/legacy.json" }),
-      })
-    } catch (error) {
-      message = (error as Error).message
-    }
-    expect(message).toContain("AOS_RUNTIME_PROXY_CONFIG")
-    expect(message).toContain("--config")
-    expect(message).toContain("AOS_UI_PROXY_CONFIG_FILE")
-  })
-
   it("does not discover a path for a command that requires an explicit one", () => {
     let message = ""
     try {
@@ -984,48 +969,6 @@ runtime:
     expect(message).not.toContain("SYNTHETIC-TOKEN-9f3a")
     expect(message).toContain("publicOrigin")
     expect(message).toContain("1 unrecognized key")
-  })
-
-  it("still parses a configuration written as JSON", async () => {
-    const legacy = JSON.stringify({
-      version: 1,
-      deploymentId: "legacy-json",
-      listen: { host: "0.0.0.0", port: 3000, exposure: "private-container" },
-      publicOrigin: "http://127.0.0.1:3000",
-      runtime: {
-        id: "hermes-main",
-        kind: "hermes",
-        baseUrl: "http://host.docker.internal:9119",
-        tokenFile: "/run/secrets/hermes-token",
-        sessionIdleMs: 300_000,
-      },
-      limits: {
-        activeExecutions: 256,
-        guestActiveExecutions: 32,
-        operatorEventPeers: 256,
-        subscriberEvents: 512,
-        subscriberBytes: 2_097_152,
-      },
-      guest: {
-        listen: { host: "0.0.0.0", port: 3001, exposure: "private-container" },
-        publicOrigin: "http://127.0.0.1:3001",
-        invitations: {
-          keys: [{ id: "current", secretFile: "/run/secrets/invitation-key" }],
-        },
-      },
-      shutdownGraceMs: 5_000,
-    })
-
-    await expect(
-      loadProxyConfig({
-        flag: CONFIG_PATH,
-        getenv: env({}),
-        ...access({ [CONFIG_PATH]: { source: legacy } }),
-      })
-    ).resolves.toMatchObject({
-      deploymentId: "legacy-json",
-      guest: { invitations: { ttlSeconds: 259_200, clockSkewSeconds: 0 } },
-    })
   })
 
   it("survives the log redactor a start failure is written through", async () => {

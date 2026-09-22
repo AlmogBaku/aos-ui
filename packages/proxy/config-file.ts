@@ -14,8 +14,6 @@ import { ProxyConfigSchema, type ProxyConfig } from "./config"
  * the unauthenticated operator listener.
  */
 
-/** Set by an operator following the pre-YAML documentation; never read. */
-const LEGACY_PATH_VARIABLE = "AOS_RUNTIME_PROXY_CONFIG"
 const PATH_VARIABLE = "AOS_UI_PROXY_CONFIG_FILE"
 const EXPLICIT_PATH_HINT = `pass --config <path> or set ${PATH_VARIABLE}`
 const MAXIMUM_SIZE_BYTES = 1_024 * 1_024
@@ -65,10 +63,6 @@ export function resolveProxyConfigPath({
   getenv,
   discover = true,
 }: ProxyConfigPathSource): { path: string; explicit: boolean } {
-  if (trimmed(getenv(LEGACY_PATH_VARIABLE)) !== undefined)
-    throw new ProxyConfigurationError(
-      `${LEGACY_PATH_VARIABLE} is no longer read; ${EXPLICIT_PATH_HINT}`
-    )
   const explicitPath = trimmed(flag) ?? trimmed(getenv(PATH_VARIABLE))
   if (explicitPath !== undefined) return { path: explicitPath, explicit: true }
   if (!discover)

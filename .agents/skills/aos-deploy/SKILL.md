@@ -36,22 +36,21 @@ processes. Treat each later material change as a new confirmation point.
 
 Use the provider-neutral template under `deploy/systemd/` and the versioned
 proxy configuration described in `docs/configuration.md`; adapt them to the
-selected host. The private proxy configuration is a YAML file (JSON is valid
-YAML and still parses). The file must be owned by the proxy user or root and
-must not be group- or world-writable; a file left at mode `0664` by
-`umask 002` fails startup. Point `AOS_UI_PROXY_CONFIG_FILE` at the absolute
-host path in `/etc/aos-ui/aos-ui.env`. The `invite` subcommand requires
-`--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a default path.
-For Web Push deployments, also set `AOS_UI_PUSH_VAPID_SUBJECT` (a `mailto:` or
-`https:` contact URL) in the env file; `deploy/setup-push.sh` appends the
-three push variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`, each only
-when missing, when run with `--subject`. After the script succeeds, add
-`-f compose.push.yaml` after the runtime overlay in `ExecStart`, `ExecReload`,
-and `ExecStop`, then run `systemctl daemon-reload && systemctl reload aos-ui`.
-Do not install
-Cloudflare, create a tunnel, alter DNS, or assume Tailscale unless the
-operator explicitly selected it. For Cloudflare, route the selected guest
-hostname to the guest listener and retain the same guest-only path boundary.
+selected host. The private proxy configuration is a YAML file. It must be owned
+by the proxy user or root and must not be group- or world-writable; a file left
+at mode `0664` by `umask 002` fails startup. Point `AOS_UI_PROXY_CONFIG_FILE` at
+the absolute host path in `/etc/aos-ui/aos-ui.env`. The `invite` subcommand
+requires `--config` or `AOS_UI_PROXY_CONFIG_FILE`; it never discovers a default
+path. For Web Push deployments, also set `AOS_UI_PUSH_VAPID_SUBJECT` (a
+`mailto:` or `https:` contact URL) in the env file; `deploy/setup-push.sh`
+appends the three push variables plus `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID`,
+each only when missing, when run with `--subject`. After the script succeeds,
+add `-f compose.push.yaml` after the runtime overlay in `ExecStart`,
+`ExecReload`, and `ExecStop`, then run
+`systemctl daemon-reload && systemctl reload aos-ui`. Do not install Cloudflare,
+create a tunnel, alter DNS, or assume Tailscale unless the operator explicitly
+selected it. For Cloudflare, route the selected guest hostname to the guest
+listener and retain the same guest-only path boundary.
 
 ## Secrets and runtime integration
 
@@ -86,5 +85,8 @@ retaining distinct route and projection policies. Exercise one normalized
 ACP run stream and reconnect without prompt replay, and confirm guest output is
 projected before delivery. Inspect the browser bundle and network boundary for
 native provider routes, URLs, and credentials. Confirm the deployed guest
-origin matches invite minting before issuing a link. Report all changed service
-names, addresses, and any intentionally unperformed external step.
+origin matches invite minting before issuing a link. After a
+configuration-only reload the verification is health, readiness, runtime status,
+and the public runtime config; the full list above applies to code changes.
+Report all changed service names, addresses, and any intentionally unperformed
+external step.
