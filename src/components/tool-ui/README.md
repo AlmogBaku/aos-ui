@@ -36,6 +36,20 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 | `request_permission`, `request_approval`    | permission    |
 | `delegate_subagent`, `run_subagent`, `task` | activity      |
 
+## Tool artifact views
+
+`tool-artifact.ts` is the browser contract for what a tool call carries beyond
+its args and result: `ToolCallMessagePart.artifact` holds `{ aos:
+AosToolArtifact }` with the ACP tool kind, locations, diffs, terminals, and
+subagent metadata. Read it with `readAosToolArtifact` and extend it with
+`withAosToolArtifact`.
+
+`LazyToolDiff` (`code-diff`, Pierre diffs) and `LazyToolTerminal` (`terminal`,
+ANSI output) render that data on demand. They are not registry-dispatched by
+tool name; the caller passes the data and the `labels` from
+`useToolDiffLabels()` / `useToolTerminalLabels()`. A load failure leaves the
+changes list and raw patch, or the ANSI-stripped output, as plain text.
+
 ## Safety rule
 
 Rich output must stay inspectable and safe:

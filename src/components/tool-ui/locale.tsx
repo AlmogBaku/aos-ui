@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react"
 
+import type { AosDiffChange } from "./tool-artifact"
 import type { RichToolPhase } from "./types"
 
 export type ToolUiLocale = "en" | "he"
@@ -40,6 +41,40 @@ export type ToolRunKind =
   | "inspected"
   | "delegated"
   | "usedTools"
+
+export type ToolDiffLabels = {
+  /** Accessible name of the changed-files list. */
+  changes: string
+  changeKinds: Record<AosDiffChange["kind"], string>
+  /** Read between a moved or copied file's old and new path. */
+  renamedTo: string
+  lineStats: (additions: number, deletions: number) => string
+  copyPatch: string
+  copied: string
+  showFullDiff: string
+  collapseDiff: string
+  rawPatch: string
+  loading: string
+  unavailable: string
+}
+
+export type ToolTerminalLabels = {
+  output: string
+  command: string
+  cwd: string
+  running: string
+  exitCode: (code: number) => string
+  signal: (signal: string) => string
+  finished: string
+  started: string
+  ended: (status: string) => string
+  truncated: string
+  noOutput: string
+  copyOutput: string
+  copied: string
+  loading: string
+  unavailable: string
+}
 
 export type ToolUiLocaleLabels = {
   states: Record<RichToolPhase, string>
@@ -143,6 +178,8 @@ export type ToolUiLocaleLabels = {
   stats: {
     waiting: string
   }
+  diff: ToolDiffLabels
+  terminal: ToolTerminalLabels
   toolNames: Record<ToolUiToolName, string>
 }
 
@@ -307,6 +344,44 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   },
   stats: {
     waiting: "Waiting for metrics…",
+  },
+  diff: {
+    changes: "Changed files",
+    changeKinds: {
+      add: "Added",
+      delete: "Deleted",
+      modify: "Modified",
+      move: "Moved",
+      copy: "Copied",
+    },
+    renamedTo: "to",
+    lineStats: (additions, deletions) =>
+      `${additions} ${additions === 1 ? "line" : "lines"} added, ${deletions} removed`,
+    copyPatch: "Copy patch",
+    copied: "Copied",
+    showFullDiff: "Show full diff",
+    collapseDiff: "Collapse diff",
+    rawPatch: "Patch",
+    loading: "Loading diff…",
+    unavailable: "Diff view unavailable. The patch text remains available.",
+  },
+  terminal: {
+    output: "Terminal output",
+    command: "Command",
+    cwd: "Working directory",
+    running: "Running",
+    exitCode: (code) => `Exit code ${code}`,
+    signal: (signal) => `Stopped by ${signal}`,
+    finished: "Finished",
+    started: "Command started",
+    ended: (status) => `Command ended. ${status}`,
+    truncated: "Output was truncated.",
+    noOutput: "No output",
+    copyOutput: "Copy output",
+    copied: "Copied",
+    loading: "Loading terminal…",
+    unavailable:
+      "Terminal view unavailable. The plain output remains available.",
   },
   toolNames: {
     question: "Question",
@@ -476,6 +551,43 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   stats: {
     waiting: "בהמתנה למדדים…",
   },
+  diff: {
+    changes: "קבצים ששונו",
+    changeKinds: {
+      add: "נוסף",
+      delete: "נמחק",
+      modify: "שונה",
+      move: "הועבר",
+      copy: "הועתק",
+    },
+    renamedTo: "אל",
+    lineStats: (additions, deletions) =>
+      `${additions === 1 ? "שורה אחת נוספה" : `${additions} שורות נוספו`}, ${deletions === 1 ? "שורה אחת הוסרה" : `${deletions} שורות הוסרו`}`,
+    copyPatch: "העתקת השינויים",
+    copied: "הועתק",
+    showFullDiff: "הצגת כל השינויים",
+    collapseDiff: "כיווץ השינויים",
+    rawPatch: "טקסט השינויים",
+    loading: "השינויים נטענים…",
+    unavailable: "תצוגת השינויים אינה זמינה. טקסט השינויים עדיין זמין.",
+  },
+  terminal: {
+    output: "פלט המסוף",
+    command: "פקודה",
+    cwd: "תיקיית עבודה",
+    running: "בהרצה",
+    exitCode: (code) => `קוד יציאה ${code}`,
+    signal: (signal) => `נעצר על ידי ${signal}`,
+    finished: "הסתיים",
+    started: "הפקודה התחילה לרוץ",
+    ended: (status) => `הפקודה הסתיימה. ${status}`,
+    truncated: "הפלט קוצר.",
+    noOutput: "אין פלט",
+    copyOutput: "העתקת הפלט",
+    copied: "הועתק",
+    loading: "המסוף נטען…",
+    unavailable: "תצוגת המסוף אינה זמינה. הפלט כטקסט פשוט עדיין זמין.",
+  },
   toolNames: {
     question: "שאלה",
     permission: "הרשאה",
@@ -519,4 +631,12 @@ export function ToolUiLocaleProvider({
 
 export function useToolUiLocale() {
   return useContext(ToolUiLocaleContext)
+}
+
+export function useToolDiffLabels(): ToolDiffLabels {
+  return useToolUiLocale().labels.diff
+}
+
+export function useToolTerminalLabels(): ToolTerminalLabels {
+  return useToolUiLocale().labels.terminal
 }
