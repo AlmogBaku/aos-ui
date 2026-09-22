@@ -308,7 +308,8 @@ describe("thread reading position", () => {
     frames.delete(frame)
     callback(0)
     expect(capture).toHaveBeenCalledTimes(1)
-    expect(sync).not.toHaveBeenCalled()
+    // Growth that shared the frame with a scroll still reaches the end.
+    expect(sync).toHaveBeenCalledTimes(1)
 
     resize?.([], {} as ResizeObserver)
     resize?.([], {} as ResizeObserver)
@@ -316,7 +317,8 @@ describe("thread reading position", () => {
     const [[resizeFrame, resizeCallback]] = frames
     frames.delete(resizeFrame)
     resizeCallback(1)
-    expect(sync).toHaveBeenCalledTimes(1)
+    expect(capture).toHaveBeenCalledTimes(1)
+    expect(sync).toHaveBeenCalledTimes(2)
 
     resize?.([], {} as ResizeObserver)
     view.unmount()

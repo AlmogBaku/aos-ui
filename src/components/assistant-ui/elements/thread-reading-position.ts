@@ -227,6 +227,9 @@ export function useThreadReadingPosition({
       if (frame !== null) return
       frame = window.requestAnimationFrame(() => {
         frame = null
+        // A scroll the reader did not make leaves a following thread where it
+        // landed, and it can share a frame with growth that must still pull the
+        // thread to its end, so every frame re-applies the bookmark it keeps.
         if (capturePending) {
           capturePending = false
           controller.capture(
@@ -234,7 +237,6 @@ export function useThreadReadingPosition({
             viewport,
             performance.now() - inputAt < READER_INPUT_WINDOW_MS
           )
-          return
         }
         controller.syncAfterContentChange(threadId, viewport)
       })
@@ -242,14 +244,13 @@ export function useThreadReadingPosition({
     const capture = () => schedule(true)
     viewport.addEventListener("scroll", capture, { passive: true })
 
-    const content = viewport.querySelector<HTMLElement>(
-      '[data-slot="aui_message-group"]'
-    )
+    // The whole scrolled content, so the footer's Todos and composer growing
+    // move a following thread too, not only the messages.
     const resizeObserver =
-      content && typeof ResizeObserver !== "undefined"
+      typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(() => schedule(false))
         : null
-    if (content) resizeObserver?.observe(content)
+    for (const content of viewport.children) resizeObserver?.observe(content)
 
     return () => {
       viewport.removeEventListener("scroll", capture)
