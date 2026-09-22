@@ -218,6 +218,13 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
   The close code Hermes sends on token rejection (documented as 4401 or 4403)
   is unverified; treat an immediate WebSocket close after dial as a possible
   authentication failure and check the Hermes server log.
+- Hermes refusals keep Hermes' own words as the failure's second line. A
+  Session another Hermes window owns fails with `AOS_SESSION_IN_USE`; Hermes'
+  active-Session limit fails with `AOS_SESSION_LIMIT`; a turn still running
+  fails with `AOS_SESSION_BUSY`. A reattach Hermes fences while it settles a
+  disconnect, and an unreadable ownership registry, are retried for a few
+  seconds without a visible error, then fail with `AOS_PROVIDER_UNAVAILABLE`.
+  A question Hermes no longer holds open fails with `AOS_INTERACTION_EXPIRED`.
 - A Hermes restart resets every active run once: the next attach produces
   `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
   history from the Hermes transcript. No prompt is re-sent.

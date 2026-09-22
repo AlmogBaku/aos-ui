@@ -283,6 +283,7 @@ const guestRunErrors: Readonly<
     retryable: true,
   },
   AOS_SESSION_BUSY: { code: "rate_limited", retryable: true },
+  AOS_SESSION_LIMIT: { code: "rate_limited", retryable: true },
 }
 
 function publicRunError(code: string | undefined) {

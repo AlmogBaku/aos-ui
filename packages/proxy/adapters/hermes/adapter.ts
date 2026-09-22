@@ -63,6 +63,11 @@ import {
 } from "./attachment-registry"
 import type { ServerRuntime } from "../../core/runtime"
 import { nativeSlashCommands } from "./slash-commands"
+import {
+  DEFAULT_RETRY_SCHEDULE,
+  retryTransient,
+  type HermesRetrySchedule,
+} from "./transient-rejections"
 import { isRecord, nativeId, timestamp, trimmedText } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
@@ -293,11 +298,18 @@ export class HermesServerAdapter implements ServerRuntime {
   /** The typed native run boundary; `run-native.ts` owns every native outcome. */
   readonly native: HermesRunNative
   readonly runs: HermesRunEngine
+  readonly #retry: HermesRetrySchedule
 
   constructor(
     private readonly transport: HermesRpcTransport,
-    options: { sessionIdleMs?: number; log?: HermesLog } = {}
+    options: {
+      sessionIdleMs?: number
+      log?: HermesLog
+      /** When a transient Hermes refusal is tried again. */
+      retry?: HermesRetrySchedule
+    } = {}
   ) {
+    this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
@@ -443,6 +455,7 @@ export class HermesServerAdapter implements ServerRuntime {
       },
       interactions: this.interactions,
       history: (scope) => this.#rawHistory(scope),
+      retry: this.#retry,
       ...(options.log ? { log: options.log } : {}),
     })
     this.runs = new HermesRunEngine(this.native, {
@@ -1045,11 +1058,17 @@ export class HermesServerAdapter implements ServerRuntime {
   async #resumeNative(scope: HermesRunScope) {
     let payload: unknown
     try {
-      payload = await this.transport.request("session.resume", {
-        session_id: scope.sessionId,
-        profile: scope.agentId,
-        omit_messages: true,
-      })
+      // A reattach Hermes fences while it settles a disconnect is let through
+      // once it has settled, so the caller never sees the fence.
+      payload = await retryTransient(
+        () =>
+          this.transport.request("session.resume", {
+            session_id: scope.sessionId,
+            profile: scope.agentId,
+            omit_messages: true,
+          }),
+        this.#retry
+      )
     } catch (error) {
       // A heal must learn that Hermes reaped this live Session so the registry
       // can invalidate the binding and resume the durable Session again; every

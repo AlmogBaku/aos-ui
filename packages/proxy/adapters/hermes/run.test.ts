@@ -1094,9 +1094,9 @@ describe("HermesRunEngine", () => {
     )
   })
 
-  it("reports an answer another user already gave as a Session in use", async () => {
+  it("reports an answer to a request Hermes no longer holds open as expired", async () => {
     const { handle } = await resumedRun({
-      respondInteractions: async () => [{ status: "in-use" as const }],
+      respondInteractions: async () => [{ status: "expired" as const }],
     })
 
     const events = await collect(handle)
@@ -1104,8 +1104,8 @@ describe("HermesRunEngine", () => {
     expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
       {
         type: RunEventKind.RUN_ERROR,
-        code: "AOS_SESSION_IN_USE",
-        message: "Another user answered this request in this Hermes Session.",
+        code: "AOS_INTERACTION_EXPIRED",
+        message: "This Hermes interaction is no longer pending.",
       },
     ])
   })
@@ -5328,6 +5328,56 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
     expect(submissions).toBe(2)
   })
+
+  it.each([
+    [
+      "busy",
+      "AOS_SESSION_BUSY",
+      "Hermes is already running this Session.",
+      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo.",
+    ],
+    [
+      "in-use",
+      "AOS_SESSION_IN_USE",
+      "This Session is open in another app. Use it there, or start a new Session.",
+      "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.",
+    ],
+    [
+      "session-limit",
+      "AOS_SESSION_LIMIT",
+      "Hermes has reached its limit of active Sessions.",
+      "Hermes is at the active session limit (4/4). Try again when another session finishes.",
+    ],
+    [
+      "unknown",
+      "AOS_PROVIDER_RUN_FAILED",
+      "Hermes rejected this command.",
+      "Hermes refused this prompt.",
+    ],
+  ] as const)(
+    "reports a %s refusal as %s followed by Hermes' own words",
+    async (reason, code, headline, detail) => {
+      const engine = new HermesRunEngine(
+        runtime({
+          submit: async () => ({
+            acknowledgement: "rejected",
+            reason,
+            detail,
+          }),
+        })
+      )
+
+      const events = await collect(await engine.start(scope, input()))
+
+      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+        {
+          type: RunEventKind.RUN_ERROR,
+          code,
+          message: `${headline}\n${detail}`,
+        },
+      ])
+    }
+  )
 
   it("rebinds the durable Session once and resubmits when Hermes reports it gone", async () => {
     const attachment = observation()

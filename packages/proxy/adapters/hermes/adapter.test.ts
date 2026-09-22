@@ -2183,6 +2183,57 @@ describe("Hermes server adapter", () => {
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
+  it("resumes without a visible failure once Hermes settles a disconnect", async () => {
+    let resumes = 0
+    const router = rpcRouter({
+      "session.resume": async () => {
+        resumes += 1
+        if (resumes < 3)
+          throw new HermesRpcRejectedError(
+            4009,
+            "session disconnect interrupt settling"
+          )
+        return { session_id: "live-secret" }
+      },
+    })
+    const wait = vi.fn(async () => undefined)
+    const adapter = new HermesServerAdapter(router, {
+      retry: { delaysMs: [0, 0, 0], wait },
+    })
+
+    await expect(
+      adapter.native.resume({
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "stored",
+      })
+    ).resolves.toMatchObject({ liveSessionId: "live-secret" })
+    expect(wait).toHaveBeenCalledTimes(2)
+  })
+
+  it("reports a disconnect Hermes never finishes settling as unavailable", async () => {
+    const router = rpcRouter({
+      "session.resume": async () => {
+        throw new HermesRpcRejectedError(
+          4009,
+          "session disconnect interrupt settling"
+        )
+      },
+    })
+    const adapter = new HermesServerAdapter(router, {
+      retry: { delaysMs: [0, 0], wait: async () => undefined },
+    })
+
+    await expect(
+      adapter.native.resume({
+        agentId: "researcher",
+        sessionId: "stored",
+        threadId: "stored",
+      })
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    expect(router.calls("session.resume")).toHaveLength(3)
+  })
+
   it("re-resumes the durable Session when Hermes rejects a heal as gone", async () => {
     let resumes = 0
     const router = rpcRouter({

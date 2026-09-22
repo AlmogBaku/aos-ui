@@ -56,14 +56,16 @@ function runtime(
   }
   const interactions = stubInteractions()
   const warn = vi.fn()
+  const wait = vi.fn(async () => undefined)
   const native = new HermesNativeRuntime({
     transport: router,
     attachments,
     interactions,
     history: async () => history,
     log: { warn },
+    retry: { delaysMs: [0, 0, 0], wait },
   })
-  return { native, router, attachments, interactions, release, warn }
+  return { native, router, attachments, interactions, release, warn, wait }
 }
 
 describe("Hermes native submit outcomes", () => {
@@ -88,7 +90,7 @@ describe("Hermes native submit outcomes", () => {
     [4001, "session-gone"],
     [4007, "session-gone"],
     [4009, "busy"],
-    [4090, "busy"],
+    [4090, "unknown"],
     [4091, "busy"],
     [5070, "storage"],
     [5071, "storage"],
@@ -117,6 +119,123 @@ describe("Hermes native submit outcomes", () => {
       if (reason === "session-gone")
         expect(attachments.invalidate).toHaveBeenCalledWith("live-secret")
       else expect(attachments.invalidate).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    [
+      "SESSION_NOT_OWNED",
+      "in-use",
+      "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.\nDetails: owned by another Hermes process",
+    ],
+    [
+      "MAX_CONCURRENT_SESSIONS",
+      "session-limit",
+      "Hermes is at the active session limit (4/4). Try again when another session finishes.",
+    ],
+  ] as const)(
+    "classifies a 4090 refusal with reason %s as %s and keeps Hermes' words",
+    async (nativeReason, reason, message) => {
+      const { native, router } = runtime({
+        "prompt.submit": async () => {
+          throw new HermesRpcRejectedError(4090, message, nativeReason)
+        },
+      })
+
+      await expect(
+        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      ).resolves.toEqual({
+        acknowledgement: "rejected",
+        reason,
+        detail: message,
+        refused: { params: { text: "Hello" } },
+      })
+      // A final refusal is never retried.
+      expect(router.calls("prompt.submit")).toHaveLength(1)
+    }
+  )
+
+  it("keeps Hermes' instruction on a busy refusal", async () => {
+    const message =
+      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo."
+    const { native } = runtime({
+      "prompt.submit": async () => {
+        throw new HermesRpcRejectedError(4009, message)
+      },
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+    ).resolves.toMatchObject({ reason: "busy", detail: message })
+  })
+
+  it("drops refusal text that names a private location", async () => {
+    const { native } = runtime({
+      "prompt.submit": async () => {
+        throw new HermesRpcRejectedError(
+          4009,
+          "session busy: /home/operator/.hermes/state.db is locked"
+        )
+      },
+    })
+
+    const outcome = await native.submit("live-secret", {
+      scope,
+      text: "Hello",
+      runId: "run-1",
+    })
+
+    expect(outcome).toMatchObject({ reason: "busy" })
+    expect(outcome).not.toHaveProperty("detail")
+  })
+
+  it.each([
+    [4009, "session disconnect interrupt settling", undefined],
+    [
+      4090,
+      "Hermes could not verify session ownership.",
+      "SESSION_COORDINATION_UNAVAILABLE",
+    ],
+  ] as const)(
+    "retries the transient refusal %s until Hermes settles",
+    async (code, message, nativeReason) => {
+      let attempts = 0
+      const { native, router, wait } = runtime({
+        "prompt.submit": async () => {
+          if (++attempts < 3)
+            throw new HermesRpcRejectedError(code, message, nativeReason)
+          return { status: "streaming" }
+        },
+      })
+
+      await expect(
+        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
+      expect(router.calls("prompt.submit")).toHaveLength(3)
+      expect(wait).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it.each([
+    [4009, "session disconnect interrupt settling", undefined],
+    [
+      4090,
+      "Hermes could not verify session ownership.",
+      "SESSION_COORDINATION_UNAVAILABLE",
+    ],
+  ] as const)(
+    "reports a transient refusal %s that outlasts its retries as an outage",
+    async (code, message, nativeReason) => {
+      const { native, router } = runtime({
+        "prompt.submit": async () => {
+          throw new HermesRpcRejectedError(code, message, nativeReason)
+        },
+      })
+
+      await expect(
+        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+      expect(router.calls("prompt.submit")).toHaveLength(4)
     }
   )
 

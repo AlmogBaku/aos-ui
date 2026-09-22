@@ -524,6 +524,7 @@ describe("guest AG-UI projection", () => {
     ["AOS_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],
     ["AOS_PROVIDER_AGENT_UNAVAILABLE", "temporarily_unavailable"],
     ["AOS_SESSION_BUSY", "rate_limited"],
+    ["AOS_SESSION_LIMIT", "rate_limited"],
     ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
     ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
     ["AOS_INTERACTION_EXPIRED", "request_failed"],

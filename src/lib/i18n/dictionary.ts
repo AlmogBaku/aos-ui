@@ -182,6 +182,7 @@ export type Dictionary = {
     AOS_PROVIDER_UNAVAILABLE: string
     AOS_SESSION_BUSY: string
     AOS_SESSION_IN_USE: string
+    AOS_SESSION_LIMIT: string
     AOS_RESET_REQUIRED: string
     AOS_STOP_UNCERTAIN: string
     AOS_STREAM_OVERFLOW: string

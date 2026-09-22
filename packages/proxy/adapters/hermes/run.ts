@@ -31,6 +31,7 @@ import {
   nativeFailure,
   providerUnavailable,
   RUN_FAILURES,
+  withDetail,
   type RunFailure,
 } from "./run-failures"
 import {
@@ -64,7 +65,11 @@ import {
   type SettlingWatcher,
 } from "./run-state"
 import type { HermesLog } from "./gateway"
-import type { HermesRunNative, HermesSubmitPrompt } from "./run-native"
+import type {
+  HermesRunNative,
+  HermesSubmitPrompt,
+  HermesSubmitRejection,
+} from "./run-native"
 
 export {
   HermesRunPublicError,
@@ -76,6 +81,19 @@ export type { HermesRunScope } from "./run-state"
 export type HermesRunHandle = ServerRunHandle
 
 export type HermesReconnectRequest = RecoveryRequest
+
+/** The public failure each refused submit reports, with Hermes' own words. */
+const REFUSAL_FAILURES: Record<
+  Exclude<HermesSubmitRejection, "command-with-attachments" | "session-gone">,
+  RunFailure
+> = {
+  busy: RUN_FAILURES.sessionBusy,
+  "in-use": RUN_FAILURES.sessionInUse,
+  "session-limit": RUN_FAILURES.sessionLimit,
+  storage: RUN_FAILURES.commandRejected,
+  invalid: RUN_FAILURES.commandRejected,
+  unknown: RUN_FAILURES.commandRejected,
+}
 
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
@@ -224,8 +242,6 @@ export class HermesRunEngine {
       if (active.terminal) return this.#handle(active)
       if (results.some(({ status }) => status === "uncertain"))
         this.#detach(active, RUN_FAILURES.interactionUncertain)
-      else if (results.some(({ status }) => status === "in-use"))
-        this.#fail(active, RUN_FAILURES.sessionInUse)
       else if (results.some(({ status }) => status === "expired"))
         this.#fail(active, RUN_FAILURES.interactionExpired)
       return this.#handle(active)
@@ -414,10 +430,11 @@ export class HermesRunEngine {
     }
     if (outcome.reason === "command-with-attachments")
       return this.#fail(active, RUN_FAILURES.commandWithAttachments)
-    if (outcome.reason === "busy")
-      return this.#fail(active, RUN_FAILURES.sessionBusy)
     if (outcome.reason !== "session-gone")
-      return this.#fail(active, RUN_FAILURES.commandRejected)
+      return this.#fail(
+        active,
+        withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
+      )
     if (retried) return this.#fail(active, RUN_FAILURES.resetRequired)
     const refused = outcome.refused
     try {

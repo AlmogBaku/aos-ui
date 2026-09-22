@@ -1053,15 +1053,15 @@ describe("HermesInteractions server requests", () => {
     ).resolves.toEqual({ status: "expired" })
   })
 
-  it("reports a request another attached user answered as a Session in use", async () => {
+  it("reports a request Hermes no longer holds open as expired", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {
       session_id: LIVE,
       question: "Which region?",
     })
-    // Hermes settles a request answered on another surface without withdrawing
-    // it, so only the answer acknowledgement can report it.
+    // `request.answer` answers `{status: "expired"}` for a request timed out,
+    // cancelled, answered elsewhere or owned by another process alike.
     requests.expireAnswers()
 
     await expect(
@@ -1070,13 +1070,13 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
-    ).resolves.toEqual({ status: "in-use" })
+    ).resolves.toEqual({ status: "expired" })
 
     expect(requests.answer(id)).toBeUndefined()
     expect(interactions.pending(scope)).toEqual([])
   })
 
-  it("reports a Session in use for a request its own live Session stopped listing", async () => {
+  it("expires a request its own live Session stopped listing", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {
@@ -1097,7 +1097,7 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
-    ).resolves.toEqual({ status: "in-use" })
+    ).resolves.toEqual({ status: "expired" })
   })
 
   it("answers on the request frame when Hermes has no answer method", async () => {

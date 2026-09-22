@@ -92,7 +92,12 @@ export const RUN_FAILURES = {
   },
   sessionInUse: {
     code: "AOS_SESSION_IN_USE",
-    message: "Another user answered this request in this Hermes Session.",
+    message:
+      "This Session is open in another app. Use it there, or start a new Session.",
+  },
+  sessionLimit: {
+    code: "AOS_SESSION_LIMIT",
+    message: "Hermes has reached its limit of active Sessions.",
   },
   sessionBusy: {
     code: "AOS_SESSION_BUSY",
@@ -160,7 +165,7 @@ export function stopUncertain() {
  * bounded text is what the check reads, because that is all that ever leaves:
  * a value that trips the rule is dropped whole rather than masked.
  */
-function publicDetail(value: unknown) {
+export function publicDetail(value: unknown) {
   const native = trimmedText(value)
   if (native === undefined) return undefined
   const detail = native.slice(0, MAX_PUBLIC_DETAIL_CHARS).trim()
@@ -214,10 +219,17 @@ export function loggedNativeMessage(failure: NativeFailure | undefined) {
  * code replaces exactly that line and keeps the provider's own words.
  */
 export function publicRunFailure(failure: NativeFailure): RunFailure {
-  const headline = runFailureHeadline(failure)
-  return failure.detail === undefined
+  return withDetail(runFailureHeadline(failure), failure.detail)
+}
+
+/** A headline followed by Hermes' own public detail as its second line. */
+export function withDetail(
+  headline: RunFailure,
+  detail: string | undefined
+): RunFailure {
+  return detail === undefined
     ? headline
-    : { code: headline.code, message: `${headline.message}\n${failure.detail}` }
+    : { code: headline.code, message: `${headline.message}\n${detail}` }
 }
 
 /** Hermes' classification, mapped to the one catalogue entry that explains it. */

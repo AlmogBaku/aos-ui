@@ -182,7 +182,7 @@ export const en = {
     AOS_INTERACTION_EXPIRED:
       "This request is no longer waiting for a response.",
     AOS_SESSION_IN_USE:
-      "Another user is working in this Session and answered this request.",
+      "This Session is open in another app. Use it there, or start a new Session.",
     AOS_PROVIDER_RUN_FAILED: "The provider could not complete this run.",
     AOS_PROVIDER_AGENT_UNAVAILABLE:
       "The provider could not start this Agent for this Session.",
@@ -192,6 +192,7 @@ export const en = {
       "The model provider returned an error for this turn. Retry, switch models, or continue in a new Session.",
     AOS_PROVIDER_UNAVAILABLE: "The provider is temporarily unavailable.",
     AOS_SESSION_BUSY: "This Session is still busy with an earlier turn.",
+    AOS_SESSION_LIMIT: "The provider has reached its limit of active Sessions.",
     AOS_RESET_REQUIRED:
       "This run must be reconciled with provider history before it can continue.",
     AOS_STOP_UNCERTAIN:

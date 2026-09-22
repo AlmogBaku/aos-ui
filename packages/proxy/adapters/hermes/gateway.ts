@@ -39,7 +39,7 @@ import {
   type HermesLog,
   type HermesSocket,
 } from "./gateway-socket"
-import { publicReason } from "./native"
+import { isRecord, nativeId, publicReason, trimmedText } from "./native"
 
 export {
   HermesAuthenticationError,
@@ -50,9 +50,18 @@ export type { HermesLog, HermesSocket } from "./gateway-socket"
 export type { ServerRequest, ServerRequestHandler }
 export { JSON_RPC_METHOD_NOT_FOUND } from "./vendor/hermes-shared/json-rpc-channel"
 
-/** Hermes authoritatively rejected a dispatched JSON-RPC request. */
+/**
+ * Hermes authoritatively rejected a dispatched JSON-RPC request. The error's own
+ * message stays generic; Hermes' words ride in `nativeMessage`, which only a
+ * caller applying the adapter's redaction rule may publish, and `reason` is the
+ * machine-readable `error.data.reason` some refusals carry.
+ */
 export class HermesRpcRejectedError extends Error {
-  constructor(readonly code?: number) {
+  constructor(
+    readonly code?: number,
+    readonly nativeMessage?: string,
+    readonly reason?: string
+  ) {
     super("Hermes RPC request was rejected")
     this.name = "HermesRpcRejectedError"
   }
@@ -689,7 +698,9 @@ export class HermesGateway implements HermesRpcTransport {
       return error
     if (error instanceof JsonRpcGatewayError)
       return new HermesRpcRejectedError(
-        Number.isSafeInteger(error.code) ? error.code : undefined
+        Number.isSafeInteger(error.code) ? error.code : undefined,
+        trimmedText(error.message),
+        isRecord(error.data) ? nativeId(error.data.reason, 128) : undefined
       )
     if (isAbort(error)) return new HermesRequestAbortedError()
     // Nothing was written: the generation was gone before the send.
