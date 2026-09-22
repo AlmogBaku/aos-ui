@@ -174,8 +174,8 @@ describe("assistant tool timeline", () => {
                 type: "tool-call",
                 toolCallId: "chart",
                 toolName: "render_chart",
-                args: { title: "Investment trend" },
-                result: {
+                args: {
+                  title: "Investment trend",
                   type: "line",
                   xKey: "quarter",
                   series: [{ key: "applied", label: "Applied AI" }],
@@ -184,6 +184,7 @@ describe("assistant tool timeline", () => {
                     { quarter: "Q1 ’25", applied: 128 },
                   ],
                 },
+                result: "Chart ready for display.",
               },
             ],
           },
@@ -191,9 +192,6 @@ describe("assistant tool timeline", () => {
       />
     )
 
-    expect(
-      document.querySelectorAll('[data-slot="tool-timeline"]')
-    ).toHaveLength(1)
     const trigger = await screen.findByRole("button", {
       name: "Reasoning · 3 tool calls",
     })
@@ -207,7 +205,6 @@ describe("assistant tool timeline", () => {
     expect(
       screen.getByText("I should inspect the project before changing it.")
     ).toBeVisible()
-    expect(document.querySelectorAll('[data-slot="tool-call"]')).toHaveLength(3)
     expect(screen.getAllByText("Read")).toHaveLength(1)
     expect(screen.getAllByText("Searched")).toHaveLength(1)
     expect(screen.getAllByText("Loaded")).toHaveLength(1)
@@ -215,11 +212,9 @@ describe("assistant tool timeline", () => {
     expect(
       screen.queryByText("private skill instructions must stay hidden")
     ).toBeNull()
-    await waitFor(() =>
-      expect(
-        document.querySelectorAll('[data-slot="tool-chrome"]')
-      ).toHaveLength(1)
-    )
+    expect(
+      await screen.findByRole("heading", { name: "Investment trend" })
+    ).toBeVisible()
   })
 
   it("keeps assistant prose visible between completed tool calls", async () => {

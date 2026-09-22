@@ -58,7 +58,8 @@ const launchPlanResult = {
   ],
 } as const
 
-const marketInvestmentChart = {
+const marketInvestmentChartArgs = {
+  title: "Investment is shifting into applied AI",
   type: "line",
   xKey: "quarter",
   series: [
@@ -154,9 +155,9 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
             type: "tool-call",
             toolCallId: "fixture-initial-chart",
             toolName: "render_chart",
-            args: { title: "Investment is shifting into applied AI" },
-            argsText: '{"title":"Investment is shifting into applied AI"}',
-            result: marketInvestmentChart,
+            args: marketInvestmentChartArgs,
+            argsText: JSON.stringify(marketInvestmentChartArgs),
+            result: { ok: true },
           },
           {
             type: "tool-call",
@@ -592,7 +593,11 @@ export function createFixtureChatModel(
           )
           workspace.publishAttention(threadId, kind, requestId)
           if (kind === "question" && scenario.questionTemplate) {
-            const { header, options: opts, allowFreeform } = scenario.questionTemplate
+            const {
+              header,
+              options: opts,
+              allowFreeform,
+            } = scenario.questionTemplate
             onQuestion?.(threadId, {
               kind: "question",
               requestId,

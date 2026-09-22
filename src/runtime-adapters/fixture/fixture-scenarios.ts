@@ -198,8 +198,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_chart",
-          { title: "Enterprise AI spend" },
           {
+            title: "Enterprise AI spend",
             type: "line",
             xKey: "quarter",
             series: [
@@ -210,7 +210,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
               { quarter: "Q4’24", total: 300, genai: 220 },
               { quarter: "Q1’25", total: 365, genai: 275 },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }
@@ -222,8 +223,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_map",
-          { title: "Interview coverage" },
           {
+            title: "Interview coverage",
             locations: [
               {
                 id: "london",
@@ -238,7 +239,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
                 longitude: 34.7818,
               },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }
@@ -250,9 +252,7 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       parts: [
         toolPart(
           "render_stats",
-          { title: "Launch metrics" },
           {
-            id: "fixture-launch-metrics",
             title: "Launch metrics",
             description: "Illustrative execution metrics",
             stats: [
@@ -272,7 +272,8 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
                 diff: { value: 4.1 },
               },
             ],
-          }
+          },
+          { ok: true }
         ),
       ],
     }

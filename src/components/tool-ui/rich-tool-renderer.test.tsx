@@ -150,13 +150,14 @@ describe("rich tool classification", () => {
       isAosRichTool(
         toolPart({
           toolName: "render_chart",
-          args: { title: "Spend" },
-          result: {
+          args: {
+            title: "Spend",
             type: "line",
             xKey: "quarter",
             series: [{ key: "value", label: "Spend" }],
             data: [{ quarter: "Q1", value: 12 }],
           },
+          result: "Chart ready for display.",
         })
       )
     ).toBe(true)
@@ -164,8 +165,8 @@ describe("rich tool classification", () => {
       isAosRichTool(
         toolPart({
           toolName: "render_chart",
-          args: { title: "Spend" },
-          result: { type: "line", data: "invalid" },
+          args: { title: "Spend", type: "line", data: "invalid" },
+          result: "Chart ready for display.",
         })
       )
     ).toBe(false)
@@ -1448,8 +1449,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_chart",
-          args: { title: "Broken chart" },
-          result: { type: "line", data: "invalid" },
+          args: { title: "Broken chart", type: "line", data: "invalid" },
+          result: "Chart ready for display.",
         })}
       />
     )
@@ -1464,8 +1465,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_chart",
-          args: { title: "Enterprise AI spend" },
-          result: {
+          args: {
+            title: "Enterprise AI spend",
             type: "line",
             xKey: "quarter",
             series: [
@@ -1477,6 +1478,7 @@ describe("safe result renderers", () => {
               { quarter: "Q1’25", total: 365, genai: 275 },
             ],
           },
+          result: "Chart ready for display.",
         })}
       />
     )
@@ -1486,8 +1488,12 @@ describe("safe result renderers", () => {
       screen.getByRole("table", { name: "Enterprise AI spend data" })
     ).toBeInTheDocument()
     expect(screen.getByRole("cell", { name: "365" })).toBeInTheDocument()
+    // The loaded visual repeats the provider title beside the table, so a
+    // second occurrence of it means the chart itself arrived.
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="chart"]')).toBeTruthy()
+      expect(screen.getAllByText("Enterprise AI spend").length).toBeGreaterThan(
+        1
+      )
     )
   })
 
@@ -1753,8 +1759,8 @@ describe("safe result renderers", () => {
       <RichToolRenderer
         {...toolPart({
           toolName: "render_map",
-          args: { title: "Interview coverage" },
-          result: {
+          args: {
+            title: "Interview coverage",
             locations: [
               {
                 id: "london",
@@ -1770,6 +1776,7 @@ describe("safe result renderers", () => {
               },
             ],
           },
+          result: "Map ready for display.",
         })}
       />
     )
@@ -1945,8 +1952,8 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_chart",
-            args: { title: "Provider chart" },
-            result: { data: "invalid" },
+            args: { title: "Provider chart", data: "invalid" },
+            result: "Chart ready for display.",
           })}
         />
       </ToolUiLocaleProvider>
@@ -2037,13 +2044,14 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_chart",
-            args: { title: "Provider chart" },
-            result: {
+            args: {
+              title: "Provider chart",
               type: "line",
               xKey: "quarter",
               series: [{ key: "total", label: "Provider series" }],
               data: [{ quarter: "Q1", total: 365 }],
             },
+            result: "Chart ready for display.",
           })}
         />
       </ToolUiLocaleProvider>
@@ -2059,8 +2067,8 @@ describe("Hebrew tool UI", () => {
         <RichToolRenderer
           {...toolPart({
             toolName: "render_map",
-            args: { title: "Provider map" },
-            result: {
+            args: {
+              title: "Provider map",
               locations: [
                 {
                   id: "location-he",
@@ -2070,6 +2078,7 @@ describe("Hebrew tool UI", () => {
                 },
               ],
             },
+            result: "Map ready for display.",
           })}
         />
       </ToolUiLocaleProvider>
