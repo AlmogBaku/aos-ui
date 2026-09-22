@@ -40,6 +40,12 @@ describe("turnLayout", () => {
     })
   })
 
+  it("folds nothing while the turn waits on the operator's answer", () => {
+    const parts = [text("Let me write it."), tool("write_file")]
+
+    expect(turnLayout(parts, "requires-action").settled).toBe(false)
+  })
+
   it("finds the settled turn's answer in its last text part", () => {
     const parts = [
       text("Let me look."),

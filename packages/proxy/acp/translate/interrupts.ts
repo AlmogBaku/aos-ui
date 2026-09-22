@@ -107,12 +107,20 @@ function permissionOutbound(
   request: PendingRequest,
   lane: Lane
 ): InterruptOutbound {
-  const title = laneText(lane, request.message ?? "Permission required")
+  // The schema's `title` names the operation and the message explains it; a
+  // request with only one of the two titles itself with it.
+  const label = record(request.responseSchema)?.title
+  const words = request.message && laneText(lane, request.message)
+  const title =
+    typeof label === "string" && label
+      ? laneText(lane, label)
+      : (words ?? "Permission required")
   return {
     kind: "request-permission",
     interruptId: request.id,
     request: {
       title,
+      ...(words && words !== title ? { description: words } : {}),
       ...(request.toolCallId
         ? {
             subject: {

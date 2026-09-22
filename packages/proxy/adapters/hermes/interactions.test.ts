@@ -328,6 +328,27 @@ describe("HermesInteractions server requests", () => {
     expect(requests.answer(id)).toEqual({ choice: "once" })
   })
 
+  it("explains an approval with its description and names it with its command", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-1",
+      command: "<write to AGENTS.md>",
+      description: "Write to protected agent-instruction file(s): AGENTS.md.",
+      choices: ["once", "deny"],
+    })
+
+    expect(interactions.pending(scope)[0]).toMatchObject({
+      interrupts: [
+        {
+          message: "Write to protected agent-instruction file(s): AGENTS.md.",
+          responseSchema: { title: "<write to AGENTS.md>" },
+        },
+      ],
+    })
+  })
+
   it("answers a session or permanent approval choice with the all flag", async () => {
     for (const choice of ["session", "always"] as const) {
       const { requests, interactions, bind } = harness()

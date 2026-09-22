@@ -545,9 +545,12 @@ function approvalInteraction(
   id: string,
   params: ApprovalRequestParams
 ): ProjectedInteraction {
+  // As with `clarify`, `title` is the label and the message the words: Hermes
+  // names the operation in `command` and explains it in `description`.
+  const command = validString(params.command)
+  const description = validString(params.description)
   const message =
-    validString(params.command ?? params.description) ??
-    "Hermes is requesting permission to continue."
+    description ?? command ?? "Hermes is requesting permission to continue."
   const choices = approvalChoices(params)
   if (choices.length === 0) invalidNative()
   return {
@@ -560,7 +563,11 @@ function approvalInteraction(
           id,
           reason: "approval",
           message: publicText(message),
-          responseSchema: { type: "string", enum: choices },
+          responseSchema: {
+            type: "string",
+            enum: choices,
+            ...(command && description ? { title: publicText(command) } : {}),
+          },
           metadata: {
             "aos.kind": "approval",
             "aos.scope": "run",

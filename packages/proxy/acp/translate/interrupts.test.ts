@@ -133,6 +133,22 @@ describe("pendingRequestToOutbound approvals", () => {
     })
   })
 
+  it("titles a permission with the operation and describes it with the message", () => {
+    const { request } = permissionOf({
+      ...approval,
+      message: "Write to protected agent-instruction file(s): AGENTS.md.",
+      responseSchema: {
+        ...approval.responseSchema,
+        title: "<write to AGENTS.md>",
+      },
+    })
+
+    expect(request.title).toBe("<write to AGENTS.md>")
+    expect(request.description).toBe(
+      "Write to protected agent-instruction file(s): AGENTS.md."
+    )
+  })
+
   it("carries the interrupt identity in parseable permission metadata", () => {
     expect(
       AosPermissionMetaSchema.parse(metaOf(permissionOf(approval)))
@@ -353,7 +369,9 @@ describe("pendingRequestToOutbound questions", () => {
       id: "clarify-3",
       reason: "question",
       responseSchema: {
-        properties: { answers: { prefixItems: [{ description, maxItems: 1 }] } },
+        properties: {
+          answers: { prefixItems: [{ description, maxItems: 1 }] },
+        },
       },
     })
     const meta = AosElicitationMetaSchema.parse(metaOf(outbound))

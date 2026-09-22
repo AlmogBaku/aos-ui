@@ -149,7 +149,11 @@ describe("ACP runtime interactions", () => {
     emit(permission({ sessionId: "session-2", meta: {} }).pending)
     const request = interactions.getPending("session-2")
     expect(request?.requestId).toMatch(/^acp-permission-/u)
-    expect(request?.questions[0]?.prompt).toBe("")
+    // A request that only names itself says so once, as the prompt.
+    expect(request?.questions[0]).toMatchObject({
+      prompt: "Run the deploy script",
+    })
+    expect(request?.questions[0]?.header).toBeUndefined()
   })
 
   it("carries the proxy's elicitation questions losslessly", () => {

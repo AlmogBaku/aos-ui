@@ -67,6 +67,11 @@ export function createAcpInteractions({
       const meta = AosPermissionMetaSchema.safeParse(
         pending.request._meta?.[AOS_META_KEY]
       )
+      const { title } = pending.request
+      const prompt =
+        pending.request.description ??
+        (meta.success ? meta.data.message : undefined) ??
+        title
       return {
         kind: "question",
         requestId: meta.success
@@ -75,11 +80,9 @@ export function createAcpInteractions({
         sessionId,
         questions: [
           {
-            header: pending.request.title,
-            prompt:
-              pending.request.description ??
-              (meta.success ? meta.data.message : undefined) ??
-              "",
+            // A request that only names itself is said once, as the prompt.
+            ...(prompt === title ? {} : { header: title }),
+            prompt,
             options: pending.request.options.map((option) => ({
               label: option.name,
               value: option.optionId,

@@ -31,7 +31,7 @@ export type TurnGroupContext = {
 export type TurnGroupKey = "group-working" | "group-reasoning" | "group-tool"
 
 export type TurnLayout = {
-  /** A running turn folds nothing, so only a settled turn has a fold. */
+  /** A live turn folds nothing, so only a settled turn has a fold. */
   readonly settled: boolean
   /** Position of the turn's final answer: its last text part. */
   readonly terminalIndex: number | undefined
@@ -136,7 +136,8 @@ export function turnLayout(
   parts: readonly TurnPart[],
   status: string | undefined
 ): TurnLayout {
-  const settled = status !== "running"
+  // A turn waiting on the operator's answer is still live, not settled.
+  const settled = status !== "running" && status !== "requires-action"
   const lastText = parts.findLastIndex((part) => part.type === "text")
   const terminalIndex = lastText === -1 ? undefined : lastText
   return { settled, terminalIndex }
