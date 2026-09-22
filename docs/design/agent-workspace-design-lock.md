@@ -66,3 +66,12 @@ Any intentional visual departure must be called out before it is introduced.
   operator taps the search / new-session control in the compact mobile header;
   the new-session control in the drawer is compact rather than a full-width
   button.
+- **No inset frame in an installed window (2026-09-22):** the rounded inset
+  shell stays the desktop composition in a browser tab, but an installed PWA
+  window drops the outer gutter, the border, the radius, and the ambient
+  shadow, because the operating system window already draws a title bar,
+  corners, and a shadow. Two frames read as one ring of dead space and the
+  `--canvas` colour behind it says nothing. Four frame tokens in
+  `src/app/globals.css` carry it, gated on `display-mode: standalone`,
+  `minimal-ui`, and `window-controls-overlay`. The panes, dividers, tab strip,
+  and inspector are untouched.

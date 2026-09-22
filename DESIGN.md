@@ -34,7 +34,7 @@ typography:
     fontWeight: 600
 rounded:
   base: "0.75rem"
-  workspace: "1.375rem"
+  workspace: "var(--workspace-shell-radius)"
 spacing:
   compact: "0.5rem"
   control: "0.625rem"
@@ -165,8 +165,12 @@ it.
 
 At desktop capacity (≥ 64rem container width) the workspace is a rounded inset
 shell with a spacious three-pane composition and conversation in the center.
-The inset shell's border (`1px solid var(--border)`), radius (`1.375rem`), and
-ambient shadow only apply inside `@container workspace (min-width: 64rem)`.
+The inset shell's border, radius, and ambient shadow only apply inside
+`@container workspace (min-width: 64rem)`, and come from the frame tokens
+`--workspace-shell-gutter` (1rem), `--workspace-shell-border-width` (1px),
+`--workspace-shell-radius` (1.375rem), and `--workspace-shell-shadow` in
+`src/app/globals.css`. An installed window drops all four: see
+`display-mode` below.
 Sessions are real tabs with an active underline; supporting panels hold agent
 identity, status, description, and sessions rather than dashboard cards or
 extra navigation.
@@ -189,18 +193,28 @@ At 64rem, 80rem, and 90rem of available container width it progressively opens
 the established three-pane composition. At coarse pointers, buttons, button
 roles, and tabs have at least 2.75rem inline and block target dimensions.
 
+An installed window (`display-mode: standalone`, `minimal-ui`, or
+`window-controls-overlay`) supplies its own title bar, corners, and shadow, so
+the frame tokens collapse to zero there and the workspace fills the window edge
+to edge at every capacity. The list is positive rather than a negation of
+`browser` so an unknown feature keeps the frame, and `fullscreen` is excluded
+because an ordinary tab at F11 reports it too. The three-pane composition,
+pane dividers, and every container tier are unchanged; only the frame goes.
+
 **The Capacity-Not-Viewport Rule.** Workspace layout responds to usable inline
 space, including enlarged text. Do not add viewport-only pane breakpoints that
 can hide controls or create page-level horizontal overflow at 200% text scale.
 Pointer and hover media queries that govern reveal-only behavior are the stated
-exception.
+exception, as is the `display-mode` query above: an installed window is an
+environment, not a capacity, and has no container equivalent.
 
 ## Elevation & Depth
 
 Depth is tonal first: the cool canvas, application background, cards, muted
 surfaces, and quiet borders create the reading order. The shell alone receives
 a broad low-elevation shadow to separate the inset application from the page;
-drawers use a scrim and their own restrained shadow. Rich tools are bordered
+drawers use a scrim and their own restrained shadow. An installed window has no
+page to separate from, so that shadow is absent there. Rich tools are bordered
 cards, not floating glows.
 
 **The Tonal-First Rule.** Prefer a surface step or a border for structure. Use

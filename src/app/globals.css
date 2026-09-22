@@ -121,6 +121,11 @@
   --workspace-shell-shadow: 0 1.25rem 3.5rem rgb(24 24 30 / 0.13);
   --workspace-drawer-scrim: rgb(24 24 30 / 0.26);
   --workspace-drawer-shadow: 0 0 2.5rem rgb(24 24 30 / 0.2);
+  /* The inset application frame. The gutter opens at desktop capacity, and an
+     installed window drops all four because it has its own frame. */
+  --workspace-shell-gutter: 0rem;
+  --workspace-shell-border-width: 1px;
+  --workspace-shell-radius: 1.375rem;
 }
 
 .dark {
@@ -193,7 +198,7 @@ html[lang="he"] {
     overflow: hidden;
     background: var(--canvas);
     color: var(--foreground);
-    padding: 0;
+    padding: var(--workspace-shell-gutter);
   }
 
   button,
@@ -223,8 +228,24 @@ html[lang="he"] {
 }
 
 @media (min-width: 64rem) {
-  body {
-    padding: 1rem;
+  :root {
+    --workspace-shell-gutter: 1rem;
+  }
+}
+
+/* An installed window already supplies a title bar, corners, and a shadow, so
+   the inset frame inside it is a second frame around nothing. The display modes
+   are listed positively: `not (display-mode: browser)` would strip the frame in
+   an ordinary tab wherever the feature is unknown. `fullscreen` is excluded
+   because a browser tab at F11 reports it too. This must stay after `.dark` so
+   the shadow reset wins in both themes. */
+@media (display-mode: standalone), (display-mode: minimal-ui),
+  (display-mode: window-controls-overlay) {
+  :root {
+    --workspace-shell-gutter: 0rem;
+    --workspace-shell-border-width: 0;
+    --workspace-shell-radius: 0;
+    --workspace-shell-shadow: none;
   }
 }
 
