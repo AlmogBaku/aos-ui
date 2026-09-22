@@ -5,6 +5,28 @@ import globals from "globals"
 import tseslint from "typescript-eslint"
 import runtimeBoundaries from "./scripts/eslint-runtime-boundaries.mjs"
 
+/** Native implementations and private Assistant UI internals, off limits to src. */
+const browserRestrictedImports = [
+  "node:*",
+  "integrations/*",
+  "integrations/**",
+  "../**/integrations/**",
+  "../../integrations/**",
+  "scripts/*",
+  "scripts/**",
+  "../**/scripts/**",
+  "@assistant-ui/*/dist/**",
+  "@assistant-ui/*/src/**",
+]
+
+/** The proxy too, for production browser code; tests may compose both sides. */
+const productionBrowserRestrictedImports = [
+  ...browserRestrictedImports,
+  "packages/proxy/*",
+  "packages/proxy/**",
+  "../**/packages/proxy/**",
+]
+
 export default defineConfig([
   globalIgnores([
     "dist/**",
@@ -47,20 +69,27 @@ export default defineConfig([
         {
           patterns: [
             {
-              group: [
-                "node:*",
-                "integrations/*",
-                "integrations/**",
-                "../**/integrations/**",
-                "../../integrations/**",
-                "scripts/*",
-                "scripts/**",
-                "../**/scripts/**",
-                "@assistant-ui/*/dist/**",
-                "@assistant-ui/*/src/**",
-              ],
+              group: browserRestrictedImports,
               message:
                 "Browser code must not import native implementations or private Assistant UI internals.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: productionBrowserRestrictedImports,
+              message:
+                "Browser code must not import the proxy, native implementations, or private Assistant UI internals.",
             },
           ],
         },

@@ -15,12 +15,7 @@ import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
  * proxies, and the installable shell — a guest has no workspace to install and
  * no service worker to register.
  */
-const GUEST_RESERVED_PATHS = [
-  "/auth",
-  "/hermes",
-  "/sw.js",
-  "/manifest.webmanifest",
-]
+const GUEST_RESERVED_PATHS = ["/auth", "/sw.js", "/manifest.webmanifest"]
 
 /**
  * The path the static handler will resolve, which is what a reservation has to
