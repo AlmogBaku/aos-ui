@@ -284,34 +284,47 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
       history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
     } catch (cause) {
-      member.releaseRoom()
-      // The stream is gone and the view was never rebuilt: have it reload,
-      // and once that failed too, stream it the turn from its prompt. A turn
-      // admitted during the read was held back, so it streams the same way.
+      // A turn admitted during the read was held back, so it streams the same
+      // way a restarted one does once its reload failed.
       const after = context.rooms.current(scope)
-      const held = after && after.turnId !== before?.turnId
-      if (restarted ? !(await member.reloadOnce(restarted.turnId)) : held) {
-        member.enterRoom(false, true)
-        await member.follow().catch(() => undefined)
-      }
+      const held = after !== undefined && after.turnId !== before?.turnId
+      await recoverReplay(member, restarted?.turnId, held)
       throw cause
     }
     const after = context.rooms.current(scope)
-    const shown =
-      restarted ??
-      (after?.turnId === before?.turnId ? undefined : restartable(after))
-    if (!shown) return { history }
+    const held = after !== undefined && after.turnId !== before?.turnId
+    const shown = restarted ?? (held ? restartable(after) : undefined)
+    if (!shown) return { history, held }
     const index = promptIndex(shown, history)
     return {
       history: throughLivePrompt(history, index, shown.at) ?? history,
+      held,
       restarted: shown.turnId,
     }
   }
 
   /**
+   * Ends the hold of a from-start replay that failed before the view was
+   * rebuilt. The stream stopped on `restarted` is gone: the view is asked to
+   * reload, and once that failed too, it streams the turn from its prompt, as
+   * it does a turn the hold kept `held` back.
+   */
+  async function recoverReplay(
+    member: SessionMember,
+    restarted: string | undefined,
+    held: boolean
+  ) {
+    member.releaseRoom()
+    if (restarted ? !(await member.reloadOnce(restarted)) : held) {
+      member.enterRoom(false, true)
+      await member.follow().catch(() => undefined)
+    }
+  }
+
+  /**
    * Rebuilds the view from the page a from-start resume replays, projected for
-   * a guest. A page that cannot reach the view releases the hold, as a failed
-   * read does, so the room's later turns still reach it.
+   * a guest. A page that cannot reach the view recovers as a failed read does,
+   * so the room's turns still reach it.
    */
   async function replayHistory(member: SessionMember, scope: SessionScope) {
     const replay = await replayPage(member, scope)
@@ -326,7 +339,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await member.send(outbound)
       return { ...replay, corrections }
     } catch (cause) {
-      member.releaseRoom()
+      await recoverReplay(member, replay.restarted, replay.held)
       throw cause
     }
   }

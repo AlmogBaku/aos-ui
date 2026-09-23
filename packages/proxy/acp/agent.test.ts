@@ -2568,39 +2568,45 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("streams the live turn to a reopened tab whose page fails again", async () => {
-    let unreadable = false
-    const test = await harness({
-      providerIds: true,
-      beforeHistory: async () => {
-        if (unreadable) throw new Error("history unavailable")
-      },
-    })
-    await test.list()
-    const messageId = await liveTurn(test, [test])
+  it.each([
+    ["read", "beforeHistory"],
+    ["replayed", "onReplay"],
+  ] as const)(
+    "streams the live turn to a reopened tab whose page fails again to be %s",
+    async (_step, hook) => {
+      let unreadable = false
+      const test = await harness({
+        providerIds: true,
+        // Throws synchronously, failing the step its hook runs in.
+        [hook]: () => {
+          if (unreadable) throw new Error("history unavailable")
+          return Promise.resolve()
+        },
+      })
+      await test.list()
+      const messageId = await liveTurn(test, [test])
 
-    unreadable = true
-    await expect(
-      open(test, { replayFrom: { type: "start" } })
-    ).rejects.toThrow()
-    // The reload the first failure asked for fails the same way.
-    const from = test.recorder.entries.length
-    await expect(
-      open(test, { replayFrom: { type: "start" } })
-    ).rejects.toThrow()
-    chunk(test.sources[0], "After")
-    await test.recorder.wait(said("After"))
+      unreadable = true
+      await expect(
+        open(test, { replayFrom: { type: "start" } })
+      ).rejects.toThrow()
+      // The reload the first failure asked for fails the same way.
+      const from = test.recorder.entries.length
+      await expect(
+        open(test, { replayFrom: { type: "start" } })
+      ).rejects.toThrow()
+      chunk(test.sources[0], "After")
+      await test.recorder.wait(said("After"))
 
-    expect(flow(test.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual([
-      `prompt ${messageId}`,
-      "chunk Live",
-      "chunk After",
-    ])
-    expect(
-      test.recorder.of(AOS_METHODS.notify.sessionInvalidated)
-    ).toHaveLength(1)
-    test.close()
-  })
+      expect(
+        flow(test.recorder, SESSION, from).filter(isPromptOrChunk)
+      ).toEqual([`prompt ${messageId}`, "chunk Live", "chunk After"])
+      expect(
+        test.recorder.of(AOS_METHODS.notify.sessionInvalidated)
+      ).toHaveLength(1)
+      test.close()
+    }
+  )
 
   it("streams a turn admitted while a reopen's page fails to that tab", async () => {
     const reading = gate()
