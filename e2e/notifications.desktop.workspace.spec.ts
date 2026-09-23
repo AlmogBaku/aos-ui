@@ -136,7 +136,7 @@ test("the Activity count follows Session state, and arrivals on read Sessions st
     })
   await expect(bell(2)).toBeVisible()
 
-  await publish(page, "run-completed")
+  await publish(page, "turn-completed")
   await publish(page, "delayed-non-selected")
   await publish(page, "duplicates")
 
@@ -175,7 +175,7 @@ for (const hidden of [true, false]) {
   }) => {
     await prepare(page, "granted")
     await background(page, hidden)
-    await publish(page, "run-failed")
+    await publish(page, "turn-failed")
     await expect.poll(() => notificationCount(page)).toBe(1)
     const notification = await page.evaluate(
       () => window.__notificationTest.notifications[0]
@@ -220,7 +220,7 @@ test("question, permission and failure remain inspectable; stale arrivals do not
   await prepare(page)
   await publish(page, "question")
   await publish(page, "permission")
-  await publish(page, "run-failed")
+  await publish(page, "turn-failed")
   await publish(page, "stale-target")
   // Arrivals do not raise the count: it is the unread and waiting Sessions.
   await expect(

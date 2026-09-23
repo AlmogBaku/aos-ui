@@ -59,9 +59,9 @@ import {
 /**
  * The Assistant UI runtime over one ACP Session. A closure owns the projected
  * state, the connection subscriptions, and the prompt writes; the thread itself
- * stays an ordinary external store, as `useAgUiRuntime` composes it. The Session
- * binding is mutable, so a local draft keeps one store across the `session/new`
- * its first turn performs.
+ * stays an ordinary Assistant UI external store. The Session binding is
+ * mutable, so a local draft keeps one store across the `session/new` its first
+ * turn performs.
  */
 
 type PromptMeta = z.infer<typeof AosPromptMetaSchema>
@@ -177,7 +177,7 @@ function rewound(
 
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
-  [AOS_JSONRPC_ERRORS.runInProgress]: "AOS_SESSION_BUSY",
+  [AOS_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
 }
 
 /** How long a refused resume waits before each further attempt. */
@@ -211,9 +211,9 @@ type ControllerOptions = {
 }
 
 /**
- * The callers' latest callbacks, handed over each render like AG-UI's core.
- * Everything the caller supplies belongs here rather than in the controller's
- * identity: a callback that changes identity mid-thread — one closing over the
+ * The callers' latest callbacks, handed over on each render. Everything the
+ * caller supplies belongs here rather than in the controller's identity: a
+ * callback that changes identity mid-thread — one closing over the
  * `AssistantClient`, which a thread-list switch replaces — would otherwise
  * rebuild the controller and replay the whole Session a second time.
  */
@@ -549,7 +549,7 @@ function createAcpController({
 
 type AcpController = ReturnType<typeof createAcpController>
 
-/** Holds the queue while a run owns the Session, as `useAgUiRuntime` does. */
+/** Holds the queue while a turn owns the Session. */
 function createQueue(controller: AcpController) {
   let busyEdges = 0
   const queue: MessageQueueController = createMessageQueue({

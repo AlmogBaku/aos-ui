@@ -32,24 +32,6 @@ export function attentionKindOf(
     : "question"
 }
 
-const ACTIVITY_TYPES = {
-  "turn-started": "run-started",
-  "turn-finished": "run-finished",
-  "turn-failed": "run-failed",
-  "attention-requested": "attention-requested",
-  "attention-resolved": "attention-resolved",
-} as const satisfies Record<
-  ExecutionEvent["kind"],
-  AosActivityNotification["type"]
->
-
-/** The activity type an execution event is spelled as on the wire. */
-export function activityTypeOf<Kind extends ExecutionEvent["kind"]>(
-  kind: Kind
-): (typeof ACTIVITY_TYPES)[Kind] {
-  return ACTIVITY_TYPES[kind]
-}
-
 function notificationOf(event: ExecutionEvent): AosActivityNotification {
   const base = {
     agentId: event.agentId,
@@ -60,11 +42,7 @@ function notificationOf(event: ExecutionEvent): AosActivityNotification {
     case "turn-started":
     case "turn-finished":
     case "turn-failed":
-      return {
-        ...base,
-        type: activityTypeOf(event.kind),
-        lifecycleId: event.turnId,
-      }
+      return { ...base, type: event.kind, turnId: event.turnId }
     case "attention-requested":
       return {
         ...base,
@@ -141,9 +119,9 @@ export function createActivityFeed({
       occurredAt: stamp(),
     }
     if (row.status === "failed") {
-      const runId =
+      const turnId =
         execution && "runId" in execution ? execution.runId : undefined
-      push({ ...base, type: "run-failed", lifecycleId: runId ?? row.id })
+      push({ ...base, type: "turn-failed", turnId: turnId ?? row.id })
       return
     }
     for (const request of execution?.requests ?? [])

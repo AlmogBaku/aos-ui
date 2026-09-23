@@ -188,7 +188,7 @@ type ActivitySubscription = {
 type FixtureRunActivity = {
   agentId: string
   threadId: string
-  lifecycleId: string
+  turnId: string
 }
 
 export class FixtureWorkspace implements WorkspaceAdapter {
@@ -446,13 +446,13 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     const session = this.#sessions.find((item) => item.threadId === threadId)
     if (!session) return undefined
     const runId = providerRunId || this.#activityIdFactory()
-    const lifecycleId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(runId)}`
-    const activity = { agentId: session.agentId, threadId, lifecycleId }
+    const turnId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(runId)}`
+    const activity = { agentId: session.agentId, threadId, turnId }
     this.#publishActivity({
-      id: `${lifecycleId}:started`,
+      id: `${turnId}:started`,
       ...activity,
       occurredAt: this.#clock().toISOString(),
-      type: "run-started",
+      type: "turn-started",
     })
     return activity
   }
@@ -472,10 +472,10 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   ) {
     if (!activity) return
     this.#publishActivity({
-      id: `${activity.lifecycleId}:${result}`,
+      id: `${activity.turnId}:${result}`,
       ...activity,
       occurredAt: this.#clock().toISOString(),
-      type: result === "finished" ? "run-finished" : "run-failed",
+      type: result === "finished" ? "turn-finished" : "turn-failed",
     })
   }
 

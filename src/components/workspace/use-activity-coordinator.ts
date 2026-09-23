@@ -319,7 +319,7 @@ export function useActivityCoordinator(
           const state = context()
           // A start is bookkeeping the store drops, but it is the proof the
           // operator is watching this Session work.
-          if (event.type === "run-started") browser?.noteRunStarted(event)
+          if (event.type === "turn-started") browser?.noteTurnStarted(event)
           const arrival = store.ingest(event)
           browser?.publish(arrival)
           setRecords(store.records())

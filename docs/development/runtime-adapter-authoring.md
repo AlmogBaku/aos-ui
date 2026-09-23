@@ -148,9 +148,9 @@ The `_meta.aos` extensions on these requests are defined in
 `packages/protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
 (`AOS_PERMISSION_KIND_SESSION`, `acp.ts:60`) represents Hermes' "allow for this
 session" scope; the translation lives in
-`packages/proxy/acp/translate/interrupts.ts:33`. Elicitation questions arrive in
+`packages/proxy/acp/translate/requests.ts`. Elicitation questions arrive in
 `_meta.aos.questions`; a multi-select question must declare `items.enum` in the
-ACP property schema (`interrupts.ts:164-179`) so the SDK accepts the elicitation,
+ACP property schema (`requests.ts`) so the SDK accepts the elicitation,
 while the response schema does not constrain values to the enum.
 
 Steps for the adapter:

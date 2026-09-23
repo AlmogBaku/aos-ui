@@ -67,10 +67,10 @@ export type ActivityBase = {
 }
 
 export type WorkspaceActivityEvent =
-  | (ActivityBase & { type: "run-started"; lifecycleId: string })
+  | (ActivityBase & { type: "turn-started"; turnId: string })
   | (ActivityBase & {
-      type: "run-finished" | "run-failed"
-      lifecycleId: string
+      type: "turn-finished" | "turn-failed"
+      turnId: string
     })
   | (ActivityBase & {
       type: "attention-requested"

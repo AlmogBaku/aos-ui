@@ -181,7 +181,7 @@ translates them to browser-facing ACP payloads. Neither end depends on the
 other's wire format.
 
 Every `session/update` on a run segment carries `_meta.aos.sequence` and
-`_meta.aos.runId` (`protocol/acp.ts:251-264`), so the browser can position
+`_meta.aos.turnId` (`protocol/acp.ts`), so the browser can position
 cursor-bearing reconnects.
 
 **Internal CUSTOM events** emitted by the coordinator publish under internal
@@ -236,7 +236,7 @@ one or more `PendingRequest` items (`core/events.ts:65-75`). The coordinator
 retains the execution in `waiting-for-input`.
 
 Delivery: each pending request is sent as a server→client `requestPermission`
-or `elicitation.create` call with an `interruptId` in `_meta.aos`
+or `elicitation.create` call with a `requestId` in `_meta.aos`
 (`protocol/acp.ts:315-341`; `acp/session-attachment.ts:460-511`).
 
 Answering all interrupts starts a new run segment via `session/resume` with
@@ -244,7 +244,7 @@ the `resume[]` reply array (`acp/session-attachment.ts:522-554`;
 `session-coordinator.ts:530-541`).
 
 A stale interrupt (the execution has moved on) returns JSON-RPC error
-`-32003 staleInterrupt` (`acp/validation.ts:58-59`).
+`-32003 staleRequest` (`acp/validation.ts:58-59`).
 
 On reconnect, pending requests are re-issued via `reissuePending`
 (`acp/session-attachment.ts:249-256`).
@@ -320,7 +320,7 @@ resuming that Session from the start.
 
 **Browser**: exponential backoff 250 ms → 5 000 ms
 (`src/runtime-adapters/aos/acp/connection.ts:59-60`). Each Session re-attaches
-via `session/resume` with `_meta.aos.after` (last sequence) and `runId`
+via `session/resume` with `_meta.aos.after` (last sequence) and `turnId`
 (`protocol/acp.ts:168-174`). `resync: true` in the response → re-resume with
 `replayFrom:{type:"start"}` (`connection.ts:329-338`). Guest re-logins before
 resuming (`connection.ts:374-377`).
@@ -434,7 +434,7 @@ except `run_conflict` and `internal_error`; maps to JSON-RPC via
 `acp/validation.ts:60-92`.
 
 **JSON-RPC extension codes** (`protocol/acp.ts:69-79`): `-32001`
-authRequired, `-32002` runInProgress, `-32003` staleInterrupt, `-32004`
+authRequired, `-32002` turnInProgress, `-32003` staleRequest, `-32004`
 notFound, `-32005` revisionConflict, `-32006` temporarilyUnavailable,
 `-32007` connectionInterrupted, `-32008` uncertainMutation, `-32602`
 invalidRequest.

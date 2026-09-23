@@ -13,7 +13,7 @@ import {
   pendingRequestToOutbound,
   replyFromElicitation,
   replyFromPermission,
-} from "./interrupts"
+} from "./requests"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -148,11 +148,11 @@ describe("pendingRequestToOutbound approvals", () => {
     )
   })
 
-  it("carries the interrupt identity in parseable permission metadata", () => {
+  it("carries the request identity in parseable permission metadata", () => {
     expect(
       AosPermissionMetaSchema.parse(metaOf(permissionOf(approval)))
     ).toEqual({
-      interruptId: "approval-1",
+      requestId: "approval-1",
       expiresAt: "2026-09-19T10:00:00.000Z",
       message: "Hermes wants to run `rm -rf build`.",
     })
@@ -168,7 +168,7 @@ describe("pendingRequestToOutbound approvals", () => {
     expect(outbound.request.title).toBe("Permission required")
     expect(outbound.request.subject).toBeUndefined()
     expect(AosPermissionMetaSchema.parse(metaOf(outbound))).toEqual({
-      interruptId: "approval-2",
+      requestId: "approval-2",
     })
   })
 })
@@ -286,7 +286,7 @@ describe("pendingRequestToOutbound questions", () => {
     expect(
       AosElicitationMetaSchema.parse(metaOf(elicitationOf(questions)))
     ).toEqual({
-      interruptId: "clarify-1",
+      requestId: "clarify-1",
       expiresAt: "2026-09-19T10:00:00.000Z",
       questions: [
         {
@@ -487,7 +487,7 @@ describe("replyFromPermission", () => {
   it.each([
     ["a cancelled prompt", { outcome: "cancelled" }],
     ["an unknown outcome", { outcome: "_dismissed" }],
-  ])("cancels the interrupt on %s", (_label, outcome) => {
+  ])("cancels the request on %s", (_label, outcome) => {
     expect(replyFromPermission(approval, { outcome })).toEqual({
       requestId: "approval-1",
       status: "cancelled",
@@ -551,15 +551,12 @@ describe("replyFromElicitation", () => {
     })
   })
 
-  it.each([["decline"], ["cancel"]])(
-    "cancels the interrupt on %s",
-    (action) => {
-      expect(replyFromElicitation(questions, { action }, "operator")).toEqual({
-        requestId: "clarify-1",
-        status: "cancelled",
-      })
-    }
-  )
+  it.each([["decline"], ["cancel"]])("cancels the request on %s", (action) => {
+    expect(replyFromElicitation(questions, { action }, "operator")).toEqual({
+      requestId: "clarify-1",
+      status: "cancelled",
+    })
+  })
 })
 
 describe("answeredQuestionOutbound", () => {
@@ -616,7 +613,7 @@ describe("answeredQuestionOutbound", () => {
     })
   })
 
-  it("leaves no record when the interrupt names no tool call", () => {
+  it("leaves no record when the request names no tool call", () => {
     expect(
       answeredQuestionOutbound(
         questions,

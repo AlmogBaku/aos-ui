@@ -27,7 +27,7 @@ import { translateTurnEvent } from "./turn-events"
 const AT = "2026-09-22T10:00:00.000Z"
 
 const context: TranslateContext = {
-  runId: "run-1",
+  turnId: "run-1",
   sequence: 7,
   lane: "operator",
   stopping: false,
@@ -92,7 +92,7 @@ describe("translateTurnEvent lifecycle", () => {
     })
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
       at: AT,
     })
   })
@@ -108,7 +108,7 @@ describe("translateTurnEvent lifecycle", () => {
         sessionUpdate: "state_update",
         state: "idle",
         stopReason,
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1", at: AT } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1", at: AT } },
       },
     ])
     expect(state).toEqual(initialTranslateState)
@@ -121,7 +121,7 @@ describe("translateTurnEvent lifecycle", () => {
 
     expect(outbound[0]).toEqual({
       kind: "composer-prefill",
-      runId: "run-1",
+      turnId: "run-1",
       text: "retry this",
     })
     expect(outbound[1]).toMatchObject({ kind: "update" })
@@ -161,7 +161,7 @@ describe("translateTurnEvent lifecycle", () => {
     expect(update).toMatchObject({ state: "idle", stopReason })
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
       at: AT,
       code,
       message: "provider refused",
@@ -192,7 +192,7 @@ describe("translateTurnEvent lifecycle", () => {
     expect(update).not.toHaveProperty("stopReason")
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
       at: AT,
       code: "AOS_INTERACTION_LOST",
       message: "question lost",
@@ -214,7 +214,7 @@ describe("translateTurnEvent messages", () => {
     })
     expect(AosChunkMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
     })
     expect(state.messageId).toBe("m1")
   })
@@ -235,13 +235,13 @@ describe("translateTurnEvent messages", () => {
         sessionUpdate: "agent_thought_chunk",
         messageId: "m1",
         content: { type: "text", text: "think" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
         content: { type: "text", text: "he" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "tool_call_update",
@@ -249,7 +249,7 @@ describe("translateTurnEvent messages", () => {
         title: "read_file",
         status: "in_progress",
         _meta: {
-          [AOS_META_KEY]: { sequence: 7, runId: "run-1", messageId: "m1" },
+          [AOS_META_KEY]: { sequence: 7, turnId: "run-1", messageId: "m1" },
         },
       },
     ])
@@ -266,7 +266,7 @@ describe("translateTurnEvent messages", () => {
       sessionUpdate: "agent_thought_chunk",
       messageId: "m1",
       content: { type: "text", text: "think" },
-      _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+      _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
     })
   })
 
@@ -281,13 +281,13 @@ describe("translateTurnEvent messages", () => {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
         content: { type: "text", text: "he" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
         content: { type: "text", text: "more" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
     ])
   })
@@ -322,7 +322,7 @@ describe("translateTurnEvent tool calls", () => {
     })
     expect(AosToolCallMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
       messageId: "m1",
       argsTextDelta: '{"p":',
     })
@@ -487,7 +487,7 @@ describe("translateTurnEvent plans", () => {
 
     expect(AosPlanMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
-      runId: "run-1",
+      turnId: "run-1",
       todos: [todo],
     })
   })
@@ -522,7 +522,7 @@ describe("translateTurnEvent extensions", () => {
     ])
 
     expect(outbound.filter((item) => item.kind === "artifact")).toEqual([
-      { kind: "artifact", runId: "run-1", messageId: "m1", artifact },
+      { kind: "artifact", turnId: "run-1", messageId: "m1", artifact },
     ])
   })
 
@@ -535,7 +535,7 @@ describe("translateTurnEvent extensions", () => {
     }
 
     expect(translate([published(descriptor)]).outbound).toEqual([
-      { kind: "artifact", runId: "run-1", artifact: descriptor },
+      { kind: "artifact", turnId: "run-1", artifact: descriptor },
     ])
   })
 
@@ -564,7 +564,7 @@ describe("translateTurnEvent extensions", () => {
     ).toEqual([
       {
         kind: "steer-accepted",
-        runId: "run-1",
+        turnId: "run-1",
         requestId: "s1",
         text: "also check the logs",
         delivery: "queued",
@@ -586,7 +586,7 @@ describe("translateTurnEvent extensions", () => {
     ).toEqual([
       {
         kind: "steer-accepted",
-        runId: "run-1",
+        turnId: "run-1",
         requestId: "s3",
         text: "third",
         delivery: "steered",

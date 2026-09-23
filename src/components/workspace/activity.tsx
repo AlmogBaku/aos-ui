@@ -75,9 +75,9 @@ export function ActivityBell({
 export function activityLabel(record: ActivityRecord, dictionary: Dictionary) {
   const copy = dictionary.activity
   switch (record.type) {
-    case "run-finished":
+    case "turn-finished":
       return copy.runFinished
-    case "run-failed":
+    case "turn-failed":
       return copy.runFailed
     case "attention-requested":
       return copy.inputRequested

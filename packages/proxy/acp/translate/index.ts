@@ -4,5 +4,5 @@ export {
   pendingRequestToOutbound,
   replyFromElicitation,
   replyFromPermission,
-} from "./interrupts"
+} from "./requests"
 export { translateTurnEvent } from "./turn-events"

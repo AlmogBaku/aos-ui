@@ -10,12 +10,12 @@ const base = {
   threadId: opaqueId,
   occurredAt: activityTimestamp,
 }
-const run = z.object({
+const turn = z.object({
   ...base,
-  type: z.enum(["run-finished", "run-failed"]),
-  lifecycleId: opaqueId,
+  type: z.enum(["turn-finished", "turn-failed"]),
+  turnId: opaqueId,
 })
-const start = run.extend({ type: z.literal("run-started") })
+const start = turn.extend({ type: z.literal("turn-started") })
 const attention = z.object({
   ...base,
   type: z.literal("attention-requested"),
@@ -35,7 +35,7 @@ const activation = z.object({
 /** External payloads are projected onto this content-free allowlist. */
 export const activityEventSchema = z.discriminatedUnion("type", [
   start,
-  run,
+  turn,
   attention,
   resolution,
   activation,
@@ -43,7 +43,7 @@ export const activityEventSchema = z.discriminatedUnion("type", [
 
 export type VisibleActivityEvent = Exclude<
   WorkspaceActivityEvent,
-  { type: "run-started" | "attention-resolved" }
+  { type: "turn-started" | "attention-resolved" }
 >
 /** Stored Activity; the provider owns read state, so entries never carry it. */
 export type ActivityEntry = VisibleActivityEvent & {

@@ -55,7 +55,7 @@ import {
   invalidRequest,
   notFound,
   parseMeta,
-  runInProgress,
+  turnInProgress,
 } from "./validation"
 
 /**
@@ -237,16 +237,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   }
 
-  /** Subscribes to the live run, reporting a cursor that cannot position it. */
+  /** Subscribes to the live turn, reporting a cursor that cannot position it. */
   async function attachPositioned(
     attachment: SessionAttachment,
     scope: SessionScope,
-    meta: { runId?: string; after?: number },
+    meta: { turnId?: string; after?: number },
     replayedCorrections = 0
   ) {
     const positioned =
-      meta.runId === undefined ||
-      meta.runId === coordinator.snapshot(scope).runId
+      meta.turnId === undefined ||
+      meta.turnId === coordinator.snapshot(scope).runId
     try {
       await attachment.attach(
         positioned ? meta.after : undefined,
@@ -455,7 +455,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       for (const outbound of translators.translateHistory(history, lane))
         await attachment.send(outbound)
     }
-    // A cursor for another run cannot position this one, and a cursor beyond
+    // A cursor for another turn cannot position this one, and a cursor beyond
     // bounded replay cannot be served: both need a full reload.
     const resync = await attachPositioned(attachment, scope, meta, corrections)
     const execution = coordinator.snapshot(scope)
@@ -496,7 +496,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       ? await promptInvited(guest, params.sessionId, meta)
       : sessions.scope(params.sessionId)
     await workspace.session(scope)
-    if (coordinator.state(scope) !== "idle") throw runInProgress()
+    if (coordinator.state(scope) !== "idle") throw turnInProgress()
     // Bytes were staged over REST; the prompt references the batch by id and
     // the stage appends its server-owned content to the user turn.
     const stage =
@@ -530,7 +530,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
-    log("acp.run.cancel", { sessionId: params.sessionId })
+    log("acp.turn.cancel", { sessionId: params.sessionId })
     // Only a resumed or prompted Session is attached, so an unauthenticated
     // guest reaches nothing here.
     const attachment = sessions.attached(params.sessionId)
@@ -612,7 +612,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       guestFor(AOS_METHODS.session.steer)
       const scope = sessions.scope(params.sessionId)
       const { runId } = coordinator.snapshot(scope)
-      if (runId === undefined) throw runInProgress()
+      if (runId === undefined) throw turnInProgress()
       return await workspace.steer(scope, {
         requestId: params.requestId,
         expectedRunId: runId,

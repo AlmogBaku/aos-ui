@@ -75,7 +75,7 @@ export function createAcpInteractions({
       return {
         kind: "question",
         requestId: meta.success
-          ? meta.data.interruptId
+          ? meta.data.requestId
           : `acp-permission-${++generated}`,
         sessionId,
         questions: [
@@ -99,7 +99,7 @@ export function createAcpInteractions({
     if (!meta.success) return undefined
     return {
       kind: "question",
-      requestId: meta.data.interruptId,
+      requestId: meta.data.requestId,
       sessionId,
       questions: meta.data.questions,
     }

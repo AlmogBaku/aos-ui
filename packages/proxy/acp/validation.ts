@@ -51,12 +51,12 @@ export function notFound() {
   return new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
 }
 
-export function runInProgress() {
-  return new RequestError(AOS_JSONRPC_ERRORS.runInProgress, "run_in_progress")
+export function turnInProgress() {
+  return new RequestError(AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress")
 }
 
-export function staleInterrupt() {
-  return new RequestError(AOS_JSONRPC_ERRORS.staleInterrupt, "stale_interrupt")
+export function staleRequest() {
+  return new RequestError(AOS_JSONRPC_ERRORS.staleRequest, "stale_request")
 }
 
 const PUBLIC_ERROR_CODES: Readonly<
@@ -73,7 +73,7 @@ const PUBLIC_ERROR_CODES: Readonly<
 
 /** Coordinator control failures, mirroring the normalized HTTP error map. */
 function coordinatorError(cause: unknown) {
-  if (cause instanceof ServerRunConflictError) return runInProgress()
+  if (cause instanceof ServerRunConflictError) return turnInProgress()
   if (
     cause instanceof ServerRunCapacityError ||
     cause instanceof ServerRunSteerUnavailableError

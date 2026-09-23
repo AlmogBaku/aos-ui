@@ -64,7 +64,7 @@ export type AcpResumeOptions = {
   /** Owning Agent when known before listing, e.g. from a deep link. */
   agentId?: string
   after?: number
-  runId?: string
+  turnId?: string
 }
 
 export interface AcpConnection {
@@ -152,7 +152,7 @@ export interface AcpConnection {
     listener: (params: unknown) => void
   ): () => void
   onPendingRequest(listener: (request: AcpPendingRequest) => void): () => void
-  /** Last `_meta.aos.sequence` seen for a Session's run, for resume. */
-  lastSequence(sessionId: string): { runId: string; after: number } | undefined
+  /** Last `_meta.aos.sequence` seen for a Session's turn, for resume. */
+  lastSequence(sessionId: string): { turnId: string; after: number } | undefined
   close(): void
 }

@@ -57,7 +57,7 @@ export function getActivityPolicy(
   preferences: BrowserPreferences,
   permission: BrowserPermission
 ) {
-  if (event.type === "run-started" || event.type === "attention-resolved") {
+  if (event.type === "turn-started" || event.type === "attention-resolved") {
     return { markRead: false, inAppNotice: false, browserNotification: false }
   }
   const foreground = context.pageVisible && context.pageFocused

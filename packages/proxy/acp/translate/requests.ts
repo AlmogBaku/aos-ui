@@ -70,7 +70,7 @@ type ElicitationForm = Omit<CreateElicitationRequest, "sessionId"> & {
   requestedSchema: ElicitationSchema
 }
 
-type InterruptOutbound = Extract<
+type RequestOutbound = Extract<
   AcpOutbound,
   { kind: "request-permission" | "elicitation" }
 >
@@ -107,7 +107,7 @@ function permissionOptions(
 function permissionOutbound(
   request: PendingRequest,
   lane: Lane
-): InterruptOutbound {
+): RequestOutbound {
   // The schema's `title` names the operation and the message explains it; a
   // request with only one of the two titles itself with it.
   const label = record(request.responseSchema)?.title
@@ -137,7 +137,7 @@ function permissionOutbound(
       options: permissionOptions(request, lane),
       _meta: {
         [AOS_META_KEY]: {
-          interruptId: request.requestId,
+          requestId: request.requestId,
           ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
           ...(request.message
             ? { message: request.message.slice(0, 4_096) }
@@ -190,13 +190,11 @@ function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
 }
 
 /**
- * Ports `createAgUiInterruptRequest` in `src/components/runtime-interactions`.
  * Every question is `custom`: a clarify answer may be free text that is none of
  * the offered choices (`MAX_CHOICES` in Hermes' `tools/clarify_tool.py`: "the UI
  * always appends an Other (type your answer) row"), so the browser must always
  * offer that row.
- */
-/**
+ *
  * A header is the provider's short label and only that: a provider without one
  * leaves it unset rather than have the proxy invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
@@ -247,7 +245,7 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
 function elicitationOutbound(
   request: PendingRequest,
   lane: Lane
-): InterruptOutbound {
+): RequestOutbound {
   const questions = questionsOf(request, lane)
   const form: ElicitationForm = {
     mode: "form",
@@ -261,7 +259,7 @@ function elicitationOutbound(
     },
     _meta: {
       [AOS_META_KEY]: {
-        interruptId: request.requestId,
+        requestId: request.requestId,
         ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
         questions,
       },
@@ -338,7 +336,7 @@ export const replyFromElicitation = ((request, response, lane) => {
  * card keeps asking a question the operator has answered. One projection of an
  * answered question reaches the browser, which never re-derives the answer it
  * just sent. The update names no message, so the browser attaches it to the turn
- * that owns the call. An interrupt that names no tool call leaves no record.
+ * that owns the call. A request that names no tool call leaves no record.
  */
 export function answeredQuestionOutbound(
   request: PendingRequest,

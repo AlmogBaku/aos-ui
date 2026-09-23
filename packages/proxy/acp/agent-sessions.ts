@@ -108,7 +108,7 @@ export function executionMeta(execution: {
     status: overlaidStatus(execution.state, "idle"),
     ...(execution.state === "idle" || execution.runId === undefined
       ? {}
-      : { runId: execution.runId }),
+      : { turnId: execution.runId }),
   }
 }
 

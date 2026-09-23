@@ -67,9 +67,6 @@ const MAX_RECONNECT_MS = 5_000
  */
 const SERVER_OWNED_CWD = "/"
 
-/** Run position of one `session/update`; richer metas carry more fields. */
-const RunPositionSchema = z.object(AosChunkMetaSchema.shape)
-
 /** An ACP payload's `_meta`, keyed by extension; only AOS's half is read. */
 const AosEnvelopeSchema = z.object({
   [AOS_META_KEY]: z.record(z.string(), z.unknown()),
@@ -161,7 +158,7 @@ export function createAcpConnection(
   >()
   const pendingListeners = new Set<(request: AcpPendingRequest) => void>()
   const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
-  const positions = new Map<string, { runId: string; after: number }>()
+  const positions = new Map<string, { turnId: string; after: number }>()
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
@@ -233,10 +230,12 @@ export function createAcpConnection(
       // Every `_meta.aos` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
       const meta = aosMetaOf(params.update._meta)
-      const position = RunPositionSchema.safeParse(meta)
+      // Every turn meta extends the chunk meta, and reads drop unknown keys,
+      // so the chunk schema positions any of them.
+      const position = AosChunkMetaSchema.safeParse(meta)
       if (position.success)
         positions.set(params.sessionId, {
-          runId: position.data.runId,
+          turnId: position.data.turnId,
           after: position.data.sequence,
         })
       for (const listener of updateListeners.get(params.sessionId) ?? [])
@@ -328,7 +327,7 @@ export function createAcpConnection(
           [AOS_META_KEY]: {
             ...(agentId === undefined ? {} : { agentId }),
             ...(resume.after === undefined ? {} : { after: resume.after }),
-            ...(resume.runId === undefined ? {} : { runId: resume.runId }),
+            ...(resume.turnId === undefined ? {} : { turnId: resume.turnId }),
           },
         },
       })

@@ -126,7 +126,7 @@ function createProxyAgent() {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Ready" }],
-      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
   ])
 
@@ -135,7 +135,7 @@ function createProxyAgent() {
       sessionUpdate: "agent_message",
       messageId: "history-4",
       content: [{ type: "text", text: "Bookmarked answer" }],
-      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
   ])
 
@@ -144,13 +144,13 @@ function createProxyAgent() {
       sessionUpdate: "user_message",
       messageId: "history-2",
       content: [{ type: "text", text: "Draft the plan" }],
-      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
     {
       sessionUpdate: "agent_message",
       messageId: "history-3",
       content: [{ type: "text", text: "First answer" }],
-      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 1 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ])
 
@@ -225,8 +225,8 @@ function createProxyAgent() {
       // Exactly what the proxy refuses a prompt with while a Session is not idle.
       if (busy.has(params.sessionId))
         throw new RequestError(
-          AOS_JSONRPC_ERRORS.runInProgress,
-          "run_in_progress"
+          AOS_JSONRPC_ERRORS.turnInProgress,
+          "turn_in_progress"
         )
       prompts.push(params)
       const messageId = `prompt-${prompts.length}`
@@ -235,13 +235,13 @@ function createProxyAgent() {
           sessionUpdate: "user_message",
           messageId,
           content: params.prompt,
-          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 1 } },
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 1 } },
         })
         push(params.sessionId, {
           sessionUpdate: "agent_message",
           messageId: `answer-${prompts.length}`,
           content: [{ type: "text", text: "Shipping it" }],
-          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 2 } },
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
       })
       return { _meta: { [AOS_META_KEY]: { messageId } } }
@@ -272,12 +272,12 @@ function createProxyAgent() {
     resumed,
     push,
     busy,
-    /** One question interrupt, exactly as the proxy issues it. */
-    ask: (sessionId: string, interruptId: string) =>
+    /** One question request, exactly as the proxy issues it. */
+    ask: (sessionId: string, requestId: string) =>
       peer?.request(methods.client.elicitation.create, {
         mode: "form",
         sessionId,
-        requestId: interruptId,
+        requestId,
         message: "The runtime needs an answer",
         requestedSchema: {
           type: "object",
@@ -285,7 +285,7 @@ function createProxyAgent() {
         },
         _meta: {
           [AOS_META_KEY]: {
-            interruptId,
+            requestId,
             questions: [
               {
                 header: "Confirm",
@@ -473,7 +473,7 @@ describe("provider-neutral AOS runtime composition", () => {
         sessionUpdate: "agent_message",
         messageId: "history-5",
         content: [{ type: "text", text: "Still here" }],
-        _meta: { [AOS_META_KEY]: { runId: "run-2", sequence: 1 } },
+        _meta: { [AOS_META_KEY]: { turnId: "run-2", sequence: 1 } },
       })
     })
     await act(async () => {
@@ -503,7 +503,7 @@ describe("provider-neutral AOS runtime composition", () => {
       proxy.push(SESSION_ID, {
         sessionUpdate: "state_update",
         state: "running",
-        _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 3 } },
+        _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
       })
     })
     await waitFor(() =>

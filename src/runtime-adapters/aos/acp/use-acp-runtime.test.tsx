@@ -34,7 +34,7 @@ import {
 } from "./use-acp-runtime"
 
 const SESSION_ID = "session-1"
-const RUN_META = { sequence: 0, runId: "run-1" }
+const TURN_META = { sequence: 0, turnId: "run-1" }
 
 type ResumeReply = Awaited<ReturnType<AcpConnection["resumeSession"]>>
 
@@ -118,7 +118,10 @@ function createFakeConnection() {
       settle()
       return resumed
     },
-    emit: (update: SessionUpdate, meta: Record<string, unknown> = RUN_META) => {
+    emit: (
+      update: SessionUpdate,
+      meta: Record<string, unknown> = TURN_META
+    ) => {
       for (const listener of updates.get(SESSION_ID) ?? [])
         listener(update, meta)
     },
@@ -599,7 +602,7 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.notify(AOS_METHODS.notify.composerPrefill, {
         sessionId: "other-session",
-        runId: "run-1",
+        turnId: "run-1",
         text: "Elsewhere",
       })
     })
@@ -607,7 +610,7 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.notify(AOS_METHODS.notify.composerPrefill, {
         sessionId: SESSION_ID,
-        runId: "run-1",
+        turnId: "run-1",
         text: "Next question?",
       })
     })
@@ -629,7 +632,7 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.notify(AOS_METHODS.notify.artifact, {
         sessionId: "other-session",
-        ...RUN_META,
+        ...TURN_META,
         artifact,
       })
     })
@@ -639,7 +642,7 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.notify(AOS_METHODS.notify.artifact, {
         sessionId: SESSION_ID,
-        ...RUN_META,
+        ...TURN_META,
         artifact,
       })
     })
@@ -729,7 +732,7 @@ describe("useAcpRuntime extras", () => {
           },
         },
         {
-          ...RUN_META,
+          ...TURN_META,
           todos: [{ id: "todo-1", label: "Ship it", status: "active" }],
         }
       )

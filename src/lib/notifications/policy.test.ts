@@ -167,8 +167,8 @@ describe("activity visibility and delivery", () => {
   )
 
   it.each([
-    [{ ...event, type: "run-finished", lifecycleId: "run-1" }, "completion"],
-    [{ ...event, type: "run-failed", lifecycleId: "run-1" }, "failure"],
+    [{ ...event, type: "turn-finished", turnId: "run-1" }, "completion"],
+    [{ ...event, type: "turn-failed", turnId: "run-1" }, "failure"],
     [{ ...event, type: "agent-ready" }, "completion"],
     [{ ...event, type: "agent-activation-failed" }, "failure"],
     [
@@ -210,7 +210,7 @@ describe("activity visibility and delivery", () => {
   })
 
   it.each([
-    { ...event, type: "run-started", lifecycleId: "run-1" },
+    { ...event, type: "turn-started", turnId: "run-1" },
     { ...event, type: "attention-resolved", requestId: "request-1" },
   ] as const)("never surfaces bookkeeping event %j", (activity) => {
     expect(
@@ -300,7 +300,7 @@ describe("the in-app chime", () => {
     )
     expect(
       shouldChime(
-        { ...event, type: "run-failed", lifecycleId: "run-1" },
+        { ...event, type: "turn-failed", turnId: "run-1" },
         focused,
         defaultBrowserPreferences
       )

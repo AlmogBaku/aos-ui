@@ -248,8 +248,8 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
       id: "start",
       agentId: "a",
       threadId: "t",
-      type: "run-started",
-      lifecycleId: "run-1",
+      type: "turn-started",
+      turnId: "run-1",
       occurredAt: watched.updatedAt,
     })
   )
@@ -514,8 +514,8 @@ function subscribedDevice() {
         id: "start",
         agentId: "a",
         threadId: "t",
-        type: "run-started",
-        lifecycleId: "run-1",
+        type: "turn-started",
+        turnId: "run-1",
         occurredAt: session.updatedAt,
       }),
     closedAppLine: () => {

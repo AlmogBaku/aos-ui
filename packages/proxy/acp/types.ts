@@ -115,17 +115,17 @@ export type AosAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 
 /** Inputs every turn-event translation needs besides the event itself. */
 export type TranslateContext = {
-  runId: string
+  turnId: string
   sequence: number
   lane: Lane
-  /** Stop was acknowledged for this run and the provider has not settled. */
+  /** Stop was acknowledged for this turn and the provider has not settled. */
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */
   now?: () => number
 }
 
 /**
- * State the turn-event reducer carries between events of one run segment:
+ * State the turn-event reducer carries between events of one turn segment:
  * the assistant message currently streaming and the arguments text streamed
  * so far per open tool call. Starts as `initialTranslateState`.
  */
@@ -145,25 +145,25 @@ export const initialTranslateState: TranslateState = {
 }
 
 /**
- * One thing to send after translating a run event. Session-scoped updates and
+ * One thing to send after translating a turn event. Session-scoped updates and
  * notifications omit `sessionId`; the attachment adds it when sending.
  */
 export type AcpOutbound =
   | { kind: "update"; update: SessionUpdate }
   | {
       kind: "artifact"
-      runId: string
+      turnId: string
       messageId?: string
       artifact: AosArtifactDescriptor
     }
   | {
       kind: "steer-accepted"
-      runId: string
+      turnId: string
       requestId: string
       text: string
       delivery: "steered" | "queued"
     }
-  | { kind: "composer-prefill"; runId: string; text: string }
+  | { kind: "composer-prefill"; turnId: string; text: string }
   | {
       kind: "request-permission"
       requestId: string
@@ -231,19 +231,19 @@ export type TranslateHistory = (
  */
 export type PersistedCorrections = (history: SessionHistoryResponse) => number
 
-/** `translate/interrupts.ts` → `pendingRequestToOutbound` */
+/** `translate/requests.ts` → `pendingRequestToOutbound` */
 export type PendingRequestToOutbound = (
   request: PendingRequest,
   lane: Lane
 ) => Extract<AcpOutbound, { kind: "request-permission" | "elicitation" }>
 
-/** `translate/interrupts.ts` → `replyFromPermission` */
+/** `translate/requests.ts` → `replyFromPermission` */
 export type ReplyFromPermission = (
   request: PendingRequest,
   response: RequestPermissionResponse
 ) => RequestReply
 
-/** `translate/interrupts.ts` → `replyFromElicitation` */
+/** `translate/requests.ts` → `replyFromElicitation` */
 export type ReplyFromElicitation = (
   request: PendingRequest,
   response: CreateElicitationResponse,

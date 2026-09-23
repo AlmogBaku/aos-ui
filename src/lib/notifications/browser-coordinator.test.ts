@@ -388,7 +388,7 @@ describe("the one-time ask", () => {
     h.localContext.pageFocused = true
     h.localContext.selection = { agentId: "a", threadId: "t" }
     h.coordinator.start()
-    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
   }
 
   it("waits for a run the operator watched in this tab", () => {
@@ -397,12 +397,12 @@ describe("the one-time ask", () => {
     h.localContext.pageFocused = true
     h.coordinator.start()
     expect(h.coordinator.settings().ask).toBe(false)
-    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
     expect(h.coordinator.settings().ask).toBe(false)
     h.localContext.selection = { agentId: "a", threadId: "t" }
-    h.coordinator.noteRunStarted({ agentId: "a", threadId: "other" })
+    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "other" })
     expect(h.coordinator.settings().ask).toBe(false)
-    h.coordinator.noteRunStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
     expect(h.coordinator.settings().ask).toBe(true)
   })
 

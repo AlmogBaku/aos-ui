@@ -64,7 +64,7 @@ export type TurnFailure = {
 
 export type ProjectorExecution = {
   readonly status: SessionStatus
-  readonly runId?: string
+  readonly turnId?: string
   /** When the running run started, as its own `state_update` reported it. */
   readonly startedAt?: number
   readonly stopReason?: string
@@ -156,7 +156,7 @@ function onMessage(
 ): ProjectorState {
   const fresh =
     role === "assistant" && !state.messages.some((message) => message.id === id)
-  const host = fresh ? emptyInterruptHostId(state) : undefined
+  const host = fresh ? emptyRequestHostId(state) : undefined
   // Re-keying the host keeps its place and the pending status it carries; the
   // run's own state settles it under the id the provider streamed.
   const source = host === undefined ? state : renameMessage(state, host, id)
@@ -202,21 +202,20 @@ function activeAssistantId(state: ProjectorState): string | undefined {
 /** The optimistic user turn a prompt shows before the provider echoes it. */
 export const LOCAL_PROMPT_PREFIX = "aos-local-"
 
-const INTERRUPT_HOST_PREFIX = "aos-interrupt-"
+const REQUEST_HOST_PREFIX = "aos-request-"
 
-/** An interrupt before the run's first update still needs a turn to host it. */
-const interruptHostId = (runId: string | undefined) =>
-  `${INTERRUPT_HOST_PREFIX}${runId ?? "current"}`
+/** A request before the turn's first update still needs a message to host it. */
+const requestHostId = (turnId: string | undefined) =>
+  `${REQUEST_HOST_PREFIX}${turnId ?? "current"}`
 
 /**
  * The hosted turn the run's own first turn takes over: one this projection
- * synthesized for an interrupt and the run has written nothing into. A host
+ * synthesized for a request and the run has written nothing into. A host
  * that already carries content is the run's turn, so it stays where it is.
  */
-function emptyInterruptHostId(state: ProjectorState): string | undefined {
+function emptyRequestHostId(state: ProjectorState): string | undefined {
   const id = state.activeAssistantId
-  if (id === undefined || !id.startsWith(INTERRUPT_HOST_PREFIX))
-    return undefined
+  if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
   const host = state.messages.find((message) => message.id === id)
   return host?.parts.length === 0 ? id : undefined
 }
@@ -266,10 +265,10 @@ function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
  */
 function reportedFailure(
   state: ProjectorState,
-  runId: string | undefined
+  turnId: string | undefined
 ): TurnFailure | undefined {
   const { execution } = state
-  return execution.status === "running" && execution.runId === runId
+  return execution.status === "running" && execution.turnId === turnId
     ? execution.error
     : undefined
 }
@@ -281,10 +280,10 @@ function reportedFailure(
  */
 function applyRunningFailure(
   state: ProjectorState,
-  carried: { runId?: string },
+  carried: { turnId?: string },
   error: TurnFailure
 ): ProjectorState {
-  const id = activeAssistantId(state) ?? interruptHostId(carried.runId)
+  const id = activeAssistantId(state) ?? requestHostId(carried.turnId)
   const failing: ProjectorState = {
     ...state,
     execution: { ...state.execution, status: "running", ...carried, error },
@@ -299,11 +298,11 @@ function applyRunningFailure(
 
 function applyIdle(
   state: ProjectorState,
-  carried: { runId?: string },
+  carried: { turnId?: string },
   stopReason: string | undefined,
   aos: StateMeta | undefined
 ): ProjectorState {
-  const reported = reportedFailure(state, carried.runId)
+  const reported = reportedFailure(state, carried.turnId)
   const failed =
     reported !== undefined ||
     stopReason === AOS_STOP_REASONS.error ||
@@ -352,8 +351,8 @@ function applyState(
 ): ProjectorState {
   const parsed = AosStateMetaSchema.safeParse(meta)
   const aos = parsed.success ? parsed.data : undefined
-  const runId = aos?.runId ?? state.execution.runId
-  const carried = runId === undefined ? {} : { runId }
+  const turnId = aos?.turnId ?? state.execution.turnId
+  const carried = turnId === undefined ? {} : { turnId }
   const next = text(update.state)
   // The run owns no turn until one of its updates opens one, so starting only
   // moves the Session's own status — and records the moment every turn this run
@@ -362,7 +361,7 @@ function applyState(
     const failure = errorFrom(aos)
     if (failure) return applyRunningFailure(state, carried, failure)
     const startedAt = epochOf(aos?.at)
-    const reported = reportedFailure(state, runId)
+    const reported = reportedFailure(state, turnId)
     return {
       ...state,
       execution: {
@@ -385,7 +384,7 @@ function applyState(
     const id =
       activeAssistantId(state) ??
       (replayed ? latestAssistantId(state.messages) : undefined) ??
-      interruptHostId(runId)
+      requestHostId(turnId)
     return {
       ...onMessage(blocked, id, "assistant", (message) =>
         withStatus(message, { type: "requires-action", reason: "interrupt" })

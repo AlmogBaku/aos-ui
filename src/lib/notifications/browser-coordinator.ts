@@ -139,7 +139,7 @@ export class BrowserActivityCoordinator {
     }
   }
   /** The ask waits for a run the operator watched in this tab. */
-  noteRunStarted(event: { agentId: string; threadId: string }) {
+  noteTurnStarted(event: { agentId: string; threadId: string }) {
     if (!this.#active || this.#firstRunSeen) return
     const context = this.#options.context()
     if (

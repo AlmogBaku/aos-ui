@@ -6,7 +6,6 @@ import {
   PushMessageSchema,
   type PushCategory,
 } from "../../protocol/push"
-import { activityTypeOf } from "../acp/activity-feed"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import { redactForLog } from "../redaction"
@@ -20,7 +19,7 @@ import type { PresenceRegistry } from "./presence"
 import type { PushRegistrations, StoredRegistration } from "./registrations"
 import type { PushSender, PushUrgency } from "./sender"
 
-/** Input and failures interrupt; a finished run can wait for the next look. */
+/** Input and failures interrupt; a finished turn can wait for the next look. */
 const URGENCY: Readonly<Record<PushCategory, PushUrgency>> = {
   input: "high",
   failure: "high",
@@ -237,7 +236,7 @@ export function createPushDispatcher({
   })
 
   const unobserve = runtimeInstance.sessions.observe((event) => {
-    const category = categoryOf(activityTypeOf(event.kind))
+    const category = categoryOf(event.kind)
     if (!category) return
     // A timestamp the provider left unreadable must not silence a notification.
     const occurredAtMs = Date.parse(event.occurredAt)

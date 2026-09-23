@@ -134,14 +134,14 @@ describe("createActivityFeed", () => {
         attentionKind: "question",
       }),
       expect.objectContaining({
-        type: "run-failed",
+        type: "turn-failed",
         sessionId: "session-3",
-        lifecycleId: "run-3",
+        turnId: "run-3",
       }),
       expect.objectContaining({
-        type: "run-failed",
+        type: "turn-failed",
         sessionId: "session-4",
-        lifecycleId: "session-4",
+        turnId: "session-4",
       }),
     ])
     expect(sessionRows.get(AGENT, "session-1")?.unread).toBe(true)
@@ -177,7 +177,7 @@ describe("createActivityFeed", () => {
     sessionRows.rememberList([session({ title: "Renamed", unread: false })])
 
     expect(seen).toEqual([
-      expect.objectContaining({ type: "run-started", lifecycleId: "run-1" }),
+      expect.objectContaining({ type: "turn-started", turnId: "run-1" }),
       expect.objectContaining({
         type: "attention-requested",
         requestId: "approval-1",
@@ -187,7 +187,7 @@ describe("createActivityFeed", () => {
         type: "attention-resolved",
         requestId: "approval-1",
       }),
-      expect.objectContaining({ type: "run-finished", lifecycleId: "run-1" }),
+      expect.objectContaining({ type: "turn-finished", turnId: "run-1" }),
       expect.objectContaining({ type: "unread-changed", unread: false }),
     ])
 
@@ -205,22 +205,18 @@ describe("createActivityFeed", () => {
       maxAgeMs: 10_000,
     })
 
-    for (const runId of ["run-1", "run-2", "run-3", "run-4"])
-      deliver(lifecycle("turn-started", runId, new Date(clock).toISOString()))
+    for (const turnId of ["run-1", "run-2", "run-3", "run-4"])
+      deliver(lifecycle("turn-started", turnId, new Date(clock).toISOString()))
 
     expect(
-      feed
-        .snapshot()
-        .map((event) => "lifecycleId" in event && event.lifecycleId)
+      feed.snapshot().map((event) => "turnId" in event && event.turnId)
     ).toEqual(["run-2", "run-3", "run-4"])
 
     clock += 20_000
     deliver(lifecycle("turn-started", "run-5", new Date(clock).toISOString()))
 
     expect(
-      feed
-        .snapshot()
-        .map((event) => "lifecycleId" in event && event.lifecycleId)
+      feed.snapshot().map((event) => "turnId" in event && event.turnId)
     ).toEqual(["run-5"])
   })
 

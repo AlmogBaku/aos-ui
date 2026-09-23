@@ -1466,7 +1466,7 @@ describe("AosUiApp fixture composition", () => {
     try {
       render(<ActivityFixture />)
       await screen.findByRole("tab", { name: "Market brief" })
-      act(() => provider!.publishActivityScenario("run-completed"))
+      act(() => provider!.publishActivityScenario("turn-completed"))
       // The bell counts the two unread fixture Sessions, not arrivals.
       const bell = (
         await screen.findAllByRole("button", { name: "Activity, 2 unread" })
@@ -1493,7 +1493,7 @@ describe("AosUiApp fixture composition", () => {
       ).toHaveAttribute("aria-selected", "true")
 
       // Opening an unread Session's Activity acknowledges it with the provider.
-      act(() => provider!.publishActivityScenario("run-failed"))
+      act(() => provider!.publishActivityScenario("turn-failed"))
       await user.click(
         screen.getAllByRole("button", { name: "Activity, 2 unread" })[0]!
       )

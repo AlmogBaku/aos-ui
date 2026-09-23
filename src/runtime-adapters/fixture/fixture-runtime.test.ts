@@ -415,8 +415,8 @@ describe("fixture ChatModelAdapter", () => {
         agentId: "agent-mica",
         threadId: "thread-mica-quarterly",
         occurredAt: FIXTURE_NOW.toISOString(),
-        type: "run-started",
-        lifecycleId:
+        type: "turn-started",
+        turnId:
           "fixture:runtime:thread-mica-quarterly:fixture-assistant-message",
       },
       {
@@ -424,8 +424,8 @@ describe("fixture ChatModelAdapter", () => {
         agentId: "agent-mica",
         threadId: "thread-mica-quarterly",
         occurredAt: FIXTURE_NOW.toISOString(),
-        type: "run-finished",
-        lifecycleId:
+        type: "turn-finished",
+        turnId:
           "fixture:runtime:thread-mica-quarterly:fixture-assistant-message",
       },
     ])
@@ -475,7 +475,7 @@ describe("fixture ChatModelAdapter", () => {
       secondStore
         .records()
         .flatMap((record) =>
-          record.type === "run-finished" ? [record.lifecycleId] : []
+          record.type === "turn-finished" ? [record.turnId] : []
         )
     ).toEqual(["fixture:runtime:thread-mica-quarterly:provider-run-two"])
   })
@@ -493,16 +493,16 @@ describe("fixture ChatModelAdapter", () => {
       "Fixture provider unavailable"
     )
     expect(activity.map(({ type }) => type)).toEqual([
-      "run-started",
-      "run-failed",
+      "turn-started",
+      "turn-failed",
     ])
     expect(activity[1]).toEqual({
       id: "fixture:runtime:thread-nori-copy:fixture-assistant-message:failed",
       agentId: "agent-nori",
       threadId: "thread-nori-copy",
       occurredAt: FIXTURE_NOW.toISOString(),
-      type: "run-failed",
-      lifecycleId: "fixture:runtime:thread-nori-copy:fixture-assistant-message",
+      type: "turn-failed",
+      turnId: "fixture:runtime:thread-nori-copy:fixture-assistant-message",
     })
   })
 
@@ -619,7 +619,7 @@ describe("fixture ChatModelAdapter", () => {
     controller.abort()
     await collectRun(run)
 
-    expect(activity.map(({ type }) => type)).toEqual(["run-started"])
+    expect(activity.map(({ type }) => type)).toEqual(["turn-started"])
   })
 
   it("streams deterministic cumulative text", async () => {

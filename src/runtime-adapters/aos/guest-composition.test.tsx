@@ -103,7 +103,7 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Earlier guest answer" }],
-      _meta: { [AOS_META_KEY]: { runId: "run-0", sequence: 0 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
     },
   ]
   let attached = false
@@ -198,7 +198,7 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
           sessionUpdate: "user_message",
           messageId,
           content: params.prompt,
-          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 1 } },
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 1 } },
         })
         // The guest lane allowlists its output: reasoning and tool calls are
         // dropped server-side, so only prose reaches this surface.
@@ -206,13 +206,13 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
           sessionUpdate: "agent_message",
           messageId: `answer-${prompts.length}`,
           content: [{ type: "text", text: "Guest-visible answer" }],
-          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 2 } },
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
         push({
           sessionUpdate: "state_update",
           state: "idle",
           stopReason: "end_turn",
-          _meta: { [AOS_META_KEY]: { runId: "run-1", sequence: 3 } },
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
         })
       })
       return { _meta: { [AOS_META_KEY]: { messageId } } }
@@ -233,7 +233,7 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
         sessionId: REF,
         title: "Delete the notes?",
         options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-        _meta: { [AOS_META_KEY]: { interruptId: "interrupt-1" } },
+        _meta: { [AOS_META_KEY]: { requestId: "interrupt-1" } },
       })
     },
   }

@@ -141,7 +141,7 @@ export async function publish(
  * this Agent work and the moment the ask becomes due.
  */
 export async function startSelectedRun(page: Page) {
-  await publish(page, "run-completed")
+  await publish(page, "turn-completed")
 }
 
 /** Leaves the window unfocused, hidden or merely covered by another app. */

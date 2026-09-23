@@ -29,8 +29,8 @@ const PLAN_STATUS = {
 export const TodosSchema = AosPlanMetaSchema.shape.todos
 type SessionTodos = z.infer<typeof TodosSchema>
 
-export function runMeta(context: TranslateContext) {
-  return { sequence: context.sequence, runId: context.runId }
+export function turnMeta(context: TranslateContext) {
+  return { sequence: context.sequence, turnId: context.turnId }
 }
 
 export function update(value: SessionUpdate): AcpOutbound {
@@ -54,7 +54,7 @@ export function stateOutbound(
   return update({
     sessionUpdate: "state_update",
     ...state,
-    _meta: { [AOS_META_KEY]: { ...runMeta(context), ...extra, at } },
+    _meta: { [AOS_META_KEY]: { ...turnMeta(context), ...extra, at } },
   })
 }
 
@@ -70,7 +70,7 @@ export function chunkOutbound(
     messageId,
     content:
       typeof content === "string" ? { type: "text", text: content } : content,
-    _meta: { [AOS_META_KEY]: runMeta(context) },
+    _meta: { [AOS_META_KEY]: turnMeta(context) },
   })
 }
 
@@ -83,14 +83,14 @@ export function toolOutbound(
   return update({
     sessionUpdate: "tool_call_update",
     ...call,
-    _meta: { [AOS_META_KEY]: { ...runMeta(context), messageId, ...args } },
+    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId, ...args } },
   })
 }
 
 /** The one plan a Session carries: its Todos, kept losslessly in `_meta.aos`. */
 export function planUpdate(
   todos: SessionTodos,
-  meta: { sequence: number; runId?: string }
+  meta: { sequence: number; turnId?: string }
 ): SessionUpdate {
   return {
     sessionUpdate: "plan_update",

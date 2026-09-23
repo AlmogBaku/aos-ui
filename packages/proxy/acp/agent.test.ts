@@ -226,19 +226,19 @@ class EventSource implements ServerRunHandle {
   }
 }
 
-type InterruptOutbound = Extract<
+type RequestOutbound = Extract<
   AcpOutbound,
   { kind: "request-permission" | "elicitation" }
 >
 
-function permissionOutbound(request: PendingRequest): InterruptOutbound {
+function permissionOutbound(request: PendingRequest): RequestOutbound {
   return {
     kind: "request-permission",
     requestId: request.requestId,
     request: {
       title: request.message ?? "",
       options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { interruptId: request.requestId } },
+      _meta: { [AOS_META_KEY]: { requestId: request.requestId } },
     },
   }
 }
@@ -248,7 +248,7 @@ const translators: Translators = {
   translateTurnEvent(state, event, context) {
     const meta = {
       _meta: {
-        [AOS_META_KEY]: { sequence: context.sequence, runId: context.runId },
+        [AOS_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
       },
     }
     if (event.kind === TurnEventKind.TurnStarted)
@@ -326,7 +326,7 @@ const translators: Translators = {
         outbound: [
           {
             kind: "steer-accepted",
-            runId: context.runId,
+            turnId: context.turnId,
             requestId: event.requestId,
             text: event.text,
             delivery: event.delivery,
@@ -861,7 +861,7 @@ describe("AOS ACP agent", () => {
       _meta: {
         [AOS_META_KEY]: {
           session: { agentId: AGENT, status: "running" },
-          execution: { status: "running", runId: "run-live" },
+          execution: { status: "running", turnId: "run-live" },
         },
       },
     })
@@ -877,7 +877,7 @@ describe("AOS ACP agent", () => {
       update: {
         sessionUpdate: "state_update",
         state: "running",
-        _meta: { [AOS_META_KEY]: { runId: "run-live" } },
+        _meta: { [AOS_META_KEY]: { turnId: "run-live" } },
       },
     })
     test.sources[0]?.emit({
@@ -995,7 +995,7 @@ describe("AOS ACP agent", () => {
       sessionId: CREATED,
       title: "permission-required",
       options: [{ optionId: "once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { interruptId: "approval-1" } },
+      _meta: { [AOS_META_KEY]: { requestId: "approval-1" } },
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
@@ -1499,11 +1499,11 @@ describe("AOS ACP agent", () => {
 
   it("hydrates the connection with the activity snapshot", async () => {
     const event: AosActivityNotification = {
-      type: "run-started",
+      type: "turn-started",
       agentId: AGENT,
       sessionId: SESSION,
       occurredAt: NOW,
-      lifecycleId: "lifecycle-1",
+      turnId: "lifecycle-1",
     }
     const test = await harness({ activity: [event] })
 
@@ -1512,14 +1512,14 @@ describe("AOS ACP agent", () => {
     )
 
     expect(hydrated.params).toEqual(event)
-    test.publishActivity({ ...event, lifecycleId: "lifecycle-2" })
+    test.publishActivity({ ...event, turnId: "lifecycle-2" })
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("lifecycle-2")
     )
     test.close()
   })
 
-  it("refuses a prompt while a run is in progress", async () => {
+  it("refuses a prompt while a turn is in progress", async () => {
     const test = await harness()
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1535,12 +1535,12 @@ describe("AOS ACP agent", () => {
         prompt: [{ type: "text", text: "Second" }],
         _meta: { [AOS_META_KEY]: {} },
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.runInProgress })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })
 
-  it("drops a reply for an interrupt the provider no longer holds", async () => {
+  it("drops a reply for a request the provider no longer holds", async () => {
     const answer = Promise.withResolvers<RequestPermissionResponse>()
     const test = await harness({ permission: () => answer.promise })
     await test.create()
@@ -1580,14 +1580,14 @@ describe("AOS ACP agent", () => {
     )
     expect(failed.params).toMatchObject({
       sessionId: CREATED,
-      code: "stale_interrupt",
+      code: "stale_request",
     })
     expect(test.logged()).toContainEqual({
       event: "acp.error",
       connectionId: "connection-1",
       sessionId: CREATED,
-      errorCode: "stale_interrupt",
-      message: "stale_interrupt",
+      errorCode: "stale_request",
+      message: "stale_request",
     })
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
@@ -1662,7 +1662,7 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() =>
       expect(test.logged()).toContainEqual({
-        event: "acp.run.cancel",
+        event: "acp.turn.cancel",
         connectionId: "connection-1",
         lane: "operator",
         sessionId: CREATED,
@@ -1715,13 +1715,13 @@ describe("AOS ACP agent", () => {
       expect(test.logged()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            event: "acp.run.failed",
+            event: "acp.turn.failed",
             connectionId: "connection-1",
             sessionId: CREATED,
             stopReason: AOS_STOP_REASONS.uncertain,
             errorCode: "AOS_CONNECTION_INTERRUPTED",
             message: "the transport dropped",
-            runId: expect.any(String),
+            turnId: expect.any(String),
           }),
         ])
       )

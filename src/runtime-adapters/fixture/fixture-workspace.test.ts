@@ -278,28 +278,28 @@ describe("FixtureWorkspace", () => {
         agentId: "agent-aster",
         threadId: "thread-aster-market",
         occurredAt: "2026-09-03T12:01:00.000Z",
-        type: "run-started",
-        lifecycleId: "fixture:run:aster-market:completed",
+        type: "turn-started",
+        turnId: "fixture:run:aster-market:completed",
       },
       {
         id: "fixture:run:aster-market:completed:finished",
         agentId: "agent-aster",
         threadId: "thread-aster-market",
         occurredAt: "2026-09-03T12:02:00.000Z",
-        type: "run-finished",
-        lifecycleId: "fixture:run:aster-market:completed",
+        type: "turn-finished",
+        turnId: "fixture:run:aster-market:completed",
       },
       expect.objectContaining({
         id: "fixture:run:nori-copy:failed:started",
         agentId: "agent-nori",
         threadId: "thread-nori-copy",
-        type: "run-started",
+        type: "turn-started",
       }),
       expect.objectContaining({
         id: "fixture:run:nori-copy:failed:terminal",
         agentId: "agent-nori",
         threadId: "thread-nori-copy",
-        type: "run-failed",
+        type: "turn-failed",
       }),
       expect.objectContaining({
         id: "fixture:attention:lumen-roadmap:question:requested",
@@ -342,19 +342,19 @@ describe("FixtureWorkspace", () => {
         id: "fixture:stale-target:finished",
         agentId: "agent-deleted",
         threadId: "thread-deleted",
-        type: "run-finished",
+        type: "turn-finished",
       }),
       expect.objectContaining({
         id: "fixture:delayed:mica-quarterly:started",
         agentId: "agent-mica",
         threadId: "thread-mica-quarterly",
-        type: "run-started",
+        type: "turn-started",
       }),
       expect.objectContaining({
         id: "fixture:delayed:mica-quarterly:finished",
         agentId: "agent-mica",
         threadId: "thread-mica-quarterly",
-        type: "run-finished",
+        type: "turn-finished",
       }),
     ])
 
@@ -372,17 +372,10 @@ describe("FixtureWorkspace", () => {
             ]
           : event.type === "attention-resolved"
             ? ["agentId", "id", "occurredAt", "requestId", "threadId", "type"]
-            : event.type === "run-started" ||
-                event.type === "run-finished" ||
-                event.type === "run-failed"
-              ? [
-                  "agentId",
-                  "id",
-                  "lifecycleId",
-                  "occurredAt",
-                  "threadId",
-                  "type",
-                ]
+            : event.type === "turn-started" ||
+                event.type === "turn-finished" ||
+                event.type === "turn-failed"
+              ? ["agentId", "id", "occurredAt", "threadId", "turnId", "type"]
               : ["agentId", "id", "occurredAt", "threadId", "type"]
       )
     }
@@ -413,11 +406,11 @@ describe("FixtureWorkspace", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "fixture:duplicate:finished",
-          type: "run-finished",
+          type: "turn-finished",
         }),
         expect.objectContaining({
           id: "fixture:stale-target:finished",
-          type: "run-finished",
+          type: "turn-finished",
           resolved: true,
         }),
       ])
@@ -436,7 +429,7 @@ describe("FixtureWorkspace", () => {
       observed.push(event)
     )
 
-    workspace.publishActivityScenario("run-completed")
+    workspace.publishActivityScenario("turn-completed")
 
     expect(observerError).toHaveBeenCalledTimes(2)
     expect(observed.map(({ agentId }) => agentId)).toEqual([

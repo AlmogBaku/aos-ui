@@ -16,11 +16,11 @@ import {
   type TranslateTurnEvent,
   type TranslateState,
 } from "../types"
-import { pendingRequestToOutbound } from "./interrupts"
+import { pendingRequestToOutbound } from "./requests"
 import {
   chunkOutbound,
   planUpdate,
-  runMeta,
+  turnMeta,
   stateOutbound,
   TodosSchema,
   toolOutbound,
@@ -44,9 +44,9 @@ function segmentMessage(state: TranslateState, messageId: string) {
   }
 }
 
-/** The assistant message a later tool patch hangs off; a run id always exists. */
+/** The assistant message a later tool patch hangs off; a turn id always exists. */
 function attachedTo(state: TranslateState, context: TranslateContext) {
-  return state.messageId ?? context.runId
+  return state.messageId ?? context.turnId
 }
 
 function openArgs(
@@ -102,7 +102,7 @@ function artifactOutbound(
   return [
     {
       kind: "artifact",
-      runId: context.runId,
+      turnId: context.turnId,
       ...(state.messageId ? { messageId: state.messageId } : {}),
       artifact: artifact.data,
     },
@@ -128,7 +128,7 @@ function steerStep(
     outbound: [
       {
         kind: "steer-accepted",
-        runId: context.runId,
+        turnId: context.turnId,
         requestId: event.requestId,
         text: event.text,
         delivery: event.delivery,
@@ -145,7 +145,7 @@ function endedOutbound(
   if (event.composerPrefill !== undefined)
     outbound.push({
       kind: "composer-prefill",
-      runId: context.runId,
+      turnId: context.turnId,
       text: event.composerPrefill,
     })
   outbound.push(
@@ -204,7 +204,7 @@ function toolStarted(
     status: "in_progress",
   }
   // The adapter's parent id only names the segment when nothing has yet.
-  const segment = segmentMessage(state, event.parentMessageId ?? context.runId)
+  const segment = segmentMessage(state, event.parentMessageId ?? context.turnId)
   return {
     state: openArgs(segment.state, event.toolCallId, ""),
     outbound: [toolOutbound(context, segment.messageId, call)],
@@ -271,7 +271,9 @@ function planOutbound(
   event: TurnEventOf<typeof TurnEventKind.PlanUpdated>
 ): AcpOutbound[] {
   const todos = TodosSchema.safeParse(event.todos)
-  return todos.success ? [update(planUpdate(todos.data, runMeta(context)))] : []
+  return todos.success
+    ? [update(planUpdate(todos.data, turnMeta(context)))]
+    : []
 }
 
 export const translateTurnEvent = ((state, event: TurnEvent, context) => {

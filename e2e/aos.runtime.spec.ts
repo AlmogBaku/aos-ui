@@ -9,7 +9,7 @@ import { expect, test, type Page } from "./test"
 
 const AGENT_ID = "research"
 const SESSION_ID = "session-1"
-const RUN_ID = "run-1"
+const TURN_ID = "run-1"
 const ACP_PATH = "/api/aos/v1/acp"
 /** A prompt the scripted provider leaves running until it is cancelled. */
 const PENDING_PROMPT = "Keep running until I stop it"
@@ -145,7 +145,7 @@ const sessionCapabilities = {
 const script = {
   acpPath: ACP_PATH,
   sessionId: SESSION_ID,
-  runId: RUN_ID,
+  turnId: TURN_ID,
   pendingPrompt: PENDING_PROMPT,
   /** `InitializeResponse._meta.aos` for the operator lane. */
   initializeMeta: {
@@ -262,7 +262,7 @@ type AcpCall = { method: string; params: unknown }
 type ResumeParams = {
   sessionId: string
   replayFrom?: { type: string }
-  _meta?: { aos?: { agentId?: string; after?: number; runId?: string } }
+  _meta?: { aos?: { agentId?: string; after?: number; turnId?: string } }
 }
 
 declare global {
@@ -385,7 +385,7 @@ function installAcpStub(script: AcpScript) {
       stub.sequence += 1
       this.update({
         ...update,
-        _meta: { aos: { sequence: stub.sequence, runId: script.runId } },
+        _meta: { aos: { sequence: stub.sequence, turnId: script.turnId } },
       })
     }
 
@@ -603,7 +603,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .toBe(2)
   await expect
     .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
-    .toEqual({ agentId: AGENT_ID, after: sequence, runId: RUN_ID })
+    .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
 

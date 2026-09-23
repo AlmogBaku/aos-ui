@@ -21,8 +21,8 @@ import {
   type ProjectorState,
 } from "./session-projector"
 
-const RUN_META = { sequence: 0, runId: "run-1" }
-const TOOL_META = { ...RUN_META, messageId: "a1" }
+const TURN_META = { sequence: 0, turnId: "run-1" }
+const TOOL_META = { ...TURN_META, messageId: "a1" }
 
 type Entry = readonly [SessionUpdate, unknown?]
 
@@ -38,7 +38,7 @@ const userChunk = (messageId: string, text: string): Entry => [
     messageId,
     content: { type: "text", text },
   },
-  RUN_META,
+  TURN_META,
 ]
 
 const agentChunk = (messageId: string, text: string): Entry => [
@@ -47,7 +47,7 @@ const agentChunk = (messageId: string, text: string): Entry => [
     messageId,
     content: { type: "text", text },
   },
-  RUN_META,
+  TURN_META,
 ]
 
 const thoughtChunk = (messageId: string, text: string): Entry => [
@@ -56,7 +56,7 @@ const thoughtChunk = (messageId: string, text: string): Entry => [
     messageId,
     content: { type: "text", text },
   },
-  RUN_META,
+  TURN_META,
 ]
 
 const toolCall = (patch: Record<string, unknown>, meta: unknown): Entry => [
@@ -66,7 +66,7 @@ const toolCall = (patch: Record<string, unknown>, meta: unknown): Entry => [
 
 const stateUpdate = (
   patch: Record<string, unknown>,
-  meta: unknown = RUN_META
+  meta: unknown = TURN_META
 ): Entry => [{ sessionUpdate: "state_update", ...patch }, meta]
 
 const ARTIFACT = {
@@ -273,7 +273,7 @@ describe("applyUpdate messages", () => {
     const next = applyUpdate(
       streamed,
       { sessionUpdate: "agent_message", messageId: "a1" },
-      RUN_META
+      TURN_META
     )
     expect(next).toBe(streamed)
   })
@@ -281,13 +281,13 @@ describe("applyUpdate messages", () => {
   it("ignores an update kind it does not project", () => {
     const streamed = fold([agentChunk("a1", "draft")])
     expect(
-      applyUpdate(streamed, { sessionUpdate: "terminal_update" }, RUN_META)
+      applyUpdate(streamed, { sessionUpdate: "terminal_update" }, TURN_META)
     ).toBe(streamed)
   })
 
   it("fails a replayed turn as the run that wrote it reported it", () => {
     const error = { code: "provider_error", message: "Broke" }
-    const history = { sequence: 0, runId: "history" }
+    const history = { sequence: 0, turnId: "history" }
     const replayed = fold([
       stateUpdate({ state: "running" }, history),
       agentChunk("a1", "Half an answer"),
@@ -306,7 +306,7 @@ describe("applyUpdate messages", () => {
     // left in the state the last one reported.
     expect(replayed.execution).toEqual({
       status: "failed",
-      runId: "history",
+      turnId: "history",
       stopReason: AOS_STOP_REASONS.error,
       error,
     })
@@ -320,12 +320,12 @@ describe("applyUpdate messages", () => {
     const failing = fold([
       userChunk("u1", "Pick a branch"),
       stateUpdate({ state: "running" }),
-      stateUpdate({ state: "running" }, { ...RUN_META, ...error }),
+      stateUpdate({ state: "running" }, { ...TURN_META, ...error }),
     ])
 
     expect(failing.execution).toMatchObject({
       status: "running",
-      runId: "run-1",
+      turnId: "run-1",
       error,
     })
     const hosted = toThreadMessages(failing).at(-1)
@@ -341,7 +341,7 @@ describe("applyUpdate messages", () => {
       [
         stateUpdate(
           { state: "running" },
-          { ...RUN_META, execution: "stopping" }
+          { ...TURN_META, execution: "stopping" }
         ),
         stateUpdate({ state: "idle", stopReason: "cancelled" }),
       ],
@@ -442,11 +442,11 @@ describe("applyUpdate tool calls", () => {
       [
         toolCall(
           { title: "grep", status: "in_progress" },
-          { ...RUN_META, messageId: "a2" }
+          { ...TURN_META, messageId: "a2" }
         ),
         toolCall(
           { status: "completed", rawOutput: { status: "answered" } },
-          { ...RUN_META, messageId: "run-2" }
+          { ...TURN_META, messageId: "run-2" }
         ),
       ],
       started
@@ -542,7 +542,7 @@ describe("applyUpdate tool calls", () => {
               content: { type: "text", text: "line" },
             },
           },
-          RUN_META,
+          TURN_META,
         ],
       ],
       started
@@ -577,7 +577,7 @@ describe("applyUpdate execution", () => {
   )
 
   it("opens the turn the running run streams into", () => {
-    expect(answering.execution).toEqual({ status: "running", runId: "run-1" })
+    expect(answering.execution).toEqual({ status: "running", turnId: "run-1" })
     expect(toThreadMessages(answering)[2]).toMatchObject({
       id: "a2",
       status: { type: "running" },
@@ -588,7 +588,7 @@ describe("applyUpdate execution", () => {
     const working = fold(
       [
         stateUpdate({ state: "running" }),
-        toolCall({ title: "grep" }, { ...RUN_META, messageId: "a2" }),
+        toolCall({ title: "grep" }, { ...TURN_META, messageId: "a2" }),
       ],
       replayed
     )
@@ -600,7 +600,7 @@ describe("applyUpdate execution", () => {
 
   it("leaves the finished turn behind a starting run finished", () => {
     const started = fold([stateUpdate({ state: "running" })], replayed)
-    expect(started.execution).toEqual({ status: "running", runId: "run-1" })
+    expect(started.execution).toEqual({ status: "running", turnId: "run-1" })
     expect(started.messages).toBe(replayed.messages)
     expect(toThreadMessages(started)[1]).toMatchObject(COMPLETE)
   })
@@ -609,7 +609,7 @@ describe("applyUpdate execution", () => {
     const blocked = fold([stateUpdate({ state: "requires_action" })], answering)
     expect(blocked.execution).toEqual({
       status: "waiting-for-input",
-      runId: "run-1",
+      turnId: "run-1",
     })
     expect(toThreadMessages(blocked)[2]).toMatchObject({
       status: { type: "requires-action", reason: "interrupt" },
@@ -713,7 +713,7 @@ describe("applyUpdate execution", () => {
     )
     expect(idle.execution).toEqual({
       status: "idle",
-      runId: "run-1",
+      turnId: "run-1",
       stopReason: "end_turn",
     })
     expect(toThreadMessages(idle)[2]).toMatchObject(COMPLETE)
@@ -736,7 +736,7 @@ describe("applyUpdate execution", () => {
         stateUpdate(
           { state: "idle", stopReason: AOS_STOP_REASONS.error },
           {
-            ...RUN_META,
+            ...TURN_META,
             code: "provider_error",
             message: "Broke",
           }
@@ -746,7 +746,7 @@ describe("applyUpdate execution", () => {
     )
     expect(failed.execution).toEqual({
       status: "failed",
-      runId: "run-1",
+      turnId: "run-1",
       stopReason: AOS_STOP_REASONS.error,
       error: { code: "provider_error", message: "Broke" },
     })
@@ -764,7 +764,7 @@ describe("applyUpdate execution", () => {
       [
         stateUpdate(
           { state: "idle", stopReason: AOS_STOP_REASONS.error },
-          { ...RUN_META, code: "AOS_PROVIDER_RUN_FAILED" }
+          { ...TURN_META, code: "AOS_PROVIDER_RUN_FAILED" }
         ),
       ],
       answering
@@ -821,7 +821,7 @@ describe("applyUpdate turn timing", () => {
   const STARTED_AT = "2026-09-22T10:00:00.000Z"
   const COMPLETED_AT = "2026-09-22T10:00:04.500Z"
   const at = (moment?: string) =>
-    moment === undefined ? RUN_META : { ...RUN_META, at: moment }
+    moment === undefined ? TURN_META : { ...TURN_META, at: moment }
   const started = (moment?: string) =>
     stateUpdate({ state: "running" }, at(moment))
   const settled = (moment?: string) =>
@@ -893,23 +893,23 @@ describe("applyUpdate Session metadata", () => {
   const todos = [{ id: "todo-1", label: "Ship", status: "active" }]
 
   it("takes the Session Todos from the plan meta", () => {
-    const planned = fold([[plan(AOS_PLAN_ID), { ...RUN_META, todos }]])
+    const planned = fold([[plan(AOS_PLAN_ID), { ...TURN_META, todos }]])
     expect(planned.todos).toEqual(todos)
   })
 
   it("ignores a plan that is not the Session's own", () => {
-    expect(fold([[plan("other"), { ...RUN_META, todos }]])).toBe(
+    expect(fold([[plan("other"), { ...TURN_META, todos }]])).toBe(
       initialProjectorState
     )
   })
 
   it("ignores a plan whose meta has no Todos", () => {
-    expect(fold([[plan(AOS_PLAN_ID), RUN_META]])).toBe(initialProjectorState)
+    expect(fold([[plan(AOS_PLAN_ID), TURN_META]])).toBe(initialProjectorState)
   })
 
   it("records title, config options, and commands, and leaves usage to the composer", () => {
     const projected = fold([
-      [{ sessionUpdate: "usage_update", used: 10, size: 100 }, RUN_META],
+      [{ sessionUpdate: "usage_update", used: 10, size: 100 }, TURN_META],
       [{ sessionUpdate: "session_info_update", title: "Ship it" }],
       [
         {
@@ -978,7 +978,7 @@ describe("applyNotification", () => {
     const withArtifact = applyNotification(
       answered,
       AOS_METHODS.notify.artifact,
-      { sessionId: "s1", ...RUN_META, messageId: "a1", artifact: ARTIFACT }
+      { sessionId: "s1", ...TURN_META, messageId: "a1", artifact: ARTIFACT }
     )
     expect(toThreadMessages(withArtifact)[1]).toMatchObject({
       content: [
@@ -999,7 +999,7 @@ describe("applyNotification", () => {
       {
         sessionId: "s1",
         sequence: 0,
-        runId: "history",
+        turnId: "history",
         messageId: "a1",
         artifact: { ...ARTIFACT, sizeBytes: 2_048 },
       }
@@ -1025,7 +1025,7 @@ describe("applyNotification", () => {
     const params = {
       sessionId: "s1",
       sequence: 0,
-      runId: "history",
+      turnId: "history",
       messageId: "a1",
       artifact: ARTIFACT,
     }
@@ -1044,7 +1044,7 @@ describe("applyNotification", () => {
     const withArtifact = applyNotification(
       answered,
       AOS_METHODS.notify.artifact,
-      { sessionId: "s1", ...RUN_META, artifact: ARTIFACT }
+      { sessionId: "s1", ...TURN_META, artifact: ARTIFACT }
     )
     expect(toThreadMessages(withArtifact)[1]).toMatchObject({
       content: [{ type: "text" }, { name: ARTIFACT_DATA_PART_NAME }],
@@ -1053,7 +1053,7 @@ describe("applyNotification", () => {
 
   const correction = {
     sessionId: "s1",
-    ...RUN_META,
+    ...TURN_META,
     requestId: "steer-1",
     text: "Also check the logs",
     delivery: "steered",
@@ -1208,13 +1208,13 @@ describe("from-start replay", () => {
     userChunk("u1", "Ship it"),
     stateUpdate(
       { state: "running" },
-      { ...RUN_META, at: "2026-09-22T10:00:00.000Z" }
+      { ...TURN_META, at: "2026-09-22T10:00:00.000Z" }
     ),
     agentChunk("a1", "Shipped"),
     toolCall({ title: "grep", status: "completed" }, TOOL_META),
     stateUpdate(
       { state: "idle", stopReason: "end_turn" },
-      { ...RUN_META, at: "2026-09-22T10:00:01.000Z" }
+      { ...TURN_META, at: "2026-09-22T10:00:01.000Z" }
     ),
   ]
 

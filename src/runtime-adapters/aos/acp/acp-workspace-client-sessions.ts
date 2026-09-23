@@ -74,8 +74,8 @@ function activityEventOf(
   const { agentId, sessionId, occurredAt, type } = notification
   if (type === "unread-changed") return undefined
   const key =
-    "lifecycleId" in notification
-      ? notification.lifecycleId
+    "turnId" in notification
+      ? notification.turnId
       : "requestId" in notification
         ? notification.requestId
         : occurredAt
@@ -94,7 +94,7 @@ function activityEventOf(
     }
   if (type === "attention-resolved")
     return { ...base, type, requestId: notification.requestId }
-  return { ...base, type, lifecycleId: notification.lifecycleId }
+  return { ...base, type, turnId: notification.turnId }
 }
 
 /** The creator's canonical tool name; adapters rename native names to it. */

@@ -940,7 +940,7 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("requires action for an interrupt and resumes the run with the answer", async () => {
+  it("requires action for a request and resumes the turn with the answer", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Delete it")
     const admitted = PromptTurnInputSchema.parse(test.start.mock.calls[0]?.[1])
@@ -980,7 +980,7 @@ describe("operator ACP lane", () => {
       ],
     })
     expect(
-      AosPermissionMetaSchema.parse(aosMetaOf(asked.params)).interruptId
+      AosPermissionMetaSchema.parse(aosMetaOf(asked.params)).requestId
     ).toBe("int-1")
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     const resumed = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
@@ -1043,7 +1043,7 @@ describe("operator ACP lane", () => {
     ).toBe(false)
 
     const meta = AosElicitationMetaSchema.parse(aosMetaOf(asked.params))
-    expect(meta.interruptId).toBe(CLARIFY)
+    expect(meta.requestId).toBe(CLARIFY)
     expect(meta.questions).toMatchObject([
       { prompt: "Which environment?", multiple: false, custom: true },
       {
@@ -1114,7 +1114,7 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("cancels the interrupt when the operator declines", async () => {
+  it("cancels the request when the operator declines", async () => {
     const test = await harness({
       elicitation: async () => ({ action: "decline" }),
     })
@@ -1283,7 +1283,7 @@ describe("operator ACP lane", () => {
     expect(steerAccepted(test.recorder)).toMatchObject([
       {
         sessionId: SESSION,
-        runId: "run-live",
+        turnId: "run-live",
         requestId: "steer-2",
         text: "And the totals",
         delivery: "steered",
@@ -1300,7 +1300,7 @@ describe("operator ACP lane", () => {
       sessionId: SESSION,
       cwd: "/",
       _meta: {
-        [AOS_META_KEY]: { agentId: AGENT, runId: "run-live", after: 0 },
+        [AOS_META_KEY]: { agentId: AGENT, turnId: "run-live", after: 0 },
       },
     })
     await drainedReplay(test, source)
@@ -1349,7 +1349,7 @@ describe("operator ACP lane", () => {
     expect(AosArtifactNotificationSchema.parse(granted[0]!.params)).toEqual({
       sessionId: SESSION,
       sequence: 0,
-      runId: "history",
+      turnId: "history",
       messageId: "message-agent",
       artifact,
     })

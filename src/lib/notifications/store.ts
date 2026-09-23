@@ -16,7 +16,7 @@ import {
 
 type RunTerminal = Extract<
   WorkspaceActivityEvent,
-  { type: "run-finished" | "run-failed" }
+  { type: "turn-finished" | "turn-failed" }
 >
 type StoreOptions = {
   now: () => number
@@ -70,13 +70,13 @@ export class ActivityStore {
     }
 
     if (
-      event.type === "run-started" ||
-      event.type === "run-finished" ||
-      event.type === "run-failed"
+      event.type === "turn-started" ||
+      event.type === "turn-finished" ||
+      event.type === "turn-failed"
     ) {
-      const key = activityScope(event, event.lifecycleId)
+      const key = activityScope(event, event.turnId)
       if (this.#closedLifecycles.has(key)) return null
-      if (event.type === "run-started") {
+      if (event.type === "turn-started") {
         const startedAt = this.#starts.get(key) ?? event.occurredAt
         this.#starts.set(key, startedAt)
         const terminal = [
@@ -138,7 +138,7 @@ export class ActivityStore {
 
   #complete(event: RunTerminal) {
     if (this.#records.has(event.id)) return null
-    const key = activityScope(event, event.lifecycleId)
+    const key = activityScope(event, event.turnId)
     const startedAt = this.#starts.get(key)
     if (!startedAt || Date.parse(event.occurredAt) < Date.parse(startedAt))
       return null
@@ -197,10 +197,10 @@ export class ActivityStore {
         this.#identities.delete(id)
         continue
       }
-      if (event.type === "run-started")
-        starts.add(activityScope(event, event.lifecycleId))
-      if (event.type === "run-finished" || event.type === "run-failed")
-        terminals.add(activityScope(event, event.lifecycleId))
+      if (event.type === "turn-started")
+        starts.add(activityScope(event, event.turnId))
+      if (event.type === "turn-finished" || event.type === "turn-failed")
+        terminals.add(activityScope(event, event.turnId))
       if (event.type === "attention-resolved")
         resolutions.add(activityScope(event, event.requestId))
     }
@@ -243,7 +243,7 @@ export class ActivityStore {
       event.agentId,
       event.threadId,
       event.type,
-      "lifecycleId" in event ? event.lifecycleId : null,
+      "turnId" in event ? event.turnId : null,
       "requestId" in event ? event.requestId : null,
       "attentionKind" in event ? event.attentionKind : null,
     ])

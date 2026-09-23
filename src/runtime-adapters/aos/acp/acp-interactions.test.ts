@@ -27,13 +27,13 @@ function harness() {
 
 function permission({
   sessionId = "session-1",
-  interruptId = "interrupt-1",
+  requestId = "interrupt-1",
   description,
   message,
   meta,
 }: {
   sessionId?: string
-  interruptId?: string
+  requestId?: string
   description?: string
   message?: string
   meta?: Record<string, unknown>
@@ -53,7 +53,7 @@ function permission({
       { optionId: "reject", name: "Reject", kind: "reject_once" },
     ],
     _meta: meta ?? {
-      aos: { interruptId, ...(message === undefined ? {} : { message }) },
+      aos: { requestId, ...(message === undefined ? {} : { message }) },
     },
   }
   const pending: AcpPendingRequest = {
@@ -66,9 +66,9 @@ function permission({
 }
 
 function elicitation({
-  interruptId = "interrupt-2",
+  requestId = "interrupt-2",
   requestScoped = false,
-}: { interruptId?: string; requestScoped?: boolean } = {}) {
+}: { requestId?: string; requestScoped?: boolean } = {}) {
   const sessionId = requestScoped ? undefined : "session-1"
   const respond = vi.fn<(response: CreateElicitationResponse) => void>()
   const request: CreateElicitationRequest = {
@@ -84,7 +84,7 @@ function elicitation({
     },
     _meta: {
       aos: {
-        interruptId,
+        requestId,
         questions: [
           {
             id: "confirm",
@@ -195,11 +195,11 @@ describe("ACP runtime interactions", () => {
     const { interactions, emit } = harness()
     const shown = elicitation()
     emit(shown.pending)
-    const unreadable = elicitation({ interruptId: "interrupt-3" })
+    const unreadable = elicitation({ requestId: "interrupt-3" })
     // The proxy carries the questions only here, and this contract rejects an
     // empty header, so there is nothing the composer could render.
     unreadable.pending.request._meta = {
-      aos: { interruptId: "interrupt-3", questions: [{ header: "" }] },
+      aos: { requestId: "interrupt-3", questions: [{ header: "" }] },
     }
 
     expect(() => emit(unreadable.pending)).not.toThrow()
@@ -268,15 +268,15 @@ describe("ACP runtime interactions", () => {
 
   it("keeps pending requests scoped to their own Session", () => {
     const { interactions, emit } = harness()
-    emit(permission({ sessionId: "session-1", interruptId: "one" }).pending)
-    emit(permission({ sessionId: "session-2", interruptId: "two" }).pending)
+    emit(permission({ sessionId: "session-1", requestId: "one" }).pending)
+    emit(permission({ sessionId: "session-2", requestId: "two" }).pending)
 
     expect(interactions.getPending("session-1")?.requestId).toBe("one")
     expect(interactions.getPending("session-2")?.requestId).toBe("two")
 
     const superseded = permission({
       sessionId: "session-1",
-      interruptId: "three",
+      requestId: "three",
     })
     emit(superseded.pending)
     expect(interactions.getPending("session-1")?.requestId).toBe("three")

@@ -21,13 +21,13 @@ import type { ServerAttachmentStage, SessionScope } from "../core/runtime"
 import type { CoordinatedRunSubscription } from "../core/session-coordinator"
 import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
-import { answeredQuestionOutbound } from "./translate/interrupts"
+import { answeredQuestionOutbound } from "./translate/requests"
 import {
   initialTranslateState,
   type AcpConnectionContext,
   type AcpOutbound,
 } from "./types"
-import { errorNotificationOf, staleInterrupt } from "./validation"
+import { errorNotificationOf, staleRequest } from "./validation"
 
 /**
  * One Session as one ACP connection observes it: at most one coordinator
@@ -39,7 +39,7 @@ import { errorNotificationOf, staleInterrupt } from "./validation"
  * logical execution, and a pending interaction all outlive it.
  */
 
-type InterruptOutbound = Extract<
+type RequestOutbound = Extract<
   AcpOutbound,
   { kind: "request-permission" | "elicitation" }
 >
@@ -85,10 +85,10 @@ function runFailureOf(update: SessionUpdate) {
     return undefined
   const meta = AosStateMetaSchema.safeParse(update._meta?.[AOS_META_KEY])
   if (!meta.success) return { stopReason }
-  const { runId, code, message } = meta.data
+  const { turnId, code, message } = meta.data
   return {
     stopReason,
-    runId,
+    turnId,
     ...(code === undefined ? {} : { errorCode: code }),
     ...(message === undefined
       ? {}
@@ -216,7 +216,7 @@ class SessionAttachment {
             _meta: {
               [AOS_META_KEY]: {
                 sequence: this.#sequence,
-                runId,
+                turnId: runId,
                 ...(state === "stopping"
                   ? { execution: "stopping" as const }
                   : {}),
@@ -290,7 +290,7 @@ class SessionAttachment {
     // `undefined`, because callers chain on what this returns.
     if (this.#detached) return Promise.resolve()
     const failure = runFailureOf(update)
-    if (failure) this.#log("error", "acp.run.failed", failure)
+    if (failure) this.#log("error", "acp.turn.failed", failure)
     return this.#client.notify(methods.client.session.update, {
       sessionId: this.#scope.threadId,
       update,
@@ -442,7 +442,7 @@ class SessionAttachment {
       for await (const { sequence, event } of subscription.events) {
         this.#sequence = sequence
         const translated = translateTurnEvent(this.#state, event, {
-          runId: subscription.runId,
+          turnId: subscription.runId,
           sequence,
           lane: this.#context.lane,
           stopping: this.#stopping,
@@ -474,10 +474,10 @@ class SessionAttachment {
    * client believing a turn it only saw part of had ended. The client owes
    * itself the Session from the start, which is what invalidation asks for.
    */
-  async #resync(runId: string, overflow: FanoutOverflowError) {
+  async #resync(turnId: string, overflow: FanoutOverflowError) {
     this.#log("error", "acp.fanout.detached", {
       subscriberId: this.#subscriberId,
-      runId,
+      turnId,
       events: overflow.events,
       bytes: overflow.bytes,
     })
@@ -500,7 +500,7 @@ class SessionAttachment {
         return this.#client.notify(AOS_METHODS.notify.artifact, {
           sessionId,
           sequence,
-          runId: outbound.runId,
+          turnId: outbound.turnId,
           ...(outbound.messageId === undefined
             ? {}
             : { messageId: outbound.messageId }),
@@ -510,7 +510,7 @@ class SessionAttachment {
         return this.#client.notify(AOS_METHODS.notify.steerAccepted, {
           sessionId,
           sequence,
-          runId: outbound.runId,
+          turnId: outbound.turnId,
           requestId: outbound.requestId,
           text: outbound.text,
           delivery: outbound.delivery,
@@ -518,7 +518,7 @@ class SessionAttachment {
       case "composer-prefill":
         return this.#client.notify(AOS_METHODS.notify.composerPrefill, {
           sessionId,
-          runId: outbound.runId,
+          turnId: outbound.turnId,
           text: outbound.text,
         })
       case "request-permission":
@@ -528,7 +528,7 @@ class SessionAttachment {
   }
 
   /** Issues one server→client request and settles it as a resume reply. */
-  #ask(outbound: InterruptOutbound) {
+  #ask(outbound: RequestOutbound) {
     const promise = (
       outbound.kind === "request-permission"
         ? this.#askPermission(outbound)
@@ -586,7 +586,7 @@ class SessionAttachment {
     const request = this.#coordinator
       .snapshot(this.#scope)
       .requests.find((pending) => pending.requestId === requestId)
-    if (!request) throw staleInterrupt()
+    if (!request) throw staleRequest()
     return request
   }
 

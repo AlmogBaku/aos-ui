@@ -25,19 +25,19 @@ type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
 
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
 
-/** Replayed history has no run; `_meta.aos` still needs a run identity. */
-const HISTORY_RUN_ID = "history"
+/** Replayed history has no live turn; `_meta.aos` still needs a turn identity. */
+const HISTORY_TURN_ID = "history"
 
 /** The `data` part name a published artifact travels under, live and stored. */
 const ARTIFACT_PART_NAME = "aos.artifact"
 
 /**
- * The run identity the shared builders ask for, given a replay has no run of its
- * own. Reusing them is what makes a stored turn and a watched turn one stream,
+ * The turn identity the shared builders ask for, given a replay has no live turn
+ * of its own. Reusing them is what makes a stored turn and a watched turn one stream,
  * so the browser reads both through one code path.
  */
 function historyContext(lane: Lane): TranslateContext {
-  return { runId: HISTORY_RUN_ID, sequence: 0, lane, stopping: false }
+  return { turnId: HISTORY_TURN_ID, sequence: 0, lane, stopping: false }
 }
 
 function imageBlock(image: string): ContentBlock | undefined {
@@ -70,7 +70,7 @@ function artifactOutbound(messageId: string, part: MessagePart): AcpOutbound[] {
     ? [
         {
           kind: "artifact",
-          runId: HISTORY_RUN_ID,
+          turnId: HISTORY_TURN_ID,
           messageId,
           artifact: artifact.data,
         },

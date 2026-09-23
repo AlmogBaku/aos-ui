@@ -20,14 +20,14 @@ const ready: WorkspaceActivityEvent = {
 const start: WorkspaceActivityEvent = {
   ...base,
   id: "start-1",
-  type: "run-started",
-  lifecycleId: "run-1",
+  type: "turn-started",
+  turnId: "run-1",
 }
 const finish: WorkspaceActivityEvent = {
   ...base,
   id: "finish-1",
-  type: "run-finished",
-  lifecycleId: "run-1",
+  type: "turn-finished",
+  turnId: "run-1",
   occurredAt: "2026-09-05T12:00:01.000Z",
 }
 const request: WorkspaceActivityEvent = {
@@ -136,8 +136,8 @@ describe("Activity store", () => {
     const store = makeStore()
     store.ingest(finish)
     expect(store.ingest({ ...ready, id: finish.id })).toBeNull()
-    expect(store.ingest(start)?.type).toBe("run-finished")
-    expect(store.records()[0]?.type).toBe("run-finished")
+    expect(store.ingest(start)?.type).toBe("turn-finished")
+    expect(store.records()[0]?.type).toBe("turn-finished")
   })
 
   it.each(["read", "ingest"] as const)(
@@ -226,8 +226,8 @@ describe("Activity store", () => {
   it("rejects start ID reuse for another lifecycle at the same origin", () => {
     const store = makeStore()
     store.ingest(start)
-    store.ingest({ ...start, lifecycleId: "run-2" })
-    store.ingest({ ...finish, lifecycleId: "run-2" })
+    store.ingest({ ...start, turnId: "run-2" })
+    store.ingest({ ...finish, turnId: "run-2" })
     expect(store.records()).toEqual([])
   })
 
@@ -269,7 +269,7 @@ describe("Activity store", () => {
     const store = makeStore()
     expect(store.ingest(start)).toBeNull()
     expect(store.records()).toEqual([])
-    expect(store.ingest(finish)?.type).toBe("run-finished")
+    expect(store.ingest(finish)?.type).toBe("turn-finished")
     expect(store.ingest(finish)).toBeNull()
     expect(store.ingest({ ...finish, id: "duplicate-terminal" })).toBeNull()
     expect(store.records().map((record) => record.id)).toEqual(["finish-1"])
@@ -290,7 +290,7 @@ describe("Activity store", () => {
     store.ingest({
       ...finish,
       id: "other-run-terminal",
-      lifecycleId: "other-run",
+      turnId: "other-run",
     })
     store.ingest({
       ...finish,
@@ -304,14 +304,16 @@ describe("Activity store", () => {
 
   it("preserves the first valid failure when completion arrives before a delayed start", () => {
     const store = makeStore()
-    store.ingest({ ...finish, id: "failure", type: "run-failed" })
+    store.ingest({ ...finish, id: "failure", type: "turn-failed" })
     store.ingest({
       ...finish,
       id: "later-completion",
       occurredAt: "2026-09-05T12:00:02.000Z",
     })
-    expect(store.ingest(start)?.type).toBe("run-failed")
-    expect(store.records().map((record) => record.type)).toEqual(["run-failed"])
+    expect(store.ingest(start)?.type).toBe("turn-failed")
+    expect(store.records().map((record) => record.type)).toEqual([
+      "turn-failed",
+    ])
   })
 
   it("preserves the first valid completion when failure arrives before a delayed start", () => {
@@ -320,10 +322,10 @@ describe("Activity store", () => {
     store.ingest({
       ...finish,
       id: "later-failure",
-      type: "run-failed",
+      type: "turn-failed",
       occurredAt: "2026-09-05T12:00:02.000Z",
     })
-    expect(store.ingest(start)?.type).toBe("run-finished")
+    expect(store.ingest(start)?.type).toBe("turn-finished")
   })
 
   it("corrects a duplicate terminal timestamp without moving its closing order", () => {
@@ -331,7 +333,7 @@ describe("Activity store", () => {
     store.ingest({
       ...finish,
       id: "failure",
-      type: "run-failed",
+      type: "turn-failed",
       occurredAt: "2026-09-05T11:59:59.000Z",
     })
     store.ingest({
@@ -339,18 +341,20 @@ describe("Activity store", () => {
       id: "later-completion",
       occurredAt: "2026-09-05T12:00:03.000Z",
     })
-    store.ingest({ ...finish, id: "failure", type: "run-failed" })
-    expect(store.ingest(start)?.type).toBe("run-failed")
+    store.ingest({ ...finish, id: "failure", type: "turn-failed" })
+    expect(store.ingest(start)?.type).toBe("turn-failed")
   })
 
   it("pairs failures and prevents a later completion for the failed lifecycle", () => {
     const store = makeStore()
     store.ingest(start)
-    expect(store.ingest({ ...finish, type: "run-failed" })?.type).toBe(
-      "run-failed"
+    expect(store.ingest({ ...finish, type: "turn-failed" })?.type).toBe(
+      "turn-failed"
     )
     store.ingest({ ...finish, id: "late-finish" })
-    expect(store.records().map((record) => record.type)).toEqual(["run-failed"])
+    expect(store.records().map((record) => record.type)).toEqual([
+      "turn-failed",
+    ])
   })
 
   it("rejects a terminal timestamp older than the observed start", () => {

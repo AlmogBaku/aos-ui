@@ -70,12 +70,12 @@ transport recovery before resuming sessions.
 **`session/resume`** request (`AosSessionResumeMetaSchema`, `acp.ts:168-174`):
 
 ```json
-{ "agentId?": "…", "after?": 0, "runId?": "…" }
+{ "agentId?": "…", "after?": 0, "turnId?": "…" }
 ```
 
 `agentId` is optional and used for deep links when the client knows the owning
 Agent before listing. `after` is the last `sequence` the client observed for
-`runId`. `resync: true` on the response means `after` was beyond bounded
+`turnId`. `resync: true` on the response means `after` was beyond bounded
 replay; resume again with `replayFrom: { type: "start" }`.
 
 **`session/prompt`** request (`AosPromptMetaSchema`, `acp.ts:198-203`):
@@ -90,7 +90,7 @@ the `aos-attachment:` URI scheme (`AOS_ATTACHMENT_URI_SCHEME`, `acp.ts:30`).
 `{ session: AosSessionInfoMeta, capabilities }`.
 
 **`session/resume`** response (`AosSessionResumeResponseMetaSchema`, `acp.ts:190-195`):
-`{ session: AosSessionInfoMeta, execution: { status, runId? }, capabilities, resync? }`.
+`{ session: AosSessionInfoMeta, execution: { status, turnId? }, capabilities, resync? }`.
 
 **`session_info_update`** `_meta.aos` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
 `{ agentId, status, archived, unread? }`. `unread` is absent when the runtime
@@ -117,18 +117,18 @@ and after a `session/set_config_option` that changes the model, because the
 window grows with the conversation and its size belongs to the model. A provider
 that cannot report usage sends none, and the last reading stands.
 
-### Run stream `_meta.aos`
+### Turn stream `_meta.aos`
 
-Every event emitted from a run segment carries a base of
-`{ sequence, runId }` (`acp.ts:251-254`).
+Every event emitted from a turn carries a base of
+`{ sequence, turnId }` (`acp.ts:251-254`).
 
-| Event                                 | Extra `_meta.aos` fields                                                   |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| `state_update`                        | `execution?: "stopping"`, `code?`, `message?` (`acp.ts:257-264`)           |
-| `agent_message_chunk`/`thought_chunk` | (base only) — identical live and on replay (`AosChunkMetaSchema`)          |
-| `tool_call_update`                    | `messageId`, `argsTextDelta?`, `argsText?` (`acp.ts:281-287`)              |
-| `plan_update`                         | `sequence`, `runId?`, `todos` (`acp.ts:290-294`)                           |
-| `usage_update`                        | `source`, `estimated?`, `breakdown?` (`acp.ts:303-307`); no sequence/runId |
+| Event                                 | Extra `_meta.aos` fields                                                    |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `state_update`                        | `execution?: "stopping"`, `code?`, `message?` (`acp.ts:257-264`)            |
+| `agent_message_chunk`/`thought_chunk` | (base only) — identical live and on replay (`AosChunkMetaSchema`)           |
+| `tool_call_update`                    | `messageId`, `argsTextDelta?`, `argsText?` (`acp.ts:281-287`)               |
+| `plan_update`                         | `sequence`, `turnId?`, `todos` (`acp.ts:290-294`)                           |
+| `usage_update`                        | `source`, `estimated?`, `breakdown?` (`acp.ts:303-307`); no sequence/turnId |
 
 Stop reasons `_aos_error` and `_aos_uncertain` appear in
 `state_update { state: "idle" }` (`AOS_STOP_REASONS`, `acp.ts:54-57`). A
@@ -166,9 +166,9 @@ Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `typ
 
 | `type`                | Extra fields                            |
 | --------------------- | --------------------------------------- |
-| `run-started`         | `lifecycleId`                           |
-| `run-finished`        | `lifecycleId`                           |
-| `run-failed`          | `lifecycleId`                           |
+| `turn-started`        | `turnId`                                |
+| `turn-finished`       | `turnId`                                |
+| `turn-failed`         | `turnId`                                |
 | `attention-requested` | `requestId`, `attentionKind: "question" | "permission"` |
 | `attention-resolved`  | `requestId`                             |
 | `unread-changed`      | `unread: boolean`                       |
@@ -190,15 +190,15 @@ ACP delivers pending interactions as `session/request_permission` or
 (`acp.ts:315-341`):
 
 **Permission** (`AosPermissionMetaSchema`, `acp.ts:315-319`):
-`{ interruptId, expiresAt?, message? }`.
+`{ requestId, expiresAt?, message? }`.
 The vendor permission kind `_allow_session` (`AOS_PERMISSION_KIND_SESSION`,
 `acp.ts:60`) represents Hermes' "allow for this session" scope.
 
 **Elicitation** (`AosElicitationMetaSchema`, `acp.ts:337-341`):
-`{ interruptId, expiresAt?, questions[] }`. Each question carries
+`{ requestId, expiresAt?, questions[] }`. Each question carries
 `{ id?, header, prompt, options[], multiple?, custom? }`. A multi-select
 question must declare `items.enum` in the ACP property schema
-(`packages/proxy/acp/translate/interrupts.ts:164-179`); a free-text answer
+(`packages/proxy/acp/translate/requests.ts`); a free-text answer
 remains valid because the response schema does not constrain values to the enum.
 
 ## JSON-RPC error codes
@@ -209,8 +209,8 @@ The proxy returns these vendor error codes beyond the standard JSON-RPC set
 | Code     | Name                     | Meaning                                      |
 | -------- | ------------------------ | -------------------------------------------- |
 | `-32001` | `authenticationRequired` | No valid session token (guest lane)          |
-| `-32002` | `runInProgress`          | Cannot send while a run is active            |
-| `-32003` | `staleInterrupt`         | Interrupt ID no longer valid                 |
+| `-32002` | `turnInProgress`         | Cannot send while a turn is active           |
+| `-32003` | `staleRequest`           | Request ID no longer valid                   |
 | `-32004` | `notFound`               | Agent or Session does not exist              |
 | `-32005` | `revisionConflict`       | Edit/rewind source message no longer current |
 | `-32006` | `temporarilyUnavailable` | Runtime not reachable; retry later           |

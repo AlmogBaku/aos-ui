@@ -211,7 +211,7 @@ function createProxyAgent(
         _meta: {
           [AOS_META_KEY]: {
             session: sessionInfoMeta(),
-            execution: { status: "running", runId: "run-1" },
+            execution: { status: "running", turnId: "run-1" },
             capabilities: capabilities(),
             ...(resumes === options.resyncOnResume ? { resync: true } : {}),
           },
@@ -289,7 +289,7 @@ function createProxyAgent(
         title: "Run the tool?",
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
         _meta: {
-          [AOS_META_KEY]: { interruptId: "interrupt-1", message: "read file" },
+          [AOS_META_KEY]: { requestId: "interrupt-1", message: "read file" },
         },
       })
     },
@@ -461,17 +461,17 @@ describe("ACP connection", () => {
     const resumed = await connection.resumeSession(SESSION_ID, {
       replayFromStart: false,
       after: 12,
-      runId: "run-1",
+      turnId: "run-1",
     })
     expect(resumed.meta.execution).toEqual({
       status: "running",
-      runId: "run-1",
+      turnId: "run-1",
     })
     // The owner reported by `session/new` travels on every later resume.
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
       _meta: {
-        [AOS_META_KEY]: { agentId: AGENT_ID, after: 12, runId: "run-1" },
+        [AOS_META_KEY]: { agentId: AGENT_ID, after: 12, turnId: "run-1" },
       },
     })
     expect(proxy.paramsOf(methods.agent.session.resume)).not.toHaveProperty(
@@ -607,25 +607,25 @@ describe("ACP connection", () => {
         state: "idle",
         stopReason: AOS_STOP_REASONS.error,
       },
-      { sequence: 7, runId: "run-1", code: "AOS_SEND_FAILED" }
+      { sequence: 7, turnId: "run-1", code: "AOS_SEND_FAILED" }
     )
 
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0]?.update).toMatchObject({ sessionUpdate: "state_update" })
-    expect(seen[0]?.meta).toMatchObject({ sequence: 7, runId: "run-1" })
+    expect(seen[0]?.meta).toMatchObject({ sequence: 7, turnId: "run-1" })
     expect(connection.lastSequence(SESSION_ID)).toEqual({
-      runId: "run-1",
+      turnId: "run-1",
       after: 7,
     })
 
     unsubscribe()
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
-      { sequence: 8, runId: "run-1" }
+      { sequence: 8, turnId: "run-1" }
     )
     await vi.waitFor(() =>
       expect(connection.lastSequence(SESSION_ID)).toEqual({
-        runId: "run-1",
+        turnId: "run-1",
         after: 8,
       })
     )
@@ -650,8 +650,8 @@ describe("ACP connection", () => {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
-      type: "run-started",
-      lifecycleId: "lifecycle-1",
+      type: "turn-started",
+      turnId: "lifecycle-1",
     })
     await proxy.notify(AOS_METHODS.notify.catalogInvalidated, undefined)
 
@@ -659,7 +659,7 @@ describe("ACP connection", () => {
       expect(activity).toHaveLength(1)
       expect(catalogInvalidations).toBe(1)
     })
-    expect(activity[0]).toMatchObject({ type: "run-started" })
+    expect(activity[0]).toMatchObject({ type: "turn-started" })
     connection.close()
   })
 
@@ -736,7 +736,7 @@ describe("ACP connection", () => {
     connection.focus(SESSION_ID, { foreground: true, idle: true })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
-      { sequence: 4, runId: "run-1" }
+      { sequence: 4, turnId: "run-1" }
     )
     await vi.waitFor(() =>
       expect(connection.lastSequence(SESSION_ID)).toBeDefined()
@@ -750,7 +750,7 @@ describe("ACP connection", () => {
     expect(delays).toEqual([250])
     expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
-        [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, runId: "run-1" },
+        [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
       },
     })
     expect(proxy.callsOf(methods.agent.session.resume)[2]).toMatchObject({

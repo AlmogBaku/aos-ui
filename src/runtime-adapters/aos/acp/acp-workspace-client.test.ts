@@ -232,7 +232,7 @@ function createFakeConnection() {
         configOptions: configOptions(model, effort),
         meta: {
           session: sessionInfoMeta(),
-          execution: { status: "running", runId: "run-1" },
+          execution: { status: "running", turnId: "run-1" },
           capabilities: capabilities(),
         },
       }
@@ -287,7 +287,7 @@ function createFakeConnection() {
       return () => listeners.delete(listener)
     },
     onPendingRequest: () => () => {},
-    lastSequence: () => ({ runId: "run-1", after: 9 }),
+    lastSequence: () => ({ turnId: "run-1", after: 9 }),
     close: () => record("close"),
   }
 
@@ -619,7 +619,7 @@ describe("ACP workspace client", () => {
       },
       {
         sequence: 3,
-        runId: "run-1",
+        turnId: "run-1",
         todos: [{ id: "todo-1", label: "Draft", status: "active" }],
       }
     )
@@ -894,7 +894,7 @@ describe("ACP workspace client", () => {
       {
         replayFromStart: false,
         agentId: AGENT_ID,
-        runId: "run-1",
+        turnId: "run-1",
         after: 9,
       },
     ])

@@ -126,7 +126,7 @@ describe("translateHistory", () => {
   it("replays a published artifact against the message that stored it", () => {
     expect(translateHistory(history, "operator")[6]).toEqual({
       kind: "artifact",
-      runId: "history",
+      turnId: "history",
       messageId: "a1",
       artifact: ARTIFACT,
     })
@@ -173,7 +173,7 @@ describe("translateHistory", () => {
     expect(kinds(outbound)).toEqual(["user_message", "artifact"])
     expect(outbound[1]).toEqual({
       kind: "artifact",
-      runId: "history",
+      turnId: "history",
       messageId: "u9",
       artifact: attached,
     })
@@ -197,7 +197,7 @@ describe("translateHistory", () => {
     // Strict, so a replayed chunk carries no field a live one does not.
     expect(AosChunkMetaSchema.parse(aosMeta(prose!))).toEqual({
       sequence: 0,
-      runId: "history",
+      turnId: "history",
     })
   })
 
@@ -261,7 +261,7 @@ describe("translateHistory", () => {
     })
     expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 0,
-      runId: "history",
+      turnId: "history",
       messageId: "a1",
       argsText: '{"path":"a.txt"}',
     })

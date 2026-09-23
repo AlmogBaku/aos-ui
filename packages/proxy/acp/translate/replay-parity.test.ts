@@ -31,7 +31,7 @@ const STARTED_AT = "2026-09-22T10:00:00.000Z"
 const FINISHED_AT = "2026-09-22T10:00:09.000Z"
 
 const liveContext: TranslateContext = {
-  runId: "run-1",
+  turnId: "run-1",
   sequence: 4,
   lane: "operator",
   stopping: false,
@@ -153,7 +153,7 @@ type Item = { kind: string; value: Record<string, unknown> }
 
 const CHUNKS = new Set(["agent_message_chunk", "agent_thought_chunk"])
 
-const UNSHARED_META = new Set(["sequence", "runId", "argsTextDelta"])
+const UNSHARED_META = new Set(["sequence", "turnId", "argsTextDelta"])
 
 /**
  * One update without the run identity and the moment no two streams of one turn
@@ -220,7 +220,10 @@ function stream(outbound: readonly AcpOutbound[]): Item[] {
   const flow: Item[] = []
   for (const outgoing of outbound) {
     if (outgoing.kind !== "update") {
-      flow.push({ kind: outgoing.kind, value: { ...outgoing, runId: "<run>" } })
+      flow.push({
+        kind: outgoing.kind,
+        value: { ...outgoing, turnId: "<run>" },
+      })
       continue
     }
     const kind = outgoing.update.sessionUpdate
