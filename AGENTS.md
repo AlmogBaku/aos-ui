@@ -243,15 +243,22 @@ database or provider registry.
 
 ## Verify changes
 
-Run the smallest relevant check during development, then the full applicable
-set before handoff:
+Pick checks by what changed, never by how many files changed or how big the
+diff looks:
 
-```bash
-bun run test
-bun run typecheck
-bun run lint
-bun run build
-```
+| What changed | Run | Not |
+|---|---|---|
+| styling, layout, copy, text, theme tokens | `bun run typecheck` and `bun run build` if code was touched; look once at the rendered surface | `test:e2e`, a new test, the unit suite |
+| a mechanical rename across files | `bun run typecheck`, `bun run build` | the full suite |
+| logic in one module | that module's tests (`bun run test <path>` or `vitest --changed`) | the full suite |
+| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `typecheck`, `lint`, `build`, once | — |
+| behavior a Playwright flow covers | that one spec, once | the whole e2e suite |
+
+A green run stays valid while the tree is unchanged: do not rerun before the
+commit. After a merge or rebase, rerun only the checks whose files overlap the
+incoming diff; a fast-forward or a docs-only upstream needs nothing. When the
+person says the change is small or asks for no ceremony, run what they said and
+name what was not run in the report.
 
 Several worktrees sweeping at once oversubscribe a shared machine and starve any
 deployment running on it, so `vitest.config.ts` caps workers at half the cores.
@@ -265,8 +272,9 @@ under `.agents/skills/` sit in an ignored directory, so stage them with
 
 Additional checks by area:
 
-- UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
-  A styling-only change has no test to write, because styling is never
+- A change to UI behavior, locale switching, runtime composition, or a browser
+  flow a spec covers: that Playwright spec via `bun run test:e2e -- <spec>`,
+  once. A styling-only change has no test to write, because styling is never
   asserted: look at the changed surface once in the rendered app and stop
   there. A second look in the other theme is earned only by a change to
   color, contrast, or theme tokens; a behavior change that happens to alter
