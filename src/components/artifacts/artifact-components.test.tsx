@@ -160,17 +160,17 @@ describe("artifact workspace", () => {
       >
         <ArtifactToolResultCard
           result={{
-            id: "ag-ui-output",
-            filename: "ag-ui-output.txt",
+            id: "tool-output",
+            filename: "tool-output.txt",
             source: { type: "inline", encoding: "utf8", data: "Output" },
           }}
         />
       </ArtifactWorkspaceProvider>
     )
 
-    expect(screen.getByText("ag-ui-output.txt")).toBeInTheDocument()
+    expect(screen.getByText("tool-output.txt")).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Open: ag-ui-output.txt" })
+      screen.getByRole("button", { name: "Open: tool-output.txt" })
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /^Open$/ })

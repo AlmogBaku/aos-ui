@@ -2731,7 +2731,7 @@ describe("SessionCoordinator", () => {
     source.emit(turnStarted)
     await readLive()
 
-    // The provider reported this turn over without a terminal AG-UI event.
+    // The provider reported this turn over without a terminal turn event.
     source.settle()
     source.close()
 

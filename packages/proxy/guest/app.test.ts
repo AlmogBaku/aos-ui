@@ -177,20 +177,6 @@ function harness(options: { existing?: boolean } = {}) {
           ],
           createdAt: "2026-09-15T00:00:00.000Z",
           status: { type: "requires-action", reason: "interrupt" },
-          metadata: {
-            custom: {
-              agui: {
-                interrupts: [
-                  {
-                    id: "question-1",
-                    reason: "question",
-                    message: "Continue?",
-                    responseSchema: { type: "boolean" },
-                  },
-                ],
-              },
-            },
-          },
         },
       ],
       total: 1,
