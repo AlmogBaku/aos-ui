@@ -267,34 +267,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("rejects browser invitation signing from an untrusted origin", async () => {
-    const configured = await createConfiguredProxy(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
-      logger: { info: vi.fn(), error: vi.fn() },
-    })
-
-    const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/guest-invitations",
-      {
-        method: "POST",
-        headers: {
-          origin: "https://attacker.example.test",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ agent: "researcher", ref: "guest-ref" }),
-      }
-    )
-
-    expect(response.status).toBe(403)
-    await expect(response.json()).resolves.toMatchObject({
-      error: {
-        code: "forbidden",
-        description: expect.stringContaining("https://attacker.example.test"),
-      },
-    })
-  })
-
-  it("issues invitations to non-browser callers that send no Origin", async () => {
+  it("issues invitations without an Origin header", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )

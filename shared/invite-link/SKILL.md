@@ -42,15 +42,12 @@ curl --fail-with-body --silent --show-error \
   "${AOS_RUNTIME_PROXY_URL%/}/api/aos/v1/guest-invitations"
 ```
 
-Send no `origin` header. The proxy refuses a foreign `Origin` (a cross-site
-browser request) and accepts none. Errors carry a JSON
-`error.description` naming the cause. Report it verbatim:
+Errors carry a JSON `error.description` naming the cause. Report it verbatim:
 
 - `201` — `{"url": ...}`.
 - `400` — the description names the rejected field (for example
   `title: too long (max 256)` or `unknown field(s): agentId`). Fix that
   field; do not guess at others.
-- `403` — a foreign `Origin` was sent; drop the header.
 - `404` — the `agent` is not in the catalog.
 
 Set `request_json` to a strict JSON object containing `agent`. The endpoint
