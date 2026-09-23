@@ -180,12 +180,12 @@ function afterResponse(member: SessionMember, task: () => Promise<void>) {
 }
 
 /**
- * The `_aos/before` cursor a resume names, or `undefined` for any other
- * replay. An extension replay this proxy does not serve is refused rather
- * than attached as though it had been.
+ * The `_aos/before` cursor a resume names, or `undefined` for no replay or
+ * `start`. ACP asks a receiver to refuse a cursor it does not understand
+ * rather than guess where to replay from, so every other one is refused.
  */
 function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
-  if (!replayFrom?.type.startsWith("_")) return undefined
+  if (!replayFrom || replayFrom.type === "start") return undefined
   const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
   if (!parsed.success) throw invalidRequest()
   return parsed.data.cursor

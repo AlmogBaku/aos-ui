@@ -875,6 +875,13 @@ describe("AOS v1 normalized protocol", () => {
     expect(
       AosReplayBeforeSchema.parse({ type: "_aos/before", cursor: "500" })
     ).toEqual({ type: "_aos/before", cursor: "500" })
+    expect(
+      AosReplayBeforeSchema.parse({
+        type: "_aos/before",
+        cursor: "500",
+        _meta: { client: {} },
+      })
+    ).toMatchObject({ cursor: "500" })
     for (const invalid of [
       { type: "_aos/before" },
       { type: "_aos/before", cursor: 500 },

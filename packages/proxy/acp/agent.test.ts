@@ -3788,7 +3788,7 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("refuses a malformed extension replay and attaches for any other", async () => {
+  it("refuses a replay cursor it does not understand", async () => {
     const test = await harness({ transcript: conversation(1_200) })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
@@ -3800,17 +3800,11 @@ describe("History pages", () => {
       { type: AOS_REPLAY_BEFORE, cursor, after: 1 },
       { type: AOS_REPLAY_BEFORE, cursor: 500 },
       { type: "_aos/after", cursor },
+      { type: "future" },
     ])
       await expect(
         older(test, cursor, SESSION, replayFrom)
       ).rejects.toMatchObject(invalidParams)
-    const calls = test.history.mock.calls.length
-    const attached = await older(test, cursor, SESSION, { type: "future" })
-
-    expect(attached).toMatchObject({
-      _meta: { [AOS_META_KEY]: { session: { agentId: AGENT } } },
-    })
-    expect(test.history.mock.calls.length).toBe(calls)
     test.close()
   })
 

@@ -198,12 +198,13 @@ export const AosPromptResponseMetaSchema = readObject({
  * The reserved `replayFrom` extension variant that reads one older page of a
  * Session this connection is already a member of. `cursor` is the opaque
  * `history.nextCursor` a previous resume returned; the server picks the page
- * size, so the client sends no limit.
+ * size, so the client sends no limit. Like every ACP type it may carry `_meta`.
  */
 export const AOS_REPLAY_BEFORE = "_aos/before" as const
 export const AosReplayBeforeSchema = z.strictObject({
   type: z.literal(AOS_REPLAY_BEFORE),
   cursor: z.string().min(1).max(256),
+  _meta: z.record(z.string(), z.unknown()).nullish(),
 })
 export type AosReplayBefore = z.infer<typeof AosReplayBeforeSchema>
 
