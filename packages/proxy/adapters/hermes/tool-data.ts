@@ -32,7 +32,7 @@ import {
   isCredentialPlaceholder,
   REDACTED,
   redactCredentials,
-} from "@shared/credentials"
+} from "../../../../shared/credentials"
 import {
   projectHermesArtifactReceipt,
   projectHermesMediaArtifacts,

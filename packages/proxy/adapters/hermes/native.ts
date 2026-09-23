@@ -4,7 +4,7 @@
  * must provide a local wrapper rather than changing these shared shapes.
  */
 
-import { containsCredential } from "@shared/credentials"
+import { containsCredential } from "../../../../shared/credentials"
 
 // ---------------------------------------------------------------------------
 // Type guards
