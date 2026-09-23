@@ -37,20 +37,20 @@ cookie. Never mint an invitation through a browser tool.
 
 ```bash
 curl --fail-with-body --silent --show-error \
-  --header "origin: ${AOS_RUNTIME_PROXY_URL%/}" \
   --header 'content-type: application/json' \
   --data-binary "$request_json" \
   "${AOS_RUNTIME_PROXY_URL%/}/api/aos/v1/guest-invitations"
 ```
 
-The `origin` header is the endpoint's only gate: it must equal the proxy's
-configured public origin exactly. Responses:
+Send no `origin` header. The proxy refuses a foreign `Origin` (a cross-site
+browser request) and accepts none. Errors carry a JSON
+`error.description` naming the cause. Report it verbatim:
 
 - `201` — `{"url": ...}`.
-- `403` — the `origin` header is missing or differs from the public origin. If
-  `AOS_RUNTIME_PROXY_URL` is a loopback or internal address, it will not match;
-  report setup-needed and name both values.
-- `400` — the body is not a valid invitation request.
+- `400` — the description names the rejected field (for example
+  `title: too long (max 256)` or `unknown field(s): agentId`). Fix that
+  field; do not guess at others.
+- `403` — a foreign `Origin` was sent; drop the header.
 - `404` — the `agent` is not in the catalog.
 
 Set `request_json` to a strict JSON object containing `agent`. The endpoint
