@@ -963,9 +963,11 @@ export function failLatestTurn(
   state: ProjectorState,
   reported: string
 ): ProjectorState {
-  const id = latestAssistantId(state.messages)
+  // A thread with no turn yet — a draft whose Session could not be created —
+  // hosts the refusal on a turn of its own, which the first replay clears.
+  const id = latestAssistantId(state.messages) ?? requestHostId("refused")
   const host = state.messages.find((message) => message.id === id)
-  if (id === undefined || host?.status?.type === "requires-action") return state
+  if (host?.status?.type === "requires-action") return state
   // The refusal arrives already worded for the operator, so it fills the
   // description half of the one failure shape every failed turn carries.
   const error: TurnFailure = { message: reported }

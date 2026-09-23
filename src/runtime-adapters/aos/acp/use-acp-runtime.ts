@@ -178,6 +178,7 @@ function rewound(
 /** The normalized failure behind a refusal the operator can act on. */
 const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [AOS_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
+  [AOS_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
 }
 
 /** How long a refused resume waits before each further attempt. */
@@ -428,6 +429,17 @@ function createAcpController({
     return stageAttachments(sessionId, attachments)
   }
 
+  /**
+   * Reports a turn that never ran. Nothing is recoverable from the thread, so
+   * the error is the signal Assistant UI hands back to the composer with the
+   * operator's text and attachments.
+   */
+  const refuse = (error: unknown) => {
+    const reported = refusalText(error, callbacks.describeRunError)
+    commit(failLatestTurn(state, reported))
+    return new MessageNotSentError(reported)
+  }
+
   const prompt = async (
     sessionId: string,
     blocks: readonly ContentBlock[],
@@ -457,11 +469,8 @@ function createAcpController({
       const kept = state.messages
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
-      const reported = refusalText(error, callbacks.describeRunError)
-      commit(failLatestTurn(retainMessages(state, kept), reported))
-      // Nothing ran and nothing is recoverable from the thread, which is the
-      // signal Assistant UI hands back to the composer with the operator's text.
-      throw new MessageNotSentError(reported)
+      commit(retainMessages(state, kept))
+      throw refuse(error)
     }
   }
 
@@ -500,8 +509,16 @@ function createAcpController({
       bound = undefined
     },
     send: async (message: AppendMessage) => {
-      const sessionId = await boundSession()
-      const staged = await stage(sessionId, message)
+      // A Session the provider could not create, or bytes it could not stage,
+      // sent nothing either.
+      let sessionId: string
+      let staged: AcpAttachmentStage | undefined
+      try {
+        sessionId = await boundSession()
+        staged = await stage(sessionId, message)
+      } catch (error) {
+        throw refuse(error)
+      }
       const rewound = rewindFor(message.sourceId)
       await prompt(
         sessionId,

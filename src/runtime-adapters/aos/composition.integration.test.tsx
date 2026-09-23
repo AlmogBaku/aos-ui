@@ -42,6 +42,7 @@ import { SessionCoordinator } from "../../../packages/proxy/core/session-coordin
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
 
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
+import { en } from "../../lib/i18n/dictionaries/en"
 import { PendingInteractionComposer } from "../../components/runtime-interactions/pending-composer"
 import { PendingInteractionProvider } from "../../components/runtime-interactions/pending-interaction-context"
 import type {
@@ -252,6 +253,9 @@ const STORED_MESSAGES: readonly SessionMessage[] = [
 ]
 
 /** The fake native runtime, wired into the real coordinator and ACP agent. */
+/** The failure a runtime reports while it cannot create a Session yet. */
+const UNAVAILABLE = new Error("The runtime is not ready")
+
 type StartInput = Parameters<ServerTurnEngine["start"]>[1]
 
 function createProxyAgentApp(stored: readonly SessionMessage[]) {
@@ -259,6 +263,8 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const scopes: SessionScope[] = []
   const inputs: StartInput[] = []
   const created: string[] = []
+  /** How many `session/new` calls the runtime refuses as not ready yet. */
+  const unavailable = { creates: 0 }
   const start = vi.fn(async (scope: SessionScope, input: StartInput) => {
     scopes.push(scope)
     inputs.push(input)
@@ -302,7 +308,10 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     turns: engine,
     resolveInvitedSession: unsupported,
     resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
-    publicError: () => undefined,
+    publicError: (cause) =>
+      cause === UNAVAILABLE
+        ? { code: "temporarily_unavailable", status: 503 }
+        : undefined,
     authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({
@@ -340,6 +349,10 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       return row
     },
     createSession: async (agentId, title) => {
+      if (unavailable.creates > 0) {
+        unavailable.creates -= 1
+        throw UNAVAILABLE
+      }
       rows.set(
         CREATED_SESSION_ID,
         sessionRow(CREATED_SESSION_ID, title ?? "New Session")
@@ -396,6 +409,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     scopes,
     inputs,
     created,
+    unavailable,
     attachmentStages,
     start,
     updateModel,
@@ -885,6 +899,32 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() =>
       expect(messageTexts(runtime())).toEqual(["Ship it", "Shipping it"])
     )
+    await proxy.close()
+  })
+
+  it("keeps a draft's turn in the composer when session/new is refused", async () => {
+    const { proxy, runtime } = await mount()
+    await screen.findByText("Ready")
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
+    })
+    proxy.unavailable.creates = 1
+
+    await send(runtime(), "Ship it")
+
+    expect(
+      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).toBeVisible()
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe(
+      "Ship it"
+    )
+    expect(proxy.created).toEqual([])
+
+    act(() => {
+      runtime().assistantRuntime.thread.composer.send()
+    })
+    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
+    expect(proxy.created).toEqual([AGENT_ID])
     await proxy.close()
   })
 
