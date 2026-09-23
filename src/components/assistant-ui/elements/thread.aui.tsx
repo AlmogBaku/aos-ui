@@ -147,6 +147,7 @@ import {
   type KeyboardEvent,
   type PropsWithChildren,
   type ReactNode,
+  type RefObject,
 } from "react"
 
 /**
@@ -568,6 +569,7 @@ const ThreadRoot: FC<{
         <ThreadConversationSearch
           direction={direction}
           revealMessage={revealMessage}
+          viewportRef={viewportRef}
           labels={labels.conversationSearch}
         />
         <div
@@ -645,14 +647,16 @@ const THREAD_MESSAGE_COMPONENTS = { Message: ThreadMessage }
 const ThreadConversationSearch: FC<{
   direction: LocaleDirection
   revealMessage: (messageId: string) => boolean
+  viewportRef: RefObject<HTMLElement | null>
   labels: Partial<ConversationSearchLabels> | undefined
-}> = ({ direction, revealMessage, labels }) => {
+}> = ({ direction, revealMessage, viewportRef, labels }) => {
   const messages = useAuiState((state) => state.thread.messages)
   return (
     <ConversationSearch
       messages={messages}
       direction={direction}
       revealMessage={revealMessage}
+      viewportRef={viewportRef}
       labels={{ ...DEFAULT_CONVERSATION_SEARCH_LABELS, ...labels }}
     />
   )

@@ -5,7 +5,11 @@ import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import { Search, X } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { KeyboardEvent } from "react"
+import type { KeyboardEvent, RefObject } from "react"
+import {
+  isFoldedAt,
+  turnLayout,
+} from "@/components/assistant-ui/elements/turn-fold"
 
 export const CONVERSATION_SEARCH_EVENT = "aos:conversation-search"
 
@@ -14,6 +18,8 @@ const SEARCH_ACTIVE_HIGHLIGHT = "aos-conversation-search-active"
 
 type SearchableMessage = {
   readonly id: string
+  readonly role?: string
+  readonly status?: { readonly type: string }
   readonly content: readonly { readonly type: string; readonly text?: string }[]
 }
 
@@ -152,6 +158,13 @@ function scrollOccurrenceIntoView(occurrence: Range) {
   setScrollTopImmediately(viewport, centeredTop)
 }
 
+/** Centers a message whose rendered text holds no match to highlight. */
+function scrollMessageIntoView(messageId: string) {
+  document
+    .querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
+    ?.scrollIntoView?.({ block: "center", behavior: "auto" })
+}
+
 /** Frames to wait for a virtualized thread to mount a message it scrolled to. */
 const REVEAL_FRAMES = 10
 
@@ -159,17 +172,46 @@ const ALWAYS_MOUNTED = () => true
 
 type SearchMatch = { readonly messageId: string; readonly ordinal: number }
 
+/**
+ * A cheap plain-text pass over Markdown, so matches count what renders rather
+ * than its source: link targets, emphasis and inline-code markers, fence info
+ * strings, and heading hashes are dropped. It is an approximation, not a
+ * parser; the highlight still comes from the rendered text.
+ */
+export function markdownPlainText(markdown: string) {
+  return markdown
+    .replace(/^ {0,3}(`{3,}|~{3,}).*$/gm, "")
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`+/g, "")
+    .replace(/\*+|~~/g, "")
+    .replace(/(^|[^\p{L}\p{N}])_+|_+(?=[^\p{L}\p{N}]|$)/gu, "$1")
+}
+
+/**
+ * The text a message shows while its folds are closed. A settled assistant
+ * turn folds its mid-turn prose, and a closed fold renders none of it.
+ */
+function visibleText(message: SearchableMessage) {
+  const layout =
+    message.role === "assistant"
+      ? turnLayout(message.content, message.status?.type)
+      : undefined
+  return message.content.flatMap((part, index) =>
+    part.type === "text" && part.text && !(layout && isFoldedAt(layout, index))
+      ? [markdownPlainText(part.text)]
+      : []
+  )
+}
+
 function messageMatches(
   messages: readonly SearchableMessage[],
   needle: string
 ): SearchMatch[] {
   const matcher = new RegExp(escapeRegularExpression(needle), "giu")
   return messages.flatMap((message) => {
-    const count = message.content.reduce(
-      (total, part) =>
-        part.type === "text" && part.text
-          ? total + Array.from(part.text.matchAll(matcher)).length
-          : total,
+    const count = visibleText(message).reduce(
+      (total, text) => total + Array.from(text.matchAll(matcher)).length,
       0
     )
     return Array.from({ length: count }, (_, ordinal) => ({
@@ -194,12 +236,15 @@ export function ConversationSearch({
   labels = DEFAULT_CONVERSATION_SEARCH_LABELS,
   direction = "ltr",
   revealMessage = ALWAYS_MOUNTED,
+  viewportRef,
 }: {
   messages: readonly SearchableMessage[]
   labels?: ConversationSearchLabels
   direction?: LocaleDirection
   /** Returns true once the message is mounted; false while it scrolls in. */
   revealMessage?: (messageId: string) => boolean
+  /** The scrolling thread, whose scroll mounts messages that may match. */
+  viewportRef?: RefObject<HTMLElement | null>
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
@@ -234,8 +279,10 @@ export function ConversationSearch({
     const activeRanges = activeMessageId
       ? searchableRanges(activeMessageId, needle)
       : []
+    // The data and the page can disagree on a count; the nearest one stands in.
     const activeOccurrence =
-      activeRanges[Math.min(activeOrdinal, activeRanges.length - 1)]
+      activeRanges[Math.min(activeOrdinal, activeRanges.length - 1)] ??
+      activeRanges[0]
     showSearchHighlights(occurrences, activeOccurrence)
     activeOccurrenceRef.current = activeOccurrence
     return activeOccurrence
@@ -320,6 +367,7 @@ export function ConversationSearch({
       }
       const activeOccurrence = paint()
       if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
+      else scrollMessageIntoView(activeMessageId)
     }
     reveal()
     return () => {
@@ -339,15 +387,13 @@ export function ConversationSearch({
       })
     }
     repaint()
-    document.addEventListener("scroll", repaint, {
-      capture: true,
-      passive: true,
-    })
+    const viewport = viewportRef?.current
+    viewport?.addEventListener("scroll", repaint, { passive: true })
     return () => {
-      document.removeEventListener("scroll", repaint, { capture: true })
+      viewport?.removeEventListener("scroll", repaint)
       if (frame !== null) cancelAnimationFrame(frame)
     }
-  }, [paint])
+  }, [paint, viewportRef])
 
   useEffect(() => clearSearchHighlights, [])
 
