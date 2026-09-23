@@ -191,6 +191,8 @@ function annotatedTurns(
           },
         }
       : {}),
+    // A watch only signals; the turn it reports is read through `discover`.
+    ...(turns.watch ? { watch: turns.watch.bind(turns) } : {}),
   }
 }
 

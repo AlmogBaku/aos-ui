@@ -2050,6 +2050,131 @@ describe("SessionCoordinator", () => {
     expect(sessions.state(scope)).toBe("idle")
   })
 
+  describe("adopting a turn the runtime started after an earlier one", () => {
+    async function afterOneTurn(
+      discover: NonNullable<ServerTurnEngine["discover"]>,
+      limits: Partial<Omit<SessionCoordinatorOptions, "engine">> = {}
+    ) {
+      const own = new EventSource()
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => own),
+        recover: vi.fn(async () => own),
+        discover: vi.fn(discover),
+      }
+      const sessions = coordinator(engine, limits)
+      const subscription = await sessions.start(
+        scope,
+        input("turn-1"),
+        access("browser")
+      )
+      own.emit({ kind: TurnEventKind.TurnEnded })
+      own.finish()
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+      subscription.close()
+      return { engine, sessions }
+    }
+
+    it("adopts it as a fresh execution that any member can stop", async () => {
+      const adopted = new EventSource()
+      const { sessions } = await afterOneTurn(async () => ({
+        handle: adopted,
+        state: "running",
+        fromStart: true,
+      }))
+      const events: ExecutionEvent[] = []
+      sessions.observe((event) => events.push(event))
+
+      await sessions.discover(scope)
+
+      const { turnId } = sessions.snapshot(scope)
+      expect(sessions.state(scope)).toBe("running")
+      expect(turnId).toMatch(/^aos-recovered-/u)
+      expect(events).toMatchObject([{ kind: "turn-started", turnId }])
+      const member = await sessions.recover(
+        scope,
+        { threadId: scope.threadId, turnId: turnId! },
+        access("member")
+      )
+      await expect(sessions.stop(scope, "member")).resolves.toBe("stopping")
+      expect(adopted.stop).toHaveBeenCalledOnce()
+      member.close()
+    })
+
+    it("replays a turn read from its start to a member that joins without a cursor", async () => {
+      const adopted = new EventSource()
+      const { sessions } = await afterOneTurn(async () => ({
+        handle: adopted,
+        state: "running",
+        fromStart: true,
+      }))
+      await sessions.discover(scope)
+      const chunk = {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Done.",
+      } as const
+      adopted.emit(chunk)
+      await vi.waitFor(() =>
+        expect(sessions.replaysFromStart(scope)).toBe(true)
+      )
+
+      const member = await sessions.recover(
+        scope,
+        { threadId: scope.threadId, turnId: sessions.snapshot(scope).turnId! },
+        access("member")
+      )
+
+      await expect(reader(member)()).resolves.toMatchObject({
+        value: { event: chunk },
+      })
+      member.close()
+    })
+
+    it("leaves the finished record alone when the runtime is idle", async () => {
+      const { engine, sessions } = await afterOneTurn(async () => undefined)
+
+      await expect(sessions.discover(scope)).resolves.toBeUndefined()
+
+      expect(engine.discover).toHaveBeenCalledOnce()
+      expect(sessions.snapshot(scope)).toMatchObject({
+        state: "idle",
+        turnId: "turn-1",
+      })
+    })
+
+    it("counts the adopted turn against the capacity limit", async () => {
+      const busy = new EventSource()
+      const { engine, sessions } = await afterOneTurn(
+        async () => ({ handle: new EventSource(), state: "running" }),
+        { maxActiveExecutions: 1 }
+      )
+      vi.mocked(engine.start).mockResolvedValueOnce(busy)
+      await sessions.start(otherScope, input("turn-2"), access("other"))
+
+      await expect(sessions.discover(scope)).rejects.toThrow()
+      expect(sessions.state(scope)).toBe("idle")
+    })
+
+    it("refuses to adopt while the proxy's own start is in flight", async () => {
+      let admit!: (handle: ServerTurnHandle) => void
+      const { engine, sessions } = await afterOneTurn(async () => ({
+        handle: new EventSource(),
+        state: "running",
+      }))
+      vi.mocked(engine.start).mockImplementationOnce(
+        () => new Promise((resolve) => (admit = resolve))
+      )
+      const starting = sessions.start(scope, input("turn-2"), access("browser"))
+
+      await expect(sessions.discover(scope)).rejects.toBeInstanceOf(
+        ServerTurnConflictError
+      )
+      admit(new EventSource())
+      await starting
+      expect(sessions.snapshot(scope).turnId).toBe("turn-2")
+    })
+  })
+
   it("requires authoritative history for a run discovered after coordinator restart", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {

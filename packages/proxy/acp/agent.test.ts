@@ -36,6 +36,7 @@ import {
 import type {
   RuntimeInstance,
   ServerTurnEngine,
+  ServerTurnWatcher,
   ServerTurnHandle,
   ServerRuntime,
   SessionPatch,
@@ -478,6 +479,8 @@ type HarnessOptions = {
     signal: AbortSignal
   ) => Promise<CreateElicitationResponse>
   discover?: ServerTurnEngine["discover"]
+  /** Stands for a runtime that reports the turns it starts by itself. */
+  watch?: ServerTurnEngine["watch"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -657,8 +660,20 @@ async function harness(options: HarnessOptions = {}) {
   const logger = { info: vi.fn(), error: vi.fn() }
   // One lane's connections share its row cache, as the operator lane's do.
   const sessionRows = createSessionRows()
+  const { watch } = options
   const rooms = createSessionRooms({
     snapshot: (roomScope) => coordinator.snapshot(roomScope),
+    ...(watch
+      ? {
+          adoption: {
+            watch,
+            discover: (roomScope, lane) =>
+              coordinator.discover(roomScope, lane),
+            observe: (roomScope, listener) =>
+              coordinator.observeScope(roomScope, listener),
+          },
+        }
+      : {}),
   })
 
   /**
@@ -3420,6 +3435,55 @@ describe("Session rooms", () => {
     expect(prompts(test.recorder)).toEqual([[{ type: "text", text: "Hello" }]])
     test.close()
     guest.close()
+  })
+
+  it("streams a turn the runtime started by itself to every open browser", async () => {
+    const watchers: ServerTurnWatcher[] = []
+    const background = new EventSource()
+    let started = false
+    const test = await harness({
+      providerIds: true,
+      watch: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      discover: async () =>
+        started
+          ? { handle: background, state: "running", fromStart: true }
+          : undefined,
+    })
+    await test.list()
+    await open(test)
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    // An earlier turn of this proxy's own, as a Session that ran one has.
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [other, test])
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
+    const fromTest = test.recorder.entries.length
+    const fromOther = other.recorder.entries.length
+
+    started = true
+    background.emit(turnStarted())
+    chunk(background, "Background")
+    watchers[0]!.onTurn()
+    for (const browser of [test, other])
+      await browser.recorder.wait(said("Background"))
+    background.emit({ kind: TurnEventKind.TurnEnded })
+    for (const browser of [test, other])
+      await browser.recorder.wait(
+        (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+      )
+
+    const turn = ["state running", "chunk Background", "state idle"]
+    expect(flow(test.recorder, SESSION, fromTest)).toEqual(turn)
+    expect(flow(other.recorder, SESSION, fromOther)).toEqual(turn)
+    expect(watchers).toHaveLength(1)
+    test.close()
+    other.close()
   })
 
   it("asks a browser shown a prompt to reload when its turn ended first", async () => {

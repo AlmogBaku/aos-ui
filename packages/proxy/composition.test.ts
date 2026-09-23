@@ -96,6 +96,7 @@ function observableRuntime() {
     runtime: {
       runtimeInfo: async () => ({ status: "ready" }),
       publicError: () => undefined,
+      turns: {},
     },
     sessions: { observe },
     close: vi.fn(async () => undefined),
@@ -131,7 +132,7 @@ describe("configured proxy composition", () => {
       status: "ready",
       capabilities: {},
     }))
-    const runtime = { runtimeInfo } as unknown as ServerRuntime
+    const runtime = { runtimeInfo, turns: {} } as unknown as ServerRuntime
     const runtimeInstance = {
       id: "test-runtime",
       runtime,
@@ -393,6 +394,7 @@ describe("configured proxy composition", () => {
           runtimeInfo: async () => ({ status: "ready" }),
           publicError: () => undefined,
           speak,
+          turns: {},
         },
         sessions: {},
         close: vi.fn(async () => undefined),

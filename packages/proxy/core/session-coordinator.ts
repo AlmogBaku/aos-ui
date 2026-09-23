@@ -455,17 +455,33 @@ export class SessionCoordinator {
     }
   }
 
-  async discover(scope: SessionScope) {
+  /**
+   * Asks the provider for a turn this coordinator is not already streaming: one
+   * it lost to a restart, a wait to refresh, or a turn the runtime started by
+   * itself after an earlier one finished. `lane` is the lane that turn is
+   * counted under.
+   */
+  async discover(
+    scope: SessionScope,
+    lane: Execution["startedByLane"] = "operator"
+  ) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (
       !this.options.engine.discover ||
-      (existing && existing.state !== "waiting-for-input")
+      (existing &&
+        existing.state !== "waiting-for-input" &&
+        existing.state !== "idle")
     )
       return existing
     const inFlight = this.#discoveries.get(key)
     if (inFlight) return inFlight
-    const discovery = this.#discover(scope, key, existing)
+    const discovery = this.#discover(
+      scope,
+      key,
+      lane,
+      existing?.state === "waiting-for-input" ? existing : undefined
+    )
     this.#discoveries.set(key, discovery)
     void discovery
       .finally(() => {
@@ -476,13 +492,15 @@ export class SessionCoordinator {
     return discovery
   }
 
+  /** `existing` is a waiting record to refresh; any other turn is new. */
   async #discover(
     scope: SessionScope,
     key: string,
+    lane: Execution["startedByLane"],
     existing: Execution | undefined
   ) {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    if (!existing) this.#assertCapacity("operator")
+    this.#assertCapacity(lane, existing)
     this.#admissions.add(key)
     try {
       const turnId =
@@ -501,8 +519,9 @@ export class SessionCoordinator {
         cacheKey: key,
         turnId,
         handle: discovered.handle,
-        // AOS never saw this turn start, so it has nothing to replay.
-        history: { journal: "none" },
+        // Only a stream that begins at the native turn's start can replay it;
+        // any other joined the turn midway and has nothing a reload can trust.
+        history: { journal: discovered.fromStart ? "start" : "none" },
       })
       this.#trackJournal(segment)
       segment.requests = structuredClone(discovered.requests ?? [])
@@ -513,7 +532,7 @@ export class SessionCoordinator {
           state: discovered.state,
           turnId,
           request: { turnId },
-          startedByLane: "operator",
+          startedByLane: lane,
           segment,
         })
       if (existing) {

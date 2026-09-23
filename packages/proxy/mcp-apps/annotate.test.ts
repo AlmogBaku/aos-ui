@@ -210,3 +210,25 @@ describe("withMcpApps on a live turn", () => {
     }
   )
 })
+
+describe("withMcpApps on a watched Session", () => {
+  it("keeps the engine's watch, so rooms still hear runtime-started turns", () => {
+    const stop = vi.fn()
+    const watch = vi.fn(() => stop)
+    const engine = {
+      start: vi.fn(),
+      recover: vi.fn(),
+      watch,
+    } as unknown as ServerTurnEngine
+    const runtime = withMcpApps({
+      turns: engine,
+      mcpApps: {} as ServerMcpApps,
+    } as unknown as ServerRuntime)
+    const watcher = { onTurn: vi.fn(), onError: vi.fn() }
+
+    runtime.turns.watch?.(scope, watcher)()
+
+    expect(watch).toHaveBeenCalledWith(scope, watcher)
+    expect(stop).toHaveBeenCalledOnce()
+  })
+})
