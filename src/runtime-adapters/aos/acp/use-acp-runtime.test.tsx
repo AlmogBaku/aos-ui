@@ -12,6 +12,7 @@ import {
 } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ExportedMessageRepository } from "@assistant-ui/core"
 import type { CompleteAttachment } from "@assistant-ui/core"
 
 import {
@@ -255,6 +256,29 @@ describe("useAcpRuntime", () => {
       { id: "u1", role: "user", text: "Ship it" },
       { id: "a1", role: "assistant", text: "Working on it" },
     ])
+  })
+
+  it("converts only the streaming turn per chunk, however long the transcript", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      for (let turn = 0; turn < 200; turn++) {
+        fake.emit(textUpdate("user_message", `u${turn}`, `Question ${turn}`))
+        fake.emit(chunkUpdate(`a${turn}`, `Answer ${turn}`))
+      }
+    })
+    const before = result.current.thread.getState().messages
+    const convert = vi.spyOn(ExportedMessageRepository, "fromArray")
+    act(() => {
+      fake.emit(chunkUpdate("a199", " and more"))
+    })
+    const after = result.current.thread.getState().messages
+    expect(convert.mock.calls.flatMap(([messages]) => messages)).toHaveLength(1)
+    expect(
+      after.slice(0, -1).every((message, at) => message === before[at])
+    ).toBe(true)
+    expect(after.at(-1)).not.toBe(before.at(-1))
+    convert.mockRestore()
   })
 
   it("resumes the opened Session once, whatever its caller's callbacks do", async () => {
