@@ -253,6 +253,8 @@ function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
 export function createAcpComposerStore(connection: AcpConnection) {
   const sessions = new Map<string, SessionEntry>()
   const observed = new Set<string>()
+  /** Updates that land between subscribing and the attach they belong to. */
+  const early = new Map<string, [SessionUpdate, unknown][]>()
   const contextListeners = new Map<string, Set<() => void>>()
   const modelListeners = new Map<string, Set<() => void>>()
   const feeds = new Map<string, ComposerModelFeed>()
@@ -297,7 +299,10 @@ export function createAcpComposerStore(connection: AcpConnection) {
 
   function accept(threadId: string, update: SessionUpdate, meta: unknown) {
     const known = sessions.get(threadId)
-    if (!known) return
+    if (!known) {
+      early.get(threadId)?.push([update, meta])
+      return
+    }
     if (SessionUpdate.isConfigOptionUpdate(update))
       project(known, threadId, projectModels(update.configOptions))
     else if (SessionUpdate.isAvailableCommandsUpdate(update))
@@ -341,6 +346,18 @@ export function createAcpComposerStore(connection: AcpConnection) {
     }
     sessions.set(threadId, known)
     project(known, threadId, projectModels(attached.configOptions))
+    observe(threadId)
+    const held = early.get(threadId) ?? []
+    early.delete(threadId)
+    for (const [update, meta] of held) accept(threadId, update, meta)
+  }
+
+  /**
+   * Subscribes before the attach that reports the Session, so an update the
+   * proxy sends right behind its `session/resume` answer is held, not lost.
+   */
+  function observe(threadId: string) {
+    if (!sessions.has(threadId) && !early.has(threadId)) early.set(threadId, [])
     if (observed.has(threadId)) return
     observed.add(threadId)
     connection.onSessionUpdate(threadId, (update, meta) =>
@@ -393,6 +410,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
   }
 
   return {
+    observe,
     attach,
     capabilities: (threadId: string) => capabilitiesOf(entry(threadId)),
     models,

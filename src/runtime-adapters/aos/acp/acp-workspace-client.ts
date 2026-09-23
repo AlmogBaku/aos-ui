@@ -222,6 +222,7 @@ export function createAcpWorkspaceClient({
       resume?: { replayFromStart?: boolean }
     ) {
       store.observe(threadId)
+      composer.observe(threadId)
       const agentId = knownAgentOf(threadId)
       const resumed = await connection.resumeSession(threadId, {
         replayFromStart: resume?.replayFromStart ?? false,

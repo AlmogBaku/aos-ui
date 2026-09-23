@@ -88,7 +88,7 @@ function TerminalHeader({
           {cwd && (
             <span className="text-muted-foreground">
               <span className="sr-only">{labels.cwd}: </span>
-              {cwd}$
+              {`${cwd}$ `}
             </span>
           )}
           {command && (

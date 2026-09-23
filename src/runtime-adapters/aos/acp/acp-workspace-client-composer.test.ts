@@ -45,7 +45,7 @@ function configOptions(model: string, effort: string): SessionConfigOption[] {
 }
 
 /** The three connection seams the store uses; the rest is never reached. */
-function createStore() {
+function createStore({ attached = true } = {}) {
   let onUpdate: AcpSessionUpdateListener = () => undefined
   let onReplay: AcpSessionReplayListener = () => undefined
   const connection = {
@@ -63,10 +63,12 @@ function createStore() {
         : configOptions("sonnet", value),
   } as unknown as AcpConnection
   const store = createAcpComposerStore(connection)
-  store.attach(SESSION_ID, {
-    configOptions: configOptions("sonnet", "low"),
-    capabilities: {} as never,
-  })
+  const attach = () =>
+    store.attach(SESSION_ID, {
+      configOptions: configOptions("sonnet", "low"),
+      capabilities: {} as never,
+    })
+  if (attached) attach()
   const emit = (update: SessionUpdate, meta?: Record<string, unknown>) =>
     onUpdate(update, meta)
   const idle = (usage?: unknown, cost?: unknown) =>
@@ -82,7 +84,7 @@ function createStore() {
         ...(cost ? { cost } : {}),
       }
     )
-  return { store, emit, idle, replay: () => onReplay() }
+  return { store, emit, idle, attach, replay: () => onReplay() }
 }
 
 const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 }
@@ -124,6 +126,17 @@ describe("createAcpComposerStore turn usage", () => {
       cost: { amount: 0.1 + 0.2, currency: "USD" },
     })
     expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps a reading that arrives before its resume answer settles", () => {
+    const { store, emit, attach } = createStore({ attached: false })
+    store.observe(SESSION_ID)
+    emit({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
+    attach()
+    expect(store.context(SESSION_ID)).toMatchObject({
+      usedTokens: 120,
+      maxTokens: 1_000,
+    })
   })
 
   it("ignores a usage missing a count ACP requires", () => {
