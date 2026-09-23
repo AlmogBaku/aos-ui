@@ -785,6 +785,46 @@ describe("Hermes server adapter", () => {
     ).rejects.toBeInstanceOf(ServerTurnSteerUncertainError)
   })
 
+  it("queues a correction Hermes declines outside a model request, as during compaction", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.redirect")
+        return { status: "rejected", text: "Correction" }
+      if (method === "prompt.submit") return { status: "queued" }
+      throw new Error(`unexpected ${method}`)
+    })
+    const adapter = new HermesServerAdapter({ request })
+
+    await expect(
+      adapter.native.redirect("live-secret", "Correction")
+    ).resolves.toBe("queued")
+    expect(request.mock.calls.at(-1)).toEqual([
+      "prompt.submit",
+      { session_id: "live-secret", text: "Correction", queued: true },
+    ])
+  })
+
+  it("keeps a declined correction's queued submit uncertain or unavailable as Hermes answers it", async () => {
+    const declined = (submit: () => Promise<unknown>) =>
+      new HermesServerAdapter({
+        request: vi.fn(async (method: string) =>
+          method === "session.redirect"
+            ? { status: "rejected", text: "Correction" }
+            : submit()
+        ),
+      }).native.redirect("live-secret", "Correction")
+
+    await expect(
+      declined(async () => {
+        throw new HermesRpcUncertainError()
+      })
+    ).rejects.toBeInstanceOf(ServerTurnSteerUncertainError)
+    await expect(
+      declined(async () => {
+        throw new HermesRpcRejectedError(-32600)
+      })
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
   it("rewinds Edit or Retry at the authoritative durable user row", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "prompt.submit") return { status: "streaming" }

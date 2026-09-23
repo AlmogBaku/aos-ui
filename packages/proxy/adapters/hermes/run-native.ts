@@ -485,6 +485,20 @@ export class HermesNativeRuntime implements HermesTurnNative {
       }
       throwUnavailable(error)
     }
+    // Hermes declines a correction outside a model request or tool batch, as
+    // while it compacts, and leaves the surface to queue it for the next turn.
+    // `queued` keeps the submit from interrupting the turn still running.
+    if (isRecord(payload) && payload.status === "rejected") {
+      this.#log?.warn("hermes.native.redirect_rejected", {})
+      const outcome = await this.#submitPrompt(liveSessionId, {
+        text,
+        queued: true,
+      })
+      if (outcome.acknowledgement === "accepted") return "queued" as const
+      if (outcome.acknowledgement === "uncertain")
+        throw new ServerTurnSteerUncertainError()
+      throw new HermesUnavailableError()
+    }
     if (
       !isRecord(payload) ||
       (payload.status !== "redirected" && payload.status !== "queued") ||
