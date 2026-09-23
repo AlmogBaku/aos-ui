@@ -439,6 +439,21 @@ assistant's answer.
   responsive reflow preserve the user's place. The same information hierarchy
   and interaction model holds across keyboard and pointer use, narrow and wide
   layouts, LTR and RTL, and reduced-motion preferences.
+- **The thread is virtualized:** a Session longer than 30 messages mounts only
+  the messages near the viewport, with spacing standing in for the rest
+  (`src/components/assistant-ui/elements/thread-message-list.tsx`). A shorter
+  one mounts whole. The list follows Assistant UI's virtualization guide:
+  `unstable_useThreadMessageIds` with `ThreadPrimitive.Unstable_MessageById`,
+  windowed by `@tanstack/react-virtual`. Both Assistant UI APIs are marked
+  unstable and experimental, so re-check them on every Assistant UI upgrade.
+  The virtualizer never moves the scroll position; its
+  `shouldAdjustScrollPositionOnItemSizeChange` guard is an instance field, set
+  to decline. The reading-position controller keeps follow mode, bookmarks, and
+  re-anchoring. Conversation search matches the message data and brings an
+  unmounted match into the window before highlighting it. The message that last
+  held focus stays mounted. Only the newest message plays the entrance
+  animation. The browser's own find and a screen reader's browse mode reach
+  only the mounted messages of a long Session.
 
 ### Motion
 
