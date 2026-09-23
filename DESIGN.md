@@ -446,14 +446,17 @@ assistant's answer.
   `unstable_useThreadMessageIds` with `ThreadPrimitive.Unstable_MessageById`,
   windowed by `@tanstack/react-virtual`. Both Assistant UI APIs are marked
   unstable and experimental, so re-check them on every Assistant UI upgrade.
-  The virtualizer never moves the scroll position; its
-  `shouldAdjustScrollPositionOnItemSizeChange` guard is an instance field, set
-  to decline. The reading-position controller keeps follow mode, bookmarks, and
+  Where the browser anchors scroll, the virtualizer never moves the scroll
+  position; its `shouldAdjustScrollPositionOnItemSizeChange` guard is an
+  instance field, set to decline there and left to the virtualizer on WebKit,
+  which has no `overflow-anchor`. The reading-position controller keeps follow mode, bookmarks, and
   re-anchoring. Conversation search matches the message data and brings an
   unmounted match into the window before highlighting it. The message that last
   held focus stays mounted. Only the newest message plays the entrance
   animation. The browser's own find and a screen reader's browse mode reach
-  only the mounted messages of a long Session.
+  only the mounted messages of a long Session. Folds and disclosures the
+  reader opened or closed stay that way while the thread is open, across a
+  message's remount; a Mermaid diagram's zoom and pan reset.
 
 ### Motion
 
