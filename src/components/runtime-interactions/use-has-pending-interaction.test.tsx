@@ -10,7 +10,7 @@ import { useHasPendingInteraction } from "./use-has-pending-interaction"
 function questionRequest(sessionId: string): RuntimeQuestionRequest {
   return {
     kind: "question",
-    requestId: `${sessionId}-interrupt`,
+    requestId: `${sessionId}-request`,
     sessionId,
     questions: [
       {
