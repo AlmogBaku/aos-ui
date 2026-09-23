@@ -16,7 +16,11 @@ import { ToolError } from "@/components/assistant-ui/elements/tool-error"
 import { LazyToolDiff, LazyToolTerminal } from "./lazy-tool-views"
 import { normalizeRichToolState } from "./lifecycle"
 import { useToolUiLocale } from "./locale"
-import { safeToolDisplayValue, safeToolPresentation } from "./safe-presentation"
+import {
+  safeToolDisplayValue,
+  safeToolPresentation,
+  safeToolText,
+} from "./safe-presentation"
 import { diffStats, readAosToolArtifact } from "./tool-artifact"
 import {
   formatToolLocation,
@@ -85,16 +89,15 @@ function codeRunnerState(
 function toolErrorMessage(part: RichToolPart) {
   const status = part.status as unknown as Record<string, unknown>
   if (typeof status.error === "string" && status.error.trim())
-    return safeToolPresentation(status.error).text.replace(/^"|"$/gu, "")
+    return safeToolText(status.error)
   const result = parsedResult(part.result)
-  if (typeof result === "string")
-    return safeToolPresentation(result).text.replace(/^"|"$/gu, "")
+  if (typeof result === "string") return safeToolText(result)
   const record = resultRecord(result)
   if (record) {
     for (const key of ["error", "message", "stderr", "output"]) {
       const candidate = record[key]
       if (typeof candidate === "string" && candidate.trim())
-        return safeToolPresentation(candidate).text.replace(/^"|"$/gu, "")
+        return safeToolText(candidate)
     }
   }
   return safeToolPresentation(part.result).text

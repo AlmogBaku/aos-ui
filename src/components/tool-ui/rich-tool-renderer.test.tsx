@@ -257,6 +257,26 @@ describe("AosToolFallback", () => {
     expect(screen.getByText("Build failed")).toBeVisible()
   })
 
+  it("keeps a stopped command's output line breaks as written", () => {
+    render(
+      <AosToolPresentation
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "sleep 30" },
+          result: { output: "waiting\n[Command interrupted]", exit_code: 130 },
+        })}
+      />
+    )
+
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "waiting\n[Command interrupted]" &&
+          element.children.length === 0
+      )
+    ).toBeVisible()
+  })
+
   it("uses Terminal Block for command output", async () => {
     const user = userEvent.setup()
     const { container } = render(

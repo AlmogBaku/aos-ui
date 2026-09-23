@@ -68,7 +68,7 @@ export function ToolError({
       <div
         className={cn(
           field,
-          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed text-destructive"
+          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive"
         )}
       >
         {message}
