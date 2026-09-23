@@ -165,6 +165,14 @@ native identities; matching an older row by text can truncate the wrong
 conversation. If history changed incompatibly, reconcile and return a
 normalized conflict rather than guessing.
 
+A message sent in the current page carries its live id until the browser
+learns the id history saved it under, and only then can it be edited. When
+the native runtime proves those ids at the turn's end, report them on
+`TurnEnded.saved`: the prompt's input `messageId` with its saved id, and the
+one id history gives the whole reply. The translator sends them as ACP
+`_meta.aos.savedIds`. Omit an id the runtime does not prove; never derive one
+from text or position.
+
 ## Preserve requests
 
 Questions and approvals are normalized pending requests. The ACP layer delivers

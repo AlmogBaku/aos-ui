@@ -680,7 +680,67 @@ function applyState(
     }
   }
   if (next !== "idle") return state
-  return applyIdle(state, carried, text(update.stopReason), aos)
+  return withSavedIds(
+    applyIdle(state, carried, text(update.stopReason), aos),
+    aos?.savedIds
+  )
+}
+
+/**
+ * Re-keys the turns a run streamed under live ids onto the ids the provider
+ * saved them under, so an edit and a later replay address the saved rows. The
+ * provider may save consecutive replies as one message, so the turns that share
+ * a saved id fold into one, in order, where the first of them stood; a turn
+ * already projected under that id is the saved one and stands alone.
+ */
+function withSavedIds(
+  state: ProjectorState,
+  savedIds: Readonly<Record<string, string>> | undefined
+): ProjectorState {
+  if (!savedIds) return state
+  const saved = new Map(Object.entries(savedIds))
+  if (!state.messages.some((message) => saved.has(message.id))) return state
+  const groups = new Map<string, ProjectedMessage[]>()
+  for (const message of state.messages) {
+    const id = saved.get(message.id) ?? message.id
+    groups.set(id, [...(groups.get(id) ?? []), message])
+  }
+  return withMessages(
+    state,
+    [...groups].map(
+      ([id, members]) =>
+        members.find((message) => message.id === id) ?? merged(id, members)
+    )
+  )
+}
+
+/** One saved message out of the turns it folds, spanning all of them. */
+function merged(
+  id: string,
+  members: readonly ProjectedMessage[]
+): ProjectedMessage {
+  const [first] = members
+  const last = members.at(-1)
+  const timed = members.flatMap((message) =>
+    message.timing ? [message.timing] : []
+  )
+  const [start] = timed
+  const completedAt = timed.at(-1)?.completedAt
+  return {
+    id,
+    role: first!.role,
+    parts: members.flatMap((message) => message.parts),
+    ...(last?.status === undefined ? {} : { status: last.status }),
+    ...(start === undefined
+      ? {}
+      : {
+          timing: {
+            startedAt: start.startedAt,
+            ...(completedAt === undefined ? {} : { completedAt }),
+            chunks: timed.reduce((sum, timing) => sum + timing.chunks, 0),
+          },
+        }),
+  }
 }
 
 /** Only the Session's own plan is projected, and `_meta.aos` carries it. */
@@ -988,24 +1048,42 @@ export function retainMessages(
 }
 
 /**
- * Reports a turn the provider refused. Nothing ran, so the refusal reads beside
- * the Session's latest answer — the host a wait no run owns already uses — and a
- * turn already awaiting the operator keeps the status it is waiting with.
+ * Reports a turn that failed without a reply of its own: one the provider
+ * refused, or a run that failed before it wrote anything. The failure reads
+ * beside the Session's latest answer — the host a wait no run owns already
+ * uses — and a turn already awaiting the operator keeps the status it is
+ * waiting with.
  */
 export function failLatestTurn(
   state: ProjectorState,
-  reported: string
+  error: TurnFailure | undefined
 ): ProjectorState {
   // A thread with no turn yet — a draft whose Session could not be created —
-  // hosts the refusal on a turn of its own, which the first replay clears.
+  // hosts the failure on a turn of its own, which the first replay clears.
   const id = latestAssistantId(state.messages) ?? requestHostId("refused")
   const host = state.messages.find((message) => message.id === id)
   if (host?.status?.type === "requires-action") return state
-  // The refusal arrives already worded for the operator, so it fills the
-  // description half of the one failure shape every failed turn carries.
-  const error: TurnFailure = { message: reported }
   return onMessage(state, id, "assistant", (message) =>
-    withStatus(message, { type: "incomplete", reason: "error", error })
+    withStatus(message, {
+      type: "incomplete",
+      reason: "error",
+      ...(error && { error }),
+    })
+  )
+}
+
+/**
+ * Whether the update between the two states ended the run in a failure before
+ * it wrote a reply, so no turn of its own shows the failure.
+ */
+export function failedWithoutReply(
+  before: ProjectorState,
+  after: ProjectorState
+): boolean {
+  return (
+    after.execution !== before.execution &&
+    after.execution.status === "failed" &&
+    activeAssistantId(before) === undefined
   )
 }
 

@@ -24,8 +24,6 @@ export type RoomTurn = {
   content: readonly ContentBlock[]
   /** Epoch ms when the turn was admitted. */
   at: number
-  /** An answered question resumed the turn, so its live stream starts there. */
-  continued?: true
 }
 
 export type RoomMember = {
@@ -348,7 +346,7 @@ export function createSessionRooms({
     continueTurn(scope: RoomScope, fromTurnId: string, toTurnId: string) {
       const room = rooms.get(roomKey(scope))
       if (!room?.turn || room.turn.turnId !== fromTurnId) return
-      room.turn = { ...room.turn, turnId: toTurnId, continued: true }
+      room.turn = { ...room.turn, turnId: toTurnId }
       for (const delivery of room.members.values()) {
         if (delivery.delivered === fromTurnId) delivery.delivered = toTurnId
       }

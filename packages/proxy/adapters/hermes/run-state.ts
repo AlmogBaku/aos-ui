@@ -7,7 +7,13 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type { Cost, PendingRequest, TokenUsage } from "../../core/events"
+import type {
+  Cost,
+  PendingRequest,
+  TokenUsage,
+  TurnEventKind,
+  TurnEventOf,
+} from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
@@ -24,6 +30,10 @@ import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
 import type { SessionModelChoice } from "./session-model"
 
 export type HermesTurnScope = SessionScope
+
+type TurnSaved = NonNullable<
+  TurnEventOf<typeof TurnEventKind.TurnEnded>["saved"]
+>
 
 /** The native turn outcome; `open` means Hermes has not ended the turn yet. */
 export type TurnOutcome = "open" | "complete" | "failed" | "interrupted"
@@ -85,6 +95,14 @@ export type ActiveTurn = {
   catchUp?: BufferedNativeEvents
   /** A settlement edge a catch-up deferred; re-decided once the page drained. */
   deferredEdge?: SettlementEdge
+  /**
+   * The user message this run's own prompt became. Only such a run can name
+   * its turn's saved rows: AOS submits its prompt as a visible user row, so
+   * history opens the turn with it.
+   */
+  promptMessageId?: string
+  /** The ids Hermes' completion proved the turn was saved under. */
+  saved?: TurnSaved
   usage?: TokenUsage[]
   cost?: Cost
   /** The model the Session last reported; a change is published. */

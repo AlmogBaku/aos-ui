@@ -8,6 +8,7 @@ import {
   AOS_META_KEY,
   AosArtifactDescriptorSchema,
   AOS_STOP_REASONS,
+  AosStateMetaSchema,
   AosSubagentSchema,
 } from "../../../protocol/acp"
 import {
@@ -224,11 +225,34 @@ function steerStep(
   }
 }
 
+/**
+ * Each message id the browser saw this turn under, mapped to the id the
+ * provider saved it as: the prompt's own, and the segment's one reply. An id
+ * the wire contract refuses drops the whole map rather than part of it.
+ */
+function savedIdsOf(
+  event: TurnEventOf<typeof TurnEventKind.TurnEnded>,
+  replyMessageId: string | undefined
+) {
+  const { user, replyId } = event.saved ?? {}
+  const entries = [
+    ...(user ? [[user.messageId, user.savedId]] : []),
+    ...(replyId && replyMessageId ? [[replyMessageId, replyId]] : []),
+  ].filter(([live, saved]) => live !== saved)
+  if (entries.length === 0) return undefined
+  const savedIds = AosStateMetaSchema.shape.savedIds.safeParse(
+    Object.fromEntries(entries)
+  )
+  return savedIds.success ? savedIds.data : undefined
+}
+
 function endedOutbound(
   context: TranslateContext,
-  event: TurnEventOf<typeof TurnEventKind.TurnEnded>
+  event: TurnEventOf<typeof TurnEventKind.TurnEnded>,
+  replyMessageId: string | undefined
 ): AcpOutbound[] {
   const outbound: AcpOutbound[] = []
+  const savedIds = savedIdsOf(event, replyMessageId)
   if (event.composerPrefill !== undefined)
     outbound.push({
       kind: "composer-prefill",
@@ -248,7 +272,10 @@ function endedOutbound(
             : "end_turn",
         ...(usage ? { usage } : {}),
       },
-      event.cost ? { cost: event.cost } : undefined
+      {
+        ...(event.cost ? { cost: event.cost } : {}),
+        ...(savedIds ? { savedIds } : {}),
+      }
     )
   )
   return outbound
@@ -546,7 +573,16 @@ function planOutbound(
 export const translateTurnEvent = ((state, event: TurnEvent, context) => {
   switch (event.kind) {
     case TurnEventKind.TurnStarted:
-      return { state, outbound: [stateOutbound(context, { state: "running" })] }
+      return {
+        state,
+        outbound: [
+          stateOutbound(
+            context,
+            { state: "running" },
+            event.startedAt ? { at: event.startedAt } : undefined
+          ),
+        ],
+      }
     case TurnEventKind.MessageChunk:
     case TurnEventKind.ThoughtChunk:
       return chunkStep(state, context, event)
@@ -580,7 +616,7 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
     case TurnEventKind.TurnEnded:
       return {
         state: initialTranslateState,
-        outbound: endedOutbound(context, event),
+        outbound: endedOutbound(context, event, state.messageId),
       }
     case TurnEventKind.TurnRequiresAction:
       return {

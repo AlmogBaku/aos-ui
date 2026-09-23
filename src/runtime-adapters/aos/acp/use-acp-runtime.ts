@@ -46,6 +46,7 @@ import {
   applyNotification,
   applyUpdate,
   clearTranscript,
+  failedWithoutReply,
   failLatestTurn,
   initialProjectorState,
   LOCAL_PROMPT_PREFIX,
@@ -55,6 +56,7 @@ import {
   toThreadMessages,
   type ProjectorExecution,
   type ProjectorState,
+  type TurnFailure,
 } from "./session-projector"
 
 /**
@@ -364,6 +366,25 @@ function createAcpController({
     // Either outcome of the resume ahead releases this one; a rejection there is
     // already reported where it happened.
     resumes = resumes.then(run, run)
+    return resumes
+  }
+
+  /**
+   * A run that failed before it wrote a reply has no turn to show the failure
+   * on, and an edit it carried has already dropped turns the provider may still
+   * hold. The failure reads where a refusal does, and the Session reloads so the
+   * thread matches what the provider kept; the reload rebuilds the thread, so
+   * the failure is shown again on the thread it rebuilt.
+   */
+  const failUnanswered = (
+    session: string,
+    generation: number,
+    error: TurnFailure | undefined
+  ) => {
+    commit(failLatestTurn(state, error))
+    void queueResume(session, generation).then(() => {
+      if (isBound(session, generation)) commit(failLatestTurn(state, error))
+    })
   }
 
   /**
@@ -380,7 +401,11 @@ function createAcpController({
       AOS_METHODS.notify
     const subscriptions = [
       connection.onSessionUpdate(next, (update, meta) => {
+        const before = state
         commit(applyUpdate(state, update, meta))
+        // A replayed failure is already what the provider holds.
+        if (replaying === 0 && failedWithoutReply(before, state))
+          failUnanswered(next, generation, state.execution.error)
       }),
       // The replay that follows carries the Session whole, so the transcript it
       // replaces goes first.
@@ -434,7 +459,9 @@ function createAcpController({
    */
   const refuse = (error: unknown) => {
     const reported = refusalText(error, callbacks.describeRunError)
-    commit(failLatestTurn(state, reported))
+    // The refusal arrives already worded for the operator, so it fills the
+    // description half of the one failure shape every failed turn carries.
+    commit(failLatestTurn(state, { message: reported }))
     return new MessageNotSentError(reported)
   }
 

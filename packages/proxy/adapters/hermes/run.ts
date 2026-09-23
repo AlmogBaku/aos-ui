@@ -34,6 +34,7 @@ import {
   projectHermesToolOutcome,
   redactedText,
 } from "./tool-data"
+import { hermesRowMessageId } from "./history"
 import { boundedNativeBytes, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
 import { HERMES_TODO_STATUS_ALIASES } from "./todos"
@@ -55,6 +56,7 @@ import {
   nativeEvent,
   nativeEventSessionId,
   payloadOf,
+  persistedTurnRows,
   stableNativeId,
   subagentPatch,
   terminalText,
@@ -209,6 +211,7 @@ export class HermesTurnEngine {
       // itself meanwhile is not.
       await this.#settling.get(key)?.done
       active = createActiveTurn(scope, input.turnId)
+      if (prompt) active.promptMessageId = prompt.messageId
       await attachTurn(this.#host, active, { kind: "barrier" })
     } finally {
       this.#admissions.delete(key)
@@ -924,6 +927,17 @@ export class HermesTurnEngine {
       return
     if (!active.messageId && completedMessageId)
       active.messageId = completedMessageId
+    const rows = active.promptMessageId
+      ? persistedTurnRows(payload.persisted_turn)
+      : undefined
+    if (rows)
+      active.saved = {
+        user: {
+          messageId: active.promptMessageId!,
+          savedId: hermesRowMessageId(rows.user),
+        },
+        replyId: hermesRowMessageId(rows.reply),
+      }
     const finalText = boundedText(payload.text)
     // A failed turn's `text` is the model's own prose only while `partial` marks
     // it as such. Without that flag Hermes composed the copy explaining the
@@ -1118,6 +1132,7 @@ export class HermesTurnEngine {
       ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
       ...(active.cost ? { cost: active.cost } : {}),
+      ...(active.saved ? { saved: active.saved } : {}),
       ...(ending.composerPrefill === undefined
         ? {}
         : { composerPrefill: ending.composerPrefill }),

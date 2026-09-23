@@ -305,6 +305,68 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
+  describe("the ids Hermes saved the turn under", () => {
+    const receipt = {
+      row_ids: [7, 8, 9, 10],
+      complete: true,
+      user_row_id: 7,
+      final_assistant_row_id: 10,
+    }
+
+    async function endOf(persisted_turn: unknown) {
+      const attachment = observation()
+      const publish = (event: unknown) =>
+        attachment.publish("live-secret", event)
+      const engine = new HermesTurnEngine(
+        runtime({ observe: attachment.observe })
+      )
+      const handle = await engine.start(scope, input())
+      const t = nativeTurn("live-secret", 1)
+      publish(t.messageStart("reply"))
+      publish(t.delta("Done"))
+      publish(
+        t.frame("message.complete", {
+          message_id: "reply",
+          text: "Done",
+          status: "complete",
+          persisted_turn,
+        })
+      )
+      return ofKind(await collect(handle), TurnEventKind.TurnEnded)[0]
+    }
+
+    it("names the prompt and its reply by the rows a complete receipt committed", async () => {
+      await expect(endOf(receipt)).resolves.toMatchObject({
+        saved: {
+          user: { messageId: "user-1", savedId: "hermes-row-7" },
+          replyId: "hermes-row-8",
+        },
+      })
+    })
+
+    it.each([
+      ["a partial receipt", { ...receipt, complete: false }],
+      ["no user row", { ...receipt, user_row_id: undefined }],
+      [
+        "a user row that does not open the turn",
+        { ...receipt, user_row_id: 8 },
+      ],
+      ["no final reply", { ...receipt, final_assistant_row_id: undefined }],
+      [
+        "a final reply that does not close it",
+        { ...receipt, final_assistant_row_id: 9 },
+      ],
+      ["rows out of order", { ...receipt, row_ids: [7, 9, 8, 10] }],
+      ["a fractional row", { ...receipt, row_ids: [7, 8.5, 9, 10] }],
+      ["no reply row", { ...receipt, row_ids: [7], final_assistant_row_id: 7 }],
+      ["no receipt", undefined],
+    ])("claims no saved ids from %s", async (_, persisted) => {
+      const ended = await endOf(persisted)
+      expect(ended).toBeDefined()
+      expect(ended).not.toHaveProperty("saved")
+    })
+  })
+
   it.each([false, true])(
     "uses authoritative completion text without duplicating a fully streamed answer (streamed: %s)",
     async (streamed) => {

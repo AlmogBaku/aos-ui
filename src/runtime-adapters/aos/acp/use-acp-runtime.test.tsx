@@ -20,6 +20,7 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
+  AOS_STOP_REASONS,
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
@@ -59,11 +60,17 @@ function createFakeConnection() {
   const resumed = new Promise<ResumeReply>((resolve) => {
     settle = () => resolve(resumeReply())
   })
+  /** What a from-start replay resends, while the resume is still in flight. */
+  let history: readonly SessionUpdate[] = []
   const resumeSession = vi.fn((sessionId: string, resume: AcpResumeOptions) => {
     // As the connection does: a from-start replay announces itself, so whoever
     // projects the Session drops what the replay is about to resend.
-    if (resume.replayFromStart)
+    if (resume.replayFromStart) {
       for (const listener of replays.get(sessionId) ?? []) listener()
+      for (const update of history)
+        for (const listener of updates.get(sessionId) ?? [])
+          listener(update, TURN_META)
+    }
     return resumed
   })
   const prompt = vi.fn(async () => ({ messageId: "u1" }))
@@ -117,6 +124,10 @@ function createFakeConnection() {
     resumeSession,
     prompt,
     cancel,
+    /** Stores the turns a later from-start replay resends. */
+    replayOnResume: (turns: readonly SessionUpdate[]) => {
+      history = turns
+    },
     settleResume: () => {
       settle()
       return resumed
@@ -591,6 +602,143 @@ describe("useAcpRuntime", () => {
       { id: "u1", role: "user", text: "Ship it" },
     ])
     expect(result.current.thread.composer.getState().text).toBe("")
+  })
+
+  describe("a run that fails before it writes a reply", () => {
+    const HISTORY = [
+      textUpdate("user_message", "u1", "Ship it"),
+      textUpdate("agent_message", "a1", "On it"),
+    ]
+    const FAILURE = { code: "AOS_PROVIDER_RUN_FAILED", message: "Broke" }
+
+    /** A thread holding the history the provider saved, and replays again. */
+    async function mountWithHistory() {
+      const fake = createFakeConnection()
+      const hook = await mount(fake)
+      act(() => {
+        for (const update of HISTORY) fake.emit(update)
+      })
+      fake.replayOnResume(HISTORY)
+      fake.prompt.mockResolvedValueOnce({ messageId: "u2" })
+      return { fake, result: hook.result }
+    }
+
+    const fail = async (fake: Fake) => {
+      await act(async () => {
+        fake.emit({ sessionUpdate: "state_update", state: "running" })
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.error,
+          },
+          { ...TURN_META, ...FAILURE }
+        )
+      })
+    }
+
+    const statusOf = (
+      runtime: ReturnType<typeof useAcpRuntime>,
+      index: number
+    ) => runtime.thread.getState().messages[index]?.status
+
+    it("reloads the Session and keeps the failure in view", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Again" }],
+        })
+      })
+      await waitFor(() => {
+        expect(fake.prompt).toHaveBeenCalled()
+      })
+      await fail(fake)
+      // The provider never saved the prompt, so the reloaded thread drops it.
+      await waitFor(() => {
+        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      })
+      await waitFor(() => {
+        expect(statusOf(result.current, 1)).toEqual({
+          type: "incomplete",
+          reason: "error",
+          error: FAILURE,
+        })
+      })
+      expect(visible(result.current)).toEqual([
+        { id: "u1", role: "user", text: "Ship it" },
+        { id: "a1", role: "assistant", text: "On it" },
+      ])
+    })
+
+    it("brings back the turns a failed edit replaced", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Ship it now" }],
+          parentId: null,
+          sourceId: "u1",
+        })
+      })
+      await waitFor(() => {
+        expect(fake.prompt).toHaveBeenCalledWith(
+          SESSION_ID,
+          [{ type: "text", text: "Ship it now" }],
+          { rewindSourceId: "provider-u1" }
+        )
+      })
+      await fail(fake)
+      await waitFor(() => {
+        expect(visible(result.current)).toEqual([
+          { id: "u1", role: "user", text: "Ship it" },
+          { id: "a1", role: "assistant", text: "On it" },
+        ])
+      })
+      expect(statusOf(result.current, 1)).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: FAILURE,
+      })
+    })
+
+    it("does not reload a failure the replay itself restates", async () => {
+      const fake = createFakeConnection()
+      fake.replayOnResume([
+        ...HISTORY,
+        { sessionUpdate: "state_update", state: "running" },
+        {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: AOS_STOP_REASONS.error,
+        },
+      ])
+      await mount(fake)
+      await act(async () => {})
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not reload a failure its reply already shows", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        fake.emit({ sessionUpdate: "state_update", state: "running" })
+        fake.emit(chunkUpdate("a2", "Half"))
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.error,
+          },
+          { ...TURN_META, ...FAILURE }
+        )
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(statusOf(result.current, 2)).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: FAILURE,
+      })
+    })
   })
 
   it("creates the Session a draft's first turn needs, then prompts it", async () => {

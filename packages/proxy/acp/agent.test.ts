@@ -289,7 +289,13 @@ const translators: Translators = {
             update: {
               sessionUpdate: "state_update",
               state: "running",
-              ...meta,
+              // As the real translator does, a dated start keeps its date.
+              _meta: {
+                [AOS_META_KEY]: {
+                  ...meta._meta[AOS_META_KEY],
+                  ...(event.startedAt ? { at: event.startedAt } : {}),
+                },
+              },
             },
           },
         ],
@@ -2504,8 +2510,12 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("keeps the page of a turn an answered question resumed", async () => {
-    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+  it("keeps what a resumed turn stored before its question for a joining tab", async () => {
+    const asked = new Date(Date.now() - 60_000).toISOString()
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(asked),
+    })
     await test.list()
     await liveTurn(test, [test])
     test.sources[0]?.emit({
@@ -2524,14 +2534,21 @@ describe("Session rooms", () => {
     test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
     await other.recorder.wait(endedTurn)
 
-    expect(flow(other.recorder)).toContain("history assistant-0")
-    expect(flow(other.recorder)).toContain("chunk Resumed")
+    expect(withoutStates(flow(other.recorder))).toEqual([
+      "history user-1",
+      "history assistant-0",
+      "chunk Resumed",
+    ])
     test.close()
     other.close()
   })
 
-  it("keeps streaming a resumed turn to the tab that reopens it", async () => {
-    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+  it("streams a resumed turn once to the tab that reopens it", async () => {
+    const asked = new Date(Date.now() - 60_000).toISOString()
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(asked),
+    })
     await test.list()
     await liveTurn(test, [test])
     test.sources[0]?.emit({
@@ -2544,7 +2561,6 @@ describe("Session rooms", () => {
     chunk(test.sources[1], "Resumed")
     await test.recorder.wait(said("Resumed"))
 
-    // The page already stores the resumed segment's rows.
     const from = test.recorder.entries.length
     await open(test, { replayFrom: { type: "start" } })
     chunk(test.sources[1], "After")
@@ -2553,9 +2569,12 @@ describe("Session rooms", () => {
       expect(flow(test.recorder, SESSION, from)).toContain("state idle")
     )
 
-    const seen = flow(test.recorder, SESSION, from)
-    expect(seen).not.toContain("chunk Resumed")
-    expect(seen.filter((item) => item === "chunk After")).toHaveLength(1)
+    expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
+      "history user-1",
+      "history assistant-0",
+      "chunk Resumed",
+      "chunk After",
+    ])
     test.close()
   })
 
@@ -3462,7 +3481,9 @@ describe("Session rooms", () => {
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other, test])
     test.sources[0]?.finish()
-    await vi.waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
+    await vi.waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("idle")
+    )
     const fromTest = test.recorder.entries.length
     const fromOther = other.recorder.entries.length
 
@@ -3531,5 +3552,236 @@ describe("Session rooms", () => {
     expect(other.recorder.entries.slice(from)).toEqual([])
     test.close()
     other.close()
+  })
+})
+
+/** A turn the runtime started by itself, adopted as it is read from its start. */
+function adopted(handle: EventSource) {
+  return { handle, state: "running" as const, fromStart: true }
+}
+
+/** One stored row of a turn, dated `createdAt`. */
+function storedRow(
+  id: string,
+  role: "user" | "assistant",
+  text: string,
+  createdAt: string
+): SessionHistoryResponse["messages"][number] {
+  return { id, role, content: [{ type: "text", text }], createdAt }
+}
+
+/** A browser that reloads the Session after its only open tab closed. */
+async function reloadAlone(test: Awaited<ReturnType<typeof harness>>) {
+  test.close()
+  await settled()
+  const reloaded = await test.connect("connection-2")
+  await reloaded.list()
+  await open(reloaded, { replayFrom: { type: "start" } })
+  return reloaded
+}
+
+describe("Reloading a running turn", () => {
+  it("shows a lone tab's reload the turn once, from its stream", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const reloaded = await reloadAlone(test)
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await reloaded.recorder.wait(endedTurn)
+
+    expect(prompts(reloaded.recorder)).toEqual([])
+    expect(withoutStates(flow(reloaded.recorder))).toEqual([
+      "history user-1",
+      "chunk Live",
+      "chunk More",
+    ])
+    reloaded.close()
+  })
+
+  it("shows a reload a turn the runtime started by itself once", async () => {
+    const watchers: ServerTurnWatcher[] = []
+    const background = new EventSource()
+    const turns = [adopted(background)]
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(),
+      watch: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      discover: async () => turns.shift(),
+    })
+    await test.list()
+    await open(test)
+    background.emit(turnStarted())
+    chunk(background, "Live")
+    watchers[0]!.onTurn()
+    await test.recorder.wait(said("Live"))
+
+    const reloaded = await reloadAlone(test)
+    chunk(background, "More")
+    background.emit({ kind: TurnEventKind.TurnEnded })
+    await reloaded.recorder.wait(endedTurn)
+
+    expect(withoutStates(flow(reloaded.recorder))).toEqual([
+      "history user-1",
+      "chunk Live",
+      "chunk More",
+    ])
+    reloaded.close()
+  })
+
+  it("shows a reload a turn an answered question resumed once", async () => {
+    const asked = new Date(Date.now() - 60_000).toISOString()
+    const test = await harness({
+      providerIds: true,
+      history: [
+        ...storedLiveTurn(asked),
+        storedRow(
+          "assistant-2",
+          "assistant",
+          "Resumed",
+          new Date().toISOString()
+        ),
+      ],
+    })
+    await test.list()
+    await liveTurn(test, [test])
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    test.sources[1]?.emit(turnStarted())
+    chunk(test.sources[1], "Resumed")
+    await test.recorder.wait(said("Resumed"))
+
+    const reloaded = await reloadAlone(test)
+    chunk(test.sources[1], "More")
+    test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
+    await reloaded.recorder.wait(endedTurn)
+
+    expect(withoutStates(flow(reloaded.recorder))).toEqual([
+      "history user-1",
+      "history assistant-0",
+      "chunk Resumed",
+      "chunk More",
+    ])
+    reloaded.close()
+  })
+
+  it("resets a reload whose page cannot be cut where the turn began", async () => {
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(""),
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const reloaded = await reloadAlone(test)
+    await reloaded.recorder.wait(said("AOS_RESET_REQUIRED"))
+    await settled()
+
+    expect(withoutStates(flow(reloaded.recorder))).toEqual([
+      "history user-1",
+      "history assistant-0",
+    ])
+    reloaded.close()
+  })
+
+  it("dates the replayed turn where it began, not when it is replayed", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    const admittedAt = Date.now() - 30_000
+    const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt)
+    try {
+      await liveTurn(test, [test])
+    } finally {
+      clock.mockRestore()
+    }
+
+    const reloaded = await reloadAlone(test)
+    await reloaded.recorder.wait(said("Live"))
+
+    const dated = updates(reloaded.recorder).flatMap((params) => {
+      const { update } = params as {
+        update: { state?: string; _meta?: unknown }
+      }
+      const meta = z
+        .object({ aos: z.object({ at: z.string() }) })
+        .safeParse(update._meta)
+      return update.state === "running" && meta.success
+        ? [meta.data.aos.at]
+        : []
+    })
+    expect(dated).toEqual([new Date(admittedAt).toISOString()])
+    reloaded.close()
+  })
+
+  it("shows each turn once to a reload that lands as the next adopted turn starts", async () => {
+    const watchers: ServerTurnWatcher[] = []
+    const first = new EventSource()
+    const next = new EventSource()
+    const turns = [adopted(first), adopted(next)]
+    const earlier = new Date(Date.now() - 60_000).toISOString()
+    const page: SessionHistoryResponse["messages"] = [
+      storedRow("user-1", "user", "First", earlier),
+      storedRow("assistant-1", "assistant", "First reply", earlier),
+    ]
+    const test = await harness({
+      providerIds: true,
+      history: page,
+      watch: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      discover: async () => turns.shift(),
+    })
+    await test.list()
+    await open(test)
+    first.emit(turnStarted())
+    chunk(first, "First reply")
+    watchers[0]!.onTurn()
+    await test.recorder.wait(said("First reply"))
+    const firstTurn = test.coordinator.snapshot(test.scope).turnId
+
+    // The runtime starts the next turn as the first one ends.
+    const now = new Date().toISOString()
+    page.push(
+      storedRow("user-2", "user", "Next", now),
+      storedRow("assistant-2", "assistant", "Next reply", now)
+    )
+    first.emit({ kind: TurnEventKind.TurnEnded })
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+    )
+    await vi.waitFor(() =>
+      expect(test.coordinator.replayStart(test.scope)?.turnId).not.toBe(
+        firstTurn
+      )
+    )
+    next.emit(turnStarted())
+    chunk(next, "Next reply")
+
+    // The reload the first turn's end asked for.
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    chunk(next, "Done")
+    next.emit({ kind: TurnEventKind.TurnEnded })
+    await vi.waitFor(() =>
+      expect(flow(test.recorder, SESSION, from)).toContain("state idle")
+    )
+
+    expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
+      "history user-1",
+      "history assistant-1",
+      "history user-2",
+      "chunk Next reply",
+      "chunk Done",
+    ])
+    test.close()
   })
 })

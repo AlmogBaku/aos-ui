@@ -208,11 +208,12 @@ class SessionMember {
 
   /**
    * Subscribes to the Session's live turn, if one is still in flight, and
-   * returns the turnId it streams. `replayedCorrections` names the steer
-   * acknowledgements this subscription must drop because the history it
-   * follows already carried them.
+   * returns the turnId it streams. `after` is the cursor the view holds, or
+   * `"reset"` for a view holding part of the turn it cannot position.
+   * `replayedCorrections` names the steer acknowledgements this subscription
+   * must drop because the history it follows already carried them.
    */
-  follow(after?: number, replayedCorrections = 0) {
+  follow(after?: number | "reset", replayedCorrections = 0) {
     return this.#follow(true, after, replayedCorrections)
   }
 
@@ -457,7 +458,11 @@ class SessionMember {
    * did, so a member is never streamed one turn twice. Returns the turnId it
    * streams, or `undefined` when no turn is live.
    */
-  #follow(refollow: boolean, after?: number, replayedCorrections = 0) {
+  #follow(
+    refollow: boolean,
+    after?: number | "reset",
+    replayedCorrections = 0
+  ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
       if (this.#left) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
@@ -470,7 +475,11 @@ class SessionMember {
           {
             threadId: this.#scope.threadId,
             turnId,
-            ...(after === undefined ? {} : { after }),
+            ...(after === "reset"
+              ? { reset: true as const }
+              : after === undefined
+                ? {}
+                : { after }),
           },
           this.#access()
         ),

@@ -103,6 +103,17 @@ describe("translateTurnEvent lifecycle", () => {
     })
   })
 
+  it("dates a started run where the turn began, not when it is sent", () => {
+    const startedAt = "2026-09-22T09:59:00.000Z"
+    const [update] = updatesOf(
+      translate([{ kind: TurnEventKind.TurnStarted, startedAt }]).outbound
+    )
+
+    expect(AosStateMetaSchema.parse(aosMeta(update!))).toMatchObject({
+      at: startedAt,
+    })
+  })
+
   it.each([
     ["end_turn", false],
     ["cancelled", true],
@@ -777,6 +788,37 @@ describe("provider facts", () => {
       amount: 0.25,
       currency: "USD",
     })
+  })
+
+  it("maps the prompt and the reply it streamed to their saved ids", () => {
+    const update = lastUpdate([
+      { kind: TurnEventKind.MessageChunk, messageId: "live-a", text: "hi" },
+      // The provider rotated its id; the segment still streamed one reply.
+      { kind: TurnEventKind.MessageChunk, messageId: "live-b", text: "!" },
+      {
+        kind: TurnEventKind.TurnEnded,
+        saved: {
+          user: { messageId: "prompt-1", savedId: "hermes-row-7" },
+          replyId: "hermes-row-8",
+        },
+      },
+    ])
+    expect(AosStateMetaSchema.parse(aosMeta(update)).savedIds).toEqual({
+      "prompt-1": "hermes-row-7",
+      "live-a": "hermes-row-8",
+    })
+  })
+
+  it("maps no reply when the turn streamed none", () => {
+    const update = lastUpdate([
+      {
+        kind: TurnEventKind.TurnEnded,
+        saved: { replyId: "hermes-row-8" },
+      },
+    ])
+    expect(AosStateMetaSchema.parse(aosMeta(update))).not.toHaveProperty(
+      "savedIds"
+    )
   })
 
   it("names the provider and model a failure ran on", () => {

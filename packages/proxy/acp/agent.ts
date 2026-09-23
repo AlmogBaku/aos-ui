@@ -52,7 +52,7 @@ import {
 import { isPromptBlock, promptText } from "./prompt-content"
 import type { SessionMember } from "./session-member"
 import type { RoomTurn } from "./session-rooms"
-import { lastPromptIndex, throughLivePrompt } from "./translate/history"
+import { beforeLiveTurn, lastPromptIndex } from "./translate/history"
 import type {
   AcpConnectionContext,
   AosAcpAgentFactory,
@@ -260,23 +260,27 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
-   * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
-   * from history reads a turn sent in this room again from its start, so the
-   * stream the member held stops before the page is read, and the rows the
-   * provider already stored of that turn are cut: `restarted` names the turn
-   * the view then shows only while its follow streams it. Any other turn keeps
-   * both: its journal starts after rows the page already holds, or its start
-   * is gone and a cursorless follow could only reset it. A turn the room
-   * admits during the read waits for the page and is replayed the same way.
-   * The guest lane validates its authoritative page before anything reads it.
+   * The page a `replayFrom: { type: "start" }` resume replays. A running turn
+   * the coordinator replays from its start is shown by that replay alone: the
+   * stream the member held stops before the page is read, and the page is cut
+   * where the turn began, so `restarted` names the turn the view then shows
+   * only while its follow streams it. A page that cannot be cut there is kept
+   * whole and its follow `reset`. Any other turn keeps the page: its start is
+   * gone and a cursorless follow could only reset it. A turn that starts during
+   * the read waits for the page and is replayed the same way. The guest lane
+   * validates its authoritative page before anything reads it.
    */
   async function replayPage(member: SessionMember, scope: SessionScope) {
-    const restartable = (turn: RoomTurn | undefined) =>
-      turn && !turn.continued && coordinator.replaysFromStart(scope)
-        ? turn
-        : undefined
-    const before = context.rooms.current(scope)
-    const restarted = restartable(before)
+    const liveTurn = () => {
+      const { state, turnId } = coordinator.snapshot(scope)
+      return state === "idle" ? undefined : turnId
+    }
+    const before = liveTurn()
+    const started = () => {
+      const after = liveTurn()
+      return after !== undefined && after !== before
+    }
+    const restarted = coordinator.replayStart(scope)
     member.holdRoom()
     if (restarted) await member.restartStream()
     let history: SessionHistoryResponse
@@ -284,22 +288,21 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
       history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
     } catch (cause) {
-      // A turn admitted during the read was held back, so it streams the same
-      // way a restarted one does once its reload failed.
-      const after = context.rooms.current(scope)
-      const held = after !== undefined && after.turnId !== before?.turnId
-      await recoverReplay(member, restarted?.turnId, held)
+      // A turn that started during the read was held back, so it streams the
+      // same way a restarted one does once its reload failed.
+      await recoverReplay(member, restarted?.turnId, started())
       throw cause
     }
-    const after = context.rooms.current(scope)
-    const held = after !== undefined && after.turnId !== before?.turnId
-    const shown = restarted ?? (held ? restartable(after) : undefined)
+    const held = started()
+    const shown =
+      restarted ?? (held ? coordinator.replayStart(scope) : undefined)
     if (!shown) return { history, held }
-    const index = promptIndex(shown, history)
+    const cut = beforeLiveTurn(history, shown.at)
     return {
-      history: throughLivePrompt(history, index, shown.at) ?? history,
+      history: cut ?? history,
       held,
       restarted: shown.turnId,
+      reset: cut === undefined,
     }
   }
 
@@ -347,20 +350,23 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   /**
    * Subscribes to the live turn, reporting a cursor that cannot position it.
    * A view whose stream `restarted` on a turn shows it only while this follow
-   * streams that turn.
+   * streams that turn; a view whose page could not be cut for it is `reset`.
    */
   async function followPositioned(
     member: SessionMember,
     scope: SessionScope,
     meta: { turnId?: string; after?: number },
-    replayedCorrections = 0,
-    restarted?: string
+    replay?: { corrections: number; restarted?: string; reset?: boolean }
   ) {
     const positioned =
       meta.turnId === undefined ||
       meta.turnId === coordinator.snapshot(scope).turnId
+    const restarted = replay?.restarted
     const followed = await member
-      .follow(positioned ? meta.after : undefined, replayedCorrections)
+      .follow(
+        replay?.reset ? "reset" : positioned ? meta.after : undefined,
+        replay?.corrections
+      )
       .catch(() => null)
     if (restarted !== undefined && followed !== restarted) {
       // A view rebuilt from the start does not act on `resync`, and this one
@@ -422,8 +428,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      replay?.corrections ?? 0,
-      replay?.restarted
+      replay
     )
     const execution = coordinator.snapshot(scope)
     afterResponse(member, async () => {
@@ -591,8 +596,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      replay?.corrections ?? 0,
-      replay?.restarted
+      replay
     )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is

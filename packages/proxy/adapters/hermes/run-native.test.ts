@@ -6,6 +6,8 @@ import {
   HermesRpcUncertainError,
   HermesUnavailableError,
 } from "./gateway"
+import { hermesRowMessageId, projectHermesHistory } from "./history"
+import { persistedTurnRows } from "./run-frames"
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
@@ -349,6 +351,53 @@ describe("Hermes native submit outcomes", () => {
       rewindSourceId: "hermes-row-12",
       confirm_truncate: true,
       truncate_before_row_id: 12,
+    })
+  })
+
+  it("rewinds a just-sent prompt by the id its completion receipt saved it under", async () => {
+    // The rows the receipt `{ row_ids: [7, 8, 9, 10], complete: true }` names.
+    const rows = [
+      { row_id: 5, role: "user", content: "Earlier" },
+      { row_id: 6, role: "assistant", content: "Earlier reply" },
+      { row_id: 7, role: "user", content: "Just sent" },
+      {
+        row_id: 8,
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "call-1", function: { name: "read_file", arguments: "{}" } },
+        ],
+      },
+      { row_id: 9, role: "tool", tool_call_id: "call-1", content: "file" },
+      { row_id: 10, role: "assistant", content: "Done" },
+    ]
+    const saved = persistedTurnRows({
+      row_ids: [7, 8, 9, 10],
+      complete: true,
+      user_row_id: 7,
+      final_assistant_row_id: 10,
+    })!
+    // The saved ids are the ones history names the prompt and its reply by.
+    expect(
+      projectHermesHistory(rows)
+        .slice(2)
+        .map(({ id }) => id)
+    ).toEqual([hermesRowMessageId(saved.user), hermesRowMessageId(saved.reply)])
+    const { native, router } = runtime(
+      { "prompt.submit": async () => ({ status: "streaming" }) },
+      rows
+    )
+
+    await native.submit("live-secret", {
+      scope,
+      text: "Edited",
+      turnId: "edit-run",
+      rewindSourceId: hermesRowMessageId(saved.user),
+    })
+
+    expect(router.calls("prompt.submit")[0]?.params).toMatchObject({
+      confirm_truncate: true,
+      truncate_before_row_id: 7,
     })
   })
 

@@ -110,17 +110,15 @@ describe("OpenCodeEventProjector", () => {
     const result = settled.find(
       (event) => event.kind === TurnEventKind.ToolCallFinished
     )
-    expect(result && "output" in result && JSON.parse(result.output)).toEqual(
-      {
-        ok: true,
-        type: "aos.artifact",
-        artifact: {
-          id: (artifact as { artifact: { id: string } }).artifact.id,
-          filename: "report.pdf",
-          mimeType: "application/pdf",
-        },
-      }
-    )
+    expect(result && "output" in result && JSON.parse(result.output)).toEqual({
+      ok: true,
+      type: "aos.artifact",
+      artifact: {
+        id: (artifact as { artifact: { id: string } }).artifact.id,
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+      },
+    })
     expect(JSON.stringify(settled)).not.toContain("/workspaces")
     for (const event of [...called, ...settled])
       expect(TurnEventSchema.safeParse(event).success).toBe(true)
@@ -676,6 +674,31 @@ describe("OpenCodeEventProjector", () => {
       admissionId: "next-admission",
       admissionBoundary: true,
     })
+  })
+
+  it("names the prompt by the admission OpenCode saved it under", () => {
+    const admitted = live(1, "session.next.prompt.admitted", {
+      timestamp: 1,
+      messageID: "aos-admission",
+      prompt: { text: "Hello" },
+      delivery: "queue",
+    })
+    const matched = new OpenCodeEventProjector(sessionId, 0, {
+      admissionId: "aos-admission",
+      userMessageId: "user-1",
+    })
+    const unmatched = new OpenCodeEventProjector(sessionId, 0, {
+      admissionId: "aos-admission",
+      userMessageId: "user-1",
+    })
+
+    matched.accept(admitted)
+
+    expect(matched.finish().events.at(-1)).toMatchObject({
+      kind: TurnEventKind.TurnEnded,
+      saved: { user: { messageId: "user-1", savedId: "aos-admission" } },
+    })
+    expect(unmatched.finish().events.at(-1)).not.toHaveProperty("saved")
   })
 
   it("repairs missed non-durable text deltas from a real durable ended event", () => {
