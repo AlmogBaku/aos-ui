@@ -237,6 +237,26 @@ describe("useAcpRuntime", () => {
     expect(onStateChange).toHaveBeenCalledTimes(2)
   })
 
+  it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(chunkUpdate("a1", "Working"))
+    })
+    const [user, assistant] = result.current.thread.getState().messages
+    act(() => {
+      fake.emit(chunkUpdate("a1", " on it"))
+    })
+    const [nextUser, nextAssistant] = result.current.thread.getState().messages
+    expect(nextUser).toBe(user)
+    expect(nextAssistant).not.toBe(assistant)
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a1", role: "assistant", text: "Working on it" },
+    ])
+  })
+
   it("resumes the opened Session once, whatever its caller's callbacks do", async () => {
     const fake = createFakeConnection()
     // The workspace closes these over the `AssistantClient`, which a

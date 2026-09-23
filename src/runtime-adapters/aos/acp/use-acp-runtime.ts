@@ -23,6 +23,7 @@ import type {
   RealtimeVoiceAdapter,
   SpeechSynthesisAdapter,
   ThreadMessage,
+  ThreadMessageLike,
 } from "@assistant-ui/core"
 import {
   createRuntimeExtras,
@@ -487,9 +488,7 @@ function createAcpController({
     isLoading: () => loading,
     getRepository: () => {
       if (repositoryOf !== state) {
-        repository = ExportedMessageRepository.fromArray(
-          toThreadMessages(state)
-        )
+        repository = toRepository(toThreadMessages(state))
         repositoryOf = state
       }
       return repository
@@ -582,6 +581,32 @@ function createQueue(controller: AcpController) {
     },
   })
   return { queue, markBusy: () => (busyEdges += 1) }
+}
+
+const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage>()
+
+/**
+ * The linear repository of a projected transcript. Each turn converts once per
+ * projected revision, so a live update re-renders only the turns it changed:
+ * `fromArray` would hand Assistant UI a fresh copy of every turn instead.
+ */
+function toRepository(
+  messages: readonly ThreadMessageLike[]
+): ExportedMessageRepository {
+  let parentId: string | null = null
+  return {
+    messages: messages.map((like) => {
+      let message = threadMessages.get(like)
+      if (!message) {
+        message = ExportedMessageRepository.fromArray([like]).messages[0]!
+          .message
+        threadMessages.set(like, message)
+      }
+      const item = { parentId, message }
+      parentId = message.id
+      return item
+    }),
+  }
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
