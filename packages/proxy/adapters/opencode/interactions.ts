@@ -1,4 +1,4 @@
-import type { RunInterruptOutcome } from "../../core/events"
+import { PendingRequestKind, type PendingRequest } from "../../core/events"
 
 import { OpenCodeMutationUncertainError } from "./client"
 
@@ -134,29 +134,29 @@ export class OpenCodeInteractions {
   /**
    * Cold recovery reads both native pending collections before it creates a
    * normalized wait.  `reconcile` makes the resulting batch the only batch
-   * that a later resume can dispatch.
+   * that later replies can dispatch.
    */
   async discover(scope: OpenCodeInteractionScope) {
     const [questions, permissions] = await Promise.all([
       this.transport.questions.list(scope.sessionId),
       this.transport.permissions.list(scope.sessionId),
     ])
-    return this.reconcile(scope, { questions, permissions })?.interrupts
+    return this.reconcile(scope, { questions, permissions })
   }
 
-  /** Validates a complete resume without sending a native mutation. */
-  async validate(scope: OpenCodeInteractionScope, resume: unknown) {
-    const { s, entries } = this.#entries(scope, resume)
+  /** Validates a complete batch of replies without sending a native mutation. */
+  async validate(scope: OpenCodeInteractionScope, replies: unknown) {
+    const { s, entries } = this.#entries(scope, replies)
     if (entries.some((entry) => entry.p.state === "dispatching"))
       throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
     this.#prepared.set(identity(s), {
-      fingerprint: this.#fingerprint(resume),
+      fingerprint: this.#fingerprint(replies),
       entries,
     })
   }
 
   /** Dispatches only the exact complete batch that `validate` bound. */
-  async dispatch(scope: OpenCodeInteractionScope, resume: unknown) {
+  async dispatch(scope: OpenCodeInteractionScope, replies: unknown) {
     const s: Scope = {
       agentId: scope.agentId,
       sessionId: scope.sessionId,
@@ -165,7 +165,7 @@ export class OpenCodeInteractions {
     const prepared = this.#prepared.get(identity(s))
     if (
       !prepared ||
-      prepared.fingerprint !== this.#fingerprint(resume) ||
+      prepared.fingerprint !== this.#fingerprint(replies) ||
       prepared.entries.some(
         (entry) =>
           entry.p.state !== "pending" ||
@@ -180,7 +180,7 @@ export class OpenCodeInteractions {
   acceptQuestion(
     scope: OpenCodeInteractionScope,
     native: unknown
-  ): RunInterruptOutcome {
+  ): PendingRequest[] {
     const id = text(record(native)?.id, 512)
     if (!id)
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
@@ -207,7 +207,7 @@ export class OpenCodeInteractions {
   acceptPermission(
     scope: OpenCodeInteractionScope,
     native: unknown
-  ): RunInterruptOutcome {
+  ): PendingRequest[] {
     const row = record(native)
     const id = text(row?.id, 512)
     if (
@@ -285,7 +285,7 @@ export class OpenCodeInteractions {
     }
     return this.snapshot(scope)
   }
-  snapshot(scope: OpenCodeInteractionScope): RunInterruptOutcome | undefined {
+  snapshot(scope: OpenCodeInteractionScope): PendingRequest[] | undefined {
     const s: Scope = {
       agentId: scope.agentId,
       sessionId: scope.sessionId,
@@ -295,51 +295,48 @@ export class OpenCodeInteractions {
       (p) => identity(p.scope) === identity(s)
     )
     if (!pending.length) return
-    return {
-      type: "interrupt",
-      interrupts: pending.map((p) => {
-        if (p.kind === "permission")
-          return {
-            id: p.id,
-            reason: "approval",
-            responseSchema: {
-              type: "string",
-              enum: ["once", "always", "deny"],
-            },
-          }
+    return pending.map((p) => {
+      if (p.kind === "permission")
         return {
-          id: p.id,
-          reason: "question",
-          message: `${p.questions!.length} questions require answers`,
+          requestId: p.id,
+          kind: PendingRequestKind.Permission,
           responseSchema: {
-            type: "array",
-            minItems: p.questions!.length,
-            maxItems: p.questions!.length,
-            items: p.questions!.map((q) => ({
-              type: "array",
-              minItems: 0,
-              maxItems: q.multiple ? q.options.length : 1,
-              items: q.custom
-                ? { type: "string", maxLength: MAX_TEXT_BYTES }
-                : { type: "string", enum: q.options.map((o) => o.publicValue) },
-            })),
+            type: "string",
+            enum: ["once", "always", "deny"],
           },
         }
-      }),
-    }
+      return {
+        requestId: p.id,
+        kind: PendingRequestKind.Elicitation,
+        message: `${p.questions!.length} questions require answers`,
+        responseSchema: {
+          type: "array",
+          minItems: p.questions!.length,
+          maxItems: p.questions!.length,
+          items: p.questions!.map((q) => ({
+            type: "array",
+            minItems: 0,
+            maxItems: q.multiple ? q.options.length : 1,
+            items: q.custom
+              ? { type: "string", maxLength: MAX_TEXT_BYTES }
+              : { type: "string", enum: q.options.map((o) => o.publicValue) },
+          })),
+        },
+      }
+    })
   }
   async respond(
     scope: OpenCodeInteractionScope,
-    resume: unknown
+    replies: unknown
   ): Promise<{ status: "resolved" | "in-progress" }> {
-    const { s, entries } = this.#entries(scope, resume)
+    const { s, entries } = this.#entries(scope, replies)
     if (entries.some((e) => e.p.state === "dispatching"))
       return { status: "in-progress" }
     await this.#dispatch(s, entries)
     return { status: "resolved" }
   }
 
-  #entries(scope: OpenCodeInteractionScope, resume: unknown) {
+  #entries(scope: OpenCodeInteractionScope, replies: unknown) {
     const s: Scope = {
       agentId: scope.agentId,
       sessionId: scope.sessionId,
@@ -350,19 +347,19 @@ export class OpenCodeInteractions {
     )
     if (
       !pending.length ||
-      !Array.isArray(resume) ||
-      resume.length !== pending.length
+      !Array.isArray(replies) ||
+      replies.length !== pending.length
     )
       throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
-    const entries: DispatchEntry[] = resume.map((raw) => {
+    const entries: DispatchEntry[] = replies.map((raw) => {
       const e = record(raw)
       if (
         !e ||
-        !text(e.interruptId, 512) ||
+        !text(e.requestId, 512) ||
         (e.status !== "resolved" && e.status !== "cancelled")
       )
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-      const p = pending.find((x) => x.id === e.interruptId)
+      const p = pending.find((x) => x.id === e.requestId)
       if (!p)
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
       return {
@@ -414,9 +411,9 @@ export class OpenCodeInteractions {
     for (const e of entries) this.#pending.delete(key(s, e.p.id))
   }
 
-  #fingerprint(resume: unknown) {
+  #fingerprint(replies: unknown) {
     try {
-      const fingerprint = JSON.stringify(resume)
+      const fingerprint = JSON.stringify(replies)
       if (typeof fingerprint !== "string")
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
       return fingerprint

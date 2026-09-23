@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { PendingRequestKind } from "../../core/events"
+
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeInteractions } from "./interactions"
 
@@ -47,14 +49,20 @@ describe("OpenCodeInteractions", () => {
     })
 
     await expect(interactions.discover(scope)).resolves.toEqual([
-      expect.objectContaining({ id: "question-1", reason: "question" }),
-      expect.objectContaining({ id: "permission-1", reason: "approval" }),
+      expect.objectContaining({
+        requestId: "question-1",
+        kind: PendingRequestKind.Elicitation,
+      }),
+      expect.objectContaining({
+        requestId: "permission-1",
+        kind: PendingRequestKind.Permission,
+      }),
     ])
     expect(questions).toHaveBeenCalledWith("native-session-1")
     expect(permissions).toHaveBeenCalledWith("native-session-1")
   })
 
-  it("separates a bound resume validation from its one native dispatch", async () => {
+  it("separates a bound reply validation from its one native dispatch", async () => {
     const reply = vi.fn(async () => undefined)
     const interactions = new OpenCodeInteractions({
       questions: {
@@ -80,7 +88,7 @@ describe("OpenCodeInteractions", () => {
     })
     const resume = [
       {
-        interruptId: "question-1",
+        requestId: "question-1",
         status: "resolved" as const,
         payload: [["option-1"]],
       },
@@ -102,7 +110,7 @@ describe("OpenCodeInteractions", () => {
       permissions: { reply: vi.fn(async () => undefined) },
     })
 
-    const interrupt = interactions.acceptQuestion(scope, {
+    const requests = interactions.acceptQuestion(scope, {
       id: "native-question-id",
       sessionID: "native-session-1",
       questions: [
@@ -123,20 +131,17 @@ describe("OpenCodeInteractions", () => {
       ],
     })
 
-    expect(interrupt).toMatchObject({
-      type: "interrupt",
-      interrupts: [
-        {
-          id: "native-question-id",
-          reason: "question",
-          message: "2 questions require answers",
-        },
-      ],
-    })
+    expect(requests).toMatchObject([
+      {
+        requestId: "native-question-id",
+        kind: PendingRequestKind.Elicitation,
+        message: "2 questions require answers",
+      },
+    ])
     await expect(
       interactions.respond(scope, [
         {
-          interruptId: "native-question-id",
+          requestId: "native-question-id",
           status: "resolved",
           payload: [["option-1"], ["option-1"]],
         },
@@ -177,7 +182,7 @@ describe("OpenCodeInteractions", () => {
     await expect(
       interactions.respond(scope, [
         {
-          interruptId: "native-question-id",
+          requestId: "native-question-id",
           status: "resolved",
           payload: [["option-1"]],
         },
@@ -186,7 +191,7 @@ describe("OpenCodeInteractions", () => {
     await expect(
       interactions.respond(scope, [
         {
-          interruptId: "native-question-id",
+          requestId: "native-question-id",
           status: "resolved",
           payload: [["Outside"], ["option-1"]],
         },
@@ -195,7 +200,7 @@ describe("OpenCodeInteractions", () => {
     expect(reply).not.toHaveBeenCalled()
   })
 
-  it("maps complete session-scoped resume batches from a new segment back to exact native labels", async () => {
+  it("maps complete session-scoped reply batches from a new segment back to exact native labels", async () => {
     const reply = vi.fn(async () => undefined)
     const permission = vi.fn(async () => undefined)
     const interactions = new OpenCodeInteractions({
@@ -220,7 +225,7 @@ describe("OpenCodeInteractions", () => {
       resources: [],
     })
     const publicChoice = (
-      question.interrupts[0]!.responseSchema!.items as Array<{
+      question[0]!.responseSchema!.items as Array<{
         items: { enum: string[] }
       }>
     )[0]!.items.enum[0]!
@@ -228,11 +233,11 @@ describe("OpenCodeInteractions", () => {
     await expect(
       interactions.respond({ ...scope, runId: "resume-segment" }, [
         {
-          interruptId: "question-1",
+          requestId: "question-1",
           status: "resolved",
           payload: [[publicChoice]],
         },
-        { interruptId: "permission-1", status: "resolved", payload: "once" },
+        { requestId: "permission-1", status: "resolved", payload: "once" },
       ])
     ).resolves.toEqual({ status: "resolved" })
     expect(reply).toHaveBeenCalledWith("native-session-1", "question-1", {
@@ -266,7 +271,7 @@ describe("OpenCodeInteractions", () => {
     await expect(
       interactions.respond({ ...scope, runId: "resume-segment" }, [
         {
-          interruptId: "question-1",
+          requestId: "question-1",
           status: "resolved",
           payload: [["option-1"]],
         },
@@ -296,7 +301,7 @@ describe("OpenCodeInteractions", () => {
     }
     const response = [
       {
-        interruptId: "question-1",
+        requestId: "question-1",
         status: "resolved",
         payload: [["option-1"]],
       },

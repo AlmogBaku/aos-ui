@@ -1,9 +1,9 @@
 import {
-  RunEventKind,
+  TurnEventKind,
   aggregateTokenUsage,
   type TokenUsage,
+  type TurnEvent,
 } from "../../core/events"
-import type { RunEvent } from "../../core/events"
 
 import { projectTodos, type Todo } from "../todos"
 
@@ -20,14 +20,8 @@ const MAX_EVENT_BYTES = 2 * 1024 * 1024
 const MAX_DUPLICATE_FINGERPRINTS = 256
 const MAX_JSON_DEPTH = 64
 
-type ProjectorScope = Readonly<{
-  sessionId: string
-  threadId: string
-  runId: string
-}>
-
 type Projection = Readonly<{
-  events: RunEvent[]
+  events: TurnEvent[]
   terminal?: "finished" | "error"
   admissionId?: string
   admissionBoundary?: boolean
@@ -521,7 +515,7 @@ export function validateOpenCodeLiveEvent(
 }
 
 export class OpenCodeEventProjector {
-  readonly #scope: ProjectorScope
+  readonly #sessionId: string
   readonly #epoch: string
   readonly #tools = new Map<string, ToolState>()
   readonly #fingerprints = new Map<number, string>()
@@ -530,33 +524,27 @@ export class OpenCodeEventProjector {
   #lastSeen: number
   #closed = false
   #stopping = false
-  #messageId?: string
-  #textOpen = false
-  #reasoningId?: string
-  #reasoningOpen = false
   /**
-   * The last plan this projector published, so an unchanged list is silent and
-   * the first change after one is a patch. A projector lives for one run
-   * segment, and a suppressed replay rebuilds this without emitting.
+   * The last plan this projector published, so an unchanged list is silent. A
+   * projector lives for one turn segment, and a suppressed replay rebuilds this
+   * without emitting.
    */
   #plan?: string
   readonly #usage: TokenUsage[] = []
 
   constructor(
-    scope: ProjectorScope,
+    sessionId: string,
     lastSeen: number,
     options: Readonly<{ admissionId?: string }> = {}
   ) {
     if (
-      !identifier(scope.sessionId) ||
-      !boundedString(scope.threadId) ||
-      !boundedString(scope.runId) ||
+      !identifier(sessionId) ||
       (lastSeen !== -1 && integer(lastSeen) === undefined) ||
       (options.admissionId !== undefined && !identifier(options.admissionId))
     )
       throw new OpenCodeEventValidationError()
-    this.#scope = scope
-    this.#epoch = `opencode:${scope.sessionId}`
+    this.#sessionId = sessionId
+    this.#epoch = `opencode:${sessionId}`
     this.#lastSeen = lastSeen
     this.#admissionId = options.admissionId
     this.#admissionMatched = options.admissionId === undefined
@@ -572,13 +560,13 @@ export class OpenCodeEventProjector {
 
   accept(value: OpenCodeDurableEvent): Projection {
     return this.acceptValidated(
-      validateOpenCodeLiveEvent(value, this.#scope.sessionId)
+      validateOpenCodeLiveEvent(value, this.#sessionId)
     )
   }
 
   acceptHistory(value: unknown): Projection {
     return this.acceptValidated(
-      validateOpenCodeHistoryEvent(value, this.#scope.sessionId)
+      validateOpenCodeHistoryEvent(value, this.#sessionId)
     )
   }
 
@@ -621,18 +609,14 @@ export class OpenCodeEventProjector {
   finish(): Projection {
     if (this.#closed) return { events: [] }
     this.#closed = true
-    const events = this.#closeOpenContent(
+    const events = this.#closeOpenTools(
       this.#stopping ? "stopped" : "completed"
     )
     events.push({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: this.#scope.threadId,
-      runId: this.#scope.runId,
-      ...(this.#stopping ? { result: { stopped: true } } : {}),
+      kind: TurnEventKind.TurnEnded,
       ...(this.#usage.length
         ? { usage: aggregateTokenUsage(this.#usage) }
         : {}),
-      outcome: { type: "success" },
     })
     return { events, terminal: "finished" }
   }
@@ -640,14 +624,14 @@ export class OpenCodeEventProjector {
   fail(code: string, message: string): Projection {
     if (this.#closed) return { events: [] }
     this.#closed = true
-    const events = this.#closeOpenContent()
-    events.push({ type: RunEventKind.RUN_ERROR, code, message })
+    const events = this.#closeOpenTools()
+    events.push({ kind: TurnEventKind.TurnFailed, code, message })
     return { events, terminal: "error" }
   }
 
   #project(event: ValidatedOpenCodeEvent): Projection {
     const { type, data } = event
-    const events: RunEvent[] = []
+    const events: TurnEvent[] = []
     if (type === "session.next.prompt.admitted") {
       const id = data.messageID as string
       if (!this.#admissionMatched) {
@@ -657,39 +641,20 @@ export class OpenCodeEventProjector {
       }
       return { events, admissionId: id, admissionBoundary: true }
     }
-    if (type === "session.next.reasoning.started") {
-      this.#openReasoning(
-        events,
-        data.assistantMessageID as string,
-        data.reasoningID as string
-      )
-    } else if (type === "session.next.reasoning.ended") {
-      const messageId = data.assistantMessageID as string
-      const reasoningId = data.reasoningID as string
-      this.#openReasoning(events, messageId, reasoningId)
+    if (
+      type === "session.next.reasoning.ended" ||
+      type === "session.next.text.ended"
+    ) {
       const text = data.text as string
       if (text)
         events.push({
-          type: RunEventKind.REASONING_MESSAGE_CONTENT,
-          messageId: reasoningId,
-          delta: text,
+          kind:
+            type === "session.next.text.ended"
+              ? TurnEventKind.MessageChunk
+              : TurnEventKind.ThoughtChunk,
+          messageId: data.assistantMessageID as string,
+          text,
         })
-      this.#closeReasoning(events)
-    } else if (type === "session.next.text.started") {
-      this.#closeReasoning(events)
-      this.#openText(events, data.assistantMessageID as string)
-    } else if (type === "session.next.text.ended") {
-      const messageId = data.assistantMessageID as string
-      this.#closeReasoning(events)
-      this.#openText(events, messageId)
-      const text = data.text as string
-      if (text)
-        events.push({
-          type: RunEventKind.TEXT_MESSAGE_CONTENT,
-          messageId,
-          delta: text,
-        })
-      this.#closeText(events)
     } else if (type === "session.next.tool.input.started") {
       this.#openTool(
         events,
@@ -705,7 +670,7 @@ export class OpenCodeEventProjector {
       const text = data.text as string
       if (text) {
         events.push({
-          type: RunEventKind.TOOL_CALL_ARGS,
+          kind: TurnEventKind.ToolCallInputChunk,
           toolCallId: callId,
           delta: text,
         })
@@ -724,23 +689,16 @@ export class OpenCodeEventProjector {
       if (!tool.args) {
         const args = JSON.stringify(data.input)
         events.push({
-          type: RunEventKind.TOOL_CALL_ARGS,
+          kind: TurnEventKind.ToolCallInputChunk,
           toolCallId: callId,
           delta: args,
         })
         tool.args = args
       }
     } else if (type === "session.next.tool.progress") {
-      const callId = data.callID as string
-      if (!this.#tools.has(callId)) throw new OpenCodeEventValidationError()
-      const text = safeTextContent(data.content)
-      events.push({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: `${this.#scope.runId}:progress:${callId}`,
-        activityType: "PROGRESS",
-        content: { callId, status: "running", ...(text ? { text } : {}) },
-        replace: true,
-      })
+      // Progress has no turn fact of its own yet; it only has to name a call.
+      if (!this.#tools.has(data.callID as string))
+        throw new OpenCodeEventValidationError()
     } else if (
       type === "session.next.tool.success" ||
       type === "session.next.tool.failed"
@@ -749,19 +707,20 @@ export class OpenCodeEventProjector {
       const tool = this.#tools.get(callId)
       if (!tool || tool.ended) throw new OpenCodeEventValidationError()
       tool.ended = true
-      events.push({ type: RunEventKind.TOOL_CALL_END, toolCallId: callId })
-      events.push({
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: `${tool.messageId}:tool:${callId}`,
-        toolCallId: callId,
-        content:
-          type === "session.next.tool.failed"
+      const failed = type === "session.next.tool.failed"
+      events.push(
+        { kind: TurnEventKind.ToolCallInputEnded, toolCallId: callId },
+        {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: callId,
+          output: failed
             ? JSON.stringify({ status: "error" })
             : toolResultContent(tool.name, safeTextContent(data.content)),
-        role: "tool",
-      })
+          failed,
+        }
+      )
       // A written list is authoritative; a failed write left the plan alone.
-      if (type === "session.next.tool.success" && tool.todoInput) {
+      if (!failed && tool.todoInput) {
         const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
         if (todos) this.#emitPlan(events, todos)
       }
@@ -776,67 +735,16 @@ export class OpenCodeEventProjector {
     return { events }
   }
 
-  /**
-   * Publishes this Session's plan on the one standard Todo channel: a snapshot
-   * the first time, a patch for every later change, and nothing at all when the
-   * list did not change.
-   */
-  #emitPlan(events: RunEvent[], todos: Todo[]) {
+  /** Publishes this Session's whole plan, and nothing when it did not change. */
+  #emitPlan(events: TurnEvent[], todos: Todo[]) {
     const plan = JSON.stringify(todos)
     if (this.#plan === plan) return
-    const messageId = `aos-plan:${this.#scope.threadId}`
-    events.push(
-      this.#plan === undefined
-        ? {
-            type: RunEventKind.ACTIVITY_SNAPSHOT,
-            messageId,
-            activityType: "PLAN",
-            content: { todos },
-            replace: true,
-          }
-        : {
-            type: RunEventKind.ACTIVITY_DELTA,
-            messageId,
-            activityType: "PLAN",
-            patch: [{ op: "replace", path: "/todos", value: todos }],
-          }
-    )
+    events.push({ kind: TurnEventKind.PlanUpdated, todos })
     this.#plan = plan
   }
 
-  #openReasoning(events: RunEvent[], messageId: string, reasoningId: string) {
-    if (this.#reasoningOpen) {
-      if (this.#messageId !== messageId || this.#reasoningId !== reasoningId)
-        throw new OpenCodeEventValidationError()
-      return
-    }
-    this.#messageId = messageId
-    this.#reasoningId = reasoningId
-    this.#reasoningOpen = true
-    events.push({
-      type: RunEventKind.REASONING_MESSAGE_START,
-      messageId: reasoningId,
-      role: "reasoning",
-    })
-  }
-
-  #openText(events: RunEvent[], messageId: string) {
-    if (this.#textOpen) {
-      if (this.#messageId !== messageId)
-        throw new OpenCodeEventValidationError()
-      return
-    }
-    this.#messageId = messageId
-    this.#textOpen = true
-    events.push({
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId,
-      role: "assistant",
-    })
-  }
-
   #openTool(
-    events: RunEvent[],
+    events: TurnEvent[],
     callId: string,
     messageId: string,
     name: string
@@ -850,47 +758,30 @@ export class OpenCodeEventProjector {
     const tool: ToolState = { messageId, name, args: "", ended: false }
     this.#tools.set(callId, tool)
     events.push({
-      type: RunEventKind.TOOL_CALL_START,
+      kind: TurnEventKind.ToolCallStarted,
       toolCallId: callId,
-      toolCallName: canonicalOpenCodeToolName(name),
+      title: canonicalOpenCodeToolName(name),
       parentMessageId: messageId,
     })
     return tool
   }
 
-  #closeReasoning(events: RunEvent[]) {
-    if (!this.#reasoningOpen || !this.#reasoningId) return
-    events.push({
-      type: RunEventKind.REASONING_MESSAGE_END,
-      messageId: this.#reasoningId,
-    })
-    this.#reasoningOpen = false
-  }
-
-  #closeText(events: RunEvent[]) {
-    if (!this.#textOpen || !this.#messageId) return
-    events.push({
-      type: RunEventKind.TEXT_MESSAGE_END,
-      messageId: this.#messageId,
-    })
-    this.#textOpen = false
-  }
-
-  #closeOpenContent(toolStatus?: "completed" | "stopped") {
-    const events: RunEvent[] = []
-    this.#closeReasoning(events)
-    this.#closeText(events)
+  /** Ends every open call; a settled turn also finishes each with `status`. */
+  #closeOpenTools(status?: "completed" | "stopped") {
+    const events: TurnEvent[] = []
     for (const [callId, tool] of this.#tools) {
       if (tool.ended) continue
       tool.ended = true
-      events.push({ type: RunEventKind.TOOL_CALL_END, toolCallId: callId })
-      if (toolStatus)
+      events.push({
+        kind: TurnEventKind.ToolCallInputEnded,
+        toolCallId: callId,
+      })
+      if (status)
         events.push({
-          type: RunEventKind.TOOL_CALL_RESULT,
-          messageId: `${tool.messageId}:tool:${callId}`,
+          kind: TurnEventKind.ToolCallFinished,
           toolCallId: callId,
-          content: JSON.stringify({ status: toolStatus }),
-          role: "tool",
+          output: JSON.stringify({ status }),
+          failed: false,
         })
     }
     return events

@@ -1,4 +1,4 @@
-import { RunEventKind, RunEventSchema } from "../../core/events"
+import { TurnEventKind, TurnEventSchema } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -7,11 +7,7 @@ import {
   validateOpenCodeLiveEvent,
 } from "./events"
 
-const scope = {
-  sessionId: "session-1",
-  threadId: "thread-1",
-  runId: "run-1",
-}
+const sessionId = "session-1"
 
 function durable(
   seq: number,
@@ -23,7 +19,7 @@ function durable(
     id: `native-${seq}`,
     type,
     durable: {
-      aggregateID: scope.sessionId,
+      aggregateID: sessionId,
       seq,
       version:
         type === "session.next.step.ended" ||
@@ -31,7 +27,7 @@ function durable(
           ? 2
           : 1,
     },
-    data: { sessionID: scope.sessionId, ...data },
+    data: { sessionID: sessionId, ...data },
     ...overrides,
   }
 }
@@ -49,16 +45,13 @@ function live(
   }
 }
 
-function planEvents(event: { type: RunEventKind }) {
-  return (
-    event.type === RunEventKind.ACTIVITY_SNAPSHOT ||
-    event.type === RunEventKind.ACTIVITY_DELTA
-  )
+function planEvents(event: { kind: TurnEventKind }) {
+  return event.kind === TurnEventKind.PlanUpdated
 }
 
 describe("OpenCodeEventProjector", () => {
-  it("orders real durable reasoning, text, tools, progress, usage, and authoritative finish as AG-UI", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+  it("orders real durable reasoning, text, tools, progress, usage, and authoritative finish as turn events", () => {
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     const events = [
       live(1, "session.next.reasoning.started", {
         assistantMessageID: "assistant-1",
@@ -132,27 +125,39 @@ describe("OpenCodeEventProjector", () => {
     ].flatMap((event) => projector.accept(event).events)
     events.push(...projector.finish().events)
 
-    expect(events.map((event) => event.type)).toEqual([
-      RunEventKind.REASONING_MESSAGE_START,
-      RunEventKind.REASONING_MESSAGE_CONTENT,
-      RunEventKind.REASONING_MESSAGE_END,
-      RunEventKind.TEXT_MESSAGE_START,
-      RunEventKind.TEXT_MESSAGE_CONTENT,
-      RunEventKind.TEXT_MESSAGE_END,
-      RunEventKind.TOOL_CALL_START,
-      RunEventKind.TOOL_CALL_ARGS,
-      RunEventKind.ACTIVITY_SNAPSHOT,
-      RunEventKind.TOOL_CALL_END,
-      RunEventKind.TOOL_CALL_RESULT,
-      RunEventKind.RUN_FINISHED,
+    expect(events.slice(0, -1)).toEqual([
+      {
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "assistant-1",
+        text: "think",
+      },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Hi there",
+      },
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "call-1",
+        title: "read",
+        parentMessageId: "assistant-1",
+      },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "call-1",
+        delta: '{"path":"README.md"}',
+      },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-1" },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "call-1",
+        output: "contents",
+        failed: false,
+      },
     ])
-    expect(events[8]).toMatchObject({
-      activityType: "PROGRESS",
-      content: { callId: "call-1", status: "running", text: "Reading" },
-    })
-    expect(events[10]).toMatchObject({ content: "contents" })
     expect(JSON.stringify(events)).not.toContain("/private/worktree")
-    expect(events.at(-1)).toMatchObject({
+    expect(events.at(-1)).toEqual({
+      kind: TurnEventKind.TurnEnded,
       usage: [
         {
           inputTokens: 11,
@@ -162,14 +167,13 @@ describe("OpenCodeEventProjector", () => {
           totalTokens: 23,
         },
       ],
-      outcome: { type: "success" },
     })
     for (const event of events)
-      expect(RunEventSchema.safeParse(event).success).toBe(true)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
   })
 
   it("accepts the real durable tool failure shape and emits a safe terminal tool result", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     projector.accept(
       live(1, "session.next.tool.input.started", {
         assistantMessageID: "assistant-1",
@@ -191,20 +195,19 @@ describe("OpenCodeEventProjector", () => {
       )
     ).toEqual({
       events: [
-        { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+        { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-1" },
         {
-          type: RunEventKind.TOOL_CALL_RESULT,
-          messageId: "assistant-1:tool:call-1",
+          kind: TurnEventKind.ToolCallFinished,
           toolCallId: "call-1",
-          content: '{"status":"error"}',
-          role: "tool",
+          output: '{"status":"error"}',
+          failed: true,
         },
       ],
     })
   })
 
   it("emits the native subagent tool under its canonical name with a summary result", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
 
     expect(
       projector.accept(
@@ -217,9 +220,9 @@ describe("OpenCodeEventProjector", () => {
       ).events
     ).toEqual([
       {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "call-1",
-        toolCallName: "delegate_subagent",
+        title: "delegate_subagent",
         parentMessageId: "assistant-1",
       },
     ])
@@ -237,7 +240,7 @@ describe("OpenCodeEventProjector", () => {
       ).events
     ).toEqual([
       {
-        type: RunEventKind.TOOL_CALL_ARGS,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "call-1",
         delta: '{"description":"Review the launch plan"}',
       },
@@ -255,19 +258,18 @@ describe("OpenCodeEventProjector", () => {
         })
       ).events
     ).toEqual([
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-1" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "assistant-1:tool:call-1",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "call-1",
-        content: '{"summary":"The review is complete."}',
-        role: "tool",
+        output: '{"summary":"The review is complete."}',
+        failed: false,
       },
     ])
   })
 
   it("publishes the native Todo tool's own input as this Session's plan", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     const called = (
       seq: number,
       callId: string,
@@ -308,16 +310,11 @@ describe("OpenCodeEventProjector", () => {
     called(1, "call-1", running)
 
     expect(succeeded(2, "call-1").at(-1)).toEqual({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: `aos-plan:${scope.threadId}`,
-      activityType: "PLAN",
-      content: {
-        todos: [
-          { id: "0", label: "Read the adapter", status: "active" },
-          { id: "1", label: "Write the test", status: "pending" },
-        ],
-      },
-      replace: true,
+      kind: TurnEventKind.PlanUpdated,
+      todos: [
+        { id: "0", label: "Read the adapter", status: "active" },
+        { id: "1", label: "Write the test", status: "pending" },
+      ],
     })
 
     // An unchanged list is the plan the browser already holds.
@@ -332,24 +329,16 @@ describe("OpenCodeEventProjector", () => {
     })
 
     expect(succeeded(6, "call-3").at(-1)).toEqual({
-      type: RunEventKind.ACTIVITY_DELTA,
-      messageId: `aos-plan:${scope.threadId}`,
-      activityType: "PLAN",
-      patch: [
-        {
-          op: "replace",
-          path: "/todos",
-          value: [
-            { id: "0", label: "Read the adapter", status: "completed" },
-            { id: "1", label: "Write the test", status: "failed" },
-          ],
-        },
+      kind: TurnEventKind.PlanUpdated,
+      todos: [
+        { id: "0", label: "Read the adapter", status: "completed" },
+        { id: "1", label: "Write the test", status: "failed" },
       ],
     })
   })
 
   it("publishes no plan at all for a native Todo tool input it cannot read", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     projector.accept(
       live(1, "session.next.tool.called", {
         assistantMessageID: "assistant-1",
@@ -373,19 +362,18 @@ describe("OpenCodeEventProjector", () => {
         })
       ).events
     ).toEqual([
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-1" },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-1" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "assistant-1:tool:call-1",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "call-1",
-        content: "Todos updated.",
-        role: "tool",
+        output: "Todos updated.",
+        failed: false,
       },
     ])
   })
 
   it("publishes no plan for a native Todo tool call that failed", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     projector.accept(
       live(1, "session.next.tool.called", {
         assistantMessageID: "assistant-1",
@@ -413,7 +401,7 @@ describe("OpenCodeEventProjector", () => {
   })
 
   it("rebuilds the plan from a suppressed replay without publishing it again", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     const input = {
       todos: [{ content: "Read the adapter", status: "in_progress" }],
     }
@@ -437,7 +425,7 @@ describe("OpenCodeEventProjector", () => {
     ])
       expect(
         projector.reconstructValidated(
-          validateOpenCodeLiveEvent(event, scope.sessionId)
+          validateOpenCodeLiveEvent(event, sessionId)
         ).events
       ).toEqual([])
 
@@ -469,7 +457,7 @@ describe("OpenCodeEventProjector", () => {
   })
 
   it("validates the complete native durable envelope and rejects foreign aggregate correlation", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     const malformed = live(
       1,
       "session.next.text.started",
@@ -503,7 +491,7 @@ describe("OpenCodeEventProjector", () => {
             },
             timestamp: 1,
           },
-          { durable: { aggregateID: scope.sessionId, seq: 1, version: 1 } }
+          { durable: { aggregateID: sessionId, seq: 1, version: 1 } }
         )
       )
     ).toThrow(OpenCodeEventValidationError)
@@ -511,7 +499,7 @@ describe("OpenCodeEventProjector", () => {
   })
 
   it("rejects forward gaps and unknown durable event types without advancing", () => {
-    const projector = new OpenCodeEventProjector(scope, 3)
+    const projector = new OpenCodeEventProjector(sessionId, 3)
 
     expect(() =>
       projector.accept(
@@ -529,7 +517,7 @@ describe("OpenCodeEventProjector", () => {
   })
 
   it("allowlists and validates intentionally ignored prompt admission events", () => {
-    const projector = new OpenCodeEventProjector(scope, 0, {
+    const projector = new OpenCodeEventProjector(sessionId, 0, {
       admissionId: "aos-admission",
     })
 
@@ -561,7 +549,7 @@ describe("OpenCodeEventProjector", () => {
   })
 
   it("repairs missed non-durable text deltas from a real durable ended event", () => {
-    const projector = new OpenCodeEventProjector(scope, 8)
+    const projector = new OpenCodeEventProjector(sessionId, 8)
 
     expect(
       projector.acceptHistory(
@@ -572,15 +560,17 @@ describe("OpenCodeEventProjector", () => {
           timestamp: 9,
         })
       ).events
-    ).toMatchObject([
-      { type: RunEventKind.TEXT_MESSAGE_START, messageId: "assistant-1" },
-      { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "Recovered text" },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "assistant-1" },
+    ).toEqual([
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Recovered text",
+      },
     ])
   })
 
   it("aggregates usage across every durable provider step in a tool-continuation run", () => {
-    const projector = new OpenCodeEventProjector(scope, 0)
+    const projector = new OpenCodeEventProjector(sessionId, 0)
     for (const [seq, input, output] of [
       [1, 10, 4],
       [2, 20, 6],
@@ -601,7 +591,7 @@ describe("OpenCodeEventProjector", () => {
       )
 
     expect(projector.finish().events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
+      kind: TurnEventKind.TurnEnded,
       usage: [
         {
           inputTokens: 30,

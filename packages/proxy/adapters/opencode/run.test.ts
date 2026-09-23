@@ -1,4 +1,10 @@
-import { RunEventKind, RunEventSchema, type TurnInput } from "../../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  TurnEventSchema,
+  type PromptTurnInput,
+  type TurnInput,
+} from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
 import type {
@@ -24,15 +30,11 @@ const admission = {
     "aos_957d880ef3fdbdf4c7672021817c07ee7a619ed7e18b557da7e9b07adad0b12c",
 }
 
-function input(overrides: Partial<TurnInput> = {}): TurnInput {
+function input(overrides: Partial<PromptTurnInput> = {}): TurnInput {
   return {
-    threadId: scope.threadId,
-    runId: "run-1",
-    state: {},
-    messages: [{ id: "user-1", role: "user", content: "Hello OpenCode" }],
-    tools: [],
-    context: [],
-    forwardedProps: {},
+    turnId: "run-1",
+    messageId: "user-1",
+    prompt: "Hello OpenCode",
     ...overrides,
   }
 }
@@ -239,20 +241,20 @@ describe("OpenCodeRunEngine", () => {
     const second = controlledStream()
     const sources = [first.source, second.source]
     const order: string[] = []
-    const interrupt = {
-      id: "question-1",
-      reason: "question",
+    const request = {
+      requestId: "question-1",
+      kind: PendingRequestKind.Elicitation,
       message: "Choose",
       responseSchema: { type: "string", enum: ["yes", "no"] },
     }
     const discover = vi
       .fn(async () => {
         order.push("interactions")
-        return [interrupt]
+        return [request]
       })
       .mockImplementationOnce(async () => {
         order.push("interactions")
-        return [interrupt]
+        return [request]
       })
       .mockImplementationOnce(async () => {
         order.push("interactions")
@@ -273,41 +275,30 @@ describe("OpenCodeRunEngine", () => {
       }),
     })
     const engine = new OpenCodeRunEngine(state.native, {
-      resume: {
+      replies: {
         discover,
         validate: vi.fn(async () => undefined),
         dispatch: vi.fn(async () => undefined),
       },
     })
 
-    const waiting = await engine.discover(scope, "recovered-question")
+    const waiting = await engine.discover(scope)
 
     expect(waiting?.state).toBe("waiting-for-input")
-    expect(waiting?.interrupts).toEqual([interrupt])
+    expect(waiting?.requests).toEqual([request])
     // A restored wait was never streamed, so it names no position: a fabricated
     // one would force the next recovery to reset.
     expect(waiting?.handle.recoveryPosition()).toBeUndefined()
     const waitingEvents = await collect(waiting!.handle)
     expect(waitingEvents).toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "recovered-question",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "recovered-question",
-        outcome: { type: "interrupt", interrupts: [interrupt] },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnRequiresAction, requests: [request] },
     ])
     expect(
-      waitingEvents.every((event) => RunEventSchema.safeParse(event).success)
+      waitingEvents.every((event) => TurnEventSchema.safeParse(event).success)
     ).toBe(true)
 
-    await expect(engine.discover(scope, "cleared-question")).resolves.toBe(
-      undefined
-    )
+    await expect(engine.discover(scope)).resolves.toBe(undefined)
     expect(order).toEqual([
       "ownership",
       "history",
@@ -326,35 +317,33 @@ describe("OpenCodeRunEngine", () => {
     const failure = new Error("interaction authority unavailable")
     const state = client()
     const engine = new OpenCodeRunEngine(state.native, {
-      resume: {
+      replies: {
         discover: vi.fn(async () => Promise.reject(failure)),
         validate: vi.fn(async () => undefined),
         dispatch: vi.fn(async () => undefined),
       },
     })
 
-    await expect(engine.discover(scope, "failed-discovery")).rejects.toBe(
-      failure
-    )
+    await expect(engine.discover(scope)).rejects.toBe(failure)
     expect(state.observation.abort).toHaveBeenCalledOnce()
   })
 
   it("repeats interaction discovery when a scoped event overlaps its read", async () => {
     const firstRead = deferred()
-    const interrupt = {
-      id: "question-current",
-      reason: "question",
+    const request = {
+      requestId: "question-current",
+      kind: PendingRequestKind.Elicitation,
       message: "Current question",
       responseSchema: { type: "string" },
     }
     const discover = vi
-      .fn(async () => [interrupt])
+      .fn(async () => [request])
       .mockImplementationOnce(async () => {
         await firstRead.promise
         return [
           {
-            id: "question-stale",
-            reason: "question",
+            requestId: "question-stale",
+            kind: PendingRequestKind.Elicitation,
             message: "Stale question",
             responseSchema: { type: "string" },
           },
@@ -362,14 +351,14 @@ describe("OpenCodeRunEngine", () => {
       })
     const state = client()
     const engine = new OpenCodeRunEngine(state.native, {
-      resume: {
+      replies: {
         discover,
         validate: vi.fn(async () => undefined),
         dispatch: vi.fn(async () => undefined),
       },
     })
 
-    const discovered = engine.discover(scope, "recovered-current-question")
+    const discovered = engine.discover(scope)
     await until(() => expect(discover).toHaveBeenCalledOnce())
     state.observation.publish(
       liveEvent(0, "session.next.prompt.admitted", {
@@ -384,7 +373,7 @@ describe("OpenCodeRunEngine", () => {
 
     await expect(discovered).resolves.toMatchObject({
       state: "waiting-for-input",
-      interrupts: [interrupt],
+      requests: [request],
     })
     expect(discover).toHaveBeenCalledTimes(2)
     expect(state.observation.abort).toHaveBeenCalledOnce()
@@ -442,15 +431,17 @@ describe("OpenCodeRunEngine", () => {
     const events = await collect(handle)
     expect(state.sessions.prompt).toHaveBeenCalledOnce()
     expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {})
-    expect(events.map((value) => (value as { type: string }).type)).toEqual([
-      RunEventKind.RUN_STARTED,
-      RunEventKind.TEXT_MESSAGE_START,
-      RunEventKind.TEXT_MESSAGE_CONTENT,
-      RunEventKind.TEXT_MESSAGE_END,
-      RunEventKind.RUN_FINISHED,
+    expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Done",
+      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     for (const value of events)
-      expect(RunEventSchema.safeParse(value).success).toBe(true)
+      expect(TurnEventSchema.safeParse(value).success).toBe(true)
   })
 
   it("uses a backoff timer for authoritative reconciliation when native wait is unavailable", async () => {
@@ -493,7 +484,7 @@ describe("OpenCodeRunEngine", () => {
 
     await expect(handle.settled).resolves.toBeUndefined()
     expect((await collect(handle)).at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
+      kind: TurnEventKind.TurnEnded,
     })
     expect(state.sessions.wait).toHaveBeenCalledOnce()
   })
@@ -513,7 +504,7 @@ describe("OpenCodeRunEngine", () => {
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
-  it("validates a bound resume before bypassing active conflict, subscribes before its void mutation, and invents no cursor", async () => {
+  it("validates bound replies before bypassing active conflict, subscribes before its void mutation, and invents no cursor", async () => {
     const order: string[] = []
     const state = client({
       active: vi.fn(async () => ({
@@ -526,7 +517,7 @@ describe("OpenCodeRunEngine", () => {
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
     const engine = new OpenCodeRunEngine(state.native, {
-      resume: {
+      replies: {
         validate: vi.fn(async () => {
           order.push("validate")
         }),
@@ -536,16 +527,12 @@ describe("OpenCodeRunEngine", () => {
       },
     })
 
-    const handle = await engine.start(
-      scope,
-      input({
-        runId: "run-resume",
-        messages: [],
-        resume: [
-          { interruptId: "approval-1", status: "resolved", payload: "once" },
-        ],
-      })
-    )
+    const handle = await engine.start(scope, {
+      turnId: "run-resume",
+      replies: [
+        { requestId: "approval-1", status: "resolved", payload: "once" },
+      ],
+    })
 
     expect(order).toEqual(["validate", "subscribe", "dispatch"])
     expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {})
@@ -579,7 +566,7 @@ describe("OpenCodeRunEngine", () => {
     expect(JSON.stringify(events)).toContain("Recovered")
     expect(JSON.stringify(events)).not.toContain("Other")
     expect(JSON.stringify(events)).not.toContain("Newer")
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it.each([
@@ -599,10 +586,9 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        RunEventKind.RUN_STARTED,
-        RunEventKind.TEXT_MESSAGE_CONTENT,
-        RunEventKind.TEXT_MESSAGE_END,
-        RunEventKind.RUN_FINISHED,
+        TurnEventKind.TurnStarted,
+        TurnEventKind.MessageChunk,
+        TurnEventKind.TurnEnded,
       ],
     },
     {
@@ -621,10 +607,9 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        RunEventKind.RUN_STARTED,
-        RunEventKind.REASONING_MESSAGE_CONTENT,
-        RunEventKind.REASONING_MESSAGE_END,
-        RunEventKind.RUN_FINISHED,
+        TurnEventKind.TurnStarted,
+        TurnEventKind.ThoughtChunk,
+        TurnEventKind.TurnEnded,
       ],
     },
     {
@@ -652,11 +637,11 @@ describe("OpenCodeRunEngine", () => {
         }),
       ],
       expected: [
-        RunEventKind.RUN_STARTED,
-        RunEventKind.TOOL_CALL_ARGS,
-        RunEventKind.TOOL_CALL_END,
-        RunEventKind.TOOL_CALL_RESULT,
-        RunEventKind.RUN_FINISHED,
+        TurnEventKind.TurnStarted,
+        TurnEventKind.ToolCallInputChunk,
+        TurnEventKind.ToolCallInputEnded,
+        TurnEventKind.ToolCallFinished,
+        TurnEventKind.TurnEnded,
       ],
     },
   ])(
@@ -688,9 +673,7 @@ describe("OpenCodeRunEngine", () => {
       })
       const events = await collect(handle)
 
-      expect(events.map((event) => (event as { type: string }).type)).toEqual(
-        expected
-      )
+      expect(events.map((event) => event.kind)).toEqual(expected)
       expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {
         after: "1",
       })
@@ -698,7 +681,7 @@ describe("OpenCodeRunEngine", () => {
     }
   )
 
-  it("re-emits one valid run error when recovery starts after a durable step failure", async () => {
+  it("re-emits one valid turn failure when recovery starts after a durable step failure", async () => {
     const failure = {
       ...historyEvent(1, "session.next.step.failed", {
         timestamp: 1,
@@ -729,12 +712,12 @@ describe("OpenCodeRunEngine", () => {
     })
     const events = await collect(handle)
 
-    expect(events.map((event) => (event as { type: string }).type)).toEqual([
-      RunEventKind.RUN_STARTED,
-      RunEventKind.RUN_ERROR,
+    expect(events.map((event) => event.kind)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.TurnFailed,
     ])
     expect(
-      events.filter((event) => RunEventSchema.safeParse(event).success)
+      events.filter((event) => TurnEventSchema.safeParse(event).success)
     ).toHaveLength(events.length)
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
@@ -827,10 +810,10 @@ describe("OpenCodeRunEngine", () => {
     await expect(stopped).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     const events = await collect(handle)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_ERROR })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnFailed })
   })
 
-  it("emits valid open-lifecycle closures before transport RUN_ERROR", async () => {
+  it("emits valid open-lifecycle closures before a transport turn failure", async () => {
     const state = client({
       active: vi
         .fn()
@@ -853,22 +836,21 @@ describe("OpenCodeRunEngine", () => {
       })
     )
     state.observation.publish(
-      liveEvent(1, "session.next.reasoning.started", {
+      liveEvent(1, "session.next.tool.input.started", {
         timestamp: 1,
         assistantMessageID: "assistant-open",
-        reasoningID: "reasoning-open",
+        callID: "call-open",
+        name: "read",
       })
     )
     await until(() => expect(handle.recoveryPosition().lastSeen).toBe(1))
     state.observation.fail()
 
-    expect(
-      (await collect(handle)).map((event) => (event as { type: string }).type)
-    ).toEqual([
-      RunEventKind.RUN_STARTED,
-      RunEventKind.REASONING_MESSAGE_START,
-      RunEventKind.REASONING_MESSAGE_END,
-      RunEventKind.RUN_ERROR,
+    expect((await collect(handle)).map((event) => event.kind)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.ToolCallStarted,
+      TurnEventKind.ToolCallInputEnded,
+      TurnEventKind.TurnFailed,
     ])
   })
 
@@ -975,9 +957,8 @@ describe("OpenCodeRunEngine", () => {
 
     await expect(handle.stop()).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
-    expect((await collect(handle)).at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
-      result: { stopped: true },
+    expect((await collect(handle)).at(-1)).toEqual({
+      kind: TurnEventKind.TurnEnded,
     })
   })
 
@@ -1058,20 +1039,15 @@ describe("OpenCodeRunEngine", () => {
         setTimeout(() => resolve("timed-out"), 100)
       ),
     ])
-    const next = await sessions.start(scope, input({ runId: "run-2" }), access)
+    const next = await sessions.start(scope, input({ turnId: "run-2" }), access)
 
     expect(terminal).not.toBe("timed-out")
     if (terminal === "timed-out") throw new Error("run did not settle")
     const [events] = terminal
-    expect(events.map((event) => (event as { type: string }).type)).toEqual([
-      RunEventKind.RUN_STARTED,
-      RunEventKind.RUN_FINISHED,
+    expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
-    expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
-      result: { stopped: true },
-    })
-    expect(RunEventSchema.safeParse(events.at(-1)).success).toBe(true)
     expect(next.runId).toBe("run-2")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
@@ -1107,7 +1083,7 @@ describe("OpenCodeRunEngine", () => {
     expect(first.abort).toHaveBeenCalledOnce()
     const priorEvents = await collect(prior)
     expect(priorEvents).toHaveLength(2)
-    expect(priorEvents.at(-1)).toMatchObject({ type: RunEventKind.RUN_ERROR })
+    expect(priorEvents.at(-1)).toMatchObject({ kind: TurnEventKind.TurnFailed })
   })
 
   it("settles a transport-failed Stop through the authoritative replacement recovery", async () => {
@@ -1181,15 +1157,8 @@ describe("OpenCodeRunEngine", () => {
     await expect(stopped).resolves.toBe("stopping")
     await expect(recovered.stop()).resolves.toBe("idle")
     expect(
-      recoveredEvents.filter(
-        (event) => event.type === RunEventKind.RUN_FINISHED
-      )
-    ).toEqual([
-      expect.objectContaining({
-        type: RunEventKind.RUN_FINISHED,
-        result: { stopped: true },
-      }),
-    ])
+      recoveredEvents.filter((event) => event.kind === TurnEventKind.TurnEnded)
+    ).toEqual([{ kind: TurnEventKind.TurnEnded }])
     expect(first.abort).toHaveBeenCalledOnce()
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
@@ -1268,19 +1237,12 @@ describe("OpenCodeRunEngine", () => {
     const recoveredEvents = await recoveredEventsPromise
 
     expect(
-      recoveredEvents.filter(
-        (event) => event.type === RunEventKind.RUN_FINISHED
-      )
-    ).toEqual([
-      expect.objectContaining({
-        type: RunEventKind.RUN_FINISHED,
-        result: { stopped: true },
-      }),
-    ])
+      recoveredEvents.filter((event) => event.kind === TurnEventKind.TurnEnded)
+    ).toEqual([{ kind: TurnEventKind.TurnEnded }])
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
-  it("resets a segment instead of growing an unconsumed AG-UI queue", async () => {
+  it("resets a segment instead of growing an unconsumed turn-event queue", async () => {
     const state = client({
       active: vi
         .fn()
@@ -1302,19 +1264,23 @@ describe("OpenCodeRunEngine", () => {
         delivery: "queue",
       })
     )
+    // Nothing reads the queue while one native call projects its start and input.
     state.observation.publish(
-      liveEvent(1, "session.next.text.ended", {
+      liveEvent(1, "session.next.tool.called", {
         timestamp: 1,
         assistantMessageID: "assistant-overflow",
-        textID: "text-overflow",
-        text: "overflow",
+        callID: "call-overflow",
+        tool: "read",
+        input: { path: "README.md" },
+        provider: { executed: true },
       })
     )
+    await until(() => expect(handle.recoveryPosition().lastSeen).toBe(1))
 
     const events = await collect(handle)
     expect(events).toHaveLength(2)
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_RESET_REQUIRED",
     })
   })

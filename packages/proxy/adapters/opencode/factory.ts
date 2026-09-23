@@ -44,7 +44,8 @@ export async function createOpenCodeRuntime(
     permissions: client.sessions.permissions,
   })
   const runs =
-    dependencies.runs ?? new OpenCodeRunEngine(client, { resume: interactions })
+    dependencies.runs ??
+    new OpenCodeRunEngine(client, { replies: interactions })
   const runtime = new OpenCodeServerAdapter({
     client,
     runs,

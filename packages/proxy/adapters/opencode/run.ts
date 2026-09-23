@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto"
 
 import {
-  RunEventKind,
+  TurnEventKind,
   TurnInputSchema,
+  isRepliesTurn,
   type PendingRequest,
   type RequestReply,
+  type TurnEvent,
+  type TurnInput,
 } from "../../core/events"
-import type { RunEvent } from "../../core/events"
 
 import {
   ServerRunConflictError,
-  type NewTurnRunInput,
   type RecoveryRequest,
-  type ResumeRunInput,
   type ServerRunEngine,
   type ServerRunHandle,
   type ServerAttachmentStage,
@@ -39,13 +39,13 @@ const DEFAULT_MAX_QUEUE_EVENTS = 2_048
 const DEFAULT_MAX_BUFFERED_EVENTS = 1_024
 const DEFAULT_WAIT_RETRY_MS = 250
 
-export type OpenCodeBoundResume = Readonly<{
+export type OpenCodeBoundReplies = Readonly<{
   /** Reads and binds the complete authoritative pending interaction batch. */
   discover?(scope: SessionScope): Promise<readonly PendingRequest[] | undefined>
-  /** Must prove every response is still bound to a pending native interaction. */
-  validate(scope: SessionScope, resume: readonly RequestReply[]): Promise<void>
+  /** Must prove every reply is still bound to a pending native interaction. */
+  validate(scope: SessionScope, replies: readonly RequestReply[]): Promise<void>
   /** Performs exactly one native 204 mutation after observation is attached. */
-  dispatch(scope: SessionScope, resume: readonly RequestReply[]): Promise<void>
+  dispatch(scope: SessionScope, replies: readonly RequestReply[]): Promise<void>
 }>
 
 type OpenCodeRunClient = Readonly<{
@@ -56,7 +56,7 @@ type OpenCodeRunClient = Readonly<{
 }>
 
 export type OpenCodeRunEngineOptions = Readonly<{
-  resume?: OpenCodeBoundResume
+  replies?: OpenCodeBoundReplies
   maxQueueEvents?: number
   maxBufferedEvents?: number
   waitRetryMs?: number
@@ -65,7 +65,6 @@ export type OpenCodeRunEngineOptions = Readonly<{
 type ActiveRun = {
   key: string
   scope: SessionScope
-  runId: string
   projector: OpenCodeEventProjector
   queue: EventQueue
   controller: AbortController
@@ -101,8 +100,8 @@ type ScopedNativeSettlement = Settlement & {
   stopRequested: boolean
 }
 
-class EventQueue implements AsyncIterable<RunEvent> {
-  readonly #values: RunEvent[] = []
+class EventQueue implements AsyncIterable<TurnEvent> {
+  readonly #values: TurnEvent[] = []
   readonly #waiters: Array<() => void> = []
   readonly #maximum: number
   #closed = false
@@ -111,7 +110,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
     this.#maximum = maximum
   }
 
-  push(event: RunEvent) {
+  push(event: TurnEvent) {
     if (this.#closed) return true
     if (this.#values.length >= this.#maximum) return false
     this.#values.push(event)
@@ -119,10 +118,10 @@ class EventQueue implements AsyncIterable<RunEvent> {
     return true
   }
 
-  resetWith(event: RunEvent) {
+  resetWith(event: TurnEvent) {
     if (this.#closed) return
     const started = this.#values.find(
-      (value) => value.type === RunEventKind.RUN_STARTED
+      (value) => value.kind === TurnEventKind.TurnStarted
     )
     this.#values.length = 0
     if (started && this.#maximum > 1) this.#values.push(started)
@@ -166,54 +165,18 @@ function positiveInteger(value: unknown, fallback: number) {
     : fallback
 }
 
-function isEmptyAuthority(value: unknown) {
-  if (value === undefined || value === null) return true
-  if (Array.isArray(value)) return value.length === 0
-  return typeof value === "object" && Object.keys(value).length === 0
-}
-
-function userText(input: ReturnType<typeof TurnInputSchema.parse>) {
-  const message = input.messages[0]
-  if (!message || message.role !== "user") return
-  if (typeof message.content === "string") return message.content
-  if (!Array.isArray(message.content)) return
-  let text = ""
-  for (const part of message.content) {
-    if (part.type !== "text") return
-    text += part.text
-  }
-  return text
-}
-
-function validateInput(
-  scope: SessionScope,
-  candidate: NewTurnRunInput | ResumeRunInput
-) {
+function validateInput(scope: SessionScope, candidate: TurnInput) {
   const input = TurnInputSchema.parse(candidate)
-  if (input.threadId !== scope.threadId)
-    throw new Error("AOS run scope does not match this Session")
-  if (
-    !isEmptyAuthority(input.state) ||
-    input.tools.length > 0 ||
-    input.context.length > 0 ||
-    !isEmptyAuthority(input.forwardedProps)
-  )
-    throw new Error("AOS does not accept browser authority as OpenCode input")
-  if ("rewindSourceId" in candidate && candidate.rewindSourceId !== undefined)
+  if (isRepliesTurn(input)) return { input, replies: input.replies }
+  if (input.rewindSourceId !== undefined)
     throw new Error(
       "OpenCode Edit and Retry are not handled by this run engine"
     )
-  const resume = input.resume?.length ? input.resume : undefined
-  const text = userText(input)
-  if (resume) {
-    if (input.messages.length !== 0)
-      throw new Error("AOS interrupt responses are not new user prompts")
-  } else if (input.messages.length !== 1 || !text) {
-    throw new Error("AOS runs require exactly one authorized user turn")
-  }
-  if (text && new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
+  const text = input.prompt
+  if (!text) throw new Error("AOS turns require exactly one user prompt")
+  if (new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
     throw new Error("The AOS user turn is too large")
-  return { input, resume, text }
+  return { input, text }
 }
 
 function admissionId(scope: SessionScope, runId: string) {
@@ -333,8 +296,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     )
   }
 
-  async discover(scope: SessionScope, runId: string) {
-    const discover = this.#options.resume?.discover
+  async discover(scope: SessionScope) {
+    const discover = this.#options.replies?.discover
     if (!discover) return undefined
     await this.#verifyOwnership(scope)
     const history = await this.#readHistory(scope.sessionId)
@@ -377,19 +340,14 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         if (observationFailed) throw observationFailure
       } while (dirty)
       if (!discovered?.length) return undefined
-      const interrupts = structuredClone([...discovered])
-      const events: RunEvent[] = [
-        { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
-        {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId,
-          outcome: { type: "interrupt", interrupts },
-        },
+      const requests = structuredClone([...discovered])
+      const events: TurnEvent[] = [
+        { kind: TurnEventKind.TurnStarted },
+        { kind: TurnEventKind.TurnRequiresAction, requests },
       ]
       return {
         state: "waiting-for-input" as const,
-        interrupts,
+        requests,
         handle: {
           events: (async function* () {
             yield* events
@@ -410,10 +368,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
 
   async start(
     scope: SessionScope,
-    candidate: NewTurnRunInput | ResumeRunInput,
+    candidate: TurnInput,
     stage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
-    const { input, resume, text } = validateInput(scope, candidate)
+    const { input, replies, text } = validateInput(scope, candidate)
     let files: readonly { uri: string; name?: string }[] | undefined
     if (stage) {
       try {
@@ -424,10 +382,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
     await this.#verifyOwnership(scope)
 
-    if (resume) {
-      if (!this.#options.resume)
-        throw new Error("OpenCode interaction resume is unavailable")
-      await this.#options.resume.validate(scope, resume)
+    if (replies) {
+      if (!this.#options.replies)
+        throw new Error("OpenCode interaction replies are unavailable")
+      await this.#options.replies.validate(scope, replies)
     } else if (await this.#active(scope.sessionId)) {
       // The native Session owns a turn AOS did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
@@ -436,10 +394,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
 
     const before = await this.#readHistory(scope.sessionId)
     const baseline = before.at(-1)?.seq ?? -1
-    const expectedAdmission = resume
+    const expectedAdmission = replies
       ? undefined
-      : admissionId(scope, input.runId)
-    const run = this.#createRun(scope, input.runId, baseline, expectedAdmission)
+      : admissionId(scope, input.turnId)
+    const run = this.#createRun(scope, baseline, expectedAdmission)
 
     try {
       await this.#attach(run, baseline)
@@ -448,7 +406,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       // closes the history-to-subscription window.
       const caughtUp = await this.#readHistory(scope.sessionId, baseline)
       if (caughtUp.length) {
-        if (!resume)
+        if (!replies)
           throw new Error("OpenCode became active before prompt admission")
         const next = caughtUp.at(-1)!.seq
         run.projector = this.#projector(run, next)
@@ -458,8 +416,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         throw new Error("OpenCode observation failed before run mutation")
 
       const after = run.projector.recoveryPosition().lastSeen
-      if (resume) {
-        await this.#options.resume!.dispatch(scope, resume)
+      if (replies) {
+        await this.#options.replies!.dispatch(scope, replies)
       } else {
         const acknowledgement = await this.#client.sessions.prompt(
           scope.sessionId,
@@ -505,12 +463,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
 
     const requestedAfter = request.position?.lastSeen ?? -1
     const expectedAdmission = admissionId(scope, request.runId)
-    const run = this.#createRun(
-      scope,
-      request.runId,
-      requestedAfter,
-      expectedAdmission
-    )
+    const run = this.#createRun(scope, requestedAfter, expectedAdmission)
 
     try {
       // Start consuming immediately. The bounded buffer remains live while the
@@ -575,7 +528,6 @@ export class OpenCodeRunEngine implements ServerRunEngine {
 
   #createRun(
     scope: SessionScope,
-    runId: string,
     after: number,
     expectedAdmission?: string
   ): ActiveRun {
@@ -599,21 +551,14 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       }
       this.#nativeSettlements.set(key, nativeSettlement)
     }
-    queue.push({
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId,
+    queue.push({ kind: TurnEventKind.TurnStarted })
+    const projector = new OpenCodeEventProjector(scope.sessionId, after, {
+      admissionId: expectedAdmission,
     })
-    const projector = new OpenCodeEventProjector(
-      { sessionId: scope.sessionId, threadId: scope.threadId, runId },
-      after,
-      { admissionId: expectedAdmission }
-    )
     if (nativeSettlement.stopRequested) projector.markStopping()
     return {
       key,
       scope,
-      runId,
       projector,
       queue,
       controller: new AbortController(),
@@ -636,15 +581,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   }
 
   #projector(run: ActiveRun, after: number, expectedAdmission?: string) {
-    const projector = new OpenCodeEventProjector(
-      {
-        sessionId: run.scope.sessionId,
-        threadId: run.scope.threadId,
-        runId: run.runId,
-      },
-      after,
-      { admissionId: expectedAdmission }
-    )
+    const projector = new OpenCodeEventProjector(run.scope.sessionId, after, {
+      admissionId: expectedAdmission,
+    })
     if (run.nativeSettlement.stopRequested) projector.markStopping()
     return projector
   }
