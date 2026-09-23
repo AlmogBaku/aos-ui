@@ -856,7 +856,10 @@ describe("ACP workspace client", () => {
           id: "sonnet",
           label: "Sonnet",
           group: "Anthropic",
-          efforts: ["low", "high"],
+          efforts: [
+            { id: "low", name: "Low" },
+            { id: "high", name: "High" },
+          ],
         },
         { id: "opus", label: "Opus", group: "Anthropic" },
       ],
@@ -879,7 +882,10 @@ describe("ACP workspace client", () => {
       id: "opus",
       label: "Opus",
       group: "Anthropic",
-      efforts: ["low", "high"],
+      efforts: [
+        { id: "low", name: "Low" },
+        { id: "high", name: "High" },
+      ],
     })
   })
 

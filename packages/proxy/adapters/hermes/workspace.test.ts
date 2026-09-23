@@ -23,7 +23,7 @@ const reasoningLadder = [
   "xhigh",
   "max",
   "ultra",
-]
+].map((id) => ({ id }))
 
 /** A Hermes catalog whose only model reports reasoning it cannot disable. */
 function modelOptions(method: string) {
@@ -421,7 +421,7 @@ describe("Hermes workspace operations", () => {
           id: '["native","small"]',
           label: "small",
           group: "Native models",
-          efforts: ["none", ...reasoningLadder],
+          efforts: [{ id: "none" }, ...reasoningLadder],
         },
         {
           id: '["native","large"]',

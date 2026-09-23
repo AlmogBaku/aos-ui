@@ -51,7 +51,8 @@ export const configOptionsOf = ((models) => {
       // ACP requires a current value; the provider's own default reports no
       // effort, which stays unset rather than claiming one of the ladder's ids.
       currentValue: models.effortId ?? "",
-      options: efforts.map((id) => ({ value: id, name: id })),
+      // ACP requires a name; an effort the provider left unnamed goes by its id.
+      options: efforts.map(({ id, name }) => ({ value: id, name: name ?? id })),
     })
   return options
 }) satisfies ConfigOptionsOf

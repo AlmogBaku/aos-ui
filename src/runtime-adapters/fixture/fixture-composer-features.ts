@@ -15,7 +15,7 @@ const FIXTURE_MODEL_OPTIONS = [
     id: "fixture-balanced",
     label: "Fixture Balanced",
     group: "Fixture",
-    efforts: ["low", "medium", "high"] as readonly string[],
+    efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
   },
   { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
 ] as const

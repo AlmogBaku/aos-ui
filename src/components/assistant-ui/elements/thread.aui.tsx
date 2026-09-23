@@ -68,6 +68,7 @@ import {
   matchLocalCommand,
   menuSlashCommands,
   type ComposerFeatureViewModel,
+  type ComposerModelEffort,
 } from "@/components/assistant-ui/composer-features"
 import {
   isUncertainDelivery,
@@ -259,6 +260,22 @@ const DEFAULT_EFFORT_LEVEL_LABELS: Record<string, string> = {
   xhigh: "Extra high",
   max: "Max",
   ultra: "Ultra",
+}
+
+/**
+ * A ladder id keeps its localized name; an effort outside the ladder shows the
+ * name its provider gave, and failing that its raw id.
+ */
+function effortLevelNames(
+  localized: Record<string, string>,
+  efforts: readonly ComposerModelEffort[]
+): Record<string, string> {
+  return Object.fromEntries(
+    efforts.map(({ id, name }) => [
+      id,
+      (Object.hasOwn(localized, id) ? localized[id] : name) ?? id,
+    ])
+  )
 }
 
 const DEFAULT_LABELS: ThreadLabels = {
@@ -1395,7 +1412,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             switching: labels.modelSwitching,
             retry: labels.modelRetry,
             effort: labels.effortSelector,
-            effortLevels: labels.effortLevels,
+            effortLevels: effortLevelNames(labels.effortLevels, efforts ?? []),
             effortUnset: labels.effortUnset,
           }}
           models={models}
@@ -1414,7 +1431,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           }}
           {...(update && efforts?.length
             ? {
-                efforts,
+                efforts: efforts.map(({ id }) => id),
                 effortValue: effortId,
                 onEffortChange: (effortId: string) => {
                   void update({ effortId })

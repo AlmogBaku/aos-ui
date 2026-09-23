@@ -115,7 +115,7 @@ export type HermesModelChoice = {
   id: string
   label: string
   group: string
-  efforts?: readonly string[]
+  efforts?: readonly { id: string }[]
 }
 
 export type HermesModelChoices = {
@@ -221,7 +221,8 @@ type NativeModel = HermesModelChoice & { provider: string; model: string }
 
 /**
  * Hermes reports reasoning support per model but never sends the ladder, so an
- * unknown model reports no efforts rather than an assumed ladder.
+ * unknown model reports no efforts rather than an assumed ladder. Nor does it
+ * name a level, so each effort is its id alone.
  */
 function projectEfforts(capability: unknown) {
   if (!isRecord(capability) || capability.reasoning !== true) return undefined
@@ -230,7 +231,7 @@ function projectEfforts(capability: unknown) {
       ? [HERMES_REASONING_DISABLED]
       : []),
     ...HERMES_REASONING_EFFORTS,
-  ]
+  ].map((id) => ({ id }))
 }
 
 function projectEffortId(value: unknown) {
