@@ -16,6 +16,7 @@ import {
   type AosToolCallMetaSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext } from "../types"
+import { StopReason, type ToolDiff } from "../../core/events"
 
 /**
  * The `session/update` values the proxy emits, each carrying the `_meta.aos`
@@ -133,5 +134,25 @@ export function planUpdate(
       })),
     },
     _meta: { [AOS_META_KEY]: { ...meta, todos } },
+  }
+}
+
+/** The ACP stop reason for each domain one. */
+export const ACP_STOP_REASON = {
+  [StopReason.EndTurn]: "end_turn",
+  [StopReason.MaxTokens]: "max_tokens",
+  [StopReason.MaxTurnRequests]: "max_turn_requests",
+  [StopReason.Refusal]: "refusal",
+  [StopReason.Cancelled]: "cancelled",
+} as const satisfies Record<StopReason, string>
+
+/** A call's changed files and patch as ACP diff content. */
+export function diffContent({ changes, patch }: ToolDiff): ToolCallContent {
+  return {
+    type: "diff",
+    changes,
+    ...(patch === undefined
+      ? {}
+      : { patch: { format: "git_patch", text: patch } }),
   }
 }

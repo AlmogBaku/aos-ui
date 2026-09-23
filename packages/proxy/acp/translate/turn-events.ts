@@ -14,12 +14,10 @@ import {
   CompactionStatus,
   isAwaitingStopFailure,
   isUncertainFailure,
-  StopReason,
   sumTokenCounts,
   TurnEventKind,
   type Subagent,
   type TokenUsage,
-  type ToolDiff,
   type TurnEvent,
   type TurnEventOf,
 } from "../../core/events"
@@ -38,17 +36,11 @@ import {
   stateOutbound,
   TodosSchema,
   toolContentOutbound,
+  ACP_STOP_REASON,
+  diffContent,
   toolOutbound,
   update,
 } from "./updates"
-
-const ACP_STOP_REASON = {
-  [StopReason.EndTurn]: "end_turn",
-  [StopReason.MaxTokens]: "max_tokens",
-  [StopReason.MaxTurnRequests]: "max_turn_requests",
-  [StopReason.Refusal]: "refusal",
-  [StopReason.Cancelled]: "cancelled",
-} as const satisfies Record<StopReason, string>
 
 const ACP_COMPACTION_STATUS = {
   [CompactionStatus.Started]: "in_progress",
@@ -125,16 +117,6 @@ function wireSubagent(subagent: Subagent | undefined) {
 
 function textContent(text: string): ToolCallContent {
   return { type: "content", content: { type: "text", text } }
-}
-
-function diffContent({ changes, patch }: ToolDiff): ToolCallContent {
-  return {
-    type: "diff",
-    changes,
-    ...(patch === undefined
-      ? {}
-      : { patch: { format: "git_patch", text: patch } }),
-  }
 }
 
 /**

@@ -2,8 +2,25 @@ import { z } from "zod"
 
 import {
   ArtifactDescriptorSchema,
+  StopReason,
+  ToolDiffSchema,
+  ToolKind,
+  ToolLocationSchema,
   TurnSteerResponseSchema,
   SessionTodosResponseSchema,
+} from "../../protocol"
+
+// The facts a stored Session message also carries live in the protocol, so a
+// reload replays them; adapters keep reaching them through this vocabulary.
+export {
+  DiffChangeSchema,
+  DiffOperation,
+  StopReason,
+  ToolDiffSchema,
+  ToolKind,
+  ToolLocationSchema,
+  type ToolDiff,
+  type ToolLocation,
 } from "../../protocol"
 
 /**
@@ -83,18 +100,6 @@ export const RequestReplySchema = z.strictObject({
 })
 export type RequestReply = z.infer<typeof RequestReplySchema>
 
-/** Why a turn that ended cleanly stopped. */
-export const StopReason = {
-  EndTurn: "end-turn",
-  /** The model hit its output token limit. */
-  MaxTokens: "max-tokens",
-  /** The turn used up the provider's budget of model requests. */
-  MaxTurnRequests: "max-turn-requests",
-  Refusal: "refusal",
-  Cancelled: "cancelled",
-} as const
-export type StopReason = (typeof StopReason)[keyof typeof StopReason]
-
 const CountSchema = z.number().int().nonnegative()
 
 /** What one provider call spent, as the provider reported it. */
@@ -160,64 +165,8 @@ export const CostSchema = z.strictObject({
 })
 export type Cost = z.infer<typeof CostSchema>
 
-/** What a tool does, so a reader can pick how to show it. */
-export const ToolKind = {
-  Read: "read",
-  Edit: "edit",
-  Delete: "delete",
-  Move: "move",
-  Search: "search",
-  Execute: "execute",
-  Think: "think",
-  Fetch: "fetch",
-  Other: "other",
-} as const
-export type ToolKind = (typeof ToolKind)[keyof typeof ToolKind]
-
 /** Timestamps are UTC ISO 8601, as `Date.prototype.toISOString` writes them. */
 const TimestampSchema = z.string().datetime()
-
-/** A file a tool call reads or changes; the path is absolute. */
-export const ToolLocationSchema = z.strictObject({
-  path: z.string().min(1),
-  line: CountSchema.optional(),
-})
-export type ToolLocation = z.infer<typeof ToolLocationSchema>
-
-/** What a change did to one file. */
-export const DiffOperation = {
-  Add: "add",
-  Delete: "delete",
-  Modify: "modify",
-  Move: "move",
-  Copy: "copy",
-} as const
-export type DiffOperation = (typeof DiffOperation)[keyof typeof DiffOperation]
-
-/** One changed file; a move or copy also names where it came from. */
-export const DiffChangeSchema = z.union([
-  z.strictObject({
-    operation: z.enum([
-      DiffOperation.Add,
-      DiffOperation.Delete,
-      DiffOperation.Modify,
-    ]),
-    path: z.string().min(1),
-  }),
-  z.strictObject({
-    operation: z.enum([DiffOperation.Move, DiffOperation.Copy]),
-    oldPath: z.string().min(1),
-    path: z.string().min(1),
-  }),
-])
-
-/** The files a call changed and, when the provider has it, the git patch. */
-export const ToolDiffSchema = z.strictObject({
-  changes: z.array(DiffChangeSchema).min(1),
-  /** Unified diff text in `git diff` format. */
-  patch: z.string().optional(),
-})
-export type ToolDiff = z.infer<typeof ToolDiffSchema>
 
 /** How far a delegated subagent has got. */
 export const SubagentStatus = {

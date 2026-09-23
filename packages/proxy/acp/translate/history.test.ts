@@ -275,6 +275,95 @@ describe("translateHistory", () => {
     expect(update).not.toHaveProperty("rawOutput")
   })
 
+  it("replays the kind, locations, diffs and timing a stored call kept", () => {
+    const [update] = updatesOf(
+      translateHistory(
+        {
+          ...history,
+          messages: [
+            {
+              id: "a6",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "c6",
+                  toolName: "edit_file",
+                  args: { path: "/work/a.ts" },
+                  argsText: '{"path":"/work/a.ts"}',
+                  result: "ok",
+                  kind: "edit",
+                  locations: [{ path: "/work/a.ts", line: 3 }],
+                  diffs: [
+                    {
+                      changes: [{ operation: "modify", path: "/work/a.ts" }],
+                      patch: "--- a/work/a.ts\n+++ b/work/a.ts\n",
+                    },
+                  ],
+                  startedAt: "2026-09-19T09:00:05.000Z",
+                  completedAt: "2026-09-19T09:00:06.500Z",
+                  durationMs: 1500,
+                },
+              ],
+              createdAt: "2026-09-19T09:00:05.000Z",
+            },
+          ],
+        },
+        "operator"
+      ).filter(
+        (item) =>
+          item.kind === "update" &&
+          item.update.sessionUpdate === "tool_call_update"
+      )
+    )
+
+    expect(update).toMatchObject({
+      kind: "edit",
+      locations: [{ path: "/work/a.ts", line: 3 }],
+      content: [
+        {
+          type: "diff",
+          changes: [{ operation: "modify", path: "/work/a.ts" }],
+          patch: {
+            format: "git_patch",
+            text: "--- a/work/a.ts\n+++ b/work/a.ts\n",
+          },
+        },
+      ],
+    })
+    expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
+      startedAt: "2026-09-19T09:00:05.000Z",
+      completedAt: "2026-09-19T09:00:06.500Z",
+      durationMs: 1500,
+    })
+  })
+
+  it("ends a turn with the stop reason the provider stored for it", () => {
+    const updates = updatesOf(
+      translateHistory(
+        {
+          ...history,
+          messages: [
+            {
+              id: "a7",
+              role: "assistant",
+              content: [{ type: "text", text: "The list goes on" }],
+              createdAt: "2026-09-19T09:00:07.000Z",
+              stopReason: "max-tokens",
+            },
+          ],
+        },
+        "operator"
+      )
+    )
+
+    expect(updates.at(-1)).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "max_tokens",
+    })
+  })
+
   it("replays the Session Todos as the one plan", () => {
     const update = updatesOf(translateHistory(history, "operator"))[7]
 
@@ -346,8 +435,7 @@ describe("translateHistory", () => {
 
   it("ends a turn still waiting on an answer as an ordinary end of turn", () => {
     // The wait itself is reissued as the pending request the browser answers,
-    // so the replayed turn only says the run stopped here. A durable status has
-    // no cancelled reason, so a stopped turn cannot replay as one either.
+    // so the replayed turn only says the turn stopped here.
     const updates = updatesOf(
       translateHistory(
         {

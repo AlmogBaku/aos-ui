@@ -1,6 +1,10 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionHistoryResponse, SessionMessage } from "../../../protocol"
+import {
+  StopReason,
+  type SessionHistoryResponse,
+  type SessionMessage,
+} from "../../../protocol"
 import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
@@ -13,7 +17,9 @@ import type {
   TranslateHistory,
 } from "../types"
 import {
+  ACP_STOP_REASON,
   chunkOutbound,
+  diffContent,
   planUpdate,
   stateOutbound,
   toolOutbound,
@@ -98,8 +104,16 @@ function toolCallOutbound(
       status: part.isError ? "failed" : "completed",
       rawInput: part.args,
       ...(part.result === undefined ? {} : { rawOutput: part.result }),
+      ...(part.kind ? { kind: part.kind } : {}),
+      ...(part.locations ? { locations: part.locations } : {}),
+      ...(part.diffs ? { content: part.diffs.map(diffContent) } : {}),
     },
-    { argsText: part.argsText }
+    {
+      argsText: part.argsText,
+      ...(part.startedAt ? { startedAt: part.startedAt } : {}),
+      ...(part.completedAt ? { completedAt: part.completedAt } : {}),
+      ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
+    }
   )
 }
 
@@ -109,9 +123,8 @@ function toolCallOutbound(
  * one still waiting on an answer, because the request the attachment reissues is
  * what reopens it.
  *
- * A durable status has no cancelled reason (`SessionMessageErrorStatusSchema`),
- * so a stopped turn replays as the failure or the end of turn the provider
- * persisted for it.
+ * A clean end replays the stop reason the provider stored, and an ordinary end
+ * of turn when it stored none.
  */
 function settledOutbound(
   context: TranslateContext,
@@ -126,7 +139,14 @@ function settledOutbound(
         { state: "idle", stopReason: AOS_STOP_REASONS.error },
         { at, message: failure.error }
       )
-    : stateOutbound(context, { state: "idle", stopReason: "end_turn" }, { at })
+    : stateOutbound(
+        context,
+        {
+          state: "idle",
+          stopReason: ACP_STOP_REASON[message.stopReason ?? StopReason.EndTurn],
+        },
+        { at }
+      )
 }
 
 /**
