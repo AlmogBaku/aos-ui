@@ -2310,7 +2310,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: JSON.stringify({
-        query: "[REDACTED]",
+        query: "OPENAI_API_KEY=[REDACTED]",
         pattern:
           "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
         path: "/srv/private/workspace",
@@ -2325,7 +2325,8 @@ describe("HermesRunEngine", () => {
         sourceUrl: "https://provider.invalid/private",
         filesystem_path: "/srv/private/result.txt",
         access_token: "[REDACTED]",
-        summary: "[REDACTED]",
+        summary:
+          "TOKEN=[REDACTED] see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
       }),
       failed: false,
     })
@@ -2394,7 +2395,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(argumentDeltas).toEqual([
-      ...credentials.map(() => '{"query":"[REDACTED]"}'),
+      ...credentials.map((credential) =>
+        JSON.stringify({
+          query: credential.replace("ordinary-value", "[REDACTED]"),
+        })
+      ),
       JSON.stringify({ query: safe }),
     ])
     for (const credential of credentials)

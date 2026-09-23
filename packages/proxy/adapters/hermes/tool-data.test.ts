@@ -339,7 +339,10 @@ describe("projectHermesToolOutcome", () => {
         exit_code: 1,
         hint: "Retry with OPENAI_API_KEY=sk-live-0123456789abcdefghij set.",
       }).result
-    ).toMatchObject({ exit_code: 1, hint: "[REDACTED]" })
+    ).toMatchObject({
+      exit_code: 1,
+      hint: "Retry with OPENAI_API_KEY=[REDACTED] set.",
+    })
   })
 
   it("publishes an artifact receipt as one public descriptor part", () => {
@@ -428,7 +431,11 @@ describe("projectHermesToolOutcome", () => {
         status: "failed",
         message: "Upload rejected: token=ghp_leaked",
       }).result
-    ).toEqual({ ok: false, status: "failed", message: "[REDACTED]" })
+    ).toEqual({
+      ok: false,
+      status: "failed",
+      message: "Upload rejected: token=[REDACTED]",
+    })
   })
 
   it("collapses a text_to_speech receipt to a status and trusts its media", () => {

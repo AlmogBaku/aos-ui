@@ -47,7 +47,7 @@ describe("createToolTimelineModel", () => {
       },
     ])
 
-    expect(model.steps[0]?.chip).toBe("[REDACTED]")
+    expect(model.steps[0]?.chip).toBe("api_key=[REDACTED]")
   })
 
   it("leaves semantic UI out of the command timeline", () => {

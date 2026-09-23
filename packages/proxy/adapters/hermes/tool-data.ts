@@ -29,6 +29,11 @@ import {
   utf8BytesWithin,
 } from "./native"
 import {
+  isCredentialPlaceholder,
+  REDACTED,
+  redactCredentials,
+} from "@shared/credentials"
+import {
   projectHermesArtifactReceipt,
   projectHermesMediaArtifacts,
 } from "./media-artifacts"
@@ -81,7 +86,8 @@ export function hermesToolKind(canonicalName: string) {
 const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 
 /**
- * An absolute path that may leave the adapter: any one carrying no credential.
+ * An absolute path that may leave the adapter: any one carrying no credential,
+ * and none a projection already masked, since that no longer names the file.
  * Tool data reaches only the operator lane, which sees the Agent's real paths;
  * the guest projection drops tool calls before a path could reach it.
  */
@@ -89,6 +95,7 @@ export function publicPath(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.startsWith("/") &&
+    !value.includes(REDACTED) &&
     !containsCredentialValue(value)
   )
 }
@@ -142,7 +149,6 @@ export type HermesPublicJsonValue =
 
 export type HermesPublicJsonRecord = Record<string, HermesPublicJsonValue>
 
-const REDACTED = "[REDACTED]"
 const TRUNCATED = "[Truncated]"
 const MAX_DEPTH = 6
 const MAX_ENTRIES = 64
@@ -244,30 +250,35 @@ function providerPrivateKey(key: string) {
   )
 }
 
-export function stringContainsCredential(value: string) {
-  if (containsCredentialValue(value)) return true
-  const assignments = value.matchAll(
-    /(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)\s*=/gu
+const ASSIGNMENT =
+  /(^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*["'`]?)([^\s"'`]+)/gu
+
+/**
+ * Native text as a tool projection shows it: each credential-shaped value, and
+ * each value assigned to a credential-named variable, masked in place. A value
+ * that only names a secret (`$TOKEN`) stays readable.
+ */
+export function redactedText(value: string) {
+  return redactCredentials(value).replace(
+    ASSIGNMENT,
+    (match, lead: string, key: string, operator: string, secret: string) =>
+      credentialToolKey(key) && !isCredentialPlaceholder(secret)
+        ? `${lead}${key}${operator}${REDACTED}`
+        : match
   )
-  for (const match of assignments) {
-    if (credentialToolKey(match[1] ?? "")) return true
-  }
-  return false
 }
 
-/** Native text as a tool projection redacts it: whole, when it holds a credential. */
-export function redactedText(value: string) {
-  return stringContainsCredential(value) ? REDACTED : value
+export function stringContainsCredential(value: string) {
+  return redactedText(value) !== value
 }
 
 function projectString(value: string, state: ProjectionState) {
-  if (stringContainsCredential(value)) return REDACTED
   const available = Math.max(
     0,
     Math.min(MAX_STRING_LENGTH, MAX_TOTAL_STRING_LENGTH - state.stringLength)
   )
   if (available === 0) return TRUNCATED
-  const projected = truncateString(value, available)
+  const projected = truncateString(redactedText(value), available)
   state.stringLength += projected.length
   return projected
 }
