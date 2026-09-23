@@ -205,6 +205,8 @@ export const CompactionStatus = {
   Started: "started",
   Completed: "completed",
   Failed: "failed",
+  /** It ended unconfirmed: nothing says the context was compacted. */
+  Cancelled: "cancelled",
 } as const
 export type CompactionStatus =
   (typeof CompactionStatus)[keyof typeof CompactionStatus]

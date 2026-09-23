@@ -107,7 +107,8 @@ standard ACP field or to `_meta.aos`:
 - Partial tool output is `ToolCallOutputChunk`; command output is
   `TerminalOutput`, after its owning `ToolCallStarted`.
 - Compaction is `CompactionUpdated` with a stable id: started, then completed
-  with a summary, or failed with an error.
+  with a summary, failed with an error, or cancelled when the turn ends
+  without the runtime confirming it.
 - `ModelChanged.modelId` is the same id `session/set_config_option` uses for
   the model option.
 - Subagent work names its `subagentId`. The spawning call carries `subagent`,

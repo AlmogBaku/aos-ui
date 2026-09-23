@@ -972,6 +972,12 @@ describe("provider facts", () => {
       error: "timed out",
     })
     expect(compaction(CompactionStatus.Failed)).not.toHaveProperty("summary")
+    expect(compaction(CompactionStatus.Cancelled)).toEqual({
+      sessionUpdate: "compaction_update",
+      compactionId: "k1",
+      status: "cancelled",
+      _meta: { [AOS_META_KEY]: turn },
+    })
   })
 
   it("hands a model change to the attachment", () => {

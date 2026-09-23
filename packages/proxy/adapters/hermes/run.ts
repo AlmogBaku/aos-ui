@@ -695,7 +695,10 @@ export class HermesTurnEngine {
 
   /**
    * Hermes restates `compacting` while a compaction runs and ends it with one
-   * `compacted`; it reports no failure of its own, and only status text.
+   * `compacted`; it reports no failure of its own, and only status text. Its
+   * gateway also tags any lifecycle notice that mentions compaction as
+   * `compacting` (a threshold notice on a Session's first turn), and Hermes'
+   * own client clears that indicator when the turn ends.
    */
   #acceptStatus(active: ActiveTurn, payload: Record<string, unknown>) {
     const { compaction } = active
@@ -715,6 +718,18 @@ export class HermesTurnEngine {
       })
       compaction.open = undefined
     }
+  }
+
+  /** A compaction Hermes never confirmed by the turn's end did not happen. */
+  #settleCompaction(active: ActiveTurn) {
+    const { compaction } = active
+    if (!compaction.open) return
+    this.#emit(active, {
+      kind: TurnEventKind.CompactionUpdated,
+      compactionId: compaction.open,
+      status: CompactionStatus.Cancelled,
+    })
+    compaction.open = undefined
   }
 
   /**
@@ -957,6 +972,7 @@ export class HermesTurnEngine {
       media: true,
       tools: ending.stopped ? "stopped" : "completed",
     })
+    this.#settleCompaction(active)
     // Hermes reports only a completed or an interrupted turn; a turn that
     // settled without saying how goes unsaid.
     const stopReason =
@@ -988,6 +1004,7 @@ export class HermesTurnEngine {
   #fail(active: ActiveTurn, failure: TurnFailure) {
     if (active.terminal) return
     this.#closeGeneration(active)
+    this.#settleCompaction(active)
     this.#emit(active, this.#failed(active, failure))
     this.#settle(active)
   }

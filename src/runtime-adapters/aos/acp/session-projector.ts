@@ -434,7 +434,8 @@ const compactionOf = (id: string) => (name: string, data: unknown) =>
 
 /**
  * A compaction reads where it happened: at first sight it takes its place
- * among the turn's parts, and every later report updates that one divider.
+ * among the turn's parts, and every later report updates that one divider. A
+ * cancelled one compacted nothing, so its divider leaves the turn.
  */
 function applyCompaction(
   state: ProjectorState,
@@ -442,6 +443,8 @@ function applyCompaction(
   meta: unknown
 ): ProjectorState {
   const compactionId = text(update.compactionId)
+  if (compactionId !== undefined && update.status === "cancelled")
+    return withoutCompaction(state, compactionId)
   const status = COMPACTION_STATUS.get(text(update.status) ?? "")
   if (compactionId === undefined || status === undefined) return state
   const summary = listOf(update.summary, isContentBlock)
@@ -474,6 +477,25 @@ function applyCompaction(
     requestHostId(turnId)
   return onMessage(state, id, "assistant", (message) =>
     appendData(message, COMPACTION_DATA_PART_NAME, data)
+  )
+}
+
+function withoutCompaction(
+  state: ProjectorState,
+  compactionId: string
+): ProjectorState {
+  const matches = compactionOf(compactionId)
+  const placed = (part: ProjectedMessage["parts"][number]) =>
+    part.source === "data" && matches(part.name, part.data)
+  if (!state.messages.some((message) => message.parts.some(placed)))
+    return state
+  return withMessages(
+    state,
+    state.messages.map((message) =>
+      message.parts.some(placed)
+        ? { ...message, parts: message.parts.filter((part) => !placed(part)) }
+        : message
+    )
   )
 }
 

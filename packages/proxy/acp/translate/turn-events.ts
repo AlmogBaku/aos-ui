@@ -46,6 +46,7 @@ const ACP_COMPACTION_STATUS = {
   [CompactionStatus.Started]: "in_progress",
   [CompactionStatus.Completed]: "completed",
   [CompactionStatus.Failed]: "failed",
+  [CompactionStatus.Cancelled]: "cancelled",
 } as const satisfies Record<CompactionStatus, string>
 
 /**

@@ -1821,6 +1821,20 @@ describe("applyUpdate compaction", () => {
     ])
   })
 
+  it("drops the divider of a compaction the runtime cancelled", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      compaction({ status: "in_progress" }),
+      agentChunk("a1", "Answer"),
+      compaction({ status: "cancelled" }),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(compactionParts(state)).toEqual([])
+    expect(toThreadMessages(state)).toMatchObject([
+      { id: "a1", content: [{ type: "text", text: "Answer" }] },
+    ])
+  })
+
   it("ignores a status the divider does not draw", () => {
     const state = fold([
       agentChunk("a1", "Hi"),

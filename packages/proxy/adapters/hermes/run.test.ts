@@ -6682,6 +6682,36 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
+  it("cancels a compaction Hermes never confirmed when the turn ends", async () => {
+    // Hermes' gateway tags a threshold notice as `compacting` and never
+    // follows it with `compacted`.
+    const events = await turnEvents((t) => [
+      t.frame("status.update", {
+        kind: "compacting",
+        text: "Auto-compaction was raised to 85% before summarizing.",
+      }),
+      t.messageStart("m1"),
+      t.complete("m1", "Done"),
+    ])
+
+    expect(ofKind(events, TurnEventKind.CompactionUpdated)).toEqual([
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:1",
+        status: "started",
+      },
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:1",
+        status: "cancelled",
+      },
+    ])
+    const kinds = events.map((event) => (event as { kind: string }).kind)
+    expect(kinds.lastIndexOf(TurnEventKind.CompactionUpdated)).toBeLessThan(
+      kinds.indexOf(TurnEventKind.TurnEnded)
+    )
+  })
+
   it("reports a delegated subagent on the call that spawned it", async () => {
     const events = await turnEvents((t) => [
       t.messageStart("m1"),
