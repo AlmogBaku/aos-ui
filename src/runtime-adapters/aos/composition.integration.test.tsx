@@ -798,6 +798,11 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() =>
       expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(false)
     )
+    // Stopped before any reply, the provider still holds the prompt, so it
+    // stays a turn instead of moving back into the composer.
+    expect(screen.getByText("Ship it")).toBeVisible()
+    expect(messageTexts(runtime())).toEqual(["Open it", "Ready", "Ship it"])
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
     await proxy.close()
   })
 
