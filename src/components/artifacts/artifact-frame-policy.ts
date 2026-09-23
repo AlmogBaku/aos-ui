@@ -35,14 +35,27 @@ export function buildArtifactHtmlCsp(
   ].join("; ")
 }
 
-export function injectArtifactHtmlCsp(
+/**
+ * Prepends a CSP meta so the policy governs every script the document holds;
+ * `decorate` may adjust the parsed document before it is serialized.
+ */
+export function injectHtmlCsp(
   html: string,
-  assetOrigins: readonly string[] = []
+  policy: string,
+  decorate?: (document: Document) => void
 ): string {
   const document = new DOMParser().parseFromString(html, "text/html")
   const meta = document.createElement("meta")
   meta.httpEquiv = "Content-Security-Policy"
-  meta.content = buildArtifactHtmlCsp(assetOrigins)
+  meta.content = policy
   document.head.prepend(meta)
+  decorate?.(document)
   return `<!doctype html>${document.documentElement.outerHTML}`
+}
+
+export function injectArtifactHtmlCsp(
+  html: string,
+  assetOrigins: readonly string[] = []
+): string {
+  return injectHtmlCsp(html, buildArtifactHtmlCsp(assetOrigins))
 }

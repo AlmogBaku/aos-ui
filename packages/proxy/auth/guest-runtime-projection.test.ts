@@ -424,6 +424,7 @@ describe("guest AG-UI projection", () => {
           maxTotalBytes: 2_000_000,
         },
         artifacts: { status: "unavailable", reason: "not-supported" },
+        mcpApps: { status: "unavailable", reason: "not-supported" },
         transcription: { status: "unavailable", reason: "not-supported" },
         speech: { status: "unavailable", reason: "not-supported" },
       },
@@ -480,6 +481,38 @@ describe("guest AG-UI projection", () => {
         messageId: "secret",
         activityType: "TRACE",
         content: { providerPath: "/private" },
+      })
+    ).toBeUndefined()
+  })
+
+  it("passes an MCP App call's start to a guest and hides any other tool call", () => {
+    expect(
+      project({
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "chart-1",
+        toolCallName: "render_chart",
+        parentMessageId: "assistant-native",
+        app: true,
+      })
+    ).toEqual({
+      type: RunEventKind.TOOL_CALL_START,
+      toolCallId: "chart-1",
+      toolCallName: "render_chart",
+      app: true,
+    })
+    expect(
+      project({
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallId: "read-1",
+        toolCallName: "read_file",
+      })
+    ).toBeUndefined()
+    expect(
+      project({
+        type: RunEventKind.TOOL_CALL_RESULT,
+        messageId: "read-1-result",
+        toolCallId: "read-1",
+        content: "private file",
       })
     ).toBeUndefined()
   })

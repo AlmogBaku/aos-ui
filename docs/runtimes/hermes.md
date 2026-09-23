@@ -9,7 +9,6 @@ credentials, and durable history. The browser connects over ACP v2 WebSocket at 
 - An authenticated Hermes server reachable from the proxy
 - A Hermes server token in a private, owner-readable file
 - Bun, or Docker with Compose
-- `uv` only when building or testing the optional native plugin
 
 The minimum supported Hermes revision is
 `47685348eaca9d673719003b9e03a71becfa6423`; the vendored gateway client and the
@@ -136,29 +135,131 @@ After a terminal Session has no subscribers or pending interaction, the proxy
 keeps it warm for five minutes and then closes only that Session attachment.
 The shared Hermes socket stays open.
 
-## Optionally install the AOS native plugin
+## Register the AOS UI tools
 
-Basic attachment uses Hermes's native APIs. The AOS plugin adds presentation tools, Session handoff, creator guidance, and the invited-chat skill. Install it from an immutable AOS commit into each profile that needs those additions:
+The installation prompt, [`shared/install/PROMPT.md`](../../shared/install/PROMPT.md),
+lets an agent perform the steps below; its [Hermes reference](../../shared/install/reference/harness-hermes.md)
+holds the exact commands. The manual steps follow.
+
+AOS UI ships its own stateless MCP server, `packages/tools-mcp`, separate from
+the proxy. It offers four tools: `render_chart`, `render_map`, `render_stats`,
+and `present_artifact({path, title?, mimeType?})`, where `path` is an absolute
+path. The first three are [MCP Apps](../mcp-apps.md) whose views draw the
+chart, map, or stats in the message; `present_artifact` has no view. Each
+tool's description carries its usage guidance; there is no AOS system prompt
+to install.
+
+Run it on the Hermes host, bound to loopback:
 
 ```bash
-hermes -p PROFILE plugins install OWNER/REPOSITORY/integrations/hermes \
-  --ref FULL_40_CHARACTER_COMMIT_SHA --no-enable
-hermes -p PROFILE plugins doctor aos-integration --ci
-hermes -p PROFILE plugins enable aos-integration
-hermes -p PROFILE tools enable --platform api_server aos-presentation aos-session-handoff
-hermes -p PROFILE tools enable --platform cli aos-presentation aos-session-handoff
+bun run tools-mcp:serve                     # http://127.0.0.1:4110/mcp
+bun run tools-mcp:serve -- --port 4111      # another port
 ```
 
-Use `file:///absolute/path/to/aos-ui#integrations/hermes` instead of the repository source for a committed local checkout. The package-level [Hermes integration README](../../integrations/hermes/README.md) documents the exact native tools and creator provisioning. Installing the plugin extends Hermes; it does not move runtime ownership into AOS.
+The Compose stack runs the same server as the `tools-mcp` service, published
+on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`. It serves `/mcp` (Streamable
+HTTP) and `/health`, has no authentication, and never reads files itself:
+`present_artifact` only returns a receipt, and the proxy later reads the file
+through Hermes.
 
-For upgrades, install from a new full committed SHA, run `plugins doctor`,
-enable the required tools, then restart Hermes. Do not patch
-an installed plugin cache to carry local or uncommitted AOS changes; commit and
-reinstall from an immutable ref instead.
+Register it in each profile that should use the tools. Hermes reads
+`mcp_servers` from the profile's own `config.yaml`
+(`~/.hermes/profiles/PROFILE/config.yaml`, or `~/.hermes/config.yaml` for the
+default profile):
+
+```yaml
+mcp_servers:
+  aos-ui:
+    url: http://127.0.0.1:4110/mcp
+```
+
+`hermes -p PROFILE mcp add aos-ui --url http://127.0.0.1:4110/mcp` writes the
+same entry interactively after probing the server; answer that it needs no
+authentication. Check the connection with `hermes -p PROFILE mcp test aos-ui`.
+
+The tools reach the model as `mcp__aos_ui__render_chart` and so on; the proxy
+canonicalizes those names, so the browser renders them as AOS tools. Hermes
+keeps no App views, so the proxy reads the chart, map, and stats views from
+the URL the profile registers ([MCP Apps](#mcp-apps)). A proxy in a container
+does not share the host's loopback, so it overrides that URL with its own
+address for the server under `mcpApps.fallback.servers.aos-ui.url`
+([MCP Apps fallback](../configuration.md#mcp-apps-fallback)); the Compose
+example, [`deploy/proxy.hermes.example.yaml`](../../deploy/proxy.hermes.example.yaml),
+sets `http://tools-mcp:4110/mcp`. The
+server loads on every platform the profile serves, messaging channels such as
+Telegram included.
+
+A running `hermes serve` connects a newly added server within about a minute
+and refreshes a Session's tool list between turns, so no restart is needed.
+When `aos-ui` is the profile's first MCP server, run `/reload-mcp` in the
+Session, or start a new Session, to pick the tools up.
+
+### Skills
+
+AOS UI's skills are plain Hermes skills: `shared/invite-link` (the
+`aos-invite-link` skill) and `shared/agent-creator` (the `aos-agent-creator`
+skill). Either copy a skill's directory into the profile's `skills/` directory,
+or list a directory that holds them; Hermes finds every `SKILL.md` below each
+listed directory:
+
+```yaml
+skills:
+  external_dirs:
+    - /absolute/path/to/aos-ui/shared
+```
+
+External directories are read-only and lose a name collision to the profile's
+own skills. Hermes caches the skills index of a running server, so restart
+`hermes serve` after adding a skill.
+
+## MCP Apps
+
+Any MCP server whose tool declares an App view renders as an App card in AOS
+([MCP Apps](../mcp-apps.md)). Register the server in the profile like any other
+MCP server; AOS itself needs no entry:
+
+```bash
+hermes -p PROFILE config set mcp_servers.NAME.url https://apps.example.test/mcp
+hermes -p PROFILE mcp test NAME
+```
+
+Hermes drops a tool's `_meta.ui` and has no API to read an MCP resource, so the
+proxy reads the view itself. It lists the profile's servers through
+`GET /api/mcp/servers?profile=PROFILE` and connects to their URLs with its own
+MCP client:
+
+- It reaches only enabled Streamable HTTP servers. A stdio server, or one that
+  needs credentials the proxy does not hold, shows the tool call's textual
+  details instead.
+- For a server that needs headers, give the proxy its own copy under
+  `mcpApps.fallback.servers.NAME.headers` in the proxy configuration
+  ([MCP Apps fallback](../configuration.md#mcp-apps-fallback)). Its URL must
+  then be `https:` or loopback.
+- When the proxy reaches a server at another address than Hermes does, set
+  `mcpApps.fallback.servers.NAME.url`; the proxy connects there instead of the
+  URL the profile registers.
+- The tool shows as `mcp__NAME__TOOL` with the server's original name, even
+  where Hermes sanitizes or shortens it.
+- The server list is cached for about 5 minutes; a tool from a server added
+  since is picked up within 30 seconds.
+
+This fallback is temporary and goes away once Hermes serves MCP Apps itself.
+
+## Sessions and Artifacts
+
+Sessions the proxy creates carry `source: "aos-ui"`. An Artifact is published
+either by a `present_artifact` receipt or by an assistant `MEDIA:/absolute/path`
+line, Hermes's own delivery convention. The proxy removes each `MEDIA:` line
+from the prose, validates the path, and reads the bytes through
+`GET /api/fs/read-data-url`. A path that is relative, traverses, or names a
+credential file such as `.env` or `auth.json` is refused.
 
 ## Creator profile
 
-Agent creation begins in a dedicated native creator profile. Mark that profile in `profile.yaml`:
+The creator behind **New Agent** is an ordinary profile, conventionally
+`aos-agent-creator`, that loads the `aos-agent-creator` skill. Its marker lives
+in its `profile.yaml`, and no `hermes` command sets it; the proxy keeps the
+marked profile out of the Agent roster and management surfaces:
 
 ```yaml
 ui_meta:
@@ -168,29 +269,14 @@ ui_meta:
     hidden: true
 ```
 
-The integration reads this metadata; it does not grant creator authority itself.
-`aos_create_agent` creates the profile in-process through Hermes's own profile
-creation (atomic since upstream a0500081). It writes the profile hidden first,
-installs the AOS plugin and enables only the requested toolsets, verifies the
-configuration, and only then reveals the profile. If plugin setup fails the
-result is `setup-needed`: the profile exists but stays hidden until an operator
-finishes setup (commands in the Hermes integration README) and makes it visible
-in Manage Agents. Results carry only constant messages plus status and Agent id;
-they never include paths or secrets. The writer refuses to create when the
-creator profile's model configuration holds a literal credential — it must use
-`${VAR}` placeholders — because Hermes copies that block into every created
-profile.
-
-A freshly provisioned creator has no credentials for its model: Hermes copies a
-new profile's model block but not its credential pool, so the creator's first
-turn fails until you sign that profile in with `hermes -p <name> auth add`.
-Never copy another profile's tokens into it.
-
-Provision the creator profile:
-
-```bash
-integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
-```
+The marker grants no authority. After the user confirms a definition, the
+creator writes the new profile with `hermes profile create` and the other
+steps in the skill's `reference/harness-hermes.md`, so it needs Hermes's
+terminal tool. AOS shows the new Agent once Hermes lists it, and the draft
+**New Agent** row resolves into it. A freshly provisioned profile has no
+credentials for its model: Hermes copies a new profile's model block but not
+its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
+another profile's tokens into it.
 
 ## Operational behavior
 
@@ -208,7 +294,7 @@ integrations/hermes/scripts/provision-creator.sh --ref <commit sha>
   completed tool results, presents the visible correction at that boundary,
   and continues under the same logical AOS run until Hermes is authoritatively
   idle.
-- Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present.
+- Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present. The `aos-ui` tools appear only in profiles that register the MCP server.
 - Session rename, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
 - Voice controls appear for native STT/TTS interfaces and when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
@@ -242,6 +328,7 @@ Hermes-native routes from the proxy host:
 - `GET /api/sessions/:id`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id` — session detail and mutations
 - `GET /api/sessions/:id/messages` — message history
 - `GET /api/fs/read-data-url` — artifact byte reads
+- `GET /api/mcp/servers?profile=` — MCP server list for tool names and MCP Apps
 - `GET /api/tools/toolsets/{stt,tts}/config` — audio configuration
 - `POST /api/audio/transcribe`, `POST /api/audio/speak` — transcription and speech
 - `GET /api/ws` (WebSocket upgrade) — gateway connection for profiles, runs, questions, and events
@@ -277,8 +364,9 @@ against a new pin or before confirming a deployment.
 ## Verify
 
 ```bash
-bun run integrations:build
-bun run hermes:test
+bunx vitest run packages/tools-mcp packages/proxy/adapters/hermes
+curl --fail --silent http://127.0.0.1:4110/health
+hermes -p PROFILE mcp test aos-ui
 ```
 
 Live acceptance requires an approved profile, disposable Session, and real credentials. If authentication, WebSocket attachment, or profile discovery fails, see [Troubleshooting](../troubleshooting.md).

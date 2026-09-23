@@ -40,9 +40,15 @@ the runtime adapter; it never transfers a queue to another Agent.
 
 ## Open published Artifacts
 
-An Artifact appears only after an Agent explicitly publishes it. This includes a trusted provider-native delivery receipt, such as a successful Hermes text-to-speech result. Ordinary files, assistant-authored paths, and unmatched `MEDIA:` references are not automatically exposed.
+An Artifact appears only after an Agent explicitly publishes it: by calling the `present_artifact` tool from the AOS UI tools MCP server with an absolute file path, by writing a `MEDIA:/absolute/path` line where the runtime supports it (Hermes and OpenClaw), or through a trusted provider-native delivery receipt, such as a successful Hermes text-to-speech result. Ordinary files and paths mentioned in prose are not exposed. A relative or traversing path, a credential file such as `.env` or `auth.json`, and a file over 25 MiB cannot be published.
 
 AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy and an inspectable Source view. Operators may allow selected HTTPS asset origins through public configuration; see [Configuration](configuration.md#artifact-html-assets). Inline image, audio, and video Artifacts appear directly in the conversation.
+
+## Use MCP Apps
+
+When an Agent calls a tool whose MCP server declares an App view, such as the AOS UI charts, maps, and stats, the view appears in the conversation, usually as soon as the call starts, and receives the call's result once it settles. It shows a loading state while the view opens, and "The app could not be shown." when the view cannot be opened. The call's request and result stay available beneath it in the compact "Used" row.
+
+An App may ask to fill the viewport; close it with the **Exit full screen** control, or with Esc while focus is outside the App. An App may send a text message into the same conversation on your behalf and may open `https` links in a new tab. It cannot navigate the workspace, open pop-ups, or submit forms. Which servers provide Apps is set in the runtime's own MCP configuration; see [MCP Apps](mcp-apps.md).
 
 ## Rename, archive, or delete a Session
 
@@ -70,7 +76,7 @@ For runtimes that support it (Hermes), you can edit a submitted user message or 
 
 ## Start a new Agent
 
-Use the **New Agent** control to open a Session with the creator Agent when exactly one creator is configured in the runtime. This is available only when the provider marks one Agent as the creator.
+Use the **New Agent** control to open a Session with the creator Agent when exactly one creator is configured in the runtime. This is available only when the provider marks one Agent as the creator. The creator interviews you with the `aos-agent-creator` skill, confirms the definition, and creates the Agent with the harness's own means. The **New Agent** draft row becomes the new Agent once the harness lists it; if the run ends without one, it stays an ordinary creator Session.
 
 ## Manage Agent visibility
 

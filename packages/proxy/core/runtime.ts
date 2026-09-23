@@ -16,6 +16,11 @@ import type {
   SessionModelUpdateRequest,
   VisibilityUpdateResponse,
 } from "../../protocol"
+import type {
+  CallToolResult,
+  McpAppView,
+  ReadResourceResult,
+} from "../../protocol/mcp-apps"
 
 export type SessionScope = {
   agentId: string
@@ -277,4 +282,51 @@ export interface ServerRuntime {
     text: string,
     signal?: AbortSignal
   ): Promise<{ bytes: Uint8Array; mimeType: string }>
+  /**
+   * MCP Apps hosting. Absent when the runtime cannot resolve a tool's UI
+   * resource; every call is keyed by the tool call that opened the view, so
+   * the browser never names a server, tool, or resource URI to open one.
+   */
+  mcpApps?: ServerMcpApps
+}
+
+/** A tool call of a running turn, before the runtime has stored it. */
+export type LiveMcpToolCall = {
+  toolCallId: string
+  toolName: string
+  input?: Record<string, unknown>
+  result?: CallToolResult
+}
+
+/** MCP Apps operations, each scoped to one Session's tool call. */
+export type ServerMcpApps = {
+  /**
+   * Hears a flagged call of this Session's own run as it streams, so a host
+   * that reads calls from stored history opens the view before the turn is
+   * stored. A host that holds its views natively leaves it out.
+   */
+  observe?(scope: SessionScope, call: LiveMcpToolCall): void
+  /** Whether the call's tool declares a view (`_meta.ui.resourceUri`). */
+  describe(
+    scope: SessionScope,
+    call: { toolCallId: string; toolName: string; result?: unknown }
+  ): Promise<boolean>
+  open(
+    scope: SessionScope,
+    toolCallId: string,
+    signal?: AbortSignal
+  ): Promise<McpAppView>
+  /** A view's `tools/call`, limited to its own server's app-visible tools. */
+  callTool(
+    scope: SessionScope,
+    toolCallId: string,
+    name: string,
+    args: Record<string, unknown>
+  ): Promise<CallToolResult>
+  /** A view's `resources/read` on its own server. */
+  readResource(
+    scope: SessionScope,
+    toolCallId: string,
+    uri: string
+  ): Promise<ReadResourceResult>
 }

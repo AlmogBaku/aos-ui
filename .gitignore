@@ -1,6 +1,5 @@
 # dependencies
 /node_modules
-# `integrations/openclaw` installs its own peer SDK to run its plugin tests.
 **/node_modules/
 /.pnp
 .pnp.*
@@ -21,6 +20,7 @@
 # production
 /build
 /dist
+/packages/tools-mcp/dist
 
 # misc
 .DS_Store

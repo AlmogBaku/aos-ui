@@ -274,6 +274,8 @@ const ToolCallStartEventSchema = z.looseObject({
   type: z.literal(RunEventKind.TOOL_CALL_START),
   toolCallId: z.string(),
   toolCallName: z.string(),
+  /** The tool declares an MCP App view, so the browser draws it from here. */
+  app: z.literal(true).optional(),
   // As with `outcome`, `null` is what released producers sent for "no parent".
   parentMessageId: z
     .string()
@@ -302,6 +304,10 @@ const ToolCallResultEventSchema = z.looseObject({
   toolCallId: z.string(),
   content: z.string(),
   role: z.literal("tool").optional(),
+  /** The tool declares an MCP App view the browser may open for this call. */
+  app: z.literal(true).optional(),
+  /** The call's name, for a guest projection that dropped its start. */
+  toolCallName: z.string().optional(),
 })
 
 const ActivitySnapshotEventSchema = z.looseObject({

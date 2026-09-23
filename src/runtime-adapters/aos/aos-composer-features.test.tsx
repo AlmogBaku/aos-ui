@@ -81,6 +81,7 @@ function capabilities(): AosWorkspaceCapabilities {
         maxTotalBytes: 1,
       },
       artifacts: { status: "unavailable", reason: "not-supported" },
+      mcpApps: { status: "unavailable", reason: "not-supported" },
       transcription: { status: "unavailable", reason: "not-supported" },
       speech: { status: "unavailable", reason: "not-supported" },
     },

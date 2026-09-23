@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
+
 import {
   createToolPartSelector,
   createToolTimelineModel,
@@ -53,13 +55,8 @@ describe("createToolTimelineModel", () => {
         type: "tool-call",
         toolCallId: "chart",
         toolName: "render_chart",
-        args: {
-          title: "Investment trend",
-          type: "line",
-          xKey: "quarter",
-          series: [{ key: "applied", label: "Applied AI" }],
-          data: [{ quarter: "Q1 ’25", applied: 128 }],
-        },
+        args: { title: "Investment trend" },
+        artifact: MCP_APP_TOOL_ARTIFACT,
         status: { type: "complete" },
       },
       {

@@ -10,10 +10,12 @@ import {
 } from "../auth/guest-invitation"
 import type {
   RuntimeInstance,
+  ServerMcpApps,
   ServerRunEngine,
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { createGuestApp } from "./app"
 
 const NOW = 1_700_000_000_000
@@ -95,6 +97,7 @@ function workspaceCapabilities() {
         maxTotalBytes: 2_000_000,
       },
       artifacts: { status: "available", scope: "session", maxBytes: 1_000_000 },
+      mcpApps: { status: "unavailable", reason: "not-supported" },
       transcription: { status: "unavailable", reason: "not-supported" },
       speech: { status: "unavailable", reason: "not-supported" },
     },
@@ -579,6 +582,54 @@ describe("guest app", () => {
       STORED,
       "artifact-1"
     )
+  })
+
+  it("opens an MCP App view only from the invited Session's own calls", async () => {
+    const subject = harness({ existing: true })
+    const mcpApps: ServerMcpApps = {
+      describe: vi.fn(async () => true),
+      // The runtime finds a call only in the Session that made it.
+      open: vi.fn(async (scope, toolCallId) => {
+        if (scope.sessionId !== STORED || toolCallId !== "call-1")
+          throw new McpAppNotFoundError()
+        return { html: "<p>view</p>" }
+      }),
+      callTool: vi.fn(async () => {
+        throw new McpAppNotFoundError()
+      }),
+      readResource: vi.fn(async () => ({ contents: [] })),
+    }
+    Object.assign(subject.runtime, { mcpApps })
+    const invite = await token(subject.invitationService)
+    const view = (toolCallId: string) =>
+      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+
+    const own = await subject.app.request(view("call-1"), {
+      headers: headers(invite),
+    })
+    expect(own.status).toBe(200)
+    expect(mcpApps.open).toHaveBeenLastCalledWith(
+      { agentId: AGENT, sessionId: STORED, threadId: REF },
+      "call-1",
+      expect.anything()
+    )
+
+    const foreign = await subject.app.request(view("call-elsewhere"), {
+      headers: headers(invite),
+    })
+    expect(foreign.status).toBe(404)
+    const call = await subject.app.request(
+      `${view("call-elsewhere")}/tools/call`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name: "refresh", arguments: {} }),
+      }
+    )
+    expect(call.status).toBe(404)
   })
 
   it("holds one invitation to a shared audio allowance in both directions", async () => {

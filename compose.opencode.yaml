@@ -64,7 +64,11 @@ services:
       AOS_UI_OPENCODE_PASSWORD_FILE: /run/secrets/opencode-password
       AOS_UI_OPENCODE_PORT: "4096"
       AOS_UI_OPENCODE_WORKTREE: /workspace
+      AOS_UI_TOOLS_MCP_URL: http://tools-mcp:4110/mcp
       OPENCODE_SERVER_USERNAME: aos-ui
+    depends_on:
+      tools-mcp:
+        condition: service_healthy
     expose:
       - "4096"
     healthcheck:

@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "types": ["vite/client"]
+  },
+  "include": [
+    "packages/tools-mcp/views/**/*.ts",
+    "packages/tools-mcp/views/**/*.tsx"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "packages/tools-mcp/views/build.ts"
+  ]
+}

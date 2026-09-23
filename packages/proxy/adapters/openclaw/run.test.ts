@@ -5,6 +5,7 @@ import { ServerRunStopNotDispatchedError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenClawClientRequestError } from "./client"
 import { stageOpenClawChatAttachments } from "./content"
+import { createOpenClawHistory } from "./history"
 import { OpenClawInteractions } from "./interactions"
 import { OpenClawRunEngine, type OpenClawRunRequestClient } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
@@ -33,6 +34,10 @@ class ControlledNative implements OpenClawRunRequestClient {
   }
   abortError?: unknown
   sendError?: unknown
+  toolOverrides: Record<string, unknown> | undefined = {
+    mcpServers: { "aos-ui": true },
+  }
+  patchError?: unknown
 
   async request<T>(
     method: string,
@@ -52,6 +57,25 @@ class ControlledNative implements OpenClawRunRequestClient {
             }
       ) as T
     if (method === "sessions.messages.unsubscribe") return {} as T
+    if (method === "sessions.list")
+      return {
+        sessions: [
+          {
+            key: params.search,
+            agentId: params.agentId,
+            ...(this.toolOverrides
+              ? { toolOverrides: structuredClone(this.toolOverrides) }
+              : {}),
+          },
+        ],
+      } as T
+    if (method === "sessions.patch") {
+      if (this.patchError) throw this.patchError
+      this.toolOverrides = structuredClone(
+        params.toolOverrides as Record<string, unknown>
+      )
+      return { ok: true } as T
+    }
     if (method === "chat.history")
       return (
         this.historyRequest
@@ -2066,5 +2090,255 @@ describe("OpenClaw run engine", () => {
         }),
       ])
     )
+  })
+})
+
+describe("OpenClaw run engine AOS tools", () => {
+  const receipt = {
+    ok: true,
+    type: "aos.artifact",
+    artifact: {
+      path: "/workspace/report.pdf",
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+    },
+  }
+
+  /** One run's events after the given native tool events and a terminal. */
+  async function runEvents(
+    native: ControlledNative,
+    tools: ReadonlyArray<Record<string, unknown>>
+  ) {
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions,
+      toolEvents: true,
+    })
+    const handle = await engine.start(scope, input())
+    let seq = 0
+    const accept = (event: string, payload: Record<string, unknown>) =>
+      subscriptions.accept(
+        {
+          type: "event",
+          event,
+          seq: 10 + seq,
+          payload: {
+            runId: "run-a",
+            sessionKey: scope.sessionId,
+            agentId: scope.agentId,
+            ...payload,
+          },
+        },
+        subscriptions.generation
+      )
+    for (const data of [...tools, { phase: "end" }])
+      accept("agent", {
+        seq: seq++,
+        stream: "phase" in data && data.phase === "end" ? "lifecycle" : "tool",
+        ts: 1_000 + seq,
+        data,
+      })
+    accept("chat", {
+      seq: 0,
+      state: "final",
+      message: { content: [{ type: "text", text: "Done" }] },
+    })
+    const events: Array<Record<string, unknown>> = []
+    for await (const event of handle.events)
+      events.push(event as Record<string, unknown>)
+    return events
+  }
+
+  it("enables the aos-ui MCP server once on an existing Session before sending", async () => {
+    const native = new ControlledNative()
+    native.toolOverrides = { mcpServers: { other: false } }
+
+    await runEvents(native, [])
+    await runEvents(native, [])
+
+    const methods = native.calls.map(({ method }) => method)
+    const patches = native.calls.filter(
+      ({ method }) => method === "sessions.patch"
+    )
+    expect(patches).toEqual([
+      expect.objectContaining({
+        params: expect.objectContaining({
+          key: scope.sessionId,
+          toolOverrides: { mcpServers: { other: false, "aos-ui": true } },
+          expectedToolOverrides: { mcpServers: { other: false } },
+        }),
+      }),
+    ])
+    expect(methods.indexOf("sessions.patch")).toBeLessThan(
+      methods.indexOf("chat.send")
+    )
+    expect(methods.filter((method) => method === "chat.send")).toHaveLength(2)
+  })
+
+  it("fails the run without sending when enabling the MCP server fails", async () => {
+    const native = new ControlledNative()
+    native.toolOverrides = undefined
+    native.patchError = new Error("patch refused")
+    const engine = new OpenClawRunEngine({
+      client: native,
+      subscriptions: new OpenClawSessionSubscriptions(native),
+    })
+
+    await expect(engine.start(scope, input())).rejects.toMatchObject({
+      code: "AOS_PROVIDER_UNAVAILABLE",
+    })
+    expect(native.calls.some(({ method }) => method === "chat.send")).toBe(
+      false
+    )
+  })
+
+  it("names prefixed AOS tools canonically and keeps unknown MCP tools raw", async () => {
+    const events = await runEvents(new ControlledNative(), [
+      {
+        phase: "start",
+        name: "aos-ui__render_chart",
+        toolCallId: "chart",
+        args: { title: "Sales" },
+      },
+      { phase: "result", name: "aos-ui__render_chart", toolCallId: "chart" },
+      {
+        phase: "start",
+        name: "other__lookup",
+        toolCallId: "lookup",
+        args: {},
+      },
+      { phase: "result", name: "other__lookup", toolCallId: "lookup" },
+    ])
+
+    expect(
+      events
+        .filter(({ type }) => type === RunEventKind.TOOL_CALL_START)
+        .map(({ toolCallName }) => toolCallName)
+    ).toEqual(["render_chart", "other__lookup"])
+  })
+
+  it("publishes a present_artifact receipt without its native path", async () => {
+    const events = await runEvents(new ControlledNative(), [
+      {
+        phase: "start",
+        name: "aos-ui__present_artifact",
+        toolCallId: "publish",
+        args: { path: "/workspace/report.pdf", title: "report.pdf" },
+      },
+      {
+        phase: "result",
+        name: "aos-ui__present_artifact",
+        toolCallId: "publish",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: `structuredContent:\n${JSON.stringify(receipt, null, 2)}`,
+            },
+            { type: "text", text: JSON.stringify(receipt) },
+          ],
+          details: { structuredContent: receipt },
+        },
+      },
+    ])
+
+    const artifact = events.find(
+      ({ type, name }) =>
+        type === RunEventKind.CUSTOM && name === "aos.artifact"
+    )
+    expect(artifact?.value).toEqual({
+      id: expect.stringMatching(/^openclaw-artifact-[a-f0-9]{32}$/u),
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+      source: {
+        type: "provider",
+        reference: (artifact?.value as { id: string }).id,
+      },
+    })
+    const result = events.find(
+      ({ type }) => type === RunEventKind.TOOL_CALL_RESULT
+    )
+    expect(JSON.parse(result?.content as string)).toEqual({
+      ok: true,
+      type: "aos.artifact",
+      artifact: {
+        id: (artifact?.value as { id: string }).id,
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+      },
+    })
+    expect(JSON.stringify(events)).not.toContain("/workspace")
+
+    const replay = await createOpenClawHistory({
+      authority: {
+        getSession: async (agentId, sessionId) => ({
+          id: sessionId,
+          agentId,
+          title: "Session",
+          archived: false,
+          updatedAt: "2026-09-15T00:00:00.000Z",
+          status: "idle" as const,
+        }),
+      },
+      client: {
+        request: async () => ({
+          messages: [
+            {
+              id: "assistant",
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "publish",
+                  name: "aos-ui__present_artifact",
+                  arguments: {},
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "publish",
+              toolName: "aos-ui__present_artifact",
+              content: [{ type: "text", text: JSON.stringify(receipt) }],
+            },
+          ],
+        }),
+      },
+      subscribeSession: async () => () => undefined,
+    }).history(scope.agentId, scope.sessionId, 200, 0)
+    expect(replay.messages[0]!.content).toContainEqual({
+      type: "data",
+      name: "aos.artifact",
+      data: artifact?.value,
+    })
+  })
+
+  it("publishes no artifact for a receipt with an unsafe path", async () => {
+    const unsafe = {
+      ...receipt,
+      artifact: { ...receipt.artifact, path: "relative/../report.pdf" },
+    }
+    const events = await runEvents(new ControlledNative(), [
+      {
+        phase: "start",
+        name: "aos-ui__present_artifact",
+        toolCallId: "publish",
+        args: {},
+      },
+      {
+        phase: "result",
+        name: "aos-ui__present_artifact",
+        toolCallId: "publish",
+        result: { content: [{ type: "text", text: JSON.stringify(unsafe) }] },
+      },
+    ])
+
+    expect(
+      events.some(
+        ({ type, name }) =>
+          type === RunEventKind.CUSTOM && name === "aos.artifact"
+      )
+    ).toBe(false)
   })
 })

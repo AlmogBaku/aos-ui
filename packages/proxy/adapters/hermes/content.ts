@@ -8,6 +8,7 @@ import {
   RECORDING_MIME_TYPES,
   SPEECH_MIME_TYPES,
 } from "../../../protocol/audio"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 
 import { isRecord, utf8BytesWithin } from "./native"
 
@@ -17,7 +18,6 @@ const MAX_ATTACHMENTS = 16
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024
-const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 const MAX_RPC_RESPONSE_BYTES = 64 * 1024
 const MAX_AUDIO_CONFIG_RESPONSE_BYTES = 64 * 1024
 const MAX_TRANSCRIPT_RESPONSE_BYTES = MAX_TRANSCRIPT_BYTES
@@ -490,6 +490,10 @@ export function createHermesContentOperations(input: {
                 status: "unavailable" as const,
                 reason: "artifact-reader-unavailable",
               },
+        mcpApps: {
+          status: "unavailable" as const,
+          reason: "mcp-apps-unavailable",
+        },
         transcription:
           input.transport.audioConfig && input.transport.transcribe
             ? {

@@ -2,6 +2,11 @@ import type { AssistantRuntime, Toolkit } from "@assistant-ui/react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import type { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
+import type {
+  CallToolResult,
+  McpAppView,
+  ReadResourceResult,
+} from "@aos/protocol/mcp-apps"
 import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
@@ -237,6 +242,23 @@ export type ArtifactAdapter = {
   resolve(input: ArtifactResolveOptions): Promise<Blob>
 }
 
+/** The tool call whose MCP App view a request addresses. */
+export type McpAppTarget = {
+  agentId: string
+  threadId: string
+  toolCallId: string
+}
+
+export type McpAppAdapter = {
+  open(input: McpAppTarget, signal?: AbortSignal): Promise<McpAppView>
+  callTool(
+    input: McpAppTarget & { name: string; arguments: Record<string, unknown> }
+  ): Promise<CallToolResult>
+  readResource(
+    input: McpAppTarget & { uri: string }
+  ): Promise<ReadResourceResult>
+}
+
 /** The complete provider-neutral browser interface consumed by the workspace. */
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime
@@ -251,6 +273,8 @@ export type HarnessRuntime = {
     ) => readonly ArtifactMessage[]
     htmlAssetOrigins?: readonly string[]
   }
+  /** Present only where the runtime hosts MCP App views. */
+  mcpApps?: McpAppAdapter
   composer?: ComposerFeatureViewModel
   /** Omit for ordinary local branches; false hides durable Edit and Retry. */
   messageRewind?:

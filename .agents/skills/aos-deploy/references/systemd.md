@@ -102,10 +102,20 @@ guest host. Confirm the operator host cannot resolve guest routes, the guest
 host cannot resolve `/api/aos/v1`, and neither host proxies native runtime
 routes.
 
-## Hermes plugin upgrades
+## Tools MCP server and Hermes skills
 
-Use a full committed SHA when installing the plugin. Run the native plugin
-doctor after installation, enable the required tools, and restart the managed
-Hermes gateway so the changed plugin and service environment are loaded. Do
-not modify files in the installed plugin cache; make a commit and reinstall
-from that immutable ref instead.
+The unit's Compose stack includes the `tools-mcp` service, so `ExecReload`
+rebuilds and restarts it with the rest of the stack. Check it after a reload
+with `curl --fail http://127.0.0.1:4110/health` (or the configured
+`AOS_UI_TOOLS_MCP_PORT`); it stays on loopback whatever the operator bind.
+
+Each Hermes profile that uses the tools registers
+`http://127.0.0.1:4110/mcp` as `aos-ui` under `mcp_servers` in its own
+`config.yaml`; `hermes -p PROFILE mcp test aos-ui` confirms it. The proxy
+reads the chart, map, and stats views itself; from its container it uses
+`mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp` in the proxy
+config instead of that loopback URL. Restarting the
+AOS unit does not require restarting Hermes. Skills are plain directories:
+copy `shared/invite-link` or `shared/agent-creator` into the profile's
+`skills/`, or list the checkout's `shared/` under `skills.external_dirs`, and
+restart the managed `hermes serve` so its skills index reloads.

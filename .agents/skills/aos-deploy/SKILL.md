@@ -67,10 +67,20 @@ Do so only after an explicit opt-in. Prefer operator-side minting when Hermes
 does not need this authority; its invite skill must report that minting is
 unavailable when it cannot read the required files.
 
-Install Hermes plugins from an immutable, committed AOS ref. Upgrade by
-installing the new immutable ref, running the plugin doctor, enabling required
-tools, and restarting the managed Hermes gateway. Never patch an installed
-plugin to carry uncommitted checkout changes.
+The AOS UI tools reach a harness through the stateless `tools-mcp` service,
+which Compose always publishes on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`
+(or `bun run tools-mcp:serve` outside Compose). It has no authentication; never
+widen its bind. Register `http://127.0.0.1:4110/mcp` as the `aos-ui` MCP server
+in each Hermes profile's `mcp_servers` and confirm it with
+`hermes -p PROFILE mcp test aos-ui`; a running `hermes serve` picks it up
+without a restart. The proxy reads the chart, map, and stats views from that
+URL too, but a proxy container does not share the host's loopback: its proxy
+config sets `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`. Install the `aos-invite-link` and `aos-agent-creator` skills
+by copying them into the profile's `skills/` directory or listing the checkout's
+`shared/` directory under `skills.external_dirs`, then restart `hermes serve`.
+Register the server with OpenClaw disabled and let the proxy enable it per
+Session, as the OpenClaw runtime guide describes; charts, maps, and stats also
+need `mcp.apps.enabled: true` on the Gateway.
 
 ## Verify before handoff
 

@@ -129,7 +129,8 @@ export function createReadState({
    */
   const unlisten = sessionRows.subscribe((row) => {
     if (row.unread !== true || !focused) return
-    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id })) return
+    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id }))
+      return
     arm(focused, false)
   })
 

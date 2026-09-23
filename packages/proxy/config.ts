@@ -236,6 +236,53 @@ const VoiceSchema = z
       })
   })
 
+/** An HTTP field name: RFC 9110 token characters only. */
+const HeaderNameSchema = z
+  .string()
+  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,256}$/u)
+
+/**
+ * How the MCP Apps fallback reaches one MCP server, keyed by the server name
+ * the runtime reports. `url` replaces the URL the runtime reports, for a proxy
+ * that reaches the server at a different address than the harness does, such
+ * as a Compose service name. Each header value is the whole contents of its
+ * file, so a credential never sits in configuration.
+ */
+const McpAppsServerSchema = z
+  .strictObject({
+    url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        HeaderNameSchema,
+        z.strictObject({ file: AbsoluteSecretFileSchema })
+      )
+      .refine((headers) => Object.keys(headers).length > 0)
+      .optional(),
+  })
+  .superRefine((server, context) => {
+    if (server.url === undefined && server.headers === undefined)
+      context.addIssue({
+        code: "custom",
+        message: "At least one of url or headers must be present",
+      })
+    if (
+      server.url !== undefined &&
+      server.headers !== undefined &&
+      !isHttpsOrLoopback(new URL(server.url))
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "url must be HTTPS or loopback when headers are configured",
+      })
+  })
+
+const McpAppsSchema = z.strictObject({
+  fallback: z.strictObject({
+    servers: z.record(z.string().min(1).max(256), McpAppsServerSchema),
+  }),
+})
+
 export const ProxyConfigSchema = z
   .strictObject({
     version: z.literal(1),
@@ -257,6 +304,7 @@ export const ProxyConfigSchema = z
       .optional(),
     push: PushSchema.optional(),
     voice: VoiceSchema.optional(),
+    mcpApps: McpAppsSchema.optional(),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
@@ -283,6 +331,7 @@ export type ProxyConfig = z.infer<typeof ProxyConfigSchema>
 export type RuntimeConfig = ProxyConfig["runtime"]
 export type RuntimeLimits = ProxyConfig["limits"]
 export type VoiceConfig = NonNullable<ProxyConfig["voice"]>
+export type McpAppsConfig = NonNullable<ProxyConfig["mcpApps"]>
 export type VoiceTranscriptionConfig = NonNullable<VoiceConfig["transcription"]>
 export type VoiceSpeechConfig = NonNullable<VoiceConfig["speech"]>
 

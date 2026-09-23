@@ -26,26 +26,42 @@ describe("OpenCode startup configuration", () => {
     ).toBe("/srv/agents")
   })
 
-  it("loads the standalone plugin and denies privileged creation by default", () => {
-    expect(
-      JSON.parse(
-        buildOpenCodeConfigContent({}, "file:///opt/aos/opencode/plugin.js") ??
-          ""
-      )
-    ).toMatchObject({
-      plugin: ["file:///opt/aos/opencode/plugin.js"],
-      permission: {
-        create_agent: "deny",
-        start_session: "allow",
-        render_chart: "allow",
-        render_map: "allow",
-        render_stats: "allow",
+  it("loads no harness plugin and leaves tool permissions to OpenCode", () => {
+    const config = JSON.parse(buildOpenCodeConfigContent({}))
+    expect(config).not.toHaveProperty("plugin")
+    expect(config).not.toHaveProperty("permission")
+  })
+
+  it("does not add a custom provider when none of its variables are configured", () => {
+    expect(JSON.parse(buildOpenCodeConfigContent({}))).not.toHaveProperty(
+      "provider"
+    )
+  })
+
+  it("attaches the AOS tools MCP server at its local default", () => {
+    expect(JSON.parse(buildOpenCodeConfigContent({}))).toMatchObject({
+      mcp: {
+        "aos-ui": {
+          type: "remote",
+          url: "http://127.0.0.1:4110/mcp",
+          enabled: true,
+        },
       },
     })
   })
 
-  it("does not add a custom provider when none of its variables are configured", () => {
-    expect(buildOpenCodeConfigContent({})).toBeUndefined()
+  it("attaches the AOS tools MCP server at an operator-configured URL", () => {
+    expect(
+      JSON.parse(
+        buildOpenCodeConfigContent({
+          AOS_UI_TOOLS_MCP_URL: " http://tools.internal:4200/mcp ",
+        })
+      )
+    ).toMatchObject({
+      mcp: {
+        "aos-ui": { type: "remote", url: "http://tools.internal:4200/mcp" },
+      },
+    })
   })
 
   it("forwards the common Gemini credential name under OpenCode's Google credential name", () => {
@@ -94,7 +110,7 @@ describe("OpenCode startup configuration", () => {
       AOS_UI_OPENAI_COMPATIBLE_MODEL_ID: "example-model",
     })
 
-    expect(JSON.parse(content ?? "")).toEqual({
+    expect(JSON.parse(content)).toMatchObject({
       provider: {
         "openai-compatible": {
           npm: "@ai-sdk/openai-compatible",

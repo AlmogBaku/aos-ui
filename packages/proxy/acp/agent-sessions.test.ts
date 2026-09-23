@@ -24,11 +24,15 @@ describe("public Session status", () => {
     // A row a live execution says nothing about keeps the provider's own answer;
     // a history load, which has no row, supplies `idle` as its own authority.
     expect(overlaidStatus("idle", "failed")).toBe("failed")
-    expect(overlaidStatus("idle", "waiting-for-input")).toBe("waiting-for-input")
+    expect(overlaidStatus("idle", "waiting-for-input")).toBe(
+      "waiting-for-input"
+    )
   })
 
   it("lets a live execution outrank the settled status", () => {
     expect(overlaidStatus("running", "failed")).toBe("running")
-    expect(overlaidStatus("waiting-for-input", "idle")).toBe("waiting-for-input")
+    expect(overlaidStatus("waiting-for-input", "idle")).toBe(
+      "waiting-for-input"
+    )
   })
 })

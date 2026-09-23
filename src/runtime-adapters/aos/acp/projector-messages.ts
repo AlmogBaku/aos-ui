@@ -8,6 +8,8 @@ import type {
   ThreadMessageLike,
 } from "@assistant-ui/core"
 
+import { mcpAppToolArtifact } from "@/components/mcp-apps/tool-part"
+
 /**
  * The message half of the ACP session projector: ACP blocks kept in arrival
  * order, tagged by the update that contributed them, plus the Assistant UI
@@ -31,6 +33,8 @@ export type ProjectedToolCall = {
   readonly rawOutput?: unknown
   readonly content?: readonly ToolCallContent[]
   readonly argsText?: string
+  /** The tool declares an MCP App view; once seen, the call keeps it. */
+  readonly app?: true
 }
 
 export type ToolCallPatch = {
@@ -45,6 +49,7 @@ export type ToolCallPatch = {
 export type ToolArgsPatch = {
   readonly argsText?: string
   readonly argsTextDelta?: string
+  readonly app?: true
 }
 
 export type ProjectedPart =
@@ -221,6 +226,7 @@ function mergeCall(
     rawInput: patched(current.rawInput, patch.rawInput),
     rawOutput: patched(current.rawOutput, patch.rawOutput),
     argsText,
+    ...(current.app || args.app ? { app: true } : {}),
   }
 }
 
@@ -322,8 +328,25 @@ function contentResult(content: readonly ToolCallContent[] | undefined) {
   return text.length > 0 ? text.join("") : undefined
 }
 
-function toolPart(call: ProjectedToolCall): ThreadMessagePart {
+/** Why an App call cannot produce a result anymore, if it cannot. */
+function appCancellation(
+  call: ProjectedToolCall,
+  result: unknown,
+  turn: MessageStatus | undefined
+) {
+  if (result !== undefined || call.status === "completed") return undefined
+  if (call.status === "failed") return "The tool call failed"
+  return turn?.type === "complete" || turn?.type === "incomplete"
+    ? "The turn ended before the tool call finished"
+    : undefined
+}
+
+function toolPart(
+  call: ProjectedToolCall,
+  turn: MessageStatus | undefined
+): ThreadMessagePart {
   const result = call.rawOutput ?? contentResult(call.content)
+  const cancelled = call.app ? appCancellation(call, result, turn) : undefined
   return {
     type: "tool-call",
     toolCallId: call.toolCallId,
@@ -331,14 +354,26 @@ function toolPart(call: ProjectedToolCall): ThreadMessagePart {
     args: isJsonObject(call.rawInput) ? call.rawInput : {},
     ...(call.argsText === undefined ? {} : { argsText: call.argsText }),
     ...(result === undefined ? {} : { result }),
+    ...(call.app
+      ? {
+          artifact: mcpAppToolArtifact({
+            input: call.rawInput !== undefined,
+            settled: call.status === "completed",
+            cancelled,
+          }),
+        }
+      : {}),
     isError: call.status === "failed",
   }
 }
 
-function threadPart(part: ProjectedPart): ThreadMessagePart[] {
+function threadPart(
+  part: ProjectedPart,
+  turn: MessageStatus | undefined
+): ThreadMessagePart[] {
   if (part.source === "data")
     return [{ type: "data", name: part.name, data: part.data }]
-  if (part.source === "tool") return [toolPart(part.call)]
+  if (part.source === "tool") return [toolPart(part.call, turn)]
   if (part.source === "thought") {
     const text = blockText(part.block)
     return text === undefined ? [] : [{ type: "reasoning", text }]
@@ -375,7 +410,7 @@ export function toThreadMessage(message: ProjectedMessage): ThreadMessageLike {
   const value: ThreadMessageLike = {
     id: message.id,
     role: message.role,
-    content: message.parts.flatMap(threadPart),
+    content: message.parts.flatMap((part) => threadPart(part, message.status)),
     ...(message.status === undefined ? {} : { status: message.status }),
     ...(timing === undefined ? {} : { metadata: { timing } }),
   }

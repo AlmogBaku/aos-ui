@@ -187,12 +187,12 @@ cursor-bearing reconnects.
 **Internal CUSTOM events** emitted by the coordinator publish under internal
 names the ACP translator maps to wire notifications:
 
-| Internal name        | Wire notification     |
-| -------------------- | --------------------- |
-| `aos.steer.accepted` | `_aos/steer_accepted` |
-| `aos.artifact`       | `_aos/artifact`       |
+| Internal name        | Wire form                                                            |
+| -------------------- | -------------------------------------------------------------------- |
+| `aos.steer.accepted` | `_aos/steer_accepted` notification                                   |
+| `aos.artifact`       | `resource_link` block, `uri: "artifact://<id>"`, on the turn's chunk |
 
-Mapping source: `acp/translate/run-events.ts:133,145-148`.
+Mapping source: `acp/translate/run-events.ts:130-170`.
 
 History replay runs through the same translators, so the browser receives
 identical shapes whether an event is live or replayed.

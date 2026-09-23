@@ -39,7 +39,6 @@ transport recovery before resuming sessions.
   "extensions": {
     "steer": true,
     "rewind": true,
-    "artifacts": true,
     "composerPrefill": true,
     "agents": true,
     "invalidation": true,
@@ -152,15 +151,14 @@ the failure and keeps Stop available, and the run's own idle update ends it.
 | Method                     | Direction     | Purpose                                                                                                                                                                                                                                                                                                                                      |
 | -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_aos/session/focus`       | client→server | Report the exposed Session (arms read-state); `AosFocusNotificationSchema`, `acp.ts:232-235`                                                                                                                                                                                                                                                 |
-| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts:419-446`)                                                                                                                                                                                                                                                                             |
-| `_aos/artifact`            | server→client | Published Artifact descriptor (`acp.ts:373-378`)                                                                                                                                                                                                                                                                                             |
+| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts:466-493`)                                                                                                                                                                                                                                                                             |
 | `_aos/steer_accepted`      | server→client | Replayable steering acknowledgement                                                                                                                                                                                                                                                                                                          |
 | `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command                                                                                                                                                                                                                                                                                                   |
 | `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)                                                                                                                                                                                                                                                                                                   |
 | `_aos/session_invalidated` | server→client | The proxy dropped this connection's live subscriber for the Session because it fell behind its event/byte bounds (`acp.fanout.detached` in the log), so what the browser holds is incomplete. The browser re-resumes the Session with `replayFrom: { type: "start" }`. Session row changes still reach the browser as `session_info_update`. |
 | `_aos/error`               | server→client | Connection-level failure with no request to answer                                                                                                                                                                                                                                                                                           |
 
-#### `_aos/activity` union (`acp.ts:419-446`)
+#### `_aos/activity` union (`acp.ts:466-493`)
 
 Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `type`:
 
@@ -173,15 +171,35 @@ Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `typ
 | `attention-resolved`  | `requestId`                             |
 | `unread-changed`      | `unread: boolean`                       |
 
-#### `_aos/artifact` descriptor (`acp.ts:352-378`)
+## Artifacts
 
-`source` is a discriminated union on `type`:
+A published Artifact reaches the browser as an ACP `resource_link` content
+block inside the turn's `agent_message_chunk` (or `user_message_chunk`), both
+live and on replay (`packages/proxy/acp/translate/updates.ts`):
 
-| `type`     | Extra fields      |
-| ---------- | ----------------- |
-| `inline`   | `encoding: "utf8" | "base64"`, `data` |
-| `url`      | `url`             |
-| `provider` | `reference`       |
+```json
+{
+  "type": "resource_link",
+  "uri": "artifact://ARTIFACT_ID",
+  "name": "report.pdf",
+  "mimeType": "application/pdf",
+  "size": 48213
+}
+```
+
+`uri` carries only the opaque, URI-encoded artifact id
+(`AOS_ARTIFACT_URI_SCHEME`, `formatArtifactUri`, and `parseArtifactUri`,
+`acp.ts:30`, `acp.ts:405-421`); it never carries a native path or a route.
+`mimeType` and `size` appear only when the publishing tool reported them. The
+proxy-side descriptor behind it is `AosArtifactDescriptorSchema`
+(`acp.ts:378-396`), whose `source` never reaches the browser.
+
+The browser fetches the bytes from the artifact route of the Session it is
+viewing: a same-origin
+`GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` on
+the operator lane, or the `/api/guest/v1/...` mirror with the guest's
+invitation token as a Bearer `Authorization` header. The proxy resolves the id only against that Session's own
+provider history.
 
 ## Interactions: permission and elicitation
 

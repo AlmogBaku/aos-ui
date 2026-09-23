@@ -43,6 +43,20 @@ function toolCard(page: Page, heading: string) {
     .filter({ has: page.getByRole("heading", { name: heading, exact: true }) })
 }
 
+/**
+ * The newest App view a tool drew. The sandbox proxy is the outer frame, named
+ * after the tool; the App document is its only child.
+ */
+function appView(page: Page, toolName: string, locale: "en" | "he" = "en") {
+  const title = locale === "he" ? `יישומון ${toolName}` : `${toolName} app`
+  return page
+    .locator(`iframe[title="${title}"]`)
+    .last()
+    .contentFrame()
+    .locator("iframe")
+    .contentFrame()
+}
+
 test("a question records one answer and closes every response control", async ({
   page,
 }) => {
@@ -178,8 +192,11 @@ test("charts and maps expose complete textual alternatives", async ({
   await openWorkspace(page)
   await sendPrompt(page, "Show a chart")
 
-  const chart = toolCard(page, "Enterprise AI spend")
-  await expect(chart.locator('[data-slot="chart"][data-chart]')).toBeVisible()
+  // Wait for this call's view: the thread already holds an earlier chart.
+  const chart = appView(page, "render_chart")
+  await expect(
+    chart.getByRole("heading", { name: "Enterprise AI spend" })
+  ).toBeVisible()
   await chart.getByRole("button", { name: "View chart data" }).click()
   const table = chart.getByRole("table", { name: "Enterprise AI spend data" })
   await expect(table).toBeVisible()
@@ -187,8 +204,7 @@ test("charts and maps expose complete textual alternatives", async ({
 
   await sendPrompt(page, "Show a map")
 
-  const map = toolCard(page, "Interview coverage")
-  await expect(map.locator('[data-slot="geo-map"]')).toBeVisible()
+  const map = appView(page, "render_map")
   await map.getByRole("button", { name: "View map locations" }).click()
   const locations = map.getByRole("list", {
     name: "Interview coverage locations",
@@ -285,8 +301,10 @@ test("stats display is a rich, structured artifact rather than a Todo", async ({
   await openWorkspace(page)
   await sendPrompt(page, "Show launch metrics")
 
-  const metrics = toolCard(page, "Launch metrics")
-  await expect(metrics.locator('[data-slot="stats-display"]')).toBeVisible()
+  const metrics = appView(page, "render_stats")
+  await expect(
+    metrics.getByRole("heading", { name: "Launch metrics" })
+  ).toBeVisible()
   await expect(metrics.getByText("Sessions")).toBeVisible()
   await expect(metrics.getByText("vs. last week")).toBeVisible()
   await expect(metrics.getByLabel("Session todos")).toHaveCount(0)
@@ -333,7 +351,10 @@ test("Hebrew localizes rich controls while preserving provider content verbatim"
   await expect(recordHe).toContainText("נדרשת תשובה")
 
   await sendPrompt(page, "Show a chart", "he")
-  const chart = toolCard(page, "Enterprise AI spend")
+  const chart = appView(page, "render_chart", "he")
+  await expect(
+    chart.getByRole("heading", { name: "Enterprise AI spend" })
+  ).toBeVisible()
   await chart.getByRole("button", { name: "הצגת נתוני התרשים" }).click()
   await expect(
     chart.getByRole("table", { name: "Enterprise AI spend — נתוני תרשים" })

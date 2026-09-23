@@ -185,6 +185,8 @@ const SessionMessagePartSchema = z.discriminatedUnion("type", [
     argsText: z.string().max(1_000_000),
     result: z.json().optional(),
     isError: z.boolean().optional(),
+    /** The tool declares an MCP App view; open it through the mcpApps API. */
+    app: z.literal(true).optional(),
   }),
   z.strictObject({
     type: z.literal("data"),
@@ -502,6 +504,15 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       CapabilityUnavailableSchema,
     ]),
     artifacts: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("session"),
+        maxBytes: z.number().int().positive(),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    /** MCP Apps: a tool call whose tool declares a UI resource opens a view. */
+    mcpApps: z.union([
       z.strictObject({
         status: z.literal("available"),
         scope: z.literal("session"),

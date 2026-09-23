@@ -119,26 +119,44 @@ export function projectGuestHistory(
       messages.push(message)
       continue
     }
-    const content = message.content.flatMap((part) => {
-      if (part.type !== "text") return []
-      const projected = projectGuestOutbound(
-        {
-          transport: "rest",
-          agentId: authorization.agentId,
-          sessionId: authorization.sessionId,
-          payload: {
-            type: "message",
-            role: message.role === "user" ? "guest" : "assistant",
-            text: part.text,
+    const content = message.content.flatMap(
+      (part): SessionMessage["content"] => {
+        // An MCP App reaches a guest as its card alone: its input and result
+        // travel only through the invitation's own view route.
+        if (part.type === "tool-call")
+          return part.app
+            ? [
+                {
+                  type: "tool-call" as const,
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  args: {},
+                  argsText: "",
+                  ...(part.isError ? { isError: true } : {}),
+                  app: true as const,
+                },
+              ]
+            : []
+        if (part.type !== "text") return []
+        const projected = projectGuestOutbound(
+          {
+            transport: "rest",
+            agentId: authorization.agentId,
+            sessionId: authorization.sessionId,
+            payload: {
+              type: "message",
+              role: message.role === "user" ? "guest" : "assistant",
+              text: part.text,
+            },
           },
-        },
-        authorization
-      )
-      return projected?.payload.type === "message" &&
-        projected.payload.text !== undefined
-        ? [{ type: "text" as const, text: projected.payload.text }]
-        : []
-    })
+          authorization
+        )
+        return projected?.payload.type === "message" &&
+          projected.payload.text !== undefined
+          ? [{ type: "text" as const, text: projected.payload.text }]
+          : []
+      }
+    )
     const interrupts =
       message.role === "assistant" &&
       message.metadata?.custom.agui &&
@@ -423,6 +441,7 @@ function createRunProjector(
   now: () => number
 ) {
   const assistantMessages = new Set<string>()
+  const toolNames = new Map<string, string>()
   return (candidate: RunEvent): RunEvent | undefined => {
     if (
       !guestAuthorizationActive(read, now) ||
@@ -475,6 +494,34 @@ function createRunProjector(
         type: RunEventKind.TEXT_MESSAGE_END,
         messageId: guestMessageId(read.tokenId, candidate.messageId),
       }
+    }
+    // Only an MCP App's card, from its start to its settling: no arguments,
+    // no output, and no other tool call. The App's input and result reach the
+    // guest through its view.
+    if (candidate.type === RunEventKind.TOOL_CALL_START) {
+      toolNames.set(candidate.toolCallId, candidate.toolCallName)
+      return candidate.app
+        ? {
+            type: RunEventKind.TOOL_CALL_START,
+            toolCallId: candidate.toolCallId,
+            toolCallName: candidate.toolCallName,
+            parentMessageId: undefined,
+            app: true,
+          }
+        : undefined
+    }
+    if (candidate.type === RunEventKind.TOOL_CALL_RESULT) {
+      const toolCallName = toolNames.get(candidate.toolCallId)
+      return candidate.app && toolCallName !== undefined
+        ? {
+            type: RunEventKind.TOOL_CALL_RESULT,
+            messageId: guestMessageId(read.tokenId, candidate.messageId),
+            toolCallId: candidate.toolCallId,
+            toolCallName,
+            content: "",
+            app: true,
+          }
+        : undefined
     }
     if (candidate.type === RunEventKind.RUN_FINISHED) {
       if (candidate.outcome?.type === "interrupt") {

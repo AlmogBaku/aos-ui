@@ -57,6 +57,111 @@ function planEvents(event: { type: RunEventKind }) {
 }
 
 describe("OpenCodeEventProjector", () => {
+  it("publishes an aos-ui MCP call under its bare name and its receipt as an opaque artifact", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    const receipt = JSON.stringify({
+      ok: true,
+      type: "aos.artifact",
+      artifact: {
+        path: "/workspaces/aos/out/report.pdf",
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+      },
+    })
+    const called = projector.accept(
+      live(1, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        tool: "aos-ui_present_artifact",
+        input: { path: "out/report.pdf" },
+        provider: { executed: true },
+        timestamp: 1,
+      })
+    ).events
+    const settled = projector.accept(
+      live(2, "session.next.tool.success", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        structured: {},
+        content: [{ type: "text", text: receipt }],
+        provider: { executed: true },
+        timestamp: 2,
+      })
+    ).events
+
+    expect(called).toContainEqual(
+      expect.objectContaining({
+        type: RunEventKind.TOOL_CALL_START,
+        toolCallName: "present_artifact",
+      })
+    )
+    const artifact = settled.find((event) => event.type === RunEventKind.CUSTOM)
+    expect(artifact).toEqual({
+      type: RunEventKind.CUSTOM,
+      name: "aos.artifact",
+      value: {
+        id: expect.stringMatching(/^opencode-artifact-[0-9a-f]{32}$/u),
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        source: { type: "provider", reference: expect.any(String) },
+      },
+    })
+    const result = settled.find(
+      (event) => event.type === RunEventKind.TOOL_CALL_RESULT
+    )
+    expect(result && "content" in result && JSON.parse(result.content)).toEqual(
+      {
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: (artifact as { value: { id: string } }).value.id,
+          filename: "report.pdf",
+          mimeType: "application/pdf",
+        },
+      }
+    )
+    expect(JSON.stringify(settled)).not.toContain("/workspaces")
+    for (const event of [...called, ...settled])
+      expect(RunEventSchema.safeParse(event).success).toBe(true)
+  })
+
+  it("publishes no artifact for a receipt naming a relative path", () => {
+    const projector = new OpenCodeEventProjector(scope, 0)
+    projector.accept(
+      live(1, "session.next.tool.called", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        tool: "aos-ui_present_artifact",
+        input: {},
+        provider: { executed: true },
+        timestamp: 1,
+      })
+    )
+    const settled = projector.accept(
+      live(2, "session.next.tool.success", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        structured: {},
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              type: "aos.artifact",
+              artifact: { path: "out/report.pdf", filename: "report.pdf" },
+            }),
+          },
+        ],
+        provider: { executed: true },
+        timestamp: 2,
+      })
+    ).events
+
+    expect(settled.some((event) => event.type === RunEventKind.CUSTOM)).toBe(
+      false
+    )
+  })
+
   it("orders real durable reasoning, text, tools, progress, usage, and authoritative finish as AG-UI", () => {
     const projector = new OpenCodeEventProjector(scope, 0)
     const events = [

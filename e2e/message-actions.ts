@@ -9,6 +9,10 @@ type MessageActionsCopy = {
   selectText: string
   update: string
   cancel: string
+  conversation: string
+  chartFrame: string
+  showChartData: string
+  appLoading: string
 }
 
 const english: MessageActionsCopy = {
@@ -19,6 +23,10 @@ const english: MessageActionsCopy = {
   selectText: "Select text",
   update: "Update",
   cancel: "Cancel",
+  conversation: "Conversation",
+  chartFrame: "render_chart app",
+  showChartData: "View chart data",
+  appLoading: "Loading the app…",
 }
 
 const hebrew: MessageActionsCopy = {
@@ -29,6 +37,10 @@ const hebrew: MessageActionsCopy = {
   selectText: "בחירת טקסט",
   update: "עדכון",
   cancel: "ביטול",
+  conversation: "שיחה",
+  chartFrame: "יישומון render_chart",
+  showChartData: "הצגת נתוני התרשים",
+  appLoading: "היישומון נטען…",
 }
 
 /** The fixture turns, located by the text a reader sees in either locale. */
@@ -112,6 +124,22 @@ async function exerciseMobile(page: Page, copy: MessageActionsCopy) {
   const menu = page.getByRole("menu")
   const assistant = turn(page, ASSISTANT_TURN)
 
+  // Chromium sizes an off-screen App frame only once it scrolls into view, and
+  // a following thread would then pull the press target back out of view. The
+  // reader's own scroll up to the turn leaves the follow before that happens.
+  const conversation = await page
+    .getByRole("main", { name: copy.conversation })
+    .boundingBox()
+  expect(conversation).not.toBeNull()
+  await page.mouse.move(
+    conversation!.x + conversation!.width / 2,
+    conversation!.y + conversation!.height / 2
+  )
+  await expect(async () => {
+    await page.mouse.wheel(0, -400)
+    await expect(turn(page, USER_TURN)).toBeInViewport({ ratio: 1 })
+  }).toPass()
+
   // Touch is the only pointer here, so a long press is the way into the actions
   // and every message also offers the reader its text back.
   await longPress(page, turn(page, USER_TURN))
@@ -141,6 +169,19 @@ export async function exerciseMessageActions(
   await page.emulateMedia({ reducedMotion: "reduce" })
   await page.goto(`/${locale}`)
   await expect(turn(page, ASSISTANT_TURN)).toBeVisible()
+  // A following thread returns to its end whenever content grows, and only the
+  // reader's own scroll leaves it, so the press waits for the lazily loaded
+  // chart App that would otherwise grow the turn and pull its target out of
+  // view. The sandbox proxy is the outer frame; the App document its child.
+  await expect(
+    page
+      .locator(`iframe[title="${copy.chartFrame}"]`)
+      .contentFrame()
+      .locator("iframe")
+      .contentFrame()
+      .getByRole("button", { name: copy.showChartData, exact: true })
+  ).toBeVisible()
+  await expect(page.getByText(copy.appLoading, { exact: true })).toHaveCount(0)
   if (mobile) await exerciseMobile(page, copy)
   else await exerciseDesktop(page, copy)
 }

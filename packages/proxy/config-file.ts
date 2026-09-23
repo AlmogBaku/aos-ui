@@ -274,8 +274,8 @@ export type ProxyEnvOverride = {
 
 /**
  * One row per scalar leaf of the schema, so the overrides are a list an
- * operator can read rather than a schema walk. `version` has no row, arrays are
- * file-only, and `AOS_UI_PROXY_TARGET`, `_HOST`, `_PORT` and `_CONFIG_FILE`
+ * operator can read rather than a schema walk. `version` has no row, arrays and
+ * the `mcpApps` server map are file-only, and `AOS_UI_PROXY_TARGET`, `_HOST`, `_PORT` and `_CONFIG_FILE`
  * belong to other features.
  */
 export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [

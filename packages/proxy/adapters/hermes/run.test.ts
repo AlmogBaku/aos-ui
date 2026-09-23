@@ -6905,6 +6905,98 @@ describe("live and refreshed Hermes tool projection agree", () => {
     expect(JSON.stringify(projection)).not.toContain("/srv/hermes")
   })
 
+  it("projects an aos-ui MCP artifact receipt identically", async () => {
+    const reportPath = "/home/alice/reports/q3.pdf"
+    const { projection, isError } = await parity({
+      toolCallId: "mcp-artifact-parity",
+      name: "mcp__aos_ui__present_artifact",
+      args: { path: reportPath },
+      // Hermes decodes the handler's `{"result": <text content>}` for the frame.
+      result: {
+        result: JSON.stringify({
+          ok: true,
+          type: "aos.artifact",
+          artifact: {
+            path: reportPath,
+            filename: "q3.pdf",
+            mimeType: "application/pdf",
+          },
+        }),
+      },
+    })
+
+    expect(isError).toBe(false)
+    expect(projection.toolName).toBe("present_artifact")
+    expect(projection.artifacts).toMatchObject([
+      {
+        id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
+        filename: "q3.pdf",
+        mimeType: "application/pdf",
+      },
+    ])
+    expect(JSON.stringify(projection)).not.toContain("/home/alice")
+  })
+
+  it.each([
+    "mcp__aos_ui__render_chart",
+    "mcp__aos_ui__render_map",
+    "mcp__aos_ui__render_stats",
+  ])("names %s by its bare aos-ui tool identically", async (name) => {
+    const { projection } = await parity({
+      toolCallId: `${name}-parity`,
+      name,
+      args: { title: "Quarter" },
+      result: { result: "Quarter is ready for display." },
+    })
+
+    expect(projection.toolName).toBe(name.replace("mcp__aos_ui__", ""))
+  })
+
+  it("publishes an assistant MEDIA line as the artifact history restores", async () => {
+    const text = "Your chart:\nMEDIA:/home/alice/reports/chart.png\nDone."
+    const attachment = observation()
+    const engine = new HermesRunEngine(
+      runtime({
+        observe: attachment.observe,
+        submit: async () => {
+          const turn = nativeTurn("live-secret", 1)
+          for (const frame of [
+            turn.messageStart("message-media-line"),
+            turn.delta(text.slice(0, 20)),
+            turn.delta(text.slice(20)),
+            turn.complete("message-media-line", text),
+            turn.idle(),
+          ])
+            attachment.publish("live-secret", frame)
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+    const events = await collect(await engine.start(scope, input()))
+    const live = ofType(events, RunEventKind.CUSTOM)
+      .filter((event) => (event as { name?: unknown }).name === "aos.artifact")
+      .map((event) => (event as { value: unknown }).value)
+    const streamed = ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)
+      .map((event) => (event as { delta: string }).delta)
+      .join("")
+    const [message] = projectHermesHistory([
+      { id: "assistant-media-line", role: "assistant", content: text },
+    ])
+
+    expect(streamed).toBe("Your chart:\nDone.")
+    expect(message?.content).toEqual([
+      { type: "text", text: "Your chart:\nDone." },
+      { type: "data", name: "aos.artifact", data: live[0] },
+    ])
+    expect(live).toMatchObject([
+      { filename: "chart.png", mimeType: "image/png" },
+    ])
+    expect(JSON.stringify(events)).not.toContain("/home/alice")
+  })
+
   it("collapses an unpublishable artifact receipt identically", async () => {
     const { projection, isError } = await parity({
       toolCallId: "artifact-unsafe-parity",

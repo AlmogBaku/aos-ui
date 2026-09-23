@@ -224,31 +224,3 @@ export function readOpenClawChatAttachments(
     STAGED_OPENCLAW_ATTACHMENTS
   ]
 }
-/** The verified plugin reports validation only; it cannot publish a native artifact. */
-export function projectOpenClawRichPresentation(raw: unknown) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
-  const v = raw as Record<string, unknown>,
-    details = v.details,
-    content = v.content
-  if (
-    !Array.isArray(content) ||
-    content.length !== 1 ||
-    !content[0] ||
-    typeof content[0] !== "object" ||
-    Array.isArray(content[0]) ||
-    (content[0] as Record<string, unknown>).type !== "text" ||
-    !text((content[0] as Record<string, unknown>).text, 8192) ||
-    !details ||
-    typeof details !== "object" ||
-    Array.isArray(details)
-  )
-    return undefined
-  const result = details as Record<string, unknown>
-  if (
-    result.type !== "aos.artifact-publication" ||
-    result.status !== "unsupported" ||
-    result.published !== false
-  )
-    return undefined
-  return { text: text((content[0] as Record<string, unknown>).text, 8192)! }
-}

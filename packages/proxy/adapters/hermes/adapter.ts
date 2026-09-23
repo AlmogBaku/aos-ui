@@ -26,7 +26,8 @@ import {
   type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
-import { projectHermesHistory } from "./history"
+import { hermesHistoryToolNames, projectHermesHistory } from "./history"
+import { createHermesMcpApps } from "./mcp-apps"
 import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
 import {
@@ -61,7 +62,9 @@ import {
   HermesSessionGoneError,
   isSessionGone,
 } from "./attachment-registry"
-import type { ServerRuntime } from "../../core/runtime"
+import type { ServerMcpApps, ServerRuntime } from "../../core/runtime"
+import type { McpAppClient } from "../../mcp-apps/client"
+import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
 import {
   DEFAULT_RETRY_SCHEDULE,
@@ -115,6 +118,12 @@ type NativeRecord = Record<string, unknown>
  * data-URL ceiling. Authentication is never among them: the dashboard answers
  * 401 for a rejected credential. None of these change on a retry.
  */
+/**
+ * The platform every Session AOS creates is recorded under, so Hermes can tell
+ * AOS Sessions apart and scope the `aos-ui` tools to them.
+ */
+const HERMES_SESSION_SOURCE = "aos-ui"
+
 const UNREADABLE_ARTIFACT_STATUS: ReadonlySet<number> = new Set([
   400, 403, 404, 413,
 ])
@@ -299,6 +308,8 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly native: HermesRunNative
   readonly runs: HermesRunEngine
   readonly #retry: HermesRetrySchedule
+  readonly mcpApps?: ServerMcpApps
+  readonly #mcpToolNames?: McpToolNames
 
   constructor(
     private readonly transport: HermesRpcTransport,
@@ -307,12 +318,24 @@ export class HermesServerAdapter implements ServerRuntime {
       log?: HermesLog
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
+      /** The proxy's own MCP client; without one, no tool opens a view. */
+      mcpAppClient?: McpAppClient
     } = {}
   ) {
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
+    if (this.#dashboard && options.mcpAppClient) {
+      const dashboard = this.#dashboard
+      const apps = createHermesMcpApps({
+        servers: (profile) => dashboard.listMcpServers(profile),
+        rawHistory: (scope) => this.#rawHistory(scope),
+        client: options.mcpAppClient,
+      })
+      this.mcpApps = apps.mcpApps
+      this.#mcpToolNames = apps.names
+    }
     const requireSession = (agentId: string, publicSessionId: string) =>
       this.#requireAttachedSession(agentId, publicSessionId)
     this.#workspace = createHermesWorkspaceOperations({
@@ -460,6 +483,7 @@ export class HermesServerAdapter implements ServerRuntime {
     })
     this.runs = new HermesRunEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
+      ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
     })
   }
 
@@ -539,6 +563,7 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await this.transport.request("session.create", {
         profile: agentId,
         title,
+        source: HERMES_SESSION_SOURCE,
         close_on_disconnect: false,
         ...(create.firstTurnInstruction === undefined
           ? {}
@@ -1328,7 +1353,10 @@ export class HermesServerAdapter implements ServerRuntime {
       // on an older page. Every page but the last projects to nothing, and one
       // page holds at most `limit` rows, so the projection stays within `limit`.
       rows = [...page, ...rows]
-      messages = projectHermesHistory(rows)
+      messages = projectHermesHistory(
+        rows,
+        await this.#mcpToolNames?.load(profile, hermesHistoryToolNames(page))
+      )
       // A short page means Hermes has no older rows left; an empty page says the
       // same even if a caller passed a degenerate limit.
       if (messages.length > 0 || page.length === 0 || page.length < limit) break
@@ -1494,6 +1522,7 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       payload = await this.transport.request("session.create", {
         profile,
+        source: HERMES_SESSION_SOURCE,
         close_on_disconnect: false,
         ...(title ? { title } : {}),
       })

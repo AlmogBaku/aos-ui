@@ -10,8 +10,9 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
-import type { RuntimeInstance } from "./core/runtime"
+import type { RuntimeInstance, ServerMcpApps } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
+import { McpAppNotFoundError } from "./mcp-apps/fallback"
 
 const origin = "http://127.0.0.1:3000"
 
@@ -300,5 +301,43 @@ describe("AOS V1 proxy", () => {
         path,
       })
     )
+  })
+
+  it("opens an MCP App view only from the Session that holds its call", async () => {
+    const runtime = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(runtime, "getSession").mockImplementation(async (agentId, id) =>
+      session(agentId, id)
+    )
+    // A call the runtime finds only in the Session that made it.
+    const owned = (sessionId: string, toolCallId: string) => {
+      if (sessionId !== "stored" || toolCallId !== "call-1")
+        throw new McpAppNotFoundError()
+    }
+    const mcpApps: ServerMcpApps = {
+      describe: vi.fn(async () => true),
+      open: vi.fn(async (scope, toolCallId) => {
+        owned(scope.sessionId, toolCallId)
+        return { html: "<p>view</p>" }
+      }),
+      callTool: vi.fn(async (scope, toolCallId) => {
+        owned(scope.sessionId, toolCallId)
+        return { content: [] }
+      }),
+      readResource: vi.fn(async () => ({ contents: [] })),
+    }
+    Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
+    const proxy = app(runtime)
+    const view = (sessionId: string) =>
+      `${origin}/api/aos/v1/agents/researcher/sessions/${sessionId}/tool-calls/call-1/app`
+
+    expect((await proxy.request(view("stored"))).status).toBe(200)
+    expect((await proxy.request(view("other"))).status).toBe(404)
+    const call = await proxy.request(`${view("other")}/tools/call`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ name: "refresh", arguments: {} }),
+    })
+    expect(call.status).toBe(404)
+    expect(await call.json()).toMatchObject({ error: { code: "not_found" } })
   })
 })

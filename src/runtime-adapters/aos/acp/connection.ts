@@ -27,7 +27,6 @@ import {
   AOS_META_KEY,
   AosActivityNotificationSchema,
   AosAgentsListResponseSchema,
-  AosArtifactNotificationSchema,
   AosChunkMetaSchema,
   AosComposerPrefillNotificationSchema,
   AosErrorNotificationSchema,
@@ -80,7 +79,6 @@ const ElicitationScopeSchema = z.object({ sessionId: z.string().min(1) })
 
 const NOTIFICATION_PARSERS: Readonly<Record<string, ParamsParser<unknown>>> = {
   [AOS_METHODS.notify.activity]: AosActivityNotificationSchema,
-  [AOS_METHODS.notify.artifact]: AosArtifactNotificationSchema,
   [AOS_METHODS.notify.steerAccepted]: AosSteerAcceptedNotificationSchema,
   [AOS_METHODS.notify.composerPrefill]: AosComposerPrefillNotificationSchema,
   [AOS_METHODS.notify.sessionInvalidated]:

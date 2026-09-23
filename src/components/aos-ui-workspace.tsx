@@ -32,6 +32,7 @@ import {
 import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
+import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
@@ -195,9 +196,15 @@ function ArtifactWorkspaceBridge({
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
-      <ArtifactWorkspaceContent {...shell} locale={locale}>
-        {children}
-      </ArtifactWorkspaceContent>
+      <McpAppHostProvider
+        adapter={bundle.mcpApps}
+        agentId={agentId}
+        threadId={artifactThreadId}
+      >
+        <ArtifactWorkspaceContent {...shell} locale={locale}>
+          {children}
+        </ArtifactWorkspaceContent>
+      </McpAppHostProvider>
     </ArtifactWorkspaceProvider>
   )
 }

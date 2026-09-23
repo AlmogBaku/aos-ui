@@ -20,6 +20,7 @@ import {
 } from "../types"
 import { pendingRequestToOutbound } from "./interrupts"
 import {
+  artifactOutbound,
   chunkOutbound,
   planUpdate,
   runMeta,
@@ -134,15 +135,18 @@ function customOutbound(
   if (event.name === "aos.artifact") {
     const artifact = AosArtifactDescriptorSchema.safeParse(event.value)
     if (!artifact.success) return { state, outbound: [] }
+    // A link is message content, so it lands on the segment's one turn, and
+    // one published before anything streamed opens that turn itself.
+    const segment = segmentMessage(state, attachedTo(state, context))
     return {
-      state,
+      state: segment.state,
       outbound: [
-        {
-          kind: "artifact",
-          runId: context.runId,
-          ...(state.messageId ? { messageId: state.messageId } : {}),
-          artifact: artifact.data,
-        },
+        artifactOutbound(
+          context,
+          "agent_message_chunk",
+          segment.messageId,
+          artifact.data
+        ),
       ],
     }
   }
@@ -234,7 +238,14 @@ function toolStarted(
   const segment = segmentMessage(state, event.parentMessageId ?? context.runId)
   return {
     state: openArgs(segment.state, event.toolCallId, ""),
-    outbound: [toolOutbound(context, segment.messageId, call)],
+    outbound: [
+      toolOutbound(
+        context,
+        segment.messageId,
+        call,
+        event.app ? { app: {} } : undefined
+      ),
+    ],
   }
 }
 
@@ -280,6 +291,28 @@ function toolSettled(
   event: RunEventOf<typeof RunEventKind.TOOL_CALL_RESULT>
 ): Step {
   const output = jsonOr(event.content, event.content)
+  // The guest projection passes an MCP App's card alone, so its lane settles
+  // the call under its name and nothing more. A call the start could not flag
+  // arrives here first, so the card may be what opens the segment.
+  if (context.lane === "guest") {
+    if (!event.app) return { state, outbound: [] }
+    const segment = segmentMessage(state, context.runId)
+    return {
+      state: segment.state,
+      outbound: [
+        toolOutbound(
+          context,
+          segment.messageId,
+          {
+            toolCallId: event.toolCallId,
+            ...(event.toolCallName ? { title: event.toolCallName } : {}),
+            status: "completed",
+          },
+          { app: {} }
+        ),
+      ],
+    }
+  }
   const call = {
     toolCallId: event.toolCallId,
     status: resultFailed(output) ? "failed" : "completed",
@@ -290,7 +323,14 @@ function toolSettled(
   }
   return {
     state,
-    outbound: [toolOutbound(context, attachedTo(state, context), call)],
+    outbound: [
+      toolOutbound(
+        context,
+        attachedTo(state, context),
+        call,
+        event.app ? { app: {} } : undefined
+      ),
+    ],
   }
 }
 

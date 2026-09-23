@@ -5,13 +5,18 @@ import globals from "globals"
 import tseslint from "typescript-eslint"
 import runtimeBoundaries from "./scripts/eslint-runtime-boundaries.mjs"
 
+/** The UI-owned MCP tool server runs beside the harness, not in the browser or proxy. */
+const toolsMcpImports = [
+  "packages/tools-mcp",
+  "packages/tools-mcp/**",
+  "../**/tools-mcp",
+  "../**/tools-mcp/**",
+]
+
 /** Native implementations and private Assistant UI internals, off limits to src. */
 const browserRestrictedImports = [
+  ...toolsMcpImports,
   "node:*",
-  "integrations/*",
-  "integrations/**",
-  "../**/integrations/**",
-  "../../integrations/**",
   "scripts/*",
   "scripts/**",
   "../**/scripts/**",
@@ -31,7 +36,6 @@ export default defineConfig([
   globalIgnores([
     "dist/**",
     "coverage/**",
-    "integrations/**/dist/**",
     "**/.venv/**",
     ".agents/**",
     ".claude/**",
@@ -97,6 +101,55 @@ export default defineConfig([
     },
   },
   {
+    files: ["packages/proxy/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: toolsMcpImports,
+              message:
+                "The proxy must not import the tools MCP server; harnesses reach it over MCP.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/tools-mcp/views/**/*.{ts,tsx}"],
+    ignores: ["packages/tools-mcp/views/build.ts"],
+    languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    files: ["packages/tools-mcp/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "@/*",
+                "src/*",
+                "src/**",
+                "../**/src/**",
+                "packages/proxy",
+                "packages/proxy/**",
+                "../proxy",
+                "../proxy/**",
+                "../**/packages/proxy/**",
+              ],
+              message:
+                "The tools MCP server and its views depend only on shared contracts, never on browser or proxy code.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["shared/**/*.ts"],
     ignores: ["shared/**/*.test.ts"],
     languageOptions: {
@@ -118,10 +171,6 @@ export default defineConfig([
                 "src/*",
                 "src/**",
                 "../src/**",
-                "integrations/*",
-                "integrations/**",
-                "../integrations/**",
-                "../**/integrations/**",
                 "node:*",
               ],
               message:

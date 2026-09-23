@@ -329,8 +329,8 @@ derived unread count. Browsing the Activity drawer marks nothing read.
 
 - **Todos and activity:** stay eager because the default workspace uses them;
   Todos progress has a localized accessible name and a proper heading level.
-- **Optional visuals:** question, permission, chart, map, and stats
-  renderers load on demand behind a localized loading state and error boundary.
+- **Optional visuals:** question and permission renderers load on demand
+  behind a localized loading state and error boundary.
 - **Fallback:** loading or failure leaves an inspectable textual/JSON
   representation available. Markdown follows the same rule: plain text stays
   lightweight, while deferred Markdown retains a localized raw-text fallback.
@@ -353,6 +353,18 @@ derived unread count. Browsing the Activity drawer marks nothing read.
   viewer, and the Artifacts roster stays a list of openable rows. A failure
   states what happened in place, and a provider that no longer holds the bytes
   says so and drops the retry and download it cannot honor.
+- **MCP Apps:** the one exception to "never run arbitrary HTML". A tool whose
+  own MCP server declares a `ui://` view renders that server-authored HTML as
+  an inline card in the message, inside an opaque-origin double iframe with a
+  CSP built from the view's declared domains; nothing else ever runs there.
+  The card follows the App's requested height up to 80% of the viewport, and
+  the App may ask for fullscreen, which covers the viewport in place with a
+  localized close control that returns focus to the card. Loading, failure, and
+  an unavailable view read as card states. The card has no header: the view
+  sits in the message, followed by the compact "Used <tool>" row that keeps the
+  call's textual details in every state. Charts, maps, and stats are the
+  `aos-ui` server's own App views (`render_chart`, `render_map`,
+  `render_stats`); `present_artifact` has no view.
 
 ### Notification ask and settings
 
@@ -464,4 +476,5 @@ on animation.
 - **Don't** use motion as the only status signal, suppress keyboard focus, or
   lower contrast for decorative subtlety.
 - **Don't** make rich output opaque or executable: preserve textual inspection
-  and never run arbitrary HTML or generated code in the browser.
+  and never run arbitrary HTML or generated code in the browser outside the
+  sandboxed MCP App frame.

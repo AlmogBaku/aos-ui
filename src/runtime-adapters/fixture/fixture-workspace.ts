@@ -516,7 +516,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   completeAgentCreation(creatorThreadId: string, agent: AgentSummary) {
     this.#addCreatedAgent(creatorThreadId, agent)
     this.#publishCatalog()
-    this.#publishAgentReceipt(creatorThreadId, agent.id, "agent-ready")
+    this.#publishCreatedAgent(creatorThreadId, agent.id, "agent-ready")
   }
 
   /** A created Agent the provider cannot activate without an operator. */
@@ -529,7 +529,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     })
     this.#hiddenAgents.add(agentId)
     this.#publishCatalog()
-    this.#publishAgentReceipt(
+    this.#publishCreatedAgent(
       creatorThreadId,
       agentId,
       "agent-activation-failed"
@@ -550,8 +550,8 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     this.#agents.push(structuredClone(agent))
   }
 
-  /** The creator tool's own receipt, as the browser store reports it. */
-  #publishAgentReceipt(
+  /** A created Agent, as the browser store reports one the catalog lists. */
+  #publishCreatedAgent(
     creatorThreadId: string,
     agentId: string,
     type: "agent-ready" | "agent-activation-failed"

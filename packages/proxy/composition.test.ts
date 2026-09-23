@@ -146,7 +146,11 @@ describe("configured proxy composition", () => {
     })
 
     expect(runtimeFactory).toHaveBeenCalledOnce()
-    expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits)
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      input.runtime,
+      input.limits,
+      new Map()
+    )
     expect(configured.runtimeInstance).toBe(runtimeInstance)
     expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
     // The guest listener serves ACP beside its HTTP routes.

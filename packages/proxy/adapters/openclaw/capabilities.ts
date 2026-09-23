@@ -1,7 +1,9 @@
 import { INTERACTION_PROTOCOL } from "../../../protocol"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { OPENCLAW_ATTACHMENT_PROXY_LIMITS } from "./content"
 import type { OpenClawNegotiatedPolicy } from "./client"
 import { OPENCLAW_MAX_PENDING_INTERACTIONS } from "./interactions"
+import { OPENCLAW_MCP_APP_MAX_BYTES } from "./mcp-apps"
 
 export type OpenClawCapabilityPolicy = OpenClawNegotiatedPolicy
 
@@ -66,8 +68,16 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
             reason: "negotiated-attachment-policy-unavailable",
           },
       artifacts: {
-        status: "unavailable" as const,
-        reason: "artifact-publication-unavailable" as const,
+        status: "available" as const,
+        scope: "session" as const,
+        maxBytes: MAX_ARTIFACT_BYTES,
+      },
+      // A tool result opens a view only while the gateway's `mcp.apps` is on;
+      // `describe` reads that per call, so the capability need not.
+      mcpApps: {
+        status: "available" as const,
+        scope: "session" as const,
+        maxBytes: OPENCLAW_MCP_APP_MAX_BYTES,
       },
       transcription: {
         status: "unavailable" as const,

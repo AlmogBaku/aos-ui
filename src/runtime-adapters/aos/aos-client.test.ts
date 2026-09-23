@@ -362,3 +362,90 @@ describe("this device's push subscription", () => {
     ).rejects.toMatchObject({ kind: "proxy-failure" })
   })
 })
+
+describe("MCP App routes", () => {
+  const APP_PATH = "/tool-calls/call%2F1/app"
+
+  function appFetcher() {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith("/app")) return Response.json({ html: "<p>app</p>" })
+      if (path.endsWith("/app/tools/call")) {
+        expect(init?.method).toBe("POST")
+        return Response.json({ content: [{ type: "text", text: "ok" }] })
+      }
+      if (path.endsWith("/app/resources/read")) {
+        expect(init?.method).toBe("POST")
+        return Response.json({
+          contents: [{ uri: "ui://board/data", text: "{}" }],
+        })
+      }
+      throw new Error(`Unexpected normalized request: ${path}`)
+    })
+  }
+
+  it("opens a view, calls its tools, and reads its resources by tool call", async () => {
+    const fetcher = appFetcher()
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+    await expect(client.openMcpApp(SESSION_ID, "call/1")).resolves.toEqual({
+      html: "<p>app</p>",
+    })
+    await expect(
+      client.callMcpAppTool(SESSION_ID, "call/1", {
+        name: "refresh",
+        arguments: { board: "launch" },
+      })
+    ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] })
+    await expect(
+      client.readMcpAppResource(SESSION_ID, "call/1", {
+        uri: "ui://board/data",
+      })
+    ).resolves.toMatchObject({ contents: [{ uri: "ui://board/data" }] })
+
+    const base = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}`
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      base,
+      `${base}/tools/call`,
+      `${base}/resources/read`,
+    ])
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+      name: "refresh",
+      arguments: { board: "launch" },
+    })
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({
+      uri: "ui://board/data",
+    })
+  })
+
+  it("serves an invited guest's App from its own base path and invitation", async () => {
+    const fetcher = appFetcher()
+    const client = new AosRemoteClient({
+      fetcher,
+      basePath: "/api/guest/v1",
+      authorization: "Bearer invitation-token",
+    })
+    client.adoptSessionOwnership("guest_ref", AGENT_ID)
+
+    await client.openMcpApp("guest_ref", "call/1")
+
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe(
+      `/api/guest/v1/agents/researcher/sessions/guest_ref${APP_PATH}`
+    )
+    expect(
+      new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
+    ).toBe("Bearer invitation-token")
+  })
+
+  it("refuses an empty tool call id before asking the proxy", async () => {
+    const fetcher = appFetcher()
+    const client = new AosRemoteClient({ fetcher })
+    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+    await expect(client.openMcpApp(SESSION_ID, "")).rejects.toMatchObject({
+      kind: "proxy-failure",
+    })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+})
