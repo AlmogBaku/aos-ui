@@ -292,7 +292,7 @@ function tokenUsage(value: unknown): TokenUsage[] {
 type ModelRef = { id: string; providerID: string }
 
 /** When a validated event happened, unless its timestamp names no real date. */
-function occurredAt(data: Record<string, unknown>) {
+export function occurredAt(data: Record<string, unknown>) {
   const timestamp = data.timestamp as number
   return timestamp <= MAX_DATE_MS ? openCodeTimestamp(timestamp) : undefined
 }

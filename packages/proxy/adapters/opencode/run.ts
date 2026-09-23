@@ -29,12 +29,12 @@ import {
 import {
   OpenCodeEventProjector,
   OpenCodeEventValidationError,
+  occurredAt,
   validateOpenCodeHistoryEvent,
   validateOpenCodeLiveEvent,
   type ValidatedOpenCodeEvent,
 } from "./events"
 import { openCodePromptFiles } from "./content"
-import { openCodeTimestamp } from "./native-schemas"
 
 const MAX_HISTORY_PAGES = 1_000
 const MAX_USER_TURN_BYTES = 1024 * 1024
@@ -341,13 +341,12 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       return undefined
     this.#adoptedAdmissions.set(key, { turnId, admissionId: id })
     const handle = await this.#recoverRun(scope, undefined, id)
+    const startedAt = occurredAt(admission.data)
     return {
       handle,
       state: "running" as const,
       fromStart: true,
-      startedAt: Date.parse(
-        openCodeTimestamp(admission.data.timestamp as number)
-      ),
+      ...(startedAt === undefined ? {} : { startedAt: Date.parse(startedAt) }),
     }
   }
 

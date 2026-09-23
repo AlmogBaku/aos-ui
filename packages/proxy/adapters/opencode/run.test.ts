@@ -1498,6 +1498,24 @@ describe("OpenCodeRunEngine foreign turns", () => {
     expect(observer.onTurn).not.toHaveBeenCalled()
   })
 
+  it("adopts a running foreign turn whose admission names no real date without a start", async () => {
+    const log = nativeLog([admitted(0, "msg-tui", 9e15)])
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => controlledStream().source),
+      active: vi.fn(async () => ({
+        data: { [scope.sessionId]: { type: "running" } },
+      })),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
+
+    const discovered = await engine.discover(scope, "aos-recovered-1")
+
+    expect(discovered).toMatchObject({ state: "running", fromStart: true })
+    expect(discovered).not.toHaveProperty("startedAt")
+    await discovered!.handle.stop()
+  })
+
   it("adopts a running foreign turn from its first event, and recovers the same admission later", async () => {
     const admittedAt = Date.parse("2026-09-24T08:00:00.000Z")
     const log = nativeLog([
