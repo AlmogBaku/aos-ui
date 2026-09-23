@@ -254,6 +254,28 @@ describe("Activity coordinator", () => {
     unmount()
     expect(provider.unsubscribe).toHaveBeenCalledTimes(1)
   })
+  it("re-renders nothing when the window's focus changes and its Activity does not", async () => {
+    const provider = source()
+    let renders = 0
+    const { result } = renderHook(
+      (props: Parameters<typeof useActivityCoordinator>[0]) => {
+        renders += 1
+        return useActivityCoordinator(props)
+      },
+      { initialProps: options(provider.workspace) }
+    )
+    act(() => provider.emit("visible", "one"))
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+    await act(async () => {})
+    const settled = renders
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"))
+      window.dispatchEvent(new Event("focus"))
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(renders).toBe(settled)
+    expect(result.current.items.map((item) => item.id)).toEqual(["visible"])
+  })
   it("coalesces unread foreground arrivals without moving focus or exposing content", async () => {
     const provider = source()
     const { result } = renderHook(useActivityCoordinator, {

@@ -40,7 +40,8 @@ import {
 import type { Locale } from "@/lib/i18n/config"
 import type { BrowserSettingsView } from "./activity"
 import { useInstallPrompt } from "./use-install-prompt"
-import { useEffect, useEffectEvent, useRef, useState } from "react"
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
+import { sameData } from "@/lib/utils"
 import type {
   SessionMetadata,
   WorkspaceAdapter,
@@ -83,6 +84,21 @@ type Options = {
     copy: { completion: string; failure: string; input: string }
   }
 }
+/**
+ * State re-read from a store on every focus change and activity event. The
+ * setter keeps the value it has when the re-read carries the same data, so an
+ * unchanged read does not re-render the workspace.
+ */
+function useDataState<Value>(initial: Value) {
+  const [value, setValue] = useState(initial)
+  const setData = useCallback(
+    (next: Value) =>
+      setValue((previous) => (sameData(previous, next) ? previous : next)),
+    []
+  )
+  return [value, setData] as const
+}
+
 export function useActivityCoordinator(
   options: Options
 ): ActivityView & { browserSettings: Omit<BrowserSettingsView, "coverage"> } {
@@ -95,7 +111,7 @@ export function useActivityCoordinator(
   const browserRef = useRef<BrowserActivityCoordinator | null>(null)
   const openRef = useRef<(id: string) => Promise<boolean>>(async () => false)
   const syncPushRef = useRef<() => void>(() => {})
-  const [browserState, setBrowserState] = useState<
+  const [browserState, setBrowserState] = useDataState<
     Pick<BrowserSettingsView, "status" | "preferences" | "ask" | "pushActive">
   >({
     status: "not-configured",
@@ -115,7 +131,7 @@ export function useActivityCoordinator(
   const validateOwnerRef = useRef<
     (threadId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
-  const [records, setRecords] = useState<ActivityRecord[]>([])
+  const [records, setRecords] = useDataState<ActivityRecord[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
   const reported = useRef<
     { threadId: string | null; foreground: boolean; idle: boolean } | undefined
@@ -399,7 +415,7 @@ export function useActivityCoordinator(
         /* Subscription teardown cannot break the workspace. */
       }
     }
-  }, [workspace])
+  }, [setBrowserState, setRecords, workspace])
 
   useEffect(() => {
     refresh()
