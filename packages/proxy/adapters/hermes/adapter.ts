@@ -172,6 +172,14 @@ function historyPagination(
 const MAX_EXTRA_HISTORY_PAGE_FETCHES = 32
 
 /**
+ * A stored Hermes row never says a turn is live. Its `is_active` only means the
+ * Session is unended and was touched in the last five minutes, so a finished
+ * turn would keep reading "running" that long. The coordinator's live turn is
+ * the one source of "running"; a row is always settled.
+ */
+const SETTLED = "idle" as const
+
+/**
  * One stored native flag, however the endpoint reporting it spells it: the
  * Session list coerces its SQLite integers to booleans, while the Session
  * detail read returns the raw `0`/`1`. Anything else is unknown, not false.
@@ -1165,7 +1173,6 @@ export class HermesServerAdapter implements ServerRuntime {
         !storedId ||
         trimmedText(row.profile) !== profile ||
         seen.has(storedId) ||
-        (row.is_active !== undefined && typeof row.is_active !== "boolean") ||
         (row.unread !== undefined && typeof row.unread !== "boolean") ||
         (row.pinned !== undefined && typeof row.pinned !== "boolean")
       )
@@ -1177,8 +1184,7 @@ export class HermesServerAdapter implements ServerRuntime {
         title: trimmedText(row.title) ?? storedId,
         archived: row.archived === true,
         updatedAt: timestamp(row.last_active ?? row.started_at),
-        status:
-          row.is_active === true ? ("running" as const) : ("idle" as const),
+        status: SETTLED,
         // Read state is derived per catalog row; an older Hermes omits it, and
         // absent must stay absent rather than collapse to "read".
         ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
@@ -1423,9 +1429,7 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     if (
       !isRecord(payload) ||
-      trimmedText(payload.id) !== storedId ||
-      (payload.is_active !== undefined &&
-        typeof payload.is_active !== "boolean")
+      trimmedText(payload.id) !== storedId
     )
       throw new HermesUnavailableError()
     if (trimmedText(payload.profile) !== profile)
@@ -1439,8 +1443,7 @@ export class HermesServerAdapter implements ServerRuntime {
       // Session arrives as `1`; an unreadable flag stays the archive default.
       archived: nativeFlag(payload.archived) ?? false,
       updatedAt: timestamp(payload.last_active ?? payload.started_at),
-      status:
-        payload.is_active === true ? ("running" as const) : ("idle" as const),
+      status: SETTLED,
       ...(pinned === undefined ? {} : { pinned }),
       // `unread` is omitted: the Session detail read carries no derived
       // activity timestamp, so read state is unknowable here.

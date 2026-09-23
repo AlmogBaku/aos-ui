@@ -1269,13 +1269,36 @@ describe("Hermes server adapter", () => {
           title: "One",
           archived: false,
           updatedAt: "1970-01-01T00:00:01.000Z",
-          status: "running",
+          // `is_active` is Hermes' five-minute recency window, not a live turn.
+          status: "idle",
         },
       ],
       total: 1,
       limit: 50,
       offset: 0,
     })
+  })
+
+  it("reads a recently active Session as settled, not running", async () => {
+    const row = {
+      id: "stored/1",
+      profile: "researcher",
+      title: "One",
+      last_active: 1,
+      is_active: true,
+    }
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async (path: string) =>
+        path.startsWith("/api/sessions?") ? { sessions: [row], total: 1 } : row
+      ),
+    })
+
+    const page = await adapter.listSessions("researcher", 50, 0)
+    expect(page.sessions.map((session) => session.status)).toEqual(["idle"])
+    await expect(
+      adapter.getSession("researcher", "stored/1")
+    ).resolves.toMatchObject({ status: "idle" })
   })
 
   it("projects the native derived read state per catalog row and omits it when absent", async () => {
