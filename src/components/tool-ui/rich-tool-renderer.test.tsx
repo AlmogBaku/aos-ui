@@ -281,7 +281,7 @@ describe("AosToolFallback", () => {
     { name: "stopped", exitCode: 130, output: "[Command interrupted]" },
     { name: "finished", exitCode: 0, output: "Built successfully" },
   ])(
-    "reads a $name command and its output left to right in Hebrew",
+    "lays a $name command and its output out left to right in Hebrew",
     async ({ exitCode, output }) => {
       const user = userEvent.setup()
       render(
@@ -300,7 +300,7 @@ describe("AosToolFallback", () => {
       if (trigger) await user.click(trigger)
       for (const text of ["bun run build --filter web", output]) {
         for (const element of screen.getAllByText(text))
-          expect(element.closest("bdi")).toHaveAttribute("dir", "ltr")
+          expect(element.closest("[dir]")).toHaveAttribute("dir", "ltr")
       }
     }
   )

@@ -77,18 +77,17 @@ export function TerminalTextFallback({
   labels: ToolTerminalLabels
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-2 text-sm">
+    <div dir="ltr" className="flex min-w-0 flex-col gap-2 text-sm">
       {terminal.command && (
         <p className="font-mono text-xs">
           <span className="sr-only">{labels.command}: </span>
-          <bdi dir="ltr">{terminal.command}</bdi>
+          {terminal.command}
         </p>
       )}
       <p className="text-muted-foreground">
         {terminalStatus(terminal, labels)}
       </p>
       <pre
-        dir="ltr"
         aria-label={labels.output}
         className="max-h-80 overflow-auto rounded-lg border border-border bg-card p-3 font-mono text-xs"
       >

@@ -9,9 +9,7 @@ import { cn } from "@/lib/utils"
 export function ToolError({
   name,
   target,
-  targetDir = "auto",
   message,
-  messageDir = "auto",
   attempt,
   maxAttempts,
   retrying,
@@ -27,9 +25,7 @@ export function ToolError({
   | "children"
   | "name"
   | "target"
-  | "targetDir"
   | "message"
-  | "messageDir"
   | "attempt"
   | "maxAttempts"
   | "retrying"
@@ -38,11 +34,7 @@ export function ToolError({
 > & {
   name: string
   target: string
-  /** `ltr` for a command or a path, which read left to right in any locale. */
-  targetDir?: "ltr" | "auto"
   message: string
-  /** `ltr` for a command's output. */
-  messageDir?: "ltr" | "auto"
   attempt: number
   maxAttempts: number
   retrying: boolean
@@ -65,10 +57,7 @@ export function ToolError({
       <div className="flex items-center gap-2.5">
         <AlertCircleIcon className="size-3.5 shrink-0 text-destructive" />
         <span className={cn(mono, "shrink-0 text-foreground/55")}>{name}</span>
-        <bdi
-          dir={targetDir}
-          className="min-w-0 flex-1 truncate text-[13px] text-foreground/80"
-        >
+        <bdi className="min-w-0 flex-1 truncate text-[13px] text-foreground/80">
           {target}
         </bdi>
         <span className={cn(mono, "shrink-0 text-foreground/30 tabular-nums")}>
@@ -76,15 +65,14 @@ export function ToolError({
         </span>
       </div>
 
-      <bdi
-        dir={messageDir}
+      <div
         className={cn(
           field,
-          "block rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive"
+          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive"
         )}
       >
         {message}
-      </bdi>
+      </div>
 
       {onRetry || onSkip ? (
         <div className="flex items-center justify-end gap-2">

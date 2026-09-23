@@ -111,8 +111,7 @@ export const AosToolError: RichToolFallbackComponent = (part) => {
     <ToolError
       name={part.toolName}
       target={toolSubject(part, kind)}
-      targetDir={toolSubjectDir(part, kind)}
-      messageDir={kind === "command" ? "ltr" : "auto"}
+      dir={kind === "command" ? "ltr" : undefined}
       message={
         part.result === undefined
           ? locale === "he"
