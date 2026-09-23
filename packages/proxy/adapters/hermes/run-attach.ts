@@ -25,6 +25,7 @@ import {
   type HermesRecovery,
 } from "./run-frames"
 import { settleFrom } from "./run-settlement"
+import { sessionModelChoice } from "./session-model"
 import {
   safelyUnsubscribe,
   settledStatus,
@@ -85,7 +86,10 @@ export async function attachTurn(
     else asked = request
   })
   try {
-    ;({ liveSessionId } = await host.native.resume(active.scope))
+    const resumed = await host.native.resume(active.scope)
+    liveSessionId = resumed.liveSessionId
+    // The model the turn starts on; a change the run observes is reported.
+    active.model ??= sessionModelChoice(resumed.info)
     unsubscribe = await host.native.observe(liveSessionId, (signal) => {
       if (signal.kind === "event") {
         if (nativeEventSessionId(signal.event) !== liveSessionId) return
@@ -342,7 +346,11 @@ async function catchUp(host: TurnEngineHost, active: ActiveTurn) {
 }
 
 /** The observed frame stream ended; how it ended decides what the run does. */
-function lostTurn(host: TurnEngineHost, active: ActiveTurn, reason: LostReason) {
+function lostTurn(
+  host: TurnEngineHost,
+  active: ActiveTurn,
+  reason: LostReason
+) {
   if (reason === "disconnected")
     host.detach(active, TURN_FAILURES.connectionInterrupted)
   // A rebound or restarted live Session cannot answer for this run's cursor.

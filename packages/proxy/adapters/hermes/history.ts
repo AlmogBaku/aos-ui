@@ -1,4 +1,5 @@
 import type { SessionMessage } from "../../../protocol"
+import { StopReason } from "../../core/events"
 import {
   isRecord as isNativeRecord,
   rowText,
@@ -13,6 +14,9 @@ import {
 } from "./media-artifacts"
 import {
   canonicalToolName,
+  hermesToolDiffs,
+  hermesToolKind,
+  hermesToolLocations,
   projectHermesToolCall,
   projectHermesToolOutcome,
 } from "./tool-data"
@@ -169,6 +173,16 @@ function isRedirectCorrection(value: JsonRecord): boolean {
   )
 }
 
+/**
+ * How a stored assistant row's model call finished, where it ends a turn. A
+ * `tool_calls` row, or one a stop gate reopened, leaves the turn running.
+ */
+const STOP_REASONS: Record<string, StopReason> = {
+  stop: StopReason.EndTurn,
+  length: StopReason.MaxTokens,
+  content_filter: StopReason.Refusal,
+}
+
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[]
@@ -219,12 +233,16 @@ export function projectHermesHistory(
         value.content ?? value.result,
         value.is_error === true
       )
+      const diffs = outcome.isError
+        ? undefined
+        : hermesToolDiffs(toolName, value.content ?? value.result)
       const content = [...message.content]
       content[target.partIndex] = {
         ...part,
-        ...(resultToolName ? { toolName } : {}),
+        ...(resultToolName ? { toolName, kind: hermesToolKind(toolName) } : {}),
         result: outcome.result,
         ...(outcome.isError ? { isError: true } : {}),
+        ...(diffs ? { diffs } : {}),
       }
       // Live publishes an artifact the moment its tool result lands, so the
       // stored turn places it there too rather than at the turn's end.
@@ -306,12 +324,15 @@ export function projectHermesHistory(
           fn?.arguments
         )
         const partIndex = content.length
+        const locations = hermesToolLocations(toolName, args)
         content.push({
           type: "tool-call",
           toolCallId,
           toolName,
           args,
           argsText: JSON.stringify(args),
+          kind: hermesToolKind(toolName),
+          ...(locations ? { locations } : {}),
         })
         calls.set(toolCallId, { messageIndex, partIndex })
       }
@@ -319,14 +340,23 @@ export function projectHermesHistory(
     // Only an assistant turn spans more than one row, so only its end is worth
     // recording: every other role completed where it was created.
     if (role === "assistant") contributed(messageIndex, value)
+    // A turn's newest row says how it stopped.
+    const stopReason =
+      role === "assistant"
+        ? STOP_REASONS[String(value.finish_reason)]
+        : undefined
     if (previousAssistant) {
-      messages[messageIndex] = { ...previousAssistant, content }
+      const turn: SessionMessage = { ...previousAssistant, content }
+      if (stopReason) turn.stopReason = stopReason
+      else delete turn.stopReason
+      messages[messageIndex] = turn
     } else {
       messages.push({
         id,
         role,
         content,
         createdAt: timestamp(value.timestamp ?? value.created_at, index),
+        ...(stopReason ? { stopReason } : {}),
         ...(userContent?.attachments?.length
           ? { attachments: userContent.attachments }
           : {}),

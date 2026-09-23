@@ -7,7 +7,7 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type { PendingRequest, TokenUsage } from "../../core/events"
+import type { Cost, PendingRequest, TokenUsage } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
@@ -16,6 +16,7 @@ import { EventQueue, startedTurnQueue } from "./event-queue"
 import type { NativeFailure, TurnFailure } from "./run-failures"
 import type { BufferedNativeEvents } from "./run-frames"
 import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
+import type { SessionModelChoice } from "./session-model"
 
 export type HermesTurnScope = SessionScope
 
@@ -80,6 +81,15 @@ export type ActiveTurn = {
   /** A settlement edge a catch-up deferred; re-decided once the page drained. */
   deferredEdge?: SettlementEdge
   usage?: TokenUsage[]
+  cost?: Cost
+  /** The model the Session last reported; a change is published. */
+  model?: SessionModelChoice
+  /** The call each background process Hermes streams output for belongs to. */
+  terminals: Map<string, { toolCallId: string; terminalId: string }>
+  /** The call that spawned each subagent Hermes reports on. */
+  subagents: Map<string, string>
+  /** The compaction Hermes is running, and how many this run has seen. */
+  compaction: { open?: string; count: number }
   settled: Promise<void>
   resolveSettled(): void
 }
@@ -161,6 +171,9 @@ export function createActiveTurn(
     terminal: false,
     awaitingStart: false,
     resumedInteraction: false,
+    terminals: new Map(),
+    subagents: new Map(),
+    compaction: { count: 0 },
     ...turnSettlement(),
   }
 }

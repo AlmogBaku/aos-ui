@@ -1,6 +1,8 @@
 import {
   PendingRequestKind,
   ReplyStatus,
+  StopReason,
+  ToolKind,
   TurnEventKind,
   TurnEventSchema,
   type PendingRequest,
@@ -267,7 +269,9 @@ describe("HermesRunEngine", () => {
   it("settles an AOS turn when its native turn later completes", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(runtime({ observe: attachment.observe }))
+    const engine = new HermesTurnEngine(
+      runtime({ observe: attachment.observe })
+    )
 
     const first = await engine.start(scope, input())
     const t = nativeTurn("live-secret", 1)
@@ -284,7 +288,9 @@ describe("HermesRunEngine", () => {
   it("settles a run on a payload-less message.complete frame", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(runtime({ observe: attachment.observe }))
+    const engine = new HermesTurnEngine(
+      runtime({ observe: attachment.observe })
+    )
 
     const first = await engine.start(scope, input())
     const t = nativeTurn("live-secret", 1)
@@ -404,7 +410,7 @@ describe("HermesRunEngine", () => {
         messageId: "run-1:assistant",
         text: " answer",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -438,7 +444,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Checked the evidence.",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -528,7 +534,7 @@ describe("HermesRunEngine", () => {
         messageId: "native-message-secret",
         text: "Hi",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -649,7 +655,7 @@ describe("HermesRunEngine", () => {
         messageId: "continued",
         text: "Done",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     expect(submits).toBe(1)
   })
@@ -764,6 +770,8 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "clarify-call",
         title: "question",
+        name: "question",
+        toolKind: ToolKind.Other,
         parentMessageId: "run-2:assistant",
       },
       {
@@ -797,7 +805,7 @@ describe("HermesRunEngine", () => {
         messageId: "run-2:assistant",
         text: "No answers selected.",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -892,7 +900,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
     expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -1107,6 +1115,8 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "call-7",
         title: "delegate_subagent",
+        name: "delegate_subagent",
+        toolKind: ToolKind.Other,
         parentMessageId: "message-42",
       },
       {
@@ -1128,7 +1138,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Done",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -1393,7 +1403,7 @@ describe("HermesRunEngine", () => {
         output: '{"status":"completed"}',
         failed: false,
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     await expect(
       engine.start(scope, input({ turnId: "run-after-tool-recovery" }))
@@ -1416,7 +1426,7 @@ describe("HermesRunEngine", () => {
     await expect(handle.stop()).resolves.toBe("idle")
     await expect(collect(handle)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.Cancelled },
     ])
     await expect(
       engine.start(scope, input({ turnId: "run-2" }))
@@ -1450,7 +1460,7 @@ describe("HermesRunEngine", () => {
 
     await expect(collect(handle)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.Cancelled },
     ])
   })
 
@@ -1672,7 +1682,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-43",
         text: "Current",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -1741,7 +1751,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-43",
         text: "Current",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -1843,7 +1853,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Recovered",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -1882,7 +1892,7 @@ describe("HermesRunEngine", () => {
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -2085,7 +2095,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Recovered",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     expect(submissions).toBe(1)
   })
@@ -2139,7 +2149,7 @@ describe("HermesRunEngine", () => {
     await expect(collect(resumed)).resolves.toMatchObject([
       { kind: TurnEventKind.TurnStarted },
       { kind: TurnEventKind.MessageChunk, text: "Recovered" },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     expect(submissions).toBe(0)
   })
@@ -3081,7 +3091,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Hello",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -3124,6 +3134,8 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.ToolCallStarted,
       toolCallId: "call-7",
       title: "read_file",
+      name: "read_file",
+      toolKind: ToolKind.Read,
       parentMessageId: "message-42",
     })
     expect(events).toContainEqual({
@@ -3743,6 +3755,7 @@ describe("HermesRunEngine", () => {
     expect(submitted).toEqual(["live-2"])
     await expect(collect(first)).resolves.toContainEqual({
       kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
     })
     attachment.publish("live-2", {
       type: "message.complete",
@@ -3965,7 +3978,9 @@ describe("HermesRunEngine", () => {
   it("terminalizes an overflow that arrives while the reader is parked", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(runtime({ observe: attachment.observe }))
+    const engine = new HermesTurnEngine(
+      runtime({ observe: attachment.observe })
+    )
     const handle = await engine.start(scope, input())
     const iterator = handle.events[Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toMatchObject({
@@ -4039,6 +4054,7 @@ describe("HermesRunEngine", () => {
       expect(TurnEventSchema.safeParse(event).success).toBe(true)
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
       usage: [
         {
           model: "claude-safe",
@@ -4144,7 +4160,7 @@ describe("HermesRunEngine", () => {
         messageId: "new-message",
         text: "new",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     expect(cursors).toEqual([0])
   })
@@ -4310,7 +4326,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Hello",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -4465,13 +4481,15 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: " world",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
   it("requires reconciliation when the live Session is rebound", async () => {
     const attachment = observation()
-    const engine = new HermesTurnEngine(runtime({ observe: attachment.observe }))
+    const engine = new HermesTurnEngine(
+      runtime({ observe: attachment.observe })
+    )
 
     const handle = await engine.start(scope, input())
     attachment.signal("live-secret", { kind: "lost", reason: "rebound" })
@@ -4524,9 +4542,7 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "reattached" })
 
     const events = await collect(handle)
-    expect(
-      ofKind(events, TurnEventKind.ArtifactPublished)
-    ).toMatchObject([
+    expect(ofKind(events, TurnEventKind.ArtifactPublished)).toMatchObject([
       { artifact: { filename: "quick-brief.mp3", mimeType: "audio/mpeg" } },
     ])
     expect(
@@ -4594,7 +4610,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-a",
         text: "alpha",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     await expect(collect(runB)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
@@ -4603,7 +4619,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-b",
         text: "beta",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
     expect(cursors).toEqual([
       { liveSessionId: "live-a", after: 1 },
@@ -4665,7 +4681,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "Hello",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -4800,7 +4816,7 @@ describe("HermesRunEngine", () => {
         messageId: "message-42",
         text: "held",
       },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -4911,7 +4927,7 @@ describe("HermesRunEngine", () => {
     expect(attachment.attached("live-1")).toBe(false)
     await expect(collect(handle)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -5196,7 +5212,7 @@ describe("HermesRunEngine", () => {
 
     await expect(collect(handle)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.Cancelled },
     ])
   })
 
@@ -5211,6 +5227,7 @@ describe("HermesRunEngine", () => {
     await expect(handle.stop()).resolves.toBe("idle")
     await expect(collect(handle)).resolves.toContainEqual({
       kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.Cancelled,
     })
   })
 
@@ -5307,7 +5324,9 @@ describe("HermesRunEngine", () => {
       expect([
         ...ofKind(events, TurnEventKind.TurnEnded),
         ...ofKind(events, TurnEventKind.TurnFailed),
-      ]).toEqual([{ kind: TurnEventKind.TurnEnded }])
+      ]).toEqual([
+        { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
+      ])
       expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
     } finally {
       vi.useRealTimers()
@@ -5346,7 +5365,9 @@ describe("HermesRunEngine", () => {
       expect([
         ...ofKind(events, TurnEventKind.TurnEnded),
         ...ofKind(events, TurnEventKind.TurnFailed),
-      ]).toEqual([{ kind: TurnEventKind.TurnEnded }])
+      ]).toEqual([
+        { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
+      ])
     } finally {
       vi.useRealTimers()
     }
@@ -5516,7 +5537,9 @@ describe("HermesRunEngine", () => {
 
     expect(
       events.find((event) => event.kind === TurnEventKind.TurnFailed)?.message
-    ).toBe(`Hermes could not complete this turn.\n${"boom ".repeat(100).trim()}`)
+    ).toBe(
+      `Hermes could not complete this turn.\n${"boom ".repeat(100).trim()}`
+    )
   })
 
   it("drops a native cause that carries a credential-shaped value", async () => {
@@ -5890,7 +5913,7 @@ describe("HermesRunEngine", () => {
     expect(cursors).toEqual([2])
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
     expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
-      { kind: TurnEventKind.TurnEnded },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
@@ -6055,6 +6078,9 @@ describe("live and refreshed Hermes tool projection agree", () => {
     resultText: string
     artifacts: unknown[]
     isError: boolean
+    toolKind: unknown
+    locations: unknown
+    diffs: unknown
   }
 
   async function liveProjection(call: ParityCall): Promise<ToolProjection> {
@@ -6106,6 +6132,9 @@ describe("live and refreshed Hermes tool projection agree", () => {
         (event) => (event as { artifact: unknown }).artifact
       ),
       isError: forCall(TurnEventKind.ToolCallFinished)?.failed === true,
+      toolKind: forCall(TurnEventKind.ToolCallStarted)?.toolKind,
+      locations: forCall(TurnEventKind.ToolCallStarted)?.locations,
+      diffs: forCall(TurnEventKind.ToolCallFinished)?.diffs,
     }
   }
 
@@ -6143,6 +6172,9 @@ describe("live and refreshed Hermes tool projection agree", () => {
         )
         .map((candidate) => candidate.data),
       isError: part?.isError === true,
+      toolKind: part?.kind,
+      locations: part?.locations,
+      diffs: part?.diffs,
     }
   }
 
@@ -6151,6 +6183,26 @@ describe("live and refreshed Hermes tool projection agree", () => {
     expect({ isError, ...live }).toEqual(refreshedProjection(call))
     return { projection: live, isError }
   }
+
+  it("projects a public file edit's kind, location, and diff identically", async () => {
+    const path = "/workspace/app/notes.md"
+    const { projection } = await parity({
+      toolCallId: "edit-parity",
+      name: "patch",
+      args: { path, old_string: "old", new_string: "new" },
+      result: {
+        success: true,
+        diff: `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`,
+        files_modified: [path],
+      },
+    })
+
+    expect(projection.toolKind).toBe(ToolKind.Edit)
+    expect(projection.locations).toEqual([{ path }])
+    expect(projection.diffs).toMatchObject([
+      { changes: [{ operation: "modify", path }] },
+    ])
+  })
 
   it("projects a published artifact receipt identically", async () => {
     const { projection, isError } = await parity({
@@ -6389,5 +6441,297 @@ describe("live and refreshed Hermes tool projection agree", () => {
     })
 
     expect(projection.toolName).toBe("tool_call")
+  })
+})
+
+describe("Hermes native provider facts", () => {
+  const openrouter = { provider: "openrouter", model: "anthropic/claude-safe" }
+
+  /** Runs one turn over `frames`, on a Session Hermes reports running `info`. */
+  async function turnEvents(
+    frames: (t: ReturnType<typeof nativeTurn>) => unknown[],
+    info: unknown = openrouter
+  ) {
+    const attachment = observation()
+    const engine = new HermesTurnEngine(
+      runtime({
+        resume: async () => ({
+          liveSessionId: "live-secret",
+          running: false,
+          info,
+        }),
+        observe: attachment.observe,
+        submit: async () => {
+          for (const frame of frames(nativeTurn("live-secret", 1)))
+            attachment.publish("live-secret", frame)
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+    const events = await collect(await engine.start(scope, input()))
+    for (const event of events)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
+    return events
+  }
+
+  it("ends the turn with cache usage and the cost Hermes priced it at", async () => {
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.frame("message.complete", {
+        message_id: "m1",
+        text: "",
+        status: "complete",
+        usage: {
+          input: 10,
+          output: 4,
+          cache_read: 6,
+          cache_write: 2,
+          cost_usd: 0.0125,
+        },
+      }),
+    ])
+
+    expect(events.at(-1)).toEqual({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
+      usage: [
+        {
+          inputTokens: 10,
+          outputTokens: 4,
+          cachedInputTokens: 6,
+          cachedWriteTokens: 2,
+        },
+      ],
+      cost: { amount: 0.0125, currency: "USD" },
+    })
+  })
+
+  it("names the Session's provider and model on a failed turn", async () => {
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.complete("m1", "", "error"),
+      t.idle(),
+    ])
+
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toMatchObject([
+      { provider: "openrouter", model: "anthropic/claude-safe" },
+    ])
+  })
+
+  it("reports a model change as the id the model option carries", async () => {
+    const events = await turnEvents((t) => [
+      t.frame("session.info", openrouter),
+      t.messageStart("m1"),
+      t.frame("session.info", { provider: "openrouter", model: "gpt-safe" }),
+      t.complete("m1", ""),
+    ])
+
+    expect(ofKind(events, TurnEventKind.ModelChanged)).toEqual([
+      {
+        kind: TurnEventKind.ModelChanged,
+        modelId: JSON.stringify(["openrouter", "gpt-safe"]),
+      },
+    ])
+  })
+
+  it("names, kinds, locates, and times a file edit and carries its diff", async () => {
+    const path = "/workspace/app/notes.md"
+    const diff = `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.toolStart("edit-1", "patch", { path, old_string: "old" }),
+      t.frame("tool.complete", {
+        tool_id: "edit-1",
+        name: "patch",
+        result: JSON.stringify({
+          success: true,
+          diff,
+          files_modified: [path],
+        }),
+        duration_s: 1.2346,
+      }),
+      t.complete("m1", ""),
+    ])
+
+    expect(ofKind(events, TurnEventKind.ToolCallStarted)).toEqual([
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "edit-1",
+        title: "patch",
+        name: "patch",
+        toolKind: ToolKind.Edit,
+        locations: [{ path }],
+        parentMessageId: "m1",
+      },
+    ])
+    expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
+      {
+        toolCallId: "edit-1",
+        failed: false,
+        durationMs: 1235,
+        diffs: [
+          {
+            changes: [{ operation: "modify", path }],
+            patch: diff,
+          },
+        ],
+      },
+    ])
+  })
+
+  it("keeps a private file out of locations and diffs", async () => {
+    const path = "/home/operator/secret.md"
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.toolStart("edit-1", "write_file", { path, content: "x" }),
+      t.toolComplete("edit-1", "write_file", {
+        bytes_written: 1,
+        files_modified: [path],
+      }),
+      t.complete("m1", ""),
+    ])
+
+    const tool = [
+      ...ofKind(events, TurnEventKind.ToolCallStarted),
+      ...ofKind(events, TurnEventKind.ToolCallFinished),
+    ]
+    expect(tool.some((event) => "locations" in event || "diffs" in event)).toBe(
+      false
+    )
+  })
+
+  it("streams a background process as the terminal of its call", async () => {
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.toolStart("run-1", "terminal", {
+        command: "npm run dev",
+        background: true,
+      }),
+      // Hermes restates the call's arguments when it completes.
+      t.frame("tool.complete", {
+        tool_id: "run-1",
+        name: "terminal",
+        args: { command: "npm run dev", background: true },
+        result: JSON.stringify({
+          output: "Background process started",
+          session_id: "proc_1",
+          pid: 7,
+          exit_code: 0,
+        }),
+      }),
+      t.frame("agent.terminal.output", {
+        process_id: "proc_1",
+        chunk: "\u001b[32mready\u001b[0m\n",
+      }),
+      t.frame("agent.terminal.output", { process_id: "proc_2", chunk: "x" }),
+      t.frame("terminal.close", { process_id: "proc_1" }),
+      t.complete("m1", ""),
+    ])
+
+    const terminal = { terminalId: "run-1:terminal", toolCallId: "run-1" }
+    expect(ofKind(events, TurnEventKind.TerminalOutput)).toEqual([
+      {
+        kind: TurnEventKind.TerminalOutput,
+        ...terminal,
+        command: "npm run dev",
+      },
+      { kind: TurnEventKind.TerminalOutput, ...terminal, data: "ready\n" },
+      { kind: TurnEventKind.TerminalOutput, ...terminal, exit: {} },
+    ])
+    const kinds = events.map((event) => (event as { kind: string }).kind)
+    expect(kinds.indexOf(TurnEventKind.TerminalOutput)).toBeLessThan(
+      kinds.indexOf(TurnEventKind.ToolCallFinished)
+    )
+  })
+
+  it("reports one compaction per compacting run of status updates", async () => {
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.frame("status.update", { kind: "compacting", text: "Compacting" }),
+      t.frame("status.update", { kind: "compacting", text: "Compacting" }),
+      t.frame("status.update", { kind: "compacted", text: "Done" }),
+      t.frame("status.update", { kind: "compacting", text: "Compacting" }),
+      t.frame("status.update", { kind: "compacted", text: "Done" }),
+      t.complete("m1", ""),
+    ])
+
+    expect(ofKind(events, TurnEventKind.CompactionUpdated)).toEqual([
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:1",
+        status: "started",
+      },
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:1",
+        status: "completed",
+      },
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:2",
+        status: "started",
+      },
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "run-1:compaction:2",
+        status: "completed",
+      },
+    ])
+  })
+
+  it("reports a delegated subagent on the call that spawned it", async () => {
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.toolStart("delegate-1", "delegate_task", { goal: "Inspect" }),
+      t.frame("subagent.start", {
+        subagent_id: "sa-1",
+        goal: "Inspect",
+        depth: 0,
+        model: "claude-safe",
+      }),
+      t.frame("subagent.start", { subagent_id: "sa-deep", depth: 1 }),
+      t.frame("subagent.complete", {
+        subagent_id: "sa-1",
+        depth: 0,
+        status: "completed",
+        summary: "Looks fine",
+        input_tokens: 30,
+        output_tokens: 12,
+        duration_seconds: 2.5,
+        files_read: ["/workspace/app/a.ts", "/home/operator/b.ts"],
+      }),
+      t.toolComplete("delegate-1", "delegate_task", { results: [] }),
+      t.complete("m1", ""),
+    ])
+
+    expect(ofKind(events, TurnEventKind.SubagentUpdated)).toEqual([
+      {
+        kind: TurnEventKind.SubagentUpdated,
+        toolCallId: "delegate-1",
+        subagent: {
+          id: "sa-1",
+          goal: "Inspect",
+          model: "claude-safe",
+          depth: 1,
+          status: "running",
+        },
+      },
+      {
+        kind: TurnEventKind.SubagentUpdated,
+        toolCallId: "delegate-1",
+        subagent: {
+          id: "sa-1",
+          depth: 1,
+          status: "completed",
+          tokens: 42,
+          filesRead: ["/workspace/app/a.ts"],
+          durationMs: 2500,
+          summary: "Looks fine",
+        },
+      },
+    ])
   })
 })

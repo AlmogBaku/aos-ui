@@ -6,7 +6,9 @@ import {
   firstBufferedSeq,
   nativeEvent,
   nativeEventBuffer,
+  terminalText,
   tokenUsage,
+  usageCost,
 } from "./run-frames"
 
 describe("reading a native Hermes frame", () => {
@@ -101,5 +103,28 @@ describe("reading native token usage", () => {
     expect(tokenUsage({ input: 3, output: -1 })).toBeUndefined()
     expect(tokenUsage({ input: 1.5 })).toBeUndefined()
     expect(tokenUsage({})).toBeUndefined()
+  })
+
+  it("reads a counter Hermes sends as null as absent", () => {
+    expect(tokenUsage({ input: 3, cache_read: null, cache_write: 2 })).toEqual([
+      { inputTokens: 3, cachedWriteTokens: 2 },
+    ])
+  })
+
+  it("prices usage in US dollars only when Hermes reports a cost", () => {
+    expect(usageCost({ cost_usd: 0.5 })).toEqual({
+      amount: 0.5,
+      currency: "USD",
+    })
+    expect(usageCost({ cost_usd: null })).toBeUndefined()
+    expect(usageCost({ cost_usd: -1 })).toBeUndefined()
+  })
+})
+
+describe("reading terminal output", () => {
+  it("keeps the text a terminal prints and drops its control sequences", () => {
+    expect(
+      terminalText("\u001b[1;32mok\u001b[0m \u001b]0;title\u0007done\n")
+    ).toBe("ok done\n")
   })
 })

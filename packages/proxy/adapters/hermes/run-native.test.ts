@@ -23,7 +23,10 @@ function stubInteractions() {
   const listeners = new Set<(request: PendingRequest) => void>()
   return {
     onPendingRequest: vi.fn(
-      (_scope: HermesTurnScope, listener: (request: PendingRequest) => void) => {
+      (
+        _scope: HermesTurnScope,
+        listener: (request: PendingRequest) => void
+      ) => {
         listeners.add(listener)
         return () => listeners.delete(listener)
       }

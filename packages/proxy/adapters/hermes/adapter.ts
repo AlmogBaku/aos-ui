@@ -422,6 +422,7 @@ export class HermesServerAdapter implements ServerRuntime {
       liveSessionId: (await this.#attachments.ensure(scope, attach))
         .liveSessionId,
       running: this.#attachedRunning(scope.agentId, scope.sessionId),
+      info: this.#retainedInfo(scope.agentId, scope.sessionId)?.info,
     })
     this.interactions = new HermesInteractions(
       {

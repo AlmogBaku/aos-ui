@@ -113,10 +113,15 @@ export type HermesInteractionSnapshot = {
   requests?: PendingRequest[]
 }
 
+/** A live binding, with the latest `session.info` the server retains for it. */
+export type HermesResumed = {
+  liveSessionId: string
+  running: boolean
+  info?: unknown
+}
+
 export interface HermesTurnNative {
-  resume(
-    scope: HermesTurnScope
-  ): Promise<{ liveSessionId: string; running: boolean }>
+  resume(scope: HermesTurnScope): Promise<HermesResumed>
   observe(
     liveSessionId: string,
     observer: AttachmentObserver
@@ -149,9 +154,7 @@ export interface HermesTurnNative {
 
 /** The durable-to-live binding surface `run-native.ts` depends on. */
 export type HermesNativeAttachments = {
-  ensure(
-    scope: HermesTurnScope
-  ): Promise<{ liveSessionId: string; running: boolean }>
+  ensure(scope: HermesTurnScope): Promise<HermesResumed>
   retain(scope: HermesTurnScope, reason: string): Promise<() => void>
   subscribeLive(
     liveSessionId: string,

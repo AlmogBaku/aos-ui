@@ -8,6 +8,13 @@
  */
 
 import {
+  DiffOperation,
+  ToolKind,
+  type ToolDiff,
+  type ToolLocation,
+} from "../../core/events"
+
+import {
   boundedGraphBytes,
   containsCredentialValue,
   containsPrivateValue,
@@ -33,6 +40,93 @@ export const CANONICAL_TOOL_NAMES = new Map<string, string>([
 
 export function canonicalToolName(name: string) {
   return CANONICAL_TOOL_NAMES.get(name) ?? name
+}
+
+/** What each canonical Hermes tool does; every other tool is `other`. */
+const TOOL_KINDS = new Map<string, ToolKind>([
+  ["read_file", ToolKind.Read],
+  ["read_terminal", ToolKind.Read],
+  ["use_skill", ToolKind.Read],
+  ["write_file", ToolKind.Edit],
+  ["patch", ToolKind.Edit],
+  ["terminal", ToolKind.Execute],
+  ["execute_code", ToolKind.Execute],
+  ["process_manage", ToolKind.Execute],
+  ["search_files", ToolKind.Search],
+  ["session_search", ToolKind.Search],
+  ["web_search", ToolKind.Search],
+  ["x_search", ToolKind.Search],
+  ["web_extract", ToolKind.Fetch],
+  ["todo", ToolKind.Think],
+])
+
+export function hermesToolKind(canonicalName: string) {
+  return TOOL_KINDS.get(canonicalName) ?? ToolKind.Other
+}
+
+/** The file tools whose `path` argument names the one file they touch. */
+const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
+
+/** An absolute path the privacy rule lets leave the adapter. */
+export function publicPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith("/") &&
+    !containsPrivateValue(value)
+  )
+}
+
+/** The file a projected file-tool call touches, when its path is public. */
+export function hermesToolLocations(
+  canonicalName: string,
+  args: HermesPublicJsonRecord
+): ToolLocation[] | undefined {
+  const path = args.path
+  return FILE_TOOLS.has(canonicalName) && publicPath(path)
+    ? [{ path }]
+    : undefined
+}
+
+/**
+ * The files a successful edit changed, from its native result. Hermes reports
+ * every file an edit touched, moves and deletes included, as modified, and the
+ * `patch` tool adds a unified diff of them; the diff travels only when every
+ * file it names is public.
+ */
+export function hermesToolDiffs(
+  canonicalName: string,
+  result: unknown
+): ToolDiff[] | undefined {
+  if (canonicalName !== "write_file" && canonicalName !== "patch")
+    return undefined
+  const parsed = parseJsonOrValue(result)
+  if (!isRecord(parsed) || !Array.isArray(parsed.files_modified))
+    return undefined
+  const paths = parsed.files_modified
+  if (paths.length === 0 || !paths.every(publicPath)) return undefined
+  const diff = parsed.diff
+  return [
+    {
+      changes: paths.map((path) => ({ operation: DiffOperation.Modify, path })),
+      ...(typeof diff === "string" && diff && publicPatch(diff)
+        ? { patch: diff }
+        : {}),
+    },
+  ]
+}
+
+/** A diff's `a/` and `b/` prefixes hide an absolute path from the rule. */
+function publicPatch(diff: string) {
+  return (
+    !containsPrivateValue(diff) &&
+    diff
+      .split("\n")
+      .every(
+        (line) =>
+          !/^(?:---|\+\+\+) [ab]\//u.test(line) ||
+          !containsPrivateValue(line.slice(6))
+      )
+  )
 }
 
 export type HermesPublicJsonValue =
@@ -147,7 +241,7 @@ function providerPrivateKey(key: string) {
   )
 }
 
-function stringContainsCredential(value: string) {
+export function stringContainsCredential(value: string) {
   if (containsCredentialValue(value)) return true
   const assignments = value.matchAll(
     /(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)\s*=/gu
@@ -156,6 +250,11 @@ function stringContainsCredential(value: string) {
     if (credentialToolKey(match[1] ?? "")) return true
   }
   return false
+}
+
+/** Native text as a tool projection redacts it: whole, when it holds a credential. */
+export function redactedText(value: string) {
+  return stringContainsCredential(value) ? REDACTED : value
 }
 
 function projectString(value: string, state: ProjectionState) {

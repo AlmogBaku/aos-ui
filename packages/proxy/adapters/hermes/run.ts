@@ -9,7 +9,9 @@
  * native frames and `event-queue` bounds what the run publishes.
  */
 import {
+  CompactionStatus,
   isRepliesTurn,
+  StopReason,
   TurnEventKind,
   TurnInputSchema,
   type PendingRequest,
@@ -21,7 +23,14 @@ import {
   type ServerTurnHandle,
 } from "../../core/runtime"
 import { projectTodos, type Todo } from "../todos"
-import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
+import {
+  hermesToolDiffs,
+  hermesToolKind,
+  hermesToolLocations,
+  projectHermesToolCall,
+  projectHermesToolOutcome,
+  redactedText,
+} from "./tool-data"
 import { boundedNativeBytes, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
 import { HERMES_TODO_STATUS_ALIASES } from "./todos"
@@ -36,13 +45,18 @@ import {
   type TurnFailure,
 } from "./run-failures"
 import {
+  backgroundProcessId,
   boundedText,
   bufferNativeEvent,
+  durationMs,
   nativeEvent,
   nativeEventSessionId,
   payloadOf,
   stableNativeId,
+  subagentPatch,
+  terminalText,
   tokenUsage,
+  usageCost,
   type HermesNativeEvent,
 } from "./run-frames"
 import {
@@ -66,6 +80,7 @@ import {
   type TurnEngineHost,
   type SettlingWatcher,
 } from "./run-state"
+import { sessionModelChoice } from "./session-model"
 import type { HermesLog } from "./gateway"
 import type {
   HermesTurnNative,
@@ -501,13 +516,12 @@ export class HermesTurnEngine {
   ) {
     switch (event.type) {
       case "session.info":
-      case "session.usage": {
-        const usage = tokenUsage(payload.usage)
-        if (usage) active.usage = usage
-        if (event.type === "session.info" && payload.running === false)
-          settleFrom(this.#host, active, "idle")
+      case "session.usage":
+        this.#acceptUsage(active, payload.usage)
+        if (event.type !== "session.info") return
+        this.#observeModel(active, payload)
+        if (payload.running === false) settleFrom(this.#host, active, "idle")
         return
-      }
       case "message.start": {
         // A native turn is running again, so no earlier outcome describes this
         // run any more, including an error the superseded turn left behind.
@@ -566,6 +580,15 @@ export class HermesTurnEngine {
         return
       case "tool.complete":
         return this.#acceptToolComplete(active, payload)
+      case "agent.terminal.output":
+      case "terminal.close":
+        return this.#acceptTerminal(active, event.type, payload)
+      case "status.update":
+        return this.#acceptStatus(active, payload)
+      case "subagent.spawn_requested":
+      case "subagent.start":
+      case "subagent.complete":
+        return this.#acceptSubagent(active, event.type, payload)
       case "error": {
         // Hermes also uses `error` for advisory failures (a rejected pending
         // model switch): reconcile liveness before any terminal turn event.
@@ -593,11 +616,19 @@ export class HermesTurnEngine {
       payload.is_error === true
     )
     this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
+    if (tool.name === "terminal" && !outcome.isError)
+      this.#announceTerminal(active, toolCallId, payload)
+    const diffs = outcome.isError
+      ? undefined
+      : hermesToolDiffs(tool.name, payload.result)
+    const duration = durationMs(payload.duration_s)
     this.#emit(active, {
       kind: TurnEventKind.ToolCallFinished,
       toolCallId,
       output: JSON.stringify(outcome.result),
       failed: outcome.isError,
+      ...(diffs ? { diffs } : {}),
+      ...(duration === undefined ? {} : { durationMs: duration }),
     })
     if (tool.name === "todo") {
       const todos = projectTodos(payload.result, HERMES_TODO_STATUS_ALIASES)
@@ -613,14 +644,137 @@ export class HermesTurnEngine {
   }
 
   /**
+   * A background process the terminal tool started streams its output apart
+   * from the call. Hermes' process id is its own, so the terminal is named
+   * after the call that owns it.
+   */
+  #announceTerminal(
+    active: ActiveTurn,
+    toolCallId: string,
+    payload: Record<string, unknown>
+  ) {
+    const processId = backgroundProcessId(payload.result)
+    if (!processId) return
+    const terminalId = `${toolCallId}:terminal`
+    active.terminals.set(processId, { toolCallId, terminalId })
+    const command = projectHermesToolCall("terminal", payload.args).args.command
+    this.#emit(active, {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId,
+      toolCallId,
+      ...(typeof command === "string" && command ? { command } : {}),
+    })
+  }
+
+  #acceptTerminal(
+    active: ActiveTurn,
+    type: string,
+    payload: Record<string, unknown>
+  ) {
+    const processId = stableNativeId(payload.process_id)
+    const terminal = processId && active.terminals.get(processId)
+    if (!terminal) return
+    if (type === "terminal.close") {
+      active.terminals.delete(processId)
+      this.#emit(active, {
+        kind: TurnEventKind.TerminalOutput,
+        ...terminal,
+        exit: {},
+      })
+      return
+    }
+    const chunk = boundedText(payload.chunk)
+    const data = chunk && terminalText(chunk)
+    if (data)
+      this.#emit(active, {
+        kind: TurnEventKind.TerminalOutput,
+        ...terminal,
+        data: redactedText(data),
+      })
+  }
+
+  /**
+   * Hermes restates `compacting` while a compaction runs and ends it with one
+   * `compacted`; it reports no failure of its own, and only status text.
+   */
+  #acceptStatus(active: ActiveTurn, payload: Record<string, unknown>) {
+    const { compaction } = active
+    if (payload.kind === "compacting" && !compaction.open) {
+      compaction.count += 1
+      compaction.open = `${active.turnId}:compaction:${compaction.count}`
+      this.#emit(active, {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: compaction.open,
+        status: CompactionStatus.Started,
+      })
+    } else if (payload.kind === "compacted" && compaction.open) {
+      this.#emit(active, {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: compaction.open,
+        status: CompactionStatus.Completed,
+      })
+      compaction.open = undefined
+    }
+  }
+
+  /**
+   * Hermes names no call on a subagent frame, and `delegate_task` runs its
+   * children while the call is open: a subagent belongs to the latest open
+   * delegation when first seen, and to that call from then on.
+   */
+  #acceptSubagent(
+    active: ActiveTurn,
+    type: string,
+    payload: Record<string, unknown>
+  ) {
+    const subagent = subagentPatch(type, payload)
+    if (!subagent) return
+    const toolCallId =
+      active.subagents.get(subagent.id) ?? this.#openDelegation(active)
+    if (!toolCallId) return
+    active.subagents.set(subagent.id, toolCallId)
+    this.#emit(active, {
+      kind: TurnEventKind.SubagentUpdated,
+      toolCallId,
+      subagent,
+    })
+  }
+
+  #openDelegation(active: ActiveTurn) {
+    let open: string | undefined
+    for (const [toolCallId, tool] of active.tools)
+      if (tool.name === "delegate_subagent" && !tool.ended) open = toolCallId
+    return open
+  }
+
+  #acceptUsage(active: ActiveTurn, value: unknown) {
+    const usage = tokenUsage(value)
+    if (usage) active.usage = usage
+    const cost = usageCost(value)
+    if (cost) active.cost = cost
+  }
+
+  /** Every `session.info` names the Session's model; a new one is a change. */
+  #observeModel(active: ActiveTurn, info: Record<string, unknown>) {
+    const model = sessionModelChoice(info)
+    if (!model) return
+    const previous = active.model
+    active.model = model
+    if (previous && previous.id !== model.id)
+      this.#emit(active, {
+        kind: TurnEventKind.ModelChanged,
+        modelId: model.id,
+      })
+  }
+
+  /**
    * Hermes ends the turn a queued prompt waits behind before it reports idle, so
    * a completion arriving before this run's turn started describes the
    * superseded turn: neither its text, its usage nor its outcome is this run's.
    */
   #acceptComplete(active: ActiveTurn, payload: Record<string, unknown>) {
     if (active.awaitingStart) return this.#sealGeneration(active)
-    const usage = tokenUsage(payload.usage)
-    if (usage) active.usage = usage
+    this.#acceptUsage(active, payload.usage)
     const completedMessageId = stableNativeId(payload.message_id ?? payload.id)
     // Hermes ended the turn; how it ended decides what settlement does.
     active.turn = turnOutcome(payload.status)
@@ -740,10 +894,14 @@ export class HermesTurnEngine {
     const projected = projectHermesToolCall(nativeName, payload.args)
     const tool = { name: projected.toolName, ended: false }
     active.tools.set(toolCallId, tool)
+    const locations = hermesToolLocations(tool.name, projected.args)
     this.#emit(active, {
       kind: TurnEventKind.ToolCallStarted,
       toolCallId,
       title: tool.name,
+      name: tool.name,
+      toolKind: hermesToolKind(tool.name),
+      ...(locations ? { locations } : {}),
       parentMessageId: messageId,
     })
     this.#emit(active, {
@@ -799,9 +957,19 @@ export class HermesTurnEngine {
       media: true,
       tools: ending.stopped ? "stopped" : "completed",
     })
+    // Hermes reports only a completed or an interrupted turn; a turn that
+    // settled without saying how goes unsaid.
+    const stopReason =
+      ending.stopped || active.turn === "interrupted"
+        ? StopReason.Cancelled
+        : active.turn === "complete"
+          ? StopReason.EndTurn
+          : undefined
     this.#emit(active, {
       kind: TurnEventKind.TurnEnded,
+      ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
+      ...(active.cost ? { cost: active.cost } : {}),
       ...(ending.composerPrefill === undefined
         ? {}
         : { composerPrefill: ending.composerPrefill }),
@@ -820,11 +988,7 @@ export class HermesTurnEngine {
   #fail(active: ActiveTurn, failure: TurnFailure) {
     if (active.terminal) return
     this.#closeGeneration(active)
-    this.#emit(active, {
-      kind: TurnEventKind.TurnFailed,
-      message: failure.message,
-      code: failure.code,
-    })
+    this.#emit(active, this.#failed(active, failure))
     this.#settle(active)
   }
 
@@ -835,16 +999,24 @@ export class HermesTurnEngine {
    */
   #detach(active: ActiveTurn, failure: TurnFailure) {
     if (active.terminal || active.detached) return
-    this.#emit(active, {
-      kind: TurnEventKind.TurnFailed,
-      message: failure.message,
-      code: failure.code,
-    })
+    this.#emit(active, this.#failed(active, failure))
     active.uncertain = true
     active.detached = true
     active.catchUp = undefined
     active.queue.close()
     safelyUnsubscribe(active.unsubscribe)
+  }
+
+  /** A public failure, on the model the Session last reported. */
+  #failed(active: ActiveTurn, failure: TurnFailure): TurnEvent {
+    return {
+      kind: TurnEventKind.TurnFailed,
+      message: failure.message,
+      code: failure.code,
+      ...(active.model
+        ? { provider: active.model.provider, model: active.model.model }
+        : {}),
+    }
   }
 
   #emit(active: ActiveTurn, event: TurnEvent) {
@@ -859,11 +1031,7 @@ export class HermesTurnEngine {
 
   #overflow(active: ActiveTurn) {
     if (active.terminal) return
-    active.queue.terminal({
-      kind: TurnEventKind.TurnFailed,
-      message: TURN_FAILURES.streamOverflow.message,
-      code: TURN_FAILURES.streamOverflow.code,
-    })
+    active.queue.terminal(this.#failed(active, TURN_FAILURES.streamOverflow))
     this.#settle(active)
   }
 

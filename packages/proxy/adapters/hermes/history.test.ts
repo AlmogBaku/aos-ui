@@ -1,3 +1,4 @@
+import { StopReason, ToolKind } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
 import { projectHermesHistory } from "./history"
@@ -381,6 +382,7 @@ describe("server-side Hermes history projection", () => {
             type: "tool-call",
             toolCallId: "chart-1",
             toolName: "render_chart",
+            kind: ToolKind.Other,
             args: { type: "bar", data: [{ label: "A", value: 2 }] },
             argsText: JSON.stringify({
               type: "bar",
@@ -392,6 +394,7 @@ describe("server-side Hermes history projection", () => {
             type: "tool-call",
             toolCallId: "artifact-1",
             toolName: "present_artifact",
+            kind: ToolKind.Other,
             args: {},
             argsText: "{}",
             result: {
@@ -477,6 +480,7 @@ describe("server-side Hermes history projection", () => {
         type: "tool-call",
         toolCallId: "clarify-1",
         toolName: "question",
+        kind: ToolKind.Other,
         args: {
           question: "2 questions",
           questions: [
@@ -807,6 +811,7 @@ describe("server-side Hermes history projection", () => {
         type: "tool-call",
         toolCallId: "artifact-unsafe",
         toolName: "present_artifact",
+        kind: ToolKind.Other,
         args: {},
         argsText: "{}",
         result: { ok: true },
@@ -977,6 +982,66 @@ describe("server-side Hermes history projection", () => {
       { type: "tool-call", toolCallId: "c1" },
       { type: "data", name: "aos.artifact", data: { id: "report-1" } },
       { type: "tool-call", toolCallId: "c2", result: { ok: true } },
+    ])
+  })
+
+  it("keeps a stored edit's kind, public location, and diff", () => {
+    const path = "/workspace/app/notes.md"
+    const diff = `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
+    const secret = "/home/operator/secret.md"
+    const messages = projectHermesHistory([
+      assistantToolCall("a1", [
+        { toolCallId: "c1", name: "patch", args: { path, old_string: "old" } },
+        { toolCallId: "c2", name: "write_file", args: { path: secret } },
+      ]),
+      toolRow("c1", "patch", { success: true, diff, files_modified: [path] }),
+      toolRow("c2", "write_file", { files_modified: [secret] }),
+    ])
+
+    const [edit, write] = messages[0]?.content ?? []
+    expect(edit).toMatchObject({
+      kind: ToolKind.Edit,
+      locations: [{ path }],
+      diffs: [{ changes: [{ operation: "modify", path }], patch: diff }],
+    })
+    expect(write).toMatchObject({ kind: ToolKind.Edit })
+    expect(write).not.toHaveProperty("locations")
+    expect(write).not.toHaveProperty("diffs")
+  })
+
+  it("stops a stored turn the way its newest row finished", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Write it"),
+      { ...assistantText("a1", "Partial"), finish_reason: "length" },
+      userRow("u2", "Look it up"),
+      {
+        ...assistantToolCall("a2", [
+          { toolCallId: "c1", name: "read_file", args: {} },
+        ]),
+        finish_reason: "tool_calls",
+      },
+      toolRow("c1", "read_file", "contents"),
+      { ...assistantText("a3", "Done"), finish_reason: "stop" },
+      userRow("u3", "Again"),
+      { ...assistantText("a4", "Declined"), finish_reason: "content_filter" },
+      userRow("u4", "Then"),
+      {
+        ...assistantToolCall("a5", [
+          { toolCallId: "c2", name: "read_file", args: {} },
+        ]),
+        finish_reason: "tool_calls",
+      },
+    ])
+
+    expect(
+      messages
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.stopReason)
+    ).toEqual([
+      StopReason.MaxTokens,
+      StopReason.EndTurn,
+      StopReason.Refusal,
+      undefined,
     ])
   })
 })

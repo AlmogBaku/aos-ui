@@ -5,6 +5,11 @@ import type {
 import { projectTodos, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson } from "./native"
+import {
+  nativeModelName,
+  nativeProviderSlug,
+  projectSessionModel,
+} from "./session-model"
 import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { toolCallSelections } from "./tool-data"
 
@@ -235,30 +240,6 @@ function projectEffortId(value: unknown) {
     (HERMES_REASONING_EFFORTS as readonly string[]).includes(effort)
     ? effort
     : undefined
-}
-
-/**
- * The model a Session is on, as Hermes reports it for the Session itself. A pick
- * made while a turn streams is stashed for the next turn start, so the catalog —
- * which reports the model the live agent holds — still names the model the
- * Session is leaving.
- */
-function projectSessionModel(info: unknown) {
-  if (!isRecord(info)) return undefined
-  const provider = stringValue(info.provider, 256)
-  const model = stringValue(info.model, 256)
-  return provider && model ? { provider, model } : undefined
-}
-
-function nativeProviderSlug(value: unknown) {
-  const provider = stringValue(value, 256)
-  return provider && /^[\w.-]+$/u.test(provider) ? provider : undefined
-}
-
-/** A model name Hermes can be asked for, without option-like leading dashes. */
-function nativeModelName(value: unknown) {
-  const model = stringValue(value, 256)
-  return model && !/\s|^[-\u2012-\u2015]/u.test(model) ? model : undefined
 }
 
 /**
