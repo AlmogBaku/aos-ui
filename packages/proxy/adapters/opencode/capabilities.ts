@@ -1,4 +1,5 @@
 import { INTERACTION_PROTOCOL } from "../../../protocol"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 
 /** Normalized capability fragment for the pinned OpenCode v2 surface. */
 export function openCodeCapabilities() {
@@ -47,9 +48,11 @@ export function openCodeCapabilities() {
         maxTotalBytes: 25 * 1024 * 1024,
       },
       artifacts: {
-        status: "unavailable",
-        reason: "native-artifact-download-unavailable",
+        status: "available",
+        scope: "session",
+        maxBytes: MAX_ARTIFACT_BYTES,
       },
+      mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
       transcription: {
         status: "unavailable",
         reason: "native-audio-unavailable",

@@ -9,6 +9,7 @@ import {
   type TurnEvent,
   type TurnInput,
 } from "../../core/events"
+import type { McpToolNames } from "../../mcp-apps/tool-names"
 
 import {
   ServerTurnConflictError,
@@ -60,6 +61,8 @@ export type OpenCodeTurnEngineOptions = Readonly<{
   maxQueueEvents?: number
   maxBufferedEvents?: number
   waitRetryMs?: number
+  /** Keyed by Agent; a turn reads the names its Agent last loaded. */
+  mcpToolNames?: McpToolNames
 }>
 
 type ActiveTurn = {
@@ -372,6 +375,9 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     stage?: ServerAttachmentStage
   ): Promise<ServerTurnHandle> {
     const { input, replies, text } = validateInput(scope, candidate)
+    // Warm the MCP tool names while the turn is admitted, so its first tool
+    // call already reads under its canonical name.
+    void this.#options.mcpToolNames?.load(scope.agentId).catch(() => undefined)
     let files: readonly { uri: string; name?: string }[] | undefined
     if (stage) {
       try {
@@ -554,6 +560,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     queue.push({ kind: TurnEventKind.TurnStarted })
     const projector = new OpenCodeEventProjector(scope.sessionId, after, {
       admissionId: expectedAdmission,
+      resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
     })
     if (nativeSettlement.stopRequested) projector.markStopping()
     return {
@@ -583,6 +590,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   #projector(run: ActiveTurn, after: number, expectedAdmission?: string) {
     const projector = new OpenCodeEventProjector(run.scope.sessionId, after, {
       admissionId: expectedAdmission,
+      resolveMcpTool: this.#options.mcpToolNames?.resolver(run.scope.agentId),
     })
     if (run.nativeSettlement.stopRequested) projector.markStopping()
     return projector

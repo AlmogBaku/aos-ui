@@ -57,9 +57,11 @@ export class HermesTurnRewindConflictError extends Error {
   }
 }
 
-/** The names the turn engine logs under; the only two lines it ever writes. */
+/** The names the turn engine logs under; the only three lines it ever writes. */
 export const TURN_NATIVE_ERROR_LOG = "hermes.turn.native_error"
 export const TURN_FAILED_LOG = "hermes.turn.failed"
+/** A turn ended with `resetRequired`; `reason` names the path that decided it. */
+export const TURN_RESET_LOG = "hermes.turn.reset_required"
 
 /** Every public turn failure the Hermes adapter can publish. */
 export const TURN_FAILURES = {

@@ -35,6 +35,7 @@ export const AOS_META_KEY = "aos" as const
 export const AOS_EXTENSION_VERSION = 1 as const
 export const AOS_AUTH_METHOD_INVITE = "aos-invite" as const
 export const AOS_ATTACHMENT_URI_SCHEME = "aos-attachment:" as const
+export const AOS_ARTIFACT_URI_SCHEME = "artifact:" as const
 
 export const AOS_METHODS = {
   session: {
@@ -48,7 +49,6 @@ export const AOS_METHODS = {
   },
   notify: {
     activity: "_aos/activity",
-    artifact: "_aos/artifact",
     steerAccepted: "_aos/steer_accepted",
     composerPrefill: "_aos/composer_prefill",
     catalogInvalidated: "_aos/catalog_invalidated",
@@ -110,7 +110,6 @@ const readObject = z.object
 export const AosExtensionsSchema = readObject({
   steer: z.boolean(),
   rewind: z.boolean(),
-  artifacts: z.boolean(),
   composerPrefill: z.boolean(),
   agents: z.boolean(),
   invalidation: z.boolean(),
@@ -377,22 +376,9 @@ export const AosToolCallMetaSchema = readObject({
   durationMs: CountSchema.optional(),
   /** The subagent this call spawned; later updates patch it by `id`. */
   subagent: AosSubagentSchema.optional(),
+  /** The tool declares an MCP App view; a flag only, never a resource URI. */
+  app: z.strictObject({}).optional(),
 })
-
-/** The creator tool's settled output, as one content-free creation receipt. */
-export const AosAgentCreationReceiptSchema = z.discriminatedUnion("status", [
-  z.object({
-    ok: z.literal(true),
-    status: z.literal("ready"),
-    agentId: z.string().min(1).max(128),
-  }),
-  z.object({
-    ok: z.literal(false),
-    status: z.literal("setup-needed"),
-    agentId: z.string().min(1).max(128),
-    error: z.string().optional(),
-  }),
-])
 
 /** `plan_update._meta.aos`: the lossless Session Todos. */
 export const AosPlanMetaSchema = readObject({
@@ -454,20 +440,41 @@ export const AosElicitationMetaSchema = readObject({
 })
 
 // ---------------------------------------------------------------------------
-// extension notifications (agent → client)
+// artifacts
 // ---------------------------------------------------------------------------
 
 /** One published artifact; `ArtifactDescriptorSchema` in `./index` defines it. */
 export const AosArtifactDescriptorSchema = ArtifactDescriptorSchema
 export type AosArtifactDescriptor = ArtifactDescriptor
 
-/** `_aos/artifact` */
-export const AosArtifactNotificationSchema = readObject({
-  sessionId: IdentifierSchema,
-  ...TurnMetaBase,
-  messageId: IdentifierSchema.optional(),
-  artifact: AosArtifactDescriptorSchema,
-})
+const ARTIFACT_URI_PREFIX = `${AOS_ARTIFACT_URI_SCHEME}//`
+
+/**
+ * The uri of the `resource_link` a published artifact is announced as. It
+ * carries only the opaque artifact id: never a native path, and no route, since
+ * the reader already knows the Session and lane it reads through.
+ */
+export function formatArtifactUri(artifactId: string) {
+  return `${ARTIFACT_URI_PREFIX}${encodeURIComponent(artifactId)}`
+}
+
+/** The artifact id an `artifact://` uri names, or `undefined` for any other uri. */
+export function parseArtifactUri(uri: string): string | undefined {
+  if (!uri.startsWith(ARTIFACT_URI_PREFIX)) return undefined
+  const encoded = uri.slice(ARTIFACT_URI_PREFIX.length)
+  if (/[/?#]/u.test(encoded)) return undefined
+  let artifactId: string
+  try {
+    artifactId = decodeURIComponent(encoded)
+  } catch {
+    return undefined
+  }
+  return IdentifierSchema.safeParse(artifactId).success ? artifactId : undefined
+}
+
+// ---------------------------------------------------------------------------
+// extension notifications (agent → client)
+// ---------------------------------------------------------------------------
 
 /** `_aos/steer_accepted` */
 export const AosSteerAcceptedNotificationSchema = readObject({

@@ -1119,7 +1119,7 @@ describe("artifact workspace", () => {
     ).toBeVisible()
     expect(
       within(viewer).getByText(
-        "The provider keeps generated audio and video for a limited time and has since removed this file. Ask the agent to generate it again if you still need it."
+        "The provider no longer holds this file. Ask the agent to create it again if you still need it."
       )
     ).toBeVisible()
     expect(within(viewer).getByText("notes.txt")).toBeVisible()

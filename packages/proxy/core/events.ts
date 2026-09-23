@@ -324,6 +324,8 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     parentMessageId: z.string().optional(),
     /** The subagent this call delegated to. */
     subagent: SubagentSchema.optional(),
+    /** The tool declares an MCP App view, so the browser draws it from here. */
+    app: z.literal(true).optional(),
     subagentId,
   }),
   /** A piece of the call's JSON arguments text. */
@@ -350,6 +352,10 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     completedAt: TimestampSchema.optional(),
     /** How long the call ran, for a provider that reports a span. */
     durationMs: CountSchema.optional(),
+    /** The tool declares an MCP App view the browser may open for this call. */
+    app: z.literal(true).optional(),
+    /** The call's name, for a guest projection that dropped its start. */
+    name: z.string().min(1).optional(),
   }),
   /**
    * One step of a terminal a tool call runs, after that call started: the

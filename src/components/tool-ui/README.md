@@ -40,15 +40,24 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 
 `tool-artifact.ts` is the browser contract for what a tool call carries beyond
 its args and result: `ToolCallMessagePart.artifact` holds `{ aos:
-AosToolArtifact }` with the ACP tool kind, locations, diffs, terminals, and
-subagent metadata. Read it with `readAosToolArtifact` and extend it with
-`withAosToolArtifact`.
+AosToolArtifact }` with the ACP tool kind, locations, diffs, terminals,
+subagent metadata, and the state of an MCP App view the tool declares (`app`,
+read by `src/components/mcp-apps/tool-part.ts`). Read it with
+`readAosToolArtifact` and extend it with `withAosToolArtifact`.
 
 `LazyToolDiff` (`code-diff`, Pierre diffs) and `LazyToolTerminal` (`terminal`,
 ANSI output) render that data on demand. They are not registry-dispatched by
 tool name; the caller passes the data and the `labels` from
 `useToolDiffLabels()` / `useToolTerminalLabels()`. A load failure leaves the
 changes list and raw patch, or the ANSI-stripped output, as plain text.
+
+The `render_*` tools come from the AOS UI tools MCP server
+(`packages/tools-mcp`). Each harness prefixes MCP tool names differently
+(`mcp__aos_ui__render_chart` on Hermes, `aos-ui__render_chart` on OpenClaw);
+the proxy canonicalizes them in `packages/proxy/core/aos-tool-names.ts`, so
+the registry only ever sees the bare names above. The fourth server tool,
+`present_artifact`, publishes an Artifact and is resolved by
+`src/components/artifacts`, not by this registry.
 
 ## Safety rule
 

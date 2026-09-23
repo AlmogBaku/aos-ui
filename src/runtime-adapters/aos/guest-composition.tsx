@@ -37,6 +37,7 @@ import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
 import { DocumentLocale } from "@/components/document-locale"
 import { PendingInteractionComposer } from "@/components/runtime-interactions/pending-composer"
 import { ThemeProvider } from "@/components/theme-provider"
+import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
 import { WorkspaceConversationShell } from "@/components/workspace"
 import { en } from "@/lib/i18n/dictionaries/en"
@@ -57,6 +58,7 @@ import {
   stagedAttachmentOf,
 } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
+import { AosMcpAppAdapter } from "./aos-mcp-apps"
 import { AosRemoteClient } from "./aos-client"
 
 /**
@@ -149,6 +151,7 @@ function GuestArtifactShell({
   agentId,
   sessionId,
   artifacts,
+  mcpApps,
   title,
   message,
   brandName,
@@ -160,6 +163,7 @@ function GuestArtifactShell({
   agentId: string
   sessionId: string
   artifacts: AosArtifactAdapter
+  mcpApps: AosMcpAppAdapter
   title?: string
   message?: string
   brandName: string
@@ -179,15 +183,21 @@ function GuestArtifactShell({
       threadId={sessionId}
       messages={messages}
     >
-      <GuestConversationShell
-        locale={locale}
-        title={title}
-        message={message}
-        brandName={brandName}
-        logoUrl={logoUrl}
-        composerFeatures={composerFeatures}
-        composer={composer}
-      />
+      <McpAppHostProvider
+        adapter={mcpApps}
+        agentId={agentId}
+        threadId={sessionId}
+      >
+        <GuestConversationShell
+          locale={locale}
+          title={title}
+          message={message}
+          brandName={brandName}
+          logoUrl={logoUrl}
+          composerFeatures={composerFeatures}
+          composer={composer}
+        />
+      </McpAppHostProvider>
     </ArtifactWorkspaceProvider>
   )
 }
@@ -341,6 +351,7 @@ function ReadyGuestAosSurface({
   }, [agentId, config.basePath, inviteToken, sessionId])
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
+  const mcpApps = useMemo(() => new AosMcpAppAdapter(rest), [rest])
   const interactions = useMemo(
     () => createAcpInteractions({ connection }),
     [connection]
@@ -435,6 +446,7 @@ function ReadyGuestAosSurface({
               agentId={agentId}
               sessionId={sessionId}
               artifacts={artifacts}
+              mcpApps={mcpApps}
               title={context.ui?.title}
               message={context.ui?.message}
               brandName={brandName}

@@ -52,6 +52,12 @@ function agentName(agent: OpenClawAgent) {
   return agent.identity?.name ?? agent.name ?? agent.id
 }
 
+/**
+ * OpenClaw's closed Agent summary has no field for a role, so the operator
+ * installs the AOS creator under this reserved Agent id.
+ */
+export const OPENCLAW_CREATOR_AGENT_ID = "aos-agent-creator"
+
 function isVisiblePrimaryAgent(
   agent: OpenClawAgent,
   hidden: ReadonlySet<string>
@@ -219,17 +225,22 @@ export function createOpenClawWorkspace(input: {
         .sort((left, right) => left.id.localeCompare(right.id))
       return {
         revision: revision(agents),
-        agents: agents.map((agent) => ({
-          summary: {
-            kind: "ready" as const,
-            id: agent.id,
-            name: agentName(agent),
-          },
-          visibility: "visible" as const,
-          selectable: true,
-          editable: false,
-          revision: revision(agent),
-        })),
+        agents: agents.map((agent) => {
+          const creator = agent.id === OPENCLAW_CREATOR_AGENT_ID
+          const visibility = creator ? "hidden" : "visible"
+          return {
+            summary: {
+              kind: "ready" as const,
+              id: agent.id,
+              name: agentName(agent),
+              ...(creator ? { visibility, role: "creator" as const } : {}),
+            },
+            visibility,
+            selectable: !creator,
+            editable: false,
+            revision: revision(agent),
+          }
+        }),
       }
     },
     listSessions,

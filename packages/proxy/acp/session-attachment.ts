@@ -503,16 +503,6 @@ class SessionAttachment {
     switch (outbound.kind) {
       case "update":
         return this.update(outbound.update)
-      case "artifact":
-        return this.#client.notify(AOS_METHODS.notify.artifact, {
-          sessionId,
-          sequence,
-          turnId: outbound.turnId,
-          ...(outbound.messageId === undefined
-            ? {}
-            : { messageId: outbound.messageId }),
-          artifact: outbound.artifact,
-        })
       case "steer-accepted":
         return this.#client.notify(AOS_METHODS.notify.steerAccepted, {
           sessionId,

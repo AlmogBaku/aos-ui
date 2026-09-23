@@ -33,6 +33,9 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
   deep links to any Session
 - Session-scoped Todos
 - Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
+- A stateless tools MCP server (`bun run tools-mcp:serve`) that gives any
+  harness the `render_chart`, `render_map`, and `render_stats` MCP Apps and the
+  `present_artifact` tool
 - Activity history and opt-in browser notifications
 - English LTR and Hebrew RTL layouts with keyboard-first navigation
 - Optional voice controls (microphone transcription and read-aloud) and restricted guest invitations
@@ -118,6 +121,10 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 > strict runtime-config schema. Every non-fixture recipe must set
 > `AOS_UI_RUNTIME_CONFIG_FILE`. The readiness endpoint `/api/aos/v1/readyz`
 > returns 503 until the runtime is reachable.
+
+Every Compose file set also starts the `tools-mcp` service on `127.0.0.1:4110`
+(`AOS_UI_TOOLS_MCP_PORT`); register `http://127.0.0.1:4110/mcp` with your
+harness as described in its runtime guide.
 
 See [Deployment](docs/deployment.md) for native-runtime overlays, networking, health checks, and persistence.
 

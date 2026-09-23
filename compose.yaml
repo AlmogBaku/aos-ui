@@ -34,6 +34,37 @@ services:
       start_period: 10s
     init: true
 
+  # The UI's stateless tools MCP server. Harnesses on the host register
+  # http://127.0.0.1:4110/mcp; Compose services reach http://tools-mcp:4110/mcp.
+  # It has no authentication, so it is published on loopback only.
+  tools-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tools-mcp
+    command:
+      - bun
+      - run
+      - packages/tools-mcp/cli.ts
+      - --http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "4110"
+    ports:
+      - 127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}:4110
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:4110/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    init: true
+
 configs:
   runtime-config:
     file: ${AOS_UI_RUNTIME_CONFIG_FILE:-./deploy/runtime-config.json}

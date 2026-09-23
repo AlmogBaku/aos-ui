@@ -35,15 +35,24 @@ import {
   ToolUiLocaleProvider,
   type ToolUiLocale,
 } from "@/components/tool-ui"
+import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
+import type { McpAppFrameProps } from "@/components/mcp-apps/mcp-app-frame"
+import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { PendingInteractionProvider } from "@/components/runtime-interactions/pending-interaction-context"
 import type {
+  McpAppAdapter,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+
+// The sandboxed frame needs a real browser; a titled stand-in marks where it mounts.
+vi.mock("@/components/mcp-apps/mcp-app-frame", () => ({
+  default: (props: McpAppFrameProps) => <iframe title={props.title} />,
+}))
 
 const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
 const matchMediaDescriptor = Object.getOwnPropertyDescriptor(
@@ -144,70 +153,67 @@ const TURN_TIMING = {
 describe("settled turn fold", () => {
   it("collapses the turn's work behind one disclosure and keeps rich output outside it", async () => {
     const user = userEvent.setup()
+    const apps = {
+      open: vi.fn(async () => ({ html: "<p>chart</p>" })),
+      callTool: vi.fn(),
+      readResource: vi.fn(),
+    } satisfies McpAppAdapter
     render(
-      <LocalThread
-        toolFallback={AosToolPresentation}
-        initialMessages={[
-          {
-            id: "tools-complete",
-            role: "assistant",
-            metadata: { timing: TURN_TIMING },
-            content: [
-              {
-                type: "reasoning",
-                text: "I should inspect the project before changing it.",
-              },
-              {
-                type: "tool-call",
-                toolCallId: "read",
-                toolName: "read_file",
-                args: { path: "README.md" },
-                result: "contents",
-              },
-              {
-                type: "tool-call",
-                toolCallId: "search",
-                toolName: "search",
-                args: { query: "assistant-ui" },
-                result: "matches",
-              },
-              {
-                type: "tool-call",
-                toolCallId: "skill",
-                toolName: "use_skill",
-                args: { skill: "kb" },
-                result: "private skill instructions must stay hidden",
-              },
-              {
-                type: "tool-call",
-                toolCallId: "chart",
-                toolName: "render_chart",
-                args: {
-                  title: "Investment trend",
-                  type: "line",
-                  xKey: "quarter",
-                  series: [{ key: "applied", label: "Applied AI" }],
-                  data: [
-                    { quarter: "Q4 ’24", applied: 103 },
-                    { quarter: "Q1 ’25", applied: 128 },
-                  ],
+      <McpAppHostProvider adapter={apps} agentId="agent" threadId="thread">
+        <LocalThread
+          toolFallback={AosToolPresentation}
+          initialMessages={[
+            {
+              id: "tools-complete",
+              role: "assistant",
+              metadata: { timing: TURN_TIMING },
+              content: [
+                {
+                  type: "reasoning",
+                  text: "I should inspect the project before changing it.",
                 },
-                result: "Chart ready for display.",
-              },
-              { type: "text", text: "The recommendation stays visible." },
-            ],
-          },
-        ]}
-      />
+                {
+                  type: "tool-call",
+                  toolCallId: "read",
+                  toolName: "read_file",
+                  args: { path: "README.md" },
+                  result: "contents",
+                },
+                {
+                  type: "tool-call",
+                  toolCallId: "search",
+                  toolName: "search",
+                  args: { query: "assistant-ui" },
+                  result: "matches",
+                },
+                {
+                  type: "tool-call",
+                  toolCallId: "skill",
+                  toolName: "use_skill",
+                  args: { skill: "kb" },
+                  result: "private skill instructions must stay hidden",
+                },
+                {
+                  type: "tool-call",
+                  toolCallId: "chart",
+                  toolName: "render_chart",
+                  args: { title: "Investment trend" },
+                  artifact: MCP_APP_TOOL_ARTIFACT,
+                  result: "Chart ready for display.",
+                },
+                { type: "text", text: "The recommendation stays visible." },
+              ],
+            },
+          ]}
+        />
+      </McpAppHostProvider>
     )
 
     const fold = await screen.findByRole("button", {
       name: "Worked for 29s",
     })
     expect(fold).toHaveAttribute("aria-expanded", "false")
-    expect(
-      await screen.findByRole("heading", { name: "Investment trend" })
-    ).toBeVisible()
+    expect(await screen.findByTitle("render_chart app")).toBeVisible()
     expect(screen.getByText("The recommendation stays visible.")).toBeVisible()
 
     await user.click(fold)

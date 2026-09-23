@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path"
+import { isAbsolute, relative } from "node:path"
 
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 import type {
@@ -84,6 +84,8 @@ export type OpenCodeClient = Readonly<{
     models(signal?: AbortSignal): Promise<unknown>
     providers(signal?: AbortSignal): Promise<unknown>
     commands(signal?: AbortSignal): Promise<unknown>
+    /** The project's resolved configuration, `GET /config`. */
+    config(signal?: AbortSignal): Promise<Record<string, unknown>>
   }>
   sessions: Readonly<{
     list(options?: OpenCodePageOptions): Promise<unknown>
@@ -174,7 +176,23 @@ export type OpenCodeClient = Readonly<{
       ): Promise<void>
     }>
   }>
+  files: Readonly<{
+    /**
+     * One file's content, as OpenCode's project file route answers it. OpenCode
+     * confines the route to its project directory, so a path outside the
+     * configured directory is not found without asking it.
+     */
+    read(path: string, signal?: AbortSignal): Promise<OpenCodeFileContent>
+  }>
   close(): Promise<void>
+}>
+
+/** The fields of the native `FileContent` an artifact read relies on. */
+export type OpenCodeFileContent = Readonly<{
+  type: "text" | "binary"
+  content: string
+  encoding?: "base64"
+  mimeType?: string
 }>
 
 type OpenCodeSdk = ReturnType<typeof createOpencodeClient>
@@ -182,6 +200,12 @@ type OpenCodeSdk = ReturnType<typeof createOpencodeClient>
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
   return value as Record<string, unknown>
+}
+
+function configRecord(value: unknown) {
+  const config = record(value)
+  if (!config) throw new OpenCodeClientError("invalid_response")
+  return config
 }
 
 function providerEnvelope(value: unknown) {
@@ -201,6 +225,24 @@ function todoList(value: unknown): unknown[] {
   const envelope = record(value)
   if (envelope && Array.isArray(envelope.data)) return envelope.data
   throw new OpenCodeClientError("invalid_response")
+}
+
+function fileContent(value: unknown): OpenCodeFileContent {
+  const file = record(value)
+  if (
+    !file ||
+    (file.type !== "text" && file.type !== "binary") ||
+    typeof file.content !== "string" ||
+    (file.encoding !== undefined && file.encoding !== "base64") ||
+    (file.mimeType !== undefined && typeof file.mimeType !== "string")
+  )
+    throw new OpenCodeClientError("invalid_response")
+  return {
+    type: file.type,
+    content: file.content,
+    ...(file.encoding === undefined ? {} : { encoding: file.encoding }),
+    ...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
+  }
 }
 
 function text(value: unknown) {
@@ -370,11 +412,13 @@ function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
 
 class Facade implements OpenCodeClient {
   readonly #sdk: OpenCodeSdk
+  readonly #directory: string
   readonly #controllers = new Set<AbortController>()
   #closed = false
 
   constructor(options: OpenCodeClientOptions) {
     const config = validateOptions(options)
+    this.#directory = options.directory
     this.#sdk = createOpencodeClient({
       baseUrl: config.baseUrl,
       directory: options.directory,
@@ -414,6 +458,13 @@ class Facade implements OpenCodeClient {
         (requestSignal) =>
           this.#sdk.v2.command.list(undefined, { signal: requestSignal }),
         providerEnvelope,
+        signal
+      ),
+    config: (signal?: AbortSignal) =>
+      this.#request(
+        (requestSignal) =>
+          this.#sdk.config.get(undefined, { signal: requestSignal }),
+        configRecord,
         signal
       ),
   }
@@ -652,6 +703,28 @@ class Facade implements OpenCodeClient {
           signal
         ),
     },
+  }
+
+  readonly files: OpenCodeClient["files"] = {
+    read: (path, signal) =>
+      this.#request(
+        (requestSignal) => {
+          const inside = isAbsolute(path) ? relative(this.#directory, path) : ""
+          if (
+            !inside ||
+            inside === ".." ||
+            inside.startsWith("../") ||
+            isAbsolute(inside)
+          )
+            throw new OpenCodeClientError("not_found")
+          return this.#sdk.file.read(
+            { path: inside },
+            { signal: requestSignal }
+          )
+        },
+        fileContent,
+        signal
+      ),
   }
 
   async close() {

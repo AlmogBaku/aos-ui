@@ -11,6 +11,7 @@ import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 import type { RuntimeLimits } from "../../config"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import type { RuntimeInstance } from "../../core/runtime"
+import { withMcpApps } from "../../mcp-apps/annotate"
 import { readSecretFile } from "../../secrets"
 import { OpenClawServerAdapter } from "./adapter"
 import {
@@ -19,6 +20,7 @@ import {
   type OpenClawGatewayClient,
 } from "./client"
 import { OpenClawInteractions } from "./interactions"
+import { createOpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawTurnEngine } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
 
@@ -122,6 +124,13 @@ async function readCredentials(config: OpenClawRuntimeConfig) {
   }
 }
 
+/** The gateway serves HTTP on its WebSocket origin; media tickets resolve there. */
+function gatewayHttpOrigin(baseUrl: string) {
+  const url = new URL(baseUrl)
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:"
+  return url.origin
+}
+
 export async function createOpenClawRuntime(
   config: OpenClawRuntimeConfig,
   limits: RuntimeLimits,
@@ -148,6 +157,9 @@ export async function createOpenClawRuntime(
       "operator.write",
       "operator.approvals",
       "operator.questions",
+      // A Session's `toolOverrides` enable the `aos-ui` MCP server; the gateway
+      // admits that field on create and patch only with admin scope.
+      "operator.admin",
     ],
     caps: [
       GATEWAY_CLIENT_CAPS.APPROVALS,
@@ -171,25 +183,32 @@ export async function createOpenClawRuntime(
   const subscriptions = new OpenClawSessionSubscriptions(client)
   state.subscriptions = subscriptions
   const interactions = new OpenClawInteractions(client)
+  const mcpToolNames = createOpenClawMcpToolNames(client)
   const turns = new OpenClawTurnEngine({
     client,
     subscriptions,
     toolEvents: true,
     replies: interactions,
+    mcpToolNames,
   })
-  const adapter = new OpenClawServerAdapter({
-    client,
-    turns,
-    subscribeSession: async (agentId, sessionKey, onInvalidate) => {
-      const lease = await subscriptions!.acquire(
-        { agentId, sessionKey },
-        onInvalidate
-      )
-      return () => void lease.release()
-    },
-  })
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  const runtime = withMcpApps(
+    new OpenClawServerAdapter({
+      client,
+      turns,
+      gatewayOrigin: gatewayHttpOrigin(config.baseUrl),
+      mcpToolNames,
+      subscribeSession: async (agentId, sessionKey, onInvalidate) => {
+        const lease = await subscriptions!.acquire(
+          { agentId, sessionKey },
+          onInvalidate
+        )
+        return () => void lease.release()
+      },
+    })
+  )
   const sessions = new SessionCoordinator({
-    engine: adapter.turns,
+    engine: runtime.turns,
     maxActiveExecutions: limits.activeExecutions,
     maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,
@@ -200,12 +219,12 @@ export async function createOpenClawRuntime(
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,
-    runtime: adapter,
+    runtime,
     sessions,
     close() {
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
-        await adapter.close()
+        await runtime.close()
       })
       return closePromise
     },

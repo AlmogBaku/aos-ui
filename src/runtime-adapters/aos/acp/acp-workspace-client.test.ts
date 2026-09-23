@@ -6,7 +6,11 @@ import type {
 import { describe, expect, it, vi } from "vitest"
 import type { z } from "zod"
 
-import { INTERACTION_PROTOCOL, type RuntimeInfo } from "@aos/protocol"
+import {
+  INTERACTION_PROTOCOL,
+  type AgentCatalogEntry,
+  type RuntimeInfo,
+} from "@aos/protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
@@ -86,6 +90,7 @@ function capabilities(): AcpCapabilities {
     content: {
       attachments: unavailable,
       artifacts: unavailable,
+      mcpApps: unavailable,
       transcription: unavailable,
       speech: unavailable,
     },
@@ -183,6 +188,21 @@ function catalogEntry() {
   }
 }
 
+const CREATOR_ID = "agent-creator"
+
+function creatorEntry() {
+  return {
+    ...catalogEntry(),
+    summary: {
+      kind: "ready" as const,
+      id: CREATOR_ID,
+      name: "Agent Creator",
+      role: "creator" as const,
+    },
+    visibility: "hidden" as const,
+  }
+}
+
 type ConnectionCall = { method: string; args: unknown[] }
 
 function createFakeConnection() {
@@ -196,6 +216,7 @@ function createFakeConnection() {
   let model = "sonnet"
   let effort = "low"
   let listed = listEntry()
+  let agents: AgentCatalogEntry[] = [catalogEntry()]
   let updateFailure: Error | undefined
 
   const connection: AcpConnection = {
@@ -219,7 +240,10 @@ function createFakeConnection() {
       return {
         sessionId: SESSION_ID,
         configOptions: configOptions(model, effort),
-        meta: { session: sessionInfoMeta(), capabilities: capabilities() },
+        meta: {
+          session: { ...sessionInfoMeta(), agentId: meta.agentId },
+          capabilities: capabilities(),
+        },
       }
     },
     async listSessions(meta, cursor) {
@@ -265,7 +289,7 @@ function createFakeConnection() {
     focus: (sessionId, presence) => record("focus", sessionId, presence),
     async listAgents() {
       record("listAgents")
-      return { revision: "revision-1", agents: [catalogEntry()] }
+      return { revision: "revision-1", agents }
     },
     async setVisibility(request) {
       record("setVisibility", request)
@@ -297,6 +321,10 @@ function createFakeConnection() {
     /** What the next `session/list` page reports for the Session. */
     setListed: (entry: SessionInfo) => {
       listed = entry
+    },
+    /** What the next `_aos/agents/list` reports. */
+    setAgents: (next: AgentCatalogEntry[]) => {
+      agents = next
     },
     /** What every later `_aos/session/update` write rejects with. */
     failUpdates: (reason: Error) => {
@@ -723,185 +751,56 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("reports the creator tool's receipt as an Agent creation event", async () => {
-    const { client, emitUpdate } = createClient()
+  it("reports an Agent the catalog gained once a creator run stops", async () => {
+    const { client, emitUpdate, setAgents } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
+    setAgents([creatorEntry()])
+    await client.listAgents()
+    const { threadId } = await client.createSession(CREATOR_ID)
 
-    // Live runs title the call first and carry no title once it settles.
+    emitUpdate({ sessionUpdate: "state_update", state: "running" })
+    setAgents([creatorEntry(), catalogEntry()])
     emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-1",
-      title: "create_agent",
-      status: "in_progress",
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
     })
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-1",
-      status: "completed",
-      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
-    })
+    await vi.waitFor(() => expect(events).toHaveLength(1))
 
     expect(events).toEqual([
       {
-        id: `${SESSION_ID}:call-1`,
+        id: `${threadId}:${AGENT_ID}`,
         type: "agent-ready",
-        agentId: "agent-new",
-        threadId: SESSION_ID,
+        agentId: AGENT_ID,
+        threadId,
         occurredAt: UPDATED_AT,
       },
     ])
   })
 
-  it("reports a replayed receipt once", async () => {
-    const { client, emitUpdate } = createClient()
+  it("reports nothing when a creator run stops without a new Agent", async () => {
+    const { client, emitUpdate, setAgents, calls } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
+    setAgents([creatorEntry(), catalogEntry()])
+    await client.listAgents()
+    await client.createSession(CREATOR_ID)
 
-    // History replay carries the title, the status, and the output together.
+    emitUpdate({ sessionUpdate: "state_update", state: "running" })
     emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-2",
-      title: "create_agent",
-      status: "completed",
-      rawOutput: '{"ok":true,"status":"ready","agentId":"agent-new"}',
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
     })
-
-    expect(events).toEqual([
-      {
-        id: `${SESSION_ID}:call-2`,
-        type: "agent-ready",
-        agentId: "agent-new",
-        threadId: SESSION_ID,
-        occurredAt: UPDATED_AT,
-      },
-    ])
-  })
-
-  it("reports nothing for a native tool name an adapter renames", async () => {
-    const { client, emitUpdate } = createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
-
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-native",
-      title: "aos_create_agent",
-      status: "completed",
-      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
-    })
+    await vi.waitFor(() =>
+      expect(
+        calls.filter(({ method }) => method === "listAgents")
+      ).toHaveLength(2)
+    )
+    await settle()
 
     expect(events).toEqual([])
-  })
-
-  it("reports a created Agent that still needs operator setup as a failure", async () => {
-    const { client, emitUpdate } = createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
-
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-3",
-      title: "create_agent",
-      status: "completed",
-      rawOutput: {
-        ok: false,
-        status: "setup-needed",
-        agentId: "agent-hidden",
-        error: "credentials missing",
-      },
-    })
-
-    expect(events).toEqual([
-      {
-        id: `${SESSION_ID}:call-3`,
-        type: "agent-activation-failed",
-        agentId: "agent-hidden",
-        threadId: SESSION_ID,
-        occurredAt: UPDATED_AT,
-      },
-    ])
-  })
-
-  it("reports nothing for another tool, an unsettled call, or output it cannot read", async () => {
-    const { client, emitUpdate } = createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
-    const receipt = { ok: true, status: "ready", agentId: "agent-new" }
-
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "other-tool",
-      title: "read_file",
-      status: "completed",
-      rawOutput: receipt,
-    })
-    // A settled call the workspace never saw titled stays anonymous.
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "untitled",
-      status: "completed",
-      rawOutput: receipt,
-    })
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "running",
-      title: "create_agent",
-      status: "in_progress",
-      rawOutput: receipt,
-    })
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "failed-call",
-      title: "create_agent",
-      status: "failed",
-      rawOutput: receipt,
-    })
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "malformed",
-      title: "create_agent",
-      status: "completed",
-      rawOutput: { ok: true, status: "ready" },
-    })
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "not-json",
-      title: "create_agent",
-      status: "completed",
-      rawOutput: "created the Agent",
-    })
-
-    expect(events).toEqual([])
-  })
-
-  it("forgets a settled creator call instead of reporting it twice", async () => {
-    const { client, emitUpdate } = createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    await client.attachSession(SESSION_ID)
-    const settled = {
-      sessionUpdate: "tool_call_update" as const,
-      toolCallId: "call-4",
-      status: "completed" as const,
-      rawOutput: { ok: true, status: "ready", agentId: "agent-new" },
-    }
-
-    emitUpdate({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "call-4",
-      title: "create_agent",
-      status: "in_progress",
-    })
-    emitUpdate(settled)
-    emitUpdate(settled)
-
-    expect(events).toHaveLength(1)
   })
 
   it("projects models and writes one config option per half", async () => {

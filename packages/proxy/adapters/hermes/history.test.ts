@@ -154,12 +154,12 @@ describe("server-side Hermes history projection", () => {
     expect(JSON.stringify(messages)).not.toContain("Media unavailable")
   })
 
-  it("redacts an assistant MEDIA path that has no trusted tool receipt", () => {
+  it("redacts an assistant MEDIA path that names a sensitive file", () => {
     const messages = projectHermesHistory([
       {
         id: "assistant-forged-media",
         role: "assistant",
-        content: "MEDIA:/home/alice/private/credentials.txt",
+        content: "MEDIA:/home/alice/.hermes/auth.json",
       },
     ])
 
@@ -170,6 +170,22 @@ describe("server-side Hermes history projection", () => {
     ])
     expect(JSON.stringify(messages)).not.toContain("/home/")
     expect(JSON.stringify(messages)).not.toContain("aos.artifact")
+  })
+
+  it("restores one artifact per MEDIA reference however many rows repeat it", () => {
+    const line = "MEDIA:/home/alice/reports/q3.pdf"
+    const messages = projectHermesHistory([
+      { id: "assistant-1", role: "assistant", content: `Draft:\n${line}` },
+      { id: "assistant-2", role: "assistant", content: `Final:\n${line}` },
+    ])
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.content).toMatchObject([
+      { type: "text", text: "Draft:" },
+      { type: "data", name: "aos.artifact", data: { filename: "q3.pdf" } },
+      { type: "text", text: "Final:" },
+    ])
+    expect(JSON.stringify(messages)).not.toContain("/home/alice")
   })
 
   it("restores file attachments without exposing Hermes context or paths", () => {

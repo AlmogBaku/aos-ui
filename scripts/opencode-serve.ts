@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process"
-import { access, realpath } from "node:fs/promises"
+import { realpath } from "node:fs/promises"
 import { connect } from "node:net"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { installCreatorDefinition } from "../integrations/opencode/agent-definition"
-
+import { installCreatorDefinition } from "./opencode-agent-definition"
 import {
   buildOpenCodeConfigContent,
   createOpenCodeChildEnvironment,
@@ -134,26 +133,16 @@ export async function main() {
     return 1
   }
 
-  const pluginPath = resolve(
-    process.env.AOS_UI_OPENCODE_PLUGIN_PATH?.trim() ||
-      resolve(
-        import.meta.dirname,
-        "../integrations/opencode/dist/aos-ui-plugin.js"
-      )
-  )
+  let configContent: string
   try {
-    await access(pluginPath)
     await installCreatorDefinition(configuredWorktree)
+    configContent = buildOpenCodeConfigContent(process.env)
   } catch (reason) {
     console.error(
-      `OpenCode integration setup failed: ${reason instanceof Error ? reason.message : String(reason)}`
+      `OpenCode setup failed: ${reason instanceof Error ? reason.message : String(reason)}`
     )
     return 1
   }
-  const configContent = buildOpenCodeConfigContent(
-    process.env,
-    pathToFileURL(pluginPath).href
-  )
 
   const child = spawn(
     "opencode",

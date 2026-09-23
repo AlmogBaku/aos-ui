@@ -17,6 +17,11 @@ describe("openCodeCapabilities", () => {
         },
       },
       content: {
+        artifacts: {
+          status: "available",
+          scope: "session",
+          maxBytes: 25 * 1024 * 1024,
+        },
         transcription: {
           status: "unavailable",
           reason: "native-audio-unavailable",

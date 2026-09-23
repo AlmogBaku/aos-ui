@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import {
   OpenClawContentPublicError,
   prepareOpenClawChatAttachments,
-  projectOpenClawRichPresentation,
   readOpenClawChatAttachments,
   stageOpenClawChatAttachments,
 } from "./content"
@@ -110,26 +109,5 @@ describe("OpenClaw content", () => {
         { ...policy, maxPayload: 128 }
       )
     ).toThrow(OpenClawContentPublicError)
-  })
-  it("keeps the actual plugin's unsupported publication as text only", () => {
-    expect(
-      projectOpenClawRichPresentation({
-        content: [
-          {
-            type: "text",
-            text: "Validated brief.pdf, but it was not published.",
-          },
-        ],
-        details: {
-          type: "aos.artifact-publication",
-          status: "unsupported",
-          published: false,
-          candidate: { path: "private.pdf" },
-        },
-      })
-    ).toEqual({ text: "Validated brief.pdf, but it was not published." })
-    expect(
-      projectOpenClawRichPresentation({ content: [], details: {} })
-    ).toBeUndefined()
   })
 })

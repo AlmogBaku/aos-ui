@@ -22,7 +22,6 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosActivityNotificationSchema,
-  AosArtifactNotificationSchema,
   AosElicitationMetaSchema,
   AosInitializeMetaSchema,
   AosPermissionMetaSchema,
@@ -185,6 +184,7 @@ const CAPABILITIES = {
   content: {
     attachments: { status: "unavailable", reason: "attachments-unavailable" },
     artifacts: { status: "unavailable", reason: "artifacts-unavailable" },
+    mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
     transcription: {
       status: "unavailable",
       reason: "transcription-unavailable",
@@ -1314,7 +1314,7 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("replays a stored artifact as a notification naming its message", async () => {
+  it("replays a stored artifact as a link chunk on its message", async () => {
     const artifact = {
       id: "artifact-1",
       filename: "Quarterly report",
@@ -1346,14 +1346,25 @@ describe("operator ACP lane", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT } },
     })
 
-    const granted = test.recorder.of(AOS_METHODS.notify.artifact)
-    expect(granted).toHaveLength(1)
-    expect(AosArtifactNotificationSchema.parse(granted[0]!.params)).toEqual({
+    const linked = updates(test.recorder).filter(
+      (params) =>
+        "content" in params.update &&
+        !Array.isArray(params.update.content) &&
+        params.update.content?.type === "resource_link"
+    )
+    expect(linked).toHaveLength(1)
+    expect(linked[0]).toMatchObject({
       sessionId: SESSION,
-      sequence: 0,
-      turnId: "history",
-      messageId: "message-agent",
-      artifact,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "message-agent",
+      },
+    })
+    expect((linked[0]!.update as { content: unknown }).content).toEqual({
+      type: "resource_link",
+      uri: "artifact://artifact-1",
+      name: "Quarterly report",
+      size: 4_096,
     })
     test.close()
   })

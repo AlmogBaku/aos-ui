@@ -63,9 +63,14 @@ export function createAcpWorkspaceClient({
   const store = createAcpSessionStore({
     connection,
     ...(now ? { now } : {}),
+    onTurnFinished: (threadId) => void reportCreatedAgents(threadId),
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
+  let creatorId: string | undefined
+  let listedAgentIds: ReadonlySet<string> = new Set()
+  /** The Agent ids each creator Session's catalog held when it opened. */
+  const creatorBaselines = new Map<string, Set<string>>()
   let sessionActions: Promise<SessionActionCapabilities> | undefined
 
   function remember(
@@ -96,6 +101,10 @@ export function createAcpWorkspaceClient({
     revisions.clear()
     for (const entry of response.agents)
       revisions.set(entry.summary.id, entry.revision)
+    creatorId = response.agents.find(
+      ({ summary }) => summary.role === "creator"
+    )?.summary.id
+    listedAgentIds = new Set(response.agents.map(({ summary }) => summary.id))
     return response
   }
 
@@ -128,6 +137,40 @@ export function createAcpWorkspaceClient({
       .finally(() => pageReads.delete(key))
     pageReads.set(key, read)
     return read
+  }
+
+  function watchCreator(threadId: string, agentId: string) {
+    if (agentId === creatorId && !creatorBaselines.has(threadId))
+      creatorBaselines.set(threadId, new Set(listedAgentIds))
+  }
+
+  /**
+   * The creator makes Agents with its harness's own means, so creation is
+   * observable only in the catalog: an Agent that was not listed when the
+   * creator Session opened, and is listed once one of its turns stops. A
+   * visible one is ready; a hidden one still needs its operator.
+   */
+  async function reportCreatedAgents(threadId: string) {
+    const baseline = creatorBaselines.get(threadId)
+    if (!baseline) return
+    let agents
+    try {
+      agents = (await catalog()).agents
+    } catch {
+      return
+    }
+    for (const { summary, visibility } of agents) {
+      if (baseline.has(summary.id)) continue
+      baseline.add(summary.id)
+      store.emitActivity({
+        id: `${threadId}:${summary.id}`,
+        type:
+          visibility === "hidden" ? "agent-activation-failed" : "agent-ready",
+        agentId: summary.id,
+        threadId,
+        occurredAt: new Date((now ?? Date.now)()).toISOString(),
+      })
+    }
   }
 
   async function listSessions(agentId?: string, cursor?: string) {
@@ -226,6 +269,7 @@ export function createAcpWorkspaceClient({
         throw new Error("Invalid AOS Session ownership")
       store.observe(created.sessionId)
       remember(created.sessionId, created.meta.session)
+      watchCreator(created.sessionId, agentId)
       composer.attach(created.sessionId, {
         configOptions: created.configOptions,
         capabilities: created.meta.capabilities,
@@ -250,6 +294,7 @@ export function createAcpWorkspaceClient({
         ...connection.lastSequence(threadId),
       })
       remember(threadId, resumed.meta.session)
+      watchCreator(threadId, resumed.meta.session.agentId)
       store.setStatus(threadId, resumed.meta.execution.status)
       composer.attach(threadId, {
         configOptions: resumed.configOptions,

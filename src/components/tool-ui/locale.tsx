@@ -10,9 +10,6 @@ export type ToolUiDirection = "ltr" | "rtl"
 export type ToolUiToolName =
   | "question"
   | "permission"
-  | "chart"
-  | "map"
-  | "stats"
   | "subagentActivity"
   | "skillActivity"
   | "toolActivity"
@@ -181,25 +178,11 @@ export type ToolUiLocaleLabels = {
     malformedExplanation: string
     copyJson: string
   }
-  chart: {
-    unavailable: string
+  mcpApp: {
     loading: string
-    showData: string
-    hideData: string
-    waiting: string
-    value: string
-    dataLabel: (title: string) => string
-  }
-  map: {
     unavailable: string
-    loading: string
-    showLocations: string
-    hideLocations: string
-    waiting: string
-    locationsLabel: (title: string) => string
-  }
-  stats: {
-    waiting: string
+    frameTitle: (toolName: string) => string
+    exitFullscreen: string
   }
   diff: ToolDiffLabels
   terminal: ToolTerminalLabels
@@ -372,25 +355,12 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       "The tool returned data that did not match this renderer. The raw payload is preserved below.",
     copyJson: "Copy JSON",
   },
-  chart: {
-    unavailable: "Chart visual unavailable. The data table remains available.",
-    loading: "Loading chart visual…",
-    showData: "View chart data",
-    hideData: "Hide chart data",
-    waiting: "Waiting for chart data…",
-    value: "Value",
-    dataLabel: (title) => `${title} data`,
-  },
-  map: {
-    unavailable: "Map visual unavailable. The location list remains available.",
-    loading: "Loading map visual…",
-    showLocations: "View map locations",
-    hideLocations: "Hide map locations",
-    waiting: "Waiting for map data…",
-    locationsLabel: (title) => `${title} locations`,
-  },
-  stats: {
-    waiting: "Waiting for metrics…",
+
+  mcpApp: {
+    loading: "Loading the app…",
+    unavailable: "The app could not be shown.",
+    frameTitle: (toolName) => `${toolName} app`,
+    exitFullscreen: "Exit full screen",
   },
   diff: {
     changes: "Changed files",
@@ -433,9 +403,6 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "Question",
     permission: "Permission",
-    chart: "Chart",
-    map: "Map",
-    stats: "Metrics",
     subagentActivity: "Subagent activity",
     skillActivity: "Skill activity",
     toolActivity: "Tool activity",
@@ -599,25 +566,12 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       "הכלי החזיר נתונים שאינם תואמים למציג זה. המטען הגולמי נשמר למטה.",
     copyJson: "העתקת JSON",
   },
-  chart: {
-    unavailable: "התרשים אינו זמין. טבלת הנתונים עדיין זמינה.",
-    loading: "התרשים נטען…",
-    showData: "הצגת נתוני התרשים",
-    hideData: "הסתרת נתוני התרשים",
-    waiting: "בהמתנה לנתוני התרשים…",
-    value: "ערך",
-    dataLabel: (title) => `${title} — נתוני תרשים`,
-  },
-  map: {
-    unavailable: "המפה אינה זמינה. רשימת המיקומים עדיין זמינה.",
-    loading: "המפה נטענת…",
-    showLocations: "הצגת מיקומי המפה",
-    hideLocations: "הסתרת מיקומי המפה",
-    waiting: "בהמתנה לנתוני המפה…",
-    locationsLabel: (title) => `${title} — מיקומים`,
-  },
-  stats: {
-    waiting: "בהמתנה למדדים…",
+
+  mcpApp: {
+    loading: "היישומון נטען…",
+    unavailable: "לא ניתן להציג את היישומון.",
+    frameTitle: (toolName) => `יישומון ${toolName}`,
+    exitFullscreen: "יציאה ממסך מלא",
   },
   diff: {
     changes: "קבצים ששונו",
@@ -659,9 +613,6 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
   toolNames: {
     question: "שאלה",
     permission: "הרשאה",
-    chart: "תרשים",
-    map: "מפה",
-    stats: "מדדים",
     subagentActivity: "פעילות סוכן משנה",
     skillActivity: "פעילות מיומנות",
     toolActivity: "פעילות כלי",

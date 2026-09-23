@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { StopReason, ToolKind } from "../../../protocol"
-
+import { openCodeArtifactReceipt } from "./content"
 import { projectOpenCodeHistory } from "./history"
 
 describe("OpenCode history projection", () => {
@@ -276,5 +276,103 @@ describe("OpenCode history projection", () => {
     })
 
     expect(message).not.toHaveProperty("stopReason")
+  })
+
+  it("replays an aos-ui receipt as the same opaque artifact the live run published", () => {
+    const receipt = JSON.stringify({
+      ok: true,
+      type: "aos.artifact",
+      artifact: {
+        path: "/workspaces/aos/out/report.pdf",
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+      },
+    })
+    const assistant = (name: string, text: string) => ({
+      id: "assistant-1",
+      type: "assistant",
+      agent: "research",
+      model: { providerID: "openai", id: "gpt" },
+      time: { created: 2_000 },
+      content: [
+        {
+          id: "call-1",
+          type: "tool",
+          name,
+          time: { created: 2_000 },
+          state: {
+            status: "completed",
+            input: {},
+            content: [{ type: "text", text }],
+            structured: {},
+          },
+        },
+      ],
+    })
+    const [message] = projectOpenCodeHistory({
+      messages: [assistant("aos-ui_present_artifact", receipt)],
+      sessionId: "session-1",
+    })
+    const live = openCodeArtifactReceipt("call-1", receipt)
+
+    expect(message?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "call-1",
+        toolName: "present_artifact",
+        result: live?.result,
+      }),
+      { type: "data", name: "aos.artifact", data: live?.descriptor },
+    ])
+    expect(JSON.stringify(message)).not.toContain("/workspaces")
+    expect(
+      projectOpenCodeHistory({
+        messages: [
+          assistant(
+            "aos-ui_present_artifact",
+            JSON.stringify({
+              ok: true,
+              type: "aos.artifact",
+              artifact: { path: "out/report.pdf", filename: "report.pdf" },
+            })
+          ),
+        ],
+        sessionId: "session-1",
+      })[0]?.content.some((part) => part.type === "data")
+    ).toBe(false)
+  })
+
+  it("canonicalizes an aos-ui render tool in history", () => {
+    const [message] = projectOpenCodeHistory({
+      messages: [
+        {
+          id: "assistant-1",
+          type: "assistant",
+          agent: "research",
+          model: { providerID: "openai", id: "gpt" },
+          time: { created: 2_000 },
+          content: [
+            {
+              id: "call-1",
+              type: "tool",
+              name: "aos-ui_render_chart",
+              time: { created: 2_000 },
+              state: {
+                status: "completed",
+                input: { title: "Sales" },
+                content: [],
+                structured: {},
+                result: "ok",
+              },
+            },
+          ],
+        },
+      ],
+      sessionId: "session-1",
+    })
+    expect(message?.content[0]).toMatchObject({
+      type: "tool-call",
+      toolName: "render_chart",
+    })
   })
 })

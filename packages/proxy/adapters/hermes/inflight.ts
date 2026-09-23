@@ -134,19 +134,24 @@ export function restoredHermesFailedTurn(
   )
   // Only prose Hermes actually streamed is content: a turn that streamed
   // nothing before failing restores as the failure alone, exactly as the live
-  // turn published it. A restore also trusts no media reference, because
-  // nothing published a tool result for this turn.
+  // turn published it. A restore trusts no TTS reference, because nothing
+  // published a tool result for this turn; a MEDIA line still restores as the
+  // artifact live published for it.
   // Truncated, never refused: an oversized retained turn must not fail the
   // whole history load on the protocol's character bound.
-  const text = (
-    inflight.assistant === undefined
-      ? ""
-      : projectHermesMediaText(inflight.assistant, [])
-  ).slice(0, MAX_TEXT_PART_CHARACTERS)
+  const projected = projectHermesMediaText(inflight.assistant ?? "", [])
+  const text = projected.text.slice(0, MAX_TEXT_PART_CHARACTERS)
   return {
     id: turn.id,
     role: "assistant",
-    content: text ? [{ type: "text", text }] : [],
+    content: [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...projected.artifacts.map(({ descriptor }) => ({
+        type: "data" as const,
+        name: "aos.artifact",
+        data: descriptor,
+      })),
+    ],
     createdAt: turn.createdAt,
     status: { type: "incomplete", reason: "error", error: message },
     metadata: { custom: { aos: { turnErrorCode: code } } },

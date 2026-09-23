@@ -1,0 +1,87 @@
+/*
+ * One stylesheet for every view. The host's MCP Apps style variables drive the
+ * tokens the moved components read; each fallback is the workspace's own value,
+ * so a host that sends no variables still gets a legible view.
+ */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@source "./";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-destructive: var(--destructive);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+:root {
+  color-scheme: light;
+  --card: var(--color-background-primary, oklch(1 0 0));
+  --background: var(--color-background-primary, oklch(1 0 0));
+  --muted: var(--color-background-secondary, oklch(0.945 0.005 265));
+  --foreground: var(--color-text-primary, oklch(0.205 0.008 265));
+  --card-foreground: var(--color-text-primary, oklch(0.205 0.008 265));
+  --muted-foreground: var(--color-text-secondary, oklch(0.5 0.012 265));
+  --primary: var(--color-ring-primary, oklch(0.57 0.22 285));
+  --border: var(--color-border-primary, oklch(0.2 0.008 265 / 12%));
+  --input: var(--color-border-secondary, oklch(0.2 0.008 265 / 16%));
+  --ring: var(--color-ring-primary, oklch(0.58 0.22 285));
+  --success: var(--color-text-success, oklch(0.49 0.14 145));
+  --destructive: var(--color-text-danger, oklch(0.58 0.22 24));
+  --radius: var(--border-radius-lg, 0.75rem);
+  --chart-1: oklch(0.58 0.22 285);
+  --chart-2: oklch(0.58 0.14 188);
+  --chart-3: oklch(0.64 0.16 78);
+  --chart-4: oklch(0.6 0.18 330);
+  --chart-5: oklch(0.58 0.15 145);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --card: var(--color-background-primary, oklch(0.275 0.006 265));
+  --background: var(--color-background-primary, oklch(0.275 0.006 265));
+  --muted: var(--color-background-secondary, oklch(0.285 0.006 265));
+  --foreground: var(--color-text-primary, oklch(0.94 0.004 265));
+  --card-foreground: var(--color-text-primary, oklch(0.94 0.004 265));
+  --muted-foreground: var(--color-text-secondary, oklch(0.72 0.006 265));
+  --primary: var(--color-ring-primary, oklch(0.69 0.2 285));
+  --border: var(--color-border-primary, oklch(1 0 0 / 10%));
+  --input: var(--color-border-secondary, oklch(1 0 0 / 15%));
+  --ring: var(--color-ring-primary, oklch(0.69 0.2 285));
+  --success: var(--color-text-success, oklch(0.75 0.14 145));
+  --destructive: var(--color-text-danger, oklch(0.67 0.2 24));
+  --chart-1: oklch(0.69 0.2 285);
+  --chart-2: oklch(0.72 0.13 188);
+  --chart-3: oklch(0.74 0.15 78);
+  --chart-4: oklch(0.68 0.17 330);
+  --chart-5: oklch(0.7 0.14 145);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply m-0 bg-transparent text-card-foreground antialiased;
+    font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+  }
+}

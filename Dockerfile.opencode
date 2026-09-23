@@ -2,17 +2,16 @@
 
 FROM oven/bun:1.3.10-alpine AS bun-runtime
 
-FROM bun-runtime AS integration-build
+FROM bun-runtime AS launcher-build
 WORKDIR /bundle
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
-COPY scripts/opencode-config.ts scripts/opencode-serve.ts ./scripts/
+COPY scripts/opencode-config.ts scripts/opencode-serve.ts scripts/opencode-agent-definition.ts \
+     scripts/opencode-creator-template.ts scripts/opencode-creator-skill.generated.ts \
+     scripts/opencode-creator-reference.generated.ts \
+     scripts/opencode-invite-link.generated.ts ./scripts/
 COPY packages/proxy/secrets.ts ./packages/proxy/secrets.ts
-COPY shared/ ./shared/
-COPY integrations/opencode/ ./integrations/opencode/
-RUN install -d integrations/opencode/dist \
-    && bun build integrations/opencode/plugin.ts --target=bun --outfile=integrations/opencode/dist/aos-ui-plugin.js \
-    && bun build scripts/opencode-serve.ts --target=bun --outfile=opencode-serve.js
+RUN bun build scripts/opencode-serve.ts --target=bun --outfile=opencode-serve.js
 
 FROM ghcr.io/anomalyco/opencode:1.18.29
 
@@ -33,7 +32,6 @@ RUN case "${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID}" in *[!0-9:]*|:*|*:) exit 1 ;; e
       /home/aos-ui/.cache \
       /home/aos-ui/.config \
       /home/aos-ui/.local/share/opencode \
-      /opt/aos-ui/integrations/opencode/dist \
       /opt/aos-ui/scripts \
       /workspace
 
@@ -46,8 +44,7 @@ ENV HOME=/home/aos-ui \
     XDG_CONFIG_HOME=/home/aos-ui/.config \
     XDG_DATA_HOME=/home/aos-ui/.local/share
 
-COPY --from=integration-build --chown=${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID} /bundle/opencode-serve.js /opt/aos-ui/scripts/opencode-serve.js
-COPY --from=integration-build --chown=${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID} /bundle/integrations/opencode/dist/aos-ui-plugin.js /opt/aos-ui/integrations/opencode/dist/aos-ui-plugin.js
+COPY --from=launcher-build --chown=${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID} /bundle/opencode-serve.js /opt/aos-ui/scripts/opencode-serve.js
 
 USER ${AOS_UI_HOST_UID}:${AOS_UI_HOST_GID}
 WORKDIR /workspace

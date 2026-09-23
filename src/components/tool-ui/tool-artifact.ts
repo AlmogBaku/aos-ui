@@ -4,7 +4,8 @@ import { z } from "zod"
  * What a tool call carries beyond its args and result, on assistant-ui's
  * `ToolCallMessagePart.artifact` as `{ aos: AosToolArtifact }`. The shapes
  * follow ACP v2 tool-call content: a kind, the locations it touched, diffs,
- * embedded terminals, and subagent metadata.
+ * embedded terminals, and subagent metadata, plus the state of an MCP App
+ * view the tool declares.
  */
 
 const toolKindSchema = z.enum([
@@ -61,12 +62,24 @@ const subagentSchema = z.object({
   childSessionId: z.string().optional(),
 })
 
+/**
+ * The tool declares an MCP App view: `input` once its arguments are complete,
+ * `settled` once the provider reports it done, and `cancelled`, with its
+ * reason, once the call can no longer produce a result.
+ */
+const mcpAppSchema = z.object({
+  input: z.literal(true).optional(),
+  settled: z.literal(true).optional(),
+  cancelled: z.string().optional(),
+})
+
 const toolArtifactSchema = z.object({
   kind: toolKindSchema.optional(),
   locations: z.array(locationSchema).optional(),
   diffs: z.array(diffSchema).optional(),
   terminals: z.array(terminalSchema).optional(),
   subagent: subagentSchema.optional(),
+  app: mcpAppSchema.optional(),
 })
 
 export type AosToolKind = z.infer<typeof toolKindSchema>
@@ -75,6 +88,7 @@ export type AosDiffChange = z.infer<typeof diffChangeSchema>
 export type AosDiff = z.infer<typeof diffSchema>
 export type AosTerminal = z.infer<typeof terminalSchema>
 export type AosSubagent = z.infer<typeof subagentSchema>
+export type AosMcpApp = z.infer<typeof mcpAppSchema>
 export type AosToolArtifact = z.infer<typeof toolArtifactSchema>
 
 function isRecord(value: unknown): value is Record<string, unknown> {

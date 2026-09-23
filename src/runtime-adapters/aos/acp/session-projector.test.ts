@@ -7,6 +7,7 @@ import { AOS_METHODS, AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { COMPACTION_DATA_PART_NAME } from "@/components/assistant-ui/elements/compaction-divider"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
 import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
 import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
@@ -74,12 +75,34 @@ const stateUpdate = (
   meta: unknown = TURN_META
 ): Entry => [{ sessionUpdate: "state_update", ...patch }, meta]
 
+/** The artifact data part a published link projects as. */
 const ARTIFACT = {
   id: "art-1",
   filename: "chart.json",
   mimeType: "application/json",
-  source: { type: "inline", encoding: "utf8", data: "{}" },
+  source: { type: "provider", reference: "art-1" },
 } as const
+
+/** A published artifact as the proxy streams it: a `resource_link` to its id. */
+const artifactLink = (
+  messageId: string,
+  extra: { uri?: string; size?: number } = {},
+  sessionUpdate:
+    "agent_message_chunk" | "user_message_chunk" = "agent_message_chunk"
+): Entry => [
+  {
+    sessionUpdate,
+    messageId,
+    content: {
+      type: "resource_link",
+      uri: "artifact://art-1",
+      name: "chart.json",
+      mimeType: "application/json",
+      ...extra,
+    },
+  },
+  TURN_META,
+]
 
 describe("applyUpdate messages", () => {
   const cases: {
@@ -469,6 +492,105 @@ describe("applyUpdate tool calls", () => {
         ],
       },
     ])
+  })
+
+  it("carries a declared MCP App view as the part's artifact flag", () => {
+    const flagged = fold([
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+      toolCall({ status: "completed", rawOutput: "done" }, TOOL_META),
+    ])
+    expect(toThreadMessages(flagged)[0]?.content[1]).toMatchObject({
+      toolCallId: "t1",
+      artifact: { aos: { app: {} } },
+    })
+    const running = fold([
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+    ])
+    expect(toThreadMessages(running)[0]?.content[1]).toMatchObject({
+      artifact: { aos: { app: {} } },
+    })
+    expect(toThreadMessages(running)[0]?.content[1]).not.toHaveProperty(
+      "artifact.aos.app.settled"
+    )
+    expect(toThreadMessages(started)[0]?.content[1]).not.toHaveProperty(
+      "artifact"
+    )
+  })
+
+  it("keeps an App call's ACP facts with its App flag", () => {
+    const part = toThreadMessages(
+      fold([
+        agentChunk("a1", "Working"),
+        toolCall(
+          { title: "show_board", kind: "fetch" },
+          { ...TOOL_META, app: {} }
+        ),
+      ])
+    )[0]?.content[1]
+    expect(isMcpAppToolPart(part as { artifact?: unknown })).toBe(true)
+    expect(
+      readAosToolArtifact((part as { artifact?: unknown }).artifact)
+    ).toEqual({ kind: "fetch", app: {} })
+  })
+
+  it("marks an App call settled when it completes without a result", () => {
+    // A guest's App call arrives without its input or output.
+    const settled = fold([
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+      toolCall({ status: "completed" }, TOOL_META),
+    ])
+    const part = toThreadMessages(settled)[0]?.content[1]
+    expect(part).toMatchObject({
+      artifact: { aos: { app: { settled: true } } },
+    })
+    expect(part).not.toHaveProperty("result")
+  })
+
+  it("marks an App call cancelled when it fails without a result", () => {
+    const failed = fold([
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+      toolCall({ status: "failed" }, TOOL_META),
+    ])
+    const part = toThreadMessages(failed)[0]?.content[1]
+    expect(part).toMatchObject({
+      artifact: { aos: { app: { cancelled: "The tool call failed" } } },
+    })
+    expect(part).not.toHaveProperty("artifact.aos.app.settled")
+
+    const reported = fold([
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+      toolCall({ status: "failed", rawOutput: "boom" }, TOOL_META),
+    ])
+    expect(toThreadMessages(reported)[0]?.content[1]).not.toHaveProperty(
+      "artifact.aos.app.cancelled"
+    )
+  })
+
+  it("marks an open App call cancelled once its turn ends", () => {
+    const open = fold([
+      stateUpdate({ state: "running" }, TURN_META),
+      agentChunk("a1", "Working"),
+      toolCall({ title: "show_board" }, { ...TOOL_META, app: {} }),
+    ])
+    expect(toThreadMessages(open)[0]?.content[1]).not.toHaveProperty(
+      "artifact.aos.app.cancelled"
+    )
+    const stopped = fold(
+      [stateUpdate({ state: "idle", stopReason: "cancelled" })],
+      open
+    )
+    expect(toThreadMessages(stopped)[0]?.content[1]).toMatchObject({
+      artifact: {
+        aos: {
+          app: { cancelled: "The turn ended before the tool call finished" },
+        },
+      },
+    })
   })
 
   it("drops a call with no turn to hang it off", () => {
@@ -990,16 +1112,13 @@ describe("applyUpdate Session metadata", () => {
   })
 })
 
-describe("applyNotification", () => {
+describe("artifact links", () => {
   const answered = fold([userChunk("u1", "Hi"), agentChunk("a1", "Hello")])
 
-  it("appends an artifact to the message it names", () => {
-    const withArtifact = applyNotification(
-      answered,
-      AOS_METHODS.notify.artifact,
-      { sessionId: "s1", ...TURN_META, messageId: "a1", artifact: ARTIFACT }
-    )
-    expect(toThreadMessages(withArtifact)[1]).toMatchObject({
+  it("appends a published link to its turn as an artifact", () => {
+    expect(
+      toThreadMessages(fold([artifactLink("a1")], answered))[1]
+    ).toMatchObject({
       content: [
         { type: "text", text: "Hello" },
         { type: "data", name: ARTIFACT_DATA_PART_NAME, data: ARTIFACT },
@@ -1007,68 +1126,86 @@ describe("applyNotification", () => {
     })
   })
 
-  it("appends a replayed artifact to the earlier turn it names", () => {
+  it("carries the size the publisher reported", () => {
+    const [, answer] = toThreadMessages(
+      fold([artifactLink("a1", { size: 2_048 })], answered)
+    )
+    expect(answer).toMatchObject({
+      content: [
+        { type: "text" },
+        { type: "data", data: { ...ARTIFACT, sizeBytes: 2_048 } },
+      ],
+    })
+  })
+
+  it("appends a replayed link to the earlier turn it names", () => {
     const replayed = fold(
       [userChunk("u2", "And again"), agentChunk("a2", "Still here")],
       answered
     )
-    const withArtifact = applyNotification(
-      replayed,
-      AOS_METHODS.notify.artifact,
-      {
-        sessionId: "s1",
-        sequence: 0,
-        turnId: "history",
-        messageId: "a1",
-        artifact: { ...ARTIFACT, sizeBytes: 2_048 },
-      }
-    )
-    const messages = toThreadMessages(withArtifact)
+    const messages = toThreadMessages(fold([artifactLink("a1")], replayed))
 
     expect(messages[1]).toMatchObject({
-      content: [
-        { type: "text", text: "Hello" },
-        {
-          type: "data",
-          name: ARTIFACT_DATA_PART_NAME,
-          data: { ...ARTIFACT, sizeBytes: 2_048 },
-        },
-      ],
+      content: [{ type: "text", text: "Hello" }, { data: ARTIFACT }],
     })
     expect(messages[3]).toMatchObject({
       content: [{ type: "text", text: "Still here" }],
     })
   })
 
-  it("grants one artifact once however often a replay announces it", () => {
-    const params = {
-      sessionId: "s1",
-      sequence: 0,
-      turnId: "history",
-      messageId: "a1",
-      artifact: ARTIFACT,
-    }
-    const once = applyNotification(
-      answered,
-      AOS_METHODS.notify.artifact,
-      params
+  it("keeps an attachment's link on the user turn that carried it", () => {
+    const [user] = toThreadMessages(
+      fold([artifactLink("u1", {}, "user_message_chunk")], answered)
     )
-
-    expect(
-      applyNotification(once, AOS_METHODS.notify.artifact, params)
-    ).toEqual(once)
-  })
-
-  it("appends an unaddressed artifact to the latest assistant turn", () => {
-    const withArtifact = applyNotification(
-      answered,
-      AOS_METHODS.notify.artifact,
-      { sessionId: "s1", ...TURN_META, artifact: ARTIFACT }
-    )
-    expect(toThreadMessages(withArtifact)[1]).toMatchObject({
-      content: [{ type: "text" }, { name: ARTIFACT_DATA_PART_NAME }],
+    expect(user).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "Hi" }, { data: ARTIFACT }],
     })
   })
+
+  it("reads an id the link had to encode", () => {
+    const [, answer] = toThreadMessages(
+      fold(
+        [artifactLink("a1", { uri: "artifact://q3%2Freport%231" })],
+        answered
+      )
+    )
+    expect(answer).toMatchObject({
+      content: [
+        { type: "text" },
+        {
+          type: "data",
+          data: {
+            id: "q3/report#1",
+            source: { type: "provider", reference: "q3/report#1" },
+          },
+        },
+      ],
+    })
+  })
+
+  it.each([
+    "https://aos.example/api/aos/v1/agents/researcher/sessions/s1/artifacts/art-1",
+    "artifact://art-1/../../secrets",
+  ])("keeps a link to %s an ordinary file, never an artifact", (uri) => {
+    const [, answer] = toThreadMessages(
+      fold([artifactLink("a1", { uri })], answered)
+    )
+    expect(answer?.content).not.toContainEqual(
+      expect.objectContaining({ type: "data" })
+    )
+    expect(answer?.content).toHaveLength(2)
+  })
+
+  it("grants one artifact once however often a replay announces it", () => {
+    const once = fold([artifactLink("a1")], answered)
+
+    expect(fold([artifactLink("a1")], once)).toEqual(once)
+  })
+})
+
+describe("applyNotification", () => {
+  const answered = fold([userChunk("u1", "Hi"), agentChunk("a1", "Hello")])
 
   const correction = {
     sessionId: "s1",
@@ -1210,7 +1347,7 @@ describe("applyNotification", () => {
 
   it("ignores a malformed payload and an unknown method", () => {
     expect(
-      applyNotification(answered, AOS_METHODS.notify.artifact, {
+      applyNotification(answered, AOS_METHODS.notify.steerAccepted, {
         sessionId: "s1",
       })
     ).toBe(answered)

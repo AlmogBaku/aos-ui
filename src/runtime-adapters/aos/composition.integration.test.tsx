@@ -166,6 +166,7 @@ const CAPABILITIES = {
   content: {
     attachments: { status: "unavailable", reason: "attachments-unavailable" },
     artifacts: { status: "available", scope: "session", maxBytes: 1_000_000 },
+    mcpApps: { status: "unavailable", reason: "not-supported" },
     transcription: { status: "unavailable", reason: "transcription" },
     speech: { status: "unavailable", reason: "speech" },
   },

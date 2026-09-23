@@ -120,6 +120,12 @@ export class HermesDashboardClient {
     })
   }
 
+  /** The profile's configured MCP servers, credentials redacted by Hermes. */
+  listMcpServers(profile: string) {
+    const query = new URLSearchParams({ profile })
+    return this.http(`/api/mcp/servers?${query}`)
+  }
+
   private mutateSession(
     profile: string,
     storedId: string,

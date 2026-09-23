@@ -1152,7 +1152,7 @@ function BuilderSignalFixture({
   )
 }
 
-type CreatorReceiptHandle = {
+type CreatedAgentHandle = {
   workspace: FixtureWorkspace
   emitActivity: (event: WorkspaceActivityEvent) => void
   refreshCalls: () => number
@@ -1160,16 +1160,16 @@ type CreatorReceiptHandle = {
   failNextRefresh: () => void
 }
 
-type CreatorReceiptState = {
+type CreatedAgentState = {
   refreshCalls: number
   failNextRefresh: boolean
   listeners: Set<(event: WorkspaceActivityEvent) => void>
 }
 
 /** Hides the created Agent from the first `hideFor` catalog refreshes. */
-function receiptWorkspace(
+function createdAgentWorkspace(
   workspace: FixtureWorkspace,
-  state: CreatorReceiptState,
+  state: CreatedAgentState,
   hideFor: number,
   hiddenAgentId: string
 ) {
@@ -1196,12 +1196,12 @@ function receiptWorkspace(
   })
 }
 
-function CreatorReceiptFixture({
+function CreatedAgentFixture({
   capture,
   hideFor = 0,
   hiddenAgentId = "agent-sora",
 }: {
-  capture: (handle: CreatorReceiptHandle) => void
+  capture: (handle: CreatedAgentHandle) => void
   hideFor?: number
   hiddenAgentId?: string
 }) {
@@ -1212,7 +1212,7 @@ function CreatorReceiptFixture({
     threadId,
     onThreadIdChange: setThreadId,
   })
-  const [state] = useState<CreatorReceiptState>(() => ({
+  const [state] = useState<CreatedAgentState>(() => ({
     refreshCalls: 0,
     failNextRefresh: false,
     listeners: new Set(),
@@ -1220,7 +1220,7 @@ function CreatorReceiptFixture({
   const bundle = useMemo<WorkspaceFixtureRuntime>(
     () => ({
       assistantRuntime: fixture.assistantRuntime,
-      workspace: receiptWorkspace(
+      workspace: createdAgentWorkspace(
         fixture.workspace,
         state,
         hideFor,
@@ -2254,9 +2254,9 @@ describe("AosUiApp fixture composition", () => {
 
   it("waits for the catalog to list the created Agent before resolving the draft", async () => {
     const user = userEvent.setup()
-    let handle: CreatorReceiptHandle | undefined
+    let handle: CreatedAgentHandle | undefined
     render(
-      <CreatorReceiptFixture
+      <CreatedAgentFixture
         hideFor={1}
         capture={(value) => {
           handle = value
@@ -2288,9 +2288,9 @@ describe("AosUiApp fixture composition", () => {
 
   it("keeps the draft and reports the created Agent as pending when the catalog never lists it", async () => {
     const user = userEvent.setup()
-    let handle: CreatorReceiptHandle | undefined
+    let handle: CreatedAgentHandle | undefined
     render(
-      <CreatorReceiptFixture
+      <CreatedAgentFixture
         hideFor={Number.MAX_SAFE_INTEGER}
         capture={(value) => {
           handle = value
@@ -2320,9 +2320,9 @@ describe("AosUiApp fixture composition", () => {
 
   it("reports a failed catalog refresh and keeps the draft it cannot resolve", async () => {
     const user = userEvent.setup()
-    let handle: CreatorReceiptHandle | undefined
+    let handle: CreatedAgentHandle | undefined
     render(
-      <CreatorReceiptFixture
+      <CreatedAgentFixture
         capture={(value) => {
           handle = value
         }}
@@ -2337,7 +2337,7 @@ describe("AosUiApp fixture composition", () => {
 
     await act(async () =>
       handle!.emitActivity({
-        id: "receipt-2",
+        id: "created-2",
         type: "agent-ready",
         agentId: "agent-sora",
         threadId: creatorSession.threadId,
@@ -2385,10 +2385,10 @@ describe("AosUiApp fixture composition", () => {
     )
   })
 
-  it("ignores a creation receipt from a Session the creator does not own", async () => {
-    let handle: CreatorReceiptHandle | undefined
+  it("ignores a created Agent reported from a Session the creator does not own", async () => {
+    let handle: CreatedAgentHandle | undefined
     render(
-      <CreatorReceiptFixture
+      <CreatedAgentFixture
         capture={(value) => {
           handle = value
         }}
@@ -2399,7 +2399,7 @@ describe("AosUiApp fixture composition", () => {
 
     await act(async () =>
       handle!.emitActivity({
-        id: "receipt-1",
+        id: "created-1",
         type: "agent-ready",
         agentId: "agent-sora",
         threadId: "thread-aster-market",

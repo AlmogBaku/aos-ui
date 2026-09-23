@@ -31,6 +31,32 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
 
 Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`; the readiness endpoint is `/api/aos/v1/readyz` (returns 503 when the runtime is unavailable).
 
+## Tools MCP server
+
+Every Compose file set, fixture mode included, starts a `tools-mcp` service:
+the stateless MCP server in `packages/tools-mcp` that offers `render_chart`,
+`render_map`, `render_stats`, and `present_artifact`. It is built from the
+`tools-mcp` stage of the `Dockerfile`, serves Streamable HTTP at `/mcp` and a
+liveness check at `/health`, and holds no state. Its chart, map, and stats tools
+are MCP Apps whose views are built into the image.
+
+The server has no authentication, so Compose always publishes it on
+`127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`; `AOS_UI_BIND_ADDRESS` does not
+widen it. A harness on the same host registers `http://127.0.0.1:4110/mcp`; a
+Compose service, such as the optional OpenCode container, uses
+`http://tools-mcp:4110/mcp`. On Hermes and OpenCode the proxy reads those views
+itself from the URL the harness registered. A containerized proxy does not
+share the host's loopback, so a proxy config can override that URL per server
+under [`mcpApps.fallback.servers.NAME.url`](configuration.md#mcp-apps-fallback);
+the Compose `web` and `tools-mcp` services share the default Compose network.
+Without Compose, run it with `bun run tools-mcp:serve`.
+
+```bash
+curl --fail --silent http://127.0.0.1:4110/health
+```
+
+Each runtime guide explains how to register the server with that harness.
+
 ## Deploy the Hermes operator surface
 
 Hermes is AOS's primary and first-supported harness. Start with this deployment
@@ -56,7 +82,9 @@ it has full operator access. The operator listener has no guest API route, and
 the guest listener has no operator API route.
 
 Start from [`deploy/proxy.hermes.example.yaml`](../deploy/proxy.hermes.example.yaml)
-and customize its listener origins and Hermes address. Hermes uses one server
+and customize its listener origins and Hermes address. Its `mcpApps` block
+points the proxy at `http://tools-mcp:4110/mcp` for the `aos-ui` server, which
+a Hermes on the host registers as `http://127.0.0.1:4110/mcp`. Hermes uses one server
 token file for both operator and guest requests. Guest invitations have a
 separate signing-key file. Secret files must be owner-only and contain no
 public runtime configuration. The mounted
@@ -83,7 +111,7 @@ The example enables the guest listener. For an operator-only deployment,
 remove the `guest` block and its invitation-key secret mount from a private
 overlay. The one Hermes token and runtime instance remain unchanged.
 
-Read [Run with Hermes](runtimes/hermes.md) for native plugin, profile, and authentication setup.
+Read [Run with Hermes](runtimes/hermes.md) for tools registration, profile, and authentication setup.
 
 ## Deploy the OpenClaw operator surface
 
@@ -121,7 +149,9 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
 ```
 
 The overlay builds and starts OpenCode, mounts the external worktree at
-`/workspace`, and keeps native port `4096` internal to Compose. The proxy uses
+`/workspace`, and keeps native port `4096` internal to Compose. OpenCode waits
+for a healthy `tools-mcp` service and registers it as `aos-ui` through
+`AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp`. The proxy uses
 the private OpenCode password file and the `opencode:4096` service address in
 the supplied private example. Its operator health endpoint is
 `/api/aos/v1/healthz`. `AOS_UI_AWS_CONFIG_DIR` overrides the host AWS
@@ -288,7 +318,8 @@ See the [configuration reference](configuration.md) for accepted fields and secr
 
 ## Network exposure
 
-All published ports bind to `127.0.0.1` by default. `AOS_UI_WEB_PUBLISHED_PORT`
+All published ports bind to `127.0.0.1` by default, and the `tools-mcp` port
+never binds anywhere else. `AOS_UI_WEB_PUBLISHED_PORT`
 (default `3000`) and `AOS_UI_GUEST_PUBLISHED_PORT` (default `3001`) set the
 host-side published ports for the operator and guest listeners. Set
 `AOS_UI_BIND_ADDRESS` or `AOS_UI_GUEST_BIND_ADDRESS` only when another host

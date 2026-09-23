@@ -12,7 +12,7 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 - [Hermes](runtimes/hermes.md) — operate Hermes behind the AOS proxy.
 - [OpenClaw](runtimes/openclaw.md) — attach an independently operated OpenClaw Gateway behind the AOS proxy.
 - [OpenCode](runtimes/opencode.md) — operate an OpenCode server behind the AOS proxy.
-- [Deployment](deployment.md) — run the Bun proxy and static assets, with optional external TLS termination.
+- [Deployment](deployment.md) — run the Bun proxy, static assets, and the tools MCP server, with optional external TLS termination.
 
 ## Operate
 
@@ -24,6 +24,7 @@ Use this documentation to configure and operate AOS UI: a workspace for personal
 
 - [Configuration](configuration.md) — public runtime JSON, local environment variables, and deployment settings.
 - [Runtime capabilities](runtime-capabilities.md) — compare fixture and normalized provider capabilities.
+- [MCP Apps](mcp-apps.md) — register an MCP App server, and what an App view may do inside AOS.
 
 ## Understand
 
@@ -35,7 +36,7 @@ Runtime adapter contributors should start with the
 
 ## Internal authorities
 
-- [ACP browser-wire contract](runtimes/acp.md) — ACP v2 message schema, extension negotiation, and `_aos/*` notifications.
+- [ACP browser-wire contract](runtimes/acp.md) — ACP v2 message schema, extension negotiation, `_aos/*` notifications, and Artifact `resource_link` blocks.
 - [Visual design lock](design/agent-workspace-design-lock.md) — binding visual direction for workspace UI.
 - [Runtime gateway architecture](design/aos-runtime-gateway-architecture.md) — normative server-side gateway design.
 

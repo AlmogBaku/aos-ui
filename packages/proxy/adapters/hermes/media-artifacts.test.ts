@@ -8,6 +8,7 @@ import {
   projectHermesMediaText,
   publishedArtifact,
 } from "./media-artifacts"
+import { projectHermesToolOutcome } from "./tool-data"
 
 const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
 const imagePath = "/home/alice/.hermes/images/upload_20260920_024035_1.png"
@@ -82,16 +83,88 @@ describe("Hermes native media projection", () => {
     expect(output).not.toContain("/home/")
   })
 
-  it("redacts an untrusted MEDIA path without granting an artifact", () => {
+  it.each([
+    ["a sensitive file", "/home/alice/.hermes/auth.json"],
+    ["a sensitive directory", "/home/alice/.hermes/mcp-tokens/github.json"],
+    ["a relative path", "out/report.pdf"],
+    ["a traversing path", "/home/alice/../bob/report.pdf"],
+  ])(
+    "redacts a MEDIA line naming %s without granting an artifact",
+    (_label, path) => {
+      const filter = new HermesMediaTextFilter()
+      const output = [
+        filter.write("MEDIA:"),
+        filter.write(path),
+        filter.finish(),
+      ].join("")
+
+      expect(output).toBe("[Media unavailable]")
+      expect(filter.takeArtifacts()).toEqual([])
+    }
+  )
+
+  it("turns an assistant MEDIA line into one artifact and drops it from prose", () => {
+    const reportPath = "/home/alice/reports/q3 summary.pdf"
     const filter = new HermesMediaTextFilter()
-    const output = [
-      filter.write("MEDIA:"),
-      filter.write("/home/alice/private/credentials.txt"),
+    const streamed = [
+      filter.write("The report is ready.\nMEDIA:`/home/alice/rep"),
+      filter.write("orts/q3 summary.pdf`\nMEDIA:/home/alice/reports/q3"),
+      filter.write(" summary.pdf\nMEDIA:/home/alice/data.bin\nAnything else?"),
       filter.finish(),
     ].join("")
+    const artifacts = filter.takeArtifacts()
 
-    expect(output).toBe("[Media unavailable]")
-    expect(output).not.toContain("/home/")
+    expect(streamed).toBe(
+      "The report is ready.\nMEDIA:/home/alice/reports/q3 summary.pdf\nAnything else?"
+    )
+    expect(artifacts.map(({ descriptor }) => descriptor)).toEqual([
+      {
+        id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
+        filename: "q3 summary.pdf",
+        mimeType: "application/pdf",
+        source: { type: "provider", reference: artifacts[0]?.descriptor.id },
+      },
+      {
+        id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
+        filename: "data.bin",
+        source: { type: "provider", reference: artifacts[1]?.descriptor.id },
+      },
+    ])
+    expect(
+      JSON.stringify(artifacts.map(({ descriptor }) => descriptor))
+    ).not.toContain("/home/")
+    expect(artifacts[0]?.reference).toBe(reportPath)
+  })
+
+  it("derives the same MEDIA-line id live, on replay, and on a read", () => {
+    const text = "Chart attached.\nMEDIA:/home/alice/reports/chart.png"
+    const live = new HermesMediaTextFilter()
+    for (const chunk of text.match(/.{1,5}/gsu) ?? []) live.write(chunk)
+    live.finish()
+    const [streamed] = live.takeArtifacts()
+    const replayed = projectHermesMediaText(text, [])
+
+    expect(replayed.text).toBe("Chart attached.")
+    expect(replayed.artifacts.map(({ descriptor }) => descriptor)).toEqual([
+      streamed?.descriptor,
+    ])
+    expect(
+      publishedArtifact(
+        [{ role: "assistant", content: text }],
+        streamed!.descriptor.id
+      )
+    ).toEqual({
+      reference: "/home/alice/reports/chart.png",
+      filename: "chart.png",
+    })
+  })
+
+  it("publishes no second artifact for a MEDIA line repeating trusted TTS audio", () => {
+    const filter = new HermesMediaTextFilter()
+    filter.trust(audioPath)
+
+    expect(filter.write(`Listen.\nMEDIA:${audioPath}\n`)).toBe("Listen.\n")
+    expect(filter.takeArtifacts()).toEqual([])
   })
 
   it("suppresses a redundant unmatched marker after trusted media was delivered", () => {
@@ -117,7 +190,7 @@ describe("Hermes native media projection", () => {
       "**Pick:** DevTools",
     ].join("\n")
 
-    expect(projectHermesMediaText(markdown, [])).toBe(markdown)
+    expect(projectHermesMediaText(markdown, []).text).toBe(markdown)
   })
 })
 
@@ -127,10 +200,12 @@ describe("Hermes published artifact receipts", () => {
 
   it("projects an opaque descriptor and never the native path", () => {
     const projected = projectHermesArtifactReceipt(
+      "call-1",
       receipt({
         id: "report-1",
         filename: "report.md",
-        path: "/srv/hermes/private/report.md",
+        workdir: "/srv/hermes/private",
+        path: "report.md",
         mimeType: "text/markdown",
         sizeBytes: 42,
       })
@@ -172,18 +247,24 @@ describe("Hermes published artifact receipts", () => {
     ],
     ["a negative size", { id: "report-1", filename: "r.md", sizeBytes: -1 }],
   ])("refuses %s", (_label, artifact) => {
-    expect(projectHermesArtifactReceipt(receipt(artifact))).toBeUndefined()
+    expect(
+      projectHermesArtifactReceipt("call-1", receipt(artifact))
+    ).toBeUndefined()
   })
 
   it("refuses a row that is not a successful artifact receipt", () => {
-    expect(projectHermesArtifactReceipt("not json")).toBeUndefined()
+    expect(projectHermesArtifactReceipt("call-1", "not json")).toBeUndefined()
     expect(
       projectHermesArtifactReceipt(
+        "call-1",
         JSON.stringify({ ok: false, type: "aos.artifact", artifact: {} })
       )
     ).toBeUndefined()
     expect(
-      projectHermesArtifactReceipt(JSON.stringify({ ok: true, type: "other" }))
+      projectHermesArtifactReceipt(
+        "call-1",
+        JSON.stringify({ ok: true, type: "other" })
+      )
     ).toBeUndefined()
   })
 
@@ -194,6 +275,7 @@ describe("Hermes published artifact receipts", () => {
         content: receipt({
           id: "report-1",
           filename: "old.md",
+          workdir: "/home/agent",
           path: "reports/old.md",
         }),
       },
@@ -202,20 +284,21 @@ describe("Hermes published artifact receipts", () => {
         content: receipt({
           id: "report-1",
           filename: "report.md",
+          workdir: "/home/agent",
           path: "reports/report.md",
         }),
       },
     ]
 
     expect(publishedArtifact(rows, "report-1")).toEqual({
-      reference: "reports/report.md",
+      reference: "/home/agent/reports/report.md",
       filename: "report.md",
     })
     expect(publishedArtifact(rows, "report-2")).toBeUndefined()
   })
 
-  it("reads by absolute path when the receipt carries its validated workdir", () => {
-    const row = (workdir: string) => ({
+  it("reads a retired plugin receipt through its absolute workdir when valid", () => {
+    const row = (workdir?: string) => ({
       role: "tool",
       content: receipt({
         id: "report-1",
@@ -231,11 +314,37 @@ describe("Hermes published artifact receipts", () => {
       reference: "/home/agent/scratch/reports/report.md",
       filename: "report.md",
     })
-    for (const workdir of ["relative/root", "/home/agent/../root"])
+    for (const workdir of [undefined, "relative/root", "/home/agent/../root"])
       expect(publishedArtifact([row(workdir)], "report-1")).toEqual({
         reference: "reports/report.md",
         filename: "report.md",
       })
+  })
+
+  it("resolves a retired plugin receipt with no workdir to its relative path", () => {
+    // The shape every retired-plugin receipt in a live Hermes store carries.
+    const legacy = (path: string) => ({
+      role: "tool",
+      tool_call_id: "call_legacy",
+      tool_name: "present_artifact",
+      content: receipt({
+        id: "hermes-artifact-9e17c0a4b2d84f6e8a1b3c5d7e9f0a12",
+        path,
+        filename: "A-proceed-internal-memo.pdf",
+        sizeBytes: 48_213,
+        mimeType: "application/pdf",
+      }),
+    })
+    const id = "hermes-artifact-9e17c0a4b2d84f6e8a1b3c5d7e9f0a12"
+
+    expect(
+      publishedArtifact([legacy("A-proceed-internal-memo.pdf")], id)
+    ).toEqual({
+      reference: "A-proceed-internal-memo.pdf",
+      filename: "A-proceed-internal-memo.pdf",
+    })
+    for (const denied of [".env", "config/.env.local", "pairing/memo.pdf"])
+      expect(publishedArtifact([legacy(denied)], id)).toBeUndefined()
   })
 
   it("refuses an absolute, drive-rooted or traversing native reference", () => {
@@ -243,13 +352,115 @@ describe("Hermes published artifact receipts", () => {
       "/srv/private/report.md",
       "C:\\private\\report.md",
       "reports/../../etc/passwd",
+      ".hermes/auth.json",
     ])
       expect(
         publishedArtifact(
           [
             {
               role: "tool",
-              content: receipt({ id: "report-1", filename: "r.md", path }),
+              content: receipt({
+                id: "report-1",
+                filename: "r.md",
+                workdir: "/home/agent",
+                path,
+              }),
+            },
+          ],
+          "report-1"
+        )
+      ).toBeUndefined()
+  })
+
+  describe("from the aos-ui MCP server", () => {
+    const reportPath = "/home/alice/reports/q3.pdf"
+    // How Hermes stores an MCP tool result: the text content, wrapped.
+    const mcpResult = (artifact: Record<string, unknown>) =>
+      JSON.stringify({ result: receipt(artifact) })
+    const content = mcpResult({
+      path: reportPath,
+      filename: "q3.pdf",
+      mimeType: "application/pdf",
+    })
+
+    it("derives the id from the call and never publishes the path", () => {
+      const projected = projectHermesArtifactReceipt("present-call", content)
+      const id = projected?.part.data.id
+
+      expect(id).toMatch(/^hermes-media-[a-f0-9]{32}$/u)
+      expect(projected?.result).toEqual({
+        ok: true,
+        type: "aos.artifact",
+        artifact: { id, filename: "q3.pdf", mimeType: "application/pdf" },
+      })
+      expect(JSON.stringify(projected)).not.toContain("/home/alice")
+      expect(
+        projectHermesArtifactReceipt("other-call", content)?.part.data.id
+      ).not.toBe(id)
+    })
+
+    it("resolves only from the tool row that carries it", () => {
+      const id = projectHermesArtifactReceipt("present-call", content)!.part
+        .data.id
+      const toolRow = {
+        role: "tool",
+        tool_call_id: "present-call",
+        tool_name: "mcp__aos_ui__present_artifact",
+        content,
+      }
+
+      expect(publishedArtifact([toolRow], id)).toEqual({
+        reference: reportPath,
+        filename: "q3.pdf",
+      })
+      for (const role of ["assistant", "user"])
+        expect(publishedArtifact([{ ...toolRow, role }], id)).toBeUndefined()
+    })
+
+    it("resolves a receipt Hermes stored inside its untrusted-data block", () => {
+      const wrapped =
+        '<untrusted_tool_result source="mcp__aos_ui__present_artifact">\n' +
+        "The following content was retrieved from an external source.\n\n" +
+        `${content}\n</untrusted_tool_result>`
+      const id = projectHermesToolOutcome(
+        "present-call",
+        "mcp__aos_ui__present_artifact",
+        wrapped
+      ).parts[0]!.data.id
+
+      expect(
+        publishedArtifact(
+          [{ role: "tool", tool_call_id: "present-call", content: wrapped }],
+          id
+        )
+      ).toEqual({ reference: reportPath, filename: "q3.pdf" })
+    })
+
+    it.each([
+      ["a relative path", "reports/q3.pdf"],
+      ["a sensitive path", "/home/alice/.env.production"],
+      ["a traversing path", "/home/alice/../bob/q3.pdf"],
+    ])("refuses %s", (_label, path) => {
+      const unsafe = mcpResult({ path, filename: "q3.pdf" })
+      expect(
+        projectHermesArtifactReceipt("present-call", unsafe)
+      ).toBeUndefined()
+    })
+  })
+
+  it("never takes a receipt-shaped assistant or user row as authority", () => {
+    for (const role of ["assistant", "user"])
+      expect(
+        publishedArtifact(
+          [
+            {
+              role,
+              content: receipt({
+                id: "report-1",
+                filename: "r.md",
+                workdir: "/home/agent",
+                path: "r.md",
+              }),
             },
           ],
           "report-1"

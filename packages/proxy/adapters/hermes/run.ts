@@ -23,6 +23,7 @@ import {
   type ServerTurnHandle,
 } from "../../core/runtime"
 import { projectTodos, type Todo } from "../todos"
+import type { McpToolNames } from "../../mcp-apps/tool-names"
 import {
   hermesToolDiffs,
   hermesToolKind,
@@ -71,6 +72,7 @@ import {
 } from "./run-settlement"
 import {
   createActiveTurn,
+  failReset,
   generationState,
   readStatus,
   safelyUnsubscribe,
@@ -130,12 +132,19 @@ export class HermesTurnEngine {
   readonly #plans = new Map<string, Todo[]>()
   readonly #host: TurnEngineHost
   readonly #lostInteractionGraceMs: number
+  readonly #mcpToolNames?: McpToolNames
 
   constructor(
     native: HermesTurnNative,
-    options: { log?: HermesLog; lostInteractionGraceMs?: number } = {}
+    options: {
+      log?: HermesLog
+      lostInteractionGraceMs?: number
+      /** Keyed by profile; a turn reads the names its profile last loaded. */
+      mcpToolNames?: McpToolNames
+    } = {}
   ) {
     this.#native = native
+    this.#mcpToolNames = options.mcpToolNames
     this.#log = options.log ?? { warn: () => undefined }
     this.#lostInteractionGraceMs =
       options.lostInteractionGraceMs ?? LOST_INTERACTION_GRACE_MS
@@ -178,6 +187,9 @@ export class HermesTurnEngine {
     if (text && new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
+    // Warm the profile's MCP tool names while the turn is admitted, so its
+    // first tool call already reads under its canonical name.
+    void this.#mcpToolNames?.load(scope.agentId).catch(() => undefined)
     const key = sessionKey(scope)
     const stale = this.#active.get(key)
     if (this.#admissions.has(key) || (stale && !stale.uncertain))
@@ -433,7 +445,7 @@ export class HermesTurnEngine {
         active,
         withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
       )
-    if (retried) return this.#fail(active, TURN_FAILURES.resetRequired)
+    if (retried) return failReset(this.#host, active, "session-gone-on-retry")
     const refused = outcome.refused
     try {
       await attachTurn(this.#host, active, { kind: "barrier" })
@@ -491,7 +503,7 @@ export class HermesTurnEngine {
     if (seq < active.lastSeen) {
       // Hermes restarted this Session's counter inside the same epoch, so its
       // ring can no longer address the rest of the turn.
-      if (!replayed) this.#fail(active, TURN_FAILURES.resetRequired)
+      if (!replayed) failReset(this.#host, active, "sequence-restarted")
       return false
     }
     if (active.catchUp) {
@@ -845,15 +857,22 @@ export class HermesTurnEngine {
     active.streamedText = boundedText(active.streamedText + delta)
   }
 
+  /** Publish filtered prose, then the artifacts its MEDIA lines delivered. */
   #emitMediaFilteredText(active: ActiveTurn, delta: string) {
-    if (!delta) return
-    const messageId = this.#ensureMessageId(active)
-    active.textStarted = true
-    this.#emit(active, {
-      kind: TurnEventKind.MessageChunk,
-      messageId,
-      text: delta,
-    })
+    if (delta) {
+      const messageId = this.#ensureMessageId(active)
+      active.textStarted = true
+      this.#emit(active, {
+        kind: TurnEventKind.MessageChunk,
+        messageId,
+        text: delta,
+      })
+    }
+    for (const { descriptor } of active.mediaFilter.takeArtifacts())
+      this.#emit(active, {
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: descriptor,
+      })
   }
 
   /**
@@ -905,7 +924,11 @@ export class HermesTurnEngine {
     const messageId = this.#ensureMessageId(active)
     const nativeName = stableNativeId(payload.name)
     if (!nativeName) return undefined
-    const projected = projectHermesToolCall(nativeName, payload.args)
+    const projected = projectHermesToolCall(
+      nativeName,
+      payload.args,
+      this.#mcpToolNames?.resolver(active.scope.agentId)
+    )
     const tool = { name: projected.toolName, ended: false }
     active.tools.set(toolCallId, tool)
     const locations = hermesToolLocations(tool.name, projected.args)

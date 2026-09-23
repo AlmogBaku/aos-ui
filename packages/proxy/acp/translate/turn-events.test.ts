@@ -418,6 +418,27 @@ describe("translateTurnEvent tool calls", () => {
     expect(chunk).toMatchObject({ messageId: "m9" })
   })
 
+  it("lets a guest's App card that opens the segment name it for the text after", () => {
+    const { outbound } = translate(
+      [
+        {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "c1",
+          name: "mcp__demo__open_demo",
+          output: "",
+          failed: false,
+          app: true,
+        },
+        messageChunk("m1", "Opened."),
+      ],
+      { lane: "guest" }
+    )
+
+    const [card, chunk] = updatesOf(outbound)
+    expect(AosToolCallMetaSchema.parse(aosMeta(card!)).messageId).toBe("run-1")
+    expect(chunk).toMatchObject({ messageId: "run-1" })
+  })
+
   it("keeps unparseable streamed arguments as text", () => {
     const { outbound } = translate([
       {
@@ -521,18 +542,26 @@ describe("translateTurnEvent extensions", () => {
     }
   }
 
-  it("grants a validated artifact against the streaming message", () => {
+  it("links a validated artifact into the streaming message", () => {
     const { outbound } = translate([
       messageChunk("m1", "he"),
       published(artifact),
     ])
 
-    expect(outbound.filter((item) => item.kind === "artifact")).toEqual([
-      { kind: "artifact", turnId: "run-1", messageId: "m1", artifact },
-    ])
+    expect(updatesOf(outbound).at(-1)).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "m1",
+      content: {
+        type: "resource_link",
+        uri: "artifact://a1",
+        name: "chart.png",
+        mimeType: "image/png",
+      },
+      _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+    })
   })
 
-  it("grants an artifact whose publisher knew a size but no media type", () => {
+  it("links an artifact whose publisher knew a size but no media type", () => {
     const descriptor = {
       id: "a2",
       filename: "report.md",
@@ -540,9 +569,19 @@ describe("translateTurnEvent extensions", () => {
       source: { type: "provider", reference: "a2" },
     }
 
-    expect(translate([published(descriptor)]).outbound).toEqual([
-      { kind: "artifact", turnId: "run-1", artifact: descriptor },
-    ])
+    const [link] = updatesOf(translate([published(descriptor)]).outbound)
+
+    // With nothing streamed yet, the link opens the turn's segment itself.
+    expect(link).toMatchObject({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "run-1",
+      content: {
+        type: "resource_link",
+        uri: "artifact://a2",
+        name: "report.md",
+        size: 4_096,
+      },
+    })
   })
 
   it.each([

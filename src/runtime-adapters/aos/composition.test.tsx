@@ -82,6 +82,7 @@ function capabilities() {
     content: {
       attachments: unavailable,
       artifacts: unavailable,
+      mcpApps: unavailable,
       transcription: unavailable,
       speech: unavailable,
     },
@@ -165,7 +166,6 @@ function createProxyAgent() {
           extensions: {
             steer: true,
             rewind: true,
-            artifacts: true,
             composerPrefill: true,
             agents: true,
             invalidation: true,

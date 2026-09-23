@@ -25,13 +25,14 @@ published HTML Artifacts. Omit it to block external HTML preview assets.
 
 Vite derives the same public shape when no configuration file is supplied.
 
-| Variable                                 | Default                 | Use                                                                                                                          |
-| ---------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                   | Public runtime JSON file. Also read by the Bun proxy and static server at startup; required in every non-fixture deployment. |
-| `AOS_UI_RUNTIME_MODE`                    | `aos`                   | `aos` or explicit `fixture`.                                                                                                 |
-| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100` | Local normalized proxy target.                                                                                               |
-| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                  | Set `false` to hide model selection.                                                                                         |
-| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                  | Set `false` to hide context usage.                                                                                           |
+| Variable                                 | Default                     | Use                                                                                                                          |
+| ---------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `AOS_UI_RUNTIME_CONFIG_FILE`             | unset                       | Public runtime JSON file. Also read by the Bun proxy and static server at startup; required in every non-fixture deployment. |
+| `AOS_UI_RUNTIME_MODE`                    | `aos`                       | `aos` or explicit `fixture`.                                                                                                 |
+| `AOS_UI_PROXY_TARGET`                    | `http://127.0.0.1:4100`     | Local normalized proxy target.                                                                                               |
+| `AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED` | `true`                      | Set `false` to hide model selection.                                                                                         |
+| `AOS_UI_COMPOSER_CONTEXT_ENABLED`        | `true`                      | Set `false` to hide context usage.                                                                                           |
+| `AOS_UI_TOOLS_MCP_URL`                   | `http://127.0.0.1:4110/mcp` | Tools MCP server URL that `bun run opencode:serve` registers as `aos-ui`.                                                    |
 
 The AOS proxy privately selects and authenticates exactly one Hermes, OpenClaw,
 or OpenCode runtime. Hermes is the primary and first-supported harness. There
@@ -40,7 +41,9 @@ is no browser runtime mode or provider route for any of them.
 ### Compose host variables
 
 These variables control how the Compose stack publishes its listeners on the
-host. They are not read by the Vite dev server.
+host. They are not read by the Vite dev server. The `tools-mcp` service has no
+authentication and is always published on `127.0.0.1`, whatever the operator
+bind address.
 
 | Variable                      | Default     | Use                                                 |
 | ----------------------------- | ----------- | --------------------------------------------------- |
@@ -48,6 +51,7 @@ host. They are not read by the Vite dev server.
 | `AOS_UI_WEB_PUBLISHED_PORT`   | `3000`      | Host-side published port for the operator listener. |
 | `AOS_UI_GUEST_BIND_ADDRESS`   | `127.0.0.1` | Host bind address for the guest listener.           |
 | `AOS_UI_GUEST_PUBLISHED_PORT` | `3001`      | Host-side published port for the guest listener.    |
+| `AOS_UI_TOOLS_MCP_PORT`       | `4110`      | Loopback host port for the `tools-mcp` service.     |
 
 ## Private proxy configuration
 
@@ -89,6 +93,7 @@ the load.
 | `limits`          | Global execution, guest execution, event-peer, and subscriber queue bounds.                                                                   |
 | `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
+| `mcpApps`         | Optional per-server URL override and headers for the MCP Apps fallback (see [MCP Apps fallback](#mcp-apps-fallback) below).                   |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
@@ -173,8 +178,9 @@ rows apply; using a runtime-specific variable with the wrong kind is an error.
 A variable whose `Applies` is "only when file has `guest` block" fails if the
 file contains no `guest` key, because env overrides cannot open a second
 listener on their own. Push and voice variables create their respective blocks
-when the file omits them. Arrays (`guest.invitations.keys`) are file-only; env
-cannot remove a key already present in the file. The variables
+when the file omits them. Arrays (`guest.invitations.keys`) and the
+`mcpApps` server map are file-only; env cannot remove a key already present in
+the file. The variables
 `AOS_UI_PROXY_TARGET`, `AOS_UI_PROXY_HOST`, `AOS_UI_PROXY_PORT`, and
 `AOS_UI_PROXY_CONFIG_FILE` are not overrides; they belong to other features.
 
@@ -328,6 +334,51 @@ Provider failures surface as `503 temporarily_unavailable`. An unsupported audio
 type or oversized request surfaces as `400 invalid_request`. The proxy never logs
 audio content or transcript text; it logs one redacted `voice.fallback` event
 per direction naming the direction and the runtime's public error code.
+
+### MCP Apps fallback {#mcp-apps-fallback}
+
+MCP App servers are registered in the runtime's own MCP configuration, never
+in AOS. On Hermes and OpenCode the proxy reads an App's view itself, through
+its own MCP client, from the server URL the runtime reports. By default it
+connects only to Streamable HTTP servers that ask for no credentials. Add an
+`mcpApps` block to let it reach a server at another address, or one that needs
+headers:
+
+```yaml
+mcpApps:
+  fallback:
+    servers:
+      aos-ui:
+        url: http://tools-mcp:4110/mcp
+      desktop:
+        headers:
+          Authorization: { file: /etc/aos-ui/secrets/desktop-ui-authorization }
+```
+
+- The key under `servers` is the MCP server name exactly as the runtime reports
+  it. Each entry needs `url`, `headers`, or both.
+- `url` replaces the URL the runtime reports; the proxy connects there
+  instead. Use it when the proxy reaches the server at a different address
+  than the harness does. A Hermes on the host registers
+  `http://127.0.0.1:4110/mcp`, but a proxy in a Compose container has its own
+  loopback, so the Hermes Compose example overrides `aos-ui` with the Compose
+  service address `http://tools-mcp:4110/mcp`. It must be an `http:` or
+  `https:` URL without credentials, query, or fragment. Only the runtime's
+  report decides whether a server is reachable at all: an override never adds
+  a server the runtime does not report with a URL.
+- Each header's `file` holds the whole header value (for example
+  `Bearer …`). It follows the same rules as `runtime.tokenFile`: absolute,
+  regular, non-symlinked, owner-only, 1–8192 bytes, one line. Every file is read
+  once at startup, so a changed value needs a proxy restart.
+- A server with headers is reached only over `https:` or on a loopback host,
+  whether the URL is the override or the runtime's; anything else is refused.
+  A `url` over plain HTTP to a host other than loopback is accepted only
+  without headers.
+- Header values never appear in logs, errors, capabilities, or browser
+  responses.
+- OpenClaw serves Apps natively and ignores this block.
+
+See [MCP Apps](mcp-apps.md) for what a view may do once it is served.
 
 ### Web Push (optional)
 

@@ -11,11 +11,20 @@ import {
 
 describe("canonicalToolName", () => {
   it("maps known aliases to their canonical names", () => {
-    expect(canonicalToolName("aos_create_agent")).toBe("create_agent")
     expect(canonicalToolName("delegate_task")).toBe("delegate_subagent")
     expect(canonicalToolName("skill_view")).toBe("use_skill")
     expect(canonicalToolName("todo_list")).toBe("todo")
     expect(canonicalToolName("clarify")).toBe("question")
+  })
+
+  it("strips the prefix Hermes gives an aos-ui MCP tool", () => {
+    expect(canonicalToolName("mcp__aos_ui__render_chart")).toBe("render_chart")
+    expect(canonicalToolName("mcp__aos_ui__present_artifact")).toBe(
+      "present_artifact"
+    )
+    expect(canonicalToolName("mcp__other__render_chart")).toBe(
+      "mcp__other__render_chart"
+    )
   })
 
   it("returns unrecognised names unchanged", () => {
@@ -366,6 +375,31 @@ describe("projectHermesToolOutcome", () => {
       },
     ])
     expect(JSON.stringify(outcome)).not.toContain("/srv/hermes")
+  })
+
+  it("reads a receipt Hermes stored inside its untrusted-data block", () => {
+    const wrapped = (name: string, value: unknown) =>
+      `<untrusted_tool_result source="mcp__aos_ui__${name}">\n` +
+      "The following content was retrieved from an external source.\n\n" +
+      `${JSON.stringify(value)}\n</untrusted_tool_result>`
+    const chart = { type: "bar", title: "Revenue", data: [{ q: "Q1", v: 3 }] }
+    expect(
+      projectHermesToolOutcome(
+        "call-2b",
+        "render_chart",
+        wrapped("render_chart", chart)
+      ).result
+    ).toEqual(chart)
+    const artifact = projectHermesToolOutcome(
+      "call-2c",
+      "present_artifact",
+      wrapped("present_artifact", {
+        ok: true,
+        type: "aos.artifact",
+        artifact: { id: "report-1", filename: "report.md" },
+      })
+    )
+    expect(artifact.parts).toHaveLength(1)
   })
 
   it("collapses an unpublishable artifact receipt to its status fields", () => {

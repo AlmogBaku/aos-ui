@@ -141,6 +141,7 @@ const sessionCapabilities = {
       maxTotalBytes: 26_214_400,
     },
     artifacts: { status: "unavailable", reason: "not-supported" },
+    mcpApps: { status: "unavailable", reason: "not-supported" },
     transcription: { status: "unavailable", reason: "not-configured" },
     speech: { status: "unavailable", reason: "not-configured" },
   },
@@ -318,7 +319,6 @@ const script = {
     extensions: {
       steer: true,
       rewind: true,
-      artifacts: false,
       composerPrefill: true,
       agents: true,
       invalidation: true,
@@ -522,8 +522,13 @@ function installAcpStub(script: AcpScript) {
         })
     }
 
+    /**
+     * A real socket dispatches every frame as its own task, so the browser has
+     * finished reacting to one frame, a resume's answer included, before the
+     * next arrives. Microtasks would hand a frame over mid-reaction instead.
+     */
     deliver(frame: Record<string, unknown>) {
-      queueMicrotask(() => {
+      setTimeout(() => {
         if (this.readyState !== 1) return
         this.dispatchEvent(
           new MessageEvent("message", { data: JSON.stringify(frame) })
@@ -725,7 +730,13 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.fill("/")
   const commandMenu = page.getByRole("listbox")
-  await expect(commandMenu.getByRole("option")).toHaveCount(31)
+  // Every provider command, after the workspace's own local `/new`.
+  await expect(commandMenu.getByRole("option")).toHaveCount(
+    slashCommands.length + 1
+  )
+  await expect(commandMenu.getByRole("option").first()).toHaveAccessibleName(
+    /^\/new\b/
+  )
   for (let index = 0; index < 15; index += 1) await input.press("ArrowDown")
   await expect
     .poll(() => commandMenu.evaluate((element) => element.scrollTop))

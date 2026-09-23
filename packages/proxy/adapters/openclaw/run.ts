@@ -20,6 +20,10 @@ import {
 import { Check } from "typebox/value"
 
 import {
+  canonicalToolName,
+  type McpToolNameResolver,
+} from "../../core/aos-tool-names"
+import {
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type RecoveryRequest,
@@ -28,12 +32,21 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "../../core/runtime"
+import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
+import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
 import {
   OpenClawContentPublicError,
   prepareOpenClawChatAttachments,
   readOpenClawChatAttachments,
 } from "./content"
+import {
+  aosToolsPatch,
+  enablesAosTools,
+  openClawInvitedSessionsParams,
+  openClawPatchSessionParams,
+  parseOpenClawSessions,
+} from "./native-schemas"
 import {
   OpenClawSessionSubscriptions,
   type OpenClawReconciliationFence,
@@ -46,6 +59,7 @@ const MAX_TURN_BYTES = 1_048_576
 const MAX_TEXT_BYTES = 2_000_000
 const MAX_QUEUE_EVENTS = 4_096
 const MAX_QUEUE_BYTES = 8_000_000
+const MAX_SESSION_LOOKUP_ROWS = 100
 const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
@@ -290,6 +304,14 @@ function settlement() {
 function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0
 }
+
+/** A native tool name under its canonical AOS or MCP name. */
+function toolName(value: unknown, resolve: McpToolNameResolver) {
+  if (!validId(value)) return "tool"
+  return canonicalToolName(value, resolve)
+}
+
+const unresolved: McpToolNameResolver = () => undefined
 
 function scopeKey(scope: SessionScope) {
   return `${scope.agentId}\u0000${scope.sessionId}`
@@ -688,6 +710,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #subscriptions: OpenClawSessionSubscriptions
   readonly #toolEvents: boolean
   readonly #replies?: OpenClawBoundReplies
+  readonly #mcpToolNames?: OpenClawMcpToolNames
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
 
@@ -696,11 +719,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     subscriptions: OpenClawSessionSubscriptions
     toolEvents?: boolean
     replies?: OpenClawBoundReplies
+    /** Resolves OpenClaw's `<server>__<tool>` names to canonical MCP names. */
+    mcpToolNames?: OpenClawMcpToolNames
   }) {
     this.#client = options.client
     this.#subscriptions = options.subscriptions
     this.#toolEvents = options.toolEvents === true
     this.#replies = options.replies
+    this.#mcpToolNames = options.mcpToolNames
   }
 
   async start(
@@ -820,6 +846,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             }
       if (sendParams && !validateChatSendParams(sendParams))
         throw new Error("Invalid OpenClaw chat.send request")
+      if (!replies)
+        await this.#enableAosTools(scope.agentId, baseline.sessionKey)
+      await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
 
       const queue = new EventQueue(() => {
         if (holder.active)
@@ -1056,6 +1085,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         baseline.inFlightRun?.runId === nativeRunId
           ? baseline.inFlightRun
           : undefined
+      await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
       const queue = new EventQueue(() => {
         if (holder.active)
           this.#fail(
@@ -1267,6 +1297,27 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     )
     if (!history) throw new Error("Invalid OpenClaw chat.history response")
     return history
+  }
+
+  /**
+   * Enables the `aos-ui` MCP server on a Session created without it. A run
+   * never starts without the tools: a failed patch fails the turn.
+   */
+  async #enableAosTools(agentId: string, sessionKey: string) {
+    const rows = parseOpenClawSessions(
+      await this.#client.request<unknown>(
+        "sessions.list",
+        openClawInvitedSessionsParams(agentId, sessionKey)
+      ),
+      MAX_SESSION_LOOKUP_ROWS
+    ).filter((row) => row.key === sessionKey)
+    if (rows.length !== 1) throw new Error("OpenClaw did not list this Session")
+    const current = rows[0]!.toolOverrides
+    if (enablesAosTools(current)) return
+    await this.#client.request(
+      "sessions.patch",
+      openClawPatchSessionParams(agentId, sessionKey, aosToolsPatch(current))
+    )
   }
 
   #authoritativelyIdle(history: HistorySnapshot) {
@@ -1586,13 +1637,25 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   #acceptTool(active: ActiveRun, data: Record<string, unknown>, ts: unknown) {
     const toolCallId = validId(data.toolCallId) ? data.toolCallId : undefined
     if (!toolCallId) return
+    const resolve =
+      this.#mcpToolNames?.resolver(
+        active.scope.agentId,
+        active.nativeSessionKey
+      ) ?? unresolved
     if (data.phase === "start") {
       if (active.tools.has(toolCallId)) return
+      const name = toolName(data.name, resolve)
       this.#startTool(
         active,
         toolCallId,
-        data.name,
-        this.#toolEvents ? safeJson(data.args) : "{}",
+        name,
+        this.#toolEvents
+          ? safeJson(
+              name === "present_artifact"
+                ? publicArtifactArgs(data.args)
+                : data.args
+            )
+          : "{}",
         epochMs(ts)
       )
       return
@@ -1616,29 +1679,39 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (data.phase !== "result") return
     const tool =
       active.tools.get(toolCallId) ??
-      this.#startTool(active, toolCallId, data.name, "{}")
+      this.#startTool(active, toolCallId, toolName(data.name, resolve), "{}")
     if (tool.ended) return
     const failed = data.isError === true
+    const artifact =
+      this.#toolEvents && tool.name === "present_artifact"
+        ? openClawArtifactReceipt(toolCallId, data.result)
+        : undefined
     this.#endTool(
       active,
       toolCallId,
       tool,
-      this.#toolEvents
-        ? safeJson(data.result)
-        : safeJson({ status: "completed", isError: failed }),
+      artifact
+        ? JSON.stringify(artifact.result)
+        : this.#toolEvents
+          ? safeJson(data.result)
+          : safeJson({ status: "completed", isError: failed }),
       failed,
       epochMs(ts)
     )
+    if (artifact)
+      active.queue.push({
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: artifact.descriptor,
+      })
   }
 
   #startTool(
     active: ActiveRun,
     toolCallId: string,
-    nativeName: unknown,
+    name: string,
     input: string,
     startedMs?: number
   ) {
-    const name = validId(nativeName) ? nativeName : "tool"
     const startedAt = isoTime(startedMs)
     const tool: OpenTool = {
       name,

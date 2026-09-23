@@ -26,9 +26,93 @@ AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing
 
 For a host Gateway, the overlay maps `host.docker.internal` to Docker's host gateway. A service bound only to host loopback may still be unreachable from the container; use a trusted container-reachable address and update the private proxy configuration. Keep the native Gateway off the browser-facing network.
 
-## Optional native tools
+## Register the AOS UI tools
 
-Install [`integrations/openclaw`](../../integrations/openclaw/README.md) in OpenClaw to add AOS chart, map, stats, Plan, and safe artifact-path validation with textual fallback. Without the plugin, ordinary text and JSON remain inspectable. The verified external-plugin API does not prove native downloadable artifact publication, Agent creation, or cross-Agent Session handoff, so those tools are not advertised.
+The installation prompt, [`shared/install/PROMPT.md`](../../shared/install/PROMPT.md),
+lets an agent perform the steps below; its [OpenClaw reference](../../shared/install/reference/harness-openclaw.md)
+holds the exact commands. The manual steps follow.
+
+AOS UI ships its own stateless MCP server, `packages/tools-mcp`, with
+`render_chart`, `render_map`, `render_stats`, and
+`present_artifact({path, title?, mimeType?})`. The first three are
+[MCP Apps](#mcp-apps), so charts, maps, and stats render only while the Gateway
+has `mcp.apps.enabled: true`. Run it on the Gateway host with
+`bun run tools-mcp:serve` (loopback, port `4110`), or use the Compose stack's
+`tools-mcp` service, published on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`.
+
+Register it in OpenClaw as `aos-ui`, disabled by default, so it loads only in
+Sessions AOS enables it for:
+
+```bash
+openclaw mcp add aos-ui --url http://127.0.0.1:4110/mcp \
+  --transport streamable-http --disabled
+```
+
+That writes this entry under `mcp.servers` in `openclaw.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "aos-ui": {
+        "url": "http://127.0.0.1:4110/mcp",
+        "transport": "streamable-http",
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Run `openclaw mcp reload` so the next turn uses the new configuration.
+
+The proxy enables the server per Session: it creates Sessions with
+`toolOverrides.mcpServers["aos-ui"] = true` and, before each new turn, patches
+the same override onto a Session created elsewhere. OpenClaw admits
+`toolOverrides` only from a device holding `operator.admin`, which the proxy
+requests; a turn whose patch fails does not start. OpenClaw names the tools
+`aos-ui__render_chart` and so on, and the proxy canonicalizes those names.
+
+### MCP Apps
+
+OpenClaw serves MCP Apps natively, and AOS renders them as App cards
+([MCP Apps](../mcp-apps.md)). Register the App server under `mcp.servers` like
+any other MCP server, and turn MCP Apps on in the Gateway:
+
+```bash
+openclaw mcp add NAME --url https://apps.example.test/mcp \
+  --transport streamable-http
+openclaw config set mcp.apps.enabled true
+openclaw config validate
+openclaw mcp reload
+```
+
+The proxy finds a view in the tool result's `details.mcpAppPreview`, opens it
+with `mcp.app.view`, and relays the view's requests through `mcp.app.callTool`
+and `mcp.app.readResource`. OpenClaw caps a view's HTML at 2 MiB. A view the
+Gateway no longer holds, or any view while `mcp.apps.enabled` is off, shows
+the tool call's textual details. The tool shows as `mcp__NAME__TOOL`, resolved
+against the Session's `tools.effective` list. The proxy's `mcpApps` headers
+block does not apply to OpenClaw.
+
+### Creator Agent
+
+OpenClaw's Agent summary has no field for a role, so AOS treats the Agent with
+the reserved id `aos-agent-creator` as the creator behind **New Agent** and
+keeps it out of the roster. Create it with `openclaw agents add` and give its
+workspace a copy of the `aos-agent-creator` skill. After the user confirms a
+definition, the creator runs `openclaw agents add` as the skill's
+`reference/harness-openclaw.md` describes, so it needs OpenClaw's command
+execution tool.
+
+### Artifacts
+
+- A `present_artifact` receipt is read through `sessions.files.get`: only
+  files in the Session's workspace, at most 256 KiB, and only text or common
+  image types (PNG, JPEG, GIF, WebP, AVIF). Anything else reads as
+  unavailable.
+- OpenClaw's own `MEDIA:` media is read through `artifacts.download`. These
+  Artifacts appear after the Session is reloaded, not while the turn streams.
 
 ## Run locally
 
@@ -49,10 +133,10 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
-- Session creation is available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, artifacts, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- Session creation and Artifacts are available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
-- The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, and `operator.questions`.
+- The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, and `operator.admin`. Admin scope is what lets it enable the `aos-ui` MCP server per Session; pair the proxy device with it.
 - A `pairing-required` error is terminal unless the Gateway responds with `pauseReconnect: false` or `recommendedNextStep: "wait_then_retry"`, in which case the adapter retries.
 
 ## Verify
@@ -60,7 +144,7 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
 Run the proxy checks for the selected deployment and verify the Gateway is reachable from the proxy host or container:
 
 ```bash
-bunx vitest run packages/proxy/adapters/openclaw
+bunx vitest run packages/proxy/adapters/openclaw packages/tools-mcp
 ```
 
 Confirm the Gateway is reachable and the device identity and token files are correct:

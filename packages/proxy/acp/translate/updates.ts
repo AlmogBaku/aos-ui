@@ -11,9 +11,11 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosPlanMetaSchema,
+  type AosArtifactDescriptor,
   type AosChunkMetaSchema,
   type AosStateMetaSchema,
   type AosToolCallMetaSchema,
+  formatArtifactUri,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
@@ -73,7 +75,8 @@ export function stateOutbound(
 /** A streamed delta, or the whole block a stored part replays as. */
 export function chunkOutbound(
   context: TranslateContext,
-  sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
+  sessionUpdate:
+    "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk",
   messageId: string,
   content: string | ContentBlock,
   extra?: ExtraMeta<typeof AosChunkMetaSchema>
@@ -84,6 +87,26 @@ export function chunkOutbound(
     content:
       typeof content === "string" ? { type: "text", text: content } : content,
     _meta: { [AOS_META_KEY]: { ...turnMeta(context), ...extra } },
+  })
+}
+
+/**
+ * A published artifact as a `resource_link` chunk on the turn it belongs to.
+ * The link names only the artifact; the reader fetches it through the Session
+ * and lane it already reads.
+ */
+export function artifactOutbound(
+  context: TranslateContext,
+  sessionUpdate: "agent_message_chunk" | "user_message_chunk",
+  messageId: string,
+  artifact: AosArtifactDescriptor
+): AcpOutbound {
+  return chunkOutbound(context, sessionUpdate, messageId, {
+    type: "resource_link",
+    uri: formatArtifactUri(artifact.id),
+    name: artifact.filename,
+    ...(artifact.mimeType === undefined ? {} : { mimeType: artifact.mimeType }),
+    ...(artifact.sizeBytes === undefined ? {} : { size: artifact.sizeBytes }),
   })
 }
 

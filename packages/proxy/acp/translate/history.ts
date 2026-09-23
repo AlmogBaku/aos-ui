@@ -18,6 +18,7 @@ import type {
 } from "../types"
 import {
   ACP_STOP_REASON,
+  artifactOutbound,
   chunkOutbound,
   diffContent,
   planUpdate,
@@ -64,24 +65,22 @@ function contentBlocks(parts: readonly MessagePart[]): ContentBlock[] {
 }
 
 /**
- * A stored artifact replays as the `_aos/artifact` notification it arrived as.
- * Any other part replays nothing here, so both roles share one projection: an
- * image the operator attached is their turn's artifact exactly as a published one
- * is the agent's.
+ * A stored artifact replays as the link chunk it arrived as, on the turn that
+ * stored it. Any other part replays nothing here, so both roles share one
+ * projection: an image the operator attached is their turn's artifact exactly as
+ * a published one is the agent's.
  */
-function artifactOutbound(messageId: string, part: MessagePart): AcpOutbound[] {
+function storedArtifactOutbound(
+  context: TranslateContext,
+  message: SessionMessage,
+  part: MessagePart
+): AcpOutbound[] {
   if (part.type !== "data" || part.name !== ARTIFACT_PART_NAME) return []
   const artifact = AosArtifactDescriptorSchema.safeParse(part.data)
-  return artifact.success
-    ? [
-        {
-          kind: "artifact",
-          turnId: HISTORY_TURN_ID,
-          messageId,
-          artifact: artifact.data,
-        },
-      ]
-    : []
+  if (!artifact.success) return []
+  const sessionUpdate =
+    message.role === "user" ? "user_message_chunk" : "agent_message_chunk"
+  return [artifactOutbound(context, sessionUpdate, message.id, artifact.data)]
 }
 
 /**
@@ -93,28 +92,38 @@ function toolCallOutbound(
   context: TranslateContext,
   messageId: string,
   part: ToolCallPart
-): AcpOutbound {
-  return toolOutbound(
-    context,
-    messageId,
-    {
-      toolCallId: part.toolCallId,
-      title: part.toolName,
-      name: part.toolName,
-      status: part.isError ? "failed" : "completed",
-      rawInput: part.args,
-      ...(part.result === undefined ? {} : { rawOutput: part.result }),
-      ...(part.kind ? { kind: part.kind } : {}),
-      ...(part.locations ? { locations: part.locations } : {}),
-      ...(part.diffs ? { content: part.diffs.map(diffContent) } : {}),
-    },
-    {
-      argsText: part.argsText,
-      ...(part.startedAt ? { startedAt: part.startedAt } : {}),
-      ...(part.completedAt ? { completedAt: part.completedAt } : {}),
-      ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
-    }
-  )
+): AcpOutbound[] {
+  const call = {
+    toolCallId: part.toolCallId,
+    title: part.toolName,
+    name: part.toolName,
+    status: part.isError ? "failed" : "completed",
+  }
+  // A guest sees an MCP App's card alone; the App's input and result reach it
+  // through the invitation's own view route.
+  if (context.lane === "guest")
+    return part.app ? [toolOutbound(context, messageId, call, { app: {} })] : []
+  return [
+    toolOutbound(
+      context,
+      messageId,
+      {
+        ...call,
+        rawInput: part.args,
+        ...(part.result === undefined ? {} : { rawOutput: part.result }),
+        ...(part.kind ? { kind: part.kind } : {}),
+        ...(part.locations ? { locations: part.locations } : {}),
+        ...(part.diffs ? { content: part.diffs.map(diffContent) } : {}),
+      },
+      {
+        argsText: part.argsText,
+        ...(part.startedAt ? { startedAt: part.startedAt } : {}),
+        ...(part.completedAt ? { completedAt: part.completedAt } : {}),
+        ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
+        ...(part.app ? { app: {} } : {}),
+      }
+    ),
+  ]
 }
 
 /**
@@ -153,9 +162,9 @@ function settledOutbound(
  * One stored turn's parts, in the order the provider produced them, which is the
  * order the turn stream sent: a whole-message upsert cannot say that this
  * paragraph came after that tool call, because it replaces one source's content
- * as one block. Execution history is the operator's; a published artifact is the
- * turn's outcome, so it replays on both lanes and the guest history projection
- * has already dropped the parts a guest may not see.
+ * as one block. Execution history is the operator's; a published artifact and an
+ * MCP App's card are the turn's outcome, so they replay on both lanes and the
+ * guest history projection has already dropped the parts a guest may not see.
  */
 function partsOutbound(
   message: SessionMessage,
@@ -177,10 +186,9 @@ function partsOutbound(
     else if (part.type === "image") {
       const image = imageBlock(part.image)
       if (image) chunk("agent_message_chunk", image)
-    } else if (part.type === "tool-call") {
-      if (context.lane !== "guest")
-        outbound.push(toolCallOutbound(context, message.id, part))
-    } else outbound.push(...artifactOutbound(message.id, part))
+    } else if (part.type === "tool-call")
+      outbound.push(...toolCallOutbound(context, message.id, part))
+    else outbound.push(...storedArtifactOutbound(context, message, part))
   }
   return outbound
 }
@@ -230,7 +238,7 @@ export const translateHistory = ((history, lane) => {
       // The turn exists before anything lands on it, so the attachment it
       // carried follows the message it belongs to.
       for (const part of message.content)
-        outbound.push(...artifactOutbound(message.id, part))
+        outbound.push(...storedArtifactOutbound(context, message, part))
     } else
       outbound.push(
         ...agentOutbound(message, context, promptedAt ?? message.createdAt)

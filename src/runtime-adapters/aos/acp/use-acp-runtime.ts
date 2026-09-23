@@ -376,7 +376,7 @@ function createAcpController({
     bound = next
     bindings += 1
     const generation = bindings
-    const { artifact, steerAccepted, composerPrefill, sessionInvalidated } =
+    const { steerAccepted, composerPrefill, sessionInvalidated } =
       AOS_METHODS.notify
     const subscriptions = [
       connection.onSessionUpdate(next, (update, meta) => {
@@ -386,9 +386,6 @@ function createAcpController({
       // replaces goes first.
       connection.onSessionReplay(next, () => {
         commit(clearTranscript(state))
-      }),
-      connection.onNotification(artifact, (params) => {
-        observe(params, artifact)
       }),
       connection.onNotification(steerAccepted, (params) => {
         observe(params, steerAccepted)

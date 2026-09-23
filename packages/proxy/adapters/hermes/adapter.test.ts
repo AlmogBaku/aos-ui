@@ -214,6 +214,7 @@ describe("Hermes server adapter", () => {
                 type: "aos.artifact",
                 artifact: {
                   id: "artifact-1",
+                  workdir: "/home/agent/scratch",
                   path: "reports/result.txt",
                   filename: "result.txt",
                 },
@@ -253,7 +254,7 @@ describe("Hermes server adapter", () => {
       mimeType: "text/plain",
     })
     expect(http.mock.calls.at(-1)?.[0]).toContain(
-      "path=reports%2Fresult.txt&profile=researcher&session_id=stored"
+      `path=${encodeURIComponent("/home/agent/scratch/reports/result.txt")}&profile=researcher&session_id=stored`
     )
     expect(http.mock.calls.at(-1)?.[1]).toEqual({
       maxResponseBytes: 26_214_400,
@@ -344,6 +345,90 @@ describe("Hermes server adapter", () => {
     expect(JSON.stringify(history)).not.toContain(audioPath)
   })
 
+  it("reads what the aos-ui MCP tool and an assistant MEDIA line published", async () => {
+    const reportPath = "/home/alice/reports/q3.pdf"
+    const chartPath = "/home/alice/reports/chart.png"
+    const messages = [
+      {
+        id: "assistant-present",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "present-call",
+            function: {
+              name: "mcp__aos_ui__present_artifact",
+              arguments: JSON.stringify({ path: reportPath }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "present-call",
+        tool_name: "mcp__aos_ui__present_artifact",
+        // Hermes wraps an MCP tool's text content as `{"result": <text>}`.
+        content: JSON.stringify({
+          result: JSON.stringify({
+            ok: true,
+            type: "aos.artifact",
+            artifact: {
+              path: reportPath,
+              filename: "q3.pdf",
+              mimeType: "application/pdf",
+            },
+          }),
+        }),
+      },
+      {
+        id: "assistant-final",
+        role: "assistant",
+        content: `Here is the chart.\nMEDIA:${chartPath}`,
+      },
+    ]
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.resume")
+        return { session_id: "live-secret", running: false, status: "idle" }
+      throw new Error(`unexpected ${method}`)
+    })
+    const http = vi.fn(async (path: string) => {
+      if (path.startsWith("/api/sessions/stored?"))
+        return { id: "stored", profile: "researcher", title: "Owned" }
+      if (path.includes("/messages?")) return { session_id: "stored", messages }
+      if (path.startsWith("/api/fs/read-data-url?"))
+        return { dataUrl: "data:application/octet-stream;base64,aGVsbG8=" }
+      throw new Error(`unexpected ${path}`)
+    })
+    const adapter = new HermesServerAdapter({ request, http })
+    const history = await adapter.history("researcher", "stored", 200, 0)
+    const artifacts = history.messages.flatMap((message) =>
+      message.content.flatMap((part) =>
+        part.type === "data" &&
+        part.name === "aos.artifact" &&
+        typeof part.data.id === "string" &&
+        typeof part.data.filename === "string"
+          ? [{ id: part.data.id, filename: part.data.filename }]
+          : []
+      )
+    )
+
+    expect(artifacts.map(({ filename }) => filename)).toEqual([
+      "q3.pdf",
+      "chart.png",
+    ])
+    expect(JSON.stringify(history)).not.toContain("/home/alice")
+    for (const [artifact, path] of [
+      [artifacts[0]!, reportPath],
+      [artifacts[1]!, chartPath],
+    ] as const) {
+      await expect(
+        adapter.artifact("researcher", "stored", artifact.id)
+      ).resolves.toMatchObject({ filename: artifact.filename })
+      expect(http.mock.calls.at(-1)?.[0]).toContain(
+        `path=${encodeURIComponent(path)}&profile=researcher`
+      )
+    }
+  })
+
   it("reports an output the provider can no longer read as not found", async () => {
     // A default `text_to_speech` delivery lands in the media cache Hermes prunes
     // at a 24-hour age, so its receipt outlives its bytes and `read-data-url`
@@ -387,6 +472,7 @@ describe("Hermes server adapter", () => {
           type: "aos.artifact",
           artifact: {
             id: "hermes-artifact-3d43f638eb6049e8aaf7cb0c8d96ad3b",
+            workdir: "/home/alice/interviews",
             path: "interview-brief.md",
             filename: "Interview Brief — VP AI",
             sizeBytes: 11_102,
@@ -484,6 +570,12 @@ describe("Hermes server adapter", () => {
       code: "not_found",
       status: 404,
     })
+
+    // An output grown past the read bound is gone the same way.
+    audioFailure = new HermesHttpError(413)
+    await expect(
+      adapter.artifact("researcher", "stored", mediaId.data.id)
+    ).rejects.toBeInstanceOf(HermesContentUnreadableError)
 
     // A provider outage stays retryable: only a refusal of the file itself is
     // reported as the output being gone.
@@ -1016,6 +1108,7 @@ describe("Hermes server adapter", () => {
         "session.create",
         {
           profile: "researcher",
+          source: "aos-ui",
           close_on_disconnect: false,
           title: "New Session",
         },
@@ -1046,6 +1139,7 @@ describe("Hermes server adapter", () => {
         "session.create",
         {
           profile: "researcher",
+          source: "aos-ui",
           close_on_disconnect: false,
         },
       ],
@@ -1131,6 +1225,7 @@ describe("Hermes server adapter", () => {
         {
           profile: "researcher",
           title: "aos-invite:guest_ref",
+          source: "aos-ui",
           close_on_disconnect: false,
           messages: [
             {

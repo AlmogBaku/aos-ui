@@ -86,6 +86,7 @@ describe("OpenClaw runtime factory", () => {
         "operator.write",
         "operator.approvals",
         "operator.questions",
+        "operator.admin",
       ],
       credentials: {
         deviceIdentity: {
@@ -146,5 +147,79 @@ describe("OpenClaw runtime factory", () => {
         limits
       )
     ).rejects.toThrow("Invalid OpenClaw device identity")
+  })
+
+  it("flags a stored call that opened a native MCP App view", async () => {
+    const files = await credentials()
+    const sessionKey = "agent:research:main"
+    const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
+    const request = vi.fn(async (method: string) => {
+      if (method === "agents.list")
+        return {
+          defaultId: "research",
+          mainKey: "main",
+          scope: "global",
+          agents: [{ id: "research", name: "Research", kind: "agent" }],
+        }
+      if (method === "sessions.list")
+        return { sessions: [{ key: sessionKey, agentId: "research" }] }
+      if (method.startsWith("sessions.messages.")) return { key: sessionKey }
+      if (method === "tools.effective")
+        return { agentId: "research", profile: "default", groups: [] }
+      if (method === "chat.history")
+        return {
+          messages: [
+            {
+              id: "assistant",
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-1",
+                  name: "excalidraw__create_view",
+                  arguments: {},
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call-1",
+              toolName: "excalidraw__create_view",
+              content: [{ type: "text", text: "drawn" }],
+              details: {
+                mcpServer: "excalidraw",
+                mcpTool: "create_view",
+                mcpAppPreview: { mcpApp: { viewId } },
+              },
+            },
+          ],
+          sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+        }
+      throw new Error(`Unexpected method ${method}`)
+    })
+    const instance = await createOpenClawRuntime(
+      {
+        kind: "openclaw",
+        id: "openclaw-local",
+        baseUrl: "ws://127.0.0.1:18789",
+        deviceIdentityFile: files.identityFile,
+        deviceTokenFile: files.tokenFile,
+      },
+      limits,
+      {
+        clientFactory: () => ({
+          start: vi.fn(async () => undefined),
+          stopAndWait: vi.fn(async () => undefined),
+          request,
+        }),
+      }
+    )
+
+    const page = await instance.runtime.history("research", sessionKey, 200, 0)
+    expect(page.messages[0]!.content[0]).toMatchObject({
+      toolName: "mcp__excalidraw__create_view",
+      app: true,
+    })
+    await instance.close()
   })
 })

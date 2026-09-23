@@ -151,6 +151,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     })
     expect(gateway.request).toHaveBeenCalledWith("sessions.create", {
       agentId: "research",
+      toolOverrides: { mcpServers: { "aos-ui": true } },
     })
     await expect(adapter.runtimeInfo()).resolves.toMatchObject({
       capabilities: { sessionCreation: { status: "available" } },
@@ -318,5 +319,216 @@ describe("OpenClaw ServerRuntime assembly", () => {
     await expect(
       withoutAttachments.stageAttachments("research", sessionKey, [])
     ).rejects.toBeInstanceOf(OpenClawAdapterUnavailableError)
+  })
+})
+
+describe("OpenClaw artifact reads", () => {
+  const receipt = {
+    ok: true,
+    type: "aos.artifact",
+    artifact: {
+      path: "/workspace/report.txt",
+      filename: "report.txt",
+      mimeType: "text/plain",
+    },
+  }
+  const receiptHistory = {
+    messages: [
+      {
+        id: "assistant",
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "publish",
+            name: "aos-ui__present_artifact",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "publish",
+        toolName: "aos-ui__present_artifact",
+        content: [{ type: "text", text: JSON.stringify(receipt) }],
+      },
+    ],
+    sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+  }
+
+  function sessionFile(file: Record<string, unknown>) {
+    return {
+      sessionKey,
+      file: {
+        path: "/workspace/report.txt",
+        name: "report.txt",
+        kind: "modified",
+        ...file,
+      },
+    }
+  }
+
+  function nativeDownload(extra: Record<string, unknown>) {
+    return {
+      artifact: {
+        id: "artifact_managed_image_abc",
+        type: "image",
+        title: "chart.png",
+        mimeType: "image/png",
+        download: { mode: "bytes" },
+      },
+      ...extra,
+    }
+  }
+
+  function artifactAdapter(
+    answers: Record<string, () => unknown>,
+    fetch?: typeof globalThis.fetch
+  ) {
+    const base = client()
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method in answers) return answers[method]!()
+      return base.request(method, params as never)
+    })
+    const gateway = client({ request } as Partial<OpenClawGatewayClient>)
+    const adapter = new OpenClawServerAdapter({
+      client: gateway,
+      turns: engine(),
+      subscribeSession: async () => () => undefined,
+      gatewayOrigin: "http://127.0.0.1:18789",
+      ...(fetch ? { fetch } : {}),
+    })
+    return { adapter, request }
+  }
+
+  async function receiptId(adapter: OpenClawServerAdapter) {
+    const page = await adapter.history("research", sessionKey, 200, 0)
+    const part = page.messages[0]!.content.find(
+      (item) => item.type === "data"
+    ) as { data: { id: string } }
+    return part.data.id
+  }
+
+  it("reads a published receipt through the Session workspace in utf8 and base64", async () => {
+    let file = sessionFile({
+      missing: false,
+      content: "hello",
+      contentEncoding: "utf8",
+    })
+    const { adapter, request } = artifactAdapter({
+      "chat.history": () => receiptHistory,
+      "sessions.files.get": () => file,
+    })
+    const id = await receiptId(adapter)
+
+    const text = await adapter.artifact("research", sessionKey, id)
+    expect(new TextDecoder().decode(text.bytes)).toBe("hello")
+    expect(text).toMatchObject({
+      filename: "report.txt",
+      mimeType: "text/plain",
+    })
+    expect(request).toHaveBeenCalledWith("sessions.files.get", {
+      agentId: "research",
+      sessionKey,
+      path: "/workspace/report.txt",
+    })
+
+    file = sessionFile({
+      missing: false,
+      content: Buffer.from([1, 2, 3]).toString("base64"),
+      contentEncoding: "base64",
+    })
+    const binary = await adapter.artifact("research", sessionKey, id)
+    expect([...binary.bytes]).toEqual([1, 2, 3])
+  })
+
+  it("reports a missing or refused receipt file as not found", async () => {
+    let answer: () => unknown = () => sessionFile({ missing: true })
+    const { adapter } = artifactAdapter({
+      "chat.history": () => receiptHistory,
+      "sessions.files.get": () => answer(),
+    })
+    const id = await receiptId(adapter)
+
+    await expect(
+      adapter.artifact("research", sessionKey, id)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    answer = () => {
+      throw new OpenClawClientRequestError("rejected", true, false)
+    }
+    await expect(
+      adapter.artifact("research", sessionKey, id)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+  })
+
+  it("does not find an artifact id this Session never published", async () => {
+    const { adapter, request } = artifactAdapter({
+      "chat.history": () => ({ messages: [] }),
+      "artifacts.download": () => {
+        throw new OpenClawClientRequestError("rejected", true, false)
+      },
+    })
+
+    for (const id of [
+      "openclaw-artifact-0123456789abcdef0123456789abcdef",
+      "artifact_managed_image_other",
+      "../etc/passwd",
+    ])
+      await expect(
+        adapter.artifact("research", sessionKey, id)
+      ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    expect(
+      request.mock.calls.some(([method]) => method === "sessions.files.get")
+    ).toBe(false)
+  })
+
+  it("downloads a native artifact inline or from the gateway's ticketed media route", async () => {
+    let download: unknown = nativeDownload({
+      encoding: "base64",
+      data: Buffer.from("png").toString("base64"),
+    })
+    const fetch = vi.fn(async () => new Response("fetched"))
+    const { adapter, request } = artifactAdapter(
+      { "artifacts.download": () => download },
+      fetch as unknown as typeof globalThis.fetch
+    )
+
+    const inline = await adapter.artifact(
+      "research",
+      sessionKey,
+      "artifact_managed_image_abc"
+    )
+    expect(new TextDecoder().decode(inline.bytes)).toBe("png")
+    expect(inline).toMatchObject({
+      filename: "chart.png",
+      mimeType: "image/png",
+    })
+    expect(request).toHaveBeenCalledWith("artifacts.download", {
+      agentId: "research",
+      sessionKey,
+      artifactId: "artifact_managed_image_abc",
+    })
+
+    download = nativeDownload({
+      url: "/api/chat/media/outgoing/research/abc?mediaTicket=t",
+    })
+    const fetched = await adapter.artifact(
+      "research",
+      sessionKey,
+      "artifact_managed_image_abc"
+    )
+    expect(new TextDecoder().decode(fetched.bytes)).toBe("fetched")
+    expect(fetch).toHaveBeenCalledWith(
+      new URL(
+        "http://127.0.0.1:18789/api/chat/media/outgoing/research/abc?mediaTicket=t"
+      ),
+      { redirect: "error" }
+    )
+
+    download = nativeDownload({ url: "https://elsewhere.example/file.png" })
+    await expect(
+      adapter.artifact("research", sessionKey, "artifact_managed_image_abc")
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

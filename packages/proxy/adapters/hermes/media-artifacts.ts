@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto"
 import {
+  safeArtifactPath,
+  safeRelativeArtifactPath,
+} from "../../core/artifact-path"
+import { MediaLineFilter, mediaReference } from "../../core/media-lines"
+import {
   containsPrivateValue,
   isRecord,
   parseJson,
   parseJsonOrValue,
   rowText,
   trimmedText,
+  unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
 
@@ -14,7 +20,7 @@ type HermesMediaArtifact = {
   descriptor: {
     id: string
     filename: string
-    mimeType: string
+    mimeType?: string
     source: { type: "provider"; reference: string }
   }
 }
@@ -42,20 +48,29 @@ const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   webp: "image/webp",
 }
 
-const MEDIA_LINE =
-  /^\s*MEDIA:\s*(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|(\S+))\s*$/u
-const MEDIA_DIRECTIVE_PREFIX = /^\s*MEDIA:/u
-const POSSIBLE_MEDIA_PREFIX =
-  /^\s*(?:M(?:E(?:D(?:I(?:A(?::(?:\s*)?)?)?)?)?)?)?$/u
-const MAX_MEDIA_LINE_BYTES = 4_112
+/** Every type an assistant MEDIA line may deliver; anything else goes untyped. */
+const MEDIA_LINE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  ...AUDIO_MIME_BY_EXTENSION,
+  ...IMAGE_MIME_BY_EXTENSION,
+  csv: "text/csv",
+  html: "text/html",
+  json: "application/json",
+  md: "text/markdown",
+  mp4: "video/mp4",
+  pdf: "application/pdf",
+  svg: "image/svg+xml",
+  txt: "text/plain",
+  webm: "video/webm",
+  zip: "application/zip",
+}
 
 function parsedRecord(value: unknown) {
   const parsed = parseJson(value)
   return isRecord(parsed) ? parsed : undefined
 }
 
-function mediaReference(line: string) {
-  return MEDIA_LINE.exec(line)?.slice(1).find(Boolean)
+function extensionOf(filename: string) {
+  return filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
 }
 
 /**
@@ -85,7 +100,7 @@ function safeMediaReference(
     utf8BytesWithin(filename, 255) === undefined
   )
     return undefined
-  const extension = filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
+  const extension = extensionOf(filename)
   const mimeType = extension ? mimeByExtension[extension] : undefined
   return mimeType ? { filename, mimeType } : undefined
 }
@@ -129,7 +144,7 @@ function artifactId(scope: string, reference: string) {
 function mediaArtifact(
   scope: string,
   reference: string,
-  media: { filename: string; mimeType: string }
+  media: { filename: string; mimeType?: string }
 ): HermesMediaArtifact {
   const id = artifactId(scope, reference)
   return {
@@ -139,8 +154,9 @@ function mediaArtifact(
 }
 
 /**
- * Grants artifact authority only to audio paths repeated in a successful,
- * native Hermes TTS receipt. Assistant-authored MEDIA text is never authority.
+ * Grants artifact authority to audio paths repeated in a successful, native
+ * Hermes TTS receipt. An assistant MEDIA line is authority of its own, projected
+ * by {@link HermesMediaTextFilter}; this receipt only covers what TTS delivered.
  */
 export function projectHermesMediaArtifacts(
   toolCallId: string,
@@ -203,11 +219,43 @@ export function projectHermesAttachedImages(text: string) {
   return { text: prose.join("\n").trim(), artifacts }
 }
 
-/** Incrementally removes Hermes delivery directives without exposing paths. */
+// ---------------------------------------------------------------------------
+// Assistant MEDIA lines
+// ---------------------------------------------------------------------------
+
+/**
+ * The scope every MEDIA-line id is derived under. Neither the live run nor the
+ * durable history knows the other's message id, so the reference alone keys
+ * the id: the same line reads as the same artifact streaming and after refresh.
+ */
+const MEDIA_LINE_SCOPE = "hermes:media-line"
+
+/** The artifact one assistant MEDIA line delivers, if its path may be read. */
+function mediaLineArtifact(reference: string) {
+  const path = safeArtifactPath(reference)
+  const filename = path?.split("/").at(-1)
+  if (!path || !filename || !safeArtifactToken(filename, 255)) return undefined
+  const extension = extensionOf(filename)
+  const mimeType = extension
+    ? MEDIA_LINE_MIME_BY_EXTENSION[extension]
+    : undefined
+  return mediaArtifact(MEDIA_LINE_SCOPE, path, {
+    filename,
+    ...(mimeType ? { mimeType } : {}),
+  })
+}
+
+/**
+ * Incrementally removes Hermes MEDIA lines without exposing paths. A readable
+ * line becomes an artifact. Once TTS delivered media this generation, every
+ * line is that delivery's marker — Hermes may name a copy of the audio — so it
+ * leaves quietly rather than publishing the same speech twice.
+ */
 export class HermesMediaTextFilter {
-  #pending = ""
-  #discardingMediaLine = false
   readonly #trusted = new Set<string>()
+  readonly #published = new Set<string>()
+  #artifacts: HermesMediaArtifact[] = []
+  readonly #lines = new MediaLineFilter((reference) => this.#claim(reference))
 
   constructor(trustedReferences: Iterable<string> = []) {
     for (const reference of trustedReferences) this.#trusted.add(reference)
@@ -218,56 +266,30 @@ export class HermesMediaTextFilter {
   }
 
   write(value: string) {
-    let prefix = ""
-    if (this.#discardingMediaLine) {
-      const newline = value.indexOf("\n")
-      if (newline < 0) return ""
-      this.#discardingMediaLine = false
-      value = value.slice(newline + 1)
-      prefix = "\n"
-    }
-    this.#pending += value
-    return `${prefix}${this.#drain(false)}`
+    return this.#lines.write(value)
   }
 
   finish() {
-    this.#discardingMediaLine = false
-    return this.#drain(true)
+    return this.#lines.finish()
   }
 
-  #projectLine(line: string) {
-    const reference = mediaReference(line)
-    if (!reference) return line
-    return this.#trusted.size > 0 ? undefined : "[Media unavailable]"
+  /** The artifacts the lines filtered since the last call delivered. */
+  takeArtifacts() {
+    const artifacts = this.#artifacts
+    this.#artifacts = []
+    return artifacts
   }
 
-  #drain(final: boolean) {
-    let output = ""
-    while (this.#pending) {
-      const newline = this.#pending.indexOf("\n")
-      if (newline >= 0) {
-        const line = this.#pending.slice(0, newline).replace(/\r$/u, "")
-        this.#pending = this.#pending.slice(newline + 1)
-        const projected = this.#projectLine(line)
-        if (projected !== undefined) output += `${projected}\n`
-        continue
-      }
-      if (
-        !final &&
-        (POSSIBLE_MEDIA_PREFIX.test(this.#pending) ||
-          MEDIA_DIRECTIVE_PREFIX.test(this.#pending))
-      ) {
-        if (utf8BytesWithin(this.#pending, MAX_MEDIA_LINE_BYTES) !== undefined)
-          break
-        output += "[Media unavailable]"
-        this.#pending = ""
-        this.#discardingMediaLine = true
-        break
-      }
-      output += this.#projectLine(this.#pending) ?? ""
-      this.#pending = ""
+  #claim(reference: string) {
+    // Accepted trade-off: a TTS turn's MEDIA lines are its delivery markers, so none publishes.
+    if (this.#trusted.size > 0) return true
+    const artifact = mediaLineArtifact(reference)
+    if (!artifact) return false
+    if (!this.#published.has(artifact.descriptor.id)) {
+      this.#published.add(artifact.descriptor.id)
+      this.#artifacts.push(artifact)
     }
-    return output
+    return true
   }
 }
 
@@ -276,7 +298,11 @@ export function projectHermesMediaText(
   trustedReferences: Iterable<string>
 ) {
   const filter = new HermesMediaTextFilter(trustedReferences)
-  return `${filter.write(text)}${filter.finish()}`.replace(/\n$/u, "")
+  const projected = `${filter.write(text)}${filter.finish()}`
+  return {
+    text: projected.replace(/\n$/u, ""),
+    artifacts: filter.takeArtifacts(),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,20 +324,59 @@ function safeArtifactToken(value: string, maxLength: number) {
 }
 
 /**
+ * The `artifact` of a successful receipt. Hermes stores an MCP tool's text
+ * content wrapped as `{"result": "<text>"}` (`tools/mcp_tool_handlers.py`
+ * `_render_call_tool_result`), so a wrapped receipt is unwrapped once.
+ */
+function receiptArtifact(raw: unknown) {
+  const outer = parsedRecord(raw)
+  const value =
+    outer && outer.type === undefined && "result" in outer
+      ? parsedRecord(outer.result)
+      : outer
+  if (!value || value.ok !== true || value.type !== "aos.artifact")
+    return undefined
+  return isRecord(value.artifact) ? value.artifact : undefined
+}
+
+/**
+ * The public id and native reference of one receipt. The `aos-ui` MCP server
+ * names an absolute path and no id, so the id derives from the call; the
+ * retired plugin carried its own id and a workdir-relative path, which live
+ * Sessions still hold. `reference` is absent when no readable path results.
+ */
+function receiptSource(toolCallId: string, artifact: Record<string, unknown>) {
+  const path = trimmedText(artifact.path)
+  const legacyId = trimmedText(artifact.id)
+  if (legacyId) {
+    // Without a usable absolute workdir Hermes resolves the relative path
+    // against the Session's cwd, which is how the oldest receipts still read.
+    const relative = path ? safeRelativeArtifactPath(path) : undefined
+    const workdir = trimmedText(artifact.workdir)?.replace(/\/+$/u, "")
+    const root = workdir ? safeArtifactPath(workdir) : undefined
+    return {
+      id: legacyId,
+      reference:
+        relative && root ? safeArtifactPath(`${root}/${relative}`) : relative,
+    }
+  }
+  const reference = path ? safeArtifactPath(path) : undefined
+  return reference && toolCallId
+    ? { id: artifactId(toolCallId, reference), reference }
+    : undefined
+}
+
+/**
  * Project a native `present_artifact` receipt into the public opaque artifact
  * descriptor. The native path never leaves this function; the public reference
  * is the artifact id the content operations resolve back to a path.
  */
-export function projectHermesArtifactReceipt(raw: unknown) {
-  const value = parsedRecord(raw)
-  if (!value || value.ok !== true || value.type !== "aos.artifact")
-    return undefined
-  const artifact = value.artifact
-  if (!isRecord(artifact)) return undefined
-  const id = trimmedText(artifact.id)
-  const filename = trimmedText(artifact.filename)
-  const mimeType = trimmedText(artifact.mimeType)
-  const sizeBytes = artifact.sizeBytes
+export function projectHermesArtifactReceipt(toolCallId: string, raw: unknown) {
+  const artifact = receiptArtifact(raw)
+  const id = artifact && receiptSource(toolCallId, artifact)?.id
+  const filename = trimmedText(artifact?.filename)
+  const mimeType = trimmedText(artifact?.mimeType)
+  const sizeBytes = artifact?.sizeBytes
   if (
     !id ||
     !filename ||
@@ -344,10 +409,51 @@ export function projectHermesArtifactReceipt(raw: unknown) {
   }
 }
 
+/** The media a durable row delivers, keyed by the artifact id each one reads as. */
+function rowMedia(row: Record<string, unknown>): HermesMediaArtifact[] {
+  if (row.role === "tool") {
+    // Read the row as the live projection did, inside Hermes's untrusted-data
+    // block, so the id it published resolves back to the same receipt.
+    const content = unwrappedToolText(row.content ?? row.result)
+    const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId) ?? ""
+    const toolName = trimmedText(row.tool_name ?? row.toolName)
+    const artifact = receiptArtifact(content)
+    const receipt = artifact && receiptSource(toolCallId, artifact)
+    const filename = trimmedText(artifact?.filename)
+    return [
+      ...(toolName
+        ? projectHermesMediaArtifacts(toolCallId, toolName, content)
+        : []),
+      ...(receipt?.reference && filename
+        ? [
+            {
+              reference: receipt.reference,
+              descriptor: {
+                id: receipt.id,
+                filename,
+                source: { type: "provider" as const, reference: receipt.id },
+              },
+            },
+          ]
+        : []),
+    ]
+  }
+  if (trimmedText(row.display_kind)) return []
+  const text = rowText(row, parseJsonOrValue(row.content))
+  // The directive the operator's own turn persisted is authority for the image
+  // it attached, and an assistant's MEDIA line for the file it delivered: only a
+  // reference this Session's transcript still carries can be read back.
+  if (row.role === "user") return projectHermesAttachedImages(text).artifacts
+  if (row.role === "assistant")
+    return projectHermesMediaText(text, []).artifacts
+  return []
+}
+
 /**
  * Resolve one already-published artifact id to its native reference by scanning
- * authoritative history newest-first. Only a native tool receipt grants
- * authority; a relative, traversal-free path is the sole accepted reference.
+ * authoritative history newest-first. Only a tool receipt, an attached image or
+ * an assistant MEDIA line grants authority, and every reference it resolves to
+ * is an absolute path {@link safeArtifactPath} accepts.
  */
 export function publishedArtifact(
   rows: readonly unknown[],
@@ -356,56 +462,11 @@ export function publishedArtifact(
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]
     if (!isRecord(row)) continue
-    if (row.role === "tool") {
-      const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId)
-      const toolName = trimmedText(row.tool_name ?? row.toolName)
-      if (toolCallId && toolName)
-        for (const media of projectHermesMediaArtifacts(
-          toolCallId,
-          toolName,
-          row.content ?? row.result
-        ))
-          if (media.descriptor.id === artifactId)
-            return {
-              reference: media.reference,
-              filename: media.descriptor.filename,
-            }
-    }
-    // The directive the operator's own turn persisted is authority for the image
-    // it attached: only a reference this Session's transcript still carries can
-    // be read back.
-    if (row.role === "user" && !trimmedText(row.display_kind))
-      for (const image of projectHermesAttachedImages(
-        rowText(row, parseJsonOrValue(row.content))
-      ).artifacts)
-        if (image.descriptor.id === artifactId)
-          return {
-            reference: image.reference,
-            filename: image.descriptor.filename,
-          }
-    const value = parsedRecord(row.content ?? row.result)
-    if (!value || value.ok !== true || value.type !== "aos.artifact") continue
-    const artifact = isRecord(value.artifact) ? value.artifact : undefined
-    const id = trimmedText(artifact?.id)
-    const path = trimmedText(artifact?.path)
-    const filename = trimmedText(artifact?.filename)
-    if (
-      id !== artifactId ||
-      !path ||
-      !filename ||
-      path.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/u.test(path) ||
-      path.split(/[\\/]/u).includes("..")
+    const media = rowMedia(row).find(
+      ({ descriptor }) => descriptor.id === artifactId
     )
-      continue
-    // Hermes resolves a relative path only against the Session's persisted cwd,
-    // which is often empty; the receipt's validated root makes the read absolute.
-    const workdir = trimmedText(artifact?.workdir)
-    const reference =
-      workdir && workdir.startsWith("/") && !workdir.split("/").includes("..")
-        ? `${workdir.replace(/\/+$/u, "")}/${path}`
-        : path
-    return { reference, filename }
+    if (media)
+      return { reference: media.reference, filename: media.descriptor.filename }
   }
   return undefined
 }

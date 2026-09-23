@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
 import { enToolUiLabels, heToolUiLabels } from "@/components/tool-ui/locale"
 import {
   withAosToolArtifact,
@@ -17,17 +18,12 @@ import {
 const text = (text: string): TurnPart => ({ type: "text", text }) as TurnPart
 const reasoning = (): TurnPart => ({ type: "reasoning" })
 const tool = (toolName: string): TurnPart => ({ type: "tool-call", toolName })
-const chart = (): TurnPart =>
+const app = (): TurnPart =>
   ({
     type: "tool-call",
     toolName: "render_chart",
-    args: {
-      title: "Trend",
-      type: "line",
-      xKey: "quarter",
-      series: [{ key: "value", label: "Value" }],
-      data: [{ quarter: "Q1", value: 12 }],
-    },
+    args: { title: "Trend" },
+    artifact: MCP_APP_TOOL_ARTIFACT,
   }) as TurnPart
 
 const paths = (parts: readonly TurnPart[], status: string | undefined) => {
@@ -112,7 +108,7 @@ describe("createTurnGroupBy", () => {
   it("splits the fold around a first-class part instead of reordering it", () => {
     const parts = [
       tool("read_file"),
-      chart(),
+      app(),
       tool("apply_patch"),
       text("The final answer."),
     ]

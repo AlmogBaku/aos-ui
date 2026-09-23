@@ -41,6 +41,8 @@ harness:
 
 Follow the local-development steps in that guide. When both the harness and AOS UI are running, open <http://localhost:3000>.
 
+To let an agent register the AOS UI tools and skills in your harness, give it [`shared/install/PROMPT.md`](../shared/install/PROMPT.md). It asks which harness and Agents to configure, then follows that harness's reference beside the prompt. Each connection guide also lists the same steps for doing it by hand.
+
 > [!IMPORTANT]
 > AOS UI does not install or start the harness. Stopping AOS leaves the harness and its data running independently.
 

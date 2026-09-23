@@ -12,13 +12,14 @@ import {
   AOS_METHODS,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
-  AosArtifactNotificationSchema,
+  AosArtifactDescriptorSchema,
   AosChunkMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosSteerAcceptedNotificationSchema,
   AosToolCallMetaSchema,
   AosTurnMetaSchema,
+  parseArtifactUri,
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
@@ -65,8 +66,9 @@ import {
 
 /**
  * Folds one Session's ACP `session/update` stream and its extension
- * notifications into the state the Assistant UI store reads: `_aos/artifact`
- * lands as a message data part, `_aos/steer_accepted` as an ordinary user turn.
+ * notifications into the state the Assistant UI store reads: a `resource_link`
+ * naming an `artifact://` id lands as a message data part, `_aos/steer_accepted`
+ * as an ordinary user turn.
  * Pure and React-free: a replay starts from `initialProjectorState` and applies
  * the same reducer the live stream does.
  */
@@ -300,6 +302,7 @@ function toolMetaPatch(aos: ToolMeta | undefined): ToolMetaPatch {
     completedAt: epochOf(aos.completedAt),
     durationMs: aos.durationMs,
     subagent: aos.subagent,
+    ...(aos.app ? { app: true as const } : {}),
   }
 }
 
@@ -711,6 +714,26 @@ function applyWhole(
   )
 }
 
+/**
+ * The artifact a published link names, or `undefined` for an ordinary link. The
+ * id is all the link carries: the artifact resolver reads it through the Session
+ * and lane this client already holds, never from a location on the wire.
+ */
+function linkedArtifact(block: ContentBlock) {
+  if (block.type !== "resource_link" || typeof block.uri !== "string")
+    return undefined
+  const id = parseArtifactUri(block.uri)
+  if (id === undefined) return undefined
+  const artifact = AosArtifactDescriptorSchema.safeParse({
+    id,
+    filename: block.name,
+    ...(block.mimeType == null ? {} : { mimeType: block.mimeType }),
+    ...(block.size == null ? {} : { sizeBytes: block.size }),
+    source: { type: "provider", reference: id },
+  })
+  return artifact.success ? artifact.data : undefined
+}
+
 function applyChunk(
   state: ProjectorState,
   update: SessionUpdate & UpdatePayload,
@@ -725,8 +748,13 @@ function applyChunk(
     return applyChild(state, { update, meta }, aos.data, named, (message) =>
       appendBlock(message, sourceOf(kind), block)
     )
+  const artifact = linkedArtifact(block)
   return onMessage(state, addressed(state, named), roleOf(kind), (message) =>
-    countChunk(appendBlock(message, sourceOf(kind), block))
+    artifact === undefined
+      ? countChunk(appendBlock(message, sourceOf(kind), block))
+      : carriesArtifact(message, artifact.id)
+        ? message
+        : appendData(message, ARTIFACT_DATA_PART_NAME, artifact)
   )
 }
 
@@ -894,19 +922,6 @@ export function applyNotification(
   method: string,
   params: unknown
 ): ProjectorState {
-  if (method === AOS_METHODS.notify.artifact) {
-    const parsed = AosArtifactNotificationSchema.safeParse(params)
-    if (!parsed.success) return state
-    const { artifact } = parsed.data
-    const named = parsed.data.messageId ?? latestAssistantId(state.messages)
-    if (named === undefined) return state
-    const messageId = addressed(state, named)
-    return onMessage(state, messageId, "assistant", (message) =>
-      carriesArtifact(message, artifact.id)
-        ? message
-        : appendData(message, ARTIFACT_DATA_PART_NAME, artifact)
-    )
-  }
   if (method !== AOS_METHODS.notify.steerAccepted) return state
   return applyCorrection(state, params)
 }

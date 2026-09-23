@@ -36,6 +36,7 @@ import {
   stagedAttachmentOf,
 } from "./aos-attachment-adapter"
 import { AosArtifactAdapter } from "./aos-artifacts"
+import { AosMcpAppAdapter } from "./aos-mcp-apps"
 import {
   useAosComposerFeatures,
   useAosSessionCapabilities,
@@ -141,6 +142,7 @@ function ReadyAosRuntimeProvider({
   )
   const attachments = useMemo(() => new AosAttachmentAdapter(), [])
   const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
+  const mcpApps = useMemo(() => new AosMcpAppAdapter(rest), [rest])
   const interactions = useMemo(
     () => createAcpInteractions({ connection }),
     [connection]
@@ -450,6 +452,7 @@ function ReadyAosRuntimeProvider({
     createSessionDraft,
     interactions,
     artifacts: { resolver: artifacts },
+    mcpApps,
     composer,
     messageRewind,
     media,

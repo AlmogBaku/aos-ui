@@ -33,6 +33,7 @@ import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-fe
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
 import { workspaceHref } from "@/lib/workspace-routing"
+import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import {
   AosToolPresentation,
   ToolUiLocaleProvider,
@@ -201,9 +202,15 @@ function ArtifactWorkspaceBridge({
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
-      <ArtifactWorkspaceContent {...shell} locale={locale}>
-        {children}
-      </ArtifactWorkspaceContent>
+      <McpAppHostProvider
+        adapter={bundle.mcpApps}
+        agentId={agentId}
+        threadId={artifactThreadId}
+      >
+        <ArtifactWorkspaceContent {...shell} locale={locale}>
+          {children}
+        </ArtifactWorkspaceContent>
+      </McpAppHostProvider>
     </ArtifactWorkspaceProvider>
   )
 }

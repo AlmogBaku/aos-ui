@@ -30,6 +30,7 @@ import {
 } from "../types"
 import { pendingRequestToOutbound } from "./requests"
 import {
+  artifactOutbound,
   chunkOutbound,
   planUpdate,
   turnMeta,
@@ -170,23 +171,29 @@ function chunkStep(
   }
 }
 
-function artifactOutbound(
+function artifactStep(
   state: TranslateState,
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.ArtifactPublished>
-): AcpOutbound[] {
+): Step {
   // Adapters are typed, not validated: the wire contract still refuses a
   // malformed descriptor, as it refuses malformed Todos below.
   const artifact = AosArtifactDescriptorSchema.safeParse(event.artifact)
-  if (!artifact.success) return []
-  return [
-    {
-      kind: "artifact",
-      turnId: context.turnId,
-      ...(state.messageId ? { messageId: state.messageId } : {}),
-      artifact: artifact.data,
-    },
-  ]
+  if (!artifact.success) return { state, outbound: [] }
+  // A link is message content, so it lands on the segment's one turn, and
+  // one published before anything streamed opens that turn itself.
+  const segment = segmentMessage(state, attachedTo(state, context))
+  return {
+    state: segment.state,
+    outbound: [
+      artifactOutbound(
+        context,
+        "agent_message_chunk",
+        segment.messageId,
+        artifact.data
+      ),
+    ],
+  }
 }
 
 function steerStep(
@@ -302,6 +309,7 @@ function toolStarted(
     ...(event.startedAt ? { startedAt: event.startedAt } : {}),
     ...wireSubagent(event.subagent),
     ...attribution(state, event.subagentId),
+    ...(event.app ? { app: {} } : {}),
   }
   // The adapter's parent id only names the segment when nothing has yet.
   const segment = segmentMessage(state, event.parentMessageId ?? context.turnId)
@@ -361,6 +369,28 @@ function toolFinished(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.ToolCallFinished>
 ): Step {
+  // The guest projection passes an MCP App's card alone, so its lane settles
+  // the call under its name and nothing more. A call the start could not flag
+  // arrives here first, so the card may be what opens the segment.
+  if (context.lane === "guest") {
+    if (!event.app) return { state, outbound: [] }
+    const segment = segmentMessage(state, context.turnId)
+    return {
+      state: segment.state,
+      outbound: [
+        toolOutbound(
+          context,
+          segment.messageId,
+          {
+            toolCallId: event.toolCallId,
+            ...(event.name ? { title: event.name, name: event.name } : {}),
+            status: "completed",
+          },
+          { app: {} }
+        ),
+      ],
+    }
+  }
   // The settled content replaces everything streamed into the call, so it
   // restates the terminals the call announced.
   const terminals = Object.entries(state.terminals).flatMap(
@@ -381,6 +411,7 @@ function toolFinished(
   const extra = {
     ...(event.completedAt ? { completedAt: event.completedAt } : {}),
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+    ...(event.app ? { app: {} } : {}),
   }
   return {
     state,
@@ -543,7 +574,7 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
     case TurnEventKind.PlanUpdated:
       return { state, outbound: planOutbound(context, event) }
     case TurnEventKind.ArtifactPublished:
-      return { state, outbound: artifactOutbound(state, context, event) }
+      return artifactStep(state, context, event)
     case TurnEventKind.SteerAccepted:
       return steerStep(state, context, event)
     case TurnEventKind.TurnEnded:

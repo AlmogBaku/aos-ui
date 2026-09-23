@@ -1,14 +1,19 @@
 import {
   AgentsListParamsSchema,
   AgentsListResultSchema,
+  ArtifactsDownloadParamsSchema,
   ChatHistoryParamsSchema,
   ModelsListParamsSchema,
+  SessionToolOverridesSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
+  SessionsFilesGetParamsSchema,
+  SessionsFilesGetResultSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
 } from "@openclaw/gateway-protocol"
+import { ArtifactsDownloadResultSchema } from "@openclaw/gateway-protocol/schema"
 import { Value } from "typebox/value"
 
 const MAX_NATIVE_COLLECTION = 1_000
@@ -33,6 +38,14 @@ export type OpenClawAgent = Readonly<{
   identity?: Readonly<{ name?: string }>
 }>
 
+/** A Session's sparse tool overlay, exactly as the native schema defines it. */
+export type OpenClawToolOverrides = Readonly<{
+  mcpServers?: Readonly<Record<string, boolean>>
+  mcpToolsDeny?: Readonly<Record<string, readonly string[]>>
+  skills?: Readonly<Record<string, boolean>>
+  webSearch?: boolean
+}>
+
 export type OpenClawSession = Readonly<{
   key: string
   agentId?: string
@@ -49,6 +62,7 @@ export type OpenClawSession = Readonly<{
   modelProvider?: string
   totalTokens?: number
   contextTokens?: number
+  toolOverrides?: OpenClawToolOverrides
 }>
 
 export type OpenClawCreatedSession = Readonly<{
@@ -157,15 +171,47 @@ export function openClawSessionsParams(
   })
 }
 
+/** The MCP server name the `aos-ui` tools are configured under in OpenClaw. */
+export const AOS_MCP_SERVER = "aos-ui"
+
 export function openClawCreateSessionParams(agentId: string) {
-  return official(SessionsCreateParamsSchema, { agentId })
+  return official(SessionsCreateParamsSchema, {
+    agentId,
+    toolOverrides: { mcpServers: { [AOS_MCP_SERVER]: true } },
+  })
 }
 
-/** Exactly one proven native Session flag; the gateway owns its side effects. */
+/** Whether a Session's overlay already enables the `aos-ui` MCP server. */
+export function enablesAosTools(overrides: OpenClawToolOverrides | undefined) {
+  return overrides?.mcpServers?.[AOS_MCP_SERVER] === true
+}
+
+/**
+ * The patch that enables the `aos-ui` MCP server for one Session. A native
+ * patch replaces the whole overlay, so it keeps every other override and
+ * applies only while the overlay is still the one it was built from.
+ */
+export function aosToolsPatch(
+  current: OpenClawToolOverrides | undefined
+): OpenClawSessionPatch {
+  return {
+    toolOverrides: {
+      ...current,
+      mcpServers: { ...current?.mcpServers, [AOS_MCP_SERVER]: true },
+    },
+    expectedToolOverrides: current ?? null,
+  }
+}
+
+/** Exactly one proven native Session change; the gateway owns its side effects. */
 export type OpenClawSessionPatch =
   | Readonly<{ label: string }>
   | Readonly<{ archived: boolean }>
   | Readonly<{ pinned: boolean }>
+  | Readonly<{
+      toolOverrides: OpenClawToolOverrides
+      expectedToolOverrides: OpenClawToolOverrides | null
+    }>
 
 export function openClawPatchSessionParams(
   agentId: string,
@@ -219,6 +265,52 @@ export function openClawModelsParams(agentId: string, sessionKey: string) {
   return official(ModelsListParamsSchema, { agentId, sessionKey })
 }
 
+export function openClawSessionFileParams(
+  agentId: string,
+  sessionKey: string,
+  path: string
+) {
+  return official(SessionsFilesGetParamsSchema, { agentId, sessionKey, path })
+}
+
+export function openClawArtifactDownloadParams(
+  agentId: string,
+  sessionKey: string,
+  artifactId: string
+) {
+  return official(ArtifactsDownloadParamsSchema, {
+    agentId,
+    sessionKey,
+    artifactId,
+  })
+}
+
+export type OpenClawSessionFile = Readonly<{
+  missing: boolean
+  content?: string
+  contentEncoding?: "utf8" | "base64"
+  mimeType?: string
+}>
+
+export function parseOpenClawSessionFile(value: unknown): OpenClawSessionFile {
+  official(SessionsFilesGetResultSchema, value)
+  return (value as { file: OpenClawSessionFile }).file
+}
+
+export type OpenClawArtifactDownload = Readonly<{
+  artifact: Readonly<{ title: string; mimeType?: string }>
+  encoding?: "base64"
+  data?: string
+  url?: string
+}>
+
+export function parseOpenClawArtifactDownload(
+  value: unknown
+): OpenClawArtifactDownload {
+  official(ArtifactsDownloadResultSchema, value)
+  return value as OpenClawArtifactDownload
+}
+
 export function parseOpenClawAgents(value: unknown): readonly OpenClawAgent[] {
   boundedNativeValue(value, MAX_NATIVE_COLLECTION)
   official(AgentsListResultSchema, value)
@@ -267,6 +359,8 @@ export function parseOpenClawSessions(
       typeof value.hasActiveRun !== "boolean"
     )
       throw new OpenClawNativePayloadError()
+    if (value.toolOverrides !== undefined)
+      official(SessionToolOverridesSchema, value.toolOverrides)
     return {
       key,
       ...(optionalString(value.agentId)
@@ -303,6 +397,9 @@ export function parseOpenClawSessions(
       ...(number(value.contextTokens) !== undefined
         ? { contextTokens: number(value.contextTokens) }
         : {}),
+      ...(value.toolOverrides === undefined
+        ? {}
+        : { toolOverrides: value.toolOverrides as OpenClawToolOverrides }),
     }
   })
 }

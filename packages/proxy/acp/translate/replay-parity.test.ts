@@ -25,6 +25,14 @@ const READ_ARGS = '{"path":"a.txt"}'
 const WRITE_ARGS = '{"path":"b.txt"}'
 const READ_RESULT = '{"ok":true}'
 const WRITE_RESULT = '{"written":1}'
+/** What the turn published: an id that needs encoding to name in a link. */
+const ARTIFACT = {
+  id: "b.txt#1",
+  filename: "b.txt",
+  mimeType: "text/plain",
+  sizeBytes: 1,
+  source: { type: "provider" as const, reference: "b.txt#1" },
+}
 
 /** The turn's span, which live reads from the clock and a replay from the page. */
 const STARTED_AT = "2026-09-22T10:00:00.000Z"
@@ -99,6 +107,7 @@ const liveEvents: TurnEvent[] = [
     failed: false,
   },
   { kind: TurnEventKind.MessageChunk, messageId: ASSISTANT, text: "Wrote it." },
+  { kind: TurnEventKind.ArtifactPublished, artifact: ARTIFACT },
   { kind: TurnEventKind.TurnEnded },
 ]
 
@@ -136,6 +145,7 @@ const storedHistory: SessionHistoryResponse = {
           result: { written: 1 },
         },
         { type: "text", text: "Wrote it." },
+        { type: "data", name: "aos.artifact", data: ARTIFACT },
       ],
       createdAt: STARTED_AT,
       completedAt: FINISHED_AT,
@@ -180,6 +190,9 @@ function anonymous(update: SessionUpdate): Record<string, unknown> {
   }
 }
 
+const isText = (value: Record<string, unknown>) =>
+  isRecord(value.content) && value.content.type === "text"
+
 const textOf = (value: Record<string, unknown>) =>
   isRecord(value.content) && typeof value.content.text === "string"
     ? value.content.text
@@ -205,7 +218,9 @@ function folded(previous: Item | undefined, item: Item) {
       : undefined
   if (
     !CHUNKS.has(item.kind) ||
-    previous.value.messageId !== item.value.messageId
+    previous.value.messageId !== item.value.messageId ||
+    !isText(previous.value) ||
+    !isText(item.value)
   )
     return undefined
   return {
@@ -266,6 +281,7 @@ describe("replay parity", () => {
       "tool_call_update",
       "agent_thought_chunk",
       "tool_call_update",
+      "agent_message_chunk",
       "agent_message_chunk",
       "state_update",
     ])

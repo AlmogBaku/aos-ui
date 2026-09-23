@@ -17,6 +17,8 @@ export const en = {
     missing: "This output is no longer available.",
     missingDetail:
       "The provider keeps generated audio and video for a limited time and has since removed this file. Ask the agent to generate it again if you still need it.",
+    missingFileDetail:
+      "The provider no longer holds this file. Ask the agent to create it again if you still need it.",
     downloadFailed: "This output could not be downloaded.",
     audio: "Audio output",
     video: "Video output",

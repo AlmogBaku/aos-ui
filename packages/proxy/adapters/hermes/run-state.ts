@@ -13,7 +13,12 @@ import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
 import { EventQueue, startedTurnQueue } from "./event-queue"
-import type { NativeFailure, TurnFailure } from "./run-failures"
+import {
+  TURN_FAILURES,
+  TURN_RESET_LOG,
+  type NativeFailure,
+  type TurnFailure,
+} from "./run-failures"
 import type { BufferedNativeEvents } from "./run-frames"
 import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
 import type { SessionModelChoice } from "./session-model"
@@ -120,6 +125,20 @@ export type TurnEngineHost = {
   fail(active: ActiveTurn, failure: TurnFailure): void
   detach(active: ActiveTurn, failure: TurnFailure): void
   settle(active: ActiveTurn): void
+}
+
+/**
+ * End a turn that must be reconciled with Hermes history. Every such path
+ * publishes the same failure, so the log line names which one decided it.
+ */
+export function failReset(
+  host: TurnEngineHost,
+  active: ActiveTurn,
+  reason: string
+) {
+  if (active.terminal) return
+  host.log.warn(TURN_RESET_LOG, { sessionId: active.scope.sessionId, reason })
+  host.fail(active, TURN_FAILURES.resetRequired)
 }
 
 /** A promise and its resolver: the one shape for AOS' own settlement edges. */

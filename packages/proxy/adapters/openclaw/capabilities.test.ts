@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
+import { OPENCLAW_MCP_APP_MAX_BYTES } from "./mcp-apps"
 import { openClawCapabilities } from "./capabilities"
 
 describe("OpenClaw capabilities", () => {
@@ -69,8 +71,14 @@ describe("OpenClaw capabilities", () => {
         completeRequestValidation: "native-run-input",
       },
       artifacts: {
-        status: "unavailable",
-        reason: "artifact-publication-unavailable",
+        status: "available",
+        scope: "session",
+        maxBytes: MAX_ARTIFACT_BYTES,
+      },
+      mcpApps: {
+        status: "available",
+        scope: "session",
+        maxBytes: OPENCLAW_MCP_APP_MAX_BYTES,
       },
       transcription: {
         status: "unavailable",

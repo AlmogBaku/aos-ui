@@ -29,6 +29,13 @@ guest:
         secretFile: /run/secrets/guest-invite-signing-key
     ttlSeconds: 259200
     clockSkewSeconds: 0
+# Hermes on the host registers the aos-ui tools as http://127.0.0.1:4110/mcp;
+# the proxy container reaches the same server on the Compose network instead.
+mcpApps:
+  fallback:
+    servers:
+      aos-ui:
+        url: http://tools-mcp:4110/mcp
 limits:
   activeExecutions: 256
   guestActiveExecutions: 32

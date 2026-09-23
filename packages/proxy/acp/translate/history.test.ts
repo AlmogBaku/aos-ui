@@ -23,6 +23,36 @@ const ARTIFACT = {
   source: { type: "provider" as const, reference: "art-1" },
 }
 
+/** The link a replay sends for `artifact` on the turn `messageId`. */
+function artifactLink(
+  sessionUpdate: "agent_message_chunk" | "user_message_chunk",
+  messageId: string,
+  artifact: {
+    id: string
+    filename: string
+    mimeType?: string
+    sizeBytes?: number
+  }
+) {
+  return {
+    kind: "update",
+    update: {
+      sessionUpdate,
+      messageId,
+      content: {
+        type: "resource_link",
+        uri: `artifact://${artifact.id}`,
+        name: artifact.filename,
+        ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
+        ...(artifact.sizeBytes === undefined
+          ? {}
+          : { size: artifact.sizeBytes }),
+      },
+      _meta: { [AOS_META_KEY]: { sequence: 0, turnId: "history" } },
+    },
+  }
+}
+
 const history: SessionHistoryResponse = {
   sessionId: "session-1",
   messages: [
@@ -116,20 +146,17 @@ describe("translateHistory", () => {
       "agent_message_chunk",
       "tool_call_update",
       "tool_call_update",
-      "artifact",
+      "agent_message_chunk",
       "state_update",
       "plan_update",
       "agent_message_chunk",
     ])
   })
 
-  it("replays a published artifact against the message that stored it", () => {
-    expect(translateHistory(history, "operator")[6]).toEqual({
-      kind: "artifact",
-      turnId: "history",
-      messageId: "a1",
-      artifact: ARTIFACT,
-    })
+  it("replays a published artifact as a link on the message that stored it", () => {
+    expect(translateHistory(history, "operator")[6]).toEqual(
+      artifactLink("agent_message_chunk", "a1", ARTIFACT)
+    )
   })
 
   it("upserts the user turn with its text and inline image", () => {
@@ -170,13 +197,10 @@ describe("translateHistory", () => {
       "operator"
     )
 
-    expect(kinds(outbound)).toEqual(["user_message", "artifact"])
-    expect(outbound[1]).toEqual({
-      kind: "artifact",
-      turnId: "history",
-      messageId: "u9",
-      artifact: attached,
-    })
+    expect(kinds(outbound)).toEqual(["user_message", "user_message_chunk"])
+    expect(outbound[1]).toEqual(
+      artifactLink("user_message_chunk", "u9", attached)
+    )
   })
 
   it("replays reasoning and prose as the chunks the run streamed", () => {
@@ -265,6 +289,37 @@ describe("translateHistory", () => {
       turnId: "history",
       messageId: "a1",
       argsText: '{"path":"a.txt"}',
+    })
+  })
+
+  it("replays the flag of a tool call that opens an MCP App view", () => {
+    const withApp: SessionHistoryResponse = {
+      ...history,
+      messages: [
+        {
+          id: "a-app",
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "c-app",
+              toolName: "mcp__weather__show-forecast",
+              args: { city: "Haifa" },
+              argsText: '{"city":"Haifa"}',
+              result: { result: "Sunny" },
+              app: true,
+            },
+          ],
+          createdAt: "2026-09-19T09:00:00.000Z",
+        },
+      ],
+    }
+    const update = updatesOf(translateHistory(withApp, "operator")).find(
+      (item) => item.sessionUpdate === "tool_call_update"
+    )
+
+    expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
+      app: {},
     })
   })
 
@@ -365,7 +420,7 @@ describe("translateHistory", () => {
   })
 
   it("replays the Session Todos as the one plan", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[7]
+    const update = updatesOf(translateHistory(history, "operator"))[8]
 
     expect(update).toMatchObject({
       sessionUpdate: "plan_update",
@@ -388,11 +443,17 @@ describe("translateHistory", () => {
       "user_message",
       "state_update",
       "agent_message_chunk",
-      "artifact",
+      "agent_message_chunk",
       "state_update",
       "plan_update",
       "agent_message_chunk",
     ])
+  })
+
+  it("links a guest's replayed artifact exactly as the operator's", () => {
+    expect(translateHistory(history, "guest")[3]).toEqual(
+      artifactLink("agent_message_chunk", "a1", ARTIFACT)
+    )
   })
 
   it("replays a failed turn that streamed nothing, carrying its failure", () => {

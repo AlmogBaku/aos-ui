@@ -99,7 +99,7 @@ same-origin `/api/aos/v1` path.
   use a trusted container-reachable address instead.
 - Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
   A missing rename/archive/delete, Todo, Activity, edit/regenerate, steering,
-  artifact, voice, or read-state control is an explicit capability limit.
+  voice, or read-state control is an explicit capability limit.
 - Confirm Session records include matching `threadId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Ensure history responses contain valid message data and resumable state when advertised.
@@ -114,7 +114,7 @@ same-origin `/api/aos/v1` path.
 - From a proxy container, use the Compose service address (`opencode:4096`),
   not a browser-facing URL. For an independently operated server, ensure its
   address is reachable from the proxy process.
-- A missing Todo, Activity, context meter, title/delete, artifact, voice,
+- A missing Todo, Activity, context meter, title/delete, voice,
   edit/regenerate, or steering control is an explicit OpenCode capability
   limit, not a connection failure.
 
@@ -135,10 +135,44 @@ Denied or unsupported permission does not disable Activity. Multiple tabs elect 
 
 Voice requires either the relevant native runtime STT/TTS configuration or a proxy `voice` block in the private proxy configuration. Microphone capture also requires HTTPS or `localhost`, browser support, and permission. Follow [Use voice](chat-voice.md) for mode-specific checks, proxy provider setup, and safety limits.
 
+## The tools MCP server is not connected
+
+- Check the server itself: `curl --fail http://127.0.0.1:4110/health` should
+  print `ok`. Under Compose, `docker compose ps tools-mcp` should report it
+  healthy; `AOS_UI_TOOLS_MCP_PORT` changes its host port.
+- The server listens on loopback. A harness on the same host registers
+  `http://127.0.0.1:4110/mcp`; the Compose OpenCode service uses
+  `http://tools-mcp:4110/mcp`. A harness in another container or on another
+  host cannot reach host loopback.
+- Tools run but charts, maps, and stats show as text on Hermes or OpenCode: the
+  proxy cannot reach the URL the harness registered. A proxy in a container
+  needs `mcpApps.fallback.servers.aos-ui.url: http://tools-mcp:4110/mcp`
+  ([MCP Apps fallback](configuration.md#mcp-apps-fallback)).
+- Hermes: `hermes -p PROFILE mcp test aos-ui` reports whether the profile's
+  `mcp_servers.aos-ui` entry connects. Confirm the entry is in that profile's
+  own `config.yaml`, not another profile's.
+- OpenClaw: `openclaw mcp status` and `openclaw mcp probe aos-ui` report the
+  registered server. The entry must use `"transport": "streamable-http"`.
+
+## The AOS tools are missing from a Session
+
+- Hermes: a running server connects a new MCP server within about a minute.
+  When `aos-ui` is the profile's first MCP server, run `/reload-mcp` or start
+  a new Session.
+- OpenClaw: the server stays disabled until the proxy enables it for the
+  Session. A turn that fails because that enable patch failed usually means
+  the proxy device lacks `operator.admin`; re-pair it with that scope. Run
+  `openclaw mcp reload` after changing `openclaw.json`.
+- OpenCode: at the pinned 1.18.29 the v2 session engine AOS drives does not
+  expose MCP tools, so the tools are not callable through AOS. This is an
+  upstream limit, not a configuration error.
+
 ## A published Artifact cannot load
 
-- Confirm the active conversation branch contains an explicit `present_artifact` result or a successful trusted provider-native delivery receipt, such as Hermes text-to-speech.
-- For Hermes media, confirm the tool result's `file_path` or `file_paths` entry exactly matches its `MEDIA:` delivery tag. AOS rejects unmatched assistant-authored paths.
+- Confirm the active conversation branch contains an explicit `present_artifact` result, an assistant `MEDIA:/absolute/path` line (Hermes), or a successful trusted provider-native delivery receipt, such as Hermes text-to-speech.
+- `present_artifact` and `MEDIA:` take an absolute path. AOS refuses a relative path, a path that traverses with `..`, and any path naming a credential file such as `.env`, `auth.json`, or `config.yaml`.
+- OpenCode reads only files inside the configured project directory; a path outside it reads as unavailable. OpenClaw reads only the Session's workspace files, at most 256 KiB and only text or common images; OpenClaw's native media appears after a reload.
+- Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
 - For HTML dependencies, add only the required credential-free HTTPS origins to `artifactHtmlAssetOrigins`.
 - Inspect the Source or textual fallback when preview rendering is unavailable.

@@ -147,25 +147,14 @@ describe("rich tool classification", () => {
     expect(
       isAosRichTool(
         toolPart({
-          toolName: "render_chart",
-          args: {
-            title: "Spend",
-            type: "line",
-            xKey: "quarter",
-            series: [{ key: "value", label: "Spend" }],
-            data: [{ quarter: "Q1", value: 12 }],
-          },
-          result: "Chart ready for display.",
+          toolName: "ask_user_question",
+          args: { question: "Proceed?", options: ["Yes", "No"] },
         })
       )
     ).toBe(true)
     expect(
       isAosRichTool(
-        toolPart({
-          toolName: "render_chart",
-          args: { title: "Spend", type: "line", data: "invalid" },
-          result: "Chart ready for display.",
-        })
+        toolPart({ toolName: "ask_user_question", args: { question: 5 } })
       )
     ).toBe(false)
   })
@@ -1423,250 +1412,14 @@ describe("safe result renderers", () => {
     await rerender(
       <RichToolRenderer
         {...toolPart({
-          toolName: "render_chart",
-          args: { title: "Broken chart", type: "line", data: "invalid" },
-          result: "Chart ready for display.",
+          toolName: "ask_user_question",
+          args: { question: 5 },
         })}
       />
     )
     expect(
-      screen.getByText("Could not safely render Chart")
+      screen.getByText("Could not safely render Question")
     ).toBeInTheDocument()
-  })
-
-  it("keeps chart data available as a table while the visual loads", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_chart",
-          args: {
-            title: "Enterprise AI spend",
-            type: "line",
-            xKey: "quarter",
-            series: [
-              { key: "total", label: "Total AI spend" },
-              { key: "genai", label: "GenAI spend" },
-            ],
-            data: [
-              { quarter: "Q4’24", total: 300, genai: 220 },
-              { quarter: "Q1’25", total: 365, genai: 275 },
-            ],
-          },
-          result: "Chart ready for display.",
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "View chart data" }))
-    expect(
-      screen.getByRole("table", { name: "Enterprise AI spend data" })
-    ).toBeInTheDocument()
-    expect(screen.getByRole("cell", { name: "365" })).toBeInTheDocument()
-    // The loaded visual repeats the provider title beside the table, so a
-    // second occurrence of it means the chart itself arrived.
-    await waitFor(() =>
-      expect(screen.getAllByText("Enterprise AI spend").length).toBeGreaterThan(
-        1
-      )
-    )
-  })
-
-  it("renders a pie chart retained in tool arguments", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_chart",
-          args: {
-            title: "Illustrative allocation",
-            type: "pie",
-            xKey: "category",
-            series: [{ key: "value", label: "Share" }],
-            data: [
-              { category: "Research", value: 45 },
-              { category: "Delivery", value: 35 },
-              { category: "Support", value: 20 },
-            ],
-          },
-          result: "Chart ready for display.",
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "View chart data" }))
-    expect(
-      screen.getByRole("table", { name: "Illustrative allocation data" })
-    ).toBeInTheDocument()
-    expect(await screen.findByTestId("chart-visual-pie")).toBeInTheDocument()
-  })
-
-  it("rejects malformed label/value pie shorthand without hiding provider data", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_chart",
-          args: {
-            title: "Sample Pie Chart",
-            type: "pie",
-            xKey: "Category",
-            series: [
-              { key: "Part A", label: "Part A" },
-              { key: "Part B", label: "Part B" },
-            ],
-            data: [
-              { key: "A", label: "Part A", value: 40 },
-              { key: "B", label: "Part B", value: 60 },
-            ],
-          },
-          result: "Chart ready for display: Sample Pie Chart",
-        })}
-      />
-    )
-
-    expect(
-      screen.getByText("Could not safely render Chart")
-    ).toBeInTheDocument()
-    expect(screen.queryByTestId("chart-visual-pie")).not.toBeInTheDocument()
-    await user.click(screen.getByText("Could not safely render Chart"))
-    expect(screen.getByText(/"xKey": "Category"/)).toBeVisible()
-    expect(
-      screen.getByText(/Chart ready for display: Sample Pie Chart/)
-    ).toBeVisible()
-  })
-
-  it("does not repair or conceal a mixed malformed pie payload", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_chart",
-          args: {
-            title: "Incomplete Pie Chart",
-            type: "pie",
-            xKey: "Category",
-            series: [{ key: "Part A", label: "Part A" }],
-            data: [{ label: "Part A", value: 40 }, null],
-          },
-          result: "Chart ready for display: Incomplete Pie Chart",
-        })}
-      />
-    )
-
-    expect(
-      screen.getByText("Could not safely render Chart")
-    ).toBeInTheDocument()
-    expect(screen.queryByTestId("chart-visual-pie")).not.toBeInTheDocument()
-    await user.click(screen.getByText("Could not safely render Chart"))
-    expect(screen.getByText(/"data": \[/)).toBeVisible()
-    expect(screen.getByText(/null/)).toBeVisible()
-    expect(
-      screen.getByText(/Chart ready for display: Incomplete Pie Chart/)
-    ).toBeVisible()
-  })
-
-  it("renders the installed stats display for argument-backed metrics", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_stats",
-          args: {
-            title: "Launch metrics",
-            description: "Illustrative execution metrics",
-            stats: [
-              {
-                key: "sessions",
-                label: "Sessions",
-                value: 1284,
-                format: { kind: "number", compact: true },
-                diff: { value: 12.5, label: "vs. last week" },
-                sparkline: { data: [880, 940, 1012, 1090, 1160, 1284] },
-              },
-            ],
-          },
-          result: "Metrics ready for display.",
-        })}
-      />
-    )
-
-    expect(screen.getByText("Sessions")).toBeInTheDocument()
-    expect(screen.getByText("vs. last week")).toBeInTheDocument()
-  })
-
-  it("suppresses stats and sparkline animations for reduced motion", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_stats",
-          args: {
-            title: "Launch metrics",
-            stats: [
-              {
-                key: "sessions",
-                label: "Sessions",
-                value: 1284,
-                sparkline: { data: [880, 940, 1012, 1090] },
-              },
-            ],
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Sessions")).toBeVisible()
-  })
-
-  it("renders currency metrics when OpenCode supplies the required currency", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_stats",
-          args: {
-            title: "Revenue",
-            stats: [
-              {
-                key: "arr",
-                label: "ARR",
-                value: 1250000,
-                format: { kind: "currency", currency: "USD", decimals: 0 },
-              },
-            ],
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByLabelText("1,250,000 US dollars")).toBeInTheDocument()
-  })
-
-  it("renders provider-native map data retained in OpenCode tool arguments", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_map",
-          args: {
-            title: "Illustrative offices",
-            locations: [
-              {
-                id: "tel-aviv",
-                label: "Tel Aviv",
-                latitude: 32.0853,
-                longitude: 34.7818,
-              },
-            ],
-          },
-          result: "Map ready for display.",
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "View map locations" }))
-    expect(screen.getByText("Tel Aviv")).toBeInTheDocument()
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="geo-map"]')).toBeTruthy()
-    )
   })
 
   it("renders a described subagent delegation as visible activity", async () => {
@@ -1684,126 +1437,9 @@ describe("safe result renderers", () => {
     expect(screen.getByText("The review is complete.")).toBeInTheDocument()
   })
 
-  it("keeps map locations available as text while the visual loads", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "render_map",
-          args: {
-            title: "Interview coverage",
-            locations: [
-              {
-                id: "london",
-                label: "London",
-                latitude: 51.5072,
-                longitude: -0.1276,
-              },
-              {
-                id: "tel-aviv",
-                label: "Tel Aviv",
-                latitude: 32.0853,
-                longitude: 34.7818,
-              },
-            ],
-          },
-          result: "Map ready for display.",
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "View map locations" }))
-    const londonLabel = screen.getByText("London")
-    const telAvivLabel = screen.getByText("Tel Aviv")
-    expect(londonLabel.closest("li")).toHaveTextContent(
-      "London — 51.5072, -0.1276"
-    )
-    expect(telAvivLabel.closest("li")).toHaveTextContent(
-      "Tel Aviv — 32.0853, 34.7818"
-    )
-    expect(londonLabel).toHaveAttribute("dir", "auto")
-    expect(screen.getByText("51.5072, -0.1276")).toHaveAttribute("dir", "ltr")
-    expect(telAvivLabel).toHaveAttribute("dir", "auto")
-    expect(screen.getByText("32.0853, 34.7818")).toHaveAttribute("dir", "ltr")
-  })
 })
 
 describe("Hebrew tool UI", () => {
-  it("formats spoken percentages with the active Hebrew locale", async () => {
-    await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "render_stats",
-            args: {
-              title: "Conversion",
-              stats: [
-                {
-                  key: "conversion",
-                  label: "Conversion rate",
-                  value: -0.1234,
-                  format: { kind: "percent", decimals: 2 },
-                },
-              ],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    const expected = new Intl.NumberFormat("he", {
-      style: "percent",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(-0.1234)
-    expect(screen.getByLabelText(expected)).toBeInTheDocument()
-  })
-
-  it("localizes chart and stats chrome while preserving provider labels", async () => {
-    const user = userEvent.setup()
-    const { rerender } = await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "render_chart",
-            args: {
-              title: "Provider chart",
-              type: "pie",
-              xKey: "category",
-              series: [{ key: "value", label: "Provider value" }],
-              data: [
-                { category: "First", value: 12 },
-                { category: "Second", value: 8 },
-              ],
-            },
-            result: "Chart ready for display.",
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    await user.click(screen.getByRole("button", { name: "הצגת נתוני התרשים" }))
-    expect(
-      screen.getByRole("columnheader", { name: "Provider value" })
-    ).toBeVisible()
-    expect(screen.queryByText(/Slice/)).not.toBeInTheDocument()
-
-    await rerender(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "render_stats",
-            args: {
-              stats: [{ key: "total", label: "Provider total", value: 20 }],
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByRole("heading", { name: "מדדים" })).toBeVisible()
-  })
-
   it("localizes QuestionFlow chrome while preserving payload text and direction", async () => {
     await renderTool(
       <ToolUiLocaleProvider locale="he">
@@ -1882,16 +1518,15 @@ describe("Hebrew tool UI", () => {
       <ToolUiLocaleProvider locale="he">
         <RichToolRenderer
           {...toolPart({
-            toolName: "render_chart",
-            args: { title: "Provider chart", data: "invalid" },
-            result: "Chart ready for display.",
+            toolName: "ask_user_question",
+            args: { question: 5 },
           })}
         />
       </ToolUiLocaleProvider>
     )
 
-    expect(screen.getByText("לא ניתן להציג בבטחה: תרשים")).toBeInTheDocument()
-    await user.click(screen.getByText("לא ניתן להציג בבטחה: תרשים"))
+    expect(screen.getByText("לא ניתן להציג בבטחה: שאלה")).toBeInTheDocument()
+    await user.click(screen.getByText("לא ניתן להציג בבטחה: שאלה"))
     expect(screen.getByRole("button", { name: "העתקת JSON" })).toBeVisible()
 
     await user.click(screen.getByRole("button", { name: "העתקת JSON" }))
@@ -1922,56 +1557,4 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByText("Provider summary")).toHaveAttribute("dir", "auto")
   })
 
-  it("localizes chart and map actions and accessible alternatives", async () => {
-    const user = userEvent.setup()
-    const { rerender } = await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "render_chart",
-            args: {
-              title: "Provider chart",
-              type: "line",
-              xKey: "quarter",
-              series: [{ key: "total", label: "Provider series" }],
-              data: [{ quarter: "Q1", total: 365 }],
-            },
-            result: "Chart ready for display.",
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    await user.click(screen.getByRole("button", { name: "הצגת נתוני התרשים" }))
-    expect(
-      screen.getByRole("table", { name: "Provider chart — נתוני תרשים" })
-    ).toBeVisible()
-
-    await rerender(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "render_map",
-            args: {
-              title: "Provider map",
-              locations: [
-                {
-                  id: "location-he",
-                  label: "Provider location",
-                  latitude: 32.0853,
-                  longitude: 34.7818,
-                },
-              ],
-            },
-            result: "Map ready for display.",
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    await user.click(screen.getByRole("button", { name: "הצגת מיקומי המפה" }))
-    expect(
-      screen.getByRole("list", { name: "Provider map — מיקומים" })
-    ).toBeVisible()
-  })
 })

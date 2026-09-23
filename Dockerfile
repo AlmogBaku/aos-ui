@@ -15,6 +15,14 @@ FROM dependencies AS builder
 COPY . .
 RUN bun run build
 
+FROM dependencies AS tools-mcp
+COPY --chown=bun:bun packages/tools-mcp ./packages/tools-mcp
+COPY --chown=bun:bun shared/presentation ./shared/presentation
+RUN bun run tools-mcp:build
+USER bun
+EXPOSE 4110
+CMD ["bun", "run", "packages/tools-mcp/cli.ts", "--http", "--host", "0.0.0.0", "--port", "4110"]
+
 FROM dependencies AS proxy
 COPY --chown=bun:bun packages ./packages
 COPY --chown=bun:bun shared ./shared

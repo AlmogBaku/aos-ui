@@ -118,26 +118,44 @@ export function projectGuestHistory(
       messages.push(message)
       continue
     }
-    const content = message.content.flatMap((part) => {
-      if (part.type !== "text") return []
-      const projected = projectGuestOutbound(
-        {
-          transport: "rest",
-          agentId: authorization.agentId,
-          sessionId: authorization.sessionId,
-          payload: {
-            type: "message",
-            role: message.role === "user" ? "guest" : "assistant",
-            text: part.text,
+    const content = message.content.flatMap(
+      (part): SessionMessage["content"] => {
+        // An MCP App reaches a guest as its card alone: its input and result
+        // travel only through the invitation's own view route.
+        if (part.type === "tool-call")
+          return part.app
+            ? [
+                {
+                  type: "tool-call" as const,
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  args: {},
+                  argsText: "",
+                  ...(part.isError ? { isError: true } : {}),
+                  app: true as const,
+                },
+              ]
+            : []
+        if (part.type !== "text") return []
+        const projected = projectGuestOutbound(
+          {
+            transport: "rest",
+            agentId: authorization.agentId,
+            sessionId: authorization.sessionId,
+            payload: {
+              type: "message",
+              role: message.role === "user" ? "guest" : "assistant",
+              text: part.text,
+            },
           },
-        },
-        authorization
-      )
-      return projected?.payload.type === "message" &&
-        projected.payload.text !== undefined
-        ? [{ type: "text" as const, text: projected.payload.text }]
-        : []
-    })
+          authorization
+        )
+        return projected?.payload.type === "message" &&
+          projected.payload.text !== undefined
+          ? [{ type: "text" as const, text: projected.payload.text }]
+          : []
+      }
+    )
     // A turn the provider failed reaches a guest as a failed turn, never as an
     // ordinary reply: its public text is projected like any other, and its
     // status carries the guest catalogue's description of the mapped failure.
@@ -299,6 +317,9 @@ function createTurnProjector(
   errors: VerifiedGuestAuthorization,
   now: () => number
 ) {
+  // The names of the calls a guest saw start, so a flagged settling can name
+  // the card even when the start itself was not flagged.
+  const toolNames = new Map<string, string>()
   return (candidate: TurnEvent): TurnEvent | undefined => {
     if (
       !guestAuthorizationActive(read, now) ||
@@ -387,6 +408,36 @@ function createTurnProjector(
               ...(candidate.awaitingStop
                 ? { awaitingStop: true as const }
                 : {}),
+            }
+          : undefined
+      }
+      // Only an MCP App's card, from its start to its settling: no arguments,
+      // no output, and no other tool call. The App's input and result reach
+      // the guest through its view.
+      case TurnEventKind.ToolCallStarted: {
+        if (candidate.subagentId !== undefined) return undefined
+        const name = candidate.name ?? candidate.title
+        toolNames.set(candidate.toolCallId, name)
+        return candidate.app
+          ? {
+              kind: TurnEventKind.ToolCallStarted,
+              toolCallId: candidate.toolCallId,
+              title: name,
+              name,
+              app: true,
+            }
+          : undefined
+      }
+      case TurnEventKind.ToolCallFinished: {
+        const name = toolNames.get(candidate.toolCallId)
+        return candidate.app && name !== undefined
+          ? {
+              kind: TurnEventKind.ToolCallFinished,
+              toolCallId: candidate.toolCallId,
+              output: "",
+              failed: candidate.failed,
+              app: true,
+              name,
             }
           : undefined
       }

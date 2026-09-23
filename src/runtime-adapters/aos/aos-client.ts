@@ -17,13 +17,22 @@ import {
   PushUnregistrationSchema,
   type PushRegistration,
 } from "@aos/protocol/push"
+import {
+  CallToolResultSchema,
+  McpAppResourceReadRequestSchema,
+  McpAppToolCallRequestSchema,
+  McpAppViewSchema,
+  ReadResourceResultSchema,
+  type McpAppResourceReadRequest,
+  type McpAppToolCallRequest,
+} from "@aos/protocol/mcp-apps"
 
 import type { AosStagedAttachment } from "./aos-attachment-adapter"
 
 /**
  * The normalized proxy's REST surface, which carries bytes and deployment
- * metadata only: attachments, artifacts, speech, transcription, and the runtime
- * descriptor. Every conversation, Session, and Agent concern travels over ACP.
+ * metadata only: attachments, artifacts, MCP App views, speech, transcription,
+ * and the runtime descriptor. Every conversation, Session, and Agent concern travels over ACP.
  */
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
@@ -204,6 +213,47 @@ export class AosRemoteClient {
     )
   }
 
+  /** The App view a flagged tool call renders; the proxy resolves its resource. */
+  async openMcpApp(threadId: string, toolCallId: string, signal?: AbortSignal) {
+    return this.#read(
+      this.#mcpAppPath(threadId, toolCallId),
+      McpAppViewSchema,
+      {
+        signal,
+      }
+    )
+  }
+
+  /** A tool call the App view makes, answered by the proxy's MCP server. */
+  async callMcpAppTool(
+    threadId: string,
+    toolCallId: string,
+    request: McpAppToolCallRequest
+  ) {
+    return this.#postMcpApp(
+      threadId,
+      toolCallId,
+      "/tools/call",
+      McpAppToolCallRequestSchema.safeParse(request),
+      CallToolResultSchema
+    )
+  }
+
+  /** A resource read the App view makes, answered by the proxy's MCP server. */
+  async readMcpAppResource(
+    threadId: string,
+    toolCallId: string,
+    request: McpAppResourceReadRequest
+  ) {
+    return this.#postMcpApp(
+      threadId,
+      toolCallId,
+      "/resources/read",
+      McpAppResourceReadRequestSchema.safeParse(request),
+      ReadResourceResultSchema
+    )
+  }
+
   async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
     return this.transcribeForAgent(this.#owner(threadId), audio, signal)
   }
@@ -271,6 +321,31 @@ export class AosRemoteClient {
         error?.code
       )
     }
+  }
+
+  #mcpAppPath(threadId: string, toolCallId: string, suffix = "") {
+    if (!toolCallId.trim() || toolCallId.length > 512)
+      throw new AosClientError("proxy-failure", "Invalid tool call reference")
+    return this.#sessionPath(
+      threadId,
+      `/tool-calls/${encodeURIComponent(toolCallId)}/app${suffix}`
+    )
+  }
+
+  async #postMcpApp<T>(
+    threadId: string,
+    toolCallId: string,
+    suffix: string,
+    request: { success: true; data: unknown } | { success: false },
+    schema: Schema<T>
+  ) {
+    if (!request.success)
+      throw new AosClientError("proxy-failure", "Invalid MCP App request")
+    return this.#read(this.#mcpAppPath(threadId, toolCallId, suffix), schema, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+    })
   }
 
   #sessionPath(threadId: string, suffix: string) {

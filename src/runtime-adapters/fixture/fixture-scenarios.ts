@@ -1,5 +1,8 @@
 import type { TodoItem } from "../contracts"
+import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
 import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
+import { FIXTURE_MCP_APP_TOOL } from "./fixture-mcp-apps"
+import { fixturePresentationPart } from "./fixture-presentations"
 import type { ThreadMessage } from "@assistant-ui/react"
 import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
@@ -29,6 +32,7 @@ export const fixtureScenarioNames = [
   "mermaid-malformed",
   "mermaid-oversized",
   "malformed-tool",
+  "mcp-app",
   "provider-outage",
   "tool-kinds",
   "diff",
@@ -298,6 +302,20 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
       name: "provider-outage",
       parts: [{ type: "text", text: "The partial response is preserved." }],
       outage: new Error("Fixture provider unavailable"),
+    }
+  }
+
+  if (input.includes("mcp app")) {
+    return {
+      name: "mcp-app",
+      parts: [
+        toolPart(
+          FIXTURE_MCP_APP_TOOL,
+          { board: "launch" },
+          "3 of 5 launch tasks are done.",
+          { artifact: MCP_APP_TOOL_ARTIFACT }
+        ),
+      ],
     }
   }
 
@@ -583,87 +601,21 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
   if (input.includes("chart")) {
     return {
       name: "chart",
-      parts: [
-        toolPart(
-          "render_chart",
-          {
-            title: "Enterprise AI spend",
-            type: "line",
-            xKey: "quarter",
-            series: [
-              { key: "total", label: "Total AI spend" },
-              { key: "genai", label: "GenAI spend" },
-            ],
-            data: [
-              { quarter: "Q4’24", total: 300, genai: 220 },
-              { quarter: "Q1’25", total: 365, genai: 275 },
-            ],
-          },
-          { ok: true }
-        ),
-      ],
+      parts: [fixturePresentationPart("fixture-render_chart")],
     }
   }
 
   if (input.includes("map")) {
     return {
       name: "map",
-      parts: [
-        toolPart(
-          "render_map",
-          {
-            title: "Interview coverage",
-            locations: [
-              {
-                id: "london",
-                label: "London",
-                latitude: 51.5072,
-                longitude: -0.1276,
-              },
-              {
-                id: "tel-aviv",
-                label: "Tel Aviv",
-                latitude: 32.0853,
-                longitude: 34.7818,
-              },
-            ],
-          },
-          { ok: true }
-        ),
-      ],
+      parts: [fixturePresentationPart("fixture-render_map")],
     }
   }
 
   if (input.includes("stat") || input.includes("metric")) {
     return {
       name: "stats",
-      parts: [
-        toolPart(
-          "render_stats",
-          {
-            title: "Launch metrics",
-            description: "Illustrative execution metrics",
-            stats: [
-              {
-                key: "sessions",
-                label: "Sessions",
-                value: 1284,
-                format: { kind: "number", compact: true },
-                diff: { value: 12.5, label: "vs. last week" },
-                sparkline: { data: [880, 940, 1012, 1090, 1160, 1284] },
-              },
-              {
-                key: "completion",
-                label: "Completion",
-                value: 0.74,
-                format: { kind: "percent", decimals: 0 },
-                diff: { value: 4.1 },
-              },
-            ],
-          },
-          { ok: true }
-        ),
-      ],
+      parts: [fixturePresentationPart("fixture-render_stats")],
     }
   }
 

@@ -3,6 +3,11 @@ import type { RuntimeInstance } from "../../core/runtime"
 import type { RuntimeConfig, RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
 import { redactForLog } from "../../redaction"
+import { withMcpApps } from "../../mcp-apps/annotate"
+import {
+  createMcpAppClient,
+  type McpServerOverrides,
+} from "../../mcp-apps/client"
 import { HermesServerAdapter } from "./adapter"
 import {
   HermesGateway,
@@ -15,6 +20,7 @@ type HermesRuntimeConfig = RuntimeConfig & { kind: "hermes" }
 
 export type HermesRuntimeFactoryDependencies = {
   transportFactory?: (options: HermesGatewayOptions) => HermesRpcTransport
+  mcpServerOverrides?: McpServerOverrides
 }
 
 /**
@@ -56,10 +62,17 @@ export async function createHermesRuntime(
   // request happens to arrive first.
   if (transport instanceof HermesGateway)
     void transport.connect().catch(() => undefined)
-  const runtime = new HermesServerAdapter(transport, {
-    sessionIdleMs: config.sessionIdleMs,
-    log,
+  const mcpAppClient = createMcpAppClient({
+    servers: dependencies.mcpServerOverrides,
   })
+  // Wrapped before the coordinator, which runs turns through `runtime.runs`.
+  const runtime = withMcpApps(
+    new HermesServerAdapter(transport, {
+      sessionIdleMs: config.sessionIdleMs,
+      log,
+      mcpAppClient,
+    })
+  )
   const sessions = new SessionCoordinator({
     engine: runtime.turns,
     maxActiveExecutions: limits.activeExecutions,
@@ -78,6 +91,7 @@ export async function createHermesRuntime(
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
         await runtime.close()
+        await mcpAppClient.close()
       })
       return closePromise
     },

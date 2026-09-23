@@ -27,6 +27,7 @@ import {
 import { settleFrom } from "./run-settlement"
 import { sessionModelChoice } from "./session-model"
 import {
+  failReset,
   safelyUnsubscribe,
   settledStatus,
   type ActiveTurn,
@@ -129,7 +130,11 @@ export async function attachTurn(
   host.turns.set(sessionKey(active.scope), active)
   if (cursor.reconcile || buffered.overflow) {
     drainBufferedEvents(buffered)
-    return host.fail(active, TURN_FAILURES.resetRequired)
+    return failReset(
+      host,
+      active,
+      cursor.reconcile ? "attach-cursor-reconcile" : "attach-buffer-overflow"
+    )
   }
   if (lost) {
     drainBufferedEvents(buffered)
@@ -137,7 +142,7 @@ export async function attachTurn(
   }
   if (cursor.replayed && !acceptReplayed(host, active, cursor.replayed)) {
     drainBufferedEvents(buffered)
-    return host.fail(active, TURN_FAILURES.resetRequired)
+    return failReset(host, active, "attach-replay-rejected")
   }
   // A watermark past the last frame this page carried means the sequences
   // in between are missing rather than delivered: read the ring once more.
@@ -336,7 +341,7 @@ async function catchUp(host: TurnEngineHost, active: ActiveTurn) {
     // the gap; an empty page with nothing held is a heal that missed nothing.
     (!active.terminal && firstBufferedSeq(held) > active.lastSeen + 1)
   ) {
-    host.fail(active, TURN_FAILURES.resetRequired)
+    failReset(host, active, "catch-up-gap")
     return
   }
   for (const event of held) host.accept(active, event, true)
@@ -354,5 +359,5 @@ function lostTurn(
   if (reason === "disconnected")
     host.detach(active, TURN_FAILURES.connectionInterrupted)
   // A rebound or restarted live Session cannot answer for this run's cursor.
-  else host.fail(active, TURN_FAILURES.resetRequired)
+  else failReset(host, active, `live-session-${reason}`)
 }

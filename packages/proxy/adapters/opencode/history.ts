@@ -1,13 +1,19 @@
 import type { SessionMessage } from "../../../protocol"
+import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import {
   openCodeStopReason,
   openCodeTimestamp,
   parseOpenCodeMessageCatalog,
   type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
-import { canonicalOpenCodeToolCall, openCodeToolKind } from "./tool-names"
+import { openCodeArtifactReceipt } from "./content"
+import {
+  canonicalOpenCodeToolCall,
+  canonicalOpenCodeToolName,
+  openCodeToolKind,
+} from "./tool-names"
 
-type NativeMessage = typeof OpenCodeNativeMessageSchema._output
+export type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -52,7 +58,58 @@ function publicJson(value: unknown, depth = 0): JsonValue | undefined {
   return result
 }
 
-function projectMessage(message: NativeMessage): SessionMessage | undefined {
+type NativeAssistantPart = Extract<
+  NativeMessage,
+  { type: "assistant" }
+>["content"][number]
+
+/** The artifact a completed `aos-ui` `present_artifact` call's receipt publishes. */
+function toolArtifact(part: NativeAssistantPart) {
+  if (
+    part.type !== "tool" ||
+    part.state.status !== "completed" ||
+    canonicalOpenCodeToolName(part.name) !== "present_artifact"
+  )
+    return undefined
+  const text = part.state.content
+    .flatMap((item) =>
+      item &&
+      typeof item === "object" &&
+      "type" in item &&
+      item.type === "text" &&
+      "text" in item &&
+      typeof item.text === "string"
+        ? [item.text]
+        : []
+    )
+    .join("\n")
+  return openCodeArtifactReceipt(part.id, text)
+}
+
+/**
+ * Resolve an artifact id to its native path by scanning this Session's own
+ * authoritative messages newest-first. Only a receipt the Session still holds
+ * grants read authority, so an id from any other Session resolves to nothing.
+ */
+export function publishedOpenCodeArtifact(
+  messages: readonly NativeMessage[],
+  artifactId: string
+) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!
+    if (message.type !== "assistant") continue
+    for (const part of message.content) {
+      const artifact = toolArtifact(part)
+      if (artifact?.descriptor.id === artifactId) return artifact
+    }
+  }
+  return undefined
+}
+
+function projectMessage(
+  message: NativeMessage,
+  resolve?: McpToolNameResolver
+): SessionMessage | undefined {
   const createdAt = openCodeTimestamp(message.time.created)
   if (message.type === "user") {
     const content: SessionMessage["content"] = [
@@ -88,10 +145,13 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
           args as { [key: string]: JsonValue },
           part.state.status === "completed"
             ? publicJson(part.state.result)
-            : undefined
+            : undefined,
+          resolve
         )
         const kind = openCodeToolKind(call.toolName)
         const { completed } = part.time
+        const artifact = toolArtifact(part)
+        const result = artifact?.result ?? call.result
         content.push({
           type: "tool-call",
           toolCallId: part.id,
@@ -106,9 +166,15 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
             part.state.status === "pending"
               ? part.state.input
               : JSON.stringify(call.args),
-          ...(call.result === undefined ? {} : { result: call.result }),
+          ...(result === undefined ? {} : { result }),
           ...(part.state.status === "error" ? { isError: true } : {}),
         })
+        if (artifact)
+          content.push({
+            type: "data",
+            name: "aos.artifact",
+            data: artifact.descriptor,
+          })
       }
     }
     return content.length
@@ -148,16 +214,27 @@ function parseToolInput(value: string): JsonValue {
   }
 }
 
+/** Every raw tool name the messages carry, so their MCP names load before projection. */
+export function openCodeHistoryToolNames(messages: readonly NativeMessage[]) {
+  const names = new Set<string>()
+  for (const message of messages)
+    if (message.type === "assistant")
+      for (const part of message.content)
+        if (part.type === "tool") names.add(part.name)
+  return names
+}
+
 export function projectOpenCodeHistory(input: {
   messages: unknown
   sessionId: string
+  resolve?: McpToolNameResolver
 }): ProjectedHistory {
   const parsedMessages = Array.isArray(input.messages)
     ? parseOpenCodeMessageCatalog({ data: input.messages, cursor: {} })
     : parseOpenCodeMessageCatalog(input.messages)
   if (!parsedMessages.success) return []
   const messages: ProjectedHistory = parsedMessages.data.data
-    .map(projectMessage)
+    .map((message) => projectMessage(message, input.resolve))
     .flatMap((message) => (message ? [message] : []))
     .sort(
       (left, right) =>

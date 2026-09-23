@@ -32,8 +32,7 @@ bun install
 ```
 
 A fresh worktree, and a checkout whose dependencies predate a new package, each
-need their own `bun install`; `integrations/openclaw` carries a second one, and
-without it `tsconfig.integration.json` fails to resolve its peer SDK.
+need their own `bun install`.
 
 Run fixture mode for backend-free UI work:
 
@@ -80,10 +79,11 @@ external reverse proxy is optional.
   and `reportFocus`. Session Todos arrive
   as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation opens
   an ordinary creator-owned Session through `New Agent` that the browser alone
-  projects as a `New Agent` draft row until the creator tool reports its
-  outcome; the hidden creator stays out of the roster and management surfaces,
-  and creation never transfers ownership or starts the created Agent's first
-  Session.
+  projects as a `New Agent` draft row until a creator run ends with a new Agent
+  in the refreshed catalog; the hidden creator stays out of the roster and
+  management surfaces, and creation never transfers ownership or starts the
+  created Agent's first Session. The creator writes the Agent with its
+  harness's own CLI or files, following `shared/agent-creator/reference/`.
 - Provider data is authoritative. Every Session belongs to one Agent; delayed
   events stay scoped to their originating Agent and Session. Todos are
   Session-scoped.
@@ -120,7 +120,12 @@ external reverse proxy is optional.
   in the rendered app and move on.
 - Rich output must remain inspectable and safe. Keep textual fallbacks for
   charts, maps, tools, and Mermaid; never execute generated code or
-  arbitrary HTML in the browser.
+  arbitrary HTML in the browser. The one exception is an MCP App: HTML its own
+  MCP server authored as a `ui://` resource, rendered only inside the
+  opaque-origin double iframe with a CSP built from its declared domains. The
+  browser never talks to an MCP server; every App request goes through the
+  proxy, scoped to the tool call's own Session, and the card keeps its textual
+  details.
 - Preserve the separation between compact, inspectable execution history and
   first-class assistant outcomes. Final prose and meaningful rich UI remain
   visible message content; follow `DESIGN.md` for the governing principles.
@@ -146,6 +151,14 @@ external reverse proxy is optional.
   OpenAI-compatible client and the `ServerRuntime` voice wrapper);
   `packages/proxy/guest` owns the guest audio budget;
   `packages/protocol/audio.ts` holds the shared audio limits.
+- MCP Apps: `packages/protocol/mcp-apps.ts` holds the view and request
+  schemas; `packages/proxy/routes/mcp-apps.ts` and
+  `packages/proxy/guest/routes/mcp-apps.ts` serve them; each adapter's
+  `mcp-apps.ts` implements `ServerRuntime.mcpApps`. `packages/proxy/mcp-apps`
+  is the proxy's own MCP client for runtimes without native MCP Apps (Hermes
+  and OpenCode) plus the `withMcpApps` wrapper and the shared name resolver;
+  delete the fallback once no adapter reaches it. `src/components/mcp-apps`
+  owns the sandbox frame, its CSP, and the host handlers.
 - `src/components/ui/menu-popup.tsx` is the one popup shell for every menu.
   Session rows use it through `src/components/workspace/session-row-menu.tsx`
   and messages through
@@ -168,11 +181,18 @@ external reverse proxy is optional.
   notification delivery. `shared/invite-link` packages guest invite logic.
 - `src/lib/i18n` owns shared locale behavior. Some feature-local copy lives beside
   its component; search for both English and Hebrew variants before editing.
-- `shared/presentation` and `shared/agent-creator` define portable assets.
-  `integrations/hermes` and `integrations/opencode` package native tools and
-  creator behavior (OpenClaw omits `create_agent`). Agent worktrees, profiles,
-  secrets, and state remain external. Never import native implementations into
-  browser code.
+- `packages/tools-mcp` is the stateless `aos-ui` MCP server every harness
+  registers for `render_chart`, `render_map`, `render_stats`, and
+  `present_artifact`; it never reads files. The first three are MCP Apps whose
+  single-file views live in `packages/tools-mcp/views`; `present_artifact` has
+  no view. `shared/presentation` defines the tool schemas and view resources
+  it serves. `shared/invite-link` and `shared/agent-creator` are
+  plain skills operators install into a harness. The proxy names the four
+  `aos-ui` tools bare and every other MCP tool `mcp__<server>__<tool>` in
+  `packages/proxy/core/aos-tool-names.ts`, and validates
+  Artifact paths in `packages/proxy/core/artifact-path.ts`. Agent worktrees,
+  profiles, secrets, and state remain external. Never import native
+  implementations into browser code.
 - Architecture boundary tests live in `test/architecture/` and
   `packages/proxy/architecture.test.ts`; the ESLint rule is
   `scripts/eslint-runtime-boundaries.mjs`.
@@ -223,15 +243,22 @@ database or provider registry.
 
 ## Verify changes
 
-Run the smallest relevant check during development, then the full applicable
-set before handoff:
+Pick checks by what changed, never by how many files changed or how big the
+diff looks:
 
-```bash
-bun run test
-bun run typecheck
-bun run lint
-bun run build
-```
+| What changed | Run | Not |
+|---|---|---|
+| styling, layout, copy, text, theme tokens | `bun run typecheck` and `bun run build` if code was touched; look once at the rendered surface | `test:e2e`, a new test, the unit suite |
+| a mechanical rename across files | `bun run typecheck`, `bun run build` | the full suite |
+| logic in one module | that module's tests (`bun run test <path>` or `vitest --changed`) | the full suite |
+| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `typecheck`, `lint`, `build`, once | — |
+| behavior a Playwright flow covers | that one spec, once | the whole e2e suite |
+
+A green run stays valid while the tree is unchanged: do not rerun before the
+commit. After a merge or rebase, rerun only the checks whose files overlap the
+incoming diff; a fast-forward or a docs-only upstream needs nothing. When the
+person says the change is small or asks for no ceremony, run what they said and
+name what was not run in the report.
 
 Several worktrees sweeping at once oversubscribe a shared machine and starve any
 deployment running on it, so `vitest.config.ts` caps workers at half the cores.
@@ -245,17 +272,16 @@ under `.agents/skills/` sit in an ignored directory, so stage them with
 
 Additional checks by area:
 
-- UI, locale, runtime-composition, or browser behavior: `bun run test:e2e`.
-  A styling-only change has no test to write, because styling is never
+- A change to UI behavior, locale switching, runtime composition, or a browser
+  flow a spec covers: that Playwright spec via `bun run test:e2e -- <spec>`,
+  once. A styling-only change has no test to write, because styling is never
   asserted: look at the changed surface once in the rendered app and stop
   there. A second look in the other theme is earned only by a change to
   color, contrast, or theme tokens; a behavior change that happens to alter
   what renders needs no theme pass at all, its tests already cover it.
-- Native packaging/shared assets: `bun run integrations:build` and `bun run hermes:test`.
-- OpenClaw plugin entry (`integrations/openclaw/index.ts`): `bun run openclaw:test`. It
-  installs the package's own lockfile because the plugin SDK is a peer this checkout
-  does not carry, so the root test and typecheck gates skip that entry and its
-  contract test. The integration's other tests run at the root.
+- Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
+  and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root
+  test and typecheck gates.
 - Compose or Docker changes:
 
   ```bash
@@ -289,9 +315,11 @@ Additional checks by area:
   container behavior changes.
 
 - Live harness acceptance requires credentials and approved disposable external
-  targets. Agent creation is provider-gated: the Hermes creator currently fails
-  closed without writing (`integrations/hermes/aos_hermes/creator.py`); the
-  OpenCode launcher denies `create_agent` (`scripts/opencode-config.ts`);
-  OpenClaw omits it entirely (`integrations/openclaw/index.ts`). Do not treat
+  targets. No runtime ships an Agent-creation tool. The creator is a Hermes
+  profile marked `ui_meta.aos.role: creator`, the OpenClaw Agent with the
+  reserved id `aos-agent-creator`, or the OpenCode launcher's hidden
+  `agent-builder`, which AOS does not yet report as the creator; each creates
+  Agents through its harness's own means, so a live creation run writes a real
+  Agent. `shared/install/PROMPT.md` installs the tools, skills, and creator. Do not treat
   mocked or skipped journeys as live passes; never change existing user
   Agents/profiles for routine tests.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
+import { OpenCodeContent, openCodeArtifactReceipt } from "./content"
 
 describe("OpenCodeContent", () => {
   it("stages a bounded batch without exposing a native path", () => {
@@ -22,33 +22,76 @@ describe("OpenCodeContent", () => {
     ])
     expect(JSON.stringify(stage)).not.toMatch(/path|native/i)
   })
+})
 
-  it("keeps artifact download unavailable rather than exporting an unscoped receipt", () => {
-    const content = new OpenCodeContent()
+const receipt = (artifact: Record<string, unknown>) =>
+  JSON.stringify({ ok: true, type: "aos.artifact", artifact })
 
-    expect(() =>
-      content.artifactReceipt({
-        metadata: {
-          aos_ui: {
-            kind: "artifact",
-            id: "artifact-1",
-            filename: "report.pdf",
-            mimeType: "application/pdf",
-            sizeBytes: 12,
-          },
+describe("openCodeArtifactReceipt", () => {
+  it("publishes an aos-ui receipt as an opaque artifact whose id derives from the call and path", () => {
+    const text = receipt({
+      path: "/workspaces/aos/out/report.pdf",
+      filename: "report.pdf",
+      mimeType: "application/pdf",
+    })
+    const projected = openCodeArtifactReceipt("call-1", text)
+
+    expect(projected).toEqual({
+      path: "/workspaces/aos/out/report.pdf",
+      descriptor: {
+        id: expect.stringMatching(/^opencode-artifact-[0-9a-f]{32}$/u),
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        source: { type: "provider", reference: projected?.descriptor.id },
+      },
+      result: {
+        ok: true,
+        type: "aos.artifact",
+        artifact: {
+          id: projected?.descriptor.id,
+          filename: "report.pdf",
+          mimeType: "application/pdf",
         },
-        attachments: [
-          {
-            type: "file",
-            filename: "report.pdf",
-            mime: "application/pdf",
-            url: "data:application/pdf;base64,AQID",
-          },
-        ],
-      })
-    ).toThrow(OpenCodeContentUnavailableError)
-    expect(() =>
-      content.artifactReceipt({ path: "/private/report.pdf" })
-    ).toThrow(OpenCodeContentUnavailableError)
+      },
+    })
+    expect(JSON.stringify(projected?.result)).not.toContain("/workspaces")
+    expect(openCodeArtifactReceipt("call-1", text)?.descriptor.id).toBe(
+      projected?.descriptor.id
+    )
+    expect(openCodeArtifactReceipt("call-2", text)?.descriptor.id).not.toBe(
+      projected?.descriptor.id
+    )
+  })
+
+  it.each([
+    ["malformed JSON", "{not json"],
+    ["a failed receipt", JSON.stringify({ ok: false, type: "aos.artifact" })],
+    [
+      "a relative path",
+      receipt({ path: "out/report.pdf", filename: "report.pdf" }),
+    ],
+    [
+      "a traversing path",
+      receipt({ path: "/workspaces/../etc/passwd", filename: "passwd" }),
+    ],
+    [
+      "a sensitive path",
+      receipt({ path: "/workspaces/aos/.env", filename: ".env" }),
+    ],
+    ["no filename", receipt({ path: "/workspaces/aos/out/report.pdf" })],
+    [
+      "a filename with a separator",
+      receipt({ path: "/workspaces/aos/out/report.pdf", filename: "a/b.pdf" }),
+    ],
+    [
+      "an invalid media type",
+      receipt({
+        path: "/workspaces/aos/out/report.pdf",
+        filename: "report.pdf",
+        mimeType: "pdf",
+      }),
+    ],
+  ])("publishes no artifact for %s", (_label, text) => {
+    expect(openCodeArtifactReceipt("call-1", text)).toBeUndefined()
   })
 })

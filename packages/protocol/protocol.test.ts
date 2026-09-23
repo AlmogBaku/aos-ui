@@ -25,6 +25,8 @@ import {
   VisibilityUpdateRequestSchema,
 } from "./index"
 import {
+  AOS_ARTIFACT_URI_SCHEME,
+  AOS_METHODS,
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
   AosFocusNotificationSchema,
@@ -33,7 +35,10 @@ import {
   AosChunkMetaSchema,
   AosStateMetaSchema,
   AosToolCallMetaSchema,
+  formatArtifactUri,
+  parseArtifactUri,
 } from "./acp"
+import { McpAppViewSchema } from "./mcp-apps"
 
 describe("AOS v1 normalized protocol", () => {
   it("preserves provider-specific approval choices and question cancellation", () => {
@@ -254,6 +259,7 @@ describe("AOS v1 normalized protocol", () => {
             scope: "session",
             maxBytes: 26214400,
           },
+          mcpApps: { status: "unavailable", reason: "not-supported" },
           transcription: {
             status: "unavailable",
             reason: "native-transcription-unavailable",
@@ -832,5 +838,57 @@ describe("AOS v1 normalized protocol", () => {
         ...patch,
       })
     ).toThrow()
+  })
+
+  it.each(["art-1", "report 2026/q3?#final.md", "תרשים:1"])(
+    "names the artifact %s in a link uri it reads back",
+    (artifactId) => {
+      const uri = formatArtifactUri(artifactId)
+
+      expect(uri.startsWith("artifact://")).toBe(true)
+      expect(new URL(uri).protocol).toBe(AOS_ARTIFACT_URI_SCHEME)
+      expect(parseArtifactUri(uri)).toBe(artifactId)
+    }
+  )
+
+  it("encodes an id so no route or query can ride on a link", () => {
+    expect(formatArtifactUri("a/b?c#d")).toBe("artifact://a%2Fb%3Fc%23d")
+  })
+
+  it.each([
+    "https://aos.example/api/aos/v1/artifacts/art-1",
+    "artifact:art-1",
+    "artifact://",
+    "artifact://a/b",
+    "artifact://a?b",
+    "artifact://%E0%A4%A",
+    "aos-attachment:stage-1/att-1",
+  ])("reads no artifact from %s", (uri) => {
+    expect(parseArtifactUri(uri)).toBeUndefined()
+  })
+
+  it("announces artifacts in the message stream, not as a notification", () => {
+    expect(Object.values(AOS_METHODS.notify)).not.toContain("_aos/artifact")
+  })
+})
+
+describe("MCP App view", () => {
+  it("carries the view's HTML, sandbox policy, and the call it renders", () => {
+    const view = {
+      html: "<!doctype html><p>forecast</p>",
+      csp: { connectDomains: ["https://api.weather.example"] },
+      permissions: { clipboardWrite: {} },
+      prefersBorder: true,
+      toolInput: { city: "Haifa" },
+      toolResult: { content: [{ type: "text", text: "sunny" }] },
+    }
+    expect(McpAppViewSchema.parse(view)).toEqual(view)
+  })
+
+  it("never carries a resource URI", () => {
+    expect(
+      McpAppViewSchema.safeParse({ html: "", resourceUri: "ui://x/view" })
+        .success
+    ).toBe(false)
   })
 })

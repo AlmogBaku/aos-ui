@@ -52,8 +52,11 @@ runs. It must not exceed `limits.activeExecutions`.
 
 ## Create an invitation
 
-The packaged `aos-invite-link` skill performs the same dedicated-Agent
-preflight before it creates a link.
+The `aos-invite-link` skill (`shared/invite-link/SKILL.md`) performs the same
+dedicated-Agent preflight before it creates a link. It is a plain skill:
+install it in a Hermes profile's `skills/` directory or through
+`skills.external_dirs` (see [Run Hermes](runtimes/hermes.md#skills)); the
+OpenCode launcher writes it into the worktree's `.opencode/skills/`.
 
 The proxy CLI signs locally and makes no HTTP request. `--ref` is optional; if
 omitted, the CLI generates a URL-safe conversation reference. Whether a new
@@ -64,7 +67,7 @@ native semantics.
 bun run gateway -- invite --config /absolute/private/path/proxy.yaml --agent interviewer
 ```
 
-The packaged native integration skill instead sends one POST to the trusted
+The `aos-invite-link` skill instead sends one POST to the trusted
 operator proxy's `/api/aos/v1/guest-invitations` endpoint. That endpoint
 requires the `Origin` header to match the operator `publicOrigin`; a missing
 or mismatched origin returns 403. An unknown Agent ID returns 404. Set
@@ -103,6 +106,21 @@ the guest connection.
 - Streaming, Stop, questions, cancellation, reload, and reconnect use the same
   normalized ACP v2 path as operator conversations.
 - Voice transcription and speech are Agent-scoped and do not create a Session. Guest audio and read-aloud text may reach the operator-configured proxy speech provider under the same permissions as operator requests. Guest audio is budgeted per conversation at 2 concurrent in-flight operations and 60 audio operations per 10 minutes, shared across all tabs and devices on the same invitation link.
+- An Artifact the invited Session publishes reaches the guest as a link. The
+  guest browser fetches it from
+  `/api/guest/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId`
+  with its invitation token as a Bearer token; the proxy resolves it only from
+  that Session's own history.
+- A tool call in the invited Session that declares an MCP App view reaches the
+  guest as the App card alone, without the call's arguments or result; no
+  other tool call reaches the guest. The `aos-ui` charts, maps, and stats are
+  such cards. The guest
+  browser opens the view and reads its resources under the invitation's
+  Artifact permission and relays its tool calls under the message permission,
+  through `/api/guest/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app`,
+  and only for a call of that Session. The view itself receives
+  the call's input and result, so give a guest-facing Agent only App servers
+  whose views are fit for a guest.
 - Expiry detaches the guest only; it does not stop provider work.
 - Invalid or expired links ask the guest to request a new invitation.
 

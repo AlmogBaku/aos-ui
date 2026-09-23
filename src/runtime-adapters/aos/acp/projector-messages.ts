@@ -60,6 +60,8 @@ export type ProjectedToolCall = {
   readonly messages?: readonly ProjectedMessage[]
   /** The terminals the call's content names, as the projector last saw them. */
   readonly terminals?: readonly ProjectedTerminal[]
+  /** The tool declares an MCP App view; once seen, the call keeps it. */
+  readonly app?: true
 }
 
 export type ToolCallPatch = {
@@ -82,6 +84,7 @@ export type ToolMetaPatch = {
   readonly completedAt?: number
   readonly durationMs?: number
   readonly subagent?: AosSubagent
+  readonly app?: true
 }
 
 export type ProjectedPart =
@@ -345,6 +348,7 @@ function mergeCall(
     completedAt: meta.completedAt ?? current.completedAt,
     durationMs: meta.durationMs ?? current.durationMs,
     subagent: mergeSubagent(current.subagent, meta.subagent),
+    ...(current.app || meta.app ? { app: true } : {}),
   }
 }
 
@@ -496,7 +500,11 @@ const knownKind = (kind: string | undefined) =>
   kind === undefined ? undefined : readAosToolArtifact({ aos: { kind } })?.kind
 
 /** What the call carries beyond args and result, or nothing at all. */
-function toolArtifact(call: ProjectedToolCall): AosToolArtifact | undefined {
+function toolArtifact(
+  call: ProjectedToolCall,
+  result: unknown,
+  turn: MessageStatus | undefined
+): AosToolArtifact | undefined {
   const kind = knownKind(call.kind)
   const locations = (call.locations ?? []).map(({ path, line }) =>
     typeof line === "number" ? { path, line } : { path }
@@ -512,6 +520,7 @@ function toolArtifact(call: ProjectedToolCall): AosToolArtifact | undefined {
     ...(diffs.length === 0 ? {} : { diffs }),
     ...(terminals.length === 0 ? {} : { terminals }),
     ...(call.subagent === undefined ? {} : { subagent: call.subagent }),
+    ...(call.app ? { app: appState(call, result, turn) } : {}),
   }
   return Object.keys(artifact).length === 0 ? undefined : artifact
 }
@@ -546,9 +555,39 @@ function childMessage(message: ProjectedMessage, call: ProjectedToolCall) {
   return fromThreadMessageLike(toThreadMessage(message), message.id, status)
 }
 
-function toolPart(call: ProjectedToolCall): ThreadMessagePart {
+/** Why an App call cannot produce a result anymore, if it cannot. */
+function appCancellation(
+  call: ProjectedToolCall,
+  result: unknown,
+  turn: MessageStatus | undefined
+) {
+  if (result !== undefined || call.status === "completed") return undefined
+  if (call.status === "failed") return "The tool call failed"
+  return turn?.type === "complete" || turn?.type === "incomplete"
+    ? "The turn ended before the tool call finished"
+    : undefined
+}
+
+/** How far an App call has come: its input, its settlement, or why it ended. */
+function appState(
+  call: ProjectedToolCall,
+  result: unknown,
+  turn: MessageStatus | undefined
+) {
+  const cancelled = appCancellation(call, result, turn)
+  return {
+    ...(call.rawInput === undefined ? {} : { input: true as const }),
+    ...(call.status === "completed" ? { settled: true as const } : {}),
+    ...(cancelled === undefined ? {} : { cancelled }),
+  }
+}
+
+function toolPart(
+  call: ProjectedToolCall,
+  turn: MessageStatus | undefined
+): ThreadMessagePart {
   const result = call.rawOutput ?? contentResult(call.content)
-  const artifact = toolArtifact(call)
+  const artifact = toolArtifact(call, result, turn)
   const timing = toolTiming(call)
   const messages = call.messages ?? []
   return {
@@ -569,10 +608,13 @@ function toolPart(call: ProjectedToolCall): ThreadMessagePart {
   }
 }
 
-function threadPart(part: ProjectedPart): ThreadMessagePart[] {
+function threadPart(
+  part: ProjectedPart,
+  turn: MessageStatus | undefined
+): ThreadMessagePart[] {
   if (part.source === "data")
     return [{ type: "data", name: part.name, data: part.data }]
-  if (part.source === "tool") return [toolPart(part.call)]
+  if (part.source === "tool") return [toolPart(part.call, turn)]
   if (part.source === "thought") {
     const text = blockText(part.block)
     return text === undefined ? [] : [{ type: "reasoning", text }]
@@ -609,7 +651,7 @@ export function toThreadMessage(message: ProjectedMessage): ThreadMessageLike {
   const value: ThreadMessageLike = {
     id: message.id,
     role: message.role,
-    content: message.parts.flatMap(threadPart),
+    content: message.parts.flatMap((part) => threadPart(part, message.status)),
     ...(message.status === undefined ? {} : { status: message.status }),
     ...(timing === undefined ? {} : { metadata: { timing } }),
   }

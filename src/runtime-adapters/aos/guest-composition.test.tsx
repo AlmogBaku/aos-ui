@@ -56,6 +56,7 @@ function capabilities() {
     content: {
       attachments: unavailable,
       artifacts: unavailable,
+      mcpApps: unavailable,
       transcription: unavailable,
       speech: unavailable,
     },
@@ -142,7 +143,6 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
             extensions: {
               steer: false,
               rewind: false,
-              artifacts: true,
               composerPrefill: false,
               agents: false,
               invalidation: false,

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["bun", "node"]
+  },
+  "files": ["packages/tools-mcp/views/build.ts"],
+  "include": ["packages/tools-mcp/**/*.ts"],
+  "exclude": ["**/*.test.ts", "packages/tools-mcp/views/**"]
+}

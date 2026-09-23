@@ -11,17 +11,12 @@ const customProviderVariables = [
 ] as const
 
 const defaultCorsOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"]
-export function buildOpenCodeConfigContent(
-  environment: Environment,
-  integrationPluginUrl?: string
-): string | undefined {
+const defaultToolsMcpUrl = "http://127.0.0.1:4110/mcp"
+
+export function buildOpenCodeConfigContent(environment: Environment): string {
   const configuredVariableCount = customProviderVariables.filter((variable) =>
     environment[variable]?.trim()
   ).length
-
-  if (configuredVariableCount === 0 && !integrationPluginUrl) {
-    return undefined
-  }
 
   if (
     configuredVariableCount > 0 &&
@@ -33,18 +28,13 @@ export function buildOpenCodeConfigContent(
   }
 
   return JSON.stringify({
-    ...(integrationPluginUrl
-      ? {
-          permission: {
-            create_agent: "deny",
-            start_session: "allow",
-            render_chart: "allow",
-            render_map: "allow",
-            render_stats: "allow",
-          },
-          plugin: [integrationPluginUrl],
-        }
-      : {}),
+    mcp: {
+      "aos-ui": {
+        type: "remote",
+        url: environment.AOS_UI_TOOLS_MCP_URL?.trim() || defaultToolsMcpUrl,
+        enabled: true,
+      },
+    },
     ...(configuredVariableCount
       ? {
           provider: {

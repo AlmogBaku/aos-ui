@@ -1,4 +1,8 @@
 import { AOS_ACP_GUEST_PATH, AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import {
+  MCP_APP_SANDBOX_CSP,
+  MCP_APP_SANDBOX_PATH,
+} from "../../protocol/mcp-apps"
 import { createConfiguredProxy } from "../composition"
 import { parseGuestComposerSlashCommandsEnabled } from "../config"
 import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
@@ -29,6 +33,27 @@ function decodedPath(pathname: string) {
   }
 }
 
+const withHeaders = (response: Response, set: Record<string, string>) => {
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(set)) headers.set(name, value)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+/**
+ * The MCP App sandbox proxy page carries its own policy on every listener, in
+ * place of the guest page's: only this origin may frame it.
+ */
+const secureSandboxResponse = (response: Response) =>
+  withHeaders(response, {
+    "content-security-policy": MCP_APP_SANDBOX_CSP,
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  })
+
 function listenerApp(
   api: {
     fetch(request: Request, server?: unknown): Response | Promise<Response>
@@ -38,22 +63,16 @@ function listenerApp(
   runtimeConfig?: unknown,
   guestSurface = false
 ) {
-  const secureGuestResponse = (response: Response) => {
-    if (!guestSurface) return response
-    const headers = new Headers(response.headers)
-    headers.set(
-      "content-security-policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-    )
-    headers.set("referrer-policy", "no-referrer")
-    headers.set("x-content-type-options", "nosniff")
-    headers.set("x-frame-options", "DENY")
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    })
-  }
+  const secureGuestResponse = (response: Response) =>
+    guestSurface
+      ? withHeaders(response, {
+          "content-security-policy":
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; media-src 'self' blob:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
+        })
+      : response
   return {
     async fetch(request: Request, server?: unknown) {
       const pathname = new URL(request.url).pathname
@@ -80,6 +99,12 @@ function listenerApp(
         )
       if (pathname.startsWith("/api/") && pathname !== "/api/health")
         return new Response(null, { status: 404 })
+      if (pathname === MCP_APP_SANDBOX_PATH) {
+        const page = await staticHandler?.(request, server)
+        return page?.ok
+          ? secureSandboxResponse(page)
+          : secureGuestResponse(page ?? new Response(null, { status: 404 }))
+      }
       return secureGuestResponse(
         (await staticHandler?.(request, server)) ??
           new Response(null, { status: 404 })

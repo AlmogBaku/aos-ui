@@ -84,7 +84,6 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
   return {
     steer: true,
     rewind: true,
-    artifacts: true,
     composerPrefill: true,
     agents: true,
     invalidation: runtime.subscribeCatalogChanges !== undefined,
@@ -111,7 +110,6 @@ const GUEST_METHODS = new Set<string>([
 const GUEST_EXTENSIONS = {
   steer: false,
   rewind: false,
-  artifacts: true,
   composerPrefill: false,
   agents: false,
   invalidation: false,

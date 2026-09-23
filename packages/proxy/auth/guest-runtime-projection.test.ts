@@ -429,6 +429,7 @@ describe("guest turn projection", () => {
           maxTotalBytes: 2_000_000,
         },
         artifacts: { status: "unavailable", reason: "not-supported" },
+        mcpApps: { status: "unavailable", reason: "not-supported" },
         transcription: { status: "unavailable", reason: "not-supported" },
         speech: { status: "unavailable", reason: "not-supported" },
       },
@@ -528,6 +529,66 @@ describe("guest turn projection", () => {
 
     for (const event of hidden)
       expect(project(event), event.kind).toBeUndefined()
+  })
+
+  it("passes an MCP App call's card to a guest and hides any other tool call", () => {
+    const access = createGuestTurnAccess(
+      authorization,
+      { ...authorization, operation: "errors:read" },
+      { agentId: "agent", sessionId: "stored", threadId: "ref" },
+      () => 10_000,
+      "subscriber"
+    )
+    const projectOne = (event: TurnEvent) =>
+      access.project(TurnEventSchema.parse(event))
+
+    expect(
+      projectOne({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "chart-1",
+        title: "Render chart",
+        name: "render_chart",
+        parentMessageId: "assistant-native",
+        app: true,
+      })
+    ).toEqual({
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId: "chart-1",
+      title: "render_chart",
+      name: "render_chart",
+      app: true,
+    })
+    expect(
+      projectOne({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "chart-1",
+        output: "private data",
+        failed: false,
+        app: true,
+      })
+    ).toEqual({
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "chart-1",
+      output: "",
+      failed: false,
+      app: true,
+      name: "render_chart",
+    })
+    expect(
+      projectOne({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "read-1",
+        title: "read_file",
+      })
+    ).toBeUndefined()
+    expect(
+      projectOne({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "read-1",
+        output: "private file",
+        failed: false,
+      })
+    ).toBeUndefined()
   })
 
   it("keeps a failure's provider and model from guests", () => {

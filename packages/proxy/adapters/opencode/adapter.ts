@@ -16,22 +16,39 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
+  ServerMcpApps,
   ServerTurnEngine,
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
+import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { projectTodos } from "../todos"
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
   OpenCodeMutationUncertainError,
   type OpenCodeClient,
+  type OpenCodeFileContent,
   type OpenCodePageOptions,
   type OpenCodeSessionEvents,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
-import { OpenCodeContent, OpenCodeContentUnavailableError } from "./content"
-import { projectOpenCodeHistory } from "./history"
+import {
+  OpenCodeContent,
+  OpenCodeContentUnavailableError,
+  OpenCodeContentUnreadableError,
+} from "./content"
+import {
+  openCodeHistoryToolNames,
+  projectOpenCodeHistory,
+  publishedOpenCodeArtifact,
+  type NativeMessage,
+} from "./history"
+import {
+  createOpenCodeMcpApps,
+  storedOpenCodeToolCall,
+  type OpenCodeMcpCatalog,
+} from "./mcp-apps"
 import { OPENCODE_TODO_STATUS_ALIASES } from "./todos"
 import {
   OpenCodeInteractionPublicError,
@@ -59,7 +76,8 @@ const MAX_HISTORY_PAGES = 100
 
 /** The assembly seam deliberately excludes coordinator-owned run state. */
 export type OpenCodeAdapterClient = Readonly<{
-  catalog: Pick<OpenCodeClient["catalog"], "agents" | "models">
+  catalog: Pick<OpenCodeClient["catalog"], "agents" | "models"> &
+    Partial<Pick<OpenCodeClient["catalog"], "config">>
   sessions: Pick<
     OpenCodeClient["sessions"],
     | "list"
@@ -80,6 +98,7 @@ export type OpenCodeAdapterClient = Readonly<{
     | "questions"
     | "permissions"
   >
+  files: Pick<OpenCodeClient["files"], "read">
   close(): Promise<void>
 }>
 
@@ -90,6 +109,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   /** Factory supplies the one shared native-interaction authority. */
   interactions?: OpenCodeInteractions
   creatorAgentId?: string
+  /** The project's MCP servers; without them, no tool opens a view. */
+  mcp?: OpenCodeMcpCatalog
 }>
 
 function identifier(value: string) {
@@ -101,6 +122,32 @@ function identifier(value: string) {
       return code >= 32 && code !== 127
     })
   )
+}
+
+/**
+ * The bytes one native file read answered with. OpenCode answers a missing file
+ * as empty text rather than an error, so empty text is unreadable; anything
+ * malformed or over the artifact limit is an unusable answer, not a missing file.
+ */
+function artifactBytes(file: OpenCodeFileContent) {
+  if (file.type === "text") {
+    if (!file.content) throw new OpenCodeContentUnreadableError()
+    const bytes = new TextEncoder().encode(file.content)
+    if (bytes.byteLength > MAX_ARTIFACT_BYTES)
+      throw new OpenCodeContentUnavailableError()
+    return bytes
+  }
+  if (
+    file.encoding !== "base64" ||
+    !file.content ||
+    file.content.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(file.content)
+  )
+    throw new OpenCodeContentUnavailableError()
+  const bytes = new Uint8Array(Buffer.from(file.content, "base64"))
+  if (bytes.byteLength > MAX_ARTIFACT_BYTES)
+    throw new OpenCodeContentUnavailableError()
+  return bytes
 }
 
 function unavailableRuntimeInfo(): RuntimeInfo {
@@ -208,6 +255,7 @@ function readyRuntimeInfo(): RuntimeInfo {
 export class OpenCodeServerAdapter implements ServerRuntime {
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
+  readonly mcpApps?: ServerMcpApps
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
   readonly #invalidations = new Set<() => void>()
@@ -225,6 +273,19 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         questions: options.client.sessions.questions,
         permissions: options.client.sessions.permissions,
       })
+    if (options.mcp)
+      this.mcpApps = createOpenCodeMcpApps(
+        options.mcp,
+        async (agentId, sessionId, toolCallId) => {
+          await this.getSession(agentId, sessionId)
+          const { messages } = await this.#readHistory(
+            agentId,
+            sessionId,
+            Number.POSITIVE_INFINITY
+          )
+          return storedOpenCodeToolCall(messages, toolCallId)
+        }
+      )
   }
 
   resolveSessionId(agentId: string, publicSessionId: string) {
@@ -261,7 +322,12 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         return { code: "revision_conflict", status: 409 } as const
       return { code: "temporarily_unavailable", status: 503 } as const
     }
-    if (cause instanceof OpenCodeWorkspaceScopeError)
+    if (
+      cause instanceof OpenCodeWorkspaceScopeError ||
+      // The receipt is still authoritative, but OpenCode cannot read its file:
+      // unlike a 503, "not found" never invites a retry that cannot succeed.
+      cause instanceof OpenCodeContentUnreadableError
+    )
       return { code: "not_found", status: 404 } as const
     if (cause instanceof OpenCodeWorkspaceUnavailableError)
       return { code: "temporarily_unavailable", status: 503 } as const
@@ -355,7 +421,11 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const required = offset + limit + 1
     if (!Number.isSafeInteger(required))
       throw new OpenCodeClientError("invalid_request")
-    const { messages, hasMore } = await this.#readHistory(sessionId, required)
+    const { messages, hasMore } = await this.#readHistory(
+      agentId,
+      sessionId,
+      required
+    )
     const page: Array<(typeof messages)[number] | SessionPlanActivityMessage> =
       messages.slice(offset, offset + limit)
     const nextOffset = offset + page.length
@@ -516,8 +586,30 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     artifactId: string
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
     await this.getSession(agentId, publicSessionId)
-    void artifactId
-    throw new OpenCodeContentUnavailableError()
+    const { raw } = await this.#readHistory(
+      agentId,
+      publicSessionId,
+      Number.POSITIVE_INFINITY
+    )
+    const artifact = publishedOpenCodeArtifact(raw, artifactId)
+    if (!artifact) throw new OpenCodeWorkspaceScopeError()
+    let file: OpenCodeFileContent
+    try {
+      file = await this.options.client.files.read(artifact.path)
+    } catch (error) {
+      if (
+        error instanceof OpenCodeClientError &&
+        (error.code === "not_found" || error.code === "invalid_request")
+      )
+        throw new OpenCodeContentUnreadableError()
+      throw error
+    }
+    const { filename, mimeType } = artifact.descriptor
+    return {
+      bytes: artifactBytes(file),
+      ...(mimeType ? { mimeType } : {}),
+      filename,
+    }
   }
 
   async transcribe(
@@ -547,8 +639,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return this.#closePromise
   }
 
-  async #readHistory(sessionId: string, required: number) {
-    const raw: unknown[] = []
+  async #readHistory(agentId: string, sessionId: string, required: number) {
+    const raw: NativeMessage[] = []
     const seenMessages = new Set<string>()
     const seenCursors = new Set<string>()
     let cursor: string | undefined
@@ -566,10 +658,17 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         seenMessages.add(message.id)
         raw.push(message)
       }
-      const messages = projectOpenCodeHistory({ messages: raw, sessionId })
+      const messages = projectOpenCodeHistory({
+        messages: raw,
+        sessionId,
+        resolve: await this.options.mcp?.names.load(
+          agentId,
+          openCodeHistoryToolNames(parsed.data.data)
+        ),
+      })
       const next = parsed.data.cursor.next
-      if (!next) return { messages, hasMore: false }
-      if (messages.length >= required) return { messages, hasMore: true }
+      if (!next) return { messages, raw, hasMore: false }
+      if (messages.length >= required) return { messages, raw, hasMore: true }
       if (seenCursors.has(next)) throw new OpenCodeWorkspaceUnavailableError()
       seenCursors.add(next)
       cursor = next

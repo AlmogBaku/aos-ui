@@ -6,10 +6,12 @@ import {
   type TokenUsage,
   type TurnEvent,
 } from "../../core/events"
+import type { McpToolNameResolver } from "../../core/aos-tool-names"
 
 import { projectTodos, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
+import { openCodeArtifactReceipt } from "./content"
 import {
   openCodeModelOptionId,
   openCodeStopReason,
@@ -560,10 +562,15 @@ export class OpenCodeEventProjector {
   /** The model the latest step ran on. */
   #model?: ModelRef
 
+  readonly #resolveMcpTool?: McpToolNameResolver
+
   constructor(
     sessionId: string,
     lastSeen: number,
-    options: Readonly<{ admissionId?: string }> = {}
+    options: Readonly<{
+      admissionId?: string
+      resolveMcpTool?: McpToolNameResolver
+    }> = {}
   ) {
     if (
       !identifier(sessionId) ||
@@ -576,6 +583,7 @@ export class OpenCodeEventProjector {
     this.#lastSeen = lastSeen
     this.#admissionId = options.admissionId
     this.#admissionMatched = options.admissionId === undefined
+    this.#resolveMcpTool = options.resolveMcpTool
   }
 
   recoveryPosition() {
@@ -772,18 +780,31 @@ export class OpenCodeEventProjector {
       tool.ended = true
       const failed = type === "session.next.tool.failed"
       const completedAt = occurredAt(data)
+      const text = failed ? undefined : safeTextContent(data.content)
+      const artifact =
+        text !== undefined &&
+        canonicalOpenCodeToolName(tool.name) === "present_artifact"
+          ? openCodeArtifactReceipt(callId, text)
+          : undefined
       events.push(
         { kind: TurnEventKind.ToolCallInputEnded, toolCallId: callId },
         {
           kind: TurnEventKind.ToolCallFinished,
           toolCallId: callId,
-          output: failed
-            ? JSON.stringify({ status: "error" })
-            : toolResultContent(tool.name, safeTextContent(data.content)),
+          output: artifact
+            ? JSON.stringify(artifact.result)
+            : text === undefined
+              ? JSON.stringify({ status: "error" })
+              : toolResultContent(tool.name, text),
           failed,
           ...(completedAt ? { completedAt } : {}),
         }
       )
+      if (artifact)
+        events.push({
+          kind: TurnEventKind.ArtifactPublished,
+          artifact: artifact.descriptor,
+        })
       // A written list is authoritative; a failed write left the plan alone.
       if (!failed && tool.todoInput) {
         const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
@@ -914,7 +935,7 @@ export class OpenCodeEventProjector {
       output: "",
     }
     this.#tools.set(callId, tool)
-    const canonical = canonicalOpenCodeToolName(name)
+    const canonical = canonicalOpenCodeToolName(name, this.#resolveMcpTool)
     const toolKind = openCodeToolKind(canonical)
     events.push({
       kind: TurnEventKind.ToolCallStarted,

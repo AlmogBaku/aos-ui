@@ -186,10 +186,10 @@ cursor-bearing reconnects.
 
 **AOS extension events** map to vendor wire notifications:
 
-| Turn event kind      | Wire notification     |
-| -------------------- | --------------------- |
-| `steer-accepted`     | `_aos/steer_accepted` |
-| `artifact-published` | `_aos/artifact`       |
+| Turn event kind      | Wire form                                                            |
+| -------------------- | -------------------------------------------------------------------- |
+| `steer-accepted`     | `_aos/steer_accepted` notification                                   |
+| `artifact-published` | `resource_link` block, `uri: "artifact://<id>"`, on the turn's chunk |
 
 Mapping source: `acp/translate/turn-events.ts`.
 

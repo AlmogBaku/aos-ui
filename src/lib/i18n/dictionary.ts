@@ -14,6 +14,7 @@ export type Dictionary = {
     unavailable: string
     missing: string
     missingDetail: string
+    missingFileDetail: string
     downloadFailed: string
     audio: string
     video: string

@@ -9,7 +9,6 @@ import {
   AOS_METHODS,
   AOS_STOP_REASONS,
   AosActivityNotificationSchema,
-  AosAgentCreationReceiptSchema,
   AosPlanMetaSchema,
   AosSessionInfoMetaSchema,
   AosSessionInvalidatedNotificationSchema,
@@ -40,6 +39,8 @@ type MetadataSubscription = {
 export type AcpSessionStoreOptions = {
   connection: AcpConnection
   now?: () => number
+  /** A live turn of an attached Session just stopped, however it ended. */
+  onTurnFinished?: (threadId: string) => void
 }
 
 /** Runs `handler` for every notification of `method` the proxy sends. */
@@ -97,27 +98,6 @@ function activityEventOf(
   return { ...base, type, turnId: notification.turnId }
 }
 
-/** The creator's canonical tool name; adapters rename native names to it. */
-const AGENT_CREATION_TOOL = "create_agent"
-
-/** The proxy usually parses tool output; a provider may still send raw text. */
-function agentCreationReceiptOf(rawOutput: unknown) {
-  let value = rawOutput
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value)
-    } catch {
-      return undefined
-    }
-  }
-  const parsed = AosAgentCreationReceiptSchema.safeParse(value)
-  return parsed.success ? parsed.data : undefined
-}
-
-function toolCallKey(threadId: string, toolCallId: string) {
-  return `${threadId}\u0000${toolCallId}`
-}
-
 function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
   return (
     left !== undefined &&
@@ -133,6 +113,7 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
 export function createAcpSessionStore({
   connection,
   now = Date.now,
+  onTurnFinished,
 }: AcpSessionStoreOptions) {
   const rows = new Map<string, SessionMetadata>()
   const titles = new Map<string, string>()
@@ -143,10 +124,6 @@ export function createAcpSessionStore({
   const subscriptions = new Set<MetadataSubscription>()
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
-  // A settled tool update carries no title, so the creator's tool is only
-  // recognizable from the title its first update reported. Remembering that
-  // one tool keeps calls the workspace never sees settle from accumulating.
-  const creatorCalls = new Set<string>()
   const invalidationListeners = new Map<string, Set<() => void>>()
 
   function rowsFor(threadIds: Iterable<string>) {
@@ -218,41 +195,6 @@ export function createAcpSessionStore({
     for (const listener of activityListeners) listener(event)
   }
 
-  /**
-   * Agent creation is observable only as the creator tool's own result, which
-   * the workspace reads as one content-free receipt per settled call.
-   */
-  function acceptToolCall(
-    threadId: string,
-    update: {
-      toolCallId: string
-      title?: string | null
-      status?: string | null
-      rawOutput?: unknown
-    }
-  ) {
-    const key = toolCallKey(threadId, update.toolCallId)
-    if (typeof update.title === "string") {
-      if (update.title === AGENT_CREATION_TOOL) creatorCalls.add(key)
-      else creatorCalls.delete(key)
-    }
-    const status = update.status
-    if (status !== "completed" && status !== "failed" && status !== "cancelled")
-      return
-    // Any settled status releases the call; only a completed one reports.
-    const creatorCall = creatorCalls.delete(key)
-    if (!creatorCall || status !== "completed") return
-    const receipt = agentCreationReceiptOf(update.rawOutput)
-    if (!receipt) return
-    emitActivity({
-      id: `${threadId}:${update.toolCallId}`,
-      type: receipt.ok ? "agent-ready" : "agent-activation-failed",
-      agentId: receipt.agentId,
-      threadId,
-      occurredAt: new Date(now()).toISOString(),
-    })
-  }
-
   /** Tells a Session's observers to re-read what the provider now holds. */
   function invalidate(threadId: string) {
     for (const listener of invalidationListeners.get(threadId) ?? []) listener()
@@ -267,7 +209,14 @@ export function createAcpSessionStore({
     if (SessionUpdate.isStateUpdate(update)) {
       const status = statusFromState(update)
       if (replaying.has(threadId)) return void replaying.set(threadId, status)
-      return patch(threadId, { status })
+      const previous = rows.get(threadId)?.status
+      patch(threadId, { status })
+      if (
+        (previous === "running" || previous === "waiting-for-input") &&
+        (status === "idle" || status === "failed")
+      )
+        onTurnFinished?.(threadId)
+      return
     }
     if (SessionUpdate.isSessionInfoUpdate(update)) {
       if (update.title && update.title !== titles.get(threadId)) {
@@ -278,8 +227,6 @@ export function createAcpSessionStore({
       if (info.success) put(threadId, info.data, update.updatedAt)
       return
     }
-    if (SessionUpdate.isToolCallUpdate(update))
-      return acceptToolCall(threadId, update)
     if (!SessionUpdate.isPlanUpdate(update)) return
     const plan = AosPlanMetaSchema.safeParse(meta)
     if (plan.success) setTodos(threadId, plan.data.todos)
@@ -388,6 +335,8 @@ export function createAcpSessionStore({
         if (!listeners.size) todoListeners.delete(threadId)
       }
     },
+
+    emitActivity,
 
     subscribeActivity(listener: (event: WorkspaceActivityEvent) => void) {
       activityListeners.add(listener)

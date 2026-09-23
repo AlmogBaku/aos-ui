@@ -288,6 +288,7 @@ describe("Hermes content operations", () => {
         scope: "session",
         maxBytes: 26_214_400,
       },
+      mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
       transcription: {
         scope: "agent",
         maxRecordingBytes: 5_242_880,
