@@ -16,8 +16,6 @@ const HYDRATION_PAGE_SIZE = 100
 export type ActivityFeedOptions = {
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
-  /** Agents this connection may observe; every Agent when absent. */
-  agentIds?: () => Promise<string[]>
   now?: () => number
   limit?: number
   maxAgeMs?: number
@@ -58,7 +56,6 @@ function notificationOf(event: ExecutionEvent): AosActivityNotification {
 export function createActivityFeed({
   runtimeInstance,
   sessionRows,
-  agentIds,
   now = Date.now,
   limit = DEFAULT_LIMIT,
   maxAgeMs = DEFAULT_MAX_AGE_MS,
@@ -67,11 +64,6 @@ export function createActivityFeed({
   const buffer: AosActivityNotification[] = []
   const listeners = new Set<(event: AosActivityNotification) => void>()
   const lastUnread = new Map<string, boolean>()
-  // Deny until the allowlist resolves, so a guest connection never observes
-  // another Agent while its own list is still in flight.
-  let observable: Set<string> | undefined = agentIds
-    ? new Set<string>()
-    : undefined
   let unsubscribeRows: (() => void) | undefined
   let closed = false
 
@@ -85,7 +77,7 @@ export function createActivityFeed({
   }
 
   const push = (event: AosActivityNotification) => {
-    if (closed || (observable && !observable.has(event.agentId))) return
+    if (closed) return
     buffer.push(event)
     trim()
     for (const listener of [...listeners]) listener(event)
@@ -135,7 +127,6 @@ export function createActivityFeed({
 
   const hydrate = async () => {
     try {
-      if (agentIds) observable = new Set(await agentIds())
       const catalog = await runtime.listAllSessions(HYDRATION_PAGE_SIZE, 0)
       if (closed) return
       sessionRows.rememberList(catalog.sessions)

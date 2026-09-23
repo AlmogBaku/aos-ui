@@ -56,13 +56,16 @@ function permission({
       aos: { requestId, ...(message === undefined ? {} : { message }) },
     },
   }
+  // The proxy withdraws a request by aborting its signal.
+  const withdrawal = new AbortController()
   const pending: AcpPendingRequest = {
     kind: "permission",
     sessionId,
     request,
     respond,
+    signal: withdrawal.signal,
   }
-  return { pending, respond }
+  return { pending, respond, withdraw: () => withdrawal.abort() }
 }
 
 function elicitation({
@@ -110,6 +113,7 @@ function elicitation({
     sessionId,
     request,
     respond,
+    signal: new AbortController().signal,
   }
   return { pending, respond }
 }
@@ -317,5 +321,42 @@ describe("ACP runtime interactions", () => {
     expect(respond).not.toHaveBeenCalled()
     expect(listener).toHaveBeenCalledTimes(1)
     expect(interactions.getPending("session-1")).toBeUndefined()
+  })
+
+  it("clears a question another UI answered without answering the runtime", () => {
+    const { interactions, emit } = harness()
+    const { pending, respond, withdraw } = permission()
+    emit(pending)
+    const listener = vi.fn()
+    interactions.subscribe("session-1", listener)
+
+    withdraw()
+
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(respond).not.toHaveBeenCalled()
+  })
+
+  it("keeps another Session's question that shares the withdrawn request id", () => {
+    const { interactions, emit } = harness()
+    const withdrawn = permission({ sessionId: "session-1" })
+    emit(withdrawn.pending)
+    emit(permission({ sessionId: "session-2" }).pending)
+
+    withdrawn.withdraw()
+
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(interactions.getPending("session-2")?.requestId).toBe("interrupt-1")
+  })
+
+  it("keeps the newer question when a superseded one is withdrawn", () => {
+    const { interactions, emit } = harness()
+    const superseded = permission({ requestId: "interrupt-1" })
+    emit(superseded.pending)
+    emit(permission({ requestId: "interrupt-2" }).pending)
+
+    superseded.withdraw()
+
+    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-2")
   })
 })

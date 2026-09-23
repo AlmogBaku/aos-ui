@@ -1,7 +1,9 @@
 import {
   client,
   methods,
+  type ContentBlock,
   type RequestPermissionResponse,
+  type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
@@ -11,11 +13,13 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
   type RuntimeInfo,
   type Session,
+  type SessionHistoryResponse,
   type SessionModelsResponse,
 } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_EXTENSION_VERSION,
+  AOS_ATTACHMENT_URI_SCHEME,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
@@ -40,12 +44,16 @@ import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
+import { createSessionRooms } from "./session-rooms"
+import { persistedCorrections } from "./translate/history"
 import type {
   AcpConnectionContext,
   AcpOutbound,
+  GuestGrant,
   GuestPolicy,
   Translators,
 } from "./types"
+import { invalidRequest } from "./validation"
 
 const AGENT = "researcher"
 const PRINCIPAL = "operator"
@@ -184,7 +192,7 @@ const USAGE = {
 class EventSource implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
-  readonly stop = vi.fn(async () => "stopping" as const)
+  readonly stop = vi.fn<ServerTurnHandle["stop"]>(async () => "stopping")
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
@@ -293,7 +301,7 @@ const translators: Translators = {
               state: "idle",
               stopReason: AOS_STOP_REASONS.uncertain,
               // As the real translator does, the failure itself travels with
-              // the state it settled, which is what the attachment logs.
+              // the state it settled, which is what the member logs.
               _meta: {
                 [AOS_META_KEY]: {
                   ...meta._meta[AOS_META_KEY],
@@ -337,8 +345,7 @@ const translators: Translators = {
       }
     return { state, outbound: [] }
   },
-  // The from-start resume paths read this count; this harness replays none.
-  persistedCorrections: () => 0,
+  persistedCorrections,
   translateHistory: (history) =>
     history.messages.map((message) => ({
       kind: "update",
@@ -429,6 +436,7 @@ const GUEST_POLICY: GuestPolicy = {
   project: {
     access: (base) => base,
     history: (value) => value,
+    turn: () => undefined,
     capabilities: (value) => value,
     permissionReply: (_request, reply) => reply,
   },
@@ -441,14 +449,33 @@ type HarnessOptions = {
   guest?: boolean
   total?: number
   activity?: AosActivityNotification[]
-  permission?: (params: unknown) => Promise<RequestPermissionResponse>
+  /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
+  permission?: (
+    params: unknown,
+    signal: AbortSignal
+  ) => Promise<RequestPermissionResponse>
   discover?: ServerTurnEngine["discover"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
   beforeModels?: () => Promise<void>
+  /** Runs before each history read; a held one stands for a slow page. */
+  beforeHistory?: () => Promise<void>
+  /** Bounds each turn's journal; a small one stands for a long turn. */
+  maxReplayEvents?: number
+  /** Runs as a resume translates the page it read, before it follows the turn. */
+  onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
+  /**
+   * Runs as the provider admits each turn, before its handle returns: holding
+   * it holds the admission, and throwing refuses the turn.
+   */
+  onStart?: (source: EventSource) => void | Promise<void>
+  /** The replayed page's messages; defaults to one earlier assistant reply. */
+  history?: SessionHistoryResponse["messages"]
+  /** Gives provider Sessions ids of their own, as a real runtime does. */
+  providerIds?: boolean
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -456,6 +483,7 @@ async function harness(options: HarnessOptions = {}) {
   const start = vi.fn(async () => {
     const source = new EventSource()
     sources.push(source)
+    await options.onStart?.(source)
     return source
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
@@ -467,13 +495,18 @@ async function harness(options: HarnessOptions = {}) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
+    maxReplayEvents: options.maxReplayEvents ?? 64,
     maxReplayBytes: 256 * 1024,
   })
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
   )
+  // A provider id is the public one behind a prefix, so either maps to the other.
+  const providerId = (publicId: string) =>
+    options.providerIds ? `provider-${publicId}` : publicId
+  const publicId = (sessionId: string) =>
+    options.providerIds ? sessionId.replace(/^provider-/u, "") : sessionId
   let models: SessionModelsResponse = MODELS
 
   const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
@@ -483,7 +516,7 @@ async function harness(options: HarnessOptions = {}) {
     offset,
   }))
   const getSession = vi.fn(async (_agentId: string, sessionId: string) => {
-    const row = rows.get(sessionId)
+    const row = rows.get(publicId(sessionId))
     if (!row) throw new Error("not found")
     return row
   })
@@ -503,26 +536,34 @@ async function harness(options: HarnessOptions = {}) {
       return { selectedId: models.selectedId }
     }
   )
-  const history = vi.fn(async (_agentId: string, sessionId: string) => ({
-    sessionId,
-    messages: [
-      {
-        id: "message-1",
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "Earlier" }],
-        createdAt: NOW,
-      },
-    ],
-    total: 1,
-    limit: 500,
-    offset: 0,
-    nextOffset: 0,
-  }))
+  const history = vi.fn(async (_agentId: string, sessionId: string) => {
+    await options.beforeHistory?.()
+    return {
+      sessionId,
+      messages: options.history ?? [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Earlier" }],
+          createdAt: NOW,
+        },
+      ],
+      total: (options.history ?? [undefined]).length,
+      limit: 500,
+      offset: 0,
+      nextOffset: 0,
+    }
+  })
 
   const runtime: ServerRuntime = {
     turns: engine,
-    resolveInvitedSession: unsupported,
-    resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
+    // Every invitation in this harness addresses the seeded Session.
+    resolveInvitedSession: async () => ({
+      sessionId: providerId(SESSION),
+      created: false,
+    }),
+    resolveSessionId: (_agentId, publicSessionId) =>
+      providerId(publicSessionId),
     publicError: () => undefined,
     authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
@@ -591,64 +632,117 @@ async function harness(options: HarnessOptions = {}) {
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
-  const context: AcpConnectionContext = {
-    connectionId: CONNECTION,
-    principalId: PRINCIPAL,
-    lane: options.guest ? "guest" : "operator",
-    runtimeInstance,
-    sessionRows: createSessionRows(),
-    readState,
-    activityFeed,
-    translators,
-    attachmentStages: new AttachmentStageRegistry(),
-    presence,
-    logger,
-    ...(options.guest ? { guest: GUEST_POLICY } : {}),
-  }
+  // One lane's connections share its row cache, as the operator lane's do.
+  const sessionRows = createSessionRows()
+  const rooms = createSessionRooms({
+    snapshot: (roomScope) => coordinator.snapshot(roomScope),
+  })
 
-  const recorder = createRecorder()
-  const clientApp = client({ name: "aos-browser" })
-    .onNotification(methods.client.session.update, ({ params }) => {
-      recorder.add({ method: methods.client.session.update, params })
-    })
-    .onRequest(methods.client.session.requestPermission, async ({ params }) => {
-      recorder.add({
-        method: methods.client.session.requestPermission,
-        params,
+  /**
+   * One browser connection to the proxy. Every connection shares the one
+   * coordinator, engine, and room registry, as one deployment's lanes do.
+   */
+  async function connect(
+    connectionId: string,
+    lane: {
+      guest?: GuestPolicy
+      /** This browser's answer to a permission request, if not the harness's. */
+      permission?: HarnessOptions["permission"]
+    } = {}
+  ) {
+    const attachmentStages = new AttachmentStageRegistry()
+    const permission = lane.permission ?? options.permission
+    const context: AcpConnectionContext = {
+      connectionId,
+      principalId: PRINCIPAL,
+      lane: lane.guest ? "guest" : "operator",
+      runtimeInstance,
+      sessionRows,
+      readState,
+      activityFeed,
+      translators: {
+        ...translators,
+        translateHistory: (history, lane) => {
+          options.onReplay?.()
+          return translators.translateHistory(history, lane)
+        },
+      },
+      attachmentStages,
+      rooms,
+      presence,
+      logger,
+      ...(lane.guest ? { guest: lane.guest } : {}),
+    }
+
+    const recorder = createRecorder()
+    const clientApp = client({ name: "aos-browser" })
+      .onNotification(methods.client.session.update, ({ params }) => {
+        recorder.add({ method: methods.client.session.update, params })
       })
-      return (
-        (await options.permission?.(params)) ?? {
-          outcome: { outcome: "selected", optionId: "once" },
+      .onRequest(
+        methods.client.session.requestPermission,
+        async ({ params, signal }) => {
+          recorder.add({
+            method: methods.client.session.requestPermission,
+            params,
+          })
+          return (
+            (await permission?.(params, signal)) ?? {
+              outcome: { outcome: "selected", optionId: "once" },
+            }
+          )
         }
       )
-    })
-  for (const method of Object.values(AOS_METHODS.notify))
-    clientApp.onNotification(
-      method,
-      (params) => params,
-      ({ params }) => {
-        recorder.add({ method, params })
+    for (const method of Object.values(AOS_METHODS.notify))
+      clientApp.onNotification(
+        method,
+        (params) => params,
+        ({ params }) => {
+          recorder.add({ method, params })
+        }
+      )
+
+    const connection = clientApp.connect(createAosAcpAgent(context))
+    const initialize = await connection.agent.request(
+      methods.agent.initialize,
+      {
+        protocolVersion: ACP_PROTOCOL_VERSION,
+        info: { name: "aos-browser", version: "1" },
+        capabilities: {},
       }
     )
+    return {
+      agent: connection.agent,
+      close: () => connection.close(),
+      initialize,
+      recorder,
+      attachmentStages,
+      /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
+      list: () => connection.agent.request(methods.agent.session.list, {}),
+      create: () =>
+        connection.agent.request(methods.agent.session.new, {
+          cwd: "/",
+          _meta: {
+            [AOS_META_KEY]: { agentId: AGENT },
+          },
+        }),
+    }
+  }
 
-  const connection = clientApp.connect(createAosAcpAgent(context))
-  const initialize = await connection.agent.request(methods.agent.initialize, {
-    protocolVersion: ACP_PROTOCOL_VERSION,
-    info: { name: "aos-browser", version: "1" },
-    capabilities: {},
-  })
+  const primary = await connect(
+    CONNECTION,
+    options.guest ? { guest: GUEST_POLICY } : {}
+  )
 
   const scope: SessionScope = {
     agentId: AGENT,
-    sessionId: SESSION,
+    sessionId: providerId(SESSION),
     threadId: SESSION,
   }
 
   return {
-    agent: connection.agent,
-    close: () => connection.close(),
-    initialize,
-    recorder,
+    ...primary,
+    connect,
     coordinator,
     scope,
     sources,
@@ -667,15 +761,6 @@ async function harness(options: HarnessOptions = {}) {
       [...logger.info.mock.calls, ...logger.error.mock.calls].map(
         ([value]) => value
       ),
-    /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
-    list: () => connection.agent.request(methods.agent.session.list, {}),
-    create: () =>
-      connection.agent.request(methods.agent.session.new, {
-        cwd: "/",
-        _meta: {
-          [AOS_META_KEY]: { agentId: AGENT },
-        },
-      }),
     publishActivity(event: AosActivityNotification) {
       for (const listener of activityListeners) listener(event)
     },
@@ -865,7 +950,7 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("replays history, attaches the live run, and reports its state", async () => {
+  it("replays history, joins the live run, and reports its state", async () => {
     const test = await harness()
     await test.list()
     // A run this connection did not start: the coordinator owns it already.
@@ -1247,7 +1332,7 @@ describe("AOS ACP agent", () => {
         sessionId: SESSION,
       })
 
-      // A detached attachment has no client to report a window to, so closing
+      // A left member has no client to report a window to, so closing
       // the Session cancels the deferred attempt instead of leaving it pending.
       expect(vi.getTimerCount()).toBe(0)
       await vi.advanceTimersByTimeAsync(60_000)
@@ -1571,9 +1656,15 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("drops a reply for a request the provider no longer holds", async () => {
+  it("withdraws a request the provider no longer holds and drops its reply", async () => {
     const answer = Promise.withResolvers<RequestPermissionResponse>()
-    const test = await harness({ permission: () => answer.promise })
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = await harness({
+      permission: (_params, signal) => {
+        withdrawal.resolve(signal)
+        return answer.promise
+      },
+    })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
@@ -1604,22 +1695,12 @@ describe("AOS ACP agent", () => {
       cwd: "/",
     })
     expect(test.discover).toHaveBeenCalled()
+    const signal = await withdrawal.promise
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
 
-    const failed = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
-    )
-    expect(failed.params).toMatchObject({
-      sessionId: CREATED,
-      code: "stale_request",
-    })
-    expect(test.logged()).toContainEqual({
-      event: "acp.error",
-      connectionId: "connection-1",
-      sessionId: CREATED,
-      errorCode: "stale_request",
-      message: "stale_request",
-    })
+    await settled()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })
@@ -1758,5 +1839,1511 @@ describe("AOS ACP agent", () => {
       )
     )
     test.close()
+  })
+})
+
+type Recorder = ReturnType<typeof createRecorder>
+type Browser = Pick<Awaited<ReturnType<typeof harness>>, "agent" | "recorder">
+
+/**
+ * What one browser shows of a Session, in order: replayed rows, prompts, and
+ * the turn stream. Usage, commands, and row updates are left out.
+ */
+function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
+  return recorder.entries.slice(from).flatMap(({ method, params }) => {
+    if (method !== methods.client.session.update) return []
+    const { sessionId: target, update } = params as {
+      sessionId: string
+      update: Record<string, unknown>
+    }
+    if (target !== sessionId) return []
+    switch (update.sessionUpdate) {
+      case "agent_message":
+        return [`history ${String(update.messageId)}`]
+      case "user_message":
+        return [`prompt ${String(update.messageId)}`]
+      case "state_update":
+        return [`state ${String(update.state)}`]
+      case "agent_message_chunk":
+        return [`chunk ${(update.content as { text: string }).text}`]
+      default:
+        return []
+    }
+  })
+}
+
+/** The content of every `user_message` one browser received for a Session. */
+function prompts(recorder: Recorder, sessionId = SESSION) {
+  return updates(recorder).flatMap((params) => {
+    const { sessionId: target, update } = params as {
+      sessionId: string
+      update: { sessionUpdate: string; content?: unknown }
+    }
+    return target === sessionId && update.sessionUpdate === "user_message"
+      ? [update.content]
+      : []
+  })
+}
+
+/** Sends one prompt and returns the user message id the proxy minted. */
+async function prompt(
+  browser: Browser,
+  content: string | ContentBlock[],
+  sessionId = SESSION,
+  meta: Record<string, unknown> = {}
+) {
+  const accepted = await browser.agent.request(methods.agent.session.prompt, {
+    sessionId,
+    prompt:
+      typeof content === "string" ? [{ type: "text", text: content }] : content,
+    _meta: { [AOS_META_KEY]: meta },
+  })
+  return z
+    .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
+    .parse(accepted)._meta.aos.messageId
+}
+
+/** Opens a Session and waits for the execution report its resume owes. */
+async function open(
+  browser: Browser,
+  params: Partial<ResumeSessionRequest> = {}
+) {
+  const from = browser.recorder.entries.length
+  await browser.agent.request(methods.agent.session.resume, {
+    sessionId: SESSION,
+    cwd: "/",
+    ...params,
+  })
+  await browser.recorder.wait(
+    (entry) =>
+      browser.recorder.entries.indexOf(entry) >= from &&
+      JSON.stringify(entry.params).includes("state_update")
+  )
+}
+
+/** Streams one reply on a provider segment and ends its turn. */
+function reply(source: EventSource | undefined, text: string) {
+  source?.emit(turnStarted())
+  source?.emit({
+    kind: TurnEventKind.MessageChunk,
+    messageId: "assistant-1",
+    text,
+  })
+  source?.emit({ kind: TurnEventKind.TurnEnded })
+}
+
+/** Lets the follow-ups a response schedules for the next task run. */
+const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
+
+/**
+ * Streams one reply, ending its turn only once every watcher saw it live: a
+ * browser the room brings in late must still find the turn running.
+ */
+async function replyWhileWatched(
+  source: EventSource | undefined,
+  text: string,
+  watchers: readonly Browser[]
+) {
+  source?.emit(turnStarted())
+  source?.emit({
+    kind: TurnEventKind.MessageChunk,
+    messageId: "assistant-1",
+    text,
+  })
+  for (const { recorder } of watchers)
+    await recorder.wait((entry) => JSON.stringify(entry.params).includes(text))
+  source?.emit({ kind: TurnEventKind.TurnEnded })
+  for (const { recorder } of watchers) await recorder.wait(endedTurn)
+}
+
+const endedTurn = (entry: Recorded) =>
+  JSON.stringify(entry.params).includes("end_turn")
+
+/** Matches the first entry whose params carry `text`. */
+const said = (text: string) => (entry: Recorded) =>
+  JSON.stringify(entry.params).includes(text)
+
+const isPromptOrChunk = (item: string) =>
+  item.startsWith("prompt") || item.startsWith("chunk")
+
+/** Streams one assistant chunk on a provider segment. */
+function chunk(
+  source: EventSource | undefined,
+  text: string,
+  messageId = "assistant-1"
+) {
+  source?.emit({ kind: TurnEventKind.MessageChunk, messageId, text })
+}
+
+/**
+ * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * has seen it. Returns the prompt's message id.
+ */
+async function liveTurn(
+  test: Awaited<ReturnType<typeof harness>>,
+  watchers: readonly Browser[]
+) {
+  const messageId = await prompt(test, "Summarize")
+  await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  test.sources[0]?.emit(turnStarted())
+  chunk(test.sources[0], "Live")
+  for (const { recorder } of watchers) await recorder.wait(said("Live"))
+  return messageId
+}
+
+/**
+ * What Hermes stores of a turn still running: its prompt, then the rows it
+ * folded into one message so far. Stored by default as the turn is admitted.
+ */
+function storedLiveTurn(
+  createdAt = new Date().toISOString(),
+  correction?: string
+): SessionHistoryResponse["messages"] {
+  return [
+    {
+      id: "user-1",
+      role: "user",
+      content: [{ type: "text", text: " Summarize " }],
+      createdAt,
+    },
+    ...(correction === undefined
+      ? []
+      : [
+          {
+            id: "correction-1",
+            role: "user" as const,
+            content: [{ type: "text" as const, text: correction }],
+            createdAt,
+            metadata: { custom: { correction: true } },
+          },
+        ]),
+    {
+      id: "assistant-0",
+      role: "assistant",
+      content: [{ type: "text", text: "Live" }],
+      createdAt,
+    },
+  ]
+}
+
+/** One browser's view of a Session without the states that bracket it. */
+const withoutStates = (seen: readonly string[]) =>
+  seen.filter((item) => !item.startsWith("state"))
+
+/** A held step a test releases when the scenario needs it to go on. */
+function gate() {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  return { held: promise, release: () => resolve() }
+}
+
+/** A browser holding its answer until the proxy withdraws the request. */
+function heldUntilWithdrawn(signal: AbortSignal) {
+  return new Promise<never>((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    })
+  })
+}
+
+const GUEST_REF = "guest-ref"
+
+/** A redeemed invitation to the seeded Session, marking what it projects. */
+function invitedGuest(denied?: string): GuestPolicy {
+  const grant: GuestGrant = {
+    agentId: AGENT,
+    ref: GUEST_REF,
+    principalId: "guest-1",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  }
+  return {
+    ...GUEST_POLICY,
+    grant: () => grant,
+    project: {
+      ...GUEST_POLICY.project,
+      // As the real guest projection does, a guest controls what it follows.
+      access: (base) => ({ ...base, canControl: true }),
+      turn: (text) => (text === denied ? undefined : `projected ${text}`),
+    },
+  }
+}
+
+const APPROVAL: PendingRequest = {
+  requestId: "approval-1",
+  kind: PendingRequestKind.Permission,
+  message: "permission-required",
+}
+
+describe("Session rooms", () => {
+  it("shows an open Session another browser's prompt, then its stream", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const from = other.recorder.entries.length
+
+    const messageId = await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [other, test])
+
+    const turn = [
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+      "state idle",
+    ]
+    expect(flow(other.recorder, SESSION, from)).toEqual(turn)
+    expect(flow(test.recorder)).toEqual(turn)
+    expect(prompts(other.recorder)).toEqual([
+      [{ type: "text", text: "Summarize" }],
+    ])
+    test.close()
+    other.close()
+  })
+
+  it("shows nobody a prompt the provider refused", async () => {
+    const test = await harness({
+      providerIds: true,
+      onStart: () => {
+        throw new Error("refused")
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    await prompt(test, "Summarize")
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.error
+    )
+    const late = await test.connect("connection-3")
+    await late.list()
+    await open(late)
+
+    expect(prompts(other.recorder)).toEqual([])
+    expect(prompts(late.recorder)).toEqual([])
+    test.close()
+    other.close()
+    late.close()
+  })
+
+  it("lets another operator browser stop the turn", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await prompt(test, "Long job")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    await other.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes('"state":"running"')
+    )
+
+    await other.agent.notify(methods.agent.session.cancel, {
+      sessionId: SESSION,
+    })
+
+    await vi.waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    test.close()
+    other.close()
+  })
+
+  it("asks every browser, takes the first answer, and streams the rest to all", async () => {
+    const late = gate()
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2", {
+      permission: async (_params, signal) => {
+        withdrawal.resolve(signal)
+        await late.held
+        return { outcome: { outcome: "selected", optionId: "once" } }
+      },
+    })
+    await other.list()
+    await open(other)
+    await prompt(test, "Delete it")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    const asked = (entry: Recorded) =>
+      entry.method === methods.client.session.requestPermission
+    await other.recorder.wait(asked)
+    await test.recorder.wait(asked)
+
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await replyWhileWatched(test.sources[1], "Resumed", [other])
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+
+    // The first answer withdrew the request from the other browser, so the
+    // answer it gives anyway is dropped rather than refused.
+    const signal = await withdrawal.promise
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    late.release()
+    await settled()
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+    other.close()
+  })
+
+  it("withdraws every browser's request when Stop ends the wait", async () => {
+    const signals: AbortSignal[] = []
+    const holding = async (_params: unknown, signal: AbortSignal) => {
+      signals.push(signal)
+      return heldUntilWithdrawn(signal)
+    }
+    const test = await harness({ providerIds: true, permission: holding })
+    await test.list()
+    const other = await test.connect("connection-2", { permission: holding })
+    await other.list()
+    await open(other)
+    await prompt(test, "Delete it")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.stop.mockResolvedValue("idle")
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+
+    await test.agent.notify(methods.agent.session.cancel, {
+      sessionId: SESSION,
+    })
+
+    await vi.waitFor(() =>
+      expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
+    )
+    await settled()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+    other.close()
+  })
+
+  it("refuses the second of two answers given at once as a turn conflict", async () => {
+    const admission = gate()
+    const test = await harness({
+      providerIds: true,
+      // The reply segment's admission is held until the losing answer lands.
+      onStart: async () => {
+        if (test.start.mock.calls.length > 1) await admission.held
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await prompt(test, "Delete it")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+
+    const failed = (entry: Recorded) =>
+      entry.method === AOS_METHODS.notify.error
+    await Promise.race([
+      test.recorder.wait(failed),
+      other.recorder.wait(failed),
+    ])
+    admission.release()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await replyWhileWatched(test.sources[1], "Resumed", [test, other])
+
+    const errors = [
+      ...test.recorder.of(AOS_METHODS.notify.error),
+      ...other.recorder.of(AOS_METHODS.notify.error),
+    ].map(({ params }) => params)
+    expect(errors).toEqual([
+      expect.objectContaining({ code: "turn_in_progress" }),
+    ])
+    expect(flow(test.recorder)).toContain("chunk Resumed")
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+    test.close()
+    other.close()
+  })
+
+  it("joins a live turn with its history, then its prompt, then its stream", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const messageId = await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "Live",
+    })
+    await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("Live")
+    )
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: { type: "start" } })
+    await other.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("Live")
+    )
+
+    const seen = flow(other.recorder)
+    expect(seen.slice(0, 3)).toEqual([
+      "history message-1",
+      `prompt ${messageId}`,
+      "state running",
+    ])
+    expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
+    expect(seen.filter((item) => item === "chunk Live")).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("shows a live turn history already stored once, after its prompt", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+
+    await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(prompts(other.recorder)).toEqual([])
+    expect(withoutStates(flow(other.recorder))).toEqual([
+      "history user-1",
+      "chunk Live",
+      "chunk More",
+    ])
+    test.close()
+    other.close()
+  })
+
+  it("shows a correction the live turn stored once, from its stream", async () => {
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(undefined, "Use the tables"),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+    await test.agent.request(AOS_METHODS.session.steer, {
+      sessionId: SESSION,
+      requestId: "steer-1",
+      text: "Use the tables",
+    })
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.steerAccepted
+    )
+
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(withoutStates(flow(other.recorder))).toEqual([
+      "history user-1",
+      "chunk Live",
+    ])
+    expect(
+      other.recorder
+        .of(AOS_METHODS.notify.steerAccepted)
+        .map(({ params }) => params)
+    ).toMatchObject([{ requestId: "steer-1", text: "Use the tables" }])
+    test.close()
+    other.close()
+  })
+
+  it("keeps a page that ends on an earlier prompt with the same text", async () => {
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(NOW),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(flow(other.recorder)).toContain("history assistant-0")
+    test.close()
+    other.close()
+  })
+
+  it("keeps the page of a discovered turn nobody here sent", async () => {
+    const test = await harness({
+      providerIds: true,
+      rows: [sessionRow({ status: "running" })],
+      discover: async () => ({ handle: new EventSource(), state: "running" }),
+      history: storedLiveTurn(),
+    })
+    await test.list()
+
+    await open(test, { replayFrom: { type: "start" } })
+
+    expect(test.coordinator.state(test.scope)).toBe("running")
+    expect(flow(test.recorder)).toContain("history assistant-0")
+    test.close()
+  })
+
+  it("keeps the page of a turn an answered question resumed", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    await liveTurn(test, [test])
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    test.sources[1]?.emit(turnStarted())
+    chunk(test.sources[1], "Resumed")
+    await test.recorder.wait(said("Resumed"))
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(flow(other.recorder)).toContain("history assistant-0")
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+    test.close()
+    other.close()
+  })
+
+  it("keeps streaming a resumed turn to the tab that reopens it", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    await liveTurn(test, [test])
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    test.sources[1]?.emit(turnStarted())
+    chunk(test.sources[1], "Resumed")
+    await test.recorder.wait(said("Resumed"))
+
+    // The page already stores the resumed segment's rows.
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    chunk(test.sources[1], "After")
+    test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
+    await vi.waitFor(() =>
+      expect(flow(test.recorder, SESSION, from)).toContain("state idle")
+    )
+
+    const seen = flow(test.recorder, SESSION, from)
+    expect(seen).not.toContain("chunk Resumed")
+    expect(seen.filter((item) => item === "chunk After")).toHaveLength(1)
+    test.close()
+  })
+
+  it("has a reopened tab reload when its page fails after its stream stopped", async () => {
+    let unreadable = false
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: async () => {
+        if (unreadable) throw new Error("history unavailable")
+      },
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    unreadable = true
+    // The second reopen stands for the reload the first one asked for.
+    for (let attempt = 0; attempt < 2; attempt++)
+      await expect(
+        open(test, { replayFrom: { type: "start" } })
+      ).rejects.toThrow()
+
+    expect(
+      test.recorder.of(AOS_METHODS.notify.sessionInvalidated)
+    ).toHaveLength(1)
+    test.close()
+  })
+
+  it("streams the live turn to a reopened tab whose page fails again", async () => {
+    let unreadable = false
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: async () => {
+        if (unreadable) throw new Error("history unavailable")
+      },
+    })
+    await test.list()
+    const messageId = await liveTurn(test, [test])
+
+    unreadable = true
+    await expect(
+      open(test, { replayFrom: { type: "start" } })
+    ).rejects.toThrow()
+    // The reload the first failure asked for fails the same way.
+    const from = test.recorder.entries.length
+    await expect(
+      open(test, { replayFrom: { type: "start" } })
+    ).rejects.toThrow()
+    chunk(test.sources[0], "After")
+    await test.recorder.wait(said("After"))
+
+    expect(flow(test.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual([
+      `prompt ${messageId}`,
+      "chunk Live",
+      "chunk After",
+    ])
+    expect(
+      test.recorder.of(AOS_METHODS.notify.sessionInvalidated)
+    ).toHaveLength(1)
+    test.close()
+  })
+
+  it("streams a turn admitted while a reopen's page fails to that tab", async () => {
+    const reading = gate()
+    const page = gate()
+    let held = false
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: async () => {
+        if (!held) return
+        reading.release()
+        await page.held
+        throw new Error("history unavailable")
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    held = true
+    const from = other.recorder.entries.length
+    const reopened = expect(
+      open(other, { replayFrom: { type: "start" } })
+    ).rejects.toThrow()
+    await reading.held
+    const messageId = await liveTurn(test, [test])
+    await settled()
+    page.release()
+    await reopened
+    await other.recorder.wait(said("Live"))
+
+    expect(flow(other.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual(
+      [`prompt ${messageId}`, "chunk Live"]
+    )
+    test.close()
+    other.close()
+  })
+
+  it("shows a turn admitted while a reopen reads history after that page", async () => {
+    const reading = gate()
+    const page = gate()
+    let held = false
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: () => {
+        if (!held) return Promise.resolve()
+        reading.release()
+        return page.held
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    held = true
+    const from = other.recorder.entries.length
+    const reopened = open(other, { replayFrom: { type: "start" } })
+    await reading.held
+    const messageId = await liveTurn(test, [test])
+    await settled()
+    page.release()
+    await reopened
+    await other.recorder.wait(said("Live"))
+
+    const seen = flow(other.recorder, SESSION, from)
+    expect(seen[0]).toBe("history message-1")
+    expect(seen.filter(isPromptOrChunk)).toEqual([
+      `prompt ${messageId}`,
+      "chunk Live",
+    ])
+    test.close()
+    other.close()
+  })
+
+  it("asks a reopen to reload when its turn ends before it follows", async () => {
+    const test: Awaited<ReturnType<typeof harness>> = await harness({
+      providerIds: true,
+      onReplay: () => test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded }),
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const resumed = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      z
+        .object({ _meta: z.object({ aos: z.object({ resync: z.boolean() }) }) })
+        .parse(resumed)._meta.aos.resync
+    ).toBe(true)
+    // A view rebuilt from the start reloads on invalidation, not on `resync`.
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+    )
+    test.close()
+  })
+
+  it("shows a guest a live turn history already stored once", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest(),
+    })
+    await liveTurn(test, [test])
+
+    await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await guest.recorder.wait(endedTurn)
+
+    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
+    expect(withoutStates(flow(guest.recorder, GUEST_REF))).toEqual([
+      "history user-1",
+      "chunk Live",
+      "chunk More",
+    ])
+    test.close()
+    guest.close()
+  })
+
+  it("asks a reopen to reload when the turn it cut ends before it follows", async () => {
+    const test: Awaited<ReturnType<typeof harness>> = await harness({
+      providerIds: true,
+      history: storedLiveTurn(),
+      onReplay: () => test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded }),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+
+    const resumed = await other.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      z
+        .object({ _meta: z.object({ aos: z.object({ resync: z.boolean() }) }) })
+        .parse(resumed)._meta.aos.resync
+    ).toBe(true)
+    test.close()
+    other.close()
+  })
+
+  it("adds no prompt to a resume whose cursor is inside the turn", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes('"state":"running"')
+    )
+    const { turnId } = test.coordinator.snapshot(test.scope)
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { _meta: { [AOS_META_KEY]: { turnId, after: 1 } } })
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    expect(prompts(other.recorder)).toEqual([])
+    expect(flow(other.recorder)).toContain("chunk Done")
+    test.close()
+    other.close()
+  })
+
+  it("gives a reconnect without a cursor the prompt once, then the stream", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const messageId = await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    const seen = flow(other.recorder)
+    expect(seen.slice(0, 2)).toEqual([`prompt ${messageId}`, "state running"])
+    expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
+    expect(seen).toContain("chunk Done")
+    test.close()
+    other.close()
+  })
+
+  it("invents no prompt for a discovered turn nobody here sent", async () => {
+    // A follow without a journal reloads history instead of streaming.
+    const test = await harness({
+      providerIds: true,
+      rows: [sessionRow({ status: "running" })],
+      discover: async () => ({ handle: new EventSource(), state: "running" }),
+    })
+    await test.list()
+    await open(test)
+    const late = await test.connect("connection-3")
+    await late.list()
+    await open(late)
+
+    expect(test.coordinator.state(test.scope)).toBe("running")
+    expect(prompts(test.recorder)).toEqual([])
+    expect(prompts(late.recorder)).toEqual([])
+    test.close()
+    late.close()
+  })
+
+  it("gives a browser that joins while the turn is admitted its prompt once, first", async () => {
+    const admission = gate()
+    const test = await harness({
+      providerIds: true,
+      onStart: () => admission.held,
+    })
+    await test.list()
+    const messageId = await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const from = other.recorder.entries.length
+    admission.release()
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    expect(flow(other.recorder, SESSION, from)).toEqual([
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+      "state idle",
+    ])
+    test.close()
+    other.close()
+  })
+
+  it("lets a losing prompt follow the winner it raced before admission", async () => {
+    const admission = gate()
+    const test = await harness({
+      providerIds: true,
+      onStart: () => admission.held,
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    const messageId = await prompt(test, "First")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+
+    // The winner is still being admitted, so the loser passes the idle check
+    // and loses at the coordinator.
+    await prompt(other, "Second")
+    const refused = await other.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.error
+    )
+    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    admission.release()
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    const seen = flow(other.recorder)
+    expect(seen.filter((item) => item === `prompt ${messageId}`)).toHaveLength(
+      1
+    )
+    expect(seen.indexOf("chunk Done")).toBeGreaterThan(
+      seen.indexOf(`prompt ${messageId}`)
+    )
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+    other.close()
+  })
+
+  it("lets a losing prompt follow the winner that was admitted first", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    // The loser passes the idle check, then waits on its staged attachment
+    // while the winner is admitted and announced.
+    const staged = gate()
+    const appendTo = vi.fn(async (text: string) => {
+      await staged.held
+      return text
+    })
+    const stageId = other.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo,
+      cleanup: async () => undefined,
+    })
+    const losing = prompt(other, "Second", SESSION, {
+      attachmentStageId: stageId,
+    })
+    await vi.waitFor(() => expect(appendTo).toHaveBeenCalledOnce())
+    const messageId = await prompt(test, "First")
+    await vi.waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("running")
+    )
+
+    staged.release()
+    await losing
+    const refused = await other.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.error
+    )
+    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    const seen = flow(other.recorder)
+    expect(seen.filter((item) => item === `prompt ${messageId}`)).toHaveLength(
+      1
+    )
+    expect(seen.indexOf("chunk Done")).toBeGreaterThan(
+      seen.indexOf(`prompt ${messageId}`)
+    )
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+    other.close()
+  })
+
+  it.each([
+    ["a browser the room brought in", "other"],
+    ["the sender", "test"],
+  ] as const)(
+    "shows %s the prompt again when it reopens the Session from the start",
+    async (_, who) => {
+      const test = await harness({ providerIds: true })
+      await test.list()
+      const other = await test.connect("connection-2")
+      await other.list()
+      await open(other)
+      const reopening = who === "test" ? test : other
+      const messageId = await liveTurn(test, [reopening])
+
+      // The browser drops its transcript and replays a page that has not
+      // persisted the in-flight prompt yet.
+      const from = reopening.recorder.entries.length
+      await open(reopening, { replayFrom: { type: "start" } })
+      chunk(test.sources[0], "More")
+      test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+      await reopening.recorder.wait(endedTurn)
+
+      const seen = flow(reopening.recorder, SESSION, from)
+      expect(seen.slice(0, 3)).toEqual([
+        "history message-1",
+        `prompt ${messageId}`,
+        "state running",
+      ])
+      expect(seen.filter(isPromptOrChunk)).toEqual([
+        `prompt ${messageId}`,
+        "chunk Live",
+        "chunk More",
+      ])
+      expect(seen.filter((item) => item === "state idle")).toHaveLength(1)
+      expect(seen.at(-1)).toBe("state idle")
+      test.close()
+      other.close()
+    }
+  )
+
+  it("shows a chunk streamed while a reopen reads history once, after it", async () => {
+    const reading = gate()
+    const page = gate()
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: () => {
+        reading.release()
+        return page.held
+      },
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const from = test.recorder.entries.length
+    const reopened = open(test, { replayFrom: { type: "start" } })
+    await reading.held
+    chunk(test.sources[0], "During")
+    // The chunk reaches every live subscriber before the page returns.
+    await settled()
+    page.release()
+    await reopened
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await test.recorder.wait(endedTurn)
+
+    const seen = flow(test.recorder, SESSION, from)
+    const during = seen.filter((item) => item.includes("During"))
+    expect(during).toHaveLength(1)
+    expect(seen.indexOf(during[0] ?? "")).toBeGreaterThan(
+      seen.indexOf("history message-1")
+    )
+    test.close()
+  })
+
+  it("still ends a turn cancelled when it is reopened after an acknowledged Stop", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+    await test.agent.notify(methods.agent.session.cancel, {
+      sessionId: SESSION,
+    })
+    await test.recorder.wait(said('"execution":"stopping"'))
+
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    const ended = await test.recorder.wait(
+      (entry) =>
+        test.recorder.entries.indexOf(entry) >= from &&
+        JSON.stringify(entry.params).includes('"state":"idle"')
+    )
+
+    expect(ended.params).toMatchObject({
+      update: { state: "idle", stopReason: "cancelled" },
+    })
+    test.close()
+  })
+
+  it("streams each chunk once to a browser that reopens twice in a row", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await liveTurn(test, [other])
+
+    const first = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    await other.recorder.wait(
+      (entry) =>
+        other.recorder.entries.indexOf(entry) >= first && said("Live")(entry)
+    )
+    const from = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(
+      flow(other.recorder, SESSION, from).filter((item) =>
+        item.startsWith("chunk")
+      )
+    ).toEqual(["chunk Live", "chunk More"])
+    test.close()
+    other.close()
+  })
+
+  it("keeps streaming a reopen whose turn outgrew its journal", async () => {
+    const test = await harness({ providerIds: true, maxReplayEvents: 2 })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await liveTurn(test, [other])
+    // A third event outgrows the journal, so the turn's start is gone.
+    chunk(test.sources[0], "Aside", "assistant-2")
+    await other.recorder.wait(said("Aside"))
+
+    const from = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More", "assistant-2")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    const seen = other.recorder.entries.slice(from)
+    expect(JSON.stringify(seen)).not.toContain("AOS_RESET_REQUIRED")
+    expect(
+      flow(other.recorder, SESSION, from).filter((item) =>
+        item.startsWith("chunk")
+      )
+    ).toEqual(["chunk More"])
+    test.close()
+    other.close()
+  })
+
+  it("replays only history to a browser that joins after the turn ended", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    reply(test.sources[0], "Done")
+    await test.recorder.wait(endedTurn)
+    await vi.waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("idle")
+    )
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: { type: "start" } })
+
+    expect(flow(other.recorder)).toEqual(["history message-1", "state idle"])
+    test.close()
+    other.close()
+  })
+
+  it("brings a resume held on its model read into a turn that started meanwhile", async () => {
+    const models = gate()
+    const test = await harness({
+      providerIds: true,
+      beforeModels: () => models.held,
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    const resumed = other.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+    await vi.waitFor(() =>
+      expect(test.logged()).toContainEqual(
+        expect.objectContaining({ connectionId: "connection-2" })
+      )
+    )
+
+    const messageId = await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [other])
+    models.release()
+    await resumed
+
+    const seen = flow(other.recorder)
+    expect(seen.slice(0, 3)).toEqual([
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+    ])
+    expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("streams each event once to a browser that follows twice at once", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await Promise.all([open(other), open(other)])
+    await replyWhileWatched(test.sources[0], "Done", [other, test])
+
+    const seen = flow(other.recorder)
+    expect(seen.filter((item) => item === "chunk Done")).toHaveLength(1)
+    expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
+    expect(
+      flow(test.recorder).filter((item) => item === "chunk Done")
+    ).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("reports no running state ahead of the stream when a draft's resume races its prompt", async () => {
+    const models = gate()
+    let hold = false
+    const test = await harness({
+      providerIds: true,
+      beforeModels: () => (hold ? models.held : Promise.resolve()),
+    })
+    await test.create()
+    hold = true
+    const resumed = test.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+    })
+    const messageId = await prompt(test, "Summarize", CREATED)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    models.release()
+    await resumed
+    await settled()
+
+    expect(flow(test.recorder, CREATED)).toEqual([`prompt ${messageId}`])
+    reply(test.sources[0], "Done")
+    await test.recorder.wait(endedTurn)
+    expect(flow(test.recorder, CREATED)).toEqual([
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+      "state idle",
+    ])
+    test.close()
+  })
+
+  it("shows the sender its own prompt once after session/new", async () => {
+    const test = await harness({ providerIds: true })
+    await test.create()
+
+    const messageId = await prompt(test, "Summarize", CREATED)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    reply(test.sources[0], "Done")
+    await test.recorder.wait(endedTurn)
+
+    expect(flow(test.recorder, CREATED)).toEqual([
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+      "state idle",
+    ])
+    test.close()
+  })
+
+  it("leaves another Session the same browser has open untouched", async () => {
+    const test = await harness({
+      providerIds: true,
+      rows: [sessionRow(), sessionRow({ id: "session-2" })],
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await open(other, { sessionId: "session-2" })
+    const from = other.recorder.entries.length
+
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [other])
+
+    expect(flow(other.recorder, "session-2", from)).toEqual([])
+    expect(prompts(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("shows a guest an operator's prompt as projected text, and lets it Stop", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest(),
+    })
+    await open(guest, { sessionId: GUEST_REF })
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    const messageId = await prompt(test, [
+      { type: "text", text: "Summarize" },
+      {
+        type: "resource_link",
+        uri: `${AOS_ATTACHMENT_URI_SCHEME}stage/notes`,
+        name: "notes.md",
+        mimeType: "text/markdown",
+      },
+    ])
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "Live",
+    })
+    await guest.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("Live")
+    )
+
+    expect(flow(guest.recorder, GUEST_REF)).toContain(`prompt ${messageId}`)
+    expect(prompts(guest.recorder, GUEST_REF)).toEqual([
+      [{ type: "text", text: "projected Summarize" }],
+    ])
+    expect(prompts(other.recorder)).toEqual([
+      [
+        { type: "text", text: "Summarize" },
+        {
+          type: "resource_link",
+          uri: `${AOS_ATTACHMENT_URI_SCHEME}stage/notes`,
+          name: "notes.md",
+          mimeType: "text/markdown",
+        },
+      ],
+    ])
+    await guest.agent.notify(methods.agent.session.cancel, {
+      sessionId: GUEST_REF,
+    })
+    await vi.waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    test.close()
+    guest.close()
+    other.close()
+  })
+
+  it("streams a guest an operator's turn whose prompt it may not see", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest("Private"),
+    })
+    await open(guest, { sessionId: GUEST_REF })
+
+    await prompt(test, "Private")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [guest])
+
+    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
+    expect(flow(guest.recorder, GUEST_REF)).toContain("chunk Done")
+    test.close()
+    guest.close()
+  })
+
+  it.each([
+    ["once", true],
+    ["session", false],
+    ["always", false],
+  ])(
+    "lets a guest answer an operator's approval %s only within its grant",
+    async (optionId, accepted) => {
+      const unanswered = gate()
+      const test = await harness({
+        providerIds: true,
+        // The operator's own browser never answers, so the guest's answer decides.
+        permission: async () => {
+          await unanswered.held
+          return { outcome: { outcome: "cancelled" } }
+        },
+      })
+      await test.list()
+      await open(test)
+      const policy = invitedGuest()
+      const guest = await test.connect("guest-connection", {
+        guest: {
+          ...policy,
+          project: {
+            ...policy.project,
+            // As the real guest projection does, refuse a widened grant.
+            permissionReply: (_request, reply) => {
+              if (JSON.stringify(reply.payload).includes('"once"')) return reply
+              throw invalidRequest()
+            },
+          },
+        },
+        permission: async () => ({
+          outcome: { outcome: "selected", optionId },
+        }),
+      })
+      await open(guest, { sessionId: GUEST_REF })
+      await prompt(test, "Delete it")
+      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+      test.sources[0]?.emit(turnStarted())
+      test.sources[0]?.emit({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [APPROVAL],
+      })
+      test.sources[0]?.finish()
+
+      if (accepted) {
+        await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+        expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+          replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+        })
+      } else {
+        const refused = await guest.recorder.wait(
+          (entry) => entry.method === AOS_METHODS.notify.error
+        )
+        expect(refused.params).toMatchObject({ code: "invalid_request" })
+        expect(test.start).toHaveBeenCalledTimes(1)
+      }
+      unanswered.release()
+      test.close()
+      guest.close()
+    }
+  )
+
+  it("shows an operator a guest's prompt rebuilt from its allowed fields", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await open(test)
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest(),
+    })
+
+    const messageId = await prompt(
+      guest,
+      [
+        {
+          type: "text",
+          text: "Hello",
+          annotations: { priority: 1 },
+          _meta: { private: "guest-only" },
+        },
+      ],
+      GUEST_REF
+    )
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await replyWhileWatched(test.sources[0], "Done", [test])
+
+    expect(flow(test.recorder)).toContain(`prompt ${messageId}`)
+    expect(prompts(test.recorder)).toEqual([[{ type: "text", text: "Hello" }]])
+    test.close()
+    guest.close()
+  })
+
+  it("asks a browser shown a prompt to reload when its turn ended first", async () => {
+    const test = await harness({
+      providerIds: true,
+      // The provider runs the whole turn before its admission even returns.
+      onStart: (source) => {
+        reply(source, "Instant")
+        source.finish()
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    await prompt(test, "Summarize")
+    const invalidated = await other.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+    )
+
+    expect(invalidated.params).toEqual({ sessionId: SESSION })
+    expect(prompts(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("sends nothing to a browser that closed the Session", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await other.agent.request(methods.agent.session.close, {
+      sessionId: SESSION,
+    })
+    const from = other.recorder.entries.length
+
+    await prompt(test, "Summarize")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    reply(test.sources[0], "Done")
+    await test.recorder.wait(endedTurn)
+    await settled()
+
+    expect(other.recorder.entries.slice(from)).toEqual([])
+    test.close()
+    other.close()
   })
 })

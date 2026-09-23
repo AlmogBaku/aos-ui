@@ -15,6 +15,10 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
  * permission becomes one single-select question over its options, and an
  * elicitation carries the lossless questions the proxy put in `_meta.aos`.
  * One pending request per Session, replaced by the next one the proxy sends.
+ *
+ * Every UI with the Session open receives the same request. When another UI
+ * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
+ * `$/cancel_request`, which aborts the request's own signal.
  */
 
 type PendingEntry = {
@@ -105,11 +109,15 @@ export function createAcpInteractions({
     }
   }
 
+  function drop(sessionId: string) {
+    entries.delete(sessionId)
+    notify(sessionId)
+  }
+
   function take(request: RuntimeQuestionRequest) {
     const entry = entries.get(request.sessionId)
     if (!entry || entry.request.requestId !== request.requestId) return
-    entries.delete(request.sessionId)
-    notify(request.sessionId)
+    drop(request.sessionId)
     return entry.pending
   }
 
@@ -121,6 +129,15 @@ export function createAcpInteractions({
     if (request === undefined) return
     entries.set(sessionId, { request, pending })
     notify(sessionId)
+    // A withdrawn request leaves the Session only while it is still the one
+    // shown there; a newer request has replaced it otherwise.
+    pending.signal.addEventListener(
+      "abort",
+      () => {
+        if (entries.get(sessionId)?.pending === pending) drop(sessionId)
+      },
+      { once: true }
+    )
   })
 
   return {

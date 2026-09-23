@@ -21,6 +21,7 @@ import {
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
 import { createActivityFeed } from "../../../packages/proxy/acp/activity-feed"
 import { createReadState } from "../../../packages/proxy/acp/read-state"
+import { createSessionRooms } from "../../../packages/proxy/acp/session-rooms"
 import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
@@ -397,6 +398,9 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     sessionRows,
     translators,
     attachmentStages,
+    rooms: createSessionRooms({
+      snapshot: (scope) => coordinator.snapshot(scope),
+    }),
     readState: createReadState({
       runtimeInstance,
       sessionRows,
@@ -794,6 +798,11 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() =>
       expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(false)
     )
+    // Stopped before any reply, the provider still holds the prompt, so it
+    // stays a turn instead of moving back into the composer.
+    expect(screen.getByText("Ship it")).toBeVisible()
+    expect(messageTexts(runtime())).toEqual(["Open it", "Ready", "Ship it"])
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
     await proxy.close()
   })
 
@@ -901,6 +910,30 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await waitFor(() =>
       expect(messageTexts(runtime())).toEqual(["Ship it", "Shipping it"])
     )
+    await proxy.close()
+  })
+
+  it("opens the next draft empty after a refused one", async () => {
+    const { proxy, runtime } = await mount()
+    await screen.findByText("Ready")
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
+    })
+    proxy.unavailable.creates = 1
+    await send(runtime(), "Ship it")
+    expect(
+      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).toBeVisible()
+
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
+    })
+
+    expect(
+      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).not.toBeInTheDocument()
+    expect(runtime().assistantRuntime.thread.getState().messages).toEqual([])
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
     await proxy.close()
   })
 

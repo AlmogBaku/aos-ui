@@ -1,7 +1,6 @@
 import {
   agent,
   methods,
-  ContentBlock,
   RequestError,
   type AgentApp,
   type AgentContext,
@@ -11,13 +10,13 @@ import {
 import {
   SESSION_CATALOG_MAX_WINDOW,
   SessionHistoryResponseSchema,
+  type SessionHistoryResponse,
 } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_AUTH_METHOD_INVITE,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
-  AOS_ATTACHMENT_URI_SCHEME,
   AOS_META_KEY,
   AosFocusNotificationSchema,
   AosLoginMetaSchema,
@@ -31,7 +30,11 @@ import {
   type AosExtensions,
 } from "../../protocol/acp"
 import type { PromptTurnInput } from "../core/events"
-import type { ServerRuntime, SessionScope } from "../core/runtime"
+import {
+  ServerTurnConflictError,
+  type ServerRuntime,
+  type SessionScope,
+} from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
@@ -46,7 +49,10 @@ import {
   decodeCursor,
   encodeCursor,
 } from "./agent-sessions"
-import type { SessionAttachment } from "./session-attachment"
+import { isPromptBlock, promptText } from "./prompt-content"
+import type { SessionMember } from "./session-member"
+import type { RoomTurn } from "./session-rooms"
+import { lastPromptIndex, throughLivePrompt } from "./translate/history"
 import type {
   AcpConnectionContext,
   AosAcpAgentFactory,
@@ -125,22 +131,34 @@ const INVITE_AUTH_METHOD = {
   name: "Invitation",
 } as const
 
-/** Text, or a link to a batch the browser staged over REST. */
-function isPromptBlock(block: ContentBlock) {
-  return (
-    ContentBlock.isText(block) ||
-    (block.type === "resource_link" &&
-      typeof block.uri === "string" &&
-      block.uri.startsWith(AOS_ATTACHMENT_URI_SCHEME))
-  )
+/**
+ * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
+ * inside the turn, so the prompt is the last user message before them.
+ */
+function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
+  const index = lastPromptIndex(history)
+  const prompt = history.messages[index]
+  if (!prompt || !Array.isArray(prompt.content)) return -1
+  const text = prompt.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+  // A prompt without text matches any other, so it never names the live one.
+  const expected = promptText(turn.content).trim()
+  return expected && text.trim() === expected ? index : -1
 }
 
-/** ACP text blocks joined the way the normalized wire carries a turn. */
-function promptText(prompt: readonly ContentBlock[]) {
-  return prompt
-    .filter(ContentBlock.isText)
-    .map(({ text }) => text)
-    .join("\n")
+/**
+ * Whether a resume already shows the live turn's prompt: its cursor sits inside
+ * that turn, or the page it replayed ends on that prompt.
+ */
+function showsPrompt(
+  turn: RoomTurn | undefined,
+  meta: { turnId?: string },
+  history?: SessionHistoryResponse
+) {
+  if (!turn) return false
+  if (meta.turnId === turn.turnId) return true
+  return history !== undefined && promptIndex(turn, history) >= 0
 }
 
 /**
@@ -149,12 +167,9 @@ function promptText(prompt: readonly ContentBlock[]) {
  * the task fires on the next turn of the loop, so anything still pending in the
  * handler lets these notifications reach the client before the response does.
  */
-function afterResponse(
-  attachment: SessionAttachment,
-  task: () => Promise<void>
-) {
+function afterResponse(member: SessionMember, task: () => Promise<void>) {
   setTimeout(() => {
-    void task().catch((cause: unknown) => attachment.report(cause))
+    void task().catch((cause: unknown) => member.report(cause))
   }, 0)
 }
 
@@ -244,25 +259,83 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   }
 
-  /** Subscribes to the live turn, reporting a cursor that cannot position it. */
-  async function attachPositioned(
-    attachment: SessionAttachment,
+  /**
+   * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
+   * from history reads a turn sent in this room again from its start, so the
+   * stream the member held stops before the page is read, and the rows the
+   * provider already stored of that turn are cut: `restarted` names the turn
+   * the view then shows only while its follow streams it. Any other turn keeps
+   * both: its journal starts after rows the page already holds, or its start
+   * is gone and a cursorless follow could only reset it. A turn the room
+   * admits during the read waits for the page and is replayed the same way.
+   * The guest lane validates its authoritative page before anything reads it.
+   */
+  async function replayPage(member: SessionMember, scope: SessionScope) {
+    const restartable = (turn: RoomTurn | undefined) =>
+      turn && !turn.continued && coordinator.replaysFromStart(scope)
+        ? turn
+        : undefined
+    const before = context.rooms.current(scope)
+    const restarted = restartable(before)
+    member.holdRoom()
+    if (restarted) await member.restartStream()
+    let history: SessionHistoryResponse
+    try {
+      const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+      history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
+    } catch (cause) {
+      member.releaseRoom()
+      // The stream is gone and the view was never rebuilt: have it reload,
+      // and once that failed too, stream it the turn from its prompt. A turn
+      // admitted during the read was held back, so it streams the same way.
+      const after = context.rooms.current(scope)
+      const held = after && after.turnId !== before?.turnId
+      if (restarted ? !(await member.reloadOnce(restarted.turnId)) : held) {
+        member.enterRoom(false, true)
+        await member.follow().catch(() => undefined)
+      }
+      throw cause
+    }
+    const after = context.rooms.current(scope)
+    const shown =
+      restarted ??
+      (after?.turnId === before?.turnId ? undefined : restartable(after))
+    if (!shown) return { history }
+    const index = promptIndex(shown, history)
+    return {
+      history: throughLivePrompt(history, index, shown.at) ?? history,
+      restarted: shown.turnId,
+    }
+  }
+
+  /**
+   * Subscribes to the live turn, reporting a cursor that cannot position it.
+   * A view whose stream `restarted` on a turn shows it only while this follow
+   * streams that turn.
+   */
+  async function followPositioned(
+    member: SessionMember,
     scope: SessionScope,
     meta: { turnId?: string; after?: number },
-    replayedCorrections = 0
+    replayedCorrections = 0,
+    restarted?: string
   ) {
     const positioned =
       meta.turnId === undefined ||
       meta.turnId === coordinator.snapshot(scope).turnId
-    try {
-      await attachment.attach(
-        positioned ? meta.after : undefined,
-        replayedCorrections
-      )
-      return positioned ? {} : { resync: true }
-    } catch {
+    const followed = await member
+      .follow(positioned ? meta.after : undefined, replayedCorrections)
+      .catch(() => null)
+    if (restarted !== undefined && followed !== restarted) {
+      // A view rebuilt from the start does not act on `resync`, and this one
+      // lacks the rest of its turn: have it rebuild again once this response
+      // lands.
+      afterResponse(member, async () => {
+        await member.reloadOnce(restarted)
+      })
       return { resync: true }
     }
+    return positioned && followed !== null ? {} : { resync: true }
   }
 
   /**
@@ -297,27 +370,44 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       }
     if (coordinator.state(scope) === "waiting-for-input")
       await workspace.discover(scope)
-    const attachment = sessions.attach(client, scope)
+    const member = sessions.join(client, scope)
     // Counted on the authoritative page, before the guest projection rebuilds
     // its messages: that projection keeps no user-turn metadata.
     let corrections = 0
-    if (params.replayFrom?.type === "start") {
-      const history = SessionHistoryResponseSchema.parse(
-        await workspace.history(scope, HISTORY_REPLAY_LIMIT)
-      )
+    const replay =
+      params.replayFrom?.type === "start"
+        ? await replayPage(member, scope)
+        : undefined
+    const history = replay?.history
+    if (history) {
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(
         policy.project.history(history),
         lane
       ))
-        await attachment.send(outbound)
+        await member.send(outbound)
     }
-    const resync = await attachPositioned(attachment, scope, meta, corrections)
+    // Seated after its history and before its follow, so the room's prompt
+    // lands between them; checked on the authoritative page, as corrections are.
+    member.enterRoom(
+      showsPrompt(context.rooms.current(scope), meta, history),
+      history !== undefined
+    )
+    const resync = await followPositioned(
+      member,
+      scope,
+      history === undefined ? meta : {},
+      corrections,
+      replay?.restarted
+    )
     const execution = coordinator.snapshot(scope)
-    afterResponse(attachment, async () => {
-      await attachment.reportExecution()
+    afterResponse(member, async () => {
+      // A turn admitted since this response was built reports itself on its
+      // own stream; restating it here would run ahead of that stream.
+      if (coordinator.snapshot(scope).turnId === execution.turnId)
+        await member.reportExecution()
       if (coordinator.state(scope) === "waiting-for-input")
-        await attachment.reissuePending()
+        await member.reissuePending()
     })
     return {
       _meta: {
@@ -401,10 +491,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     sessions.remember([row])
     const capabilities = await workspace.capabilities(scope)
     const models = await workspace.models(scope)
-    const attachment = sessions.attach(client, scope)
-    afterResponse(attachment, async () => {
-      await attachment.update(commandsUpdate(capabilities))
-      await attachment.reportUsage()
+    const member = sessions.join(client, scope)
+    afterResponse(member, async () => {
+      await member.update(commandsUpdate(capabilities))
+      await member.reportUsage()
     })
     return {
       sessionId: publicSessionId,
@@ -455,19 +545,36 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       (state === "idle" && row.status === "running")
     )
       await workspace.discover(scope)
-    const attachment = sessions.attach(client, scope)
+    const member = sessions.join(client, scope)
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
     let corrections = 0
-    if (params.replayFrom?.type === "start") {
-      const history = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+    const replay =
+      params.replayFrom?.type === "start"
+        ? await replayPage(member, scope)
+        : undefined
+    const history = replay?.history
+    if (history) {
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(history, lane))
-        await attachment.send(outbound)
+        await member.send(outbound)
     }
+    // Seated after its history and before any other provider read, so a turn
+    // another browser starts meanwhile reaches it, prompt first.
+    member.enterRoom(
+      showsPrompt(context.rooms.current(scope), meta, history),
+      history !== undefined
+    )
     // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload.
-    const resync = await attachPositioned(attachment, scope, meta, corrections)
+    // bounded replay cannot be served: both need a full reload. A view rebuilt
+    // from history owns nothing of the turn, so it follows without a cursor.
+    const resync = await followPositioned(
+      member,
+      scope,
+      history === undefined ? meta : {},
+      corrections,
+      replay?.restarted
+    )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is
     // scheduled: `afterResponse` fires on the next task, so a read awaited
@@ -475,13 +582,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // the browser to start listening for them.
     const models = await workspace.models(scope)
     const capabilities = await workspace.capabilities(scope)
-    afterResponse(attachment, async () => {
-      await attachment.reportExecution()
+    afterResponse(member, async () => {
+      // A turn admitted since this response was built reports itself on its
+      // own stream; restating it here would run ahead of that stream.
+      if (coordinator.snapshot(scope).turnId === execution.turnId)
+        await member.reportExecution()
       // A resumed Session carries the window every earlier turn already grew;
       // only a report here keeps its composer from opening on an empty gauge.
-      await attachment.reportUsage()
+      await member.reportUsage()
       if (coordinator.state(scope) === "waiting-for-input")
-        await attachment.reissuePending()
+        await member.reissuePending()
     })
     return {
       configOptions: translators.configOptionsOf(models),
@@ -527,27 +637,42 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? {}
         : { rewindSourceId: meta.rewindSourceId }),
     }
-    const attachment = sessions.attach(client, scope)
-    afterResponse(attachment, async () => {
-      await attachment.update({
+    const member = sessions.join(client, scope)
+    afterResponse(member, async () => {
+      // Seated before admission, so a turn that wins the race still reaches
+      // this browser, and shown its own prompt as today.
+      member.enterRoom()
+      await member.update({
         sessionUpdate: "user_message",
         messageId,
         content: params.prompt,
       })
-      await attachment.startTurn(input, stage)
+      try {
+        await member.startTurn(input, stage)
+      } catch (cause) {
+        if (!(cause instanceof ServerTurnConflictError)) throw cause
+        // Another browser's turn won: report the conflict, then follow it.
+        await member.report(cause)
+        await member.catchUp()
+        return
+      }
+      await member.announce({
+        turnId: input.turnId,
+        messageId,
+        content: params.prompt,
+        at: Date.now(),
+      })
     })
     return { _meta: { [AOS_META_KEY]: { messageId } } }
   })
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
     log("acp.turn.cancel", { sessionId: params.sessionId })
-    // Only a resumed or prompted Session is attached, so an unauthenticated
+    // Only a joined Session has a member, so an unauthenticated
     // guest reaches nothing here.
-    const attachment = sessions.attached(params.sessionId)
-    if (!attachment) return
-    await attachment
-      .cancel()
-      .catch((cause: unknown) => attachment.report(cause))
+    const member = sessions.member(params.sessionId)
+    if (!member) return
+    await member.cancel().catch((cause: unknown) => member.report(cause))
   })
 
   app.onRequest(methods.agent.session.setConfigOption, async ({ params }) => {
@@ -561,14 +686,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
     // The window's size belongs to the model, so a switch restates the usage
     // the browser is holding against the model the Session has just left.
-    const attachment = sessions.attached(params.sessionId)
-    if (attachment) afterResponse(attachment, () => attachment.reportUsage())
+    const member = sessions.member(params.sessionId)
+    if (member) afterResponse(member, () => member.reportUsage())
     return { configOptions }
   })
 
   app.onRequest(methods.agent.session.close, ({ params }) => {
     guestFor(methods.agent.session.close)
-    sessions.detach(params.sessionId)
+    sessions.leave(params.sessionId)
     return {}
   })
 
@@ -603,7 +728,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       )
       const row = await workspace.session(scope)
       await sessions
-        .attach(client, scope)
+        .join(client, scope)
         .update(sessionInfoUpdate(row, sessions.status(row)))
       // Archiving and pinning move the Session's membership and order in the
       // catalog, which only a relist settles; a provider's catalog watcher may
@@ -686,10 +811,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const notify = (method: `_${string}`, params?: unknown) => {
       void client.notify(method, params).catch(() => undefined)
     }
-    for (const event of context.activityFeed.snapshot())
+    for (const event of context.activityFeed?.snapshot() ?? [])
       notify(AOS_METHODS.notify.activity, event)
     const stops = [
-      context.activityFeed.subscribe((event) =>
+      context.activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
       // A guest owns no roster and no catalog, and its connection ends with the
@@ -698,9 +823,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? [context.guest.expire(() => connection.close())]
         : [
             context.sessionRows.subscribe((row) => {
-              const attachment = sessions.attached(row.id)
-              if (attachment)
-                void attachment
+              const member = sessions.member(row.id)
+              if (member)
+                void member
                   .update(sessionInfoUpdate(row, sessions.status(row)))
                   .catch(() => undefined)
             }),
@@ -715,7 +840,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     sessions.close()
     context.presence?.clear(context.principalId, context.connectionId)
     context.readState.close()
-    context.activityFeed.close()
+    context.activityFeed?.close()
   })
 
   return app

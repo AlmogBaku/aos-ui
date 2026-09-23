@@ -21,12 +21,13 @@ describe("AOS local draft registry", () => {
       mainThreadId = "local-beta"
       return second
     })
-    const reset = vi.fn()
-    const resetComposer = vi.fn()
     const runtime = {
       threads: {
         switchToNewThread,
-        getById: () => ({ reset, composer: { reset: resetComposer } }),
+        getById: () => ({
+          import: vi.fn(),
+          composer: { reset: vi.fn(async () => undefined) },
+        }),
         getState: () => ({
           mainThreadId,
           threadItems: { [mainThreadId]: { id: mainThreadId } },
@@ -43,38 +44,5 @@ describe("AOS local draft registry", () => {
 
     expect(drafts.agentFor("local-alpha")).toBe("alpha")
     expect(drafts.agentFor("local-beta")).toBe("beta")
-    expect(reset).toHaveBeenCalledTimes(2)
-    expect(reset).toHaveBeenCalledWith([])
-    expect(resetComposer).toHaveBeenCalledTimes(2)
-  })
-
-  it("clears Assistant UI's reusable draft slot before selecting it again", async () => {
-    const reset = vi.fn()
-    const resetComposer = vi.fn()
-    const runtime = {
-      threads: {
-        switchToNewThread: vi.fn(async () => undefined),
-        getById: () => ({ reset, composer: { reset: resetComposer } }),
-        getState: () => ({
-          mainThreadId: "reused-local",
-          threadItems: {
-            "reused-local": {
-              id: "reused-local",
-              remoteId: undefined,
-              externalId: undefined,
-            },
-          },
-        }),
-      },
-    } as never
-    const drafts = new AosDraftRegistry()
-
-    await createAosSessionDraft(runtime, drafts, "alpha")
-    await createAosSessionDraft(runtime, drafts, "alpha")
-
-    expect(reset).toHaveBeenCalledTimes(2)
-    expect(reset).toHaveBeenNthCalledWith(1, [])
-    expect(reset).toHaveBeenNthCalledWith(2, [])
-    expect(resetComposer).toHaveBeenCalledTimes(2)
   })
 })

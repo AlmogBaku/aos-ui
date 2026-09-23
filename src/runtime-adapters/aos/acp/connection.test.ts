@@ -283,15 +283,20 @@ function createProxyAgent(
     notify(method: string, params: unknown) {
       return peer?.notify(method, params)
     },
-    askPermission() {
-      return peer?.request(methods.client.session.requestPermission, {
-        sessionId: SESSION_ID,
-        title: "Run the tool?",
-        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
-        _meta: {
-          [AOS_META_KEY]: { requestId: "interrupt-1", message: "read file" },
+    /** Aborting `withdrawal` withdraws the request with `$/cancel_request`. */
+    askPermission(withdrawal?: AbortSignal) {
+      return peer?.request(
+        methods.client.session.requestPermission,
+        {
+          sessionId: SESSION_ID,
+          title: "Run the tool?",
+          options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          _meta: {
+            [AOS_META_KEY]: { requestId: "interrupt-1", message: "read file" },
+          },
         },
-      })
+        withdrawal ? { cancellationSignal: withdrawal } : undefined
+      )
     },
   }
 }
@@ -682,6 +687,23 @@ describe("ACP connection", () => {
     await expect(answered).resolves.toMatchObject({
       outcome: { outcome: "selected", optionId: "allow" },
     })
+    connection.close()
+  })
+
+  it("releases a request the proxy withdraws as cancelled", async () => {
+    const proxy = createProxyAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+    const pending: AcpPendingRequest[] = []
+    connection.onPendingRequest((request) => pending.push(request))
+    const withdrawal = new AbortController()
+
+    const answered = proxy.askPermission(withdrawal.signal)
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
+    withdrawal.abort()
+
+    await expect(answered).rejects.toMatchObject({ code: -32800 })
+    expect(pending[0]?.signal.aborted).toBe(true)
     connection.close()
   })
 

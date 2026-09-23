@@ -2,10 +2,10 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   type SessionHistoryResponse,
 } from "../../protocol"
-import { createActivityFeed } from "../acp/activity-feed"
 import { createAosAcpAgent } from "../acp/agent"
 import { createReadState } from "../acp/read-state"
 import { createAcpService } from "../acp/service"
+import type { SessionRooms } from "../acp/session-rooms"
 import * as translators from "../acp/translate"
 import type {
   AcpConnectionContext,
@@ -28,6 +28,7 @@ import {
   createGuestTurnAccess,
   projectGuestCapabilities,
   projectGuestHistory,
+  projectGuestText,
 } from "../auth/guest-runtime-projection"
 import { PendingRequestKind } from "../core/events"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
@@ -46,6 +47,8 @@ export type GuestAcpServiceOptions = {
   invitations: GuestInvitationService
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
   attachmentStages: ServerAttachmentStages
+  /** The one room registry the operator lane shares, so both see one room. */
+  rooms: SessionRooms
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
   now?: () => number
@@ -159,11 +162,23 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
     project: {
       access(base, scope) {
         const { read, errors } = authorized()
-        return createGuestTurnAccess(read, errors, scope, now, base.subscriberId)
+        return createGuestTurnAccess(
+          read,
+          errors,
+          scope,
+          now,
+          base.subscriberId
+        )
       },
       history(value: SessionHistoryResponse) {
         const { read, grant } = authorized()
         return projectGuestHistory(value, read, grant.ref)
+      },
+      turn(text) {
+        const { read } = authorized()
+        return guestAuthorizationActive(read, now)
+          ? projectGuestText(read, "guest", text)
+          : undefined
       },
       capabilities: projectCapabilities,
       permissionReply(request, reply) {
@@ -193,8 +208,9 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
 }
 
 /**
- * One accepted guest connection: its own invitation policy, read-state service
- * (inert on this lane), and activity feed scoped to the invited Agent alone.
+ * One accepted guest connection: its own invitation policy and read-state
+ * service (inert on this lane). It carries no activity feed, which would
+ * describe the Agent's other Sessions.
  */
 export function createGuestConnection(
   options: GuestAcpServiceOptions,
@@ -214,6 +230,7 @@ export function createGuestConnection(
     sessionRows,
     translators,
     attachmentStages: options.attachmentStages,
+    rooms: options.rooms,
     logger: options.logger,
     guest,
     readState: createReadState({
@@ -222,16 +239,6 @@ export function createGuestConnection(
       lane,
       now,
       onUnreadChanged: () => undefined,
-    }),
-    activityFeed: createActivityFeed({
-      runtimeInstance,
-      sessionRows,
-      now,
-      // Only the invited Agent, and nothing at all until it is invited.
-      agentIds: async () => {
-        const grant = guest.grant()
-        return grant ? [grant.agentId] : []
-      },
     }),
   }
 }
@@ -243,7 +250,7 @@ export function createGuestConnection(
 export function createGuestAcpService(options: GuestAcpServiceOptions) {
   const lane = "guest" as const
   const sessionRows = createSessionRows({ now: options.now ?? Date.now })
-  return createAcpService({
+  const service = createAcpService({
     publicOrigin: options.publicOrigin,
     lane,
     principalId: lane,
@@ -251,4 +258,6 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
     connection: (connectionId) =>
       createGuestConnection(options, sessionRows, connectionId),
   })
+  // Exposed so the composition can show both lanes hold the same registry.
+  return { ...service, rooms: options.rooms }
 }

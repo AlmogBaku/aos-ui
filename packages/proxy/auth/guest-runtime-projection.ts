@@ -98,6 +98,29 @@ function restoredTurnErrorCode(metadata: SessionMessage["metadata"]) {
   return typeof code === "string" ? code : undefined
 }
 
+/**
+ * One message's text as the guest may read it. A user turn projects under the
+ * `guest` role whoever sent it; `undefined` means the guest sees none of it.
+ */
+export function projectGuestText(
+  authorization: GuestAuthorization,
+  role: "guest" | "assistant",
+  text: string
+) {
+  const projected = projectGuestOutbound(
+    {
+      transport: "rest",
+      agentId: authorization.agentId,
+      sessionId: authorization.sessionId,
+      payload: { type: "message", role, text },
+    },
+    authorization
+  )
+  return projected?.payload.type === "message"
+    ? projected.payload.text
+    : undefined
+}
+
 export function projectGuestHistory(
   history: SessionHistoryResponse,
   authorization: GuestAuthorization,
@@ -137,23 +160,12 @@ export function projectGuestHistory(
               ]
             : []
         if (part.type !== "text") return []
-        const projected = projectGuestOutbound(
-          {
-            transport: "rest",
-            agentId: authorization.agentId,
-            sessionId: authorization.sessionId,
-            payload: {
-              type: "message",
-              role: message.role === "user" ? "guest" : "assistant",
-              text: part.text,
-            },
-          },
-          authorization
+        const text = projectGuestText(
+          authorization,
+          message.role === "user" ? "guest" : "assistant",
+          part.text
         )
-        return projected?.payload.type === "message" &&
-          projected.payload.text !== undefined
-          ? [{ type: "text" as const, text: projected.payload.text }]
-          : []
+        return text === undefined ? [] : [{ type: "text" as const, text }]
       }
     )
     // A turn the provider failed reaches a guest as a failed turn, never as an

@@ -549,7 +549,7 @@ function createAcpController({
     cancel: () => {
       if (bound !== undefined) connection.cancel(bound)
     },
-    setMessages: (messages: readonly ThreadMessage[]) => {
+    importMessages: (messages: readonly ThreadMessage[]) => {
       commit(
         retainMessages(
           state,
@@ -701,8 +701,9 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
         queue?.notifyCancelled()
         controller.cancel()
       },
-      setMessages: (messages) => controller.setMessages(messages),
-      onImport: (messages) => controller.setMessages(messages),
+      // No `setMessages`: with it, Stop before any reply unsends the prompt
+      // into the composer, but the provider has already saved it.
+      onImport: (messages) => controller.importMessages(messages),
       ...(adapters && { adapters }),
       ...(queue && { queue: queue.adapter }),
     }

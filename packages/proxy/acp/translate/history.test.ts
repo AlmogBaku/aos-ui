@@ -11,7 +11,11 @@ import {
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound } from "../types"
-import { persistedCorrections, translateHistory } from "./history"
+import {
+  persistedCorrections,
+  throughLivePrompt,
+  translateHistory,
+} from "./history"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 
@@ -544,20 +548,24 @@ describe("translateHistory", () => {
   })
 })
 
+const PROMPTED_AT = "2026-09-19T09:00:00.000Z"
+
+const user = (id: string, text: string, correction = false) => ({
+  id,
+  role: "user" as const,
+  content: [{ type: "text" as const, text }],
+  createdAt: PROMPTED_AT,
+  ...(correction ? { metadata: { custom: { correction: true } } } : {}),
+})
+
+const agent = {
+  id: "a9",
+  role: "assistant" as const,
+  content: [{ type: "text" as const, text: "Answered" }],
+  createdAt: "2026-09-19T09:00:01.000Z",
+}
+
 describe("persistedCorrections", () => {
-  const user = (id: string, text: string, correction = false) => ({
-    id,
-    role: "user" as const,
-    content: [{ type: "text" as const, text }],
-    createdAt: "2026-09-19T09:00:00.000Z",
-    ...(correction ? { metadata: { custom: { correction: true } } } : {}),
-  })
-  const agent = {
-    id: "a9",
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "Answered" }],
-    createdAt: "2026-09-19T09:00:01.000Z",
-  }
   const of = (messages: SessionHistoryResponse["messages"]) =>
     persistedCorrections({ ...history, messages })
 
@@ -585,5 +593,46 @@ describe("persistedCorrections", () => {
         user("u3", "Now the appendix"),
       ])
     ).toBe(0)
+  })
+})
+
+describe("throughLivePrompt", () => {
+  const admitted = Date.parse(PROMPTED_AT)
+  const page = (messages: SessionHistoryResponse["messages"]) => ({
+    ...history,
+    messages,
+  })
+
+  it("cuts the page back to the live prompt, dropping what the turn stored", () => {
+    const earlier = { ...agent, id: "a1" }
+    const stored = page([
+      earlier,
+      user("u1", "Summarize"),
+      user("u2", "Shorter", true),
+      agent,
+    ])
+
+    expect(throughLivePrompt(stored, 1, admitted)?.messages).toEqual([
+      earlier,
+      user("u1", "Summarize"),
+    ])
+  })
+
+  it("keeps a page whose prompt was stored before the turn was admitted", () => {
+    const stored = page([user("u1", "Summarize"), agent])
+
+    expect(throughLivePrompt(stored, 0, admitted + 60_000)).toBeUndefined()
+  })
+
+  it("allows a provider clock a moment behind the proxy's", () => {
+    const stored = page([user("u1", "Summarize"), agent])
+
+    expect(throughLivePrompt(stored, 0, admitted + 2_000)?.messages).toEqual([
+      user("u1", "Summarize"),
+    ])
+  })
+
+  it("keeps a page that shows no prompt", () => {
+    expect(throughLivePrompt(page([agent]), -1, admitted)).toBeUndefined()
   })
 })

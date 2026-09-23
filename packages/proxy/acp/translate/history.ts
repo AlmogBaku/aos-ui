@@ -119,7 +119,9 @@ function toolCallOutbound(
         argsText: part.argsText,
         ...(part.startedAt ? { startedAt: part.startedAt } : {}),
         ...(part.completedAt ? { completedAt: part.completedAt } : {}),
-        ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
+        ...(part.durationMs === undefined
+          ? {}
+          : { durationMs: part.durationMs }),
         ...(part.app ? { app: {} } : {}),
       }
     ),
@@ -248,8 +250,17 @@ export const translateHistory = ((history, lane) => {
 }) satisfies TranslateHistory
 
 /** A user turn the provider persisted as a mid-turn correction. */
-function isCorrection(message: SessionHistoryResponse["messages"][number]) {
+export function isCorrection(
+  message: SessionHistoryResponse["messages"][number]
+) {
   return message.role === "user" && message.metadata?.custom.correction === true
+}
+
+/** Where the page's last prompt sits: its last user turn that is no correction. */
+export function lastPromptIndex(history: SessionHistoryResponse) {
+  return history.messages.findLastIndex(
+    (message) => message.role === "user" && !isCorrection(message)
+  )
 }
 
 /**
@@ -258,9 +269,31 @@ function isCorrection(message: SessionHistoryResponse["messages"][number]) {
  * provider cannot persist another prompt while a turn runs, so every flagged
  * user turn beyond the last plain one belongs to the turn the journal replays.
  */
-export const persistedCorrections = ((history) => {
-  const users = history.messages.filter((message) => message.role === "user")
+export const persistedCorrections = ((history) =>
   // No plain prompt in the page leaves every flagged turn to count.
-  const prompt = users.findLastIndex((message) => !isCorrection(message))
-  return users.length - prompt - 1
-}) satisfies PersistedCorrections
+  history.messages
+    .slice(lastPromptIndex(history) + 1)
+    .filter((message) => message.role === "user")
+    .length) satisfies PersistedCorrections
+
+/** How far a provider's clock may run behind the proxy's for a stored prompt. */
+const PROMPT_CLOCK_SKEW_MS = 5_000
+
+/**
+ * The page cut back to the live turn's prompt at `index`, when that prompt was
+ * stored no earlier than the turn was admitted. The provider folds the rows the
+ * turn stored so far into one message that reads as a finished reply, so a view
+ * that replays the turn from its start drops them, corrections included, and
+ * shows the turn once. `undefined` when the page shows no such prompt.
+ */
+export function throughLivePrompt(
+  history: SessionHistoryResponse,
+  index: number,
+  admittedAt: number
+): SessionHistoryResponse | undefined {
+  const prompt = history.messages[index]
+  if (prompt?.role !== "user") return undefined
+  if (Date.parse(prompt.createdAt) < admittedAt - PROMPT_CLOCK_SKEW_MS)
+    return undefined
+  return { ...history, messages: history.messages.slice(0, index + 1) }
+}

@@ -16,6 +16,7 @@ import {
   AOS_META_KEY,
 } from "../../protocol/acp"
 import { createAosAcpAgent } from "../acp/agent"
+import { createSessionRooms } from "../acp/session-rooms"
 import {
   createGuestInvitationService,
   type GuestInvitationService,
@@ -125,7 +126,6 @@ const OPERATOR_DIFF = {
   changes: [{ operation: "modify" as const, path: OPERATOR_PATH }],
   patch: `--- a${OPERATOR_PATH}\n+++ b${OPERATOR_PATH}\n-old\n+new\n`,
 }
-
 
 /** One published artifact, as the Hermes adapter emits it live and stored. */
 const ARTIFACT = {
@@ -353,7 +353,11 @@ type HarnessOptions = {
   /** The invited Session already exists; a fresh invitation creates nothing. */
   existing?: boolean
   handle?: () => ServerTurnHandle
-  permission?: (params: unknown) => Promise<RequestPermissionResponse>
+  /** The guest's answer; `signal` aborts as the proxy withdraws the request. */
+  permission?: (
+    params: unknown,
+    signal: AbortSignal
+  ) => Promise<RequestPermissionResponse>
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -390,6 +394,12 @@ function harness(options: HarnessOptions = {}) {
   const runtimeInfo = vi.fn(unsupported)
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(async () => HISTORY)
+  const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
+    sessions: [],
+    total: 0,
+    limit,
+    offset,
+  }))
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
@@ -400,12 +410,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     listAgents: unsupported,
     updateAgentVisibility: unsupported,
-    listAllSessions: async (limit, offset) => ({
-      sessions: [],
-      total: 0,
-      limit,
-      offset,
-    }),
+    listAllSessions,
     listSessions: unsupported,
     history,
     getSession: async () => ({
@@ -437,6 +442,7 @@ function harness(options: HarnessOptions = {}) {
     close: async () => undefined,
   }
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
+  const clock = { now: NOW }
   const invitations = invitationService()
   const context = createGuestConnection(
     {
@@ -444,7 +450,10 @@ function harness(options: HarnessOptions = {}) {
       runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
-      now: () => NOW,
+      rooms: createSessionRooms({
+        snapshot: (scope) => coordinator.snapshot(scope),
+      }),
+      now: () => clock.now,
       schedule: (delayMs, task) => {
         scheduled.push({ delayMs, task })
         return scheduled.length
@@ -460,17 +469,20 @@ function harness(options: HarnessOptions = {}) {
     .onNotification(methods.client.session.update, ({ params }) => {
       recorder.add({ method: methods.client.session.update, params })
     })
-    .onRequest(methods.client.session.requestPermission, async ({ params }) => {
-      recorder.add({
-        method: methods.client.session.requestPermission,
-        params,
-      })
-      return (
-        (await options.permission?.(params)) ?? {
-          outcome: { outcome: "selected", optionId: "once" },
-        }
-      )
-    })
+    .onRequest(
+      methods.client.session.requestPermission,
+      async ({ params, signal }) => {
+        recorder.add({
+          method: methods.client.session.requestPermission,
+          params,
+        })
+        return (
+          (await options.permission?.(params, signal)) ?? {
+            outcome: { outcome: "selected", optionId: "once" },
+          }
+        )
+      }
+    )
   for (const method of Object.values(AOS_METHODS.notify))
     clientApp.onNotification(
       method,
@@ -487,7 +499,10 @@ function harness(options: HarnessOptions = {}) {
     close: () => connection.close(),
     recorder,
     scheduled,
+    clock,
     invitations,
+    policy: context.guest,
+    coordinator,
     start,
     handles,
     history,
@@ -495,6 +510,7 @@ function harness(options: HarnessOptions = {}) {
     deleteSession,
     runtimeInfo,
     resolveInvitedSession,
+    listAllSessions,
     initialize: () =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
@@ -640,6 +656,53 @@ describe("guest ACP lane", () => {
     await expect(test.resume("another-session")).rejects.toMatchObject({
       code: AOS_JSONRPC_ERRORS.notFound,
     })
+    test.close()
+  })
+
+  it("projects another member's prompt the way its history projects a user turn", async () => {
+    const test = harness()
+    // One byte past the guest message text bound, which history drops too.
+    const oversized = "x".repeat(16_385)
+    expect(() => test.policy?.project.turn("Hello")).toThrow()
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    expect(test.policy?.project.turn("Hello")).toBe("Hello")
+    expect(test.policy?.project.turn(oversized)).toBeUndefined()
+    const history = test.policy?.project.history({
+      sessionId: REF,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: [{ type: "text", text: "Hello" }],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: [{ type: "text", text: oversized }],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      total: 2,
+      limit: 500,
+      offset: 0,
+      nextOffset: 0,
+    })
+    expect(history?.messages.map(({ content }) => content)).toEqual([
+      [{ type: "text", text: "Hello" }],
+    ])
+    test.close()
+  })
+
+  it("gives an expired grant no copy of another member's prompt", async () => {
+    const test = harness()
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    test.clock.now = NOW + 259_200_000
+    expect(test.policy?.project.turn("Hello")).toBeUndefined()
     test.close()
   })
 
@@ -842,6 +905,50 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
+  it("withdraws its request once an operator answers it", async () => {
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = harness({
+      existing: true,
+      handle: () =>
+        terminalHandle(
+          test.start.mock.calls.length > 1 ? RUN_EVENTS : REQUEST_EVENTS
+        ),
+      permission: (_params, signal) => {
+        withdrawal.resolve(signal)
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason))
+        })
+      },
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Delete the notes")
+    const signal = await withdrawal.promise
+
+    // The operator addresses the Session by its own public id.
+    const reply = await test.coordinator.start(
+      { agentId: AGENT, sessionId: STORED, threadId: "operator-view" },
+      {
+        turnId: "operator-reply",
+        replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+      },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    reply.close()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+  })
+
   it("stops its own run through the controller the projection grants", async () => {
     const test = harness({
       existing: true,
@@ -878,6 +985,36 @@ describe("guest ACP lane", () => {
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("carries no activity from any Session of the invited Agent", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    const other = await test.coordinator.start(
+      { agentId: AGENT, sessionId: "operator-session", threadId: "operator" },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    for await (const _ of other.events) void _
+    await test.prompt("Hello")
+    await test.recorder.wait(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes('"idle"')
+    )
+
+    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
+    // Nor does it list the deployment's Sessions to seed one.
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
   })
 

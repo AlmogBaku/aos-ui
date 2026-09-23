@@ -32,7 +32,6 @@ function harness(
   options: {
     sessions?: Session[]
     executions?: Record<string, Execution>
-    agentIds?: () => Promise<string[]>
     now?: () => number
     limit?: number
     maxAgeMs?: number
@@ -68,7 +67,6 @@ function harness(
   const feed = createActivityFeed({
     runtimeInstance,
     sessionRows,
-    ...(options.agentIds ? { agentIds: options.agentIds } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.limit === undefined ? {} : { limit: options.limit }),
     ...(options.maxAgeMs === undefined ? {} : { maxAgeMs: options.maxAgeMs }),
@@ -218,22 +216,6 @@ describe("createActivityFeed", () => {
     expect(
       feed.snapshot().map((event) => "turnId" in event && event.turnId)
     ).toEqual(["run-5"])
-  })
-
-  it("observes only the Agents the connection may see", async () => {
-    const { feed } = harness({
-      agentIds: async () => [AGENT],
-      sessions: [
-        session({ unread: true }),
-        session({ id: "session-9", agentId: "assistant", unread: true }),
-      ],
-    })
-
-    await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
-    expect(feed.snapshot()[0]).toMatchObject({
-      agentId: AGENT,
-      sessionId: "session-1",
-    })
   })
 
   it("stops observing and publishing after close", async () => {

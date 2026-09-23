@@ -560,6 +560,39 @@ describe("useAcpRuntime", () => {
     expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
   })
 
+  it("keeps a prompt stopped before any reply, since the provider saved it", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Ship it" }],
+      })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalled()
+    })
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+    await act(async () => {
+      result.current.thread.cancelRun()
+    })
+    act(() => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "cancelled",
+      })
+    })
+    expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+    ])
+    expect(result.current.thread.composer.getState().text).toBe("")
+  })
+
   it("creates the Session a draft's first turn needs, then prompts it", async () => {
     const fake = createFakeConnection()
     const attach = vi.fn(async () => undefined)

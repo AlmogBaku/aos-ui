@@ -17,7 +17,7 @@ import { AOS_META_KEY, type AosSessionInfoMeta } from "../../protocol/acp"
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import { createSessionAttachment } from "./session-attachment"
+import { createSessionMember } from "./session-member"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import { invalidRequest, notFound, publicRequestError } from "./validation"
 
@@ -224,10 +224,7 @@ export function createSessions(context: AcpConnectionContext) {
   const coordinator = context.runtimeInstance.sessions
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
-  const attachments = new Map<
-    string,
-    ReturnType<typeof createSessionAttachment>
-  >()
+  const members = new Map<string, ReturnType<typeof createSessionMember>>()
 
   const remember = (rows: readonly Session[]) => {
     for (const row of rows) owners.set(row.id, row.agentId)
@@ -263,40 +260,40 @@ export function createSessions(context: AcpConnectionContext) {
       return workspace.scope(agentId, publicSessionId)
     },
 
-    /** The Session's attachment on this connection, created on first use. */
-    attach(client: AgentContext, scope: SessionScope) {
-      const existing = attachments.get(scope.threadId)
+    /** The Session's member on this connection, created on first use. */
+    join(client: AgentContext, scope: SessionScope) {
+      const existing = members.get(scope.threadId)
       if (existing) return existing
-      const attachment = createSessionAttachment({
+      const member = createSessionMember({
         context,
         scope,
         client,
         readUsage: () => workspace.usage(scope),
         readModels: () => workspace.models(scope),
       })
-      attachments.set(scope.threadId, attachment)
-      return attachment
+      members.set(scope.threadId, member)
+      return member
     },
 
-    attached(publicSessionId: string) {
-      return attachments.get(publicSessionId)
+    member(publicSessionId: string) {
+      return members.get(publicSessionId)
     },
 
-    detach(publicSessionId: string) {
-      attachments.get(publicSessionId)?.detach()
-      attachments.delete(publicSessionId)
+    leave(publicSessionId: string) {
+      members.get(publicSessionId)?.leave()
+      members.delete(publicSessionId)
     },
 
     forget(scope: SessionScope) {
-      attachments.get(scope.threadId)?.detach()
-      attachments.delete(scope.threadId)
+      members.get(scope.threadId)?.leave()
+      members.delete(scope.threadId)
       owners.delete(scope.threadId)
       context.sessionRows.forget(scope.agentId, scope.threadId)
     },
 
     close() {
-      for (const attachment of attachments.values()) attachment.detach()
-      attachments.clear()
+      for (const member of members.values()) member.leave()
+      members.clear()
       owners.clear()
     },
   }

@@ -314,7 +314,7 @@ it with a synthetic value.
 
 The proxy emits one `usage_update` on `session/new`, on `session/resume`, after
 every settled turn, and after a `session/set_config_option` that changes the
-model (`packages/proxy/acp/session-attachment.ts:228-242`). Implement
+model (`packages/proxy/acp/session-member.ts:342-346`). Implement
 `workspaceCapabilities` to return a `SessionContextResponse`, or declare usage
 unavailable; a provider that cannot answer at all leaves the last reading
 standing without emitting an empty gauge.
