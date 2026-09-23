@@ -50,7 +50,17 @@ const areComponentMapsShallowEqual = (
 export const MESSAGE_BODY_TYPOGRAPHY =
   "text-base leading-7 @min-[64rem]/workspace:text-sm @min-[64rem]/workspace:leading-6"
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, smooth }) => {
+/**
+ * The reveal still advances every frame, but the text it shows, and so the
+ * markdown re-parse of the whole streaming turn, commits at most this often.
+ * Committing every frame makes a long reply cost more per frame as it grows.
+ */
+const STREAMING_REVEAL = { minCommitMs: 50 } as const
+
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({
+  components,
+  smooth = true,
+}) => {
   const markdownComponents = useMemo(() => {
     if (!components) return defaultComponents
     return {
@@ -61,7 +71,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, smooth }) => {
 
   return (
     <MarkdownTextPrimitive
-      smooth={smooth}
+      smooth={smooth && STREAMING_REVEAL}
       remarkPlugins={[remarkGfm]}
       className={cn("aui-md", MESSAGE_BODY_TYPOGRAPHY)}
       components={markdownComponents}
