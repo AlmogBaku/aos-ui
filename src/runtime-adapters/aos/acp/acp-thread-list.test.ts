@@ -184,6 +184,26 @@ describe("ACP remote thread-list adapter", () => {
       expect(second.nextCursor).toBeUndefined()
     })
 
+    it("reads past a page every Agent's page one already listed", async () => {
+      const listSessions = scopedCatalog([
+        [sessionInfo({ sessionId: "aster-1", agentId: "aster" })],
+        [sessionInfo({ sessionId: "willow-1", agentId: "willow" })],
+        [sessionInfo({ sessionId: "aster-3", agentId: "aster" })],
+      ])
+      const { adapter } = harness(
+        { listSessions },
+        { agentScope: () => "aster" }
+      )
+
+      const first = await adapter.list()
+      const second = await adapter.list({ after: first.nextCursor })
+
+      expect(second.threads.map(({ remoteId }) => remoteId)).toEqual([
+        "aster-3",
+      ])
+      expect(second.nextCursor).toBeUndefined()
+    })
+
     it("offers no further page to an Agent whose Sessions all fit", async () => {
       const { adapter } = harness(
         {

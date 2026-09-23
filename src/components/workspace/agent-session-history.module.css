@@ -222,6 +222,32 @@
   }
 }
 
+/* The list's quiet tail: text, not a button, until it is pointed at. */
+.loadMore {
+  border: 0;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  text-underline-offset: 0.2em;
+}
+
+.loadMore:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.loadMore:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.loadMore[aria-disabled="true"] {
+  color: var(--muted-foreground);
+  cursor: default;
+  text-decoration: none;
+}
+
 .archivedEmpty {
   margin: 0;
   padding: 0.5rem 0.5rem 0.75rem;

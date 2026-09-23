@@ -104,6 +104,19 @@ export function createAcpThreadListAdapter({
     return metadata
   }
 
+  // A page that lists nothing, or a cursor that does not advance, cannot
+  // reach another Session.
+  function advances(
+    page: { sessions: readonly unknown[]; nextCursor?: string },
+    cursor: string | undefined
+  ) {
+    return (
+      page.sessions.length > 0 &&
+      page.nextCursor !== undefined &&
+      page.nextCursor !== cursor
+    )
+  }
+
   function revise(remoteId: string, change: Partial<RemoteThreadMetadata>) {
     const metadata = listed.get(remoteId)
     if (metadata) listed.set(remoteId, { ...metadata, ...change })
@@ -132,12 +145,28 @@ export function createAcpThreadListAdapter({
      */
     async list({ after } = {}) {
       const agentId = agentScope?.()
-      const [page, everyAgent] = await Promise.all([
+      const [first, everyAgent] = await Promise.all([
         connection.listSessions(listMeta(agentId), after),
         agentId === undefined || after !== undefined
           ? undefined
           : connection.listSessions({}),
       ])
+      // Page one of every Agent can already hold this Agent's next page, and a
+      // later page that lists nothing new would stop History reading at its
+      // end, so a later read continues until it reaches an unlisted Session.
+      let page = first
+      let cursor = after
+      const read = new Set([after])
+      while (
+        after !== undefined &&
+        page.sessions.every((info) => listed.has(info.sessionId)) &&
+        advances(page, cursor) &&
+        !read.has(page.nextCursor)
+      ) {
+        cursor = page.nextCursor
+        read.add(cursor)
+        page = await connection.listSessions(listMeta(agentId), cursor)
+      }
       const sessions = new Map(
         [...page.sessions, ...(everyAgent?.sessions ?? [])].map((info) => [
           info.sessionId,
@@ -147,13 +176,10 @@ export function createAcpThreadListAdapter({
       const threads = [...sessions.values()].map((info) =>
         remember(metadataOf(info))
       )
-      // A page that adds nothing, or a cursor that does not advance, cannot
-      // reach another Session.
-      const more =
-        page.sessions.length > 0 &&
-        page.nextCursor !== undefined &&
-        page.nextCursor !== after
-      return { threads, ...(more ? { nextCursor: page.nextCursor } : {}) }
+      return {
+        threads,
+        ...(advances(page, cursor) ? { nextCursor: page.nextCursor } : {}),
+      }
     },
 
     /**

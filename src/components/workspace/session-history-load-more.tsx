@@ -1,10 +1,13 @@
 "use client"
 
+import { ChevronDown, LoaderCircle } from "lucide-react"
 import { useThreadListLoadMore } from "@assistant-ui/core/react"
 import { useAuiState } from "@assistant-ui/react"
 import { useEffect, useRef, useState } from "react"
 
-import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
+
+import styles from "./agent-session-history.module.css"
 
 export type SessionHistoryLoadMoreCopy = {
   loadMoreSessions: string
@@ -57,16 +60,32 @@ export function SessionHistoryLoadMore({
 
   if (!hasMore) return null
 
+  // Quiet centered text in both states, so the label changes in place and
+  // focus stays on the control while the page loads.
   return (
-    <div ref={sentinel} className="flex justify-center p-2">
-      <p role="status" className="text-sm text-muted-foreground">
+    <div ref={sentinel} className="flex justify-center py-2">
+      <button
+        type="button"
+        className={cn(
+          styles.loadMore,
+          "inline-flex items-center gap-1.5 px-2 py-1 text-xs"
+        )}
+        aria-disabled={loadingMore}
+        onClick={loadingMore ? undefined : loadMore}
+      >
+        {loadingMore ? (
+          <LoaderCircle
+            className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+        )}
+        {loadingMore ? copy.loadingMoreSessions : copy.loadMoreSessions}
+      </button>
+      <p role="status" className="sr-only">
         {loadingMore ? copy.loadingMoreSessions : null}
       </p>
-      {loadingMore ? null : (
-        <Button type="button" variant="ghost" size="sm" onClick={loadMore}>
-          {copy.loadMoreSessions}
-        </Button>
-      )}
     </div>
   )
 }
