@@ -2877,6 +2877,37 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  it("reports no running state ahead of the stream when a draft's resume races its prompt", async () => {
+    const models = gate()
+    let hold = false
+    const test = await harness({
+      providerIds: true,
+      beforeModels: () => (hold ? models.held : Promise.resolve()),
+    })
+    await test.create()
+    hold = true
+    const resumed = test.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+    })
+    const messageId = await prompt(test, "Summarize", CREATED)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    models.release()
+    await resumed
+    await settled()
+
+    expect(flow(test.recorder, CREATED)).toEqual([`prompt ${messageId}`])
+    reply(test.sources[0], "Done")
+    await test.recorder.wait(endedTurn)
+    expect(flow(test.recorder, CREATED)).toEqual([
+      `prompt ${messageId}`,
+      "state running",
+      "chunk Done",
+      "state idle",
+    ])
+    test.close()
+  })
+
   it("shows the sender its own prompt once after session/new", async () => {
     const test = await harness({ providerIds: true })
     await test.create()

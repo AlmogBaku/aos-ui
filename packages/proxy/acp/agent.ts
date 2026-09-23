@@ -371,7 +371,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
     const execution = coordinator.snapshot(scope)
     afterResponse(member, async () => {
-      await member.reportExecution()
+      // A turn admitted since this response was built reports itself on its
+      // own stream; restating it here would run ahead of that stream.
+      if (coordinator.snapshot(scope).turnId === execution.turnId)
+        await member.reportExecution()
       if (coordinator.state(scope) === "waiting-for-input")
         await member.reissuePending()
     })
@@ -549,7 +552,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const models = await workspace.models(scope)
     const capabilities = await workspace.capabilities(scope)
     afterResponse(member, async () => {
-      await member.reportExecution()
+      // A turn admitted since this response was built reports itself on its
+      // own stream; restating it here would run ahead of that stream.
+      if (coordinator.snapshot(scope).turnId === execution.turnId)
+        await member.reportExecution()
       // A resumed Session carries the window every earlier turn already grew;
       // only a report here keeps its composer from opening on an empty gauge.
       await member.reportUsage()
