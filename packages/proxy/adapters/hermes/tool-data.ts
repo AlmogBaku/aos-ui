@@ -17,7 +17,6 @@ import {
 import {
   boundedGraphBytes,
   containsCredentialValue,
-  containsPrivateValue,
   isRecord,
   parseJson,
   parseJsonOrValue,
@@ -67,12 +66,16 @@ export function hermesToolKind(canonicalName: string) {
 /** The file tools whose `path` argument names the one file they touch. */
 const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 
-/** An absolute path the privacy rule lets leave the adapter. */
+/**
+ * An absolute path that may leave the adapter: any one carrying no credential.
+ * Tool data reaches only the operator lane, which sees the Agent's real paths;
+ * the guest projection drops tool calls before a path could reach it.
+ */
 export function publicPath(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.startsWith("/") &&
-    !containsPrivateValue(value)
+    !containsCredentialValue(value)
   )
 }
 
@@ -108,25 +111,11 @@ export function hermesToolDiffs(
   return [
     {
       changes: paths.map((path) => ({ operation: DiffOperation.Modify, path })),
-      ...(typeof diff === "string" && diff && publicPatch(diff)
+      ...(typeof diff === "string" && diff && !stringContainsCredential(diff)
         ? { patch: diff }
         : {}),
     },
   ]
-}
-
-/** A diff's `a/` and `b/` prefixes hide an absolute path from the rule. */
-function publicPatch(diff: string) {
-  return (
-    !containsPrivateValue(diff) &&
-    diff
-      .split("\n")
-      .every(
-        (line) =>
-          !/^(?:---|\+\+\+) [ab]\//u.test(line) ||
-          !containsPrivateValue(line.slice(6))
-      )
-  )
 }
 
 export type HermesPublicJsonValue =
@@ -593,15 +582,15 @@ function publicAnswer(value: unknown) {
   return typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_PUBLIC_ANSWER_LENGTH &&
-    !containsPrivateValue(value)
+    !stringContainsCredential(value)
     ? value
     : undefined
 }
 
 /**
  * Projects the answers Hermes recorded for a settled clarification. An answer
- * that carries a credential or a private location is dropped rather than
- * rewritten, so a cancelled and a redacted clarification read alike.
+ * that carries a credential is dropped rather than rewritten, so a cancelled
+ * and a redacted clarification read alike.
  */
 /**
  * Hermes records a multi-select answer as a list and a single one as text; an
@@ -660,14 +649,8 @@ function publicToolResult(
   // An artifact receipt AOS could not publish keeps only its status fields: the
   // rest of a native receipt is a filesystem path.
   const receipt: HermesPublicJsonRecord = {}
-  for (const key of PUBLIC_ARTIFACT_RECEIPT_KEYS) {
-    if (!(key in projected)) continue
-    const value = projected[key]!
-    // A native status message is prose that may name the very location this
-    // collapse drops, so it is held to the same rule as a recorded answer.
-    if (typeof value === "string" && containsPrivateValue(value)) continue
-    receipt[key] = value
-  }
+  for (const key of PUBLIC_ARTIFACT_RECEIPT_KEYS)
+    if (key in projected) receipt[key] = projected[key]!
   return Object.keys(receipt).length
     ? receipt
     : { status: isError ? "failed" : "completed" }
