@@ -94,3 +94,24 @@ it.each([undefined, "idle", "active"] as const)(
     ])
   }
 )
+
+it("keeps the roster it has when an invalidation re-reads the same one", async () => {
+  let notify!: () => void
+  const read = () => [{ kind: "ready", id: "aster", name: "Aster" } as const]
+  const workspace: WorkspaceAdapter = {
+    listAgents: async () => read(),
+    refreshAgents: vi.fn(async () => read()),
+    getSessionMetadata: async () => [],
+    createSession: async () => ({ threadId: "unused" }),
+    subscribeAgentCatalog: (listener) => {
+      notify = listener
+      return () => {}
+    },
+  }
+  const { result } = renderHook(() => useWorkspaceCatalog(workspace, 0))
+  await waitFor(() => expect(result.current.agentsLoading).toBe(false))
+  const roster = result.current.agents
+  await act(async () => notify())
+  expect(workspace.refreshAgents).toHaveBeenCalledTimes(1)
+  expect(result.current.agents).toBe(roster)
+})

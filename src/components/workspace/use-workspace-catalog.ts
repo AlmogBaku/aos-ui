@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { sameData } from "@/lib/utils"
 import type {
   AgentSummary,
   WorkspaceAdapter,
@@ -24,7 +25,9 @@ export function useWorkspaceCatalog(
           ? workspace.refreshAgents()
           : workspace.listAgents())
         if (active && requestGeneration === generation) {
-          setAgents(next)
+          // Every catalog invalidation re-reads the roster, and most leave it
+          // as it was: keeping the value spares the workspace a re-render.
+          setAgents((previous) => (sameData(previous, next) ? previous : next))
           setAgentError(null)
           setAgentsLoading(false)
         }
