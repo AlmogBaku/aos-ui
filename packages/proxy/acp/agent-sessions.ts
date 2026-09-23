@@ -11,9 +11,14 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   type TurnSteerRequest,
   type Session,
+  type SessionHistoryResponse,
   type SessionModelUpdateRequest,
 } from "../../protocol"
-import { AOS_META_KEY, type AosSessionInfoMeta } from "../../protocol/acp"
+import {
+  AOS_META_KEY,
+  type AosHistoryCursor,
+  type AosSessionInfoMeta,
+} from "../../protocol/acp"
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
@@ -112,7 +117,11 @@ export function executionMeta(execution: {
   }
 }
 
-/** `session/list` pages by offset; the cursor is that offset, opaquely. */
+/**
+ * `session/list` and history pages go by offset; the cursor is that offset,
+ * opaquely. Only a cursor this codec could have issued decodes, so no other
+ * spelling of a number reaches a runtime.
+ */
 export function encodeCursor(offset: number) {
   return Buffer.from(String(offset), "utf8").toString("base64url")
 }
@@ -120,8 +129,41 @@ export function encodeCursor(offset: number) {
 export function decodeCursor(cursor: string | null | undefined) {
   if (cursor === undefined || cursor === null) return 0
   const offset = Number(Buffer.from(cursor, "base64url").toString("utf8"))
-  if (!Number.isSafeInteger(offset) || offset < 0) throw invalidRequest()
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    encodeCursor(offset) !== cursor
+  )
+    throw invalidRequest()
   return offset
+}
+
+/** How far back history pages reach; older history reads as truncated. */
+export const HISTORY_MAX_OFFSET = 100_000
+
+/** An older page's offset: past the start replay, short of the reach. */
+export function decodeHistoryCursor(cursor: string) {
+  const offset = decodeCursor(cursor)
+  if (offset < 1 || offset >= HISTORY_MAX_OFFSET) throw invalidRequest()
+  return offset
+}
+
+/**
+ * `_meta.aos.history` for a page just read: a cursor to the next older page,
+ * nothing once the page reached the start, or `truncated` when older history
+ * exists that neither the runtime nor the reach serves.
+ */
+export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
+  // A runtime that cannot read further back has no page to offer beyond this.
+  if (page.truncated) return { truncated: true }
+  const older = page.nextOffset < page.total
+  if (
+    older &&
+    page.nextOffset > page.offset &&
+    page.nextOffset < HISTORY_MAX_OFFSET
+  )
+    return { nextCursor: encodeCursor(page.nextOffset) }
+  return older ? { truncated: true } : {}
 }
 
 /**
@@ -178,8 +220,10 @@ export function createWorkspace(context: AcpConnectionContext) {
           await runtime.getSession(scope.agentId, scope.sessionId)
         )
       ),
-    history: (scope: SessionScope, limit: number) =>
-      call(() => runtime.history(scope.agentId, scope.sessionId, limit, 0)),
+    history: (scope: SessionScope, limit: number, offset = 0) =>
+      call(() =>
+        runtime.history(scope.agentId, scope.sessionId, limit, offset)
+      ),
     update: (scope: SessionScope, patch: SessionPatch) =>
       call(() => runtime.updateSession(scope.agentId, scope.sessionId, patch)),
     delete: (scope: SessionScope) =>

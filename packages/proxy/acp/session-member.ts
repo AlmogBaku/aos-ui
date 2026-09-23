@@ -404,6 +404,11 @@ class SessionMember {
     return this.#send(outbound, this.#sequence)
   }
 
+  /** The Session this member attaches, as its connection resolved it. */
+  get scope() {
+    return this.#scope
+  }
+
   update(update: SessionUpdate) {
     // Nothing to tell a client that has gone. A resolved promise rather than
     // `undefined`, because callers chain on what this returns.

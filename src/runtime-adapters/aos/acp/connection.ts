@@ -25,11 +25,14 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
+  AOS_REPLAY_BEFORE,
   AosActivityNotificationSchema,
   AosAgentsListResponseSchema,
   AosChunkMetaSchema,
   AosComposerPrefillNotificationSchema,
   AosErrorNotificationSchema,
+  AosHistoryPageResponseMetaSchema,
+  AosHistoryPageTagSchema,
   AosInitializeMetaSchema,
   AosPromptResponseMetaSchema,
   AosSessionInvalidatedNotificationSchema,
@@ -38,12 +41,14 @@ import {
   AosSetVisibilityResponseSchema,
   AosSteerAcceptedNotificationSchema,
   AosSteerResponseSchema,
+  type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
 import type {
   AcpConnection,
   AcpConnectionStatus,
+  AcpHistoryPage,
   AcpPendingRequest,
   AcpResumeOptions,
   AcpSessionReplayListener,
@@ -157,6 +162,9 @@ export function createAcpConnection(
   const pendingListeners = new Set<(request: AcpPendingRequest) => void>()
   const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
   const positions = new Map<string, { turnId: string; after: number }>()
+  const histories = new Map<string, AosHistoryCursor>()
+  /** The updates of the page read in flight for each Session. */
+  const pages = new Map<string, AcpHistoryPage["updates"][number][]>()
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
@@ -168,6 +176,8 @@ export function createAcpConnection(
   let reconnectDelayMs = INITIAL_RECONNECT_MS
   let reconnecting = false
   let recovering = false
+  /** Settles once a recovered transport has reattached every Session. */
+  let reattached: PromiseWithResolvers<void> | undefined
   // The guest lane's principal, replayed whenever a new transport redeems it.
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
@@ -253,6 +263,13 @@ export function createAcpConnection(
       // Every `_meta.aos` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
       const meta = aosMetaOf(params.update._meta)
+      // An older page's updates belong to the page read alone: its turns are
+      // long over, so a live listener or the resume position would take its
+      // state markers for the running turn's.
+      if (AosHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
+        pages.get(params.sessionId)?.push({ update: params.update, meta })
+        return
+      }
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
       // so the chunk schema positions any of them.
       const position = AosChunkMetaSchema.safeParse(meta)
@@ -298,7 +315,9 @@ export function createAcpConnection(
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: { name: clientInfo.name, version: clientInfo.version },
-      capabilities: {},
+      // This client pages older history itself, so a from-start resume may
+      // replay only the newest page.
+      capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
     settleInitialized?.(meta)
@@ -341,8 +360,8 @@ export function createAcpConnection(
           listener()
         )
       : []
-    const response = await agent
-      .request(methods.agent.session.resume, {
+    try {
+      const response = await agent.request(methods.agent.session.resume, {
         sessionId,
         cwd: SERVER_OWNED_CWD,
         ...(resume.replayFromStart ? { replayFrom: { type: "start" } } : {}),
@@ -354,14 +373,42 @@ export function createAcpConnection(
           },
         },
       })
-      .finally(() => {
-        for (const settle of settled) settle?.()
+      const meta = AosSessionResumeResponseMetaSchema.parse(
+        aosMetaOf(response._meta)
+      )
+      owners.set(sessionId, meta.session.agentId)
+      // Recorded before the replay settles, so whoever it settles reads the
+      // cursor of the transcript it now holds.
+      if (meta.history) histories.set(sessionId, meta.history)
+      return { configOptions: response.configOptions ?? [], meta }
+    } finally {
+      for (const settle of settled) settle?.()
+    }
+  }
+
+  async function resumePage(
+    sessionId: string,
+    cursor: string
+  ): Promise<AcpHistoryPage> {
+    // The proxy reads a page only for a Session this connection has attached,
+    // which a recovered transport has not done until it reattaches.
+    await reattached?.promise
+    const agent = await withAgent()
+    const updates: AcpHistoryPage["updates"][number][] = []
+    pages.set(sessionId, updates)
+    try {
+      const response = await agent.request(methods.agent.session.resume, {
+        sessionId,
+        cwd: SERVER_OWNED_CWD,
+        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
       })
-    const meta = AosSessionResumeResponseMetaSchema.parse(
-      aosMetaOf(response._meta)
-    )
-    owners.set(sessionId, meta.session.agentId)
-    return { configOptions: response.configOptions ?? [], meta }
+      const { history } = AosHistoryPageResponseMetaSchema.parse(
+        aosMetaOf(response._meta)
+      )
+      return { updates, history }
+    } finally {
+      if (pages.get(sessionId) === updates) pages.delete(sessionId)
+    }
   }
 
   /** The proxy replays every attached Session from the sequence last seen. */
@@ -421,6 +468,8 @@ export function createAcpConnection(
         if (invitation !== undefined && !(await reloginOrClose(invitation)))
           return
         await resumeAttached()
+        reattached?.resolve()
+        reattached = undefined
       })
       .catch((error: unknown) => connection.close(error))
     const onClosed = () => {
@@ -432,6 +481,12 @@ export function createAcpConnection(
         return
       }
       recovering = true
+      if (!reattached) {
+        reattached = Promise.withResolvers()
+        // Closing mid-recovery must not raise an unhandled rejection when no
+        // page read is waiting.
+        void reattached.promise.catch(() => {})
+      }
       setStatus("reconnecting")
       scheduleReconnect()
     }
@@ -456,6 +511,8 @@ export function createAcpConnection(
     failInitialized?.(new Error("The ACP connection closed"))
     failInitialized = undefined
     settleInitialized = undefined
+    reattached?.reject(new Error("The ACP connection closed"))
+    reattached = undefined
     live?.connection.close()
     live = undefined
   }
@@ -500,6 +557,8 @@ export function createAcpConnection(
     },
 
     resumeSession,
+    resumePage,
+    history: (sessionId) => histories.get(sessionId),
 
     async prompt(sessionId, blocks: ContentBlock[], meta) {
       const agent = await withAgent()

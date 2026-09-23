@@ -722,6 +722,83 @@ describe("HermesRunEngine", () => {
     expect(submits).toBe(1)
   })
 
+  /** The requests a turn pauses on after its tool frames arrive. */
+  async function requestsAfter(
+    frames: readonly (readonly [string, Record<string, unknown>])[],
+    request: PendingRequest
+  ) {
+    const attachment = observation()
+    const interrupt = pendingRequests()
+    const engine = new HermesTurnEngine(
+      runtime({
+        observe: attachment.observe,
+        onPendingRequest: interrupt.onPendingRequest,
+        submit: async () => {
+          for (const [index, [type, payload]] of [
+            ["message.start", { message_id: "message-1" }] as const,
+            ...frames,
+          ].entries())
+            attachment.publish("live-secret", {
+              type,
+              session_id: "live-secret",
+              seq: index + 1,
+              payload,
+            })
+          interrupt.raise(request)
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+    const events = await collect(await engine.start(scope, input()))
+    return ofKind(events, TurnEventKind.TurnRequiresAction).flatMap(
+      (event) => (event as { requests: PendingRequest[] }).requests
+    )
+  }
+  const approval: PendingRequest = {
+    requestId: "approval-1",
+    kind: PendingRequestKind.Permission,
+    message: "Run it?",
+  }
+  const started = (toolId: string) =>
+    ["tool.start", { tool_id: toolId, name: "terminal", args: {} }] as const
+  const completed = (toolId: string) =>
+    ["tool.complete", { tool_id: toolId, name: "terminal" }] as const
+
+  it("links a permission to the one tool call still running", async () => {
+    await expect(
+      requestsAfter(
+        [started("call-1"), completed("call-1"), started("call-2")],
+        approval
+      )
+    ).resolves.toEqual([{ ...approval, toolCallId: "call-2" }])
+  })
+
+  it("leaves a permission unlinked when no tool call is running", async () => {
+    await expect(
+      requestsAfter([started("call-1"), completed("call-1")], approval)
+    ).resolves.toEqual([approval])
+  })
+
+  it("leaves a permission unlinked when several tool calls are running", async () => {
+    await expect(
+      requestsAfter([started("call-1"), started("call-2")], approval)
+    ).resolves.toEqual([approval])
+  })
+
+  it("never links an elicitation to the running tool call", async () => {
+    const question: PendingRequest = {
+      requestId: "question-1",
+      kind: PendingRequestKind.Elicitation,
+      message: "Which one?",
+    }
+    await expect(requestsAfter([started("call-1")], question)).resolves.toEqual(
+      [question]
+    )
+  })
+
   it("observes interrupts only while the run is attached to its Session", async () => {
     const attachment = observation()
     const interrupt = pendingRequests()
@@ -2372,7 +2449,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: JSON.stringify({
-        query: "[REDACTED]",
+        query: "OPENAI_API_KEY=[REDACTED]",
         pattern:
           "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
         path: "/srv/private/workspace",
@@ -2387,7 +2464,8 @@ describe("HermesRunEngine", () => {
         sourceUrl: "https://provider.invalid/private",
         filesystem_path: "/srv/private/result.txt",
         access_token: "[REDACTED]",
-        summary: "[REDACTED]",
+        summary:
+          "TOKEN=[REDACTED] see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
       }),
       failed: false,
     })
@@ -2456,7 +2534,11 @@ describe("HermesRunEngine", () => {
     )
 
     expect(argumentDeltas).toEqual([
-      ...credentials.map(() => '{"query":"[REDACTED]"}'),
+      ...credentials.map((credential) =>
+        JSON.stringify({
+          query: credential.replace("ordinary-value", "[REDACTED]"),
+        })
+      ),
       JSON.stringify({ query: safe }),
     ])
     for (const credential of credentials)

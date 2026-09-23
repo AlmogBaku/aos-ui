@@ -124,6 +124,21 @@ the exact Agent and Session attachment before publishing normalized output.
 History is authoritative. Incremental events make the UI timely; they do not
 replace provider history during recovery.
 
+`history(agentId, sessionId, limit, offset)` pages backwards from the newest:
+
+- `offset` counts from the newest message, so `0` is the newest page and each
+  page's `nextOffset` is where the next older page starts. Messages within a
+  page stay chronological.
+- A page that stops short of the Session's start begins at a turn start: its
+  first user message. The older rows before it are dropped and `nextOffset`
+  re-reads them as the next page's newest. A page that reached the start is
+  kept whole, and so is a page with no user message, whose turn is longer
+  than the page.
+- Only the `offset === 0` page carries the Session's current plan and any
+  restored failed turn.
+- `truncated: true` says older history exists that the adapter cannot reach;
+  set it on the page that reaches that limit rather than failing the read.
+
 ## Separate Send, queue, steering, and commands
 
 These operations have different authority and retry semantics:

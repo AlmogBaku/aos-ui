@@ -4,6 +4,8 @@
  * must provide a local wrapper rather than changing these shared shapes.
  */
 
+import { containsCredential } from "@shared/credentials"
+
 // ---------------------------------------------------------------------------
 // Type guards
 // ---------------------------------------------------------------------------
@@ -75,14 +77,12 @@ export function trimmedText(value: unknown) {
 // Redaction predicates
 // ---------------------------------------------------------------------------
 
-const CREDENTIAL_VALUE =
-  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/iu
 const PRIVATE_LOCATION_VALUE =
   /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
 
 /** True when a native string carries a credential-shaped secret. */
 export function containsCredentialValue(value: string) {
-  return CREDENTIAL_VALUE.test(value)
+  return containsCredential(value)
 }
 
 /**

@@ -85,6 +85,7 @@ import {
   useMessageRetry,
 } from "./message-actions"
 import { MessageContextMenu } from "./message-context-menu"
+import { ThreadHistoryLoadEarlier } from "./thread-history-load-earlier"
 import { useThreadReadingPosition } from "./thread-reading-position"
 import {
   ThreadMessageList,
@@ -197,6 +198,10 @@ export type ThreadProps = {
 
 export type ThreadLabels = {
   loadingConversation: string
+  loadEarlierMessages: string
+  loadingEarlierMessages: string
+  conversationBeginning: string
+  earlierMessagesUnavailable: string
   scrollToBottom: string
   welcome: string
   composerPlaceholder: string
@@ -301,6 +306,10 @@ const DEFAULT_LABELS: ThreadLabels = {
   queueMessage: "Queue message",
   stopGenerating: "Stop generating",
   assistantWorking: "Assistant is working",
+  loadEarlierMessages: "Load earlier messages",
+  loadingEarlierMessages: "Loading earlier messages",
+  conversationBeginning: "Beginning of conversation",
+  earlierMessagesUnavailable: "Earlier messages can't be loaded",
   copy: "Copy",
   refresh: "Refresh",
   more: "More",
@@ -308,7 +317,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   edit: "Edit",
   selectText: "Select text",
   pendingInteractionAction:
-    "Answer the pending question before changing this conversation",
+    "Respond to the pending request before changing this conversation",
   cancel: "Cancel",
   update: "Update",
   historySearch: "Search conversation history",
@@ -520,6 +529,10 @@ const ThreadRoot: FC<{
     if (threadId) readingPosition.follow(threadId)
   }, [readingPosition, threadId])
   useAuiEvent("thread.runStart", followLatest)
+  const readingBookmark = useCallback(
+    () => (threadId ? readingPosition.bookmark(threadId) : undefined),
+    [readingPosition, threadId]
+  )
   const revealMessage = useCallback(
     (messageId: string) =>
       messageListRef.current?.revealMessage(messageId) ?? true,
@@ -591,11 +604,13 @@ const ThreadRoot: FC<{
           <AuiIf condition={isHistoryLoadingView}>
             <ThreadHistorySkeleton />
           </AuiIf>
+          <ThreadHistoryLoadEarlier viewportRef={viewportRef} labels={labels} />
 
           <DisclosureMemoryProvider scope={threadId}>
             <ThreadMessageList
               ref={messageListRef}
               viewportRef={viewportRef}
+              readingBookmark={readingBookmark}
               components={THREAD_MESSAGE_COMPONENTS}
               className="mx-auto mb-8 w-full max-w-(--thread-content-max-width) empty:hidden @md:mb-10"
             />

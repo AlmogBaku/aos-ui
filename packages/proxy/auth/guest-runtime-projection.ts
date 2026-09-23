@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { z } from "zod"
 
 import {
   GuestRuntimeCapabilitiesResponseSchema,
@@ -121,17 +122,24 @@ export function projectGuestText(
     : undefined
 }
 
+/**
+ * A replay from the start may join every page of the Session, each already
+ * bounded as it was read, so only the page's own size limit is lifted.
+ */
+const ProjectedHistorySchema = SessionHistoryResponseSchema.extend({
+  messages: z.array(SessionHistoryResponseSchema.shape.messages.element),
+})
+
 export function projectGuestHistory(
   history: SessionHistoryResponse,
   authorization: GuestAuthorization,
   publicSessionId = history.sessionId
 ) {
   const messages: unknown[] = []
-  for (const [index, message] of history.messages.entries()) {
+  for (const message of history.messages) {
     if (message.role === "system") continue
+    // Pages count back from the newest, so the setup turn may open any page.
     if (
-      index === 0 &&
-      history.offset === 0 &&
       message.role === "user" &&
       authorization.firstTurn?.instruction &&
       isPrivateFirstTurn(message.content, authorization.firstTurn.instruction)
@@ -200,7 +208,7 @@ export function projectGuestHistory(
         : {}),
     })
   }
-  return SessionHistoryResponseSchema.parse({
+  return ProjectedHistorySchema.parse({
     sessionId: publicSessionId,
     messages,
     total: history.total,

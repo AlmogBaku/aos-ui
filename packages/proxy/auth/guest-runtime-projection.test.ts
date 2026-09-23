@@ -111,45 +111,41 @@ describe("guest turn projection", () => {
     expect(projected.execution).toEqual({ status: "running", turnId: "run-1" })
   })
 
-  it("does not hide an ordinary user message that resembles a private seed", () => {
+  it("hides the first-turn envelope on whichever page holds it, and nothing else", () => {
     const envelope = JSON.stringify({
       v: 1,
       type: "aos.guest.first-turn",
       instruction: "Private setup",
     })
-    const projected = projectGuestHistory(
-      {
-        sessionId: "stored",
-        messages: [
-          {
-            id: "ordinary",
-            role: "user",
-            content: [{ type: "text", text: "Hello" }],
-            createdAt: "2026-09-15T00:00:00.000Z",
-          },
-          {
-            id: "lookalike",
-            role: "user",
-            content: [{ type: "text", text: envelope }],
-            createdAt: "2026-09-15T00:00:01.000Z",
-          },
-        ],
-        total: 2,
-        limit: 200,
-        offset: 0,
-        nextOffset: 2,
-      },
-      {
-        ...authorization,
-        firstTurn: { instruction: "Private setup" },
-      },
-      "ref"
+    const text = (id: string, role: "user" | "assistant", body: string) => ({
+      id,
+      role,
+      content: [{ type: "text" as const, text: body }],
+      createdAt: "2026-09-15T00:00:00.000Z",
+    })
+    // Three pages of one Session, newest first, as a guest scrolls back.
+    const pages = [
+      [text("next", "user", "Next"), text("answer-3", "assistant", "Three")],
+      [text("hello", "user", "Hello"), text("answer-2", "assistant", "Two")],
+      [text("seed", "user", envelope), text("answer-1", "assistant", "One")],
+    ].map((messages, index) =>
+      projectGuestHistory(
+        {
+          sessionId: "stored",
+          messages,
+          total: 6,
+          limit: 2,
+          offset: index * 2,
+          nextOffset: index * 2 + 2,
+        },
+        { ...authorization, firstTurn: { instruction: "Private setup" } },
+        "ref"
+      )
     )
 
-    expect(projected.messages).toHaveLength(2)
-    expect(projected.messages[1]).toMatchObject({
-      content: [{ type: "text", text: envelope }],
-    })
+    expect(
+      pages.map((page) => page.messages.map((message) => message.id))
+    ).toEqual([["next", "answer-3"], ["hello", "answer-2"], ["answer-1"]])
   })
 
   it("keeps no correction flag on a projected user turn", () => {

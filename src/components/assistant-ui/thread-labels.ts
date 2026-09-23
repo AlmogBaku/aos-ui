@@ -4,6 +4,10 @@ import type { Locale } from "@/lib/i18n/config"
 export const threadLabels: Record<Locale, ThreadLabels> = {
   en: {
     loadingConversation: "Loading conversation",
+    loadEarlierMessages: "Load earlier messages",
+    loadingEarlierMessages: "Loading earlier messages",
+    conversationBeginning: "Beginning of conversation",
+    earlierMessagesUnavailable: "Earlier messages can't be loaded",
     scrollToBottom: "Scroll to bottom",
     welcome: "What would you like to work on?",
     composerPlaceholder: "Message",
@@ -23,7 +27,7 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     edit: "Edit message",
     selectText: "Select text",
     pendingInteractionAction:
-      "Answer the pending question before changing this conversation",
+      "Respond to the pending request before changing this conversation",
     cancel: "Cancel",
     update: "Update",
     historySearch: "Search conversation history",
@@ -94,6 +98,10 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
   },
   he: {
     loadingConversation: "השיחה נטענת",
+    loadEarlierMessages: "טעינת הודעות קודמות",
+    loadingEarlierMessages: "הודעות קודמות נטענות",
+    conversationBeginning: "תחילת השיחה",
+    earlierMessagesUnavailable: "אי אפשר לטעון הודעות קודמות",
     scrollToBottom: "גלילה לתחתית",
     welcome: "על מה תרצו לעבוד?",
     composerPlaceholder: "הודעה",
@@ -112,7 +120,7 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     exportMarkdown: "ייצוא כ-Markdown",
     edit: "עריכת ההודעה",
     selectText: "בחירת טקסט",
-    pendingInteractionAction: "יש לענות על השאלה הממתינה לפני שינוי השיחה",
+    pendingInteractionAction: "יש להשיב לבקשה הממתינה לפני שינוי השיחה",
     cancel: "ביטול",
     update: "עדכון",
     historySearch: "חיפוש בהיסטוריית השיחה",

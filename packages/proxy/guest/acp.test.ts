@@ -7,13 +7,17 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
-import { INTERACTION_PROTOCOL } from "../../protocol"
+import {
+  INTERACTION_PROTOCOL,
+  type SessionHistoryResponse,
+} from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
+  AOS_REPLAY_BEFORE,
 } from "../../protocol/acp"
 import { createAosAcpAgent } from "../acp/agent"
 import { createSessionRooms } from "../acp/session-rooms"
@@ -353,6 +357,8 @@ type HarnessOptions = {
   /** The invited Session already exists; a fresh invitation creates nothing. */
   existing?: boolean
   handle?: () => ServerTurnHandle
+  /** The page the runtime serves `offset` rows back; the one stored page by default. */
+  history?: (offset: number) => SessionHistoryResponse
   /** The guest's answer; `signal` aborts as the proxy withdraws the request. */
   permission?: (
     params: unknown,
@@ -393,7 +399,10 @@ function harness(options: HarnessOptions = {}) {
   const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
-  const history = vi.fn(async () => HISTORY)
+  const history = vi.fn(
+    async (_agentId: string, _sessionId: string, _limit: number, offset = 0) =>
+      options.history?.(offset) ?? HISTORY
+  )
   const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
     sessions: [],
     total: 0,
@@ -511,11 +520,14 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     listAllSessions,
-    initialize: () =>
+    /** Advertises paging older history, as the AOS browser does, by default. */
+    initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-guest-browser", version: "1" },
-        capabilities: {},
+        capabilities: {
+          _meta: { [AOS_META_KEY]: { historyPages: pagesHistory } },
+        },
       }),
     login: async (token: string) =>
       await connection.agent.request(methods.agent.auth.login, {
@@ -527,6 +539,12 @@ function harness(options: HarnessOptions = {}) {
         sessionId,
         cwd: "/",
         ...(replay ? { replayFrom: { type: "start" as const } } : {}),
+      }),
+    older: (cursor: string) =>
+      connection.agent.request(methods.agent.session.resume, {
+        sessionId: REF,
+        cwd: "/",
+        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
       }),
     prompt: (text: string) =>
       connection.agent.request(methods.agent.session.prompt, {
@@ -1021,6 +1039,123 @@ describe("guest ACP lane", () => {
     expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
     // Nor does it list the deployment's Sessions to seed one.
     expect(test.listAllSessions).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("projects an older page as it projects the replayed one", async () => {
+    const cursor = Buffer.from("500").toString("base64url")
+    const test = harness({
+      existing: true,
+      history: (offset) =>
+        offset === 0
+          ? {
+              sessionId: STORED,
+              messages: [
+                {
+                  id: "assistant-9",
+                  role: "assistant",
+                  content: [{ type: "text", text: "Newest answer" }],
+                  createdAt: "2026-09-15T00:10:00.000Z",
+                },
+              ],
+              total: 502,
+              limit: 500,
+              offset: 0,
+              nextOffset: 500,
+            }
+          : { ...HISTORY, total: 502, offset, nextOffset: 502 },
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    const resumed = await test.resume(REF, true)
+    expect(resumed).toMatchObject({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursor } } },
+    })
+    const from = test.recorder.entries.length
+    const page = await test.older(cursor)
+
+    expect(page).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
+    const sent = test.recorder.entries
+      .slice(from)
+      .filter(({ method }) => method === methods.client.session.update)
+    const replayed = JSON.stringify(sent)
+    expect(replayed).toContain("Safe answer")
+    expect(replayed).not.toContain("private reasoning")
+    expect(replayed).not.toContain(OPERATOR_PATH)
+    expect(replayed).not.toContain("/private")
+    // The invitation's setup turn stays hidden on whichever page holds it.
+    expect(replayed).not.toContain(INSTRUCTION)
+    for (const { params } of sent)
+      expect(params).toMatchObject({
+        update: { _meta: { [AOS_META_KEY]: { historyPage: { cursor } } } },
+      })
+    test.close()
+  })
+
+  it("replays a whole long Session, projected, to a guest that does not page", async () => {
+    // The stored setup turn first, then more messages than one page holds.
+    const transcript = [
+      ...HISTORY.messages,
+      ...Array.from({ length: 1_000 }, (_, index) => ({
+        id: `answer-${index}`,
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: `Answer ${index}` }],
+        createdAt: "2026-09-15T00:10:00.000Z",
+      })),
+    ]
+    const test = harness({
+      existing: true,
+      history: (offset) => {
+        const end = Math.max(0, transcript.length - offset)
+        const messages = transcript.slice(Math.max(0, end - 500), end)
+        return {
+          sessionId: STORED,
+          messages,
+          total: transcript.length,
+          limit: 500,
+          offset,
+          nextOffset: offset + messages.length,
+        }
+      },
+    })
+    await test.initialize(false)
+    await test.login(await invite(test.invitations))
+    const from = test.recorder.entries.length
+
+    const resumed = await test.resume(REF, true)
+
+    expect(resumed).toMatchObject({
+      _meta: { [AOS_META_KEY]: { history: {} } },
+    })
+    const replayed = JSON.stringify(
+      test.recorder.entries
+        .slice(from)
+        .filter(({ method }) => method === methods.client.session.update)
+    )
+    expect(replayed).toContain("Safe answer")
+    expect(replayed).toContain("Answer 0")
+    expect(replayed).toContain("Answer 999")
+    expect(replayed).not.toContain("private reasoning")
+    expect(replayed).not.toContain(INSTRUCTION)
+    test.close()
+  })
+
+  it("refuses an older page once the invitation expired, before its timer fires", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    test.clock.now = NOW + 259_200_000
+
+    await expect(
+      test.older(Buffer.from("500").toString("base64url"))
+    ).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+    expect(test.history).not.toHaveBeenCalled()
     test.close()
   })
 

@@ -237,6 +237,14 @@ export interface ServerRuntime {
     limit: number,
     offset: number
   ): Promise<SessionCatalogResponse>
+  /**
+   * One chronological page of history, paged backwards: `offset` counts from
+   * the newest message and `nextOffset` starts the next older page. A page
+   * short of the start begins at its first user message, so no turn splits;
+   * one that reached the start, or holds no user message, stays whole. Only
+   * `offset === 0` carries the plan and a restored failed turn, and
+   * `truncated` marks older history the adapter cannot reach.
+   */
   history(
     agentId: string,
     runtimeSessionId: string,

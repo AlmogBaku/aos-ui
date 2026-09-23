@@ -28,6 +28,7 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
+import { permissionProviderMetadata } from "./payloads/permission"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
 
@@ -1099,7 +1100,110 @@ describe("provider permission renderer", () => {
     expect(respondToApproval).toHaveBeenCalledWith({ optionId: "once" })
   })
 
-  it("only offers persistent permission when its provider scope is visible", async () => {
+  it.each([
+    ["on the call it guards", "terminal", { command: "rm -rf /tmp/build" }],
+    ["on its own", "request_permission", { action: "rm -rf /tmp/build" }],
+  ])(
+    "shows the operation Hermes asks for and why, %s",
+    async (_case, toolName, args) => {
+      await renderTool(
+        <RichToolRenderer
+          {...toolPart({
+            toolName,
+            args,
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "hermes-approval",
+              prompt: "Hermes flagged a recursive delete",
+              options: [{ id: "once", kind: "allow-once" }],
+            },
+            providerMetadata: permissionProviderMetadata("rm -rf /tmp/build"),
+          })}
+        />
+      )
+
+      expect(screen.getByText("rm -rf /tmp/build")).toHaveAttribute(
+        "dir",
+        "ltr"
+      )
+      expect(
+        screen.getByText("Hermes flagged a recursive delete")
+      ).toBeInTheDocument()
+    }
+  )
+
+  it("does not repeat an operation that is its own explanation", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "terminal",
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "hermes-approval",
+            prompt: "rm -rf /tmp/build",
+            options: [{ id: "once", kind: "allow-once" }],
+          },
+          providerMetadata: permissionProviderMetadata("rm -rf /tmp/build"),
+        })}
+      />
+    )
+
+    expect(screen.getAllByText("rm -rf /tmp/build")).toHaveLength(1)
+  })
+
+  it.each([
+    ["en", "Answered: Allow for this session"],
+    ["he", "נענה: אישור לסשן הזה"],
+  ] as const)("names the option chosen in %s", async (locale, answer) => {
+    await renderTool(
+      <ToolUiLocaleProvider locale={locale}>
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "request_permission",
+            args: { action: "Run the deploy script" },
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "permission-answered",
+              prompt: "Run the deploy script?",
+              options: [
+                { id: "session", kind: "_allow_session" },
+                { id: "deny", kind: "reject-once" },
+              ],
+              optionId: "session",
+              approved: true,
+            },
+          })}
+        />
+      </ToolUiLocaleProvider>
+    )
+
+    expect(screen.getByText(answer)).toBeInTheDocument()
+  })
+
+  it("names a provider's own wording for the option chosen", async () => {
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "request_permission",
+          args: { action: "Run the deploy script" },
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "permission-answered",
+            prompt: "Run the deploy script?",
+            options: [
+              { id: "sandbox", kind: "_sandbox", label: "Run in a sandbox" },
+            ],
+            optionId: "sandbox",
+            approved: true,
+          },
+        })}
+      />
+    )
+
+    expect(screen.getByText("Answered: Run in a sandbox")).toBeInTheDocument()
+  })
+
+  it("confirms a persistent permission and shows its provider scope", async () => {
     const user = userEvent.setup()
     const respondToApproval = vi.fn().mockResolvedValue(undefined)
 
@@ -1120,11 +1224,6 @@ describe("provider permission renderer", () => {
                 label: "Always for this dataset",
                 grants: ["datasets/market/**"],
               },
-              {
-                id: "always-hidden",
-                kind: "allow-always",
-                label: "Always everywhere",
-              },
               { id: "reject", kind: "reject-once", label: "Reject" },
             ],
           },
@@ -1134,9 +1233,6 @@ describe("provider permission renderer", () => {
     )
 
     expect(screen.getByText("datasets/market/**")).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Always everywhere" })
-    ).not.toBeInTheDocument()
 
     await user.click(
       screen.getByRole("button", { name: "Always for this dataset" })
@@ -1149,6 +1245,111 @@ describe("provider permission renderer", () => {
         optionId: "always-dataset",
       })
     )
+  })
+
+  it("offers a persistent permission without a scope behind the confirm step", async () => {
+    const user = userEvent.setup()
+    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "request_permission",
+          args: { action: "Run the deploy script" },
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "permission-always",
+            prompt: "Run the deploy script?",
+            options: [
+              { id: "once", kind: "allow-once" },
+              { id: "always", kind: "allow-always" },
+            ],
+          },
+          respondToApproval,
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "Always allow" }))
+    expect(respondToApproval).not.toHaveBeenCalled()
+    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("list", { name: "Persistent permission scope" })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Confirm always" }))
+
+    await waitFor(() =>
+      expect(respondToApproval).toHaveBeenCalledWith({ optionId: "always" })
+    )
+  })
+
+  it.each([
+    ["en", "Allow for this session"],
+    ["he", "אישור לסשן הזה"],
+  ] as const)(
+    "names the AOS session option in %s and answers it as approved",
+    async (locale, name) => {
+      const user = userEvent.setup()
+      const respondToApproval = vi.fn().mockResolvedValue(undefined)
+
+      await renderTool(
+        <ToolUiLocaleProvider locale={locale}>
+          <RichToolRenderer
+            {...toolPart({
+              toolName: "request_permission",
+              args: { action: "Run the deploy script" },
+              status: { type: "requires-action", reason: "tool-calls" },
+              approval: {
+                id: "permission-session",
+                prompt: "Run the deploy script?",
+                options: [{ id: "session", kind: "_allow_session" }],
+              },
+              respondToApproval,
+            })}
+          />
+        </ToolUiLocaleProvider>
+      )
+
+      const choices = screen.getByRole("group", {
+        name: "Run the deploy script?",
+      })
+      await user.click(within(choices).getByRole("button", { name }))
+      // A kind Assistant UI does not know needs its decision spelled out.
+      expect(respondToApproval).toHaveBeenCalledWith({
+        optionId: "session",
+        approved: true,
+      })
+    }
+  )
+
+  it("keeps a provider's wording for an option kind it cannot name", async () => {
+    const user = userEvent.setup()
+    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+
+    await renderTool(
+      <RichToolRenderer
+        {...toolPart({
+          toolName: "request_permission",
+          args: { action: "Run the deploy script" },
+          status: { type: "requires-action", reason: "tool-calls" },
+          approval: {
+            id: "permission-custom",
+            prompt: "Run the deploy script?",
+            options: [
+              { id: "sandbox", kind: "_sandbox", label: "Run in a sandbox" },
+              { id: "refuse", kind: "_reject_quietly", label: "Refuse" },
+            ],
+          },
+          respondToApproval,
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "Refuse" }))
+    expect(respondToApproval).toHaveBeenCalledWith({
+      optionId: "refuse",
+      approved: false,
+    })
   })
 
   it("does not invent choices when the provider supplies no option ids", async () => {
@@ -1436,7 +1637,6 @@ describe("safe result renderers", () => {
     expect(screen.getByText("Review the launch plan")).toBeInTheDocument()
     expect(screen.getByText("The review is complete.")).toBeInTheDocument()
   })
-
 })
 
 describe("Hebrew tool UI", () => {
@@ -1556,5 +1756,4 @@ describe("Hebrew tool UI", () => {
     expect(screen.getByText("Provider agent")).toHaveAttribute("dir", "auto")
     expect(screen.getByText("Provider summary")).toHaveAttribute("dir", "auto")
   })
-
 })

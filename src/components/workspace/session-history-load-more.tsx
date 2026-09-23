@@ -3,11 +3,10 @@
 import { ChevronDown, LoaderCircle } from "lucide-react"
 import { useThreadListLoadMore } from "@assistant-ui/core/react"
 import { useAuiState } from "@assistant-ui/react"
-import { useEffect, useRef, useState } from "react"
-
 import { cn } from "@/lib/utils"
 
 import styles from "./agent-session-history.module.css"
+import { useLoadMoreSentinel } from "./use-load-more-sentinel"
 
 export type SessionHistoryLoadMoreCopy = {
   loadMoreSessions: string
@@ -31,32 +30,13 @@ export function SessionHistoryLoadMore({
     (state) =>
       state.threads.threadIds.length + state.threads.archivedThreadIds.length
   )
-  const sentinel = useRef<HTMLDivElement>(null)
-  const [inView, setInView] = useState(false)
-  // The row count the last automatic read started from.
-  const readFrom = useRef<number | null>(null)
-
-  useEffect(() => {
-    const node = sentinel.current
-    if (!node || typeof IntersectionObserver !== "function") return
-    const observer = new IntersectionObserver(([entry]) =>
-      setInView(entry?.isIntersecting === true)
-    )
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [hasMore])
-
-  useEffect(() => {
-    if (!inView) {
-      readFrom.current = null
-      return
-    }
-    // Keep reading while the end stays in view, but only after a page that
-    // listed more: a failed read waits for the button instead of looping.
-    if (disabled || readFrom.current === listed) return
-    readFrom.current = listed
-    loadMore()
-  }, [disabled, inView, listed, loadMore])
+  // Keep reading while the end stays in view, but only after a page that
+  // listed more: a failed read waits for the button instead of looping.
+  const sentinel = useLoadMoreSentinel({
+    load: loadMore,
+    disabled,
+    loadKey: listed,
+  })
 
   if (!hasMore) return null
 

@@ -52,7 +52,7 @@ describe("safe tool presentation", () => {
 
     expect(presentation.text).toContain("[REDACTED]")
     expect(presentation.text).not.toContain("raw-secret-value")
-    expect(presentation.title).toBe("[REDACTED]")
+    expect(presentation.title).toBe("Provider returned access_token=[REDACTED]")
   })
 
   it("derives timeline labels from sanitized provider values", () => {
@@ -64,12 +64,8 @@ describe("safe tool presentation", () => {
     })
 
     expect(
-      safeToolDisplayValue(
-        { query: "api_key=raw-secret" },
-        ["query"],
-        "tool"
-      )
-    ).toBe("[REDACTED]")
+      safeToolDisplayValue({ query: "api_key=raw-secret" }, ["query"], "tool")
+    ).toBe("api_key=[REDACTED]")
     expect(safeToolDisplayValue(hostile, ["query"], "tool")).toBe(
       "[Unserializable value]"
     )

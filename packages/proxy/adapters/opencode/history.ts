@@ -3,8 +3,8 @@ import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import {
   openCodeStopReason,
   openCodeTimestamp,
+  OpenCodeNativeMessageSchema,
   parseOpenCodeMessageCatalog,
-  type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
 import { openCodeArtifactReceipt } from "./content"
 import {
@@ -229,11 +229,16 @@ export function projectOpenCodeHistory(input: {
   sessionId: string
   resolve?: McpToolNameResolver
 }): ProjectedHistory {
+  // An array is the adapter's accumulated read of many native pages, so only a
+  // single native page is held to the page schema's row bound.
   const parsedMessages = Array.isArray(input.messages)
-    ? parseOpenCodeMessageCatalog({ data: input.messages, cursor: {} })
+    ? OpenCodeNativeMessageSchema.array().safeParse(input.messages)
     : parseOpenCodeMessageCatalog(input.messages)
   if (!parsedMessages.success) return []
-  const messages: ProjectedHistory = parsedMessages.data.data
+  const native = Array.isArray(parsedMessages.data)
+    ? parsedMessages.data
+    : parsedMessages.data.data
+  const messages: ProjectedHistory = native
     .map((message) => projectMessage(message, input.resolve))
     .flatMap((message) => (message ? [message] : []))
     .sort(

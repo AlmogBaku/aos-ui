@@ -18,6 +18,12 @@ const PENDING_PROMPT = "Keep running until I stop it"
 const VOCABULARY_PROMPT = "Lengthen the trial and run the tests"
 /** The Session the scripted turn's subagent runs in. */
 const CHILD_SESSION_ID = "session-2"
+/** A prompt whose turn asks permission to run the tool call it guards. */
+const GUARDED_PERMISSION_PROMPT = "Clean the build directory"
+/** A prompt whose turn asks a permission no tool call carries. */
+const STANDALONE_PERMISSION_PROMPT = "Ask before touching the network"
+/** The tool call the guarded permission request is about. */
+const GUARDED_TOOL_CALL_ID = "clean-build"
 
 const runtime = {
   runtime: { id: "hermes", name: "Hermes" },
@@ -304,6 +310,35 @@ const vocabularyTurn = [
   },
 ]
 
+/**
+ * `session/request_permission` params in the shape `permissionOutbound` in
+ * `packages/proxy/acp/translate/requests.ts` builds: the schema title names the
+ * operation, the message explains it, and a request that knows its tool call
+ * names it as the subject.
+ */
+function permissionRequest(requestId: string, toolCallId?: string) {
+  const title = "Run command"
+  const message = "Delete the build directory?"
+  return {
+    sessionId: SESSION_ID,
+    title,
+    description: message,
+    ...(toolCallId === undefined
+      ? {}
+      : {
+          subject: {
+            type: "tool_call",
+            toolCall: { toolCallId, title, status: "pending" },
+          },
+        }),
+    options: [
+      { optionId: "once", name: "Allow once", kind: "allow_once" },
+      { optionId: "deny", name: "Deny", kind: "reject_once" },
+    ],
+    _meta: { aos: { requestId, message } },
+  }
+}
+
 /** Every payload the scripted responder answers with, in one serializable object. */
 const script = {
   acpPath: ACP_PATH,
@@ -312,6 +347,20 @@ const script = {
   pendingPrompt: PENDING_PROMPT,
   vocabularyPrompt: VOCABULARY_PROMPT,
   vocabularyTurn,
+  guardedPermissionPrompt: GUARDED_PERMISSION_PROMPT,
+  standalonePermissionPrompt: STANDALONE_PERMISSION_PROMPT,
+  /** The guarded command the permission turn streams before it waits. */
+  guardedToolCall: {
+    sessionUpdate: "tool_call_update",
+    toolCallId: GUARDED_TOOL_CALL_ID,
+    title: "rm -rf build",
+    name: "run_command",
+    kind: "execute",
+    status: "pending",
+    rawInput: { command: "rm -rf build" },
+  },
+  guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
+  standalonePermission: permissionRequest("permission-2"),
   /** `InitializeResponse._meta.aos` for the operator lane. */
   initializeMeta: {
     version: 1,
@@ -326,6 +375,7 @@ const script = {
       readState: true,
       focus: true,
       guestProjection: false,
+      historyPages: false,
     },
   },
   agentCatalog: {
@@ -392,6 +442,12 @@ const script = {
       text: "Restored from AOS.",
     },
   ],
+  /**
+   * A history too long for one replay: a from-start resume sends only its
+   * newest page, and each `_aos/before` read sends the page before its cursor,
+   * held until the test calls `__acpStub.releasePage()`.
+   */
+  pagedHistory: null as PagedHistory | null,
   recovered: {
     messageId: "reconnect-answer",
     text: "Recovered after reconnect.",
@@ -421,8 +477,13 @@ const script = {
   },
 }
 
+type PagedHistory = {
+  pageSize: number
+  messages: { role: string; messageId: string; text: string }[]
+}
 type AcpScript = typeof script
 type AcpCall = { method: string; params: unknown }
+type AcpReply = { method: string; result?: unknown; error?: unknown }
 type ResumeParams = {
   sessionId: string
   replayFrom?: { type: string }
@@ -434,6 +495,8 @@ declare global {
     __acpStub: {
       /** Every JSON-RPC call the browser sent, in order. */
       calls: AcpCall[]
+      /** Every reply the browser sent to a request the stub made, in order. */
+      replies: AcpReply[]
       /** How many transports the browser has opened. */
       connections: number
       /** The newest `_meta.aos.sequence` the stub has emitted. */
@@ -442,6 +505,8 @@ declare global {
       dropSocket: () => void
       /** Releases the window a deferred resume is holding back. */
       pushUsage: () => void
+      /** Sends the held `_aos/before` page, if one is waiting. */
+      releasePage: () => void
     }
   }
 }
@@ -454,13 +519,16 @@ function installAcpStub(script: AcpScript) {
   const RealWebSocket = window.WebSocket
   const stub: Window["__acpStub"] = {
     calls: [],
+    replies: [],
     connections: 0,
     sequence: 0,
     dropSocket: () => {},
     pushUsage: () => {},
+    releasePage: () => {},
   }
   window.__acpStub = stub
   let turn = 0
+  let requests = 0
 
   const asRecord = (value: unknown): Record<string, unknown> =>
     typeof value === "object" && value !== null
@@ -478,6 +546,11 @@ function installAcpStub(script: AcpScript) {
     handlers = new Map<
       string,
       (params: Record<string, unknown>, id: unknown) => void
+    >()
+    /** Requests this stub made that the browser has not answered yet. */
+    outstanding = new Map<
+      unknown,
+      { method: string; onReply: (reply: AcpReply) => void }
     >()
 
     constructor() {
@@ -509,7 +582,7 @@ function installAcpStub(script: AcpScript) {
 
     accept(message: Record<string, unknown>) {
       const method = message.method
-      if (typeof method !== "string") return
+      if (typeof method !== "string") return this.acceptReply(message)
       const params = asRecord(message.params)
       stub.calls.push({ method, params })
       const handler = this.handlers.get(method)
@@ -520,6 +593,18 @@ function installAcpStub(script: AcpScript) {
           id: message.id,
           error: { code: -32601, message: `Unscripted ACP method: ${method}` },
         })
+    }
+
+    /** A reply to one of this stub's own requests, recorded in order. */
+    acceptReply(message: Record<string, unknown>) {
+      const request = this.outstanding.get(message.id)
+      if (!request) return
+      this.outstanding.delete(message.id)
+      const reply: AcpReply = { method: request.method }
+      if ("result" in message) reply.result = message.result
+      if ("error" in message) reply.error = message.error
+      stub.replies.push(reply)
+      request.onReply(reply)
     }
 
     /**
@@ -544,6 +629,18 @@ function installAcpStub(script: AcpScript) {
       this.deliver({ jsonrpc: "2.0", method, params })
     }
 
+    /** A server-to-client request; `onReply` runs once the browser answers. */
+    request(
+      method: string,
+      params: unknown,
+      onReply: (reply: AcpReply) => void = () => {}
+    ) {
+      requests += 1
+      const id = `stub-request-${requests}`
+      this.outstanding.set(id, { method, onReply })
+      this.deliver({ jsonrpc: "2.0", id, method, params })
+    }
+
     /** One unsequenced `session/update`, as a replay or an out-of-band read. */
     update(update: Record<string, unknown>) {
       this.notify("session/update", { sessionId: script.sessionId, update })
@@ -561,12 +658,34 @@ function installAcpStub(script: AcpScript) {
       })
     }
 
-    message(role: string, messageId: string, text: string) {
+    message(
+      role: string,
+      messageId: string,
+      text: string,
+      meta?: Record<string, unknown>
+    ) {
       this.update({
         sessionUpdate: role === "user" ? "user_message" : "agent_message",
         messageId,
         content: [{ type: "text", text }],
+        ...(meta ? { _meta: { aos: meta } } : {}),
       })
+    }
+
+    /**
+     * The page ending `offset` messages before the newest, as the proxy reads
+     * it: its messages, then the cursor of the page before it, if any.
+     */
+    historyPage(
+      paged: PagedHistory,
+      offset: number,
+      meta?: Record<string, unknown>
+    ) {
+      const end = paged.messages.length - offset
+      const start = Math.max(0, end - paged.pageSize)
+      for (const entry of paged.messages.slice(start, end))
+        this.message(entry.role, entry.messageId, entry.text, meta)
+      return start > 0 ? { nextCursor: `offset-${offset + end - start}` } : {}
     }
 
     registerHandlers() {
@@ -594,7 +713,31 @@ function installAcpStub(script: AcpScript) {
             configOptions: script.configOptions,
             _meta: { aos: script.resumeMeta },
           })
-        if (asRecord(params.replayFrom).type === "start")
+        const replayFrom = asRecord(params.replayFrom)
+        const paged = script.pagedHistory
+        // An older page is its own read: tagged updates and a cursor, with no
+        // reattach, so neither the configuration nor the window is restated.
+        if (paged && replayFrom.type === "_aos/before") {
+          const cursor = String(replayFrom.cursor)
+          const offset = Number(cursor.replace("offset-", ""))
+          stub.releasePage = () => {
+            stub.releasePage = () => {}
+            const history = this.historyPage(paged, offset, {
+              historyPage: { cursor },
+            })
+            this.respond(id, { _meta: { aos: { history } } })
+          }
+          return
+        }
+        if (paged && replayFrom.type === "start") {
+          const history = this.historyPage(paged, 0)
+          this.respond(id, {
+            configOptions: script.configOptions,
+            _meta: { aos: { ...script.resumeMeta, history } },
+          })
+          return
+        }
+        if (replayFrom.type === "start")
           for (const entry of script.history)
             this.message(entry.role, entry.messageId, entry.text)
         else
@@ -626,6 +769,43 @@ function installAcpStub(script: AcpScript) {
         })
         this.run({ sessionUpdate: "state_update", state: "running" })
         if (promptText(params).includes(script.pendingPrompt)) return
+        const settle = () =>
+          this.run({
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+          })
+        // A permission turn waits on the operator, as the proxy's
+        // `requiresActionOutbound` does: the wait, then the request.
+        if (promptText(params).includes(script.guardedPermissionPrompt)) {
+          const call = script.guardedToolCall
+          this.run({ ...call, _meta: { aos: { messageId: answerId } } })
+          this.run({ sessionUpdate: "state_update", state: "requires_action" })
+          this.request(
+            "session/request_permission",
+            script.guardedPermission,
+            () => {
+              this.run({
+                sessionUpdate: "tool_call_update",
+                toolCallId: call.toolCallId,
+                status: "completed",
+                rawOutput: "removed",
+                _meta: { aos: { messageId: answerId } },
+              })
+              settle()
+            }
+          )
+          return
+        }
+        if (promptText(params).includes(script.standalonePermissionPrompt)) {
+          this.run({ sessionUpdate: "state_update", state: "requires_action" })
+          this.request(
+            "session/request_permission",
+            script.standalonePermission,
+            settle
+          )
+          return
+        }
         if (promptText(params).includes(script.vocabularyPrompt)) {
           // A model switch is Session state, not a position in the run.
           for (const update of script.vocabularyTurn)
@@ -801,6 +981,84 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
 })
 
+test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({
+  page,
+}) => {
+  // Five pages of scrolling through 1,200 messages outlast the default budget
+  // on a loaded machine.
+  test.slow()
+  const length = 1_200
+  const text = (index: number) => `Long history message ${index}`
+  await serveAcp(page, {
+    initializeMeta: {
+      ...script.initializeMeta,
+      extensions: { ...script.initializeMeta.extensions, historyPages: true },
+    },
+    pagedHistory: {
+      // Even pages start at a user message, as the proxy's turn-aligned pages do.
+      pageSize: 200,
+      messages: Array.from({ length }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        messageId: `older-${index}`,
+        text: text(index),
+      })),
+    },
+  })
+  await page.goto("/")
+
+  // The Session opens at its latest message, not at its first.
+  const newest = page.getByText(text(length - 1), { exact: true })
+  await expect(newest).toBeInViewport()
+  const box = await newest.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+
+  const pageReads = async () =>
+    (await resumes(page)).filter(
+      (call) => call.replayFrom?.type === "_aos/before"
+    ).length
+  // The message nearest the top of the thread that the reader can see whole.
+  const firstInView = () =>
+    page.evaluate(() => {
+      const shown = [...document.querySelectorAll("[data-message-id]")].find(
+        (row) => {
+          const { top, bottom } = row.getBoundingClientRect()
+          return top >= 0 && bottom <= window.innerHeight
+        }
+      )
+      return /Long history message \d+/.exec(shown?.textContent ?? "")?.[0]
+    })
+
+  const beginning = page.getByText("Beginning of conversation")
+  for (let loaded = 0; loaded < length / 200 - 1; loaded += 1) {
+    // The reader scrolls up until the read-ahead margin asks for the page
+    // before; the stub holds it, so the reader's place is fixed when it lands.
+    await expect(async () => {
+      if ((await pageReads()) === loaded) await page.mouse.wheel(0, -6_000)
+      expect(await pageReads()).toBe(loaded + 1)
+    }).toPass({ intervals: [50] })
+    const anchor = await firstInView()
+    expect(anchor).toBeDefined()
+    await page.evaluate(() => window.__acpStub.releasePage())
+    await expect(
+      page.getByRole("button", { name: "Loading earlier messages" })
+    ).toHaveCount(0)
+    // Prepending a page moves nothing the reader is looking at.
+    await expect(page.getByText(anchor!, { exact: true })).toBeInViewport()
+  }
+
+  // The last page carries no cursor: the thread says so, reads no further,
+  // and the reader can scroll to the very first message.
+  await expect(beginning).toBeAttached()
+  const first = page.getByText(text(0), { exact: true })
+  await expect(async () => {
+    await page.mouse.wheel(0, -6_000)
+    await expect(first).toBeInViewport({ timeout: 500 })
+  }).toPass({ intervals: [50] })
+  await expect(beginning).toBeInViewport()
+  expect(await pageReads()).toBe(length / 200 - 1)
+})
+
 test("AOS proxy shows the context gauge when the window arrives after the resume", async ({
   page,
 }) => {
@@ -928,4 +1186,54 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
   await expect
     .poll(async () => (await resumes(page)).map((call) => call.sessionId))
     .toContain(CHILD_SESSION_ID)
+})
+
+test("AOS proxy answers a permission request on the tool call it guards, and one that stands alone", async ({
+  page,
+}) => {
+  await serveAcp(page)
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  const input = page.getByRole("textbox", { name: "Message input" })
+  const card = page.getByRole("heading", { name: "Permission request" })
+  const choices = page.getByRole("group", {
+    name: "Delete the build directory?",
+  })
+  const replies = () => page.evaluate(() => window.__acpStub.replies)
+  const allowed = {
+    method: "session/request_permission",
+    result: { outcome: { outcome: "selected", optionId: "once" } },
+  }
+
+  // The request that names its tool call is answered on that call, and the
+  // composer stays the composer rather than turning into a Questions form.
+  await input.fill(GUARDED_PERMISSION_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(choices).toBeVisible()
+  await expect(card).toHaveCount(1)
+  await expect(input).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send answer" })).toHaveCount(0)
+
+  await choices.getByRole("button", { name: "Allow once" }).click()
+  await expect.poll(replies).toEqual([allowed])
+  // The card was the call's own: once the call settles, its outcome replaces
+  // the card, where a request on no call would have left a card behind.
+  await expect(card).toHaveCount(0)
+  await expandByKeyboard(page.getByRole("button", { name: "Worked" }))
+  await expect(
+    page.getByRole("button", { name: /^Ran rm -rf build/ })
+  ).toBeVisible()
+
+  // A request no call carries is still answered in the transcript, on its own.
+  await input.fill(STANDALONE_PERMISSION_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(choices).toBeVisible()
+  await expect(card).toHaveCount(1)
+  await expect(input).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send answer" })).toHaveCount(0)
+
+  await choices.getByRole("button", { name: "Allow once" }).click()
+  await expect.poll(replies).toEqual([allowed, allowed])
+  await expect(page.getByText("Answered: Allow once")).toBeVisible()
+  await expect(choices).toHaveCount(0)
 })

@@ -1,7 +1,12 @@
 "use client"
 
 import { useRef, useState } from "react"
-import type { PermissionPayload } from "./payloads/permission"
+import {
+  readPermissionAction,
+  type PermissionPayload,
+} from "./payloads/permission"
+
+import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
 
 import { Button } from "@/components/ui/button"
 
@@ -26,7 +31,8 @@ export function PermissionTool({
     Extract<RichToolPhase, "submitting" | "answered" | "failed"> | undefined
   >()
   const [confirmOption, setConfirmOption] = useState<ApprovalOption>()
-  const [failedOption, setFailedOption] = useState<ApprovalOption>()
+  /** The option last sent, retried if it failed and named once answered. */
+  const [sentOption, setSentOption] = useState<ApprovalOption>()
   const submissionInFlight = useRef(false)
   const { labels } = useToolUiLocale()
   const providerState = normalizeRichToolState(part, { interactive: true })
@@ -52,25 +58,39 @@ export function PermissionTool({
     }
 
     submissionInFlight.current = true
-    setFailedOption(option)
+    setSentOption(option)
     setLocalPhase("submitting")
     try {
-      await part.respondToApproval({ optionId: option.id })
+      await part.respondToApproval(approvalResponse(option))
       setLocalPhase("answered")
       setConfirmOption(undefined)
-      setFailedOption(undefined)
     } catch {
       submissionInFlight.current = false
       setLocalPhase("failed")
     }
   }
 
+  const prompt = part.approval?.prompt ?? payload.args.action
+  // The operation itself, unless the provider asked with nothing more.
+  const action = readPermissionAction(part)
+  const operation = action === prompt ? undefined : action
+  const chosen =
+    options.find(({ id }) => id === part.approval?.optionId) ?? sentOption
+
   return (
     <ToolChrome
       title={labels.permission.title}
-      description={part.approval?.prompt ?? payload.args.action}
+      description={prompt}
       state={state}
     >
+      {operation ? (
+        <code
+          className="block rounded-md bg-muted p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"
+          dir="ltr"
+        >
+          {operation}
+        </code>
+      ) : null}
       {state.phase === "pending" && confirmOption ? (
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-3">
           <div className="flex flex-col gap-1">
@@ -81,7 +101,9 @@ export function PermissionTool({
               {labels.permission.persistentExplanation}
             </p>
           </div>
-          <ScopeList grants={confirmOption.grants ?? []} />
+          {confirmOption.grants?.length ? (
+            <ScopeList grants={confirmOption.grants} />
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -104,7 +126,11 @@ export function PermissionTool({
 
       {state.phase === "pending" && !confirmOption ? (
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-2">
+          <div
+            role="group"
+            aria-label={prompt}
+            className="flex flex-wrap gap-2"
+          >
             {options.map((option) => (
               <Button
                 key={option.id}
@@ -116,17 +142,15 @@ export function PermissionTool({
                   else void answer(option)
                 }}
               >
-                <bdi dir="auto">
-                  {option.label ?? defaultOptionLabel(option.kind, labels)}
-                </bdi>
+                <bdi dir="auto">{optionLabel(option, labels)}</bdi>
               </Button>
             ))}
           </div>
-          {options
-            .filter((option) => option.kind === "allow-always")
-            .map((option) => (
-              <ScopeList key={option.id} grants={option.grants ?? []} />
-            ))}
+          {options.map((option) =>
+            option.kind === "allow-always" && option.grants?.length ? (
+              <ScopeList key={option.id} grants={option.grants} />
+            ) : null
+          )}
         </div>
       ) : null}
 
@@ -136,7 +160,11 @@ export function PermissionTool({
         </p>
       ) : null}
       {state.phase === "answered" ? (
-        <p className="text-sm">{labels.permission.answered}</p>
+        <p className="text-sm" dir="auto">
+          {chosen
+            ? labels.permission.answeredWith(optionLabel(chosen, labels))
+            : labels.permission.answered}
+        </p>
       ) : null}
       {state.phase === "expired" ? (
         <p className="text-sm text-muted-foreground">
@@ -151,12 +179,12 @@ export function PermissionTool({
       {state.phase === "failed" ? (
         <div className="flex flex-col items-start gap-2">
           <p className="text-sm text-destructive">{labels.permission.failed}</p>
-          {providerState.phase === "pending" && failedOption ? (
+          {providerState.phase === "pending" && sentOption ? (
             <Button
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => void answer(failedOption)}
+              onClick={() => void answer(sentOption)}
             >
               {labels.common.retry}
             </Button>
@@ -171,23 +199,36 @@ function getVisibleOptions(part: RichToolPart): ApprovalOption[] {
   const supplied = part.approval?.options
   if (!supplied?.length) return []
 
-  return supplied.filter(
-    (option) =>
-      isAnswerableOption(option) &&
-      (option.kind !== "allow-always" || Boolean(option.grants?.length))
-  )
+  return supplied.filter(isAnswerableOption)
 }
 
 function isAnswerableOption(option: ApprovalOption) {
   return typeof option.id === "string" && option.id.trim().length > 0
 }
 
-function defaultOptionLabel(
-  kind: string,
+const STANDARD_KINDS = new Set([
+  "allow-once",
+  "allow-always",
+  "reject-once",
+  "reject-always",
+])
+
+/** Assistant UI decides a standard kind itself; any other needs it spelled out. */
+function approvalResponse(option: ApprovalOption) {
+  return STANDARD_KINDS.has(option.kind)
+    ? { optionId: option.id }
+    : { optionId: option.id, approved: !option.kind.includes("reject") }
+}
+
+function optionLabel(
+  { kind, label }: ApprovalOption,
   labels: ReturnType<typeof useToolUiLocale>["labels"]
 ) {
+  if (label !== undefined) return label
   if (kind === "allow-once") return labels.permission.allowOnce
   if (kind === "allow-always") return labels.permission.allowAlways
+  if (kind === AOS_PERMISSION_KIND_SESSION)
+    return labels.permission.allowSession
   if (kind === "reject-always") return labels.permission.rejectAlways
   return labels.permission.reject
 }

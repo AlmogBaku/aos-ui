@@ -36,13 +36,20 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
+  type AosHistoryCursor,
   type AosPromptMetaSchema,
 } from "@aos/protocol/acp"
 
 import type { TodoItem } from "@/runtime-adapters/contracts"
+import {
+  threadHistoryExtras,
+  type ThreadHistoryState,
+} from "@/runtime-adapters/thread-history"
 
+import type { AcpApprovals } from "./acp-approvals"
 import type { AcpConnection } from "./types"
 import {
+  applyApprovals,
   applyNotification,
   applyUpdate,
   clearTranscript,
@@ -51,6 +58,7 @@ import {
   initialProjectorState,
   LOCAL_PROMPT_PREFIX,
   messageBlocks,
+  prependMessages,
   renameMessage,
   retainMessages,
   toThreadMessages,
@@ -74,6 +82,8 @@ export type AcpRuntimeExtras = {
   readonly todos: readonly TodoItem[]
   readonly configOptions?: readonly SessionConfigOption[]
   readonly commands?: readonly AvailableCommand[]
+  /** The Session's older history, once a replay has said where it stands. */
+  readonly history?: ThreadHistoryState
 }
 
 /** One attachment of a staged batch, as the prompt links it. */
@@ -91,6 +101,11 @@ export type AcpAttachmentStage = {
 
 export type UseAcpRuntimeOptions = {
   connection: AcpConnection
+  /**
+   * The connection's permission requests, shown and answered as tool
+   * approvals. They outlive the thread, since the proxy sends each one once.
+   */
+  approvals?: AcpApprovals
   sessionId: string | undefined
   agentId: string
   isDisabled?: boolean
@@ -187,6 +202,9 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
 /** How long a refused resume waits before each further attempt. */
 const RESUME_RETRY_DELAYS_MS = [500, 1000, 2000]
 
+/** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
+type ResumeOutcome = "replayed" | "refused" | "abandoned"
+
 /** Whether the provider refused only because it is not ready yet. */
 const isTemporarilyUnavailable = (error: unknown) =>
   isRecord(error) && error.code === AOS_JSONRPC_ERRORS.temporarilyUnavailable
@@ -210,6 +228,7 @@ function refusalText(
 
 type ControllerOptions = {
   connection: AcpConnection
+  approvals: AcpApprovals | undefined
   /** The Session this thread opened with; a local draft has none yet. */
   sessionId: string | undefined
 }
@@ -235,6 +254,7 @@ type ControllerCallbacks = Pick<
 function createAcpController({
   sessionId: openedWith,
   connection,
+  approvals,
 }: ControllerOptions) {
   let callbacks: ControllerCallbacks = {}
   const resume = (id: string) =>
@@ -250,11 +270,34 @@ function createAcpController({
   /** Rises with every binding, so an abandoned resume stops retrying. */
   let bindings = 0
   let retryTimer: ReturnType<typeof setTimeout> | undefined
+  /** Ends a retry's wait early, so a rebinding releases the replays behind it. */
+  let retryWake: (() => void) | undefined
   let version = 0
   let locals = 0
   let repository = ExportedMessageRepository.fromArray([])
   let repositoryOf: ProjectorState | undefined
   const listeners = new Set<() => void>()
+
+  /**
+   * Older history. The cursor is what the latest replay reported, then what
+   * each page after it did; `undefined` means no replay has said yet. A page
+   * belongs to the transcript it was asked for: every replay start and settle,
+   * binding, and accepted rewind bumps `transcripts`, and a page that lands
+   * under another one is dropped.
+   */
+  let pagesEnabled = false
+  let cursor: AosHistoryCursor | undefined
+  /** An accepted rewind moved the provider's history under the cursor. */
+  let cursorStale = false
+  let olderLoading = false
+  let olderFailed = false
+  let transcripts = 0
+  /** Accepted rewinds, so a replay that started before one leaves it stale. */
+  let rewinds = 0
+  /** Replays under way; a page waits for the transcript they refill. */
+  let replaysOpen = 0
+  /** The load that owns `olderLoading`, so a rebinding can release it. */
+  let loads = 0
 
   const notify = () => {
     version += 1
@@ -327,46 +370,58 @@ function createAcpController({
     bound === session && generation === bindings
 
   /**
-   * Resumes one Session until its history is on its way. A rejection otherwise
-   * surfaces through the connection's status and `_aos/error`; the thread only
-   * stops waiting for its history. A `temporarily_unavailable` refusal is the
-   * exception: the provider is still bringing the Session up, so the resume is
-   * worth another try shortly, as long as this binding is still the live one.
+   * Resumes one Session until its history is on its way, and says how that
+   * went. A rejection otherwise surfaces through the connection's status and
+   * `_aos/error`. A `temporarily_unavailable` refusal is the exception: the
+   * provider is still bringing the Session up, so the resume is worth another
+   * try shortly, as long as this binding is still the live one.
    */
   const attemptResume = async (
     session: string,
-    generation: number,
-    retry = 0
-  ) => {
-    try {
-      await whileReplaying(() => resume(session))
-    } catch (error) {
-      if (
-        isTemporarilyUnavailable(error) &&
-        retry < RESUME_RETRY_DELAYS_MS.length &&
-        isBound(session, generation)
-      ) {
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined
-          void attemptResume(session, generation, retry + 1)
-        }, RESUME_RETRY_DELAYS_MS[retry])
-        return
+    generation: number
+  ): Promise<ResumeOutcome> => {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await whileReplaying(() => resume(session))
+        return "replayed"
+      } catch (error) {
+        if (
+          !isTemporarilyUnavailable(error) ||
+          retry >= RESUME_RETRY_DELAYS_MS.length ||
+          !isBound(session, generation)
+        )
+          return "refused"
       }
+      await new Promise<void>((resolve) => {
+        retryWake = resolve
+        retryTimer = setTimeout(resolve, RESUME_RETRY_DELAYS_MS[retry])
+      })
+      retryTimer = undefined
+      retryWake = undefined
+      if (!isBound(session, generation)) return "abandoned"
     }
-    if (!loading) return
-    loading = false
-    notify()
   }
 
+  /**
+   * Replays the Session from the start, after any replay already queued. Its
+   * outcome ends the thread's wait for its history, unless a rebinding left it
+   * behind.
+   */
   const queueResume = (session: string, generation: number) => {
-    const run = () =>
-      isBound(session, generation)
-        ? attemptResume(session, generation)
-        : undefined
+    const run = async (): Promise<ResumeOutcome> => {
+      if (!isBound(session, generation)) return "abandoned"
+      const outcome = await attemptResume(session, generation)
+      if (outcome !== "abandoned" && loading) {
+        loading = false
+        notify()
+      }
+      return outcome
+    }
     // Either outcome of the resume ahead releases this one; a rejection there is
     // already reported where it happened.
-    resumes = resumes.then(run, run)
-    return resumes
+    const settled = resumes.then(run, run)
+    resumes = settled
+    return settled
   }
 
   /**
@@ -396,10 +451,21 @@ function createAcpController({
     unsubscribe?.()
     bound = next
     bindings += 1
+    transcripts += 1
+    cursor = undefined
+    cursorStale = false
+    olderLoading = false
+    olderFailed = false
     const generation = bindings
     const { steerAccepted, composerPrefill, sessionInvalidated } =
       AOS_METHODS.notify
+    // What is already pending was sent before this thread bound the Session.
+    const takeApprovals = () => {
+      if (approvals) commit(applyApprovals(state, approvals.list(next)))
+    }
+    takeApprovals()
     const subscriptions = [
+      approvals?.subscribe(next, takeApprovals) ?? (() => {}),
       connection.onSessionUpdate(next, (update, meta) => {
         const before = state
         commit(applyUpdate(state, update, meta))
@@ -408,9 +474,23 @@ function createAcpController({
           failUnanswered(next, generation, state.execution.error)
       }),
       // The replay that follows carries the Session whole, so the transcript it
-      // replaces goes first.
+      // replaces goes first, and a fresh cursor comes with it.
       connection.onSessionReplay(next, () => {
         commit(clearTranscript(state))
+        const before = connection.history(next)
+        const rewound = rewinds
+        replaysOpen += 1
+        transcripts += 1
+        return () => {
+          replaysOpen -= 1
+          transcripts += 1
+          const after = connection.history(next)
+          if (bound !== next || after === before) return
+          cursor = after
+          // A rewind accepted mid-replay may have moved what it already read.
+          if (rewinds === rewound) cursorStale = false
+          notify()
+        }
       }),
       connection.onNotification(steerAccepted, (params) => {
         observe(params, steerAccepted)
@@ -427,6 +507,8 @@ function createAcpController({
     unsubscribe = () => {
       clearTimeout(retryTimer)
       retryTimer = undefined
+      retryWake?.()
+      retryWake = undefined
       for (const off of subscriptions) off()
     }
     queueResume(next, generation)
@@ -490,6 +572,13 @@ function createAcpController({
       commit(
         renameMessage(rewound(state, rewoundFrom, localId), localId, messageId)
       )
+      // The provider's positions moved under the cursor: the next page first
+      // rebuilds the newest one, and a page still in flight is dropped.
+      if (rewoundFrom !== undefined) {
+        rewinds += 1
+        cursorStale = true
+        transcripts += 1
+      }
     } catch (error) {
       const kept = state.messages
         .filter((message) => message.id !== localId)
@@ -499,7 +588,77 @@ function createAcpController({
     }
   }
 
+  /**
+   * Reads the page before the cursor into a scratch projection and places its
+   * messages first. Its turns are long over, so none of their state reaches
+   * the live execution. One read at a time; a failure, of the page or of the
+   * rebuild a stale cursor needs first, waits to be asked again.
+   */
+  const loadOlder = async () => {
+    const session = bound
+    if (
+      !pagesEnabled ||
+      session === undefined ||
+      olderLoading ||
+      replaysOpen > 0 ||
+      cursor?.nextCursor === undefined
+    )
+      return
+    const load = (loads += 1)
+    olderLoading = true
+    olderFailed = false
+    notify()
+    try {
+      if (cursorStale) {
+        const generation = bindings
+        if ((await queueResume(session, generation)) !== "replayed") {
+          if (isBound(session, generation)) olderFailed = true
+          return
+        }
+      }
+      const from = cursor?.nextCursor
+      if (bound !== session || cursorStale || from === undefined) return
+      const transcript = transcripts
+      try {
+        const page = await connection.resumePage(session, from)
+        if (transcript !== transcripts) return
+        const older = page.updates.reduce(
+          (scratch, { update, meta }) => applyUpdate(scratch, update, meta),
+          initialProjectorState
+        )
+        cursor = page.history
+        commit(prependMessages(state, older.messages))
+      } catch {
+        if (transcript === transcripts) olderFailed = true
+      }
+    } finally {
+      if (load === loads) {
+        olderLoading = false
+        notify()
+      }
+    }
+  }
+
+  void connection.initialized.then(
+    ({ extensions }) => {
+      pagesEnabled = extensions.historyPages
+      notify()
+    },
+    // A failed handshake surfaces through the connection's status.
+    () => {}
+  )
+
   return {
+    getHistory: (): ThreadHistoryState | undefined =>
+      pagesEnabled && cursor !== undefined
+        ? {
+            hasOlder: cursor.nextCursor !== undefined,
+            truncated: cursor.truncated === true,
+            loading: olderLoading,
+            failed: olderFailed,
+            loadOlder,
+          }
+        : undefined,
     setCallbacks: (next: ControllerCallbacks) => {
       callbacks = next
     },
@@ -576,6 +735,15 @@ function createAcpController({
     cancel: () => {
       if (bound !== undefined) connection.cancel(bound)
     },
+    respondToApproval: (
+      approvalId: string,
+      optionId: string,
+      approved: boolean
+    ) => {
+      if (!approvals || bound === undefined)
+        throw new Error("The ACP Session has no pending permission")
+      return approvals.respond(bound, approvalId, optionId, approved)
+    },
     importMessages: (messages: readonly ThreadMessage[]) => {
       commit(
         retainMessages(
@@ -634,7 +802,8 @@ function toRepository(
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
-  const { connection, sessionId, enableMessageQueue, isDisabled } = options
+  const { connection, approvals, sessionId, enableMessageQueue, isDisabled } =
+    options
   // One controller per mounted thread: a local draft gains its Session while
   // this thread stays mounted, so keying the store on that Session would
   // discard the very turn that created it, mid-prompt. Only the Session the
@@ -642,8 +811,8 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   // around that one and the later binding moves underneath it.
   const [openedWith] = useState(sessionId)
   const controller = useMemo(
-    () => createAcpController({ connection, sessionId: openedWith }),
-    [connection, openedWith]
+    () => createAcpController({ connection, approvals, sessionId: openedWith }),
+    [approvals, connection, openedWith]
   )
   // Ordered before the binding so the first resume already reaches the caller's
   // `attach`, and before the subscription so a replayed update already reports.
@@ -702,19 +871,24 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     void queueItems
     void steerItems
     const state = controller.getState()
+    const history = controller.getHistory()
     return {
       messageRepository: controller.getRepository(),
       isRunning: state.execution.status === "running",
       isLoading: controller.isLoading(),
       isDisabled: isDisabled ?? false,
-      extras: acpExtras.provide({
-        execution: state.execution,
-        todos: state.todos,
-        ...(state.configOptions === undefined
-          ? {}
-          : { configOptions: state.configOptions }),
-        ...(state.commands === undefined ? {} : { commands: state.commands }),
-      }),
+      // The thread reads older history through the provider-neutral channel.
+      extras: threadHistoryExtras.provide(
+        acpExtras.provide({
+          execution: state.execution,
+          todos: state.todos,
+          ...(state.configOptions === undefined
+            ? {}
+            : { configOptions: state.configOptions }),
+          ...(state.commands === undefined ? {} : { commands: state.commands }),
+          ...(history === undefined ? {} : { history }),
+        })
+      ),
       onNew: (message) => controller.send(message),
       onEdit: (message) => {
         queue?.clear()
@@ -727,6 +901,12 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       onCancel: async () => {
         queue?.notifyCancelled()
         controller.cancel()
+      },
+      // A permission answers with one of its own options, never a bare verdict.
+      onRespondToToolApproval: ({ approvalId, optionId, approved }) => {
+        if (optionId === undefined)
+          throw new Error("A permission answer must choose one of its options")
+        return controller.respondToApproval(approvalId, optionId, approved)
       },
       // No `setMessages`: with it, Stop before any reply unsends the prompt
       // into the composer, but the provider has already saved it.

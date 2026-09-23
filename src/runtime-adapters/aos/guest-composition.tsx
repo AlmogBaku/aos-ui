@@ -49,6 +49,7 @@ import {
   AOS_JSONRPC_ERRORS,
   type AosSessionResumeResponseMetaSchema,
 } from "@aos/protocol/acp"
+import { createAcpApprovals } from "./acp/acp-approvals"
 import { createAcpInteractions } from "./acp/acp-interactions"
 import { acpSocketUrl, createAcpConnection } from "./acp/connection"
 import type { AcpConnection } from "./acp/types"
@@ -356,6 +357,10 @@ function ReadyGuestAosSurface({
     () => createAcpInteractions({ connection }),
     [connection]
   )
+  const approvals = useMemo(
+    () => createAcpApprovals({ connection }),
+    [connection]
+  )
   const media = useMemo(() => new VoiceMediaController(), [])
   // The invited Session reports what it supports only once it is attached.
   const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
@@ -400,6 +405,7 @@ function ReadyGuestAosSurface({
   )
   const runtime = useAcpRuntime({
     connection,
+    approvals,
     sessionId,
     agentId,
     attach,

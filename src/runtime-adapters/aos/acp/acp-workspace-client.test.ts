@@ -261,6 +261,9 @@ function createFakeConnection() {
         },
       }
     },
+    // Older pages belong to the thread's runtime, never the workspace client.
+    resumePage: () => Promise.reject(new Error("unused")),
+    history: () => undefined,
     async prompt(sessionId) {
       record("prompt", sessionId)
       return { messageId: "message-1" }

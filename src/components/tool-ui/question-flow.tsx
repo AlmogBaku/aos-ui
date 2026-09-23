@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
   useOutOfBandQuestions,
-  usePendingInteractionGate,
+  useHasPendingQuestion,
 } from "@/components/runtime-interactions/pending-interaction-context"
 
 import { OptionList } from "./option-list"
@@ -61,7 +61,7 @@ export function QuestionFlowTool(props: QuestionToolProps) {
  */
 function QuestionRecord({ part, payload }: QuestionToolProps) {
   const { labels } = useToolUiLocale()
-  const beingAsked = usePendingInteractionGate()
+  const beingAsked = useHasPendingQuestion()
   const state = readQuestionState(part, { interactive: true })
   if (beingAsked && state.phase === "pending") return null
 

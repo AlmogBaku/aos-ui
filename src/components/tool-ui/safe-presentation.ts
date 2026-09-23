@@ -1,4 +1,5 @@
-const REDACTED = "[REDACTED]"
+import { REDACTED, redactCredentials } from "@shared/credentials"
+
 const UNAVAILABLE = "[Unserializable value]"
 const TRUNCATED = "[Truncated]"
 const CIRCULAR = "[Circular]"
@@ -12,8 +13,6 @@ const textEncoder = new TextEncoder()
 
 const sensitiveKey =
   /(?:api[-_]?key|auth(?:orization)?|credential|cookie|password|passwd|private[-_]?key|secret|set[-_]?cookie|token)/i
-const sensitiveValue =
-  /(?:\b(?:access[-_]?token|api[-_]?key|auth(?:orization)?|credential|password|secret|token)\s*[=:]\s*\S+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_\w+|sk-[\w-]+|xox[baprs]-\w+|eyJ[\w-]+\.[\w-]+\.[\w-]+))/i
 
 export type SafeToolPresentation = {
   text: string
@@ -45,7 +44,8 @@ export function safeToolDisplayValue(
 
   for (const key of keys) {
     const candidate = (sanitized as Record<string, unknown>)[key]
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim()
+    if (typeof candidate === "string" && candidate.trim())
+      return candidate.trim()
   }
   return fallback
 }
@@ -120,7 +120,7 @@ function readProperty(value: object, key: string): unknown {
 }
 
 function safeString(value: string) {
-  const redacted = sensitiveValue.test(value) ? REDACTED : value
+  const redacted = redactCredentials(value)
   return redacted.length > MAX_STRING_LENGTH
     ? `${redacted.slice(0, MAX_STRING_LENGTH)}${TRUNCATED}`
     : redacted

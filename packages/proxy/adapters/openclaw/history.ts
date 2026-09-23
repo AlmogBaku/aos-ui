@@ -295,6 +295,16 @@ function projectMessages(
     .map(({ message }) => message)
 }
 
+/**
+ * The index of the oldest row that opens a turn: the first user row the
+ * projection turns into a message. `-1` when the rows hold no turn start.
+ */
+function openClawTurnStart(rows: readonly unknown[]) {
+  return rows.findIndex(
+    (row) => record(row) && row.role === "user" && nativeMessageId(row)
+  )
+}
+
 /** The MCP App view the `toolCallId` result among these rows opened. */
 function storedMcpAppView(rows: readonly unknown[], toolCallId: string) {
   for (const row of rows)
@@ -470,21 +480,28 @@ export function createOpenClawHistory(input: {
         limit,
         offset
       )
-      const unresolved = unresolvedToolNames(native.messages)
+      const rawCount = native.messages.length
+      const reachedStart = rawCount < limit
+      // A page that stops short of the start begins at its oldest turn start,
+      // so no turn is split across two pages; the rows before it are re-read
+      // as the newest rows of the next page.
+      const turnStart = reachedStart ? 0 : openClawTurnStart(native.messages)
+      const rows =
+        turnStart > 0 ? native.messages.slice(turnStart) : native.messages
+      const unresolved = unresolvedToolNames(rows)
       if (unresolved.length > 0)
         await input.mcpToolNames?.load(agentId, sessionKey, unresolved)
       const messages = projectMessages(
-        native.messages,
+        rows,
         input.mcpToolNames?.resolver(agentId, sessionKey) ?? (() => undefined)
       )
-      const rawCount = native.messages.length
       return {
         sessionId: sessionKey,
         messages,
-        total: offset + rawCount + (rawCount === limit ? 1 : 0),
+        total: offset + rawCount + (reachedStart ? 0 : 1),
         limit,
         offset,
-        nextOffset: offset + rawCount,
+        nextOffset: offset + rows.length,
         execution: execution(native),
       }
     },

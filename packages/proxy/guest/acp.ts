@@ -159,6 +159,9 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
 
     grant: () => redeemed?.grant,
 
+    active: () =>
+      redeemed !== undefined && guestAuthorizationActive(redeemed.read, now),
+
     project: {
       access(base, scope) {
         const { read, errors } = authorized()
