@@ -239,8 +239,10 @@ describe("createReadState", () => {
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
   })
 
-  it("acknowledges a Session the provider re-lights under the operator's eyes", async () => {
+  it("acknowledges a Session the provider re-lights under the operator's eyes without flashing it", async () => {
     const { updateSession, readState, sessionRows } = harness()
+    const published: (boolean | undefined)[] = []
+    sessionRows.subscribe((row) => published.push(row.unread))
     const relight = (sessionId: string) => {
       sessionRows.rememberList([
         {
@@ -259,19 +261,28 @@ describe("createReadState", () => {
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(1)
 
-    // Past the write guard, so the list read is believed rather than coerced.
+    // Past the write guard and with no ack on its way, the focused row still
+    // reads read while the provider gets its acknowledgement.
     await settle(READ_GUARD_MS)
     relight(SESSION)
-    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
 
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(2)
-    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+    expect(published).not.toContain(true)
 
     await settle(READ_GUARD_MS)
     relight("session-2")
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(2)
+    expect(sessionRows.get(AGENT, "session-2")?.unread).toBe(true)
+
+    // Out of focus, the provider's unread is the operator's again.
+    readState.blur()
+    relight(SESSION)
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(updateSession).toHaveBeenCalledTimes(2)
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 
   it("writes nothing when the runtime does not track read state", async () => {

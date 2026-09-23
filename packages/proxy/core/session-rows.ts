@@ -42,10 +42,11 @@ export interface SessionRows {
   /** Optimistically settles `unread: false`, stamps `readAt`, and arms the guard. */
   markRead(agentId: string, sessionId: string): SessionRow | undefined
   /**
-   * Ignores list rows that report this Session unread until the returned
-   * release runs, because an acknowledgement for it is already on its way.
+   * Keeps this Session read until the returned release runs: a list row that
+   * reports it unread settles read instead, and `onRelit` runs after the page
+   * is merged so the holder can acknowledge it to the provider.
    */
-  holdRead(agentId: string, sessionId: string): () => void
+  holdRead(agentId: string, sessionId: string, onRelit: () => void): () => void
   forget(agentId: string, sessionId: string): void
   subscribe(listener: SessionRowListener): () => void
 }
@@ -105,8 +106,8 @@ export function createSessionRows({
 }: { now?: () => number } = {}): SessionRows {
   const rows = new Map<string, SessionRow>()
   const guardedUntil = new Map<string, number>()
-  /** How many acknowledgements on their way hold each Session read. */
-  const held = new Map<string, number>()
+  /** The holds that keep each Session read, each with its re-lit callback. */
+  const held = new Map<string, Set<{ onRelit: () => void }>>()
   const listeners = new Set<SessionRowListener>()
 
   /** True while our own mark-read outranks what a list page may still report. */
@@ -129,10 +130,14 @@ export function createSessionRows({
 
     rememberList(incoming) {
       const updated: SessionRow[] = []
+      const relit: (() => void)[] = []
       for (const row of incoming) {
         const key = rowKey(row.agentId, row.id)
         const previous = rows.get(key)
-        const stale = (guarded(key) || held.has(key)) && row.unread === true
+        const holds = row.unread === true ? held.get(key) : undefined
+        for (const hold of holds ?? []) relit.push(hold.onRelit)
+        const stale =
+          (guarded(key) || holds !== undefined) && row.unread === true
         const unread = stale ? false : row.unread
         // The provider is the authority on *whether* this Session is read, and
         // nobody but our own acknowledgement knows *when*: a page reporting it
@@ -144,6 +149,7 @@ export function createSessionRows({
         if (changed(previous, merged)) updated.push(merged)
       }
       for (const row of updated) publish(row)
+      for (const onRelit of relit) onRelit()
       return updated
     },
 
@@ -173,16 +179,15 @@ export function createSessionRows({
       return merged
     },
 
-    holdRead(agentId, sessionId) {
+    holdRead(agentId, sessionId, onRelit) {
       const key = rowKey(agentId, sessionId)
-      held.set(key, (held.get(key) ?? 0) + 1)
-      let released = false
+      const hold = { onRelit }
+      const holds = held.get(key) ?? new Set()
+      holds.add(hold)
+      held.set(key, holds)
       return () => {
-        if (released) return
-        released = true
-        const remaining = (held.get(key) ?? 1) - 1
-        if (remaining > 0) held.set(key, remaining)
-        else held.delete(key)
+        holds.delete(hold)
+        if (holds.size === 0 && held.get(key) === holds) held.delete(key)
       }
     },
 

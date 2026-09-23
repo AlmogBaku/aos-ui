@@ -50,12 +50,12 @@ export function createReadState({
   const { runtime } = runtimeInstance
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
+  let releaseFocus: (() => void) | undefined
   let pending:
     | {
         handle: TimerHandle
         target: Target
         forced: boolean
-        release: () => void
       }
     | undefined
   let tracked: Promise<boolean> | undefined
@@ -79,7 +79,6 @@ export function createReadState({
   const clearPending = () => {
     if (!pending) return
     cancel(pending.handle)
-    pending.release()
     pending = undefined
   }
 
@@ -117,9 +116,7 @@ export function createReadState({
 
   /**
    * Restarts the debounce. A forced write survives a re-arm so an exposure
-   * never loses its acknowledgement to a floored re-ack. Until the write
-   * settles, a list page that still reports the Session unread is not
-   * forwarded: the acknowledgement it is waiting for is already on its way.
+   * never loses its acknowledgement to a floored re-ack.
    */
   function arm(target: Target, force: boolean, delayMs = FOCUS_DEBOUNCE_MS) {
     if (lane === "guest" || closed) return
@@ -129,39 +126,42 @@ export function createReadState({
         sameTarget(pending.target, target) &&
         pending.forced)
     clearPending()
-    const release = sessionRows.holdRead(target.agentId, target.sessionId)
     const handle = schedule(() => {
       pending = undefined
-      void write(target, forced).finally(release)
+      void write(target, forced)
     }, delayMs)
-    pending = { handle, target, forced, release }
+    pending = { handle, target, forced }
   }
 
-  /**
-   * A provider re-lights a Session for activity the operator is already
-   * reading, and only a list read reports it. The browser never asks for
-   * unread, so a settled `unread` on the focused row is always the provider
-   * and never an operator who wants it kept unread.
-   */
-  const unlisten = sessionRows.subscribe((row) => {
-    if (row.unread !== true || !focused) return
-    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id }))
-      return
-    arm(focused, false)
-  })
+  const unfocus = () => {
+    focused = undefined
+    releaseFocus?.()
+    releaseFocus = undefined
+    clearPending()
+  }
 
   return {
     focus(agentId, sessionId) {
-      focused = { agentId, sessionId }
+      unfocus()
+      const target = { agentId, sessionId }
+      focused = target
+      /*
+       * A provider re-lights a Session for activity the operator is already
+       * reading, and only a list read reports it. The browser never asks for
+       * unread, so an `unread` on the focused row is always the provider and
+       * never an operator who wants it kept unread: the row stays read and the
+       * provider gets the acknowledgement instead of the browser a flash.
+       */
+      if (lane !== "guest")
+        releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
+          arm(target, false)
+        )
       // Hermes arms its watermark only on a write, so an already-read Session
       // still needs one acknowledgement per exposure.
-      arm(focused, true)
+      arm(target, true)
     },
 
-    blur() {
-      focused = undefined
-      clearPending()
-    },
+    blur: unfocus,
 
     onExecution(event) {
       if (!focused || !sameTarget(focused, event)) return
@@ -173,9 +173,7 @@ export function createReadState({
 
     close() {
       closed = true
-      focused = undefined
-      clearPending()
-      unlisten()
+      unfocus()
     },
   }
 }
