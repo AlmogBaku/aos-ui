@@ -52,7 +52,7 @@ import {
 import { isPromptBlock, promptText } from "./prompt-content"
 import type { SessionMember } from "./session-member"
 import type { RoomTurn } from "./session-rooms"
-import { isCorrection } from "./translate/history"
+import { lastPromptIndex, throughLivePrompt } from "./translate/history"
 import type {
   AcpConnectionContext,
   AosAcpAgentFactory,
@@ -132,9 +132,22 @@ const INVITE_AUTH_METHOD = {
 } as const
 
 /**
+ * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
+ * inside the turn, so the prompt is the last user message before them.
+ */
+function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
+  const index = lastPromptIndex(history)
+  const prompt = history.messages[index]
+  if (!prompt || !Array.isArray(prompt.content)) return -1
+  const text = prompt.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+  return text.trim() === promptText(turn.content).trim() ? index : -1
+}
+
+/**
  * Whether a resume already shows the live turn's prompt: its cursor sits inside
- * that turn, or the page it replayed ends on that prompt. A correction is a
- * steer inside the turn, so the prompt is the last user message before them.
+ * that turn, or the page it replayed ends on that prompt.
  */
 function showsPrompt(
   turn: RoomTurn | undefined,
@@ -143,14 +156,7 @@ function showsPrompt(
 ) {
   if (!turn) return false
   if (meta.turnId === turn.turnId) return true
-  const prompt = history?.messages.findLast(
-    (message) => message.role === "user" && !isCorrection(message)
-  )
-  if (!prompt || !Array.isArray(prompt.content)) return false
-  const text = prompt.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n")
-  return text.trim() === promptText(turn.content).trim()
+  return history !== undefined && promptIndex(turn, history) >= 0
 }
 
 /**
@@ -254,30 +260,48 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   /**
    * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
    * from history reads the live turn again from its start, so the stream the
-   * member held stops before the page is read. A turn whose start is gone
-   * keeps it, because a cursorless follow could only reset that turn.
+   * member held stops before the page is read, and the rows the provider
+   * already stored of that turn are cut: `cut` names the turn the page then
+   * lacks. A turn whose start is gone keeps both, because a cursorless follow
+   * could only reset that turn. The guest lane validates its authoritative
+   * page before anything reads it.
    */
   async function replayPage(member: SessionMember, scope: SessionScope) {
-    if (coordinator.replaysFromStart(scope)) await member.restartStream()
-    return await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+    const fromStart = coordinator.replaysFromStart(scope)
+    if (fromStart) await member.restartStream()
+    const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+    const history = context.guest
+      ? SessionHistoryResponseSchema.parse(read)
+      : read
+    const turn = context.rooms.current(scope)
+    // An answered question's stream starts after what the page stored.
+    if (!fromStart || !turn || turn.continued) return { history }
+    const cut = throughLivePrompt(history, promptIndex(turn, history), turn.at)
+    return cut ? { history: cut, cut: turn.turnId } : { history }
   }
 
-  /** Subscribes to the live turn, reporting a cursor that cannot position it. */
+  /**
+   * Subscribes to the live turn, reporting a cursor that cannot position it.
+   * A page `cut` from a turn shows it only while this follow streams it.
+   */
   async function followPositioned(
     member: SessionMember,
     scope: SessionScope,
     meta: { turnId?: string; after?: number },
-    replayedCorrections = 0
+    replayedCorrections = 0,
+    cut?: string
   ) {
     const positioned =
       meta.turnId === undefined ||
       meta.turnId === coordinator.snapshot(scope).turnId
     try {
-      await member.follow(
+      const followed = await member.follow(
         positioned ? meta.after : undefined,
         replayedCorrections
       )
-      return positioned ? {} : { resync: true }
+      return positioned && (cut === undefined || followed === cut)
+        ? {}
+        : { resync: true }
     } catch {
       return { resync: true }
     }
@@ -319,11 +343,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // Counted on the authoritative page, before the guest projection rebuilds
     // its messages: that projection keeps no user-turn metadata.
     let corrections = 0
-    let history: SessionHistoryResponse | undefined
-    if (params.replayFrom?.type === "start") {
-      history = SessionHistoryResponseSchema.parse(
-        await replayPage(member, scope)
-      )
+    const replay =
+      params.replayFrom?.type === "start"
+        ? await replayPage(member, scope)
+        : undefined
+    const history = replay?.history
+    if (history) {
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(
         policy.project.history(history),
@@ -341,7 +366,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      corrections
+      corrections,
+      replay?.cut
     )
     const execution = coordinator.snapshot(scope)
     afterResponse(member, async () => {
@@ -489,9 +515,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
     let corrections = 0
-    let history: SessionHistoryResponse | undefined
-    if (params.replayFrom?.type === "start") {
-      history = await replayPage(member, scope)
+    const replay =
+      params.replayFrom?.type === "start"
+        ? await replayPage(member, scope)
+        : undefined
+    const history = replay?.history
+    if (history) {
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(history, lane))
         await member.send(outbound)
@@ -509,7 +538,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      corrections
+      corrections,
+      replay?.cut
     )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is

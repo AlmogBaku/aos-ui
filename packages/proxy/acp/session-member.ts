@@ -179,7 +179,8 @@ class SessionMember {
     this.#readModels = options.readModels
     this.#seat = {
       sendTurn: (turn) => this.#sendTurn(turn),
-      follow: () => this.#follow(false),
+      follow: async () =>
+        (await this.#follow(false)) === undefined ? "idle" : "following",
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
       report: (cause) => {
@@ -195,12 +196,13 @@ class SessionMember {
   }
 
   /**
-   * Subscribes to the Session's live turn, if one is still in flight.
-   * `replayedCorrections` names the steer acknowledgements this subscription
-   * must drop because the history it follows already carried them.
+   * Subscribes to the Session's live turn, if one is still in flight, and
+   * returns the turnId it streams. `replayedCorrections` names the steer
+   * acknowledgements this subscription must drop because the history it
+   * follows already carried them.
    */
-  async follow(after?: number, replayedCorrections = 0) {
-    await this.#follow(true, after, replayedCorrections)
+  follow(after?: number, replayedCorrections = 0) {
+    return this.#follow(true, after, replayedCorrections)
   }
 
   /**
@@ -396,15 +398,16 @@ class SessionMember {
    * Subscribes to the live turn unless this member already carries it. A
    * resume asks whether its current subscription does, so it can re-follow a
    * turn whose stream it lost; the room asks whether any subscription ever
-   * did, so a member is never streamed one turn twice.
+   * did, so a member is never streamed one turn twice. Returns the turnId it
+   * streams, or `undefined` when no turn is live.
    */
   #follow(refollow: boolean, after?: number, replayedCorrections = 0) {
-    return this.#exclusive(async (): Promise<"following" | "idle"> => {
-      if (this.#left) return "idle"
+    return this.#exclusive(async (): Promise<string | undefined> => {
+      if (this.#left) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
-      if (state === "idle" || turnId === undefined) return "idle"
+      if (state === "idle" || turnId === undefined) return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
-      if (carried === turnId) return "following"
+      if (carried === turnId) return turnId
       this.#consume(
         await this.#coordinator.recover(
           this.#scope,
@@ -417,7 +420,7 @@ class SessionMember {
         ),
         replayedCorrections
       )
-      return "following"
+      return turnId
     })
   }
 

@@ -45,6 +45,7 @@ import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createSessionRooms } from "./session-rooms"
+import { persistedCorrections } from "./translate/history"
 import type {
   AcpConnectionContext,
   AcpOutbound,
@@ -344,8 +345,7 @@ const translators: Translators = {
       }
     return { state, outbound: [] }
   },
-  // The from-start resume paths read this count; this harness replays none.
-  persistedCorrections: () => 0,
+  persistedCorrections,
   translateHistory: (history) =>
     history.messages.map((message) => ({
       kind: "update",
@@ -459,6 +459,8 @@ type HarnessOptions = {
   beforeHistory?: () => Promise<void>
   /** Bounds each turn's journal; a small one stands for a long turn. */
   maxReplayEvents?: number
+  /** Runs as a resume translates the page it read, before it follows the turn. */
+  onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
   /**
@@ -654,7 +656,13 @@ async function harness(options: HarnessOptions = {}) {
       sessionRows,
       readState,
       activityFeed,
-      translators,
+      translators: {
+        ...translators,
+        translateHistory: (history, lane) => {
+          options.onReplay?.()
+          return translators.translateHistory(history, lane)
+        },
+      },
       attachmentStages,
       rooms,
       presence,
@@ -1983,6 +1991,45 @@ async function liveTurn(
   return messageId
 }
 
+/**
+ * What Hermes stores of a turn still running: its prompt, then the rows it
+ * folded into one message so far. Stored by default as the turn is admitted.
+ */
+function storedLiveTurn(
+  createdAt = new Date().toISOString(),
+  correction?: string
+): SessionHistoryResponse["messages"] {
+  return [
+    {
+      id: "user-1",
+      role: "user",
+      content: [{ type: "text", text: " Summarize " }],
+      createdAt,
+    },
+    ...(correction === undefined
+      ? []
+      : [
+          {
+            id: "correction-1",
+            role: "user" as const,
+            content: [{ type: "text" as const, text: correction }],
+            createdAt,
+            metadata: { custom: { correction: true } },
+          },
+        ]),
+    {
+      id: "assistant-0",
+      role: "assistant",
+      content: [{ type: "text", text: "Live" }],
+      createdAt,
+    },
+  ]
+}
+
+/** One browser's view of a Session without the states that bracket it. */
+const withoutStates = (seen: readonly string[]) =>
+  seen.filter((item) => !item.startsWith("state"))
+
 /** A held step a test releases when the scenario needs it to go on. */
 function gate() {
   const { promise, resolve } = Promise.withResolvers<void>()
@@ -2212,40 +2259,169 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("adds no prompt a replayed history already ends with", async () => {
-    const test = await harness({
-      providerIds: true,
-      history: [
-        {
-          id: "user-1",
-          role: "user",
-          content: [{ type: "text", text: " Summarize " }],
-          createdAt: NOW,
-        },
-        {
-          id: "assistant-0",
-          role: "assistant",
-          content: [{ type: "text", text: "Working" }],
-          createdAt: NOW,
-        },
-      ],
-    })
+  it("shows a live turn history already stored once, after its prompt", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
     await test.list()
-    await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-
     const other = await test.connect("connection-2")
     await other.list()
+    await liveTurn(test, [test])
+
     await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
     await other.recorder.wait(endedTurn)
 
     expect(prompts(other.recorder)).toEqual([])
-    expect(flow(other.recorder).slice(0, 2)).toEqual([
+    expect(withoutStates(flow(other.recorder))).toEqual([
       "history user-1",
-      "history assistant-0",
+      "chunk Live",
+      "chunk More",
     ])
+    test.close()
+    other.close()
+  })
+
+  it("shows a correction the live turn stored once, from its stream", async () => {
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(undefined, "Use the tables"),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+    await test.agent.request(AOS_METHODS.session.steer, {
+      sessionId: SESSION,
+      requestId: "steer-1",
+      text: "Use the tables",
+    })
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.steerAccepted
+    )
+
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(withoutStates(flow(other.recorder))).toEqual([
+      "history user-1",
+      "chunk Live",
+    ])
+    expect(
+      other.recorder
+        .of(AOS_METHODS.notify.steerAccepted)
+        .map(({ params }) => params)
+    ).toMatchObject([{ requestId: "steer-1", text: "Use the tables" }])
+    test.close()
+    other.close()
+  })
+
+  it("keeps a page that ends on an earlier prompt with the same text", async () => {
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(NOW),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(flow(other.recorder)).toContain("history assistant-0")
+    test.close()
+    other.close()
+  })
+
+  it("keeps the page of a discovered turn nobody here sent", async () => {
+    const test = await harness({
+      providerIds: true,
+      rows: [sessionRow({ status: "running" })],
+      discover: async () => ({ handle: new EventSource(), state: "running" }),
+      history: storedLiveTurn(),
+    })
+    await test.list()
+
+    await open(test, { replayFrom: { type: "start" } })
+
+    expect(test.coordinator.state(test.scope)).toBe("running")
+    expect(flow(test.recorder)).toContain("history assistant-0")
+    test.close()
+  })
+
+  it("keeps the page of a turn an answered question resumed", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    await liveTurn(test, [test])
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    test.sources[1]?.emit(turnStarted())
+    chunk(test.sources[1], "Resumed")
+    await test.recorder.wait(said("Resumed"))
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: { type: "start" } })
+    test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(flow(other.recorder)).toContain("history assistant-0")
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+    test.close()
+    other.close()
+  })
+
+  it("shows a guest a live turn history already stored once", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest(),
+    })
+    await liveTurn(test, [test])
+
+    await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await guest.recorder.wait(endedTurn)
+
+    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
+    expect(withoutStates(flow(guest.recorder, GUEST_REF))).toEqual([
+      "history user-1",
+      "chunk Live",
+      "chunk More",
+    ])
+    test.close()
+    guest.close()
+  })
+
+  it("asks a reopen to reload when the turn it cut ends before it follows", async () => {
+    const test: Awaited<ReturnType<typeof harness>> = await harness({
+      providerIds: true,
+      history: storedLiveTurn(),
+      onReplay: () => test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded }),
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await liveTurn(test, [test])
+
+    const resumed = await other.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      z
+        .object({ _meta: z.object({ aos: z.object({ resync: z.boolean() }) }) })
+        .parse(resumed)._meta.aos.resync
+    ).toBe(true)
     test.close()
     other.close()
   })
