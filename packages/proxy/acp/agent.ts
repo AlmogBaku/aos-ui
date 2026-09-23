@@ -565,7 +565,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
     guestFor(methods.agent.session.delete)
     const scope = sessions.scope(params.sessionId)
-    await workspace.mutate(scope, "DELETE")
+    await workspace.delete(scope)
     sessions.forget(scope)
     await client.notify(AOS_METHODS.notify.catalogInvalidated)
     return {}
@@ -581,9 +581,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await context.readState.markRead(scope.agentId, scope.threadId)
         return {}
       }
-      await workspace.mutate(
+      await workspace.update(
         scope,
-        "PATCH",
         params.title !== undefined
           ? { title: params.title }
           : params.archived !== undefined

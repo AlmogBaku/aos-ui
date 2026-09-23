@@ -1,3 +1,5 @@
+import type { SessionPatch } from "../../core/runtime"
+
 export type HermesDashboardHttp = (
   path: string,
   init?: { method?: string; body?: unknown; maxResponseBytes?: number }
@@ -60,12 +62,11 @@ export class HermesDashboardClient {
     ) as Promise<HermesNativeMessagePage>
   }
 
-  updateSession(profile: string, storedId: string, body: unknown) {
-    const update =
-      typeof body === "object" && body !== null && !Array.isArray(body)
-        ? { ...body, profile }
-        : { profile }
-    return this.mutateSession(profile, storedId, "PATCH", update)
+  updateSession(profile: string, storedId: string, patch: SessionPatch) {
+    return this.mutateSession(profile, storedId, "PATCH", {
+      ...patch,
+      profile,
+    })
   }
 
   deleteSession(profile: string, storedId: string) {

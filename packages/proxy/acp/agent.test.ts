@@ -33,6 +33,7 @@ import type {
   ServerTurnEngine,
   ServerTurnHandle,
   ServerRuntime,
+  SessionPatch,
   SessionScope,
 } from "../core/runtime"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
@@ -483,22 +484,16 @@ async function harness(options: HarnessOptions = {}) {
     if (!row) throw new Error("not found")
     return row
   })
-  const mutateSession = vi.fn(
-    async (
-      _agentId: string,
-      sessionId: string,
-      method: "PATCH" | "DELETE",
-      body?: unknown
-    ) => {
+  const updateSession = vi.fn(
+    async (_agentId: string, sessionId: string, patch: SessionPatch) => {
       const current = rows.get(sessionId)
-      if (method === "DELETE") {
-        rows.delete(sessionId)
-        return
-      }
       if (current)
-        rows.set(sessionId, { ...current, ...PatchSchema.parse(body ?? {}) })
+        rows.set(sessionId, { ...current, ...PatchSchema.parse(patch) })
     }
   )
+  const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
+    rows.delete(sessionId)
+  })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
       models = { ...models, ...ModelPatchSchema.parse(patch) }
@@ -542,7 +537,8 @@ async function harness(options: HarnessOptions = {}) {
       )
       return { session: { id: CREATED, agentId } }
     },
-    mutateSession,
+    updateSession,
+    deleteSession,
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => {
       await options.beforeModels?.()
@@ -653,7 +649,8 @@ async function harness(options: HarnessOptions = {}) {
     sources,
     start,
     discover,
-    mutateSession,
+    updateSession,
+    deleteSession,
     updateModel,
     listAllSessions,
     readState,
@@ -1268,7 +1265,7 @@ describe("AOS ACP agent", () => {
       title: "Renamed",
     })
 
-    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       title: "Renamed",
     })
     expect(updates(test.recorder)).toMatchObject([
@@ -1293,7 +1290,7 @@ describe("AOS ACP agent", () => {
       pinned: true,
     })
 
-    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       pinned: true,
     })
     expect(updates(test.recorder)).toMatchObject([
@@ -1318,7 +1315,7 @@ describe("AOS ACP agent", () => {
       archived: true,
     })
 
-    expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       archived: true,
     })
     expect(relists(test.recorder)).toHaveLength(1)
@@ -1343,7 +1340,7 @@ describe("AOS ACP agent", () => {
     })
 
     expect(test.readState.markRead).toHaveBeenCalledWith(AGENT, SESSION)
-    expect(test.mutateSession).not.toHaveBeenCalled()
+    expect(test.updateSession).not.toHaveBeenCalled()
     test.close()
   })
 

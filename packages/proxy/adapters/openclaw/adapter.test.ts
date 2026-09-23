@@ -165,7 +165,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: async () => () => undefined,
     })
 
-    await adapter.mutateSession("research", sessionKey, "PATCH", {
+    await adapter.updateSession("research", sessionKey, {
       title: "Renamed",
     })
     expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
@@ -174,7 +174,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
       label: "Renamed",
     })
     for (const archived of [true, false]) {
-      await adapter.mutateSession("research", sessionKey, "PATCH", { archived })
+      await adapter.updateSession("research", sessionKey, { archived })
       expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
         agentId: "research",
         key: sessionKey,
@@ -182,14 +182,14 @@ describe("OpenClaw ServerRuntime assembly", () => {
       })
     }
     for (const pinned of [true, false]) {
-      await adapter.mutateSession("research", sessionKey, "PATCH", { pinned })
+      await adapter.updateSession("research", sessionKey, { pinned })
       expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
         agentId: "research",
         key: sessionKey,
         pinned,
       })
     }
-    await adapter.mutateSession("research", sessionKey, "DELETE")
+    await adapter.deleteSession("research", sessionKey)
     expect(gateway.request).toHaveBeenCalledWith("sessions.delete", {
       agentId: "research",
       key: sessionKey,
@@ -212,14 +212,10 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: async () => () => undefined,
     })
 
-    for (const body of [
-      { unread: false },
-      { title: "One", archived: true },
-      [],
-    ])
-      await expect(
-        adapter.mutateSession("research", sessionKey, "PATCH", body)
-      ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    // The provider has no native read state to write.
+    await expect(
+      adapter.updateSession("research", sessionKey, { unread: false })
+    ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
     expect(gateway.request).not.toHaveBeenCalledWith(
       "sessions.patch",
       expect.anything()

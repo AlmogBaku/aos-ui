@@ -13,6 +13,7 @@ import type {
   ServerAttachmentStage,
   ServerTurnEngine,
   ServerRuntime,
+  SessionPatch,
 } from "../../core/runtime"
 import {
   OpenClawClientConnectionError,
@@ -203,17 +204,19 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.createSession(agentId)
   }
 
-  async mutateSession(
+  async updateSession(
     agentId: string,
     runtimeSessionId: string,
-    method: "PATCH" | "DELETE",
-    body?: unknown
+    patch: SessionPatch
   ): Promise<void> {
     await this.#start()
     // The native patch owns each flag's side effects; AOS sends one at a time.
-    await (method === "DELETE"
-      ? this.#workspace.deleteSession(agentId, runtimeSessionId)
-      : this.#workspace.patchSession(agentId, runtimeSessionId, body))
+    await this.#workspace.updateSession(agentId, runtimeSessionId, patch)
+  }
+
+  async deleteSession(agentId: string, runtimeSessionId: string) {
+    await this.#start()
+    await this.#workspace.deleteSession(agentId, runtimeSessionId)
   }
 
   async workspaceCapabilities(

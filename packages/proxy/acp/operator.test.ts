@@ -44,6 +44,7 @@ import type {
   ServerTurnEngine,
   ServerTurnHandle,
   ServerRuntime,
+  SessionPatch,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
@@ -386,22 +387,16 @@ async function harness(options: HarnessOptions = {}) {
     if (!row) throw new Error("not found")
     return row
   })
-  const mutateSession = vi.fn(
-    async (
-      _agentId: string,
-      sessionId: string,
-      method: "PATCH" | "DELETE",
-      body?: unknown
-    ) => {
+  const updateSession = vi.fn(
+    async (_agentId: string, sessionId: string, patch: SessionPatch) => {
       const current = rows.get(sessionId)
-      if (method === "DELETE") {
-        rows.delete(sessionId)
-        return
-      }
       if (current)
-        rows.set(sessionId, { ...current, ...PatchSchema.parse(body ?? {}) })
+        rows.set(sessionId, { ...current, ...PatchSchema.parse(patch) })
     }
   )
+  const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
+    rows.delete(sessionId)
+  })
   const history = vi.fn(async () => options.history ?? HISTORY)
 
   const runtime: ServerRuntime = {
@@ -425,7 +420,8 @@ async function harness(options: HarnessOptions = {}) {
       )
       return { session: { id: CREATED, agentId } }
     },
-    mutateSession,
+    updateSession,
+    deleteSession,
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => MODELS,
     updateModel: unsupported,
@@ -519,7 +515,8 @@ async function harness(options: HarnessOptions = {}) {
     recorder,
     sources,
     start,
-    mutateSession,
+    updateSession,
+    deleteSession,
     /** Registers the Agent that owns the seeded Session, as a roster read does. */
     list: () => connection.agent.request(methods.agent.session.list, {}),
     create: () =>
@@ -1179,11 +1176,11 @@ describe("operator ACP lane", () => {
     test.clock.advance(500)
 
     await vi.waitFor(() =>
-      expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
         unread: false,
       })
     )
-    expect(test.mutateSession).toHaveBeenCalledTimes(1)
+    expect(test.updateSession).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(unreadChanges(test.recorder)).toHaveLength(2))
     expect(unreadChanges(test.recorder)[1]).toMatchObject({
       agentId: AGENT,

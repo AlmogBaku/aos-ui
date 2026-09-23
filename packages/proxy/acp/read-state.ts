@@ -83,9 +83,7 @@ export function createReadState({
     const providerId = runtime.resolveSessionId(agentId, sessionId)
     if (!providerId) return
     try {
-      await runtime.mutateSession(agentId, providerId, "PATCH", {
-        unread: false,
-      })
+      await runtime.updateSession(agentId, providerId, { unread: false })
     } catch {
       // A Session the provider has not created yet rejects the write. Read
       // state is advisory: the optimistic row stands and a later list corrects.

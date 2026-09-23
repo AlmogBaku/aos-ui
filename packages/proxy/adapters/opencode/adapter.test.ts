@@ -225,38 +225,38 @@ describe("OpenCode server adapter", () => {
       turns: turnEngine,
     })
 
-    await adapter.mutateSession("research", "session-1", "PATCH", {
+    await adapter.updateSession("research", "session-1", {
       title: "Renamed",
     })
     expect(native.sessions.update).toHaveBeenNthCalledWith(1, "session-1", {
       title: "Renamed",
     })
-    await adapter.mutateSession("research", "session-1", "PATCH", {
+    await adapter.updateSession("research", "session-1", {
       archived: true,
     })
     expect(native.sessions.update).toHaveBeenNthCalledWith(2, "session-1", {
       time: { archived: expect.any(Number) },
     })
-    await adapter.mutateSession("research", "session-1", "PATCH", {
+    await adapter.updateSession("research", "session-1", {
       archived: false,
     })
     expect(native.sessions.update).toHaveBeenNthCalledWith(3, "session-1", {
       time: {},
     })
-    await adapter.mutateSession("research", "session-1", "PATCH", {
+    await adapter.updateSession("research", "session-1", {
       pinned: true,
     })
     // A pin write merges into native metadata instead of replacing it.
     expect(native.sessions.update).toHaveBeenNthCalledWith(4, "session-1", {
       metadata: { "native.label": "keep me", "aos.pinned": true },
     })
-    await adapter.mutateSession("research", "session-1", "PATCH", {
+    await adapter.updateSession("research", "session-1", {
       pinned: false,
     })
     expect(native.sessions.update).toHaveBeenNthCalledWith(5, "session-1", {
       metadata: { "native.label": "keep me", "aos.pinned": false },
     })
-    await adapter.mutateSession("research", "session-1", "DELETE")
+    await adapter.deleteSession("research", "session-1")
     expect(native.sessions.delete).toHaveBeenCalledWith("session-1")
     await expect(
       adapter.getSession("research", "session-1")
@@ -279,14 +279,10 @@ describe("OpenCode server adapter", () => {
       turns: turnEngine,
     })
 
-    for (const body of [
-      { unread: false },
-      { title: "One", archived: true },
-      [],
-    ])
-      await expect(
-        adapter.mutateSession("research", "session-1", "PATCH", body)
-      ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    // The provider has no native read state to write.
+    await expect(
+      adapter.updateSession("research", "session-1", { unread: false })
+    ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
     expect(native.sessions.update).not.toHaveBeenCalled()
     await expect(
       adapter.artifact("research", "session-1", "artifact-1")

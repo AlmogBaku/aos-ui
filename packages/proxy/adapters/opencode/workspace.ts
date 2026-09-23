@@ -2,12 +2,12 @@ import {
   AgentCatalogResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
-  SessionPatchRequestSchema,
   SessionSchema,
   type AgentCatalogResponse,
   type Session,
   type SessionCatalogResponse,
 } from "../../../protocol"
+import type { SessionPatch } from "../../core/runtime"
 import {
   parseOpenCodeAgentCatalog,
   parseOpenCodeSession,
@@ -161,28 +161,28 @@ export function createOpenCodeWorkspaceOperations(input: {
     }
   }
 
-  async function patchSession(
+  async function updateSession(
     agentId: string,
     sessionId: string,
-    body: unknown
+    patch: SessionPatch
   ) {
     const { native } = await readSession(agentId, sessionId)
-    const intent = SessionPatchRequestSchema.safeParse(body)
-    if (!intent.success) throw new OpenCodeWorkspaceUnavailableError()
-    const { title, archived, pinned } = intent.data
-    if (title !== undefined)
-      return input.client.sessions.update(sessionId, { title })
-    if (archived !== undefined)
+    if ("title" in patch)
+      return input.client.sessions.update(sessionId, { title: patch.title })
+    if ("archived" in patch)
       // An empty native `time` is the only unarchive the pinned SDK can
       // express: it types `time.archived` as a bare number and offers no
       // unarchive route. Unverified until a live OpenCode acceptance run.
       return input.client.sessions.update(sessionId, {
-        time: archived ? { archived: Date.now() } : {},
+        time: patch.archived ? { archived: Date.now() } : {},
       })
-    if (pinned !== undefined)
+    if ("pinned" in patch)
       // Merge, never replace: foreign native metadata keys must survive.
       return input.client.sessions.update(sessionId, {
-        metadata: { ...native.metadata, [OPENCODE_PIN_METADATA_KEY]: pinned },
+        metadata: {
+          ...native.metadata,
+          [OPENCODE_PIN_METADATA_KEY]: patch.pinned,
+        },
       })
     // `unread` has no native read state to write, so it stays unavailable.
     throw new OpenCodeWorkspaceUnavailableError()
@@ -319,7 +319,7 @@ export function createOpenCodeWorkspaceOperations(input: {
       return (await readSession(agentId, sessionId)).session
     },
 
-    patchSession,
+    updateSession,
 
     async deleteSession(agentId: string, sessionId: string) {
       await readSession(agentId, sessionId)
