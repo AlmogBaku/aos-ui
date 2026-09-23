@@ -370,6 +370,8 @@ export const SessionHistoryResponseSchema = z.strictObject({
   limit: z.number().int().min(1).max(500),
   offset: z.number().int().min(0),
   nextOffset: z.number().int().min(0),
+  /** Older history exists that this runtime cannot read. */
+  truncated: z.boolean().optional(),
   execution: z
     .strictObject({
       status: SessionStatusSchema,

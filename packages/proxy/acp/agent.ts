@@ -97,6 +97,7 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
     readState: true,
     focus: true,
     guestProjection: false,
+    historyPages: false,
   }
 }
 
@@ -123,6 +124,7 @@ const GUEST_EXTENSIONS = {
   readState: false,
   focus: false,
   guestProjection: true,
+  historyPages: false,
 } satisfies AosExtensions
 
 const INVITE_AUTH_METHOD = {
